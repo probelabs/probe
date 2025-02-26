@@ -5,17 +5,23 @@ pub fn preprocess_query(query: &str) -> Vec<(String, String)> {
     let stop_words = ranking::stop_words();
     let stemmer = ranking::get_stemmer();
 
-    // Split by whitespace and filter out stop words
-    query
-        .to_lowercase()
-        .split_whitespace()
-        .filter(|word| !stop_words.contains(&word.to_string()))
+    // Convert to lowercase first
+    let lowercase_query = query.to_lowercase();
+    
+    // Split by non-alphanumeric characters
+    let words: Vec<&str> = lowercase_query
+        .split(|c: char| !c.is_alphanumeric())
+        .collect();
+
+    // Filter out stop words and empty strings
+    words
+        .into_iter()
+        .filter(|word| !word.is_empty() && !stop_words.contains(&word.to_string()))
         .map(|word| {
             let original = word.to_string();
             let stemmed = stemmer.stem(word).to_string();
             (original, stemmed)
         })
-        .filter(|(orig, _)| !orig.is_empty())
         .collect()
 }
 

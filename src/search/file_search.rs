@@ -146,7 +146,11 @@ pub fn find_files_with_pattern(
 
     // Add custom ignore patterns
     for pattern in custom_ignores {
-        builder.add_custom_ignore_filename(pattern);
+        // Create an override builder for glob patterns
+        let mut override_builder = ignore::overrides::OverrideBuilder::new(path);
+        override_builder.add(&format!("!{}", pattern)).unwrap();
+        let overrides = override_builder.build().unwrap();
+        builder.overrides(overrides);
     }
 
     // Count how many files we're searching
@@ -297,7 +301,11 @@ pub fn find_matching_filenames(
 
     // Add custom ignore patterns
     for pattern in custom_ignores {
-        builder.add_custom_ignore_filename(pattern);
+        // Create an override builder for glob patterns
+        let mut override_builder = ignore::overrides::OverrideBuilder::new(path);
+        override_builder.add(&format!("!{}", pattern)).unwrap();
+        let overrides = override_builder.build().unwrap();
+        builder.overrides(overrides);
     }
 
     // Recursively walk the directory and check each file

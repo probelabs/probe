@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 // The integration test needs access to the library crate
-use code_search::models::SearchResult;
 use code_search::search::perform_code_search;
 
 // Helper function to create test files

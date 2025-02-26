@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 
 fn main() {
     // Import the tokenize function from our code-search crate
