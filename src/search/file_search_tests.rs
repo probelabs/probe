@@ -103,7 +103,8 @@ mod tests {
         let matching_files = find_files_with_pattern(
             temp_dir.path(),
             "search",
-            &[]
+            &[],
+            false
         ).expect("Failed to find files with pattern");
 
         // Should find all files containing "search" (ignoring node_modules)
@@ -131,7 +132,8 @@ mod tests {
             temp_dir.path(),
             &["search".to_string()],
             &already_found,
-            &[]
+            &[],
+            false
         ).expect("Failed to find matching filenames");
 
         // Should find files with "search" in the name
@@ -160,7 +162,8 @@ mod tests {
             temp_dir.path(),
             &["search".to_string()],
             &already_found,
-            &[]
+            &[],
+            false
         ).expect("Failed to find matching filenames");
 
         // Should not find search_result.txt since it's already found
@@ -179,7 +182,8 @@ mod tests {
         let matching_files = find_files_with_pattern(
             temp_dir.path(),
             "search",
-            &custom_ignores
+            &custom_ignores,
+            false
         ).expect("Failed to find files with pattern");
 
         // Should not find any txt files

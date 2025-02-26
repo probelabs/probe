@@ -41,7 +41,7 @@ mod tests {
         let mut line_numbers = HashSet::new();
         line_numbers.insert(3);  // Match on "line 3"
 
-        let results = process_file_with_results(&file_path, &line_numbers)
+        let results = process_file_with_results(&file_path, &line_numbers, false)
             .expect("Failed to process file with results");
 
         assert!(!results.is_empty());
@@ -71,7 +71,7 @@ function test2() {
         line_numbers.insert(3);  // Line in test1 function
         line_numbers.insert(7);  // Line in test2 function
 
-        let results = process_file_with_results(&file_path, &line_numbers)
+        let results = process_file_with_results(&file_path, &line_numbers, false)
             .expect("Failed to process file with results");
 
         assert!(!results.is_empty());
@@ -93,7 +93,7 @@ function test2() {
         line_numbers.insert(3);
         line_numbers.insert(4);
 
-        let results = process_file_with_results(&file_path, &line_numbers)
+        let results = process_file_with_results(&file_path, &line_numbers, false)
             .expect("Failed to process file with results");
 
         assert_eq!(results.len(), 1);

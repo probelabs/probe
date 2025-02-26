@@ -59,17 +59,35 @@ The project is organized into the following directories:
 ### CLI Mode
 
 ```bash
-code-search cli --path <DIRECTORY_PATH> --query <SEARCH_PATTERN>
+code-search cli --path <DIRECTORY_PATH> --query <SEARCH_PATTERN> [OPTIONS]
 ```
+
+#### Options
+
+- `--path` - Directory path to search in (required)
+- `--query` - Query patterns to search for (required, can specify multiple)
+- `--files-only` - Skip AST parsing and just output unique files
+- `--ignore` - Custom patterns to ignore (in addition to .gitignore and common patterns)
+- `--include-filenames` - Include files whose names match query words
+- `--reranker` - Reranking method to use for search results (hybrid, bm25, tfidf)
+- `--frequency` - Use frequency-based search with stemming and stopword removal (enabled by default)
+- `--exact` - Use exact matching without stemming or stopword removal (overrides frequency search)
+- `--max-results` - Maximum number of results to return
+- `--max-bytes` - Maximum total bytes of code content to return
+- `--max-tokens` - Maximum total tokens in code content to return (for AI usage)
+- `--allow-tests` - Allow test files and test code blocks in search results (disabled by default)
 
 #### Examples
 
 ```bash
-# Search for "setTools" in the current directory
+# Search for "setTools" in the current directory (uses frequency search by default)
 code-search cli --path . --query "setTools"
 
-# Search for "impl" in the src directory
-code-search cli --path ./src --query "impl"
+# Search for "impl" in the src directory with exact matching
+code-search cli --path ./src --query "impl" --exact
+
+# Search for multiple patterns
+code-search cli --path ./src --query "function" --query "class"
 ```
 
 ### MCP Server Mode
@@ -82,14 +100,27 @@ This starts the tool as an MCP server that can be used with the Model Context Pr
 
 #### MCP Tool: search_code
 
+This tool should be used every time you need to search the codebase for understanding code structure, finding implementations, or identifying patterns. Queries can be any text (including multi-word phrases like "IP whitelist"), but prefer simple, focused queries for better results. Use maxResults parameter to limit the number of results when needed.
+
 Input schema:
 ```json
 {
   "path": "Directory path to search in",
   "query": ["Query patterns to search for"],
-  "files_only": false
+  "filesOnly": false,
+  "ignore": ["Patterns to ignore"],
+  "includeFilenames": false,
+  "reranker": "hybrid",
+  "frequencySearch": true,
+  "exact": false,
+  "maxResults": null,
+  "maxBytes": null,
+  "maxTokens": null,
+  "allowTests": false
 }
 ```
+
+Note: `frequencySearch` is enabled by default. If you want exact matching without stemming or stopword removal, set `exact` to `true` which will override the frequency search behavior.
 
 Example usage with MCP client:
 ```rust
@@ -113,7 +144,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "arguments": {
                 "path": "./src",
                 "query": ["impl", "fn"],
-                "files_only": false
+                "filesOnly": false,
+                "exact": true  // Use exact matching instead of frequency-based search
             }
         }))
     ).await?;

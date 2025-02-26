@@ -140,6 +140,7 @@ fn test_search_single_term() {
         None,     // max_results
         None,     // max_bytes
         None,     // max_tokens
+        false,    // allow_tests
     )
     .expect("Failed to perform search");
 
@@ -189,6 +190,7 @@ fn test_search_multiple_terms() {
         None,     // max_results
         None,     // max_bytes
         None,     // max_tokens
+        false,    // allow_tests
     )
     .expect("Failed to perform search");
 
@@ -221,6 +223,7 @@ fn test_search_files_only() {
         None,     // max_results
         None,     // max_bytes
         None,     // max_tokens
+        false,    // allow_tests
     )
     .expect("Failed to perform search");
 
@@ -276,6 +279,7 @@ fn test_search_include_filenames() {
         None,     // max_results
         None,     // max_bytes
         None,     // max_tokens
+        false,    // allow_tests
     )
     .expect("Failed to perform search");
 
@@ -318,6 +322,7 @@ fn test_search_with_limits() {
         Some(2),  // max_results - limit to 2 results
         None,     // max_bytes
         None,     // max_tokens
+        false,    // allow_tests
     )
     .expect("Failed to perform search");
 
@@ -354,6 +359,7 @@ fn test_frequency_search() {
         None,     // max_results
         None,     // max_bytes
         None,     // max_tokens
+        false,    // allow_tests
     )
     .expect("Failed to perform search");
 
@@ -386,6 +392,7 @@ fn test_search_with_custom_ignores() {
         None,            // max_results
         None,            // max_bytes
         None,            // max_tokens
+        false,           // allow_tests
     )
     .expect("Failed to perform search");
 

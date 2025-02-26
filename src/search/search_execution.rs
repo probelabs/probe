@@ -80,6 +80,12 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
     }
 
     println!("Found {} search results", results.len());
+    
+    // Calculate and print total bytes and tokens
+    let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
+    let total_tokens: usize = results.iter().map(|r| count_tokens(&r.code)).sum();
+    println!("Total bytes returned: {}", total_bytes);
+    println!("  Total tokens returned: {}", total_tokens);
 }
 
 /// Returns a reference to the tiktoken tokenizer
@@ -178,6 +184,7 @@ pub fn perform_code_search(
     max_results: Option<usize>,
     max_bytes: Option<usize>,
     max_tokens: Option<usize>,
+    allow_tests: bool, // Parameter to control test file/node inclusion
 ) -> Result<LimitedSearchResults> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
@@ -211,6 +218,7 @@ pub fn perform_code_search(
             max_results,
             max_bytes,
             max_tokens,
+            allow_tests,
         );
     }
 
@@ -313,19 +321,27 @@ pub fn perform_code_search(
 
             let file_path = entry.path();
 
-            // Skip files that we don't support parsing (if AST mode is enabled)
-            if !files_only {
-                let extension = file_path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .unwrap_or("");
+    // Skip files that we don't support parsing (if AST mode is enabled)
+    if !files_only {
+        let extension = file_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("");
 
-                if get_language(extension).is_none() {
-                    continue;
-                }
-            }
+        if get_language(extension).is_none() {
+            continue;
+        }
+    }
+    
+    // Skip test files unless allow_tests is true
+    if !allow_tests && crate::language::is_test_file(file_path) {
+        if debug_mode {
+            println!("DEBUG: Skipping test file: {:?}", file_path);
+        }
+        continue;
+    }
 
-            // Search the file
+    // Search the file
             let path_clone = file_path.to_owned();
             if let Err(err) = searcher.search_path(
                 &matcher,
@@ -388,7 +404,7 @@ pub fn perform_code_search(
         if include_filenames {
             let already_found_files: HashSet<PathBuf> = matches_by_file.keys().cloned().collect();
             let matching_files =
-                find_matching_filenames(path, queries, &already_found_files, custom_ignores)?;
+                find_matching_filenames(path, queries, &already_found_files, custom_ignores, allow_tests)?;
 
             for file_path in matching_files {
                 results.push(SearchResult {
@@ -484,7 +500,7 @@ pub fn perform_code_search(
     // Process each file and collect results
     let mut results = Vec::new();
     for (path, line_numbers) in matches_by_file {
-        let file_results = process_file_with_results(&path, &line_numbers)?;
+        let file_results = process_file_with_results(&path, &line_numbers, allow_tests)?;
         results.extend(file_results);
     }
 
@@ -492,7 +508,7 @@ pub fn perform_code_search(
     if include_filenames {
         let already_found_files: HashSet<PathBuf> = found_files;
         let matching_files =
-            find_matching_filenames(path, queries, &already_found_files, custom_ignores)?;
+            find_matching_filenames(path, queries, &already_found_files, custom_ignores, allow_tests)?;
 
         for file_path in matching_files {
             match process_file_by_filename(&file_path) {
@@ -522,13 +538,13 @@ pub fn perform_frequency_search(
     max_results: Option<usize>,
     max_bytes: Option<usize>,
     max_tokens: Option<usize>,
+    allow_tests: bool,
 ) -> Result<LimitedSearchResults> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
 
-    println!("Performing frequency-based search for query: {}", query);
-
     if debug_mode {
+        println!("Performing frequency-based search for query: {}", query);
         println!("DEBUG: Starting frequency-based search with parameters:");
         println!("DEBUG:   Path: {:?}", path);
         println!("DEBUG:   Query: {}", query);
@@ -552,28 +568,33 @@ pub fn perform_frequency_search(
 
     // 2. Create regex patterns for each term
     let term_patterns = create_term_patterns(&term_pairs);
-    println!("Frequency search enabled");
-    println!("Original query: {}", query);
-    println!("After preprocessing:");
-    for (i, (original, stemmed)) in term_pairs.iter().enumerate() {
-        if original == stemmed {
-            println!("  Term {}: {} (stemmed same as original)", i + 1, original);
-        } else {
-            println!("  Term {}: {} (stemmed to {})", i + 1, original, stemmed);
+    if debug_mode {
+        println!("Frequency search enabled");
+        println!("Original query: {}", query);
+        println!("After preprocessing:");
+        for (i, (original, stemmed)) in term_pairs.iter().enumerate() {
+            if original == stemmed {
+                println!("  Term {}: {} (stemmed same as original)", i + 1, original);
+            } else {
+                println!("  Term {}: {} (stemmed to {})", i + 1, original, stemmed);
+            }
         }
+        println!("Search patterns: {:?}", term_patterns);
     }
-    println!("Search patterns: {:?}", term_patterns);
 
     // 3. Find all files and their match frequencies
-    let mut file_match_counts: HashMap<PathBuf, usize> = HashMap::new();
+    let mut file_match_counts: HashMap<PathBuf, usize> = HashMap::new(); // Terms matched
+    let mut file_total_matches: HashMap<PathBuf, usize> = HashMap::new(); // Total matches
     let mut file_matched_lines: HashMap<PathBuf, HashSet<usize>> = HashMap::new();
 
     // First, find all files matching the first pattern
-    let initial_files = find_files_with_pattern(path, &term_patterns[0], custom_ignores)?;
-    println!(
-        "Found {} files matching first term pattern",
-        initial_files.len()
-    );
+    let initial_files = find_files_with_pattern(path, &term_patterns[0], custom_ignores, allow_tests)?;
+    if debug_mode {
+        println!(
+            "Found {} files matching first term pattern",
+            initial_files.len()
+        );
+    }
 
     // Initialize with zero matches
     for file in &initial_files {
@@ -591,22 +612,27 @@ pub fn perform_frequency_search(
             file_match_counts.keys().cloned().collect()
         };
 
-        println!(
-            "Searching {} files for pattern {}: {}",
-            files_to_search.len(),
-            i + 1,
-            pattern
-        );
+        if debug_mode {
+            println!(
+                "Searching {} files for pattern {}: {}",
+                files_to_search.len(),
+                i + 1,
+                pattern
+            );
+        }
 
         for file in &files_to_search {
             // Search for this pattern in the file
             match search_file_for_pattern(file, pattern) {
                 Ok((matched, line_numbers)) => {
                     if matched {
-                        // Increment match count for this file
-                        *file_match_counts.entry(file.clone()).or_insert(0) += 1;
+                    // Increment term match count by 1
+                    *file_match_counts.entry(file.clone()).or_insert(0) += 1;
+                    
+                    // Add the number of matches (line numbers) to the total matches count
+                    *file_total_matches.entry(file.clone()).or_insert(0) += line_numbers.len();
 
-                        // Add matched line numbers
+                    // Add matched line numbers
                         if let Some(lines) = file_matched_lines.get_mut(file) {
                             lines.extend(line_numbers);
                         }
@@ -617,22 +643,34 @@ pub fn perform_frequency_search(
         }
     }
 
-    // 4. Sort files by match frequency (descending)
-    let mut files_by_frequency: Vec<(PathBuf, usize)> = file_match_counts.into_iter().collect();
-    files_by_frequency.sort_by(|a, b| b.1.cmp(&a.1));
+    // 4. Create a combined structure for sorting
+    let mut files_by_frequency: Vec<(PathBuf, usize, usize)> = file_match_counts
+        .iter()
+        .map(|(path, term_count)| {
+            let total_matches = file_total_matches.get(path).cloned().unwrap_or(0);
+            (path.clone(), *term_count, total_matches)
+        })
+        .collect();
+
+    // Sort by term count first, then by total matches if term counts are equal
+    files_by_frequency.sort_by(|a, b| {
+        b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2))
+    });
 
     println!(
         "Found {} files with the following match frequencies:",
         files_by_frequency.len()
     );
-    for (i, (file, count)) in files_by_frequency.iter().enumerate().take(10) {
-        println!("  {}: {:?} - {} term matches", i + 1, file, count);
+    for (i, (file, term_count, total_matches)) in files_by_frequency.iter().enumerate().take(50) {
+        println!("  {}: {:?} - {} term matches, {} total occurrences", 
+                 i + 1, file, term_count, total_matches);
     }
 
     if debug_mode {
         println!("DEBUG: Raw search results - all files by frequency:");
-        for (i, (file, count)) in files_by_frequency.iter().enumerate() {
-            println!("DEBUG:   {}. {:?} - {} term matches", i + 1, file, count);
+        for (i, (file, term_count, total_matches)) in files_by_frequency.iter().enumerate() {
+            println!("DEBUG:   {}. {:?} - {} term matches, {} total occurrences", 
+                     i + 1, file, term_count, total_matches);
         }
 
         println!("DEBUG: Raw search results - matched lines by file:");
@@ -644,16 +682,16 @@ pub fn perform_frequency_search(
 
     // 5. Process the top N files (or all if fewer)
     let top_n = 100; // Configurable
-    let top_files: Vec<(PathBuf, usize)> = files_by_frequency
+    let top_files: Vec<(PathBuf, usize, usize)> = files_by_frequency
         .into_iter()
-        .filter(|(_, count)| *count > 0) // Only include files that matched at least one term
+        .filter(|(_, term_count, _)| *term_count > 0) // Only include files that matched at least one term
         .take(top_n)
         .collect();
 
     // 6. Process results
     let mut results = Vec::new();
 
-    for (file_path, match_count) in &top_files {
+    for (file_path, term_count, _total_matches) in &top_files {
         if files_only {
             // For files-only mode, just return the file paths
             results.push(SearchResult {
@@ -663,7 +701,7 @@ pub fn perform_frequency_search(
                 code: "".to_string(),
                 matched_by_filename: None,
                 rank: None,
-                score: Some(*match_count as f64), // Use match count as score
+                score: Some(*term_count as f64), // Use term count as score
                 tfidf_score: None,
                 bm25_score: None,
                 tfidf_rank: None,
@@ -672,13 +710,13 @@ pub fn perform_frequency_search(
         } else {
             // Process the file with the matching line numbers
             if let Some(line_numbers) = file_matched_lines.get(file_path) {
-                match process_file_with_results(&file_path, line_numbers) {
+                match process_file_with_results(&file_path, line_numbers, allow_tests) {
                     Ok(file_results) => {
                         // Add match count as a score for each result from this file
                         let mut scored_results = file_results;
                         for result in &mut scored_results {
                             // Store the match count as an initial score
-                            result.score = Some(*match_count as f64);
+                            result.score = Some(*term_count as f64);
                         }
                         results.extend(scored_results);
                     }
@@ -690,14 +728,15 @@ pub fn perform_frequency_search(
 
     // 7. Add filename matches if requested
     if include_filenames {
-        // Create a HashSet of file paths from top_files
-        let already_found_files: HashSet<PathBuf> =
-            top_files.iter().map(|(path, _)| path.clone()).collect();
+    // Create a HashSet of file paths from top_files
+    let already_found_files: HashSet<PathBuf> =
+        top_files.iter().map(|(path, _, _)| path.clone()).collect();
         let filename_matches = find_matching_filenames(
             path,
             &[query.to_string()],
             &already_found_files,
             custom_ignores,
+            allow_tests,
         )?;
 
         for file_path in filename_matches {

@@ -218,11 +218,11 @@ fn test_cli_reranker() {
 }
 
 #[test]
-fn test_cli_frequency_search() {
+fn test_cli_default_frequency_search() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
 
-    // Run the CLI with frequency-based search
+    // Run the CLI with default settings (frequency search should be enabled by default)
     let output = Command::new("cargo")
         .args(&[
             "run",
@@ -231,7 +231,6 @@ fn test_cli_frequency_search() {
             temp_dir.path().to_str().unwrap(),
             "--query",
             "search",
-            "--frequency",
         ])
         .output()
         .expect("Failed to execute command");
@@ -248,10 +247,48 @@ fn test_cli_frequency_search() {
         "Output should indicate matches were found"
     );
 
-    // Check that it used frequency-based search
+    // Check that it used frequency-based search (which is now the default)
     assert!(
         stdout.contains("Frequency search enabled"),
-        "Should use frequency-based search"
+        "Should use frequency-based search by default"
+    );
+}
+
+#[test]
+fn test_cli_exact_search() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_test_directory_structure(&temp_dir);
+
+    // Run the CLI with exact search option
+    let output = Command::new("cargo")
+        .args(&[
+            "run",
+            "--",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--query",
+            "search",
+            "--exact",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    // Check that the command succeeded
+    assert!(output.status.success());
+
+    // Convert stdout to string
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Check that it found matches
+    assert!(
+        stdout.contains("Found"),
+        "Output should indicate matches were found"
+    );
+
+    // Check that it did NOT use frequency-based search
+    assert!(
+        !stdout.contains("Frequency search enabled"),
+        "Should not use frequency-based search with --exact option"
     );
 }
 

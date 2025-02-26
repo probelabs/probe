@@ -6,6 +6,8 @@ use ignore::WalkBuilder;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use crate::language::is_test_file;
+
 /// Searches a file for a pattern and returns whether it matched and the matching line numbers
 pub fn search_file_for_pattern(file_path: &Path, pattern: &str) -> Result<(bool, HashSet<usize>)> {
     let mut matched = false;
@@ -64,6 +66,7 @@ pub fn find_files_with_pattern(
     path: &Path,
     pattern: &str,
     custom_ignores: &[String],
+    allow_tests: bool,
 ) -> Result<Vec<PathBuf>> {
     let mut matching_files = Vec::new();
 
@@ -173,6 +176,14 @@ pub fn find_files_with_pattern(
         }
 
         let file_path = entry.path();
+        
+        // Skip test files unless allow_tests is true
+        if !allow_tests && is_test_file(file_path) {
+            if debug_mode {
+                println!("DEBUG: Skipping test file: {:?}", file_path);
+            }
+            continue;
+        }
 
         // Search the file
         let path_clone = file_path.to_owned();
@@ -227,6 +238,7 @@ pub fn find_matching_filenames(
     queries: &[String],
     already_found_files: &HashSet<PathBuf>,
     custom_ignores: &[String],
+    allow_tests: bool,
 ) -> Result<Vec<PathBuf>> {
     let mut matching_files = Vec::new();
 
@@ -327,6 +339,11 @@ pub fn find_matching_filenames(
 
         // Skip if this file was already found in the code search
         if already_found_files.contains(file_path) {
+            continue;
+        }
+        
+        // Skip test files unless allow_tests is true
+        if !allow_tests && is_test_file(file_path) {
             continue;
         }
 

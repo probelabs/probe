@@ -24,11 +24,15 @@ fn main() -> Result<()> {
             include_filenames,
             reranker,
             frequency_search,
+            exact,
             max_results,
             max_bytes,
             max_tokens,
+            allow_tests,
         }) => {
             println!("Running in CLI mode (subcommand)");
+            // If exact is specified, override frequency_search
+            let use_frequency = if exact { false } else { frequency_search };
             let limited_results = perform_code_search(
                 &path,
                 &query,
@@ -36,10 +40,11 @@ fn main() -> Result<()> {
                 &ignore,
                 include_filenames,
                 &reranker,
-                frequency_search,
+                use_frequency,
                 max_results,
                 max_bytes,
                 max_tokens,
+                allow_tests,
             )?;
 
             if limited_results.results.is_empty() {
@@ -79,6 +84,8 @@ fn main() -> Result<()> {
                 if !args.query.is_empty() {
                     println!("Running in CLI mode (direct arguments)");
                     // Run in CLI mode with direct arguments
+                    // If exact is specified, override frequency_search
+                    let use_frequency = if args.exact { false } else { args.frequency_search };
                     let limited_results = perform_code_search(
                         &path,
                         &args.query,
@@ -86,10 +93,11 @@ fn main() -> Result<()> {
                         &args.ignore,
                         args.include_filenames,
                         &args.reranker,
-                        args.frequency_search,
+                        use_frequency,
                         args.max_results,
                         args.max_bytes,
                         args.max_tokens,
+                        args.allow_tests,
                     )?;
 
                     if limited_results.results.is_empty() {

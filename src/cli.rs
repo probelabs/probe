@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Run in CLI mode (default)
-    Cli {
+    Cli { 
         /// Path to search in
         #[arg(short, long)]
         path: PathBuf,
@@ -29,9 +29,13 @@ pub enum Command {
         #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "bm25", "tfidf"])]
         reranker: String,
 
-        /// Use frequency-based search with stemming and stopword removal (better for large codebases)
-        #[arg(short = 's', long = "frequency")]
+        /// Use frequency-based search with stemming and stopword removal (enabled by default)
+        #[arg(short = 's', long = "frequency", default_value = "true")]
         frequency_search: bool,
+
+        /// Use exact matching without stemming or stopword removal
+        #[arg(long = "exact")]
+        exact: bool,
 
         /// Maximum number of results to return
         #[arg(long = "max-results")]
@@ -44,6 +48,10 @@ pub enum Command {
         /// Maximum total tokens in code content to return (for AI usage)
         #[arg(long = "max-tokens")]
         max_tokens: Option<usize>,
+
+        /// Allow test files and test code blocks in search results
+        #[arg(long = "allow-tests")]
+        allow_tests: bool,
     },
 }
 
@@ -74,9 +82,13 @@ pub struct Args {
     #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "bm25", "tfidf"])]
     pub reranker: String,
 
-    /// Use frequency-based search with stemming and stopword removal (better for large codebases)
-    #[arg(short = 's', long = "frequency")]
+    /// Use frequency-based search with stemming and stopword removal (enabled by default)
+    #[arg(short = 's', long = "frequency", default_value = "true")]
     pub frequency_search: bool,
+
+    /// Use exact matching without stemming or stopword removal
+    #[arg(long = "exact")]
+    pub exact: bool,
 
     /// Maximum number of results to return
     #[arg(long = "max-results")]
@@ -89,6 +101,10 @@ pub struct Args {
     /// Maximum total tokens in code content to return (for AI usage)
     #[arg(long = "max-tokens")]
     pub max_tokens: Option<usize>,
+
+    /// Allow test files and test code blocks in search results
+    #[arg(long = "allow-tests")]
+    pub allow_tests: bool,
 
     #[command(subcommand)]
     pub command: Option<Command>,

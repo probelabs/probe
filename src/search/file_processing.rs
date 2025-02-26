@@ -31,6 +31,7 @@ pub fn process_file_by_filename(path: &Path) -> Result<SearchResult> {
 pub fn process_file_with_results(
     path: &Path,
     line_numbers: &HashSet<usize>,
+    allow_tests: bool,
 ) -> Result<Vec<SearchResult>> {
     // Read the file content
     let content = fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
@@ -58,7 +59,7 @@ pub fn process_file_with_results(
     }
 
     // First try to use AST parsing
-    if let Ok(code_blocks) = parse_file_for_code_blocks(&content, extension, line_numbers) {
+    if let Ok(code_blocks) = parse_file_for_code_blocks(&content, extension, line_numbers, allow_tests) {
         if debug_mode {
             println!("DEBUG: AST parsing successful");
             println!("DEBUG:   Found {} code blocks", code_blocks.len());
@@ -131,6 +132,29 @@ pub fn process_file_with_results(
                 );
                 if line_num <= lines.len() {
                     println!("DEBUG:   Line content: '{}'", lines[line_num - 1].trim());
+                }
+            }
+            
+            // Skip fallback context for test files if allow_tests is false
+            if !allow_tests && crate::language::is_test_file(path) {
+                if debug_mode {
+                    println!("DEBUG: Skipping fallback context for test file: {:?}", path);
+                }
+                continue;
+            }
+            
+            // Check if the line is in a test function/module by examining its content
+            if !allow_tests && line_num <= lines.len() {
+                let line_content = lines[line_num - 1];
+                // Simple heuristic check for test functions/modules
+                if (line_content.contains("fn test_") || 
+                    line_content.contains("#[test]") || 
+                    line_content.contains("#[cfg(test)]") ||
+                    line_content.contains("mod tests")) {
+                    if debug_mode {
+                        println!("DEBUG: Skipping fallback context for test code: '{}'", line_content.trim());
+                    }
+                    continue;
                 }
             }
 

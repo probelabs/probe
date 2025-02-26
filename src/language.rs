@@ -221,6 +221,7 @@ pub fn parse_file_for_code_blocks(
     content: &str,
     extension: &str,
     line_numbers: &HashSet<usize>,
+    allow_tests: bool,
 ) -> Result<Vec<CodeBlock>> {
     // Get the appropriate language
     let language =
@@ -266,6 +267,18 @@ pub fn parse_file_for_code_blocks(
             }
 
             seen_nodes.insert(node_key);
+            
+            // Skip test nodes unless allow_tests is true
+            if !allow_tests && is_test_node(&node, extension, content.as_bytes()) {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Skipping test node at line {}, type: {}",
+                        line,
+                        node.kind()
+                    );
+                }
+                continue;
+            }
 
             if debug_mode {
                 println!(
@@ -360,4 +373,320 @@ pub fn merge_code_blocks(code_blocks: Vec<CodeBlock>) -> Vec<CodeBlock> {
         }
     }
     merged_blocks
+}
+
+// Function to determine if a file is a test file based on common naming conventions and directory patterns
+pub fn is_test_file(path: &std::path::Path) -> bool {
+    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    
+    // Check file name patterns
+    if let Some(file_name) = path.file_name().and_then(|f| f.to_str()) {
+        // Rust: *_test.rs, *_tests.rs, test_*.rs, tests.rs
+        if file_name.ends_with("_test.rs") || file_name.ends_with("_tests.rs") || 
+           file_name.starts_with("test_") || file_name == "tests.rs" {
+            if debug_mode {
+                println!("DEBUG: Test file detected (Rust): {}", file_name);
+            }
+            return true;
+        }
+        
+        // JavaScript/TypeScript: *.spec.js, *.test.js, *.spec.ts, *.test.ts
+        if file_name.ends_with(".spec.js") || file_name.ends_with(".test.js") ||
+           file_name.ends_with(".spec.ts") || file_name.ends_with(".test.ts") ||
+           file_name.ends_with(".spec.jsx") || file_name.ends_with(".test.jsx") ||
+           file_name.ends_with(".spec.tsx") || file_name.ends_with(".test.tsx") {
+            if debug_mode {
+                println!("DEBUG: Test file detected (JS/TS): {}", file_name);
+            }
+            return true;
+        }
+        
+        // Python: test_*.py
+        if file_name.starts_with("test_") && file_name.ends_with(".py") {
+            if debug_mode {
+                println!("DEBUG: Test file detected (Python): {}", file_name);
+            }
+            return true;
+        }
+        
+        // Go: *_test.go
+        if file_name.ends_with("_test.go") {
+            if debug_mode {
+                println!("DEBUG: Test file detected (Go): {}", file_name);
+            }
+            return true;
+        }
+        
+        // C/C++: test_*.c, test_*.cpp, *_test.c, *_test.cpp
+        if (file_name.starts_with("test_") || file_name.ends_with("_test.c") || 
+            file_name.ends_with("_test.cpp") || file_name.ends_with("_test.cc") || 
+            file_name.ends_with("_test.cxx")) {
+            if debug_mode {
+                println!("DEBUG: Test file detected (C/C++): {}", file_name);
+            }
+            return true;
+        }
+        
+        // Java: *Test.java
+        if file_name.ends_with("Test.java") {
+            if debug_mode {
+                println!("DEBUG: Test file detected (Java): {}", file_name);
+            }
+            return true;
+        }
+        
+        // Ruby: *_test.rb, test_*.rb, *_spec.rb
+        if file_name.ends_with("_test.rb") || file_name.starts_with("test_") && file_name.ends_with(".rb") || 
+           file_name.ends_with("_spec.rb") {
+            if debug_mode {
+                println!("DEBUG: Test file detected (Ruby): {}", file_name);
+            }
+            return true;
+        }
+        
+        // PHP: *Test.php, test_*.php
+        if file_name.ends_with("Test.php") || (file_name.starts_with("test_") && file_name.ends_with(".php")) {
+            if debug_mode {
+                println!("DEBUG: Test file detected (PHP): {}", file_name);
+            }
+            return true;
+        }
+    }
+    
+    // Check directory patterns
+    let path_str = path.to_string_lossy();
+    
+    // Common test directories across languages
+    if path_str.contains("/tests/") || path_str.contains("/test/") || 
+       path_str.contains("/__tests__/") || path_str.contains("/__test__/") ||
+       path_str.contains("/spec/") || path_str.contains("/specs/") {
+        if debug_mode {
+            println!("DEBUG: Test file detected (directory pattern): {}", path_str);
+        }
+        return true;
+    }
+    
+    // Check for files in a tests directory at the root level
+    if let Some(parent) = path.parent() {
+        if let Some(dir_name) = parent.file_name().and_then(|d| d.to_str()) {
+            if dir_name == "tests" {
+                if debug_mode {
+                    println!("DEBUG: Test file detected (in tests directory): {}", path_str);
+                }
+                return true;
+            }
+        }
+    }
+    
+    false
+}
+
+// Function to identify test code blocks in the AST using tree-sitter nodes
+pub fn is_test_node(node: &Node, extension: &str, source: &[u8]) -> bool {
+    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let node_type = node.kind();
+    
+    match extension {
+        "rs" => {
+            // Rust: Check for #[test] attribute or test_ prefix on function_item nodes
+            if node_type == "function_item" {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "attribute" {
+                        let attr_text = child.utf8_text(source).unwrap_or("");
+                        if attr_text.contains("#[test]") || attr_text.contains("#[cfg(test)]") {
+                            if debug_mode {
+                                println!("DEBUG: Test node detected (Rust): #[test] or #[cfg(test)] function");
+                            }
+                            return true;
+                        }
+                    } else if child.kind() == "identifier" {
+                        let name = child.utf8_text(source).unwrap_or("");
+                        if name.starts_with("test_") {
+                            if debug_mode {
+                                println!("DEBUG: Test node detected (Rust): test_ function");
+                            }
+                            return true;
+                        }
+                    }
+                }
+            } else if node_type == "mod_item" {
+                // Check for test modules
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "identifier" {
+                        let name = child.utf8_text(source).unwrap_or("");
+                        if name == "tests" {
+                            if debug_mode {
+                                println!("DEBUG: Test node detected (Rust): tests module");
+                            }
+                            return true;
+                        }
+                    } else if child.kind() == "attribute" {
+                        let attr_text = child.utf8_text(source).unwrap_or("");
+                        if attr_text.contains("#[cfg(test)]") {
+                            if debug_mode {
+                                println!("DEBUG: Test node detected (Rust): #[cfg(test)] module");
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        "js" | "jsx" | "ts" | "tsx" => {
+            // JavaScript/TypeScript: Check call_expression nodes with describe, test, or it identifiers
+            if node_type == "call_expression" {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "identifier" {
+                        let name = child.utf8_text(source).unwrap_or("");
+                        if name == "describe" || name == "test" || name == "it" || name == "suite" || 
+                           name == "context" || name == "expect" {
+                            if debug_mode {
+                                println!("DEBUG: Test node detected (JS/TS): {} function", name);
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        "py" => {
+            // Python: Check function_definition nodes with names starting with test_
+            if node_type == "function_definition" {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "identifier" {
+                        let name = child.utf8_text(source).unwrap_or("");
+                        if name.starts_with("test_") {
+                            if debug_mode {
+                                println!("DEBUG: Test node detected (Python): test_ function");
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        "go" => {
+            // Go: Check function_declaration nodes with names starting with Test
+            if node_type == "function_declaration" {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "identifier" {
+                        let name = child.utf8_text(source).unwrap_or("");
+                        if name.starts_with("Test") {
+                            if debug_mode {
+                                println!("DEBUG: Test node detected (Go): Test function");
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" => {
+            // C/C++: Check function_definition nodes with test in the name
+            if node_type == "function_definition" {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "function_declarator" {
+                        let mut subcursor = child.walk();
+                        for subchild in child.children(&mut subcursor) {
+                            if subchild.kind() == "identifier" {
+                                let name = subchild.utf8_text(source).unwrap_or("");
+                                if name.contains("test") || name.contains("Test") {
+                                    if debug_mode {
+                                        println!("DEBUG: Test node detected (C/C++): test function");
+                                    }
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "java" => {
+            // Java: Check method_declaration nodes with @Test annotation
+            if node_type == "method_declaration" {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "modifiers" {
+                        let mut subcursor = child.walk();
+                        for annotation in child.children(&mut subcursor) {
+                            if annotation.kind() == "annotation" {
+                                let annotation_text = annotation.utf8_text(source).unwrap_or("");
+                                if annotation_text.contains("@Test") {
+                                    if debug_mode {
+                                        println!("DEBUG: Test node detected (Java): @Test method");
+                                    }
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "rb" => {
+            // Ruby: Check method nodes with test_ prefix or describe/it blocks
+            if node_type == "method" {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "identifier" {
+                        let name = child.utf8_text(source).unwrap_or("");
+                        if name.starts_with("test_") {
+                            if debug_mode {
+                                println!("DEBUG: Test node detected (Ruby): test_ method");
+                            }
+                            return true;
+                        }
+                    }
+                }
+            } else if node_type == "call" {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "identifier" {
+                        let name = child.utf8_text(source).unwrap_or("");
+                        if name == "describe" || name == "it" || name == "context" || name == "specify" {
+                            if debug_mode {
+                                println!("DEBUG: Test node detected (Ruby): {} block", name);
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        "php" => {
+            // PHP: Check method_declaration nodes with test prefix or PHPUnit annotations
+            if node_type == "method_declaration" {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "name" {
+                        let name = child.utf8_text(source).unwrap_or("");
+                        if name.starts_with("test") {
+                            if debug_mode {
+                                println!("DEBUG: Test node detected (PHP): test method");
+                            }
+                            return true;
+                        }
+                    } else if child.kind() == "comment" {
+                        let comment = child.utf8_text(source).unwrap_or("");
+                        if comment.contains("@test") {
+                            if debug_mode {
+                                println!("DEBUG: Test node detected (PHP): @test annotation");
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    
+    false
 }
