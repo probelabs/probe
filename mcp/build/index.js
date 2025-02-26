@@ -83,6 +83,10 @@ class CodeSearchServer {
                                 type: 'number',
                                 description: 'Maximum total tokens in code content to return (for AI usage)',
                             },
+                            allowTests: {
+                                type: 'boolean',
+                                description: 'Allow test files and test code blocks in search results (disabled by default)',
+                            },
                         },
                         required: ['path', 'query'],
                     },
@@ -159,6 +163,9 @@ class CodeSearchServer {
         }
         if (args.maxTokens !== undefined) {
             cliArgs.push('--max-tokens', args.maxTokens.toString());
+        }
+        if (args.allowTests) {
+            cliArgs.push('--allow-tests');
         }
         // Execute the command
         const command = `${CODE_SEARCH_PATH} ${cliArgs.join(' ')}`;

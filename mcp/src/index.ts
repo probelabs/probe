@@ -29,6 +29,7 @@ interface SearchCodeArgs {
   maxBytes?: number;
   maxTokens?: number;
   allowTests?: boolean;
+  anyTerm?: boolean;
 }
 
 class CodeSearchServer {
@@ -118,6 +119,10 @@ class CodeSearchServer {
               allowTests: {
                 type: 'boolean',
                 description: 'Allow test files and test code blocks in search results (disabled by default)',
+              },
+              anyTerm: {
+                type: 'boolean',
+                description: 'Match files that contain any of the search terms (by default, files must contain all terms)',
               },
             },
             required: ['path', 'query'],
@@ -216,6 +221,10 @@ class CodeSearchServer {
     
     if (args.allowTests) {
       cliArgs.push('--allow-tests');
+    }
+    
+    if (args.anyTerm) {
+      cliArgs.push('--any-term');
     }
     
     // Execute the command

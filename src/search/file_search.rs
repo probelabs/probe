@@ -33,7 +33,7 @@ pub fn search_file_for_pattern(file_path: &Path, pattern: &str) -> Result<(bool,
         &matcher,
         file_path,
         UTF8(|line_number, line| {
-            if !matched {
+            if !matched && debug_mode {
                 // Only log the first match
                 println!("  Match found in file: {}", file_name);
             }
@@ -42,14 +42,14 @@ pub fn search_file_for_pattern(file_path: &Path, pattern: &str) -> Result<(bool,
             line_numbers.insert(line_num);
 
             // Log raw search results if debug mode is enabled
-            if debug_mode {
-                println!(
-                    "DEBUG: Match in file '{}' at line {}: '{}'",
-                    file_name,
-                    line_num,
-                    line.trim()
-                );
-            }
+            // if debug_mode {
+            //     println!(
+            //         "DEBUG: Match in file '{}' at line {}: '{}'",
+            //         file_name,
+            //         line_num,
+            //         line.trim()
+            //     );
+            // }
 
             Ok(true) // Continue searching for all matches
         }),

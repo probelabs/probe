@@ -85,7 +85,7 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
     let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
     let total_tokens: usize = results.iter().map(|r| count_tokens(&r.code)).sum();
     println!("Total bytes returned: {}", total_bytes);
-    println!("  Total tokens returned: {}", total_tokens);
+    println!("Total tokens returned: {}", total_tokens);
 }
 
 /// Returns a reference to the tiktoken tokenizer
@@ -185,6 +185,7 @@ pub fn perform_code_search(
     max_bytes: Option<usize>,
     max_tokens: Option<usize>,
     allow_tests: bool, // Parameter to control test file/node inclusion
+    any_term: bool, // Parameter to control multi-term search behavior
 ) -> Result<LimitedSearchResults> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
@@ -198,6 +199,7 @@ pub fn perform_code_search(
         println!("DEBUG:   Include filenames: {}", include_filenames);
         println!("DEBUG:   Reranker: {}", reranker);
         println!("DEBUG:   Frequency search: {}", frequency_search);
+        println!("DEBUG:   Match mode: {}", if any_term { "any term" } else { "all terms" });
     }
 
     // If frequency-based search is enabled and we have exactly one query
@@ -219,16 +221,20 @@ pub fn perform_code_search(
             max_bytes,
             max_tokens,
             allow_tests,
+            any_term,
         );
     }
 
-    // Collect matches
-    let mut matches_by_file: HashMap<PathBuf, HashSet<usize>> = HashMap::new();
+    // Collect matches for each query
+    let mut matches_by_file_and_query: HashMap<PathBuf, HashMap<usize, HashSet<usize>>> = HashMap::new();
 
-    println!("Searching for {} queries in {:?}...", queries.len(), path);
+    println!("Searching for {} queries in {:?} (mode: {})...", 
+             queries.len(), 
+             path, 
+             if any_term { "any term matches" } else { "all terms must match" });
 
     // Process each query
-    for query in queries {
+    for (query_idx, query) in queries.iter().enumerate() {
         // Create a case-insensitive regex matcher with the query
         let matcher = RegexMatcherBuilder::new()
             .case_insensitive(true)
@@ -347,8 +353,10 @@ pub fn perform_code_search(
                 &matcher,
                 file_path,
                 UTF8(|line_number, _line| {
-                    matches_by_file
+                    matches_by_file_and_query
                         .entry(path_clone.clone())
+                        .or_insert_with(HashMap::new)
+                        .entry(query_idx)
                         .or_insert_with(HashSet::new)
                         .insert(line_number as usize);
                     Ok(true)
@@ -358,6 +366,39 @@ pub fn perform_code_search(
                 continue;
             }
         }
+    }
+
+    // Combine matches based on the search mode (all terms or any term)
+    let mut matches_by_file: HashMap<PathBuf, HashSet<usize>> = HashMap::new();
+    let total_files_with_any_match = matches_by_file_and_query.len();
+    
+    for (file_path, query_matches) in matches_by_file_and_query {
+        // In "any term" mode, include files that match any of the queries
+        // In default mode (all terms), only include files that match all queries
+        let should_include = if any_term {
+            // Any term mode: include if there's at least one match
+            !query_matches.is_empty()
+        } else {
+            // All terms mode: include only if all queries match
+            query_matches.len() == queries.len()
+        };
+        
+        if should_include {
+            // Combine all line numbers for this file
+            let mut all_lines = HashSet::new();
+            for lines in query_matches.values() {
+                all_lines.extend(lines);
+            }
+            matches_by_file.insert(file_path, all_lines);
+        }
+    }
+    
+    // Log filtering statistics
+    if queries.len() > 1 {
+        println!("Term filtering: {} files matched at least one term, {} files matched the filter criteria ({}).",
+                 total_files_with_any_match,
+                 matches_by_file.len(),
+                 if any_term { "any term" } else { "all terms" });
     }
 
     // If no matches found in content and filename matching is disabled, return empty results
@@ -523,8 +564,11 @@ pub fn perform_code_search(
         rank_search_results(&mut results, queries, reranker);
     }
 
+    // Apply default token limit of 100k if not specified
+    let default_max_tokens = max_tokens.or(Some(100000));
+    
     // Apply limits and return
-    Ok(apply_limits(results, max_results, max_bytes, max_tokens))
+    Ok(apply_limits(results, max_results, max_bytes, default_max_tokens))
 }
 
 /// Performs a search using frequency-based approach with stemming and stopword removal
@@ -539,6 +583,7 @@ pub fn perform_frequency_search(
     max_bytes: Option<usize>,
     max_tokens: Option<usize>,
     allow_tests: bool,
+    any_term: bool, // Default is false (all terms must match)
 ) -> Result<LimitedSearchResults> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
@@ -657,13 +702,18 @@ pub fn perform_frequency_search(
         b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2))
     });
 
-    println!(
-        "Found {} files with the following match frequencies:",
-        files_by_frequency.len()
-    );
-    for (i, (file, term_count, total_matches)) in files_by_frequency.iter().enumerate().take(50) {
-        println!("  {}: {:?} - {} term matches, {} total occurrences", 
-                 i + 1, file, term_count, total_matches);
+    if debug_mode {
+        println!(
+            "Found {} files with the following match frequencies:",
+            files_by_frequency.len()
+        );
+    }
+    
+    // Only print detailed match information in debug mode
+    if debug_mode {
+        for (i, (file, term_count, total_matches)) in files_by_frequency.iter().enumerate().take(50) {
+            println!("  Match found in file: {:?}", file);
+        }
     }
 
     if debug_mode {
@@ -682,11 +732,40 @@ pub fn perform_frequency_search(
 
     // 5. Process the top N files (or all if fewer)
     let top_n = 100; // Configurable
-    let top_files: Vec<(PathBuf, usize, usize)> = files_by_frequency
+    let initial_file_count = files_by_frequency.len();
+    let files_with_matches = files_by_frequency.iter().filter(|(_, term_count, _)| *term_count > 0).count();
+    let files_matched_all_terms = files_by_frequency.iter()
+        .filter(|(_, term_count, _)| *term_count == term_patterns.len())
+        .count();
+    
+    // Filter files based on the search mode
+    let filtered_files: Vec<(PathBuf, usize, usize)> = if any_term {
+        // Any term mode: include files that match at least one term
+        files_by_frequency.into_iter()
+            .filter(|(_, term_count, _)| *term_count > 0)
+            .collect()
+    } else {
+        // All terms mode: include only files that match all terms
+        files_by_frequency.into_iter()
+            .filter(|(_, term_count, _)| *term_count == term_patterns.len())
+            .collect()
+    };
+    
+    // Take the top N files
+    let top_files: Vec<(PathBuf, usize, usize)> = filtered_files
         .into_iter()
-        .filter(|(_, term_count, _)| *term_count > 0) // Only include files that matched at least one term
         .take(top_n)
         .collect();
+    
+    // Log filtering statistics
+    if term_pairs.len() > 1 {
+        println!("Frequency filtering (mode: {}): {} files scanned, {} files matched at least one term, {} files matched all terms, {} files selected for processing.",
+                 if any_term { "any term" } else { "all terms" },
+                 initial_file_count,
+                 files_with_matches,
+                 files_matched_all_terms,
+                 top_files.len());
+    }
 
     // 6. Process results
     let mut results = Vec::new();
@@ -772,8 +851,11 @@ pub fn perform_frequency_search(
         rank_search_results(&mut results, &[query.to_string()], reranker);
     }
 
+    // Apply default token limit of 100k if not specified
+    let default_max_tokens = max_tokens.or(Some(100000));
+    
     // Apply limits and return
-    Ok(apply_limits(results, max_results, max_bytes, max_tokens))
+    Ok(apply_limits(results, max_results, max_bytes, default_max_tokens))
 }
 
 // Import necessary types for the implementation

@@ -52,6 +52,10 @@ pub enum Command {
         /// Allow test files and test code blocks in search results
         #[arg(long = "allow-tests")]
         allow_tests: bool,
+
+        /// Match files that contain any of the search terms (by default, files must contain all terms)
+        #[arg(long = "any-term")]
+        any_term: bool,
     },
 }
 
@@ -105,6 +109,10 @@ pub struct Args {
     /// Allow test files and test code blocks in search results
     #[arg(long = "allow-tests")]
     pub allow_tests: bool,
+
+    /// Match files that contain any of the search terms (by default, files must contain all terms)
+    #[arg(long = "any-term")]
+    pub any_term: bool,
 
     #[command(subcommand)]
     pub command: Option<Command>,

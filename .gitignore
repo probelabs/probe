@@ -89,3 +89,10 @@ rust-project.json
 
 # Debug files
 *.stackdump
+
+# Protocol Buffer files
+*.proto
+*_pb2.py
+*.pb.css
+*.pb.h
+*.pb.*

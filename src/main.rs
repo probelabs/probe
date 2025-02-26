@@ -29,6 +29,7 @@ fn main() -> Result<()> {
             max_bytes,
             max_tokens,
             allow_tests,
+            any_term,
         }) => {
             println!("Running in CLI mode (subcommand)");
             // If exact is specified, override frequency_search
@@ -45,6 +46,7 @@ fn main() -> Result<()> {
                 max_bytes,
                 max_tokens,
                 allow_tests,
+                any_term,
             )?;
 
             if limited_results.results.is_empty() {
@@ -52,22 +54,20 @@ fn main() -> Result<()> {
             } else {
                 format_and_print_search_results(&limited_results.results);
 
-                // Print information about limits if they were applied
-                if let Some(limits) = &limited_results.limits_applied {
-                    println!("\nLimits applied:");
-                    if let Some(max_results) = limits.max_results {
-                        println!("  Max results: {}", max_results);
-                    }
-                    if let Some(max_bytes) = limits.max_bytes {
-                        println!("  Max bytes: {}", max_bytes);
-                    }
-                    if let Some(max_tokens) = limits.max_tokens {
-                        println!("  Max tokens: {}", max_tokens);
-                    }
-                    println!("  Total bytes returned: {}", limits.total_bytes);
-                    println!("  Total tokens returned: {}", limits.total_tokens);
+                // Print information about limits only if some results were skipped
+                if !limited_results.skipped_files.is_empty() {
+                    if let Some(limits) = &limited_results.limits_applied {
+                        println!("\nLimits applied:");
+                        if let Some(max_results) = limits.max_results {
+                            println!("  Max results: {}", max_results);
+                        }
+                        if let Some(max_bytes) = limits.max_bytes {
+                            println!("  Max bytes: {}", max_bytes);
+                        }
+                        if let Some(max_tokens) = limits.max_tokens {
+                            println!("  Max tokens: {}", max_tokens);
+                        }
 
-                    if !limited_results.skipped_files.is_empty() {
                         println!(
                             "\nSkipped {} files due to limits",
                             limited_results.skipped_files.len()
@@ -98,6 +98,7 @@ fn main() -> Result<()> {
                         args.max_bytes,
                         args.max_tokens,
                         args.allow_tests,
+                        args.any_term,
                     )?;
 
                     if limited_results.results.is_empty() {
@@ -105,22 +106,20 @@ fn main() -> Result<()> {
                     } else {
                         format_and_print_search_results(&limited_results.results);
 
-                        // Print information about limits if they were applied
-                        if let Some(limits) = &limited_results.limits_applied {
-                            println!("\nLimits applied:");
-                            if let Some(max_results) = limits.max_results {
-                                println!("  Max results: {}", max_results);
-                            }
-                            if let Some(max_bytes) = limits.max_bytes {
-                                println!("  Max bytes: {}", max_bytes);
-                            }
-                            if let Some(max_tokens) = limits.max_tokens {
-                                println!("  Max tokens: {}", max_tokens);
-                            }
-                            println!("  Total bytes returned: {}", limits.total_bytes);
-                            println!("  Total tokens returned: {}", limits.total_tokens);
+                        // Print information about limits only if some results were skipped
+                        if !limited_results.skipped_files.is_empty() {
+                            if let Some(limits) = &limited_results.limits_applied {
+                                println!("\nLimits applied:");
+                                if let Some(max_results) = limits.max_results {
+                                    println!("  Max results: {}", max_results);
+                                }
+                                if let Some(max_bytes) = limits.max_bytes {
+                                    println!("  Max bytes: {}", max_bytes);
+                                }
+                                if let Some(max_tokens) = limits.max_tokens {
+                                    println!("  Max tokens: {}", max_tokens);
+                                }
 
-                            if !limited_results.skipped_files.is_empty() {
                                 println!(
                                     "\nSkipped {} files due to limits",
                                     limited_results.skipped_files.len()

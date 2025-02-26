@@ -76,6 +76,7 @@ code-search cli --path <DIRECTORY_PATH> --query <SEARCH_PATTERN> [OPTIONS]
 - `--max-bytes` - Maximum total bytes of code content to return
 - `--max-tokens` - Maximum total tokens in code content to return (for AI usage)
 - `--allow-tests` - Allow test files and test code blocks in search results (disabled by default)
+- `--any-term` - Match files that contain any of the search terms (by default, files must contain all terms)
 
 #### Examples
 
