@@ -47,6 +47,7 @@ fn main() -> Result<()> {
                 max_tokens,
                 allow_tests,
                 any_term,
+                exact,
             )?;
 
             if limited_results.results.is_empty() {
@@ -99,6 +100,7 @@ fn main() -> Result<()> {
                         args.max_tokens,
                         args.allow_tests,
                         args.any_term,
+                        args.exact,
                     )?;
 
                     if limited_results.results.is_empty() {

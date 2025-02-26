@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::{Language, Node, Parser as TSParser};
 
 use crate::models::CodeBlock;
@@ -222,6 +222,7 @@ pub fn parse_file_for_code_blocks(
     extension: &str,
     line_numbers: &HashSet<usize>,
     allow_tests: bool,
+    _term_matches: Option<&HashMap<usize, HashSet<usize>>>, // Query index to line numbers
 ) -> Result<Vec<CodeBlock>> {
     // Get the appropriate language
     let language =
@@ -418,9 +419,9 @@ pub fn is_test_file(path: &std::path::Path) -> bool {
         }
         
         // C/C++: test_*.c, test_*.cpp, *_test.c, *_test.cpp
-        if (file_name.starts_with("test_") || file_name.ends_with("_test.c") || 
+        if file_name.starts_with("test_") || file_name.ends_with("_test.c") || 
             file_name.ends_with("_test.cpp") || file_name.ends_with("_test.cc") || 
-            file_name.ends_with("_test.cxx")) {
+            file_name.ends_with("_test.cxx") {
             if debug_mode {
                 println!("DEBUG: Test file detected (C/C++): {}", file_name);
             }

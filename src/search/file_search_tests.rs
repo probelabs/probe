@@ -59,7 +59,7 @@ mod tests {
         let content = "line 1: no match\nline 2: contains search term\nline 3: no match\n";
         let file_path = create_test_file(&temp_dir, "test.txt", content);
 
-        let (matched, line_numbers) = search_file_for_pattern(&file_path, "search")
+        let (matched, line_numbers) = search_file_for_pattern(&file_path, "search", true)
             .expect("Failed to search file");
 
         assert!(matched);
@@ -73,7 +73,7 @@ mod tests {
         let content = "line 1: no match\nline 2: no match\nline 3: no match\n";
         let file_path = create_test_file(&temp_dir, "test.txt", content);
 
-        let (matched, line_numbers) = search_file_for_pattern(&file_path, "nonexistent")
+        let (matched, line_numbers) = search_file_for_pattern(&file_path, "nonexistent", true)
             .expect("Failed to search file");
 
         assert!(!matched);
@@ -87,12 +87,46 @@ mod tests {
         let file_path = create_test_file(&temp_dir, "test.txt", content);
 
         // Search should be case-insensitive by default
-        let (matched, line_numbers) = search_file_for_pattern(&file_path, "search")
+        let (matched, line_numbers) = search_file_for_pattern(&file_path, "search", true)
             .expect("Failed to search file");
 
         assert!(matched);
         assert_eq!(line_numbers.len(), 1);
         assert!(line_numbers.contains(&2));  // Line 2 contains "SEARCH"
+    }
+
+    #[test]
+    fn test_search_file_for_pattern_word_boundaries() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let content = "line 1: ip address\nline 2: skipped\nline 3: ip\n";
+        let file_path = create_test_file(&temp_dir, "test.txt", content);
+
+        // With word boundaries (exact=false), "ip" should match "ip" but not "skipped"
+        let (matched, line_numbers) = search_file_for_pattern(&file_path, "ip", false)
+            .expect("Failed to search file");
+
+        assert!(matched);
+        assert_eq!(line_numbers.len(), 2);
+        assert!(line_numbers.contains(&1));  // Line 1 contains "ip"
+        assert!(line_numbers.contains(&3));  // Line 3 contains "ip"
+        assert!(!line_numbers.contains(&2)); // Line 2 contains "skipped" but should not match
+    }
+
+    #[test]
+    fn test_search_file_for_pattern_exact_mode() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let content = "line 1: ip address\nline 2: skipped\nline 3: ip\n";
+        let file_path = create_test_file(&temp_dir, "test.txt", content);
+
+        // In exact mode (exact=true), "ip" should match both "ip" and "skipped"
+        let (matched, line_numbers) = search_file_for_pattern(&file_path, "ip", true)
+            .expect("Failed to search file");
+
+        assert!(matched);
+        assert_eq!(line_numbers.len(), 3);  // All 3 lines should match
+        assert!(line_numbers.contains(&1));  // Line 1 contains "ip"
+        assert!(line_numbers.contains(&2));  // Line 2 contains "skipped" which contains "ip"
+        assert!(line_numbers.contains(&3));  // Line 3 contains "ip"
     }
 
     #[test]

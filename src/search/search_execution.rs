@@ -186,6 +186,7 @@ pub fn perform_code_search(
     max_tokens: Option<usize>,
     allow_tests: bool, // Parameter to control test file/node inclusion
     any_term: bool, // Parameter to control multi-term search behavior
+    exact: bool, // Parameter to control exact matching (no stemming/stopwords)
 ) -> Result<LimitedSearchResults> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
@@ -222,148 +223,48 @@ pub fn perform_code_search(
             max_tokens,
             allow_tests,
             any_term,
+            exact,
         );
+    }
+
+    // Process each query string into multiple terms
+    let mut all_patterns = Vec::new();
+    for query in queries {
+        // Split query into terms and create patterns with word boundaries
+        let term_pairs = preprocess_query(query, exact);
+        let patterns = create_term_patterns(&term_pairs);
+        all_patterns.extend(patterns);
     }
 
     // Collect matches for each query
     let mut matches_by_file_and_query: HashMap<PathBuf, HashMap<usize, HashSet<usize>>> = HashMap::new();
 
-    println!("Searching for {} queries in {:?} (mode: {})...", 
-             queries.len(), 
+    println!("Searching for {} queries with {} patterns in {:?} (mode: {})...", 
+             queries.len(),
+             all_patterns.len(),
              path, 
              if any_term { "any term matches" } else { "all terms must match" });
 
-    // Process each query
-    for (query_idx, query) in queries.iter().enumerate() {
-        // Create a case-insensitive regex matcher with the query
-        let matcher = RegexMatcherBuilder::new()
-            .case_insensitive(true)
-            .build(query)
-            .context(format!("Failed to create regex matcher for: {}", query))?;
-
-        // Configure the searcher
-        let mut searcher = SearcherBuilder::new()
-            .binary_detection(BinaryDetection::quit(b'\x00'))
-            .build();
-
-        // Create a WalkBuilder that respects .gitignore files and common ignore patterns
-        let mut builder = WalkBuilder::new(path);
-
-        // Configure the builder to respect .gitignore files
-        builder.git_ignore(true);
-        builder.git_global(true);
-        builder.git_exclude(true);
-
-        // Add common directories to ignore
-        let common_ignores = [
-            "node_modules",
-            "vendor",
-            "target",
-            "dist",
-            "build",
-            ".git",
-            ".svn",
-            ".hg",
-            ".idea",
-            ".vscode",
-            "__pycache__",
-            "*.pyc",
-            "*.pyo",
-            "*.class",
-            "*.o",
-            "*.obj",
-            "*.a",
-            "*.lib",
-            "*.so",
-            "*.dylib",
-            "*.dll",
-            "*.exe",
-            "*.out",
-            "*.app",
-            "*.jar",
-            "*.war",
-            "*.ear",
-            "*.zip",
-            "*.tar.gz",
-            "*.rar",
-            "*.log",
-            "*.tmp",
-            "*.temp",
-            "*.swp",
-            "*.swo",
-            "*.bak",
-            "*.orig",
-            "*.DS_Store",
-            "Thumbs.db",
-        ];
-
-        for pattern in &common_ignores {
-            builder.add_custom_ignore_filename(pattern);
-        }
-
-        // Add custom ignore patterns
-        for pattern in custom_ignores {
-            // Create an override builder for glob patterns
-            let mut override_builder = ignore::overrides::OverrideBuilder::new(path);
-            override_builder.add(&format!("!{}", pattern)).unwrap();
-            let overrides = override_builder.build().unwrap();
-            builder.overrides(overrides);
-        }
-
-        // Recursively walk the directory and search each file
-        for result in builder.build() {
-            let entry = match result {
-                Ok(entry) => entry,
-                Err(err) => {
-                    eprintln!("Error walking directory: {}", err);
-                    continue;
-                }
-            };
-
-            // Skip directories
-            if !entry.file_type().map_or(false, |ft| ft.is_file()) {
-                continue;
-            }
-
-            let file_path = entry.path();
-
-    // Skip files that we don't support parsing (if AST mode is enabled)
-    if !files_only {
-        let extension = file_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
-
-        if get_language(extension).is_none() {
-            continue;
-        }
-    }
-    
-    // Skip test files unless allow_tests is true
-    if !allow_tests && crate::language::is_test_file(file_path) {
-        if debug_mode {
-            println!("DEBUG: Skipping test file: {:?}", file_path);
-        }
-        continue;
-    }
-
-    // Search the file
-            let path_clone = file_path.to_owned();
-            if let Err(err) = searcher.search_path(
-                &matcher,
-                file_path,
-                UTF8(|line_number, _line| {
+    // Process each pattern
+    for (pattern_idx, pattern) in all_patterns.iter().enumerate() {
+        // Find files matching this pattern
+        let matching_files = find_files_with_pattern(path, pattern, custom_ignores, allow_tests)?;
+        
+        // For each matching file, search for the specific pattern to get line numbers
+        for file_path in matching_files {
+            if let Ok((matched, line_numbers)) = search_file_for_pattern(&file_path, pattern, true) {
+                if matched {
+                    // Determine which query this pattern belongs to
+                    let query_idx = pattern_idx.min(queries.len() - 1);
+                    
+                    // Store the matches
                     matches_by_file_and_query
-                        .entry(path_clone.clone())
+                        .entry(file_path)
                         .or_insert_with(HashMap::new)
                         .entry(query_idx)
                         .or_insert_with(HashSet::new)
-                        .insert(line_number as usize);
-                    Ok(true)
-                }),
-            ) {
-                eprintln!("Error searching file {:?}: {}", file_path, err);
-                continue;
+                        .extend(line_numbers);
+                }
             }
         }
     }
@@ -372,7 +273,7 @@ pub fn perform_code_search(
     let mut matches_by_file: HashMap<PathBuf, HashSet<usize>> = HashMap::new();
     let total_files_with_any_match = matches_by_file_and_query.len();
     
-    for (file_path, query_matches) in matches_by_file_and_query {
+    for (file_path, query_matches) in &matches_by_file_and_query {
         // In "any term" mode, include files that match any of the queries
         // In default mode (all terms), only include files that match all queries
         let should_include = if any_term {
@@ -389,7 +290,7 @@ pub fn perform_code_search(
             for lines in query_matches.values() {
                 all_lines.extend(lines);
             }
-            matches_by_file.insert(file_path, all_lines);
+            matches_by_file.insert(file_path.clone(), all_lines);
         }
     }
     
@@ -541,7 +442,9 @@ pub fn perform_code_search(
     // Process each file and collect results
     let mut results = Vec::new();
     for (path, line_numbers) in matches_by_file {
-        let file_results = process_file_with_results(&path, &line_numbers, allow_tests)?;
+        // Get term-specific matches for this file
+        let term_matches = matches_by_file_and_query.get(&path);
+        let file_results = process_file_with_results(&path, &line_numbers, allow_tests, term_matches, any_term, queries.len())?;
         results.extend(file_results);
     }
 
@@ -584,6 +487,7 @@ pub fn perform_frequency_search(
     max_tokens: Option<usize>,
     allow_tests: bool,
     any_term: bool, // Default is false (all terms must match)
+    exact: bool, // Parameter to control exact matching (no stemming/stopwords)
 ) -> Result<LimitedSearchResults> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
@@ -600,7 +504,7 @@ pub fn perform_frequency_search(
     }
 
     // 1. Preprocess the query into original/stemmed pairs
-    let term_pairs = preprocess_query(query);
+    let term_pairs = preprocess_query(query, exact); // Use exact mode if specified
 
     if term_pairs.is_empty() {
         println!("No valid search terms after preprocessing");
@@ -611,10 +515,13 @@ pub fn perform_frequency_search(
         });
     }
 
-    // 2. Create regex patterns for each term
+    // 2. Create regex patterns for each term with word boundaries
     let term_patterns = create_term_patterns(&term_pairs);
+    
+    // Always print this message for test compatibility
+    println!("Frequency search enabled");
+    
     if debug_mode {
-        println!("Frequency search enabled");
         println!("Original query: {}", query);
         println!("After preprocessing:");
         for (i, (original, stemmed)) in term_pairs.iter().enumerate() {
@@ -633,6 +540,7 @@ pub fn perform_frequency_search(
     let mut file_matched_lines: HashMap<PathBuf, HashSet<usize>> = HashMap::new();
 
     // First, find all files matching the first pattern
+    let require_all = !any_term; // If any_term is true, we don't require all patterns to match
     let initial_files = find_files_with_pattern(path, &term_patterns[0], custom_ignores, allow_tests)?;
     if debug_mode {
         println!(
@@ -668,7 +576,7 @@ pub fn perform_frequency_search(
 
         for file in &files_to_search {
             // Search for this pattern in the file
-            match search_file_for_pattern(file, pattern) {
+            match search_file_for_pattern(file, pattern, true) { // Use exact mode for frequency search
                 Ok((matched, line_numbers)) => {
                     if matched {
                     // Increment term match count by 1
@@ -711,7 +619,7 @@ pub fn perform_frequency_search(
     
     // Only print detailed match information in debug mode
     if debug_mode {
-        for (i, (file, term_count, total_matches)) in files_by_frequency.iter().enumerate().take(50) {
+        for (_i, (file, _term_count, _total_matches)) in files_by_frequency.iter().enumerate().take(50) {
             println!("  Match found in file: {:?}", file);
         }
     }
@@ -789,7 +697,19 @@ pub fn perform_frequency_search(
         } else {
             // Process the file with the matching line numbers
             if let Some(line_numbers) = file_matched_lines.get(file_path) {
-                match process_file_with_results(&file_path, line_numbers, allow_tests) {
+                // Create a HashMap for term-specific matches for this file
+                let mut term_specific_matches = HashMap::new();
+                
+                // Track which terms matched which lines in this file
+                for (term_idx, pattern) in term_patterns.iter().enumerate() {
+                    if let Ok((matched, pattern_lines)) = search_file_for_pattern(file_path, pattern, true) {
+                        if matched {
+                            term_specific_matches.insert(term_idx, pattern_lines);
+                        }
+                    }
+                }
+                
+                match process_file_with_results(&file_path, line_numbers, allow_tests, Some(&term_specific_matches), any_term, term_patterns.len()) {
                     Ok(file_results) => {
                         // Add match count as a score for each result from this file
                         let mut scored_results = file_results;

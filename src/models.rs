@@ -12,7 +12,9 @@ pub struct SearchLimits {
     pub max_results: Option<usize>,
     pub max_bytes: Option<usize>,
     pub max_tokens: Option<usize>,
+    #[allow(dead_code)]
     pub total_bytes: usize,
+    #[allow(dead_code)]
     pub total_tokens: usize,
 }
 

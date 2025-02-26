@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 4389d9e5a829d147cb11cb4b5182e75a0741f36823f0ade724d5f19102e93dcf # shrinks to query = "'a?"
+cc 8553eb31be6672c0c6fd031bee95f520d4bb55fec15e8474d10a3c5b5ba8b4c4 # shrinks to query = "["

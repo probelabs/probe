@@ -5,11 +5,13 @@ use grep::searcher::{BinaryDetection, SearcherBuilder};
 use ignore::WalkBuilder;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use regex::Regex;
 
 use crate::language::is_test_file;
+use crate::search::query::{preprocess_query, regex_escape};
 
 /// Searches a file for a pattern and returns whether it matched and the matching line numbers
-pub fn search_file_for_pattern(file_path: &Path, pattern: &str) -> Result<(bool, HashSet<usize>)> {
+pub fn search_file_for_pattern(file_path: &Path, pattern: &str, exact: bool) -> Result<(bool, HashSet<usize>)> {
     let mut matched = false;
     let mut line_numbers = HashSet::new();
     let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
@@ -17,11 +19,18 @@ pub fn search_file_for_pattern(file_path: &Path, pattern: &str) -> Result<(bool,
     // Check if debug mode is enabled
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
 
+    // Use word boundaries unless exact mode is specified
+    let adjusted_pattern = if exact { 
+        pattern.to_string() 
+    } else { 
+        format!(r"\b{}\b", pattern) 
+    };
+
     // Create a case-insensitive regex matcher for the pattern
     let matcher = RegexMatcherBuilder::new()
         .case_insensitive(true)
-        .build(pattern)
-        .context(format!("Failed to create regex matcher for: {}", pattern))?;
+        .build(&adjusted_pattern)
+        .context(format!("Failed to create regex matcher for: {}", adjusted_pattern))?;
 
     // Configure the searcher
     let mut searcher = SearcherBuilder::new()
@@ -32,7 +41,7 @@ pub fn search_file_for_pattern(file_path: &Path, pattern: &str) -> Result<(bool,
     if let Err(err) = searcher.search_path(
         &matcher,
         file_path,
-        UTF8(|line_number, line| {
+        UTF8(|line_number, _line| {
             if !matched && debug_mode {
                 // Only log the first match
                 println!("  Match found in file: {}", file_name);
@@ -242,19 +251,26 @@ pub fn find_matching_filenames(
 ) -> Result<Vec<PathBuf>> {
     let mut matching_files = Vec::new();
 
-    // Extract words from queries
-    let mut query_words = HashSet::new();
+    // Process queries to get both original and stemmed terms
+    let mut term_pairs = Vec::new();
     for query in queries {
-        // Split query by non-alphanumeric characters and collect words
-        for word in query.split(|c: char| !c.is_alphanumeric()) {
-            let word = word.trim();
-            if !word.is_empty() {
-                query_words.insert(word.to_lowercase());
+        term_pairs.extend(preprocess_query(query, false)); // Use non-exact mode for filename matching
+    }
+
+    println!("Looking for filenames matching queries (with stemming): {:?}", queries);
+    
+    // Debug output for stemmed terms
+    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    if debug_mode && !term_pairs.is_empty() {
+        println!("DEBUG: Using the following term pairs for filename matching:");
+        for (i, (original, stemmed)) in term_pairs.iter().enumerate() {
+            if original == stemmed {
+                println!("DEBUG:   {}. {} (stemmed same as original)", i + 1, original);
+            } else {
+                println!("DEBUG:   {}. {} (stemmed to {})", i + 1, original, stemmed);
             }
         }
     }
-
-    println!("Looking for filenames containing words: {:?}", query_words);
 
     // Create a WalkBuilder that respects .gitignore files and common ignore patterns
     let mut builder = WalkBuilder::new(path);
@@ -353,9 +369,28 @@ pub fn find_matching_filenames(
             None => continue,
         };
 
-        // Check if any query word is in the file name
-        for word in &query_words {
-            if file_name.contains(word) {
+        // Check if any term (original or stemmed) matches the file name using word boundaries
+        for (original, stemmed) in &term_pairs {
+            // Create a regex pattern that matches either the original or stemmed term
+            let pattern = if original == stemmed {
+                // If stemmed and original are the same, just use one with word boundaries
+                format!(r"\b{}\b", regex_escape(original))
+            } else {
+                // Otherwise, create an OR pattern with word boundaries
+                format!(r"\b({}|{})\b", regex_escape(original), regex_escape(stemmed))
+            };
+            
+            // Create and check the regex
+            let re = Regex::new(&pattern).unwrap();
+            if re.is_match(&file_name) {
+                if debug_mode {
+                    if original == stemmed {
+                        println!("DEBUG: File '{}' matched term '{}'", file_name, original);
+                    } else {
+                        println!("DEBUG: File '{}' matched term '{}' or its stemmed form '{}'", 
+                                 file_name, original, stemmed);
+                    }
+                }
                 matching_files.push(file_path.to_owned());
                 break;
             }
@@ -363,7 +398,7 @@ pub fn find_matching_filenames(
     }
 
     println!(
-        "Found {} files with names matching query words",
+        "Found {} files with names containing whole-word matches of query words (including stemmed forms)",
         matching_files.len()
     );
     Ok(matching_files)
