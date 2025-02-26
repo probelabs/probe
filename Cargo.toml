@@ -1,0 +1,39 @@
+[package]
+name = "code-search"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+grep = "0.2"
+ignore = "0.4"
+tree-sitter = "0.20"
+tree-sitter-rust = "0.20"
+tree-sitter-javascript = "0.20"
+tree-sitter-typescript = "0.20"
+tree-sitter-python = "0.20"
+tree-sitter-go = "0.20"
+tree-sitter-c = "0.20"
+tree-sitter-cpp = "0.20"
+tree-sitter-java = "0.20"
+tree-sitter-ruby = "0.20"
+tree-sitter-php = "0.20"
+clap = { version = "4.3", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rust-stemmers = "1.2"
+tokio = { version = "1", features = ["full"] }
+tiktoken-rs = "0.5"
+
+[dev-dependencies]
+tempfile = "3.7"
+proptest = "1.2"
+criterion = "0.5"
+
+[lib]
+name = "code_search"
+path = "src/lib.rs"
+
+[[bin]]
+name = "code-search"
+path = "src/main.rs"
