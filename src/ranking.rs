@@ -250,7 +250,7 @@ fn split_camel_case(s: &str) -> Vec<String> {
     let mut prev_is_lower = false;
     let mut prev_is_numeric = false;
 
-    for (i, c) in s.chars().enumerate() {
+    for (_i, c) in s.chars().enumerate() {
         let is_numeric = c.is_numeric();
         // println!("  Char {}: '{}', prev_is_lower: {}, prev_is_numeric: {}", i, c, prev_is_lower, prev_is_numeric);
 
