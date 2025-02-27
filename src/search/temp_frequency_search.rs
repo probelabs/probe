@@ -340,7 +340,9 @@ pub fn perform_frequency_search(
             term_matches.as_ref(), 
             any_term, 
             term_pairs.len(),
-            filename_matched_terms
+            filename_matched_terms,
+            &[term_pairs.clone()],
+            Some(&[term_pairs.clone()])
         )?;
         
         results.extend(file_results);
@@ -367,7 +369,7 @@ pub fn perform_frequency_search(
             // files that matched by filename, but we include it for consistency
             let _filename_matched_queries = get_filename_matched_queries(&filename, &[term_pairs.clone()]);
             
-            match process_file_by_filename(&file_path) {
+            match process_file_by_filename(&file_path, &[term_pairs.clone()], Some(&[term_pairs.clone()])) {
                 Ok(mut result) => {
                     // Ensure the matched_by_filename flag is set
                     result.matched_by_filename = Some(true);

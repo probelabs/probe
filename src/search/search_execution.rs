@@ -102,6 +102,15 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
                     println!("File Match Rank: {}", file_match_rank);
                 }
 
+                // Display block-level statistics
+                if let Some(block_unique_terms) = result.block_unique_terms {
+                    println!("Block Unique Terms: {}", block_unique_terms);
+                }
+
+                if let Some(block_total_matches) = result.block_total_matches {
+                    println!("Block Total Matches: {}", block_total_matches);
+                }
+
                 println!("Type: {}", result.node_type);
             }
         }
@@ -280,6 +289,11 @@ pub fn perform_code_search(
     // Store the term pairs for each query for filename matching
     let queries_terms: Vec<Vec<(String, String)>> =
         queries.iter().map(|q| preprocess_query(q, exact)).collect();
+    
+    // Cache preprocessed query terms for reuse
+    let preprocessed_queries: Vec<Vec<String>> = queries_terms.iter()
+        .map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()).collect())
+        .collect();
 
     // Create a mapping from pattern index to query index (for backward compatibility)
     let mut pattern_to_query: Vec<usize> = Vec::new();
@@ -663,7 +677,8 @@ pub fn perform_code_search(
                 file_unique_terms: None,
                 file_total_matches: None,
                 file_match_rank: None,
-            });
+                block_unique_terms: None,
+                block_total_matches: None,            });
         }
 
         // If filename matching is enabled, find files whose names match query words
@@ -693,7 +708,8 @@ pub fn perform_code_search(
                     file_unique_terms: None,
                     file_total_matches: None,
                     file_match_rank: None,
-                });
+                    block_unique_terms: None,
+                    block_total_matches: None,                });
             }
         }
 
@@ -811,6 +827,8 @@ pub fn perform_code_search(
             any_term,
             queries_terms.iter().map(|terms| terms.len()).sum(),
             filename_matched_terms,
+            &queries_terms,
+            Some(&preprocessed_queries), // Pass the cached preprocessed query terms
         )?;
 
         // Assign file-level statistics to each result
@@ -844,7 +862,7 @@ pub fn perform_code_search(
             let _filename_matched_queries =
                 get_filename_matched_queries_compat(&filename, &queries_terms);
 
-            match process_file_by_filename(&file_path) {
+            match process_file_by_filename(&file_path, &queries_terms, Some(&preprocessed_queries)) {
                 Ok(mut result) => {
                     // Ensure the matched_by_filename flag is set
                     result.matched_by_filename = Some(true);
@@ -1294,7 +1312,8 @@ pub fn perform_frequency_search(
                 file_unique_terms: None,
                 file_total_matches: None,
                 file_match_rank: None,
-            });
+                block_unique_terms: None,
+                block_total_matches: None,            });
         }
 
         // If filename matching is enabled, find files whose names match query words
@@ -1325,7 +1344,8 @@ pub fn perform_frequency_search(
                     file_unique_terms: None,
                     file_total_matches: None,
                     file_match_rank: None,
-                });
+                    block_unique_terms: None,
+                    block_total_matches: None,                });
             }
         }
 
@@ -1438,7 +1458,8 @@ pub fn perform_frequency_search(
                     file_unique_terms: Some(__unique_terms),
                     file_total_matches: Some(_total_matches),
                     file_match_rank: None,
-                });
+                    block_unique_terms: None,
+                    block_total_matches: None,            });
                 continue;
             }
         }
@@ -1476,6 +1497,8 @@ pub fn perform_frequency_search(
                     file_unique_terms: Some(file_unique_terms),
                     file_total_matches: Some(file_total_matches),
                     file_match_rank: Some(file_match_rank),
+                    block_unique_terms: None,
+                    block_total_matches: None,
                 });
                 continue;
             }
@@ -1501,6 +1524,8 @@ pub fn perform_frequency_search(
                     file_unique_terms: Some(file_unique_terms),
                     file_total_matches: Some(file_total_matches),
                     file_match_rank: Some(file_match_rank),
+                    block_unique_terms: None,
+                    block_total_matches: None,
                 });
                 continue;
             }
@@ -1531,6 +1556,8 @@ pub fn perform_frequency_search(
                 file_unique_terms: Some(file_unique_terms),
                 file_total_matches: Some(file_total_matches),
                 file_match_rank: Some(file_match_rank),
+                block_unique_terms: None,
+                block_total_matches: None,
             });
         } else {
             // Get term-specific matches for this file
@@ -1563,12 +1590,16 @@ pub fn perform_frequency_search(
                 any_term,
                 term_pairs.len(),
                 filename_matched_terms,
+                &[term_pairs.clone()],
+                Some(&[term_pairs.iter().map(|(_, stemmed)| stemmed.clone()).collect()]), // Pass the cached preprocessed query terms
             )?;
 
             // Assign file-level statistics to each result
             for result in &mut file_results {
                 let file_path_str = result.file.clone();
-                if let Some(&(unique_terms, total_matches, rank)) = file_stats.get(&file_path_str) {
+                if let Some(&(unique_terms, total_matches, rank)) =
+                    file_stats.get(&file_path_str)
+                {
                     result.file_unique_terms = Some(unique_terms);
                     result.file_total_matches = Some(total_matches);
                     result.file_match_rank = Some(rank);
@@ -1592,7 +1623,7 @@ pub fn perform_frequency_search(
 
         for file_path in filename_matching_files {
             // Process the file that matched by filename
-            match process_file_by_filename(&file_path) {
+            match process_file_by_filename(&file_path, &[term_pairs.clone()], Some(&[term_pairs.iter().map(|(_, stemmed)| stemmed.clone()).collect()])) {
                 Ok(mut result) => {
                     // Assign file-level statistics
                     let file_path_str = file_path.to_string_lossy().to_string();

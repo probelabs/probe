@@ -5,6 +5,8 @@ use std::path::Path;
 
 use crate::language::{merge_code_blocks, parse_file_for_code_blocks};
 use crate::models::SearchResult;
+use crate::ranking::preprocess_text;
+use crate::search::file_search::get_filename_matched_queries_compat;
 
 /// Function to check if a code block should be included based on term matches
 fn filter_code_block(
@@ -72,16 +74,29 @@ fn filter_code_block(
 }
 
 /// Function to process a file that was matched by filename
-pub fn process_file_by_filename(path: &Path) -> Result<SearchResult> {
+pub fn process_file_by_filename(
+    path: &Path, 
+    queries_terms: &[Vec<(String, String)>],
+    preprocessed_queries: Option<&[Vec<String>]>, // Optional preprocessed query terms for optimization
+) -> Result<SearchResult> {
     // Read the file content
     let content = fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
-
-    // Create a SearchResult for the entire file
-    Ok(SearchResult {
+    
+    // Get the filename for matching
+    let filename = path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    
+    // Use get_filename_matched_queries_compat to determine matched terms
+    let matched_terms = get_filename_matched_queries_compat(&filename, queries_terms);
+    
+    // Create a SearchResult with filename match information
+    let mut search_result = SearchResult {
         file: path.to_string_lossy().to_string(),
         lines: (1, content.lines().count()),
         node_type: "file".to_string(),
-        code: content,
+        code: content.clone(), // Clone content here to avoid the move
         matched_by_filename: Some(true),
         rank: None,
         score: None,
@@ -89,10 +104,38 @@ pub fn process_file_by_filename(path: &Path) -> Result<SearchResult> {
         bm25_score: None,
         tfidf_rank: None,
         bm25_rank: None,
-        file_unique_terms: None,
-        file_total_matches: None,
+        file_unique_terms: Some(matched_terms.len()),
+        file_total_matches: Some(0),
         file_match_rank: None,
-    })
+        block_unique_terms: Some(matched_terms.len()),
+        block_total_matches: Some(0),
+    };
+
+    // Use preprocessed query terms if available
+    if let Some(preprocessed) = preprocessed_queries {
+        let query_terms: Vec<String> = preprocessed.iter().flat_map(|terms| terms.iter().cloned()).collect();
+        let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
+        let block_terms = preprocess_text(&content, false);
+        let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
+            0
+        } else {
+            block_terms.iter()
+                .filter(|t| unique_query_terms.contains(*t))
+                .collect::<HashSet<&String>>()
+                .len()
+        };
+        let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
+            0
+        } else {
+            block_terms.iter()
+                .filter(|t| unique_query_terms.contains(*t))
+                .count()
+        };
+        search_result.file_unique_terms = Some(block_unique_terms);
+        search_result.file_total_matches = Some(block_total_matches);
+    }
+
+    Ok(search_result)
 }
 
 /// Function to process a file with line numbers and return SearchResult structs
@@ -104,6 +147,8 @@ pub fn process_file_with_results(
     any_term: bool, // Whether to include code blocks that match any term (true) or all terms (false)
     num_queries: usize, // Total number of queries being searched
     filename_matched_queries: HashSet<usize>, // Query indices that match the filename
+    queries_terms: &[Vec<(String, String)>], // The query terms for calculating block matches
+    preprocessed_queries: Option<&[Vec<String>]>, // Optional preprocessed query terms for optimization
 ) -> Result<Vec<SearchResult>> {
     // Read the file content
     let content = fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
@@ -171,17 +216,50 @@ pub fn process_file_with_results(
             let start_line = block.start_row + 1; // Convert to 1-based line numbers
             let end_line = block.end_row + 1;
 
-            // Extract the full code between start and end lines
-            let full_code = lines[start_line - 1..end_line].join("\n");
+            // Extract the full code for this block
+            let full_code = if start_line > 0 && end_line <= lines.len() {
+                lines[start_line - 1..end_line].join("\n")
+            } else {
+                "".to_string()
+            };
+
+            // Calculate block term matches
+            let block_terms = preprocess_text(&full_code, false);
+            
+            // Use preprocessed query terms if available, otherwise generate them
+            let query_terms: Vec<String> = if let Some(preprocessed) = preprocessed_queries {
+                preprocessed.iter().flat_map(|terms| terms.iter().cloned()).collect()
+            } else {
+                queries_terms.iter()
+                    .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
+                    .collect()
+            };
+            
+            let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
+            
+            // Calculate unique terms matched in the block
+            let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
+                0
+            } else {
+                block_terms.iter()
+                    .filter(|t| unique_query_terms.contains(*t))
+                    .collect::<HashSet<&String>>()
+                    .len()
+            };
+            
+            // Calculate total matches in the block
+            let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
+                0
+            } else {
+                block_terms.iter()
+                    .filter(|t| unique_query_terms.contains(*t))
+                    .count()
+            };
 
             if debug_mode {
                 println!(
-                    "DEBUG: AST block found at lines {}-{}, node type: {}",
-                    start_line, end_line, block.node_type
-                );
-                println!(
-                    "DEBUG: Extracted block at lines {}-{}, type: {}",
-                    start_line, end_line, block.node_type
+                    "DEBUG: Block at {}-{} has {} unique term matches and {} total matches",
+                    start_line, end_line, block_unique_terms, block_total_matches
                 );
             }
 
@@ -223,7 +301,7 @@ pub fn process_file_with_results(
                     file: path.to_string_lossy().to_string(),
                     lines: (start_line, end_line),
                     node_type: block.node_type.clone(),
-                    code: full_code,
+                    code: full_code.clone(), // Clone full_code here to avoid the move
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -231,9 +309,11 @@ pub fn process_file_with_results(
                     bm25_score: None,
                     tfidf_rank: None,
                     bm25_rank: None,
-                    file_unique_terms: None,
-                    file_total_matches: None,
+                    file_unique_terms: Some(block_unique_terms),
+                    file_total_matches: Some(block_total_matches),
                     file_match_rank: None,
+                    block_unique_terms: Some(block_unique_terms),
+                    block_total_matches: Some(block_total_matches),
                 });
             }
         }
@@ -297,7 +377,44 @@ pub fn process_file_with_results(
                 lines[0..context_end].join("\n")
             };
 
+            // Calculate block term matches
+            let block_terms = preprocess_text(&context_code, false);
+            
+            // Use preprocessed query terms if available, otherwise generate them
+            let query_terms: Vec<String> = if let Some(preprocessed) = preprocessed_queries {
+                preprocessed.iter().flat_map(|terms| terms.iter().cloned()).collect()
+            } else {
+                queries_terms.iter()
+                    .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
+                    .collect()
+            };
+            
+            let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
+            
+            // Calculate unique terms matched in the block
+            let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
+                0
+            } else {
+                block_terms.iter()
+                    .filter(|t| unique_query_terms.contains(*t))
+                    .collect::<HashSet<&String>>()
+                    .len()
+            };
+            
+            // Calculate total matches in the block
+            let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
+                0
+            } else {
+                block_terms.iter()
+                    .filter(|t| unique_query_terms.contains(*t))
+                    .count()
+            };
+
             if debug_mode {
+                println!(
+                    "DEBUG: Context block at {}-{} has {} unique term matches and {} total matches",
+                    context_start, context_end, block_unique_terms, block_total_matches
+                );
                 println!(
                     "DEBUG: Fallback context at lines {}-{}",
                     context_start, context_end
@@ -337,7 +454,7 @@ pub fn process_file_with_results(
                     file: path.to_string_lossy().to_string(),
                     lines: (context_start, context_end),
                     node_type: "context".to_string(), // Mark as context-based result
-                    code: context_code,
+                    code: context_code.clone(), // Clone context_code here to avoid the move
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -348,6 +465,8 @@ pub fn process_file_with_results(
                     file_unique_terms: None,
                     file_total_matches: None,
                     file_match_rank: None,
+                    block_unique_terms: Some(block_unique_terms),
+                    block_total_matches: Some(block_total_matches),
                 });
             }
 
@@ -388,11 +507,52 @@ pub fn process_file_with_results(
 
         // Clear the previous results and return the entire file
         results.clear();
+
+        // Calculate block term matches for the entire file
+        let block_terms = preprocess_text(&content, false);
+        
+        // Use preprocessed query terms if available, otherwise generate them
+        let query_terms: Vec<String> = if let Some(preprocessed) = preprocessed_queries {
+            preprocessed.iter().flat_map(|terms| terms.iter().cloned()).collect()
+        } else {
+            queries_terms.iter()
+                .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
+                .collect()
+        };
+        
+        let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
+        
+        // Calculate unique terms matched in the file
+        let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
+            0
+        } else {
+            block_terms.iter()
+                .filter(|t| unique_query_terms.contains(*t))
+                .collect::<HashSet<&String>>()
+                .len()
+        };
+        
+        // Calculate total matches in the file
+        let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
+            0
+        } else {
+            block_terms.iter()
+                .filter(|t| unique_query_terms.contains(*t))
+                .count()
+        };
+
+        if debug_mode {
+            println!(
+                "DEBUG: Full file has {} unique term matches and {} total matches",
+                block_unique_terms, block_total_matches
+            );
+        }
+
         results.push(SearchResult {
             file: path.to_string_lossy().to_string(),
             lines: (1, total_lines),
             node_type: "file".to_string(), // Mark as full file result
-            code: content,
+            code: content.clone(), // Clone content here to avoid the move
             matched_by_filename: None,
             rank: None,
             score: None,
@@ -403,6 +563,8 @@ pub fn process_file_with_results(
             file_unique_terms: None,
             file_total_matches: None,
             file_match_rank: None,
+            block_unique_terms: Some(block_unique_terms),
+            block_total_matches: Some(block_total_matches),
         });
     }
 

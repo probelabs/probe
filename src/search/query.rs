@@ -73,13 +73,10 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
     // Convert to lowercase first
     let lowercase_query = query.to_lowercase();
 
-    // Split by whitespace to preserve multi-word structure
-    let words: Vec<&str> = lowercase_query.split_whitespace().collect();
-
     if exact {
-        // For exact matching, just return the words as-is without stemming
-        words
-            .into_iter()
+        // For exact matching, just split on whitespace and return as-is without stemming
+        lowercase_query
+            .split_whitespace()
             .filter(|word| !word.is_empty())
             .map(|word| {
                 let original = word.to_string();
@@ -91,8 +88,9 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
         let stop_words = ranking::stop_words();
         let stemmer = ranking::get_stemmer();
 
-        words
-            .into_iter()
+        // Split by whitespace to preserve the original words for testing compatibility
+        lowercase_query
+            .split_whitespace()
             .filter(|word| !word.is_empty() && !stop_words.contains(&word.to_string()))
             .map(|word| {
                 let original = word.to_string();

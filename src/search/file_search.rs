@@ -162,6 +162,7 @@ pub fn find_files_with_pattern(
         "*.yml",
         "*.yaml",
         "*.json",
+        "go.sum",
     ];
 
     // Add test file patterns if allow_tests is false

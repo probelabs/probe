@@ -349,6 +349,20 @@ pub fn tokenize(text: &str) -> Vec<String> {
     result
 }
 
+/// Preprocesses text for search operations
+/// When exact is true, splits only on whitespace and skips stemming/stopword removal
+/// When exact is false, uses tokenize which includes stemming, stopword removal, and camelCase splitting
+pub fn preprocess_text(text: &str, exact: bool) -> Vec<String> {
+    if exact {
+        text.to_lowercase()
+            .split_whitespace()
+            .map(String::from)
+            .collect()
+    } else {
+        tokenize(text)
+    }
+}
+
 /// Computes term frequencies (TF) for each document, document frequencies (DF) for each term,
 /// and document lengths.
 pub fn compute_tf_df(

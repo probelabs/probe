@@ -254,7 +254,9 @@
             term_matches.as_ref(), 
             any_term, 
             term_pairs.len(),
-            filename_matched_terms
+            filename_matched_terms,
+            &[term_pairs.clone()],
+            Some(&[term_pairs.clone()])
         )?;
         
         results.extend(file_results);
@@ -272,7 +274,7 @@
         )?;
 
         for file_path in matching_files {
-            match process_file_by_filename(&file_path) {
+            match process_file_by_filename(&file_path, &[term_pairs.clone()], Some(&[term_pairs.clone()])) {
                 Ok(mut result) => {
                     // Ensure the matched_by_filename flag is set
                     result.matched_by_filename = Some(true);

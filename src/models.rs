@@ -46,6 +46,10 @@ pub struct SearchResult {
     pub file_total_matches: Option<usize>,
     // Rank of the file based on total matches
     pub file_match_rank: Option<usize>,
+    // Number of unique search terms matched in the block
+    pub block_unique_terms: Option<usize>,
+    // Total frequency of term matches in the block
+    pub block_total_matches: Option<usize>,
 }
 
 // Structure to hold node information for merging
