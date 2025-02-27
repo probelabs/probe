@@ -9,11 +9,16 @@ pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], 
     // Combine all queries into a single string for ranking
     let combined_query = queries.join(" ");
 
-    // Extract document texts for ranking
-    let documents: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
+    // Extract document texts for ranking, including filename in each document
+    // This ensures filename terms are considered in the ranking algorithms
+    let documents: Vec<String> = results
+        .iter()
+        .map(|r| format!("// Filename: {}\n{}", r.file, r.code))
+        .collect();
+    let documents_refs: Vec<&str> = documents.iter().map(|s| s.as_str()).collect();
 
     // Rank the documents
-    let ranked_indices = ranking::rank_documents(&documents, &combined_query);
+    let ranked_indices = ranking::rank_documents(&documents_refs, &combined_query);
 
     // Update the search results with rank and score information
     for (rank_index, (original_index, combined_score, tfidf_score, bm25_score)) in

@@ -1,4 +1,3 @@
-
 fn main() {
     // Import the tokenize function from our code-search crate
     use code_search::ranking::tokenize;

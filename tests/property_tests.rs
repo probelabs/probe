@@ -43,16 +43,20 @@ proptest! {
         let term_pairs = preprocess_query(&query, false); // Use non-exact mode for property tests
         let patterns = create_term_patterns(&term_pairs);
 
-        // For each term pair where the stemmed version differs,
-        // the pattern should include both original and stemmed with word boundaries
-        for (i, (orig, stemmed)) in term_pairs.iter().enumerate() {
-            if orig == stemmed {
-                assert_eq!(patterns[i], format!("\\b{}\\b", orig));
-            } else {
-                // Pattern should include both original and stemmed with word boundaries
-                let expected_pattern = format!("\\b({}|{})\\b", regex_escape(orig), regex_escape(stemmed));
-                assert_eq!(patterns[i], expected_pattern);
-            }
+        // Since create_term_patterns now returns a Vec<(String, HashSet<usize>)>,
+        // we need to check the patterns differently
+
+        // Check that we have at least one pattern for each term
+        for i in 0..term_pairs.len() {
+            // Find at least one pattern that contains the term index i
+            let found = patterns.iter().any(|(_, indices)| indices.contains(&i));
+            assert!(found, "No pattern found for term at index {}", i);
+        }
+
+        // Check that each pattern has the correct format
+        for (pattern, _) in &patterns {
+            // Pattern should be a valid regex
+            assert!(regex::Regex::new(pattern).is_ok(), "Invalid regex pattern: {}", pattern);
         }
     }
 

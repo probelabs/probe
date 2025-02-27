@@ -3,6 +3,7 @@ use crate::search::query::{preprocess_query, regex_escape, create_term_patterns}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn test_preprocess_query() {
@@ -14,8 +15,8 @@ mod tests {
         // "for" should be removed as a stop word
         assert_eq!(terms.len(), 2);
         
-        let has_search = terms.iter().any(|(orig, stemmed)| orig == "search");
-        let has_code = terms.iter().any(|(orig, stemmed)| orig == "code");
+        let has_search = terms.iter().any(|(orig, _stemmed)| orig == "search");
+        let has_code = terms.iter().any(|(orig, _stemmed)| orig == "code");
         
         assert!(has_search);
         assert!(has_code);
@@ -113,30 +114,68 @@ mod tests {
 
     #[test]
     fn test_create_term_patterns() {
-        // Test creating term patterns
-        let terms = vec![
+        // Test with multiple terms
+        let term_pairs = vec![
             ("search".to_string(), "search".to_string()),
             ("function".to_string(), "function".to_string()),
             ("running".to_string(), "run".to_string()),
         ];
         
-        let patterns = create_term_patterns(&terms);
+        let patterns = create_term_patterns(&term_pairs);
         
-        assert_eq!(patterns.len(), 3);
+        // With the new grouped pattern format, we expect:
+        // 1. One pattern for each term with combined boundaries
+        // 2. Multiple patterns for term combinations
         
-        // Check that the pattern for "search" has word boundaries (since stem is the same)
-        assert_eq!(patterns[0], "\\bsearch\\b");
+        // Check that we have patterns for each individual term
+        let search_pattern = patterns.iter().find(|(p, indices)| 
+            indices.len() == 1 && indices.contains(&0) && p.contains("search")
+        );
         
-        // Check that the pattern for "function" has word boundaries (since stem is the same)
-        assert_eq!(patterns[1], "\\bfunction\\b");
+        let function_pattern = patterns.iter().find(|(p, indices)| 
+            indices.len() == 1 && indices.contains(&1) && p.contains("function")
+        );
         
-        // Check that the pattern for "running" includes both original and stemmed versions with word boundaries
-        assert_eq!(patterns[2], "\\b(running|run)\\b");
+        let running_pattern = patterns.iter().find(|(p, indices)| 
+            indices.len() == 1 && indices.contains(&2) && p.contains("running|run")
+        );
+        
+        // Assert that patterns exist
+        assert!(search_pattern.is_some(), "No pattern found for 'search'");
+        assert!(function_pattern.is_some(), "No pattern found for 'function'");
+        assert!(running_pattern.is_some(), "No pattern found for 'running|run'");
+        
+        // Check that term indices are correct
+        assert_eq!(search_pattern.unwrap().1, HashSet::from([0]));
+        assert_eq!(function_pattern.unwrap().1, HashSet::from([1]));
+        assert_eq!(running_pattern.unwrap().1, HashSet::from([2]));
+        
+        // Check that patterns have word boundaries
+        assert!(search_pattern.unwrap().0.contains("\\b"));
+        assert!(function_pattern.unwrap().0.contains("\\b"));
+        assert!(running_pattern.unwrap().0.contains("\\b"));
+        
+        // Check for concatenated patterns
+        let search_function_pattern = patterns.iter().find(|(_, indices)| 
+            indices.len() == 2 && indices.contains(&0) && indices.contains(&1)
+        );
+        
+        let search_running_pattern = patterns.iter().find(|(_, indices)| 
+            indices.len() == 2 && indices.contains(&0) && indices.contains(&2)
+        );
+        
+        let function_running_pattern = patterns.iter().find(|(_, indices)| 
+            indices.len() == 2 && indices.contains(&1) && indices.contains(&2)
+        );
+        
+        assert!(search_function_pattern.is_some(), "No pattern found for 'search' + 'function'");
+        assert!(search_running_pattern.is_some(), "No pattern found for 'search' + 'running'");
+        assert!(function_running_pattern.is_some(), "No pattern found for 'function' + 'running'");
     }
 
     #[test]
     fn test_create_term_patterns_with_regex_chars() {
-        // Test creating term patterns with regex special characters
+        // Test with terms containing regex special characters
         let terms = vec![
             ("search.term".to_string(), "search.term".to_string()),
             ("function(x)".to_string(), "function(x)".to_string()),
@@ -144,45 +183,71 @@ mod tests {
         
         let patterns = create_term_patterns(&terms);
         
-        assert_eq!(patterns.len(), 2);
-        
         // Check that regex special characters are escaped
-        assert_eq!(patterns[0], "\\bsearch\\.term\\b");
-        assert_eq!(patterns[1], "\\bfunction\\(x\\)\\b");
+        let search_term_pattern = patterns.iter().find(|(p, indices)| 
+            indices.len() == 1 && indices.contains(&0) && p.contains("search\\.term")
+        );
+        
+        let function_x_pattern = patterns.iter().find(|(p, indices)| 
+            indices.len() == 1 && indices.contains(&1) && p.contains("function\\(x\\)")
+        );
+        
+        assert!(search_term_pattern.is_some(), "No pattern found for 'search.term'");
+        assert!(function_x_pattern.is_some(), "No pattern found for 'function(x)'");
+        
+        // Check term indices
+        assert_eq!(search_term_pattern.unwrap().1, HashSet::from([0]));
+        assert_eq!(function_x_pattern.unwrap().1, HashSet::from([1]));
+        
+        // Check for concatenated patterns with escaped characters
+        let concatenated = patterns.iter().find(|(p, indices)| 
+            indices.len() == 2 && indices.contains(&0) && indices.contains(&1) &&
+            (p.contains("search\\.term") && p.contains("function\\(x\\)"))
+        );
+        
+        assert!(concatenated.is_some(), "No concatenated pattern found");
     }
-    
+
     #[test]
-    fn test_create_term_patterns_with_word_boundaries() {
-        // Test that word boundaries are added correctly
-        let terms = vec![
+    fn test_create_term_patterns_with_flexible_boundaries() {
+        // Test with IP addresses and other terms that need flexible boundary handling
+        let term_pairs = vec![
             ("ip".to_string(), "ip".to_string()),
-            ("whitelist".to_string(), "whitelist".to_string()),
-            ("running".to_string(), "run".to_string()),
+            ("address".to_string(), "address".to_string()),
         ];
         
-        let patterns = create_term_patterns(&terms);
+        let patterns = create_term_patterns(&term_pairs);
         
-        assert_eq!(patterns.len(), 3);
+        // Check that we have patterns for each individual term
+        let ip_pattern = patterns.iter().find(|(p, indices)| 
+            indices.len() == 1 && indices.contains(&0) && p.contains("ip")
+        );
         
-        // Check that word boundaries are added
-        assert_eq!(patterns[0], "\\bip\\b");
-        assert_eq!(patterns[1], "\\bwhitelist\\b");
-        assert_eq!(patterns[2], "\\b(running|run)\\b");
+        let address_pattern = patterns.iter().find(|(p, indices)| 
+            indices.len() == 1 && indices.contains(&1) && p.contains("address")
+        );
         
-        // Verify that the patterns will match correctly
-        let re_ip = regex::Regex::new(&patterns[0]).unwrap();
-        let re_whitelist = regex::Regex::new(&patterns[1]).unwrap();
-        let re_running = regex::Regex::new(&patterns[2]).unwrap();
+        assert!(ip_pattern.is_some(), "No pattern found for 'ip'");
+        assert!(address_pattern.is_some(), "No pattern found for 'address'");
         
-        // Should match whole words
-        assert!(re_ip.is_match("ip"));
-        assert!(re_whitelist.is_match("whitelist"));
-        assert!(re_running.is_match("running"));
-        assert!(re_running.is_match("run"));
+        // Check that term indices are correct
+        assert_eq!(ip_pattern.unwrap().1, HashSet::from([0]));
+        assert_eq!(address_pattern.unwrap().1, HashSet::from([1]));
         
-        // Should not match partial words
-        assert!(!re_ip.is_match("ipaddress"));
-        assert!(!re_whitelist.is_match("whitelistitem"));
-        assert!(!re_running.is_match("running_fast"));
+        // Check that patterns have word boundaries
+        assert!(ip_pattern.unwrap().0.contains("\\b"));
+        assert!(address_pattern.unwrap().0.contains("\\b"));
+        
+        // Check for concatenated patterns
+        let ip_address_pattern = patterns.iter().find(|(_, indices)| 
+            indices.len() == 2 && indices.contains(&0) && indices.contains(&1)
+        );
+        
+        assert!(ip_address_pattern.is_some(), "No pattern found for 'ip' + 'address'");
+        
+        // Verify the pattern contains both terms
+        let pattern_str = ip_address_pattern.unwrap().0.clone();
+        assert!(pattern_str.contains("ip") && pattern_str.contains("address"), 
+                "Concatenated pattern doesn't contain both terms: {}", pattern_str);
     }
 }

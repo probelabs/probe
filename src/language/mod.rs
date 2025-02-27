@@ -268,7 +268,7 @@ pub fn parse_file_for_code_blocks(
             }
 
             seen_nodes.insert(node_key);
-            
+
             // Skip test nodes unless allow_tests is true
             if !allow_tests && is_test_node(&node, extension, content.as_bytes()) {
                 if debug_mode {
@@ -331,15 +331,10 @@ pub fn merge_code_blocks(code_blocks: Vec<CodeBlock>) -> Vec<CodeBlock> {
 
     for block in code_blocks {
         if let Some(last) = merged_blocks.last_mut() {
-            let threshold = if block.node_type == "struct_type" || last.node_type == "struct_type" {
-                50 // Larger threshold for structs
-            } else {
-                10
-            };
+            // Use a consistent threshold of 10 lines for all block types
+            let threshold = 10;
 
-            if block.start_row <= last.end_row + threshold
-                || (block.node_type == last.node_type && block.node_type == "struct_type")
-            {
+            if block.start_row <= last.end_row + threshold {
                 if debug_mode {
                     println!(
                         "DEBUG: Merging blocks: {} ({}-{}) with {} ({}-{})",
@@ -379,29 +374,37 @@ pub fn merge_code_blocks(code_blocks: Vec<CodeBlock>) -> Vec<CodeBlock> {
 // Function to determine if a file is a test file based on common naming conventions and directory patterns
 pub fn is_test_file(path: &std::path::Path) -> bool {
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
-    
+
     // Check file name patterns
     if let Some(file_name) = path.file_name().and_then(|f| f.to_str()) {
         // Rust: *_test.rs, *_tests.rs, test_*.rs, tests.rs
-        if file_name.ends_with("_test.rs") || file_name.ends_with("_tests.rs") || 
-           file_name.starts_with("test_") || file_name == "tests.rs" {
+        if file_name.ends_with("_test.rs")
+            || file_name.ends_with("_tests.rs")
+            || file_name.starts_with("test_")
+            || file_name == "tests.rs"
+        {
             if debug_mode {
                 println!("DEBUG: Test file detected (Rust): {}", file_name);
             }
             return true;
         }
-        
+
         // JavaScript/TypeScript: *.spec.js, *.test.js, *.spec.ts, *.test.ts
-        if file_name.ends_with(".spec.js") || file_name.ends_with(".test.js") ||
-           file_name.ends_with(".spec.ts") || file_name.ends_with(".test.ts") ||
-           file_name.ends_with(".spec.jsx") || file_name.ends_with(".test.jsx") ||
-           file_name.ends_with(".spec.tsx") || file_name.ends_with(".test.tsx") {
+        if file_name.ends_with(".spec.js")
+            || file_name.ends_with(".test.js")
+            || file_name.ends_with(".spec.ts")
+            || file_name.ends_with(".test.ts")
+            || file_name.ends_with(".spec.jsx")
+            || file_name.ends_with(".test.jsx")
+            || file_name.ends_with(".spec.tsx")
+            || file_name.ends_with(".test.tsx")
+        {
             if debug_mode {
                 println!("DEBUG: Test file detected (JS/TS): {}", file_name);
             }
             return true;
         }
-        
+
         // Python: test_*.py
         if file_name.starts_with("test_") && file_name.ends_with(".py") {
             if debug_mode {
@@ -409,7 +412,7 @@ pub fn is_test_file(path: &std::path::Path) -> bool {
             }
             return true;
         }
-        
+
         // Go: *_test.go
         if file_name.ends_with("_test.go") {
             if debug_mode {
@@ -417,17 +420,20 @@ pub fn is_test_file(path: &std::path::Path) -> bool {
             }
             return true;
         }
-        
+
         // C/C++: test_*.c, test_*.cpp, *_test.c, *_test.cpp
-        if file_name.starts_with("test_") || file_name.ends_with("_test.c") || 
-            file_name.ends_with("_test.cpp") || file_name.ends_with("_test.cc") || 
-            file_name.ends_with("_test.cxx") {
+        if file_name.starts_with("test_")
+            || file_name.ends_with("_test.c")
+            || file_name.ends_with("_test.cpp")
+            || file_name.ends_with("_test.cc")
+            || file_name.ends_with("_test.cxx")
+        {
             if debug_mode {
                 println!("DEBUG: Test file detected (C/C++): {}", file_name);
             }
             return true;
         }
-        
+
         // Java: *Test.java
         if file_name.ends_with("Test.java") {
             if debug_mode {
@@ -435,58 +441,75 @@ pub fn is_test_file(path: &std::path::Path) -> bool {
             }
             return true;
         }
-        
+
         // Ruby: *_test.rb, test_*.rb, *_spec.rb
-        if file_name.ends_with("_test.rb") || file_name.starts_with("test_") && file_name.ends_with(".rb") || 
-           file_name.ends_with("_spec.rb") {
+        if file_name.ends_with("_test.rb")
+            || file_name.starts_with("test_") && file_name.ends_with(".rb")
+            || file_name.ends_with("_spec.rb")
+        {
             if debug_mode {
                 println!("DEBUG: Test file detected (Ruby): {}", file_name);
             }
             return true;
         }
-        
+
         // PHP: *Test.php, test_*.php
-        if file_name.ends_with("Test.php") || (file_name.starts_with("test_") && file_name.ends_with(".php")) {
+        if file_name.ends_with("Test.php")
+            || (file_name.starts_with("test_") && file_name.ends_with(".php"))
+        {
             if debug_mode {
                 println!("DEBUG: Test file detected (PHP): {}", file_name);
             }
             return true;
         }
     }
-    
+
     // Check directory patterns
     let path_str = path.to_string_lossy();
-    
+
     // Common test directories across languages
-    if path_str.contains("/tests/") || path_str.contains("/test/") || 
-       path_str.contains("/__tests__/") || path_str.contains("/__test__/") ||
-       path_str.contains("/spec/") || path_str.contains("/specs/") {
+    if path_str.contains("/tests/")
+        || path_str.contains("/test/")
+        || path_str.contains("/__tests__/")
+        || path_str.contains("/__test__/")
+        || path_str.contains("/spec/")
+        || path_str.contains("/specs/")
+    {
         if debug_mode {
-            println!("DEBUG: Test file detected (directory pattern): {}", path_str);
+            println!(
+                "DEBUG: Test file detected (directory pattern): {}",
+                path_str
+            );
         }
         return true;
     }
-    
+
     // Check for files in a tests directory at the root level
     if let Some(parent) = path.parent() {
         if let Some(dir_name) = parent.file_name().and_then(|d| d.to_str()) {
             if dir_name == "tests" {
                 if debug_mode {
-                    println!("DEBUG: Test file detected (in tests directory): {}", path_str);
+                    println!(
+                        "DEBUG: Test file detected (in tests directory): {}",
+                        path_str
+                    );
                 }
                 return true;
             }
         }
     }
-    
+
     false
 }
+
+#[cfg(test)]
+mod tests;
 
 // Function to identify test code blocks in the AST using tree-sitter nodes
 pub fn is_test_node(node: &Node, extension: &str, source: &[u8]) -> bool {
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
     let node_type = node.kind();
-    
+
     match extension {
         "rs" => {
             // Rust: Check for #[test] attribute or test_ prefix on function_item nodes
@@ -542,8 +565,13 @@ pub fn is_test_node(node: &Node, extension: &str, source: &[u8]) -> bool {
                 for child in node.children(&mut cursor) {
                     if child.kind() == "identifier" {
                         let name = child.utf8_text(source).unwrap_or("");
-                        if name == "describe" || name == "test" || name == "it" || name == "suite" || 
-                           name == "context" || name == "expect" {
+                        if name == "describe"
+                            || name == "test"
+                            || name == "it"
+                            || name == "suite"
+                            || name == "context"
+                            || name == "expect"
+                        {
                             if debug_mode {
                                 println!("DEBUG: Test node detected (JS/TS): {} function", name);
                             }
@@ -599,7 +627,9 @@ pub fn is_test_node(node: &Node, extension: &str, source: &[u8]) -> bool {
                                 let name = subchild.utf8_text(source).unwrap_or("");
                                 if name.contains("test") || name.contains("Test") {
                                     if debug_mode {
-                                        println!("DEBUG: Test node detected (C/C++): test function");
+                                        println!(
+                                            "DEBUG: Test node detected (C/C++): test function"
+                                        );
                                     }
                                     return true;
                                 }
@@ -651,7 +681,11 @@ pub fn is_test_node(node: &Node, extension: &str, source: &[u8]) -> bool {
                 for child in node.children(&mut cursor) {
                     if child.kind() == "identifier" {
                         let name = child.utf8_text(source).unwrap_or("");
-                        if name == "describe" || name == "it" || name == "context" || name == "specify" {
+                        if name == "describe"
+                            || name == "it"
+                            || name == "context"
+                            || name == "specify"
+                        {
                             if debug_mode {
                                 println!("DEBUG: Test node detected (Ruby): {} block", name);
                             }
@@ -688,6 +722,6 @@ pub fn is_test_node(node: &Node, extension: &str, source: &[u8]) -> bool {
         }
         _ => {}
     }
-    
+
     false
 }

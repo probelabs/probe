@@ -1,0 +1,206 @@
+# Code-Search Project Guidelines
+
+This file provides guidelines for AI assistants and developers working on the code-search project.
+
+## Project Overview
+
+Code-search is a tool for searching code repositories with powerful filtering and ranking capabilities. It provides:
+- Regex-based code search with stemming and stopword removal
+- Language-aware code block extraction
+- Frequency-based search for better relevance
+- Flexible term matching with boundary control
+- Result ranking using TF-IDF and BM25 algorithms
+
+## Project Structure
+
+```
+code-search/
+├── src/                    # Main source code
+│   ├── language/           # Language-specific parsing
+│   ├── search/             # Core search functionality
+│   │   ├── file_processing.rs    # File content processing
+│   │   ├── file_search.rs        # File searching logic
+│   │   ├── query.rs              # Query processing
+│   │   ├── result_ranking.rs     # Result ranking algorithms
+│   │   └── search_execution.rs   # Main search execution
+│   ├── lib.rs              # Library entry point
+│   └── main.rs             # CLI application entry point
+├── tests/                  # Integration tests
+│   ├── mocks/              # Mock files for testing
+│   └── ...                 # Various test files
+└── mcp/                    # MCP server for code-search
+```
+
+## Code Style Guide
+
+### Rust Conventions
+
+1. **Naming**:
+   - Use `snake_case` for variables, functions, and modules
+   - Use `CamelCase` for types and traits
+   - Use `SCREAMING_SNAKE_CASE` for constants
+
+2. **Documentation**:
+   - All public functions, structs, and modules should have doc comments
+   - Use `///` for doc comments
+   - Include examples where appropriate
+
+3. **Error Handling**:
+   - Use `Result<T, E>` for functions that can fail
+   - Prefer `?` operator for error propagation
+   - Use `anyhow::Result` for functions that can return multiple error types
+
+4. **Formatting**:
+   - Follow standard Rust formatting (rustfmt)
+   - Use 4 spaces for indentation
+   - Maximum line length of 100 characters
+
+### Project-Specific Conventions
+
+1. **Pattern Generation**:
+   - When generating regex patterns, use `HashSet` to avoid duplicates
+   - For term patterns, generate three variants: start boundary, end boundary, and no boundary
+   - For multi-term queries, generate concatenated combinations
+
+2. **File Processing**:
+   - Use AST parsing when possible for more accurate code block extraction
+   - Fall back to line-based context when AST parsing fails
+   - Apply the 80% rule: if more than 80% of a file is matched, return the entire file
+
+## Testing Approach
+
+### Test Organization
+
+1. **Unit Tests**:
+   - Place unit tests in the same file as the code they test
+   - Use `#[cfg(test)]` module at the end of each file
+   - For complex modules, use a separate `*_tests.rs` file in the same directory
+   - Include the tests using `include!("module_tests.rs")` in a `#[cfg(test)]` module
+
+2. **Integration Tests**:
+   - Place integration tests in the `tests/` directory
+   - Use descriptive names for test files
+   - Group related tests in the same file
+
+### Running Tests
+
+1. **Unit Tests**:
+   ```bash
+   cargo test --lib
+   ```
+
+2. **Integration Tests**:
+   ```bash
+   cargo test --test integration_tests
+   ```
+
+3. **All Tests**:
+   ```bash
+   cargo test
+   ```
+
+4. **Specific Tests**:
+   ```bash
+   cargo test test_name
+   ```
+
+### Test Coverage
+
+- Aim for high test coverage, especially for core functionality
+- Include tests for edge cases and error conditions
+- Use property-based testing for functions with complex input domains
+
+## Common Commands
+
+### Building
+
+```bash
+cargo build
+```
+
+### Running
+
+```bash
+cargo run -- search "query" path/to/search
+```
+
+### Debug Mode
+
+Enable debug mode to see detailed logging:
+
+```bash
+CODE_SEARCH_DEBUG=1 cargo run -- search "query" path/to/search
+```
+
+### MCP Server
+
+Start the MCP server:
+
+```bash
+cd mcp && npm run build && node build/index.js
+```
+
+## Dependency Management
+
+1. **Adding Dependencies**:
+   - Add new dependencies to `Cargo.toml`
+   - Prefer well-maintained crates with good documentation
+   - Consider the impact on build time and binary size
+
+2. **Versioning**:
+   - Use semantic versioning for dependencies
+   - Specify version constraints to avoid breaking changes
+
+## File Organization
+
+1. **Module Structure**:
+   - Use `mod.rs` files for module organization
+   - Group related functionality in the same module
+   - Export public items from the module root
+
+2. **Code Organization**:
+   - Place related functions and types together
+   - Use private helper functions for complex logic
+   - Keep functions focused on a single responsibility
+
+## Making Changes
+
+When making changes to the codebase:
+
+1. **Pattern Generation**:
+   - When modifying `create_term_patterns`, ensure it handles:
+     - Individual terms with flexible boundaries
+     - Concatenated term combinations for multi-term queries
+     - Proper regex escaping for special characters
+
+2. **Search Execution**:
+   - When modifying `perform_code_search`, ensure it:
+     - Properly maps patterns to terms
+     - Handles both "any term" and "all terms" modes
+     - Correctly processes filename matches
+
+3. **Result Ranking**:
+   - When modifying ranking algorithms, ensure they:
+     - Properly calculate TF-IDF and BM25 scores
+     - Handle edge cases (empty documents, rare terms)
+     - Maintain backward compatibility with existing code
+
+## Debugging Tips
+
+1. **Debug Mode**:
+   - Set `CODE_SEARCH_DEBUG=1` to enable debug logging
+   - Debug logs include detailed information about:
+     - Pattern generation
+     - File matching
+     - Term frequencies
+     - Result ranking
+
+2. **Common Issues**:
+   - If search returns no results, check:
+     - Query preprocessing (stemming, stopwords)
+     - Pattern generation
+     - File matching logic
+   - If ranking seems incorrect, check:
+     - Term frequency calculation
+     - Document length normalization
+     - Score combination logic

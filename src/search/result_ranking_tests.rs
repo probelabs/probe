@@ -19,6 +19,9 @@ mod tests {
                 bm25_score: None,
                 tfidf_rank: None,
                 bm25_rank: None,
+                file_unique_terms: None,
+                file_total_matches: None,
+                file_match_rank: None,
             },
             SearchResult {
                 file: "file2.rs".to_string(),
@@ -32,6 +35,9 @@ mod tests {
                 bm25_score: None,
                 tfidf_rank: None,
                 bm25_rank: None,
+                file_unique_terms: None,
+                file_total_matches: None,
+                file_match_rank: None,
             },
             SearchResult {
                 file: "file3.rs".to_string(),
@@ -45,6 +51,9 @@ mod tests {
                 bm25_score: None,
                 tfidf_rank: None,
                 bm25_rank: None,
+                file_unique_terms: None,
+                file_total_matches: None,
+                file_match_rank: None,
             },
         ]
     }

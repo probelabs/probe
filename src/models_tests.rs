@@ -18,6 +18,9 @@ mod tests {
             bm25_score: None,
             tfidf_rank: None,
             bm25_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
         };
         
         assert_eq!(result.file, "test.rs");
@@ -31,6 +34,9 @@ mod tests {
         assert_eq!(result.bm25_score, None);
         assert_eq!(result.tfidf_rank, None);
         assert_eq!(result.bm25_rank, None);
+        assert_eq!(result.file_unique_terms, None);
+        assert_eq!(result.file_total_matches, None);
+        assert_eq!(result.file_match_rank, None);
     }
 
     #[test]
@@ -66,6 +72,9 @@ mod tests {
                 bm25_score: Some(0.9),
                 tfidf_rank: Some(1),
                 bm25_rank: Some(1),
+                file_unique_terms: Some(2),
+                file_total_matches: Some(5),
+                file_match_rank: Some(1),
             },
             SearchResult {
                 file: "test2.rs".to_string(),
@@ -79,6 +88,9 @@ mod tests {
                 bm25_score: Some(0.8),
                 tfidf_rank: Some(2),
                 bm25_rank: Some(2),
+                file_unique_terms: Some(1),
+                file_total_matches: Some(3),
+                file_match_rank: Some(2),
             },
         ];
         
@@ -96,6 +108,9 @@ mod tests {
                 bm25_score: Some(0.7),
                 tfidf_rank: Some(3),
                 bm25_rank: Some(3),
+                file_unique_terms: Some(1),
+                file_total_matches: Some(2),
+                file_match_rank: Some(3),
             },
         ];
         

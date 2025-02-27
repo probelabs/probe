@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Run in CLI mode (default)
-    Cli { 
+    Cli {
         /// Path to search in
         #[arg(short, long)]
         path: PathBuf,

@@ -3,15 +3,18 @@ use grep::regex::RegexMatcherBuilder;
 use grep::searcher::sinks::UTF8;
 use grep::searcher::{BinaryDetection, SearcherBuilder};
 use ignore::WalkBuilder;
+use regex::Regex;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use regex::Regex;
 
-use crate::language::is_test_file;
-use crate::search::query::{preprocess_query, regex_escape};
+use crate::search::query::{create_term_patterns, preprocess_query};
 
 /// Searches a file for a pattern and returns whether it matched and the matching line numbers
-pub fn search_file_for_pattern(file_path: &Path, pattern: &str, exact: bool) -> Result<(bool, HashSet<usize>)> {
+pub fn search_file_for_pattern(
+    file_path: &Path,
+    pattern: &str,
+    exact: bool,
+) -> Result<(bool, HashSet<usize>)> {
     let mut matched = false;
     let mut line_numbers = HashSet::new();
     let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
@@ -19,18 +22,25 @@ pub fn search_file_for_pattern(file_path: &Path, pattern: &str, exact: bool) -> 
     // Check if debug mode is enabled
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
 
-    // Use word boundaries unless exact mode is specified
-    let adjusted_pattern = if exact { 
-        pattern.to_string() 
-    } else { 
-        format!(r"\b{}\b", pattern) 
+    // Check if the pattern already has word boundaries or parentheses (indicating a grouped pattern)
+    let has_word_boundaries = pattern.contains("\\b") || pattern.starts_with("(");
+
+    // Use the pattern as-is if exact mode is specified, it already has word boundaries,
+    // or it's a grouped pattern (starts with parenthesis)
+    let adjusted_pattern = if exact || has_word_boundaries {
+        pattern.to_string()
+    } else {
+        format!(r"\b{}\b", pattern)
     };
 
     // Create a case-insensitive regex matcher for the pattern
     let matcher = RegexMatcherBuilder::new()
         .case_insensitive(true)
         .build(&adjusted_pattern)
-        .context(format!("Failed to create regex matcher for: {}", adjusted_pattern))?;
+        .context(format!(
+            "Failed to create regex matcher for: {}",
+            adjusted_pattern
+        ))?;
 
     // Configure the searcher
     let mut searcher = SearcherBuilder::new()
@@ -82,9 +92,8 @@ pub fn find_files_with_pattern(
     // Check if debug mode is enabled
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
 
-    println!("Running rgrep search with pattern: {}", pattern);
-
     if debug_mode {
+        println!("Running rgrep search with pattern: {}", pattern);
         println!("DEBUG: Starting rgrep search in path: {:?}", path);
         println!("DEBUG: Using pattern: {}", pattern);
         println!("DEBUG: Custom ignores: {:?}", custom_ignores);
@@ -110,7 +119,7 @@ pub fn find_files_with_pattern(
     builder.git_exclude(true);
 
     // Add common directories to ignore
-    let common_ignores = [
+    let mut common_ignores = vec![
         "node_modules",
         "vendor",
         "target",
@@ -150,10 +159,67 @@ pub fn find_files_with_pattern(
         "*.orig",
         "*.DS_Store",
         "Thumbs.db",
+        "*.yml",
+        "*.yaml",
+        "*.json",
     ];
 
+    // Add test file patterns if allow_tests is false
+    if !allow_tests {
+        let test_patterns = vec![
+            "*_test.rs",
+            "*_tests.rs",
+            "test_*.rs",
+            "tests.rs",
+            "*.spec.js",
+            "*.test.js",
+            "*.spec.ts",
+            "*.test.ts",
+            "*.spec.jsx",
+            "*.test.jsx",
+            "*.spec.tsx",
+            "*.test.tsx",
+            "test_*.py",
+            "*_test.go",
+            "test_*.c",
+            "*_test.c",
+            "*_test.cpp",
+            "*_test.cc",
+            "*_test.cxx",
+            "*Test.java",
+            "*_test.rb",
+            "test_*.rb",
+            "*_spec.rb",
+            "*Test.php",
+            "test_*.php",
+            "**/tests/**",
+            "**/test/**",
+            "**/__tests__/**",
+            "**/__test__/**",
+            "**/spec/**",
+            "**/specs/**",
+        ];
+        common_ignores.extend(test_patterns);
+    }
+
+    // Create a single override builder for all common ignore patterns
+    let mut override_builder = ignore::overrides::OverrideBuilder::new(path);
+
+    // Add all common ignore patterns to the override builder
     for pattern in &common_ignores {
-        builder.add_custom_ignore_filename(pattern);
+        if let Err(err) = override_builder.add(&format!("!**/{}", pattern)) {
+            eprintln!("Error adding ignore pattern {:?}: {}", pattern, err);
+        }
+    }
+
+    // Build and apply the overrides
+    match override_builder.build() {
+        Ok(overrides) => {
+            builder.overrides(overrides);
+        }
+        Err(err) => {
+            eprintln!("Error building ignore overrides: {}", err);
+        }
     }
 
     // Add custom ignore patterns
@@ -185,14 +251,6 @@ pub fn find_files_with_pattern(
         }
 
         let file_path = entry.path();
-        
-        // Skip test files unless allow_tests is true
-        if !allow_tests && is_test_file(file_path) {
-            if debug_mode {
-                println!("DEBUG: Skipping test file: {:?}", file_path);
-            }
-            continue;
-        }
 
         // Search the file
         let path_clone = file_path.to_owned();
@@ -226,11 +284,13 @@ pub fn find_files_with_pattern(
         }
     }
 
-    println!(
-        "Searched {} files, found {} matches",
-        total_files,
-        matching_files.len()
-    );
+    if debug_mode {
+        println!(
+            "Searched {} files, found {} matches",
+            total_files,
+            matching_files.len()
+        );
+    }
 
     if debug_mode && !matching_files.is_empty() {
         println!("DEBUG: Raw search results - matching files:");
@@ -252,23 +312,34 @@ pub fn find_matching_filenames(
     let mut matching_files = Vec::new();
 
     // Process queries to get both original and stemmed terms
-    let mut term_pairs = Vec::new();
-    for query in queries {
-        term_pairs.extend(preprocess_query(query, false)); // Use non-exact mode for filename matching
-    }
+    let queries_terms: Vec<Vec<(String, String)>> = queries
+        .iter()
+        .map(|q| preprocess_query(q, false)) // Use non-exact mode for filename matching
+        .collect();
 
-    println!("Looking for filenames matching queries (with stemming): {:?}", queries);
-    
-    // Debug output for stemmed terms
+    // Generate all patterns using the new create_term_patterns function
+    let all_patterns: Vec<String> = queries_terms
+        .iter()
+        .flat_map(|term_pairs| {
+            // Extract just the pattern strings from the tuples
+            create_term_patterns(term_pairs)
+                .into_iter()
+                .map(|(pattern, _)| pattern)
+                .collect::<Vec<String>>()
+        })
+        .collect();
+
+    println!(
+        "Looking for filenames matching queries (with flexible patterns): {:?}",
+        queries
+    );
+
+    // Debug output for patterns
     let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
-    if debug_mode && !term_pairs.is_empty() {
-        println!("DEBUG: Using the following term pairs for filename matching:");
-        for (i, (original, stemmed)) in term_pairs.iter().enumerate() {
-            if original == stemmed {
-                println!("DEBUG:   {}. {} (stemmed same as original)", i + 1, original);
-            } else {
-                println!("DEBUG:   {}. {} (stemmed to {})", i + 1, original, stemmed);
-            }
+    if debug_mode && !all_patterns.is_empty() {
+        println!("DEBUG: Using the following patterns for filename matching:");
+        for (i, pattern) in all_patterns.iter().enumerate() {
+            println!("DEBUG:   {}. {}", i + 1, pattern);
         }
     }
 
@@ -281,7 +352,7 @@ pub fn find_matching_filenames(
     builder.git_exclude(true);
 
     // Add common directories to ignore
-    let common_ignores = [
+    let mut common_ignores = vec![
         "node_modules",
         "vendor",
         "target",
@@ -321,10 +392,67 @@ pub fn find_matching_filenames(
         "*.orig",
         "*.DS_Store",
         "Thumbs.db",
+        "*.yml",
+        "*.yaml",
+        "*.json",
     ];
 
+    // Add test file patterns if allow_tests is false
+    if !allow_tests {
+        let test_patterns = vec![
+            "*_test.rs",
+            "*_tests.rs",
+            "test_*.rs",
+            "tests.rs",
+            "*.spec.js",
+            "*.test.js",
+            "*.spec.ts",
+            "*.test.ts",
+            "*.spec.jsx",
+            "*.test.jsx",
+            "*.spec.tsx",
+            "*.test.tsx",
+            "test_*.py",
+            "*_test.go",
+            "test_*.c",
+            "*_test.c",
+            "*_test.cpp",
+            "*_test.cc",
+            "*_test.cxx",
+            "*Test.java",
+            "*_test.rb",
+            "test_*.rb",
+            "*_spec.rb",
+            "*Test.php",
+            "test_*.php",
+            "**/tests/**",
+            "**/test/**",
+            "**/__tests__/**",
+            "**/__test__/**",
+            "**/spec/**",
+            "**/specs/**",
+        ];
+        common_ignores.extend(test_patterns);
+    }
+
+    // Create a single override builder for all common ignore patterns
+    let mut override_builder = ignore::overrides::OverrideBuilder::new(path);
+
+    // Add all common ignore patterns to the override builder
     for pattern in &common_ignores {
-        builder.add_custom_ignore_filename(pattern);
+        if let Err(err) = override_builder.add(&format!("!**/{}", pattern)) {
+            eprintln!("Error adding ignore pattern {:?}: {}", pattern, err);
+        }
+    }
+
+    // Build and apply the overrides
+    match override_builder.build() {
+        Ok(overrides) => {
+            builder.overrides(overrides);
+        }
+        Err(err) => {
+            eprintln!("Error building ignore overrides: {}", err);
+        }
     }
 
     // Add custom ignore patterns
@@ -357,11 +485,6 @@ pub fn find_matching_filenames(
         if already_found_files.contains(file_path) {
             continue;
         }
-        
-        // Skip test files unless allow_tests is true
-        if !allow_tests && is_test_file(file_path) {
-            continue;
-        }
 
         // Get the file name as a string
         let file_name = match file_path.file_name() {
@@ -369,37 +492,157 @@ pub fn find_matching_filenames(
             None => continue,
         };
 
-        // Check if any term (original or stemmed) matches the file name using word boundaries
-        for (original, stemmed) in &term_pairs {
-            // Create a regex pattern that matches either the original or stemmed term
-            let pattern = if original == stemmed {
-                // If stemmed and original are the same, just use one with word boundaries
-                format!(r"\b{}\b", regex_escape(original))
-            } else {
-                // Otherwise, create an OR pattern with word boundaries
-                format!(r"\b({}|{})\b", regex_escape(original), regex_escape(stemmed))
-            };
-            
-            // Create and check the regex
-            let re = Regex::new(&pattern).unwrap();
-            if re.is_match(&file_name) {
-                if debug_mode {
-                    if original == stemmed {
-                        println!("DEBUG: File '{}' matched term '{}'", file_name, original);
-                    } else {
-                        println!("DEBUG: File '{}' matched term '{}' or its stemmed form '{}'", 
-                                 file_name, original, stemmed);
-                    }
+        // Check if any pattern matches the file name
+        if all_patterns
+            .iter()
+            .any(|pattern| match Regex::new(pattern) {
+                Ok(re) => re.is_match(&file_name),
+                Err(e) => {
+                    eprintln!("Error compiling regex pattern '{}': {}", pattern, e);
+                    false
                 }
-                matching_files.push(file_path.to_owned());
-                break;
+            })
+        {
+            if debug_mode {
+                println!("DEBUG: File '{}' matched a pattern", file_name);
             }
+            matching_files.push(file_path.to_owned());
         }
     }
 
     println!(
-        "Found {} files with names containing whole-word matches of query words (including stemmed forms)",
+        "Found {} files with names matching flexible patterns (including concatenated forms)",
         matching_files.len()
     );
     Ok(matching_files)
+}
+
+/// Function to determine which terms match in a filename or path
+pub fn get_filename_matched_queries(
+    file_path: &Path,
+    search_root: &Path,
+    term_pairs: &[Vec<(String, usize)>],
+) -> HashSet<usize> {
+    // Get the relative path from the search root
+    let relative_path = file_path
+        .strip_prefix(search_root)
+        .unwrap_or(file_path)
+        .to_string_lossy()
+        .to_lowercase();
+
+    let mut matched_indices = HashSet::new();
+
+    // Check if debug mode is enabled
+    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+
+    if debug_mode {
+        println!("DEBUG: Checking path '{}' for term matches", relative_path);
+    }
+
+    for (_query_idx, terms) in term_pairs.iter().enumerate() {
+        // Convert the terms to the format expected by create_term_patterns
+        let term_string_pairs: Vec<(String, String)> = terms
+            .iter()
+            .map(|(term, _)| (term.clone(), term.clone()))
+            .collect();
+
+        // Generate patterns with term indices
+        let patterns_with_term_indices = create_term_patterns(&term_string_pairs);
+
+        // Check each pattern against the path
+        for (pattern, pattern_term_indices) in patterns_with_term_indices {
+            match Regex::new(&pattern) {
+                Ok(re) => {
+                    if re.is_match(&relative_path) {
+                        // Map the pattern's term indices to the original term indices
+                        for pattern_term_idx in pattern_term_indices {
+                            if pattern_term_idx < terms.len() {
+                                let (term, original_index) = &terms[pattern_term_idx];
+                                if debug_mode {
+                                    println!(
+                                        "DEBUG:   Term '{}' (index {}) matched in path '{}'",
+                                        term, original_index, relative_path
+                                    );
+                                }
+                                matched_indices.insert(*original_index);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error compiling regex pattern '{}': {}", pattern, e);
+                }
+            }
+        }
+    }
+
+    if debug_mode && !matched_indices.is_empty() {
+        println!(
+            "DEBUG:   Found {} term matches in path '{}'",
+            matched_indices.len(),
+            relative_path
+        );
+    }
+
+    matched_indices
+}
+
+/// Compatibility function for the old get_filename_matched_queries signature
+/// This will be used by existing code until it's updated to use the new function
+pub fn get_filename_matched_queries_compat(
+    filename: &str,
+    queries_terms: &[Vec<(String, String)>],
+) -> HashSet<usize> {
+    let mut matched_terms = HashSet::new();
+
+    // Check if debug mode is enabled
+    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+
+    if debug_mode {
+        println!("DEBUG: Checking filename '{}' for term matches", filename);
+    }
+
+    let filename_lower = filename.to_lowercase();
+
+    for (_query_idx, term_pairs) in queries_terms.iter().enumerate() {
+        // Generate flexible patterns for this query's terms
+        let patterns_with_term_indices = create_term_patterns(term_pairs);
+
+        // Check each pattern against the filename
+        for (pattern, term_indices) in patterns_with_term_indices {
+            match Regex::new(&pattern) {
+                Ok(re) => {
+                    if re.is_match(&filename_lower) {
+                        // If the pattern matches, add all the term indices it corresponds to
+                        for term_idx in term_indices {
+                            if debug_mode {
+                                // Get the original term for debugging
+                                if term_idx < term_pairs.len() {
+                                    let (original_term, _) = &term_pairs[term_idx];
+                                    println!(
+                                        "DEBUG:   Term '{}' (index {}) matched in filename '{}'",
+                                        original_term, term_idx, filename
+                                    );
+                                }
+                            }
+                            matched_terms.insert(term_idx);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error compiling regex pattern '{}': {}", pattern, e);
+                }
+            }
+        }
+    }
+
+    if debug_mode && !matched_terms.is_empty() {
+        println!(
+            "DEBUG:   Found {} term matches in filename '{}'",
+            matched_terms.len(),
+            filename
+        );
+    }
+
+    matched_terms
 }

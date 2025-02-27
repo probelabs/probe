@@ -40,9 +40,16 @@ pub struct SearchResult {
     pub tfidf_rank: Option<usize>,
     // BM25 rank (1 is most relevant)
     pub bm25_rank: Option<usize>,
+    // Number of distinct search terms matched in the file
+    pub file_unique_terms: Option<usize>,
+    // Total count of matches across the file (content + filename matches)
+    pub file_total_matches: Option<usize>,
+    // Rank of the file based on total matches
+    pub file_match_rank: Option<usize>,
 }
 
 // Structure to hold node information for merging
+#[derive(Clone)]
 pub struct CodeBlock {
     pub start_row: usize,
     pub end_row: usize,

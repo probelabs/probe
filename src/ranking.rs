@@ -237,14 +237,64 @@ pub fn get_stemmer() -> &'static Stemmer {
     STEMMER.get_or_init(|| Stemmer::create(Algorithm::English))
 }
 
+/// Splits a camelCase or PascalCase string into individual words
+fn split_camel_case(s: &str) -> Vec<String> {
+    if s.is_empty() {
+        return Vec::new();
+    }
+
+    // println!("Splitting: {}", s);
+
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut prev_is_lower = false;
+    let mut prev_is_numeric = false;
+
+    for (i, c) in s.chars().enumerate() {
+        let is_numeric = c.is_numeric();
+        // println!("  Char {}: '{}', prev_is_lower: {}, prev_is_numeric: {}", i, c, prev_is_lower, prev_is_numeric);
+
+        if c.is_uppercase() && prev_is_lower {
+            // Transition from lowercase to uppercase indicates a new word
+            if !current.is_empty() {
+                // println!("  -> Word break (lowercase->uppercase): '{}'", current);
+                result.push(current.to_lowercase());
+                current = String::new();
+            }
+        } else if is_numeric && !current.is_empty() && !prev_is_numeric {
+            // Transition from alpha to numeric indicates a new word
+            // println!("  -> Word break (alpha->numeric): '{}'", current);
+            result.push(current.to_lowercase());
+            current = String::new();
+        } else if !is_numeric && prev_is_numeric {
+            // Transition from numeric to alpha indicates a new word
+            if !current.is_empty() {
+                // println!("  -> Word break (numeric->alpha): '{}'", current);
+                result.push(current.to_lowercase());
+                current = String::new();
+            }
+        }
+
+        current.push(c);
+        prev_is_lower = c.is_lowercase();
+        prev_is_numeric = is_numeric;
+    }
+
+    // Add the last word
+    if !current.is_empty() {
+        // println!("  -> Final word: '{}'", current);
+        result.push(current.to_lowercase());
+    }
+
+    // println!("Split result: {:?}", result);
+    result
+}
+
 /// Tokenizes text into lowercase words by splitting on whitespace and non-alphanumeric characters,
-/// removes stop words, and applies stemming.
+/// removes stop words, and applies stemming. Also splits camelCase/PascalCase identifiers.
 pub fn tokenize(text: &str) -> Vec<String> {
     let stop_words = stop_words();
     let stemmer = get_stemmer();
-
-    // First, convert to lowercase
-    let text = text.to_lowercase();
 
     // Split by whitespace and collect words
     let mut tokens = Vec::new();
@@ -267,12 +317,36 @@ pub fn tokenize(text: &str) -> Vec<String> {
         }
     }
 
-    // Filter out stop words and apply stemming
-    tokens
-        .into_iter()
-        .filter(|s| !stop_words.contains(s)) // Remove stop words
-        .map(|s| stemmer.stem(&s).to_string()) // Apply stemming
-        .collect()
+    // Create a set to track unique tokens after processing
+    let mut processed_tokens = HashSet::new();
+    let mut result = Vec::new();
+
+    // Process each token: filter stop words, apply stemming, and add to result if unique
+    for token in tokens {
+        // First, split camelCase/PascalCase identifiers
+        let mut parts = vec![token.to_lowercase()]; // Include the original token (lowercase)
+
+        // Only try to split if the original token has mixed case
+        if token.chars().any(|c| c.is_uppercase()) {
+            parts.extend(split_camel_case(&token).into_iter());
+        }
+
+        // Process each part (original token and split parts)
+        for part in parts {
+            // Skip stop words
+            if stop_words.contains(&part) {
+                continue;
+            }
+
+            // Add the stemmed part if it's unique
+            let stemmed_part = stemmer.stem(&part).to_string();
+            if processed_tokens.insert(stemmed_part.clone()) {
+                result.push(stemmed_part);
+            }
+        }
+    }
+
+    result
 }
 
 /// Computes term frequencies (TF) for each document, document frequencies (DF) for each term,
@@ -467,5 +541,35 @@ mod tests {
 
         assert_eq!(stem1, stem2);
         assert_eq!(stem2, stem3);
+    }
+
+    #[test]
+    fn test_camel_case_splitting() {
+        // Test camelCase
+        let tokens = tokenize("enableIpWhiteListing");
+        println!("Tokens for 'enableIpWhiteListing': {:?}", tokens);
+
+        // These should be present (in stemmed form)
+        assert!(tokens.contains(&"enabl".to_string()));
+        assert!(tokens.contains(&"ip".to_string()));
+        assert!(tokens.contains(&"white".to_string()));
+        assert!(tokens.contains(&"list".to_string()));
+
+        // Test PascalCase
+        let tokens = tokenize("EnableIpWhiteListing");
+        println!("Tokens for 'EnableIpWhiteListing': {:?}", tokens);
+
+        assert!(tokens.contains(&"enabl".to_string()));
+        assert!(tokens.contains(&"ip".to_string()));
+        assert!(tokens.contains(&"white".to_string()));
+        assert!(tokens.contains(&"list".to_string()));
+
+        // Test with numbers
+        let tokens = tokenize("IPv4Address");
+        println!("Tokens for 'IPv4Address': {:?}", tokens);
+
+        assert!(tokens.contains(&"ipv".to_string()));
+        assert!(tokens.contains(&"4".to_string()));
+        assert!(tokens.contains(&"address".to_string()));
     }
 }

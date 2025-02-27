@@ -25,6 +25,8 @@ rust-stemmers = "1.2"
 tokio = { version = "1", features = ["full"] }
 tiktoken-rs = "0.5"
 regex = "1.9"
+itertools = "0.10"
+rayon = "1.8"
 
 [dev-dependencies]
 tempfile = "3.7"

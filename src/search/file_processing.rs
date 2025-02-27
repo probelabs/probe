@@ -12,28 +12,63 @@ fn filter_code_block(
     term_matches: &HashMap<usize, HashSet<usize>>,
     any_term: bool,
     num_queries: usize,
+    filename_matched_queries: &HashSet<usize>, // New parameter for filename matches
+    debug_mode: bool,                          // Added debug_mode parameter
 ) -> bool {
     // Note: For large files with many blocks, performance could be improved by
     // pre-computing term matches per line range instead of scanning term_matches
     // for each block. This optimization should be considered if performance
     // becomes an issue.
-    
-    let mut matched_terms = HashSet::new();
-    
-    // Check which terms have matches within the block's line range
+
+    let mut matched_queries = HashSet::new();
+
+    // Check which queries have matches within the block's line range
     for (query_idx, lines) in term_matches {
-        if lines.iter().any(|&l| l >= block_lines.0 && l <= block_lines.1) {
-            matched_terms.insert(*query_idx);
+        if lines
+            .iter()
+            .any(|&l| l >= block_lines.0 && l <= block_lines.1)
+        {
+            matched_queries.insert(*query_idx);
         }
     }
-    
-    if any_term {
-        // Any term mode: include if any term matches
-        !matched_terms.is_empty()
+
+    // Determine if the block should be included
+    let should_include = if any_term {
+        // Any term mode: include if any term matches in content
+        // (we don't use filename matches in any_term mode to maintain precision)
+        !matched_queries.is_empty()
     } else {
-        // All terms mode: include only if all terms match
-        matched_terms.len() == num_queries
+        // All terms mode: include if all queries are matched either in content or filename
+        (0..num_queries)
+            .all(|i| filename_matched_queries.contains(&i) || matched_queries.contains(&i))
+    };
+
+    // Add debug logging
+    if debug_mode {
+        println!(
+            "DEBUG: Considering block at lines {}-{}",
+            block_lines.0, block_lines.1
+        );
+        println!("DEBUG: Matched queries (indices): {:?}", matched_queries);
+        println!("DEBUG: Total matched queries: {}", matched_queries.len());
+        if any_term {
+            println!("DEBUG: Any-term mode: Include if any term matches");
+        } else {
+            println!("DEBUG: All-terms mode: Include if all {} queries matched (including filename matches: {:?})", 
+                     num_queries, filename_matched_queries);
+        }
+        println!(
+            "DEBUG: Block included: {} (Reason: {})",
+            should_include,
+            if should_include {
+                "Matched criteria"
+            } else {
+                "Insufficient matches"
+            }
+        );
     }
+
+    should_include
 }
 
 /// Function to process a file that was matched by filename
@@ -54,6 +89,9 @@ pub fn process_file_by_filename(path: &Path) -> Result<SearchResult> {
         bm25_score: None,
         tfidf_rank: None,
         bm25_rank: None,
+        file_unique_terms: None,
+        file_total_matches: None,
+        file_match_rank: None,
     })
 }
 
@@ -65,6 +103,7 @@ pub fn process_file_with_results(
     term_matches: Option<&HashMap<usize, HashSet<usize>>>, // Query index to line numbers
     any_term: bool, // Whether to include code blocks that match any term (true) or all terms (false)
     num_queries: usize, // Total number of queries being searched
+    filename_matched_queries: HashSet<usize>, // Query indices that match the filename
 ) -> Result<Vec<SearchResult>> {
     // Read the file content
     let content = fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
@@ -89,10 +128,21 @@ pub fn process_file_with_results(
         println!("DEBUG:   Matched line numbers: {:?}", line_numbers);
         println!("DEBUG:   File extension: {}", extension);
         println!("DEBUG:   Total lines in file: {}", lines.len());
+
+        // Log filename matches if present
+        if !filename_matched_queries.is_empty() {
+            println!(
+                "DEBUG: Filename '{}' matched queries (indices): {:?}",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                filename_matched_queries
+            );
+        }
     }
 
     // First try to use AST parsing
-    if let Ok(code_blocks) = parse_file_for_code_blocks(&content, extension, line_numbers, allow_tests, term_matches) {
+    if let Ok(code_blocks) =
+        parse_file_for_code_blocks(&content, extension, line_numbers, allow_tests, term_matches)
+    {
         if debug_mode {
             println!("DEBUG: AST parsing successful");
             println!("DEBUG:   Found {} code blocks", code_blocks.len());
@@ -129,6 +179,10 @@ pub fn process_file_with_results(
                     "DEBUG: AST block found at lines {}-{}, node type: {}",
                     start_line, end_line, block.node_type
                 );
+                println!(
+                    "DEBUG: Extracted block at lines {}-{}, type: {}",
+                    start_line, end_line, block.node_type
+                );
             }
 
             // Mark all lines in this block as covered
@@ -138,8 +192,15 @@ pub fn process_file_with_results(
 
             // Apply term filtering if term_matches is provided
             let should_include = if let Some(term_matches_map) = term_matches {
-                // Apply filtering based on any_term setting
-                filter_code_block((start_line, end_line), term_matches_map, any_term, num_queries)
+                // Use the filter_code_block function with the filename_matched_queries parameter
+                filter_code_block(
+                    (start_line, end_line),
+                    term_matches_map,
+                    any_term,
+                    num_queries,
+                    &filename_matched_queries,
+                    debug_mode,
+                )
             } else {
                 // If no term_matches provided, include all blocks
                 true
@@ -148,6 +209,10 @@ pub fn process_file_with_results(
             if debug_mode {
                 println!(
                     "DEBUG: Filtered code block at {}-{}: included={}",
+                    start_line, end_line, should_include
+                );
+                println!(
+                    "DEBUG: Block at {}-{} filtered: included={}",
                     start_line, end_line, should_include
                 );
             }
@@ -166,6 +231,9 @@ pub fn process_file_with_results(
                     bm25_score: None,
                     tfidf_rank: None,
                     bm25_rank: None,
+                    file_unique_terms: None,
+                    file_total_matches: None,
+                    file_match_rank: None,
                 });
             }
         }
@@ -185,7 +253,7 @@ pub fn process_file_with_results(
                     println!("DEBUG:   Line content: '{}'", lines[line_num - 1].trim());
                 }
             }
-            
+
             // Skip fallback context for test files if allow_tests is false
             if !allow_tests && crate::language::is_test_file(path) {
                 if debug_mode {
@@ -193,17 +261,21 @@ pub fn process_file_with_results(
                 }
                 continue;
             }
-            
+
             // Check if the line is in a test function/module by examining its content
             if !allow_tests && line_num <= lines.len() {
                 let line_content = lines[line_num - 1];
                 // Simple heuristic check for test functions/modules
-                if line_content.contains("fn test_") || 
-                    line_content.contains("#[test]") || 
-                    line_content.contains("#[cfg(test)]") ||
-                    line_content.contains("mod tests") {
+                if line_content.contains("fn test_")
+                    || line_content.contains("#[test]")
+                    || line_content.contains("#[cfg(test)]")
+                    || line_content.contains("mod tests")
+                {
                     if debug_mode {
-                        println!("DEBUG: Skipping fallback context for test code: '{}'", line_content.trim());
+                        println!(
+                            "DEBUG: Skipping fallback context for test code: '{}'",
+                            line_content.trim()
+                        );
                     }
                     continue;
                 }
@@ -225,10 +297,24 @@ pub fn process_file_with_results(
                 lines[0..context_end].join("\n")
             };
 
+            if debug_mode {
+                println!(
+                    "DEBUG: Fallback context at lines {}-{}",
+                    context_start, context_end
+                );
+            }
+
             // Apply term filtering if term_matches is provided
             let should_include = if let Some(term_matches_map) = term_matches {
-                // Apply filtering based on any_term setting
-                filter_code_block((context_start, context_end), term_matches_map, any_term, num_queries)
+                // Use the filter_code_block function with the filename_matched_queries parameter
+                filter_code_block(
+                    (context_start, context_end),
+                    term_matches_map,
+                    any_term,
+                    num_queries,
+                    &filename_matched_queries,
+                    debug_mode,
+                )
             } else {
                 // If no term_matches provided, include all blocks
                 true
@@ -237,6 +323,10 @@ pub fn process_file_with_results(
             if debug_mode {
                 println!(
                     "DEBUG: Filtered context block at {}-{}: included={}",
+                    context_start, context_end, should_include
+                );
+                println!(
+                    "DEBUG: Context at {}-{} filtered: included={}",
                     context_start, context_end, should_include
                 );
             }
@@ -255,6 +345,9 @@ pub fn process_file_with_results(
                     bm25_score: None,
                     tfidf_rank: None,
                     bm25_rank: None,
+                    file_unique_terms: None,
+                    file_total_matches: None,
+                    file_match_rank: None,
                 });
             }
 
@@ -307,6 +400,9 @@ pub fn process_file_with_results(
             bm25_score: None,
             tfidf_rank: None,
             bm25_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
         });
     }
 

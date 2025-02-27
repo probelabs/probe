@@ -3,6 +3,7 @@
 **/*.rs.bk
 *.pdb
 Cargo.lock
+.vscode
 # Uncomment the line below if this is a library (keep it commented if it's an application)
 # Cargo.lock
 
@@ -11,6 +12,10 @@ Cargo.lock
 !Cargo.json
 !package.json
 !tsconfig.json
+
+# YAML files
+*.yml
+*.yaml
 
 # Node.js specific ignores
 node_modules/

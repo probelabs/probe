@@ -86,7 +86,11 @@ fn main() -> Result<()> {
                     println!("Running in CLI mode (direct arguments)");
                     // Run in CLI mode with direct arguments
                     // If exact is specified, override frequency_search
-                    let use_frequency = if args.exact { false } else { args.frequency_search };
+                    let use_frequency = if args.exact {
+                        false
+                    } else {
+                        args.frequency_search
+                    };
                     let limited_results = perform_code_search(
                         &path,
                         &args.query,
