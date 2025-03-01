@@ -129,7 +129,7 @@ cargo run -- search "query" path/to/search
 Enable debug mode to see detailed logging:
 
 ```bash
-CODE_SEARCH_DEBUG=1 cargo run -- search "query" path/to/search
+DEBUG=1 cargo run -- search "query" path/to/search
 ```
 
 ### MCP Server
@@ -188,7 +188,7 @@ When making changes to the codebase:
 ## Debugging Tips
 
 1. **Debug Mode**:
-   - Set `CODE_SEARCH_DEBUG=1` to enable debug logging
+   - Set `DEBUG=1` to enable debug logging
    - Debug logs include detailed information about:
      - Pattern generation
      - File matching

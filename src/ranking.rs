@@ -461,12 +461,59 @@ pub fn compute_avgdl(lengths: &[usize]) -> f64 {
 }
 
 /// Ranks documents based on a query using a hybrid scoring approach.
+// Helper function to calculate mean
+fn calculate_mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().sum::<f64>() / values.len() as f64
+}
+
+// Helper function to calculate standard deviation
+fn calculate_std_dev(values: &[f64], mean: f64) -> f64 {
+    if values.len() <= 1 {
+        return 0.0;
+    }
+    let variance = values.iter()
+        .map(|x| (x - mean).powi(2))
+        .sum::<f64>() / (values.len() - 1) as f64;
+    variance.sqrt()
+}
+
+// Helper function to calculate z-score
+fn zscore(value: f64, mean: f64, std_dev: f64) -> f64 {
+    if std_dev == 0.0 {
+        0.0
+    } else {
+        (value - mean) / std_dev
+    }
+}
+
+// Helper function to invert rank (higher score for lower rank)
+fn invert_rank(rank: usize, total: usize) -> f64 {
+    if total <= 1 {
+        1.0
+    } else {
+        1.0 - (rank - 1) as f64 / (total - 1) as f64
+    }
+}
+
 /// Returns a vector of tuples containing:
 /// - document index
 /// - combined score
 /// - TF-IDF score
 /// - BM25 score
-pub fn rank_documents(documents: &[&str], query: &str) -> Vec<(usize, f64, f64, f64)> {
+/// - new score (incorporating file and block metrics)
+pub fn rank_documents(
+    documents: &[&str], 
+    query: &str,
+    file_unique_terms: Option<usize>,
+    file_total_matches: Option<usize>,
+    file_match_rank: Option<usize>,
+    block_unique_terms: Option<usize>,
+    block_total_matches: Option<usize>,
+    node_type: Option<&str>
+) -> Vec<(usize, f64, f64, f64, f64)> {
     // Preprocess documents
     let (tfs, dfs, lengths) = compute_tf_df(documents);
     let n = documents.len();
@@ -493,10 +540,105 @@ pub fn rank_documents(documents: &[&str], query: &str) -> Vec<(usize, f64, f64, 
         scores.push((i, combined, tfidf, bm25));
     }
 
-    // Sort documents by combined score in descending order
-    scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // Extract all scores for normalization
+    let combined_scores: Vec<f64> = scores.iter().map(|(_, c, _, _)| *c).collect();
+    let tfidf_scores: Vec<f64> = scores.iter().map(|(_, _, t, _)| *t).collect();
+    let bm25_scores: Vec<f64> = scores.iter().map(|(_, _, _, b)| *b).collect();
+    let n = scores.len();
 
-    scores
+    // Calculate means and standard deviations
+    let mean_cs = calculate_mean(&combined_scores);
+    let std_cs = calculate_std_dev(&combined_scores, mean_cs);
+    let mean_tf = calculate_mean(&tfidf_scores);
+    let std_tf = calculate_std_dev(&tfidf_scores, mean_tf);
+    let mean_bm = calculate_mean(&bm25_scores);
+    let std_bm = calculate_std_dev(&bm25_scores, mean_bm);
+
+    // Create rankings for TF-IDF and BM25
+    let mut tfidf_ranks: Vec<(usize, f64)> = scores.iter().enumerate()
+        .map(|(i, (_, _, t, _))| (i, *t))
+        .collect();
+    let mut bm25_ranks: Vec<(usize, f64)> = scores.iter().enumerate()
+        .map(|(i, (_, _, _, b))| (i, *b))
+        .collect();
+
+    // Sort to determine ranks
+    tfidf_ranks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    bm25_ranks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Create rank lookup maps
+    let mut tfidf_rank_map = HashMap::new();
+    let mut bm25_rank_map = HashMap::new();
+    for (rank, (idx, _)) in tfidf_ranks.iter().enumerate() {
+        tfidf_rank_map.insert(*idx, rank + 1);
+    }
+    for (rank, (idx, _)) in bm25_ranks.iter().enumerate() {
+        bm25_rank_map.insert(*idx, rank + 1);
+    }
+
+    // Calculate new scores
+    let mut new_scores = Vec::new();
+    for (i, (_, combined, tfidf, bm25)) in scores.iter().enumerate() {
+        // Normalize scores
+        let cs_norm = zscore(*combined, mean_cs, std_cs);
+        let tf_norm = zscore(*tfidf, mean_tf, std_tf);
+        let bm_norm = zscore(*bm25, mean_bm, std_bm);
+
+        // Get ranks and invert them
+        let tr_score = invert_rank(*tfidf_rank_map.get(&i).unwrap_or(&n), n);
+        let br_score = invert_rank(*bm25_rank_map.get(&i).unwrap_or(&n), n);
+        let fmr_score = invert_rank(file_match_rank.unwrap_or(n), n);
+
+        // Convert metrics to f64 and collect for normalization
+        let fut = file_unique_terms.map(|x| x as f64).unwrap_or(0.0);
+        let ftm = file_total_matches.map(|x| x as f64).unwrap_or(0.0);
+        let but = block_unique_terms.map(|x| x as f64).unwrap_or(0.0);
+        let btm = block_total_matches.map(|x| x as f64).unwrap_or(0.0);
+
+        // Calculate means and standard deviations for metrics
+        let mean_fut = calculate_mean(&vec![fut]);
+        let std_fut = calculate_std_dev(&vec![fut], mean_fut);
+        let mean_ftm = calculate_mean(&vec![ftm]);
+        let std_ftm = calculate_std_dev(&vec![ftm], mean_ftm);
+        let mean_but = calculate_mean(&vec![but]);
+        let std_but = calculate_std_dev(&vec![but], mean_but);
+        let mean_btm = calculate_mean(&vec![btm]);
+        let std_btm = calculate_std_dev(&vec![btm], mean_btm);
+
+        // Normalize metrics using z-scores
+        let fut_norm = zscore(fut, mean_fut, std_fut);
+        let ftm_norm = zscore(ftm, mean_ftm, std_ftm);
+        let but_norm = zscore(but, mean_but, std_but);
+        let btm_norm = zscore(btm, mean_btm, std_btm);
+
+        // Type bonus
+        let type_bonus = match node_type {
+            Some("method_declaration") => 0.05,
+            Some("function_declaration") => 0.03,
+            _ => 0.0
+        };
+
+        // Calculate final score with weights
+        let new_score = 
+            0.25 * cs_norm +
+            0.15 * tf_norm +
+            0.15 * bm_norm +
+            0.05 * fut_norm +
+            0.10 * ftm_norm +
+            0.05 * but_norm +
+            0.10 * btm_norm +
+            0.05 * tr_score +
+            0.05 * br_score +
+            0.05 * fmr_score +
+            type_bonus;
+
+        new_scores.push((i, *combined, *tfidf, *bm25, new_score));
+    }
+
+    // Sort by new score in descending order
+    new_scores.sort_by(|a, b| b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal));
+
+    new_scores
 }
 
 #[cfg(test)]

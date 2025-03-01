@@ -40,6 +40,8 @@ pub struct SearchResult {
     pub tfidf_rank: Option<usize>,
     // BM25 rank (1 is most relevant)
     pub bm25_rank: Option<usize>,
+    // New score incorporating file and block metrics
+    pub new_score: Option<f64>,
     // Number of distinct search terms matched in the file
     pub file_unique_terms: Option<usize>,
     // Total count of matches across the file (content + filename matches)

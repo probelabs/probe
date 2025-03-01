@@ -38,7 +38,7 @@ pub fn perform_code_search(
     any_term: bool,    // Parameter to control multi-term search behavior
     exact: bool,       // Parameter to control exact matching (no stemming/stopwords)
 ) -> Result<LimitedSearchResults> {
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Initialize timing structure
     let mut timings = SearchTimings {
@@ -275,9 +275,9 @@ pub fn perform_code_search(
         for path in all_files.iter() {
             results.push(SearchResult {
                 file: path.to_string_lossy().to_string(),
-                lines: (0, 0),
+                lines: (1, 1), // Default line count since we don't have the actual count
                 node_type: "file".to_string(),
-                code: "".to_string(),
+                code: String::new(), // Empty content since we don't have the actual content
                 matched_by_filename: None,
                 rank: None,
                 score: None,
@@ -285,6 +285,7 @@ pub fn perform_code_search(
                 bm25_score: None,
                 tfidf_rank: None,
                 bm25_rank: None,
+                new_score: None,
                 file_unique_terms: None,
                 file_total_matches: None,
                 file_match_rank: None,
@@ -298,16 +299,17 @@ pub fn perform_code_search(
             for af in additional_files {
                 results.push(SearchResult {
                     file: af.to_string_lossy().to_string(),
-                    lines: (0, 0),
+                    lines: (1, 1), // Default line count
                     node_type: "file".to_string(),
-                    code: "".to_string(),
-                    matched_by_filename: Some(true),
+                    code: String::new(), // Empty content
+                    matched_by_filename: None,
                     rank: None,
                     score: None,
                     tfidf_score: None,
                     bm25_score: None,
                     tfidf_rank: None,
                     bm25_rank: None,
+                    new_score: None,
                     file_unique_terms: None,
                     file_total_matches: None,
                     file_match_rank: None,
@@ -503,7 +505,7 @@ pub fn perform_frequency_search(
     any_term: bool,
     exact: bool,
 ) -> Result<LimitedSearchResults> {
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     let mut timings = SearchTimings {
         query_preprocessing: None,
@@ -642,9 +644,9 @@ pub fn perform_frequency_search(
         for (path, _, _) in &freq_files {
             out_results.push(SearchResult {
                 file: path.to_string_lossy().to_string(),
-                lines: (0, 0),
+                lines: (1, 1),
                 node_type: "file".to_string(),
-                code: "".to_string(),
+                code: String::new(),
                 matched_by_filename: None,
                 rank: None,
                 score: None,
@@ -652,6 +654,7 @@ pub fn perform_frequency_search(
                 bm25_score: None,
                 tfidf_rank: None,
                 bm25_rank: None,
+                new_score: None,
                 file_unique_terms: None,
                 file_total_matches: None,
                 file_match_rank: None,
@@ -667,16 +670,17 @@ pub fn perform_frequency_search(
             for ff in found_filenames {
                 out_results.push(SearchResult {
                     file: ff.to_string_lossy().to_string(),
-                    lines: (0, 0),
+                    lines: (1, 1),
                     node_type: "file".to_string(),
-                    code: "".to_string(),
-                    matched_by_filename: Some(true),
+                    code: String::new(),
+                    matched_by_filename: None,
                     rank: None,
                     score: None,
                     tfidf_score: None,
                     bm25_score: None,
                     tfidf_rank: None,
                     bm25_rank: None,
+                    new_score: None,
                     file_unique_terms: None,
                     file_total_matches: None,
                     file_match_rank: None,

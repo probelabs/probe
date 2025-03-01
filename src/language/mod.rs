@@ -123,7 +123,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
         return None;
     }
 
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let target_node = find_most_specific_node(node, line);
 
     if debug_mode {
@@ -239,7 +239,7 @@ pub fn parse_file_for_code_blocks(
     let root_node = tree.root_node();
 
     // Check for debug mode
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("DEBUG: Parsing file with extension: {}", extension);
@@ -327,7 +327,7 @@ pub fn parse_file_for_code_blocks(
 // Function to merge overlapping code blocks
 pub fn merge_code_blocks(code_blocks: Vec<CodeBlock>) -> Vec<CodeBlock> {
     let mut merged_blocks: Vec<CodeBlock> = Vec::new();
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     for block in code_blocks {
         if let Some(last) = merged_blocks.last_mut() {
@@ -373,7 +373,7 @@ pub fn merge_code_blocks(code_blocks: Vec<CodeBlock>) -> Vec<CodeBlock> {
 
 // Function to determine if a file is a test file based on common naming conventions and directory patterns
 pub fn is_test_file(path: &std::path::Path) -> bool {
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Check file name patterns
     if let Some(file_name) = path.file_name().and_then(|f| f.to_str()) {
@@ -507,7 +507,7 @@ mod tests;
 
 // Function to identify test code blocks in the AST using tree-sitter nodes
 pub fn is_test_node(node: &Node, extension: &str, source: &[u8]) -> bool {
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let node_type = node.kind();
 
     match extension {

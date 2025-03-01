@@ -5,7 +5,7 @@ use crate::search::search_tokens::count_tokens;
 
 /// Function to format and print search results according to the specified format
 pub fn format_and_print_search_results(results: &[SearchResult]) {
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     for result in results {
         let file_path = Path::new(&result.file);
@@ -47,6 +47,9 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
 
                 if let Some(bm25_rank) = result.bm25_rank {
                     println!("BM25 Rank: {}", bm25_rank);
+                }
+                if let Some(new_score) = result.new_score {
+                    println!("New Score: {:.4}", new_score);
                 }
 
                 if let Some(file_unique_terms) = result.file_unique_terms {

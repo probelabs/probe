@@ -20,7 +20,7 @@ pub fn search_file_for_pattern(
     let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
 
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Check if the pattern already has word boundaries or parentheses (indicating a grouped pattern)
     let has_word_boundaries = pattern.contains("\\b") || pattern.starts_with("(");
@@ -90,7 +90,7 @@ pub fn find_files_with_pattern(
     let mut matching_files = Vec::new();
 
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("Running rgrep search with pattern: {}", pattern);
@@ -119,7 +119,7 @@ pub fn find_files_with_pattern(
     builder.git_exclude(true);
 
     // Add common directories to ignore
-    let mut common_ignores = vec![
+    let mut common_ignores: Vec<String> = vec![
         "node_modules",
         "vendor",
         "target",
@@ -163,11 +163,11 @@ pub fn find_files_with_pattern(
         "*.yaml",
         "*.json",
         "go.sum",
-    ];
+    ].into_iter().map(String::from).collect();
 
     // Add test file patterns if allow_tests is false
     if !allow_tests {
-        let test_patterns = vec![
+        let test_patterns: Vec<String> = vec![
             "*_test.rs",
             "*_tests.rs",
             "test_*.rs",
@@ -199,14 +199,19 @@ pub fn find_files_with_pattern(
             "**/__test__/**",
             "**/spec/**",
             "**/specs/**",
-        ];
+        ].into_iter().map(String::from).collect();
         common_ignores.extend(test_patterns);
     }
 
-    // Create a single override builder for all common ignore patterns
+    // Add custom ignore patterns to the common ignores
+    for pattern in custom_ignores {
+        common_ignores.push(pattern.clone());
+    }
+
+    // Create a single override builder for all ignore patterns
     let mut override_builder = ignore::overrides::OverrideBuilder::new(path);
 
-    // Add all common ignore patterns to the override builder
+    // Add all ignore patterns to the override builder
     for pattern in &common_ignores {
         if let Err(err) = override_builder.add(&format!("!**/{}", pattern)) {
             eprintln!("Error adding ignore pattern {:?}: {}", pattern, err);
@@ -221,15 +226,6 @@ pub fn find_files_with_pattern(
         Err(err) => {
             eprintln!("Error building ignore overrides: {}", err);
         }
-    }
-
-    // Add custom ignore patterns
-    for pattern in custom_ignores {
-        // Create an override builder for glob patterns
-        let mut override_builder = ignore::overrides::OverrideBuilder::new(path);
-        override_builder.add(&format!("!{}", pattern)).unwrap();
-        let overrides = override_builder.build().unwrap();
-        builder.overrides(overrides);
     }
 
     // Count how many files we're searching
@@ -336,7 +332,7 @@ pub fn find_matching_filenames(
     );
 
     // Debug output for patterns
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     if debug_mode && !all_patterns.is_empty() {
         println!("DEBUG: Using the following patterns for filename matching:");
         for (i, pattern) in all_patterns.iter().enumerate() {
@@ -353,7 +349,7 @@ pub fn find_matching_filenames(
     builder.git_exclude(true);
 
     // Add common directories to ignore
-    let mut common_ignores = vec![
+    let mut common_ignores: Vec<String> = vec![
         "node_modules",
         "vendor",
         "target",
@@ -396,11 +392,11 @@ pub fn find_matching_filenames(
         "*.yml",
         "*.yaml",
         "*.json",
-    ];
+    ].into_iter().map(String::from).collect();
 
     // Add test file patterns if allow_tests is false
     if !allow_tests {
-        let test_patterns = vec![
+        let test_patterns: Vec<String> = vec![
             "*_test.rs",
             "*_tests.rs",
             "test_*.rs",
@@ -432,14 +428,19 @@ pub fn find_matching_filenames(
             "**/__test__/**",
             "**/spec/**",
             "**/specs/**",
-        ];
+        ].into_iter().map(String::from).collect();
         common_ignores.extend(test_patterns);
     }
 
-    // Create a single override builder for all common ignore patterns
+    // Add custom ignore patterns to the common ignores
+    for pattern in custom_ignores {
+        common_ignores.push(pattern.clone());
+    }
+
+    // Create a single override builder for all ignore patterns
     let mut override_builder = ignore::overrides::OverrideBuilder::new(path);
 
-    // Add all common ignore patterns to the override builder
+    // Add all ignore patterns to the override builder
     for pattern in &common_ignores {
         if let Err(err) = override_builder.add(&format!("!**/{}", pattern)) {
             eprintln!("Error adding ignore pattern {:?}: {}", pattern, err);
@@ -454,15 +455,6 @@ pub fn find_matching_filenames(
         Err(err) => {
             eprintln!("Error building ignore overrides: {}", err);
         }
-    }
-
-    // Add custom ignore patterns
-    for pattern in custom_ignores {
-        // Create an override builder for glob patterns
-        let mut override_builder = ignore::overrides::OverrideBuilder::new(path);
-        override_builder.add(&format!("!{}", pattern)).unwrap();
-        let overrides = override_builder.build().unwrap();
-        builder.overrides(overrides);
     }
 
     // Recursively walk the directory and check each file
@@ -534,7 +526,7 @@ pub fn get_filename_matched_queries(
     let mut matched_indices = HashSet::new();
 
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("DEBUG: Checking path '{}' for term matches", relative_path);
@@ -597,7 +589,7 @@ pub fn get_filename_matched_queries_compat(
     let mut matched_terms = HashSet::new();
 
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("DEBUG: Checking filename '{}' for term matches", filename);

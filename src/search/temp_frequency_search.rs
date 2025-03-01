@@ -14,7 +14,7 @@ pub fn perform_frequency_search(
     exact: bool, // Parameter to control exact matching (no stemming/stopwords)
 ) -> Result<LimitedSearchResults> {
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("Performing frequency-based search for query: {}", query);

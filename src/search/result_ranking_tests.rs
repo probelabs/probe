@@ -10,7 +10,7 @@ mod tests {
             SearchResult {
                 file: "file1.rs".to_string(),
                 lines: (1, 10),
-                node_type: "function".to_string(),
+                node_type: "context".to_string(), // Changed to context for testing context boost
                 code: "fn test_function() { println!(\"This is a test function with search terms\"); }".to_string(),
                 matched_by_filename: None,
                 rank: None,
@@ -19,9 +19,12 @@ mod tests {
                 bm25_score: None,
                 tfidf_rank: None,
                 bm25_rank: None,
-                file_unique_terms: None,
-                file_total_matches: None,
-                file_match_rank: None,
+                new_score: None,
+                file_unique_terms: Some(2), // "search", "terms"
+                file_total_matches: Some(2),
+                file_match_rank: Some(2),
+                block_unique_terms: Some(2),
+                block_total_matches: Some(2),
             },
             SearchResult {
                 file: "file2.rs".to_string(),
@@ -35,9 +38,12 @@ mod tests {
                 bm25_score: None,
                 tfidf_rank: None,
                 bm25_rank: None,
-                file_unique_terms: None,
-                file_total_matches: None,
-                file_match_rank: None,
+                new_score: None,
+                file_unique_terms: Some(1), // No search terms
+                file_total_matches: Some(1),
+                file_match_rank: Some(3),
+                block_unique_terms: Some(0),
+                block_total_matches: Some(0),
             },
             SearchResult {
                 file: "file3.rs".to_string(),
@@ -51,9 +57,12 @@ mod tests {
                 bm25_score: None,
                 tfidf_rank: None,
                 bm25_rank: None,
-                file_unique_terms: None,
-                file_total_matches: None,
-                file_match_rank: None,
+                new_score: None,
+                file_unique_terms: Some(3), // "search" appears multiple times
+                file_total_matches: Some(4),
+                file_match_rank: Some(1),
+                block_unique_terms: Some(1),
+                block_total_matches: Some(3),
             },
         ]
     }
@@ -63,7 +72,10 @@ mod tests {
         let mut results = create_test_results();
         let queries = vec!["search".to_string()];
         
+        // Enable debug mode for this test to verify logging
+        std::env::set_var("DEBUG", "1");
         rank_search_results(&mut results, &queries, "hybrid");
+        std::env::remove_var("DEBUG");
         
         // Check that all results have been assigned ranks and scores
         for result in &results {
@@ -71,6 +83,7 @@ mod tests {
             assert!(result.score.is_some());
             assert!(result.tfidf_score.is_some());
             assert!(result.bm25_score.is_some());
+            assert!(result.new_score.is_some());
             assert!(result.tfidf_rank.is_some());
             assert!(result.bm25_rank.is_some());
         }
@@ -98,6 +111,7 @@ mod tests {
             assert!(result.score.is_some());
             assert!(result.tfidf_score.is_some());
             assert!(result.bm25_score.is_some());
+            assert!(result.new_score.is_some());
             assert!(result.tfidf_rank.is_some());
             assert!(result.bm25_rank.is_some());
         }
@@ -121,6 +135,7 @@ mod tests {
             assert!(result.score.is_some());
             assert!(result.tfidf_score.is_some());
             assert!(result.bm25_score.is_some());
+            assert!(result.new_score.is_some());
             assert!(result.tfidf_rank.is_some());
             assert!(result.bm25_rank.is_some());
         }
@@ -144,6 +159,7 @@ mod tests {
             assert!(result.score.is_some());
             assert!(result.tfidf_score.is_some());
             assert!(result.bm25_score.is_some());
+            assert!(result.new_score.is_some());
             assert!(result.tfidf_rank.is_some());
             assert!(result.bm25_rank.is_some());
         }

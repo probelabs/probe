@@ -4,7 +4,7 @@ use crate::models::SearchResult;
 /// Function to format and print search results according to the specified format
 pub fn format_and_print_search_results(results: &[SearchResult]) {
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     for result in results {
         // Get file extension

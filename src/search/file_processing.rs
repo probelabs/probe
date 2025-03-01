@@ -104,6 +104,7 @@ pub fn process_file_by_filename(
         bm25_score: None,
         tfidf_rank: None,
         bm25_rank: None,
+        new_score: None,
         file_unique_terms: Some(matched_terms.len()),
         file_total_matches: Some(0),
         file_match_rank: None,
@@ -166,7 +167,7 @@ pub fn process_file_with_results(
     let mut covered_lines = HashSet::new();
 
     // Debug mode
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("DEBUG: Processing file with results: {:?}", path);
@@ -300,8 +301,8 @@ pub fn process_file_with_results(
                 results.push(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (start_line, end_line),
-                    node_type: block.node_type.clone(),
-                    code: full_code.clone(), // Clone full_code here to avoid the move
+                    node_type: "file".to_string(),
+                    code: full_code.clone(),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -309,6 +310,7 @@ pub fn process_file_with_results(
                     bm25_score: None,
                     tfidf_rank: None,
                     bm25_rank: None,
+                    new_score: None,
                     file_unique_terms: Some(block_unique_terms),
                     file_total_matches: Some(block_total_matches),
                     file_match_rank: None,
@@ -462,6 +464,7 @@ pub fn process_file_with_results(
                     bm25_score: None,
                     tfidf_rank: None,
                     bm25_rank: None,
+                    new_score: None,
                     file_unique_terms: None,
                     file_total_matches: None,
                     file_match_rank: None,
@@ -480,7 +483,7 @@ pub fn process_file_with_results(
 
     // Define a function to determine if we should return the full file
     fn should_return_full_file(coverage_percentage: f64, total_lines: usize) -> bool {
-        total_lines >= 5 && coverage_percentage >= 80.0
+        total_lines >= 5 && coverage_percentage >= 99.0
     }
 
     // Calculate coverage percentage with safeguards for division by zero
@@ -500,7 +503,7 @@ pub fn process_file_with_results(
     }
 
     // Check if we should return the full file based on coverage and minimum line count
-    if should_return_full_file(coverage_percentage, total_lines) {
+    if false && should_return_full_file(coverage_percentage, total_lines) {
         if debug_mode {
             println!("DEBUG: Coverage exceeds 80%, returning entire file");
         }
@@ -560,6 +563,7 @@ pub fn process_file_with_results(
             bm25_score: None,
             tfidf_rank: None,
             bm25_rank: None,
+            new_score: None,
             file_unique_terms: None,
             file_total_matches: None,
             file_match_rank: None,

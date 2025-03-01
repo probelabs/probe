@@ -4,7 +4,7 @@ use crate::ranking;
 /// Function to rank search results based on query relevance
 pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], reranker: &str) {
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("CODE_SEARCH_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Combine all queries into a single string for ranking
     let combined_query = queries.join(" ");
@@ -18,17 +18,34 @@ pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], 
     let documents_refs: Vec<&str> = documents.iter().map(|s| s.as_str()).collect();
 
     // Rank the documents
-    let ranked_indices = ranking::rank_documents(&documents_refs, &combined_query);
+    // Get metrics from the first result (assuming they're the same for all results in this set)
+    let file_unique_terms = results.first().and_then(|r| r.file_unique_terms);
+    let file_total_matches = results.first().and_then(|r| r.file_total_matches);
+    let block_unique_terms = results.first().and_then(|r| r.block_unique_terms);
+    let block_total_matches = results.first().and_then(|r| r.block_total_matches);
+    let node_type = results.first().map(|r| r.node_type.as_str());
+
+    let ranked_indices = ranking::rank_documents(
+        &documents_refs, 
+        &combined_query,
+        file_unique_terms,
+        file_total_matches,
+        results.first().and_then(|r| r.file_match_rank),
+        block_unique_terms,
+        block_total_matches,
+        node_type
+    );
 
     // Update the search results with rank and score information
-    for (rank_index, (original_index, combined_score, tfidf_score, bm25_score)) in
+    for (rank_index, (original_index, combined_score, tfidf_score, bm25_score, new_score)) in
         ranked_indices.iter().enumerate()
     {
         if let Some(result) = results.get_mut(*original_index) {
             result.rank = Some(rank_index + 1); // 1-based rank
-            result.score = Some(*combined_score);
+            result.score = Some(*combined_score); // Keep original combined score
             result.tfidf_score = Some(*tfidf_score);
             result.bm25_score = Some(*bm25_score);
+            result.new_score = Some(*new_score); // Store new score separately
         }
     }
 
@@ -116,10 +133,10 @@ pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], 
                 println!("Using hybrid ranking (default)");
             }
 
-            // Sort by combined score (default)
+            // Sort by new score (default)
             results.sort_by(|a, b| {
-                let score_a = a.score.unwrap_or(0.0);
-                let score_b = b.score.unwrap_or(0.0);
+                let score_a = a.new_score.unwrap_or(0.0);
+                let score_b = b.new_score.unwrap_or(0.0);
                 // Sort in descending order
                 score_b
                     .partial_cmp(&score_a)
