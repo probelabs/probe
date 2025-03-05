@@ -1,4 +1,4 @@
-use probe::ranking::{compute_avgdl, rank_documents, tokenize};
+use probe::ranking::{compute_avgdl, rank_documents, tokenize, RankingParams};
 use probe::search::query::{create_term_patterns, preprocess_query, regex_escape};
 use proptest::prelude::*;
 
@@ -85,8 +85,20 @@ proptest! {
         // Convert Vec<String> to Vec<&str>
         let docs_refs: Vec<&str> = docs.iter().map(|s| s.as_str()).collect();
 
+        // Create RankingParams
+        let params = RankingParams {
+            documents: &docs_refs,
+            query: &query,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            node_type: None,
+        };
+
         // This should never panic
-        let ranked = rank_documents(&docs_refs, &query, None, None, None, None, None, None);
+        let ranked = rank_documents(&params);
 
         // The number of ranked documents should match the input
         assert_eq!(ranked.len(), docs.len());

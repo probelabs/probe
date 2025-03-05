@@ -4,7 +4,7 @@ use tempfile::TempDir;
 
 use probe::models::SearchResult;
 use probe::search::block_merging::merge_ranked_blocks;
-use probe::search::search_runner::perform_probe;
+use probe::search::{perform_probe, SearchOptions};
 
 #[test]
 fn test_merge_ranked_blocks() {
@@ -163,25 +163,31 @@ fn test_integration_with_search_flow() {
     // Create test files with overlapping code blocks
     create_test_files(temp_path);
 
+    // Create search query
+    let queries = vec!["function test".to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // Create SearchOptions
+    let options = SearchOptions {
+        path: temp_path,
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        include_filenames: true,
+        reranker: "combined",
+        frequency_search: false,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: true,
+        any_term: true,
+        exact: false,
+        merge_blocks: true,
+        merge_threshold: Some(5),
+    };
+
     // Run a search that should produce multiple overlapping blocks
-    let search_results = perform_probe(
-        temp_path,
-        &["function test".to_string()],
-        false,      // files_only
-        &[],        // custom_ignores
-        true,       // include_filenames
-        "combined", // reranker
-        false,      // frequency_search
-        None,       // max_results
-        None,       // max_bytes
-        None,       // max_tokens
-        true,       // allow_tests
-        true,       // any_term
-        false,      // exact
-        true,       // merge_blocks
-        Some(5),    // merge_threshold
-    )
-    .unwrap();
+    let search_results = perform_probe(&options).unwrap();
 
     // Check that we got merged results
     assert!(

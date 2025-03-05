@@ -54,7 +54,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
                 found_node = Some(next_sibling);
             } else {
                 // Look in next sibling's subtree
-                found_node = find_acceptable_child(next_sibling, &language_impl);
+                found_node = find_acceptable_child(next_sibling, language_impl.as_ref());
             }
         }
 
@@ -65,7 +65,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
                     found_node = Some(prev_sibling);
                 } else {
                     // Look in previous sibling's subtree
-                    found_node = find_acceptable_child(prev_sibling, &language_impl);
+                    found_node = find_acceptable_child(prev_sibling, language_impl.as_ref());
                 }
             }
         }
@@ -271,7 +271,7 @@ pub fn find_related_code_node<'a>(comment_node: Node<'a>, extension: &str) -> Op
 
     // Priority 2: Look for acceptable child in the next node
     if let Some(next_node) = find_immediate_next_node(comment_node) {
-        if let Some(child) = find_acceptable_child(next_node, &language_impl) {
+        if let Some(child) = find_acceptable_child(next_node, language_impl.as_ref()) {
             if debug_mode {
                 println!(
                     "DEBUG: Found acceptable child in next node: type='{}', lines={}-{}",
@@ -299,7 +299,7 @@ pub fn find_related_code_node<'a>(comment_node: Node<'a>, extension: &str) -> Op
         }
 
         // Look in previous sibling's subtree
-        if let Some(child) = find_acceptable_child(prev_sibling, &language_impl) {
+        if let Some(child) = find_acceptable_child(prev_sibling, language_impl.as_ref()) {
             if debug_mode {
                 println!(
                     "DEBUG: Found acceptable child in previous sibling: type='{}', lines={}-{}",
@@ -355,7 +355,7 @@ fn find_prev_sibling(node: Node<'_>) -> Option<Node<'_>> {
 /// Find first acceptable node in a subtree
 fn find_acceptable_child<'a>(
     node: Node<'a>,
-    language_impl: &Box<dyn LanguageImpl>,
+    language_impl: &dyn LanguageImpl,
 ) -> Option<Node<'a>> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {

@@ -8,7 +8,7 @@ mod ranking;
 mod search;
 
 use cli::Args;
-use search::{format_and_print_search_results, perform_probe};
+use search::{format_and_print_search_results, perform_probe, SearchOptions};
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -21,23 +21,25 @@ fn main() -> Result<()> {
     };
 
     let query = vec![args.pattern];
-    let limited_results = perform_probe(
-        &args.paths[0], // First path or "." by default
-        &query,
-        args.files_only,
-        &args.ignore,
-        args.include_filenames,
-        &args.reranker,
-        use_frequency,
-        args.max_results,
-        args.max_bytes,
-        args.max_tokens,
-        args.allow_tests,
-        args.any_term,
-        args.exact,
-        args.merge_blocks,
-        args.merge_threshold,
-    )?;
+    let search_options = SearchOptions {
+        path: &args.paths[0], // First path or "." by default
+        queries: &query,
+        files_only: args.files_only,
+        custom_ignores: &args.ignore,
+        include_filenames: args.include_filenames,
+        reranker: &args.reranker,
+        frequency_search: use_frequency,
+        max_results: args.max_results,
+        max_bytes: args.max_bytes,
+        max_tokens: args.max_tokens,
+        allow_tests: args.allow_tests,
+        any_term: args.any_term,
+        exact: args.exact,
+        merge_blocks: args.merge_blocks,
+        merge_threshold: args.merge_threshold,
+    };
+    
+    let limited_results = perform_probe(&search_options)?;
 
     if limited_results.results.is_empty() {
         println!("No results found.");

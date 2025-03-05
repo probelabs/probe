@@ -1,13 +1,13 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 
 use crate::models::{LimitedSearchResults, SearchResult};
-use crate::search::file_processing::{process_file_by_filename, process_file_with_results};
+use crate::search::file_processing::{process_file_by_filename, process_file_with_results, FileProcessingParams};
 use crate::search::file_search::{
     find_files_with_pattern, find_matching_filenames, get_filename_matched_queries,
     get_filename_matched_queries_compat, search_file_for_pattern,
@@ -15,6 +15,7 @@ use crate::search::file_search::{
 use crate::search::query::{create_term_patterns, preprocess_query};
 use crate::search::result_ranking::rank_search_results;
 use crate::search::search_limiter::apply_limits;
+use crate::search::search_options::{FrequencySearchOptions, SearchOptions};
 
 /// Struct to hold timing information for different stages of the search process
 pub struct SearchTimings {
@@ -27,23 +28,24 @@ pub struct SearchTimings {
 }
 
 /// Performs a search on code repositories and returns results in a structured format
-pub fn perform_probe(
-    path: &Path,
-    queries: &[String],
-    files_only: bool,
-    custom_ignores: &[String],
-    include_filenames: bool,
-    reranker: &str,
-    frequency_search: bool, // Parameter for frequency-based search
-    max_results: Option<usize>,
-    max_bytes: Option<usize>,
-    max_tokens: Option<usize>,
-    allow_tests: bool,              // Parameter to control test file/node inclusion
-    any_term: bool,                 // Parameter to control multi-term search behavior
-    exact: bool,                    // Parameter to control exact matching (no stemming/stopwords)
-    merge_blocks: bool,             // Parameter to control post-ranking block merging
-    merge_threshold: Option<usize>, // Parameter to control how many lines between blocks to merge
-) -> Result<LimitedSearchResults> {
+pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
+    let SearchOptions {
+        path,
+        queries,
+        files_only,
+        custom_ignores,
+        include_filenames,
+        reranker,
+        frequency_search,
+        max_results,
+        max_bytes,
+        max_tokens,
+        allow_tests,
+        any_term,
+        exact,
+        merge_blocks,
+        merge_threshold,
+    } = options;
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Initialize timing structure
@@ -70,12 +72,12 @@ pub fn perform_probe(
         println!("DEBUG:   Frequency search: {}", frequency_search);
         println!(
             "DEBUG:   Match mode: {}",
-            if any_term { "any term" } else { "all terms" }
+            if *any_term { "any term" } else { "all terms" }
         );
     }
 
     // If frequency-based search is enabled and we have exactly one query
-    if frequency_search && queries.len() == 1 {
+    if *frequency_search && queries.len() == 1 {
         if debug_mode {
             println!(
                 "DEBUG: Using frequency-based search for query: {}",
@@ -84,7 +86,7 @@ pub fn perform_probe(
         }
 
         // Print ranking method being used
-        match reranker {
+        match *reranker {
             "tfidf" => println!("Using TF-IDF for ranking"),
             "bm25" => println!("Using BM25 for ranking"),
             "hybrid" => {
@@ -94,27 +96,27 @@ pub fn perform_probe(
             _ => println!("Using {} for ranking", reranker),
         }
 
-        return perform_frequency_search(
+        return perform_frequency_search(&FrequencySearchOptions {
             path,
-            &queries[0],
-            files_only,
+            query: &queries[0],
+            files_only: *files_only,
             custom_ignores,
-            include_filenames,
+            include_filenames: *include_filenames,
             reranker,
-            max_results,
-            max_bytes,
-            max_tokens,
-            allow_tests,
-            any_term,
-            exact,
-            merge_blocks,
-            merge_threshold,
-        );
+            max_results: *max_results,
+            max_bytes: *max_bytes,
+            max_tokens: *max_tokens,
+            allow_tests: *allow_tests,
+            any_term: *any_term,
+            exact: *exact,
+            merge_blocks: *merge_blocks,
+            merge_threshold: *merge_threshold,
+        });
     }
 
     // Process each query string into multiple terms and store the term pairs for later use
     let queries_terms: Vec<Vec<(String, String)>> =
-        queries.iter().map(|q| preprocess_query(q, exact)).collect();
+        queries.iter().map(|q| preprocess_query(q, *exact)).collect();
 
     // Cache preprocessed query terms for reuse
     let preprocessed_queries: Vec<Vec<String>> = queries_terms
@@ -166,7 +168,7 @@ pub fn perform_probe(
         queries.len(),
         all_patterns.len(),
         path,
-        if any_term {
+        if *any_term {
             "any term matches"
         } else {
             "all terms must match"
@@ -175,7 +177,11 @@ pub fn perform_probe(
 
     // Start timing file searching
     let file_searching_start = Instant::now();
-    let matches_by_file_and_term: Arc<Mutex<HashMap<PathBuf, HashMap<usize, HashSet<usize>>>>> =
+    
+    // Define a type alias for the complex nested type
+    type FileTermMatches = HashMap<PathBuf, HashMap<usize, HashSet<usize>>>;
+    
+    let matches_by_file_and_term: Arc<Mutex<FileTermMatches>> =
         Arc::new(Mutex::new(HashMap::new()));
 
     // Prepare single-term patterns separately from multi-term combos
@@ -201,7 +207,7 @@ pub fn perform_probe(
 
         patterns.par_iter().for_each(|pat| {
             if let Ok(matching_files) =
-                find_files_with_pattern(path, pat, custom_ignores, allow_tests)
+                find_files_with_pattern(path, pat, custom_ignores, *allow_tests)
             {
                 for file_path in matching_files {
                     if let Ok((did_match, line_numbers)) =
@@ -278,8 +284,8 @@ pub fn perform_probe(
     // Collect all files with content matches
     let content_files: HashSet<PathBuf> = matches_by_file_and_term.keys().cloned().collect();
     // Optionally find files by filename
-    let filename_matching_files = if include_filenames {
-        find_matching_filenames(path, queries, &content_files, custom_ignores, allow_tests)?
+    let filename_matching_files = if *include_filenames {
+        find_matching_filenames(path, queries, &content_files, custom_ignores, *allow_tests)?
     } else {
         Vec::new()
     };
@@ -294,7 +300,7 @@ pub fn perform_probe(
             "Term filtering: {} files matched at least one term, {} files matched the filter criteria ({}).",
             matches_by_file_and_term.len(),
             all_files.len(),
-            if any_term { "any term" } else { "all terms must match" }
+            if *any_term { "any term" } else { "all terms must match" }
         );
     }
 
@@ -311,7 +317,7 @@ pub fn perform_probe(
     println!("Found matches in {} files.", all_files.len());
 
     // If files_only is set, return file-level results only
-    if files_only {
+    if *files_only {
         let mut results = Vec::new();
         for path in all_files.iter() {
             results.push(SearchResult {
@@ -338,11 +344,11 @@ pub fn perform_probe(
                 block_id: None,
             });
         }
-        if include_filenames {
+        if *include_filenames {
             let found_files: HashSet<PathBuf> =
                 results.iter().map(|r| PathBuf::from(&r.file)).collect();
             let additional_files =
-                find_matching_filenames(path, queries, &found_files, custom_ignores, allow_tests)?;
+                find_matching_filenames(path, queries, &found_files, custom_ignores, *allow_tests)?;
             for af in additional_files {
                 results.push(SearchResult {
                     file: af.to_string_lossy().to_string(),
@@ -382,7 +388,7 @@ pub fn perform_probe(
                 r.bm25_rank = Some(i + 1);
             }
         }
-        return Ok(apply_limits(results, max_results, max_bytes, max_tokens));
+        return Ok(apply_limits(results, *max_results, *max_bytes, *max_tokens));
     }
 
     // Otherwise, process each file, retrieving relevant line info
@@ -411,7 +417,7 @@ pub fn perform_probe(
 
         // If any_term is true, any matched term is enough
         // If all_term is true, we check if all query sets have at least one matched term
-        let should_include = if any_term {
+        let should_include = if *any_term {
             !(content_terms.is_empty() && filename_terms.is_empty())
         } else {
             queries.iter().enumerate().all(|(q_idx, _)| {
@@ -477,17 +483,18 @@ pub fn perform_probe(
                 all_lines.extend(lineset);
             }
             // Call process_file_with_results
-            let rres = process_file_with_results(
-                &path,
-                &all_lines,
-                allow_tests,
-                Some(&content_map),
-                any_term,
-                total_terms,
-                filename_terms.clone(),
-                &queries_terms,
-                Some(&preprocessed_queries),
-            );
+            let params = FileProcessingParams {
+                path: &path,
+                line_numbers: &all_lines,
+                allow_tests: *allow_tests,
+                term_matches: Some(&content_map),
+                any_term: *any_term,
+                num_queries: total_terms,
+                filename_matched_queries: filename_terms.clone(),
+                queries_terms: &queries_terms,
+                preprocessed_queries: Some(&preprocessed_queries),
+            };
+            let rres = process_file_with_results(&params);
             if let Ok(mut file_results) = rres {
                 // Attach file-level stats
                 for fr in &mut file_results {
@@ -528,7 +535,7 @@ pub fn perform_probe(
     let result_ranking_start = Instant::now();
 
     // Print ranking method being used
-    match reranker {
+    match *reranker {
         "tfidf" => println!("Using TF-IDF for ranking"),
         "bm25" => println!("Using BM25 for ranking"),
         "hybrid" => println!("Using hybrid ranking (default - simple TF-IDF + BM25 combination)"),
@@ -538,7 +545,7 @@ pub fn perform_probe(
 
     if !results.is_empty() {
         // For hybrid2, we want to ensure we have two separate ranks
-        if reranker == "hybrid2" {
+        if *reranker == "hybrid2" {
             // First calculate regular combined score ranks
             rank_search_results(&mut results, queries, "combined");
 
@@ -568,15 +575,15 @@ pub fn perform_probe(
     // Default token limit if none specified
     let default_max_tokens = max_tokens.or(Some(100000));
     let limit_application_start = Instant::now();
-    let limited_results = apply_limits(results, max_results, max_bytes, default_max_tokens);
+    let limited_results = apply_limits(results, *max_results, *max_bytes, default_max_tokens);
     timings.limit_application = Some(limit_application_start.elapsed());
 
     // Apply post-ranking block merging
     let block_merging_start = Instant::now();
-    let merged_results = if !limited_results.results.is_empty() && merge_blocks {
+    let merged_results = if !limited_results.results.is_empty() && *merge_blocks {
         use crate::search::block_merging::merge_ranked_blocks;
         let original_count = limited_results.results.len();
-        let merged = merge_ranked_blocks(limited_results.results, merge_threshold);
+        let merged = merge_ranked_blocks(limited_results.results, *merge_threshold);
 
         if debug_mode {
             println!(
@@ -623,22 +630,23 @@ pub fn perform_probe(
 }
 
 /// Performs a frequency-based search for a single query
-pub fn perform_frequency_search(
-    path: &Path,
-    query: &str,
-    files_only: bool,
-    custom_ignores: &[String],
-    include_filenames: bool,
-    reranker: &str,
-    max_results: Option<usize>,
-    max_bytes: Option<usize>,
-    max_tokens: Option<usize>,
-    allow_tests: bool,
-    any_term: bool,
-    exact: bool,
-    merge_blocks: bool, // Parameter to control post-ranking block merging
-    merge_threshold: Option<usize>, // Parameter to control how many lines between blocks to merge
-) -> Result<LimitedSearchResults> {
+pub fn perform_frequency_search(options: &FrequencySearchOptions) -> Result<LimitedSearchResults> {
+    let FrequencySearchOptions {
+        path,
+        query,
+        files_only,
+        custom_ignores,
+        include_filenames,
+        reranker,
+        max_results,
+        max_bytes,
+        max_tokens,
+        allow_tests,
+        any_term,
+        exact,
+        merge_blocks,
+        merge_threshold,
+    } = options;
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     let mut timings = SearchTimings {
@@ -655,7 +663,7 @@ pub fn perform_frequency_search(
         println!("Performing frequency-based search for query: {}", query);
     }
 
-    let term_pairs = preprocess_query(query, exact);
+    let term_pairs = preprocess_query(query, *exact);
     if term_pairs.is_empty() {
         println!("No valid search terms after preprocessing");
         return Ok(LimitedSearchResults {
@@ -686,7 +694,7 @@ pub fn perform_frequency_search(
 
     let mut all_files = HashSet::new();
     for (pattern, _) in &patterns_with_terms {
-        let found = find_files_with_pattern(path, pattern, custom_ignores, allow_tests)?;
+        let found = find_files_with_pattern(path, pattern, custom_ignores, *allow_tests)?;
         all_files.extend(found);
     }
 
@@ -719,7 +727,7 @@ pub fn perform_frequency_search(
     }
 
     patterns_with_terms.par_iter().for_each(|(pat, tset)| {
-        if let Ok(matching_files) = find_files_with_pattern(path, pat, custom_ignores, allow_tests)
+        if let Ok(matching_files) = find_files_with_pattern(path, pat, custom_ignores, *allow_tests)
         {
             for mfile in matching_files {
                 if let Ok((matched, lines)) = search_file_for_pattern(&mfile, pat, true) {
@@ -791,7 +799,7 @@ pub fn perform_frequency_search(
     }
 
     // If files_only, return them directly
-    if files_only {
+    if *files_only {
         let mut out_results = Vec::new();
         for (path, _, _) in &freq_files {
             out_results.push(SearchResult {
@@ -819,14 +827,14 @@ pub fn perform_frequency_search(
             });
         }
 
-        if include_filenames {
+        if *include_filenames {
             let existing: HashSet<PathBuf> = freq_files.iter().map(|(p, _, _)| p.clone()).collect();
             let found_filenames = find_matching_filenames(
                 path,
                 &[query.to_string()],
                 &existing,
                 custom_ignores,
-                allow_tests,
+                *allow_tests,
             )?;
             for ff in found_filenames {
                 out_results.push(SearchResult {
@@ -868,9 +876,9 @@ pub fn perform_frequency_search(
 
         return Ok(apply_limits(
             out_results,
-            max_results,
-            max_bytes,
-            max_tokens,
+            *max_results,
+            *max_bytes,
+            *max_tokens,
         ));
     }
 
@@ -938,18 +946,22 @@ pub fn perform_frequency_search(
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_default();
             let fmatch = get_filename_matched_queries_compat(&filename, &[term_pairs.clone()]);
+// Create a longer-lived value for preprocessed queries
+let preprocessed_query_terms: Vec<Vec<String>> = vec![term_pairs.iter().map(|(_, s)| s.clone()).collect()];
 
-            let res = process_file_with_results(
-                &path,
-                &content_lines,
-                allow_tests,
-                Some(&tmp_map),
-                any_term,
-                term_pairs.len(),
-                fmatch.clone(),
-                &[term_pairs.clone()],
-                Some(&[term_pairs.iter().map(|(_, s)| s.clone()).collect()]),
-            );
+let params = FileProcessingParams {
+    path: &path,
+    line_numbers: &content_lines,
+    allow_tests: *allow_tests,
+    term_matches: Some(&tmp_map),
+    any_term: *any_term,
+    num_queries: term_pairs.len(),
+    filename_matched_queries: fmatch.clone(),
+    queries_terms: &[term_pairs.clone()],
+    preprocessed_queries: Some(&preprocessed_query_terms),
+};
+let _res = process_file_with_results(&params);
+            let res = process_file_with_results(&params);
             if let Ok(mut file_results) = res {
                 // Attach file-level stats
                 for fr in &mut file_results {
@@ -962,7 +974,7 @@ pub fn perform_frequency_search(
         }
     }
 
-    if include_filenames {
+    if *include_filenames {
         let mut found_set: HashSet<PathBuf> = HashSet::new();
         found_set.extend(results.iter().map(|r| PathBuf::from(&r.file)));
         let extra = find_matching_filenames(
@@ -970,7 +982,7 @@ pub fn perform_frequency_search(
             &[query.to_string()],
             &found_set,
             custom_ignores,
-            allow_tests,
+            *allow_tests,
         )?;
         for xf in extra {
             match process_file_by_filename(
@@ -997,7 +1009,7 @@ pub fn perform_frequency_search(
     let rr_start = Instant::now();
     if !results.is_empty() {
         // For hybrid2, we want to ensure we have two separate ranks
-        if reranker == "hybrid2" {
+        if *reranker == "hybrid2" {
             // First calculate regular combined score ranks
             rank_search_results(&mut results, &[query.to_string()], "combined");
 
@@ -1027,15 +1039,15 @@ pub fn perform_frequency_search(
     // apply limits
     let lam_start = Instant::now();
     let default_max_tokens = max_tokens.or(Some(100000));
-    let limited = apply_limits(results, max_results, max_bytes, default_max_tokens);
+    let limited = apply_limits(results, *max_results, *max_bytes, default_max_tokens);
     timings.limit_application = Some(lam_start.elapsed());
 
     // Apply post-ranking block merging
     let block_merging_start = Instant::now();
-    let merged_results = if !limited.results.is_empty() && merge_blocks {
+    let merged_results = if !limited.results.is_empty() && *merge_blocks {
         use crate::search::block_merging::merge_ranked_blocks;
         let original_count = limited.results.len();
-        let merged = merge_ranked_blocks(limited.results, merge_threshold);
+        let merged = merge_ranked_blocks(limited.results, *merge_threshold);
 
         if debug_mode {
             println!(

@@ -8,6 +8,28 @@ use crate::models::SearchResult;
 use crate::ranking::preprocess_text;
 use crate::search::file_search::get_filename_matched_queries_compat;
 
+/// Parameters for file processing
+pub struct FileProcessingParams<'a> {
+    /// Path to the file
+    pub path: &'a Path,
+    /// Line numbers to process
+    pub line_numbers: &'a HashSet<usize>,
+    /// Whether to allow test files/functions
+    pub allow_tests: bool,
+    /// Map of query indices to matching line numbers
+    pub term_matches: Option<&'a HashMap<usize, HashSet<usize>>>,
+    /// Whether to include blocks matching any term (true) or all terms (false)
+    pub any_term: bool,
+    /// Total number of queries being searched
+    pub num_queries: usize,
+    /// Query indices that match the filename
+    pub filename_matched_queries: HashSet<usize>,
+    /// The query terms for calculating block matches
+    pub queries_terms: &'a [Vec<(String, String)>],
+    /// Optional preprocessed query terms for optimization
+    pub preprocessed_queries: Option<&'a [Vec<String>]>,
+}
+
 /// Function to check if a code block should be included based on term matches
 fn filter_code_block(
     block_lines: (usize, usize),
@@ -153,12 +175,12 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
     let trimmed = line.trim();
 
     // First try to detect comments
-    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("*") {
-        return "comment".to_string();
-    } else if trimmed.starts_with("#") && extension.map_or(false, |ext| ext == "py" || ext == "rb")
-    {
-        return "comment".to_string();
-    } else if trimmed.starts_with("'''") || trimmed.starts_with("\"\"\"") {
+    if trimmed.starts_with("//") ||
+       trimmed.starts_with("/*") ||
+       trimmed.starts_with("*") ||
+       (trimmed.starts_with("#") && extension.is_some_and(|ext| ext == "py" || ext == "rb")) ||
+       trimmed.starts_with("'''") ||
+       trimmed.starts_with("\"\"\"") {
         return "comment".to_string();
     }
 
@@ -168,14 +190,14 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
     // Check for function/method declarations
     if (trimmed.contains("fn ")
         && (trimmed.contains("(") || trimmed.contains(")"))
-        && extension.map_or(false, |ext| ext == "rs"))
-        || (trimmed.contains("func ") && extension.map_or(false, |ext| ext == "go"))
+        && extension == Some("rs"))
+        || (trimmed.contains("func ") && extension == Some("go"))
         || (trimmed.contains("function ")
-            && extension.map_or(false, |ext| ext == "js" || ext == "ts"))
-        || (lowercase.contains("def ") && extension.map_or(false, |ext| ext == "py"))
+            && extension.is_some_and(|ext| ext == "js" || ext == "ts"))
+        || (lowercase.contains("def ") && extension == Some("py"))
         || (trimmed.contains("public")
             && trimmed.contains("void")
-            && extension.map_or(false, |ext| ext == "java" || ext == "kt"))
+            && extension.is_some_and(|ext| ext == "java" || ext == "kt"))
     {
         return "function".to_string();
     }
@@ -183,12 +205,12 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
     // Check for class declarations
     if (trimmed.contains("class ") || trimmed.contains("interface "))
         || (trimmed.contains("struct ")
-            && extension.map_or(false, |ext| {
+            && extension.is_some_and(|ext| {
                 ext == "rs" || ext == "go" || ext == "c" || ext == "cpp"
             }))
         || (trimmed.contains("type ")
             && trimmed.contains("struct")
-            && extension.map_or(false, |ext| ext == "go"))
+            && extension == Some("go"))
         || (trimmed.contains("enum "))
     {
         return "class".to_string();
@@ -226,22 +248,12 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
 }
 
 /// Function to process a file with line numbers and return SearchResult structs
-pub fn process_file_with_results(
-    path: &Path,
-    line_numbers: &HashSet<usize>,
-    allow_tests: bool,
-    term_matches: Option<&HashMap<usize, HashSet<usize>>>, // Query index to line numbers
-    any_term: bool, // Whether to include code blocks that match any term (true) or all terms (false)
-    num_queries: usize, // Total number of queries being searched
-    filename_matched_queries: HashSet<usize>, // Query indices that match the filename
-    queries_terms: &[Vec<(String, String)>], // The query terms for calculating block matches
-    preprocessed_queries: Option<&[Vec<String>]>, // Optional preprocessed query terms for optimization
-) -> Result<Vec<SearchResult>> {
+pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<SearchResult>> {
     // Read the file content
-    let content = fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
+    let content = fs::read_to_string(params.path).context(format!("Failed to read file: {:?}", params.path))?;
 
     // Get the file extension
-    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    let extension = params.path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
     // Split the content into lines for context processing
     let lines: Vec<&str> = content.lines().collect();
@@ -256,24 +268,24 @@ pub fn process_file_with_results(
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: Processing file with results: {:?}", path);
-        println!("DEBUG:   Matched line numbers: {:?}", line_numbers);
+        println!("DEBUG: Processing file with results: {:?}", params.path);
+        println!("DEBUG:   Matched line numbers: {:?}", params.line_numbers);
         println!("DEBUG:   File extension: {}", extension);
         println!("DEBUG:   Total lines in file: {}", lines.len());
 
         // Log filename matches if present
-        if !filename_matched_queries.is_empty() {
+        if !params.filename_matched_queries.is_empty() {
             println!(
                 "DEBUG: Filename '{}' matched queries (indices): {:?}",
-                path.file_name().unwrap_or_default().to_string_lossy(),
-                filename_matched_queries
+                params.path.file_name().unwrap_or_default().to_string_lossy(),
+                params.filename_matched_queries
             );
         }
     }
 
     // First try to use AST parsing
     if let Ok(code_blocks) =
-        parse_file_for_code_blocks(&content, extension, line_numbers, allow_tests, term_matches)
+        parse_file_for_code_blocks(&content, extension, params.line_numbers, params.allow_tests, params.term_matches)
     {
         if debug_mode {
             println!("DEBUG: AST parsing successful");
@@ -291,7 +303,7 @@ pub fn process_file_with_results(
         }
 
         // Generate a unique file ID for block correlation
-        let file_id = format!("{}", path.to_string_lossy());
+        let file_id = format!("{}", params.path.to_string_lossy());
 
         // Process all individual blocks (no merging)
         for (block_idx, block) in code_blocks.iter().enumerate() {
@@ -302,7 +314,7 @@ pub fn process_file_with_results(
             // Check if this is a struct_type inside a function in Go code
             let (final_start_line, final_end_line, is_nested_struct) = if extension == "go"
                 && block.node_type == "struct_type"
-                && block.parent_node_type.as_ref().map_or(false, |p| {
+                && block.parent_node_type.as_ref().is_some_and(|p| {
                     p == "function_declaration" || p == "method_declaration"
                 }) {
                 // Use the parent function's boundaries instead of just the struct
@@ -336,13 +348,13 @@ pub fn process_file_with_results(
             let block_terms = preprocess_text(&full_code, false);
 
             // Use preprocessed query terms if available, otherwise generate them
-            let query_terms: Vec<String> = if let Some(preprocessed) = preprocessed_queries {
+            let query_terms: Vec<String> = if let Some(preprocessed) = params.preprocessed_queries {
                 preprocessed
                     .iter()
                     .flat_map(|terms| terms.iter().cloned())
                     .collect()
             } else {
-                queries_terms
+                params.queries_terms
                     .iter()
                     .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
                     .collect()
@@ -384,14 +396,14 @@ pub fn process_file_with_results(
             }
 
             // Apply term filtering if term_matches is provided
-            let should_include = if let Some(term_matches_map) = term_matches {
+            let should_include = if let Some(term_matches_map) = params.term_matches {
                 // Use the filter_code_block function with the filename_matched_queries parameter
                 filter_code_block(
                     (final_start_line, final_end_line),
                     term_matches_map,
-                    any_term,
-                    num_queries,
-                    &filename_matched_queries,
+                    params.any_term,
+                    params.num_queries,
+                    &params.filename_matched_queries,
                     debug_mode,
                 )
             } else {
@@ -413,7 +425,7 @@ pub fn process_file_with_results(
             // Add to results only if it passes the filter
             if should_include {
                 results.push(SearchResult {
-                    file: path.to_string_lossy().to_string(),
+                    file: params.path.to_string_lossy().to_string(),
                     lines: (final_start_line, final_end_line),
                     node_type: if is_nested_struct {
                         block
@@ -449,7 +461,7 @@ pub fn process_file_with_results(
     }
 
     // Check for any line numbers that weren't covered
-    for &line_num in line_numbers {
+    for &line_num in params.line_numbers {
         if !covered_lines.contains(&line_num) {
             if debug_mode {
                 println!(
@@ -462,15 +474,15 @@ pub fn process_file_with_results(
             }
 
             // Skip fallback context for test files if allow_tests is false
-            if !allow_tests && crate::language::is_test_file(path) {
+            if !params.allow_tests && crate::language::is_test_file(params.path) {
                 if debug_mode {
-                    println!("DEBUG: Skipping fallback context for test file: {:?}", path);
+                    println!("DEBUG: Skipping fallback context for test file: {:?}", params.path);
                 }
                 continue;
             }
 
             // Check if the line is in a test function/module by examining its content
-            if !allow_tests && line_num <= lines.len() {
+            if !params.allow_tests && line_num <= lines.len() {
                 let line_content = lines[line_num - 1];
                 // Simple heuristic check for test functions/modules
                 if line_content.contains("fn test_")
@@ -518,13 +530,13 @@ pub fn process_file_with_results(
             let block_terms = preprocess_text(&context_code, false);
 
             // Use preprocessed query terms if available, otherwise generate them
-            let query_terms: Vec<String> = if let Some(preprocessed) = preprocessed_queries {
+            let query_terms: Vec<String> = if let Some(preprocessed) = params.preprocessed_queries {
                 preprocessed
                     .iter()
                     .flat_map(|terms| terms.iter().cloned())
                     .collect()
             } else {
-                queries_terms
+                params.queries_terms
                     .iter()
                     .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
                     .collect()
@@ -565,14 +577,14 @@ pub fn process_file_with_results(
             }
 
             // Apply term filtering if term_matches is provided
-            let should_include = if let Some(term_matches_map) = term_matches {
+            let should_include = if let Some(term_matches_map) = params.term_matches {
                 // Use the filter_code_block function with the filename_matched_queries parameter
                 filter_code_block(
                     (context_start, context_end),
                     term_matches_map,
-                    any_term,
-                    num_queries,
-                    &filename_matched_queries,
+                    params.any_term,
+                    params.num_queries,
+                    &params.filename_matched_queries,
                     debug_mode,
                 )
             } else {
@@ -594,7 +606,7 @@ pub fn process_file_with_results(
             // Add to results only if it passes the filter
             if should_include {
                 results.push(SearchResult {
-                    file: path.to_string_lossy().to_string(),
+                    file: params.path.to_string_lossy().to_string(),
                     lines: (context_start, context_end),
                     node_type,
                     code: context_code.clone(), // Clone context_code here to avoid the move
@@ -648,7 +660,7 @@ pub fn process_file_with_results(
     }
 
     // Check if we should return the full file based on coverage and minimum line count
-    if false && should_return_full_file(coverage_percentage, total_lines) {
+    if should_return_full_file(coverage_percentage, total_lines) {
         if debug_mode {
             println!("DEBUG: Coverage exceeds 80%, returning entire file");
         }
@@ -660,13 +672,13 @@ pub fn process_file_with_results(
         let block_terms = preprocess_text(&content, false);
 
         // Use preprocessed query terms if available, otherwise generate them
-        let query_terms: Vec<String> = if let Some(preprocessed) = preprocessed_queries {
+        let query_terms: Vec<String> = if let Some(preprocessed) = params.preprocessed_queries {
             preprocessed
                 .iter()
                 .flat_map(|terms| terms.iter().cloned())
                 .collect()
         } else {
-            queries_terms
+            params.queries_terms
                 .iter()
                 .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
                 .collect()
@@ -703,7 +715,7 @@ pub fn process_file_with_results(
         }
 
         results.push(SearchResult {
-            file: path.to_string_lossy().to_string(),
+            file: params.path.to_string_lossy().to_string(),
             lines: (1, total_lines),
             node_type: "file".to_string(), // Mark as full file result
             code: content.clone(),         // Clone content here to avoid the move
@@ -732,7 +744,7 @@ pub fn process_file_with_results(
         println!(
             "DEBUG: Generated {} search results for file {:?}",
             results.len(),
-            path
+            params.path
         );
     }
 

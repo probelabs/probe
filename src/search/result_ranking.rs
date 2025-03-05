@@ -2,7 +2,7 @@ use crate::models::SearchResult;
 use crate::ranking;
 
 /// Function to rank search results based on query relevance
-pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], reranker: &str) {
+pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], reranker: &str) {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
@@ -25,16 +25,18 @@ pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], 
     let block_total_matches = results.first().and_then(|r| r.block_total_matches);
     let node_type = results.first().map(|r| r.node_type.as_str());
 
-    let ranked_indices = ranking::rank_documents(
-        &documents_refs,
-        &combined_query,
+    let ranking_params = ranking::RankingParams {
+        documents: &documents_refs,
+        query: &combined_query,
         file_unique_terms,
         file_total_matches,
-        results.first().and_then(|r| r.file_match_rank),
+        file_match_rank: results.first().and_then(|r| r.file_match_rank),
         block_unique_terms,
         block_total_matches,
         node_type,
-    );
+    };
+    
+    let ranked_indices = ranking::rank_documents(&ranking_params);
 
     // Store original document indices and their various scores for later use
     let mut doc_scores: Vec<(usize, f64, f64, f64, f64)> = Vec::new();

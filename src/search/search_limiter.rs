@@ -34,9 +34,9 @@ pub fn apply_limits(
         let r_bytes = r.code.len();
         let r_tokens = count_tokens(&r.code);
 
-        let would_exceed_results = max_results.map_or(false, |mr| limited.len() >= mr);
-        let would_exceed_bytes = max_bytes.map_or(false, |mb| total_bytes + r_bytes > mb);
-        let would_exceed_tokens = max_tokens.map_or(false, |mt| total_tokens + r_tokens > mt);
+        let would_exceed_results = max_results.is_some_and(|mr| limited.len() >= mr);
+        let would_exceed_bytes = max_bytes.is_some_and(|mb| total_bytes + r_bytes > mb);
+        let would_exceed_tokens = max_tokens.is_some_and(|mt| total_tokens + r_tokens > mt);
 
         if would_exceed_results || would_exceed_bytes || would_exceed_tokens {
             if r.rank.is_some()

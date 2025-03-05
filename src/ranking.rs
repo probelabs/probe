@@ -2,6 +2,56 @@ use rust_stemmers::{Algorithm, Stemmer};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+/// Represents the result of term frequency and document frequency computation
+pub struct TfDfResult {
+    /// Term frequencies for each document
+    pub term_frequencies: Vec<HashMap<String, usize>>,
+    /// Document frequencies for each term
+    pub document_frequencies: HashMap<String, usize>,
+    /// Document lengths (number of tokens in each document)
+    pub document_lengths: Vec<usize>,
+}
+
+/// Parameters for BM25 scoring algorithm
+pub struct Bm25Params {
+    /// Document term frequencies
+    pub tf_d: HashMap<String, usize>,
+    /// Query term frequencies
+    pub query_tf: HashMap<String, usize>,
+    /// Document frequencies for each term
+    pub dfs: HashMap<String, usize>,
+    /// Total number of documents
+    pub n: usize,
+    /// Length of the current document
+    pub doc_len: usize,
+    /// Average document length
+    pub avgdl: f64,
+    /// Term frequency saturation parameter
+    pub k1: f64,
+    /// Length normalization parameter
+    pub b: f64,
+}
+
+/// Parameters for document ranking
+pub struct RankingParams<'a> {
+    /// Documents to rank
+    pub documents: &'a [&'a str],
+    /// Query string
+    pub query: &'a str,
+    /// Number of unique terms in the file
+    pub file_unique_terms: Option<usize>,
+    /// Total number of matches in the file
+    pub file_total_matches: Option<usize>,
+    /// Rank of the file in the match list
+    pub file_match_rank: Option<usize>,
+    /// Number of unique terms in the block
+    pub block_unique_terms: Option<usize>,
+    /// Total number of matches in the block
+    pub block_total_matches: Option<usize>,
+    /// Type of the node (e.g., "method_declaration")
+    pub node_type: Option<&'a str>,
+}
+
 /// Returns a reference to a HashSet containing common English stop words.
 pub fn stop_words() -> &'static HashSet<String> {
     static STOP_WORDS: OnceLock<HashSet<String>> = OnceLock::new();
@@ -365,16 +415,10 @@ pub fn preprocess_text(text: &str, exact: bool) -> Vec<String> {
 
 /// Computes term frequencies (TF) for each document, document frequencies (DF) for each term,
 /// and document lengths.
-pub fn compute_tf_df(
-    documents: &[&str],
-) -> (
-    Vec<HashMap<String, usize>>,
-    HashMap<String, usize>,
-    Vec<usize>,
-) {
-    let mut tfs = Vec::with_capacity(documents.len());
-    let mut dfs = HashMap::new();
-    let mut lengths = Vec::with_capacity(documents.len());
+pub fn compute_tf_df(documents: &[&str]) -> TfDfResult {
+    let mut term_frequencies = Vec::with_capacity(documents.len());
+    let mut document_frequencies = HashMap::new();
+    let mut document_lengths = Vec::with_capacity(documents.len());
 
     for doc in documents {
         let tokens = tokenize(doc);
@@ -385,12 +429,17 @@ pub fn compute_tf_df(
         }
         // Update document frequency based on unique terms in this document
         for term in tf.keys() {
-            *dfs.entry(term.clone()).or_insert(0) += 1;
+            *document_frequencies.entry(term.clone()).or_insert(0) += 1;
         }
-        tfs.push(tf);
-        lengths.push(tokens.len());
+        term_frequencies.push(tf);
+        document_lengths.push(tokens.len());
     }
-    (tfs, dfs, lengths)
+    
+    TfDfResult {
+        term_frequencies,
+        document_frequencies,
+        document_lengths,
+    }
 }
 
 /// Computes the TF-IDF IDF value for a term.
@@ -428,22 +477,13 @@ fn tfidf_score(
 }
 
 /// Computes the BM25 score for a document given a query.
-fn bm25_score(
-    tf_d: &HashMap<String, usize>,
-    query_tf: &HashMap<String, usize>,
-    dfs: &HashMap<String, usize>,
-    n: usize,
-    doc_len: usize,
-    avgdl: f64,
-    k1: f64,
-    b: f64,
-) -> f64 {
+fn bm25_score(params: &Bm25Params) -> f64 {
     let mut score = 0.0;
-    for (term, &qf) in query_tf {
-        if let Some(&tf) = tf_d.get(term) {
-            let idf = idf_bm25(*dfs.get(term).unwrap_or(&0), n);
-            let tf_part = (tf as f64 * (k1 + 1.0))
-                / (tf as f64 + k1 * (1.0 - b + b * (doc_len as f64 / avgdl)));
+    for (term, &qf) in &params.query_tf {
+        if let Some(&tf) = params.tf_d.get(term) {
+            let idf = idf_bm25(*params.dfs.get(term).unwrap_or(&0), params.n);
+            let tf_part = (tf as f64 * (params.k1 + 1.0))
+                / (tf as f64 + params.k1 * (1.0 - params.b + params.b * (params.doc_len as f64 / params.avgdl)));
             // BM25 contribution: TF(Q) * IDF * TF_part
             score += (qf as f64) * idf * tf_part;
         }
@@ -503,23 +543,14 @@ fn invert_rank(rank: usize, total: usize) -> f64 {
 /// - TF-IDF score
 /// - BM25 score
 /// - new score (incorporating file and block metrics)
-pub fn rank_documents(
-    documents: &[&str],
-    query: &str,
-    file_unique_terms: Option<usize>,
-    file_total_matches: Option<usize>,
-    file_match_rank: Option<usize>,
-    block_unique_terms: Option<usize>,
-    block_total_matches: Option<usize>,
-    node_type: Option<&str>,
-) -> Vec<(usize, f64, f64, f64, f64)> {
+pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64, f64, f64, f64)> {
     // Preprocess documents
-    let (tfs, dfs, lengths) = compute_tf_df(documents);
-    let n = documents.len();
-    let avgdl = compute_avgdl(&lengths);
+    let tf_df_result = compute_tf_df(params.documents);
+    let n = params.documents.len();
+    let avgdl = compute_avgdl(&tf_df_result.document_lengths);
 
     // Preprocess query
-    let query_tokens = tokenize(query);
+    let query_tokens = tokenize(params.query);
     let mut query_tf = HashMap::new();
     for token in query_tokens {
         *query_tf.entry(token).or_insert(0) += 1;
@@ -532,9 +563,19 @@ pub fn rank_documents(
 
     // Compute scores for each document
     let mut scores = Vec::new();
-    for (i, tf_d) in tfs.iter().enumerate() {
-        let tfidf = tfidf_score(tf_d, &query_tf, &dfs, n);
-        let bm25 = bm25_score(tf_d, &query_tf, &dfs, n, lengths[i], avgdl, k1, b);
+    for (i, tf_d) in tf_df_result.term_frequencies.iter().enumerate() {
+        let tfidf = tfidf_score(tf_d, &query_tf, &tf_df_result.document_frequencies, n);
+        let bm25_params = Bm25Params {
+            tf_d: tf_d.clone(),
+            query_tf: query_tf.clone(),
+            dfs: tf_df_result.document_frequencies.clone(),
+            n,
+            doc_len: tf_df_result.document_lengths[i],
+            avgdl,
+            k1,
+            b,
+        };
+        let bm25 = bm25_score(&bm25_params);
         let combined = alpha * tfidf + (1.0 - alpha) * bm25;
         scores.push((i, combined, tfidf, bm25));
     }
@@ -590,13 +631,13 @@ pub fn rank_documents(
         // Get ranks and invert them
         let tr_score = invert_rank(*tfidf_rank_map.get(&i).unwrap_or(&n), n);
         let br_score = invert_rank(*bm25_rank_map.get(&i).unwrap_or(&n), n);
-        let fmr_score = invert_rank(file_match_rank.unwrap_or(n), n);
+        let fmr_score = invert_rank(params.file_match_rank.unwrap_or(n), n);
 
         // Convert metrics to f64 and collect for normalization
-        let fut = file_unique_terms.map(|x| x as f64).unwrap_or(0.0);
-        let ftm = file_total_matches.map(|x| x as f64).unwrap_or(0.0);
-        let but = block_unique_terms.map(|x| x as f64).unwrap_or(0.0);
-        let btm = block_total_matches.map(|x| x as f64).unwrap_or(0.0);
+        let fut = params.file_unique_terms.map(|x| x as f64).unwrap_or(0.0);
+        let ftm = params.file_total_matches.map(|x| x as f64).unwrap_or(0.0);
+        let but = params.block_unique_terms.map(|x| x as f64).unwrap_or(0.0);
+        let btm = params.block_total_matches.map(|x| x as f64).unwrap_or(0.0);
 
         // Calculate means and standard deviations for metrics
         let mean_fut = calculate_mean(&[fut]);
@@ -615,7 +656,7 @@ pub fn rank_documents(
         let btm_norm = zscore(btm, mean_btm, std_btm);
 
         // Type bonus
-        let type_bonus = match node_type {
+        let type_bonus = match params.node_type {
             Some("method_declaration") => 0.05,
             Some("function_declaration") => 0.03,
             _ => 0.0,

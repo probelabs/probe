@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 // The integration test needs access to the library crate
-use probe::search::perform_probe;
+use probe::search::{perform_probe, SearchOptions};
 
 // Helper function to create test files
 fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
@@ -128,25 +128,32 @@ fn test_search_single_term() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
 
+    // Create search query
+    let queries = vec!["search".to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // Create SearchOptions
+    let options = SearchOptions {
+        path: temp_dir.path(),
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        include_filenames: false,
+        reranker: "hybrid",
+        frequency_search: false,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: false,
+        any_term: false,
+        exact: false,
+        merge_blocks: false,
+        merge_threshold: None,
+    };
+
     // Search for a single term
-    let search_results = perform_probe(
-        temp_dir.path(),
-        &["search".to_string()],
-        false,    // files_only
-        &[],      // custom_ignores
-        false,    // include_filenames
-        "hybrid", // reranker
-        false,    // frequency_search
-        None,     // max_results
-        None,     // max_bytes
-        None,     // max_tokens
-        false,    // allow_tests
-        false,    // any_term
-        false,    // exact
-        false,    // merge_blocks
-        None,     // merge_threshold
-    )
-    .expect("Failed to perform search");
+    let search_results = perform_probe(&options)
+        .expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -183,25 +190,32 @@ fn test_search_multiple_terms() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
 
+    // Create search query
+    let queries = vec!["search".to_string(), "function".to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // Create SearchOptions
+    let options = SearchOptions {
+        path: temp_dir.path(),
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        include_filenames: false,
+        reranker: "hybrid",
+        frequency_search: false,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: false,
+        any_term: false,
+        exact: false,
+        merge_blocks: false,
+        merge_threshold: None,
+    };
+
     // Search for multiple terms
-    let search_results = perform_probe(
-        temp_dir.path(),
-        &["search".to_string(), "function".to_string()],
-        false,    // files_only
-        &[],      // custom_ignores
-        false,    // include_filenames
-        "hybrid", // reranker
-        false,    // frequency_search
-        None,     // max_results
-        None,     // max_bytes
-        None,     // max_tokens
-        false,    // allow_tests
-        false,    // any_term
-        false,    // exact
-        false,    // merge_blocks
-        None,     // merge_threshold
-    )
-    .expect("Failed to perform search");
+    let search_results = perform_probe(&options)
+        .expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -220,25 +234,32 @@ fn test_search_files_only() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
 
+    // Create search query
+    let queries = vec!["search".to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // Create SearchOptions
+    let options = SearchOptions {
+        path: temp_dir.path(),
+        queries: &queries,
+        files_only: true,
+        custom_ignores: &custom_ignores,
+        include_filenames: false,
+        reranker: "hybrid",
+        frequency_search: false,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: false,
+        any_term: false,
+        exact: false,
+        merge_blocks: false,
+        merge_threshold: None,
+    };
+
     // Search for files only
-    let search_results = perform_probe(
-        temp_dir.path(),
-        &["search".to_string()],
-        true,     // files_only
-        &[],      // custom_ignores
-        false,    // include_filenames
-        "hybrid", // reranker
-        false,    // frequency_search
-        None,     // max_results
-        None,     // max_bytes
-        None,     // max_tokens
-        false,    // allow_tests
-        false,    // any_term
-        false,    // exact
-        false,    // merge_blocks
-        None,     // merge_threshold
-    )
-    .expect("Failed to perform search");
+    let search_results = perform_probe(&options)
+        .expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -286,25 +307,32 @@ fn test_search_include_filenames() {
     // Print the file path for debugging
     println!("Created test file at: {:?}", search_file_path);
 
+    // Create search query
+    let queries = vec!["search".to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // Create SearchOptions
+    let options = SearchOptions {
+        path: temp_dir.path(),
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        include_filenames: true,
+        reranker: "hybrid",
+        frequency_search: false,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: false,
+        any_term: false,
+        exact: false,
+        merge_blocks: false,
+        merge_threshold: None,
+    };
+
     // Search with filename matching enabled
-    let search_results = perform_probe(
-        temp_dir.path(),
-        &["search".to_string()],
-        false,    // files_only
-        &[],      // custom_ignores
-        true,     // include_filenames
-        "hybrid", // reranker
-        false,    // frequency_search
-        None,     // max_results
-        None,     // max_bytes
-        None,     // max_tokens
-        false,    // allow_tests
-        false,    // any_term
-        false,    // exact
-        false,    // merge_blocks
-        None,     // merge_threshold
-    )
-    .expect("Failed to perform search");
+    let search_results = perform_probe(&options)
+        .expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -333,25 +361,32 @@ fn test_search_with_limits() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
 
+    // Create search query
+    let queries = vec!["search".to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // Create SearchOptions
+    let options = SearchOptions {
+        path: temp_dir.path(),
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        include_filenames: false,
+        reranker: "hybrid",
+        frequency_search: false,
+        max_results: Some(2),  // limit to 2 results
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: false,
+        any_term: false,
+        exact: false,
+        merge_blocks: false,
+        merge_threshold: None,
+    };
+
     // Search with limits
-    let search_results = perform_probe(
-        temp_dir.path(),
-        &["search".to_string()],
-        false,    // files_only
-        &[],      // custom_ignores
-        false,    // include_filenames
-        "hybrid", // reranker
-        false,    // frequency_search
-        Some(2),  // max_results - limit to 2 results
-        None,     // max_bytes
-        None,     // max_tokens
-        false,    // allow_tests
-        false,    // any_term
-        false,    // exact
-        false,    // merge_blocks
-        None,     // merge_threshold
-    )
-    .expect("Failed to perform search");
+    let search_results = perform_probe(&options)
+        .expect("Failed to perform search");
 
     // Should find matches but limited to 2
     assert!(!search_results.results.is_empty());
@@ -374,25 +409,32 @@ fn test_frequency_search() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
 
+    // Create search query
+    let queries = vec!["search".to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // Create SearchOptions
+    let options = SearchOptions {
+        path: temp_dir.path(),
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        include_filenames: false,
+        reranker: "hybrid",
+        frequency_search: true,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: false,
+        any_term: false,
+        exact: false,
+        merge_blocks: false,
+        merge_threshold: None,
+    };
+
     // Search using frequency-based search
-    let search_results = perform_probe(
-        temp_dir.path(),
-        &["search".to_string()],
-        false,    // files_only
-        &[],      // custom_ignores
-        false,    // include_filenames
-        "hybrid", // reranker
-        true,     // frequency_search
-        None,     // max_results
-        None,     // max_bytes
-        None,     // max_tokens
-        false,    // allow_tests
-        false,    // any_term
-        false,    // exact
-        false,    // merge_blocks
-        None,     // merge_threshold
-    )
-    .expect("Failed to perform search");
+    let search_results = perform_probe(&options)
+        .expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -423,25 +465,32 @@ func main() {
 "#;
     create_test_file(&temp_dir, "ip_utils.go", content);
 
+    // Create search query
+    let queries = vec!["ip".to_string(), "whitelist".to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // Create SearchOptions
+    let options = SearchOptions {
+        path: temp_dir.path(),
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        include_filenames: true,  // enable this to find files with terms in their filenames
+        reranker: "hybrid",
+        frequency_search: false,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: false,
+        any_term: false,  // using "all terms" mode
+        exact: false,
+        merge_blocks: false,
+        merge_threshold: None,
+    };
+
     // Search for both terms in "all terms" mode
-    let search_results = perform_probe(
-        temp_dir.path(),
-        &["ip".to_string(), "whitelist".to_string()],
-        false,    // files_only
-        &[],      // custom_ignores
-        true,     // include_filenames - enable this to find files with terms in their filenames
-        "hybrid", // reranker
-        false,    // frequency_search
-        None,     // max_results
-        None,     // max_bytes
-        None,     // max_tokens
-        false,    // allow_tests
-        false,    // any_term - using "all terms" mode
-        false,    // exact
-        false,    // merge_blocks
-        None,     // merge_threshold
-    )
-    .expect("Failed to perform search");
+    let search_results = perform_probe(&options)
+        .expect("Failed to perform search");
 
     // Should find matches
     assert!(
@@ -480,25 +529,31 @@ fn test_search_with_custom_ignores() {
     // Create a custom ignore pattern for Python files
     let custom_ignores = vec!["*.py".to_string()];
 
+    // Create search query
+    let queries = vec!["search".to_string()];
+
+    // Create SearchOptions
+    let options = SearchOptions {
+        path: temp_dir.path(),
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        include_filenames: false,
+        reranker: "hybrid",
+        frequency_search: false,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: false,
+        any_term: false,
+        exact: false,
+        merge_blocks: false,
+        merge_threshold: None,
+    };
+
     // Search with custom ignore patterns
-    let search_results = perform_probe(
-        temp_dir.path(),
-        &["search".to_string()],
-        false,           // files_only
-        &custom_ignores, // custom_ignores
-        false,           // include_filenames
-        "hybrid",        // reranker
-        false,           // frequency_search
-        None,            // max_results
-        None,            // max_bytes
-        None,            // max_tokens
-        false,           // allow_tests
-        false,           // any_term
-        false,           // exact
-        false,           // merge_blocks
-        None,            // merge_threshold
-    )
-    .expect("Failed to perform search");
+    let search_results = perform_probe(&options)
+        .expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -588,25 +643,32 @@ fn calculate_product(a: i32, b: i32) -> i32 {
     // Define search query that will match multiple blocks in both files
     let query = "calculate";
 
+    // Create search query
+    let queries = vec![query.to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // Create SearchOptions
+    let options = SearchOptions {
+        path: temp_dir.path(),
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        include_filenames: false,
+        reranker: "combined",
+        frequency_search: false,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: true,
+        any_term: true,
+        exact: false,
+        merge_blocks: true,
+        merge_threshold: Some(5),
+    };
+
     // Perform search
-    let search_result = perform_probe(
-        temp_dir.path(),
-        &[query.to_string()],
-        false,      // files_only
-        &[],        // custom_ignores
-        false,      // include_filenames
-        "combined", // reranker
-        false,      // frequency_search
-        None,       // max_results
-        None,       // max_bytes
-        None,       // max_tokens
-        true,       // allow_tests
-        true,       // any_term
-        false,      // exact
-        true,       // merge_blocks
-        Some(5),    // merge_threshold
-    )
-    .expect("Search should succeed");
+    let search_result = perform_probe(&options)
+        .expect("Search should succeed");
 
     // Verify that results are not empty
     assert!(
