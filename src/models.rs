@@ -19,7 +19,7 @@ pub struct SearchLimits {
 }
 
 // Structure to hold search results
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SearchResult {
     pub file: String,
     pub lines: (usize, usize),
@@ -42,6 +42,10 @@ pub struct SearchResult {
     pub bm25_rank: Option<usize>,
     // New score incorporating file and block metrics
     pub new_score: Option<f64>,
+    // Hybrid2 rank (1 is most relevant)
+    pub hybrid2_rank: Option<usize>,
+    // Separate rank for combined score (useful when using different rerankers)
+    pub combined_score_rank: Option<usize>,
     // Number of distinct search terms matched in the file
     pub file_unique_terms: Option<usize>,
     // Total count of matches across the file (content + filename matches)
@@ -52,6 +56,11 @@ pub struct SearchResult {
     pub block_unique_terms: Option<usize>,
     // Total frequency of term matches in the block
     pub block_total_matches: Option<usize>,
+    // Identifier for the parent file (used for block merging)
+    pub parent_file_id: Option<String>,
+    // Identifier for the individual block within a file (used for block merging)
+    #[allow(dead_code)]
+    pub block_id: Option<usize>,
 }
 
 // Structure to hold node information for merging
@@ -59,7 +68,13 @@ pub struct SearchResult {
 pub struct CodeBlock {
     pub start_row: usize,
     pub end_row: usize,
+    #[allow(dead_code)]
     pub start_byte: usize,
+    #[allow(dead_code)]
     pub end_byte: usize,
     pub node_type: String,
+    // Parent node information
+    pub parent_node_type: Option<String>,
+    pub parent_start_row: Option<usize>,
+    pub parent_end_row: Option<usize>,
 }

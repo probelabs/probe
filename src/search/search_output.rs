@@ -27,10 +27,21 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
 
         if debug_mode {
             if let Some(rank) = result.rank {
+                // Add a display order field to show the actual ordering of results
+                println!("Display Order: {}", results.iter().position(|r| r.file == result.file && r.lines == result.lines).unwrap_or(0) + 1);
+                
                 println!("Rank: {}", rank);
 
                 if let Some(score) = result.score {
                     println!("Combined Score: {:.4}", score);
+                }
+
+                // Display the combined score rank if available, otherwise calculate it
+                if let Some(combined_rank) = result.combined_score_rank {
+                    println!("Combined Score Rank: {}", combined_rank);
+                } else {
+                    // Fall back to the old behavior if the field isn't set
+                    println!("Combined Score Rank: {}", rank);
                 }
 
                 if let Some(tfidf_score) = result.tfidf_score {
@@ -48,8 +59,16 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
                 if let Some(bm25_rank) = result.bm25_rank {
                     println!("BM25 Rank: {}", bm25_rank);
                 }
+                
+                // Display Hybrid 2 score and rank with more prominence
                 if let Some(new_score) = result.new_score {
-                    println!("New Score: {:.4}", new_score);
+                    println!("Hybrid 2 Score: {:.4}", new_score);
+                }
+                
+                if let Some(hybrid2_rank) = result.hybrid2_rank {
+                    println!("Hybrid 2 Rank: {}", hybrid2_rank);
+                } else if result.new_score.is_some() {
+                    println!("Hybrid 2 Rank: N/A");
                 }
 
                 if let Some(file_unique_terms) = result.file_unique_terms {

@@ -26,7 +26,7 @@ pub enum Command {
         include_filenames: bool,
 
         /// Reranking method to use for search results
-        #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "bm25", "tfidf"])]
+        #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "hybrid2", "bm25", "tfidf"])]
         reranker: String,
 
         /// Use frequency-based search with stemming and stopword removal (enabled by default)
@@ -56,6 +56,14 @@ pub enum Command {
         /// Match files that contain any of the search terms (by default, files must contain all terms)
         #[arg(long = "any-term")]
         any_term: bool,
+
+        /// Merge adjacent code blocks after ranking (disabled by default)
+        #[arg(long = "merge-blocks", default_value = "false")]
+        merge_blocks: bool,
+
+        /// Maximum number of lines between code blocks to consider them adjacent for merging (default: 5)
+        #[arg(long = "merge-threshold")]
+        merge_threshold: Option<usize>,
     },
 }
 
@@ -83,7 +91,7 @@ pub struct Args {
     pub include_filenames: bool,
 
     /// Reranking method to use for search results
-    #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "bm25", "tfidf"])]
+    #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "hybrid2", "bm25", "tfidf"])]
     pub reranker: String,
 
     /// Use frequency-based search with stemming and stopword removal (enabled by default)
@@ -113,6 +121,14 @@ pub struct Args {
     /// Match files that contain any of the search terms (by default, files must contain all terms)
     #[arg(long = "any-term")]
     pub any_term: bool,
+
+    /// Merge adjacent code blocks after ranking (disabled by default)
+    #[arg(long = "merge-blocks", default_value = "false")]
+    pub merge_blocks: bool,
+
+    /// Maximum number of lines between code blocks to consider them adjacent for merging (default: 5)
+    #[arg(long = "merge-threshold")]
+    pub merge_threshold: Option<usize>,
 
     #[command(subcommand)]
     pub command: Option<Command>,

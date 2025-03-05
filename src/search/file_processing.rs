@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
-use crate::language::{merge_code_blocks, parse_file_for_code_blocks};
+use crate::language::{parse_file_for_code_blocks};
 use crate::models::SearchResult;
 use crate::ranking::preprocess_text;
 use crate::search::file_search::get_filename_matched_queries_compat;
@@ -105,11 +105,15 @@ pub fn process_file_by_filename(
         tfidf_rank: None,
         bm25_rank: None,
         new_score: None,
+        hybrid2_rank: None,
+        combined_score_rank: None,
         file_unique_terms: Some(matched_terms.len()),
         file_total_matches: Some(0),
         file_match_rank: None,
         block_unique_terms: Some(matched_terms.len()),
         block_total_matches: Some(0),
+        parent_file_id: None,
+        block_id: None,
     };
 
     // Use preprocessed query terms if available
@@ -137,6 +141,66 @@ pub fn process_file_by_filename(
     }
 
     Ok(search_result)
+}
+
+/// Determines a better node type for fallback context by analyzing the line content
+fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
+    let trimmed = line.trim();
+    
+    // First try to detect comments
+    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("*") {
+        return "comment".to_string();
+    } else if trimmed.starts_with("#") && extension.map_or(false, |ext| ext == "py" || ext == "rb") {
+        return "comment".to_string();
+    } else if trimmed.starts_with("'''") || trimmed.starts_with("\"\"\"") {
+        return "comment".to_string();
+    }
+    
+    // Try to detect common code structures based on the line content
+    let lowercase = trimmed.to_lowercase();
+    
+    // Check for function/method declarations
+    if (trimmed.contains("fn ") && (trimmed.contains("(") || trimmed.contains(")")) && extension.map_or(false, |ext| ext == "rs"))
+        || (trimmed.contains("func ") && extension.map_or(false, |ext| ext == "go"))
+        || (trimmed.contains("function ") && extension.map_or(false, |ext| ext == "js" || ext == "ts"))
+        || (lowercase.contains("def ") && extension.map_or(false, |ext| ext == "py"))
+        || (trimmed.contains("public") && trimmed.contains("void") && extension.map_or(false, |ext| ext == "java" || ext == "kt"))
+    {
+        return "function".to_string();
+    }
+    
+    // Check for class declarations
+    if (trimmed.contains("class ") || trimmed.contains("interface ")) 
+        || (trimmed.contains("struct ") && extension.map_or(false, |ext| ext == "rs" || ext == "go" || ext == "c" || ext == "cpp"))
+        || (trimmed.contains("type ") && trimmed.contains("struct") && extension.map_or(false, |ext| ext == "go"))
+        || (trimmed.contains("enum "))
+    {
+        return "class".to_string();
+    }
+    
+    // Check for imports/requires
+    if trimmed.starts_with("import ") || trimmed.starts_with("from ") || trimmed.starts_with("require ")
+        || trimmed.starts_with("use ") || trimmed.starts_with("#include ")
+    {
+        return "import".to_string();
+    }
+    
+    // Check for variable declarations
+    if (trimmed.starts_with("let ") || trimmed.starts_with("var ") || trimmed.starts_with("const "))
+        || (trimmed.contains("=") && !trimmed.contains("==") && !trimmed.contains("=>"))
+    {
+        return "variable_declaration".to_string();
+    }
+    
+    // Check for control flow statements
+    if trimmed.starts_with("if ") || trimmed.starts_with("for ") || trimmed.starts_with("while ")
+        || trimmed.starts_with("switch ") || trimmed.starts_with("match ")
+    {
+        return "control_flow".to_string();
+    }
+    
+    // If we can't determine a specific type, use "code" instead of "context"
+    "code".to_string()
 }
 
 /// Function to process a file with line numbers and return SearchResult structs
@@ -192,15 +256,8 @@ pub fn process_file_with_results(
         if debug_mode {
             println!("DEBUG: AST parsing successful");
             println!("DEBUG:   Found {} code blocks", code_blocks.len());
-        }
-
-        // Merge overlapping code blocks
-        let merged_blocks = merge_code_blocks(code_blocks);
-
-        if debug_mode {
-            println!("DEBUG:   After merging: {} blocks", merged_blocks.len());
-
-            for (i, block) in merged_blocks.iter().enumerate() {
+            
+            for (i, block) in code_blocks.iter().enumerate() {
                 println!(
                     "DEBUG:   Block {}: type={}, lines={}-{}",
                     i + 1,
@@ -211,15 +268,44 @@ pub fn process_file_with_results(
             }
         }
 
-        // Process all blocks found by AST parsing
-        for block in merged_blocks {
+        // Generate a unique file ID for block correlation
+        let file_id = format!("{}", path.to_string_lossy());
+
+        // Process all individual blocks (no merging)
+        for (block_idx, block) in code_blocks.iter().enumerate() {
             // Get the line start and end based on AST
             let start_line = block.start_row + 1; // Convert to 1-based line numbers
             let end_line = block.end_row + 1;
 
+            // Check if this is a struct_type inside a function in Go code
+            let (final_start_line, final_end_line, is_nested_struct) = 
+                if extension == "go" && 
+                   block.node_type == "struct_type" && 
+                   block.parent_node_type.as_ref().map_or(false, |p| p == "function_declaration" || p == "method_declaration") {
+                    
+                    // Use the parent function's boundaries instead of just the struct
+                    if let Some(parent_start) = block.parent_start_row {
+                        if let Some(parent_end) = block.parent_end_row {
+                            if debug_mode {
+                                println!(
+                                    "DEBUG: Expanding nested struct at {}-{} to parent function at {}-{}",
+                                    start_line, end_line, parent_start + 1, parent_end + 1
+                                );
+                            }
+                            (parent_start + 1, parent_end + 1, true)
+                        } else {
+                            (start_line, end_line, false)
+                        }
+                    } else {
+                        (start_line, end_line, false)
+                    }
+                } else {
+                    (start_line, end_line, false)
+                };
+
             // Extract the full code for this block
-            let full_code = if start_line > 0 && end_line <= lines.len() {
-                lines[start_line - 1..end_line].join("\n")
+            let full_code = if final_start_line > 0 && final_end_line <= lines.len() {
+                lines[final_start_line - 1..final_end_line].join("\n")
             } else {
                 "".to_string()
             };
@@ -260,12 +346,12 @@ pub fn process_file_with_results(
             if debug_mode {
                 println!(
                     "DEBUG: Block at {}-{} has {} unique term matches and {} total matches",
-                    start_line, end_line, block_unique_terms, block_total_matches
+                    final_start_line, final_end_line, block_unique_terms, block_total_matches
                 );
             }
 
             // Mark all lines in this block as covered
-            for line_num in start_line..=end_line {
+            for line_num in final_start_line..=final_end_line {
                 covered_lines.insert(line_num);
             }
 
@@ -273,7 +359,7 @@ pub fn process_file_with_results(
             let should_include = if let Some(term_matches_map) = term_matches {
                 // Use the filter_code_block function with the filename_matched_queries parameter
                 filter_code_block(
-                    (start_line, end_line),
+                    (final_start_line, final_end_line),
                     term_matches_map,
                     any_term,
                     num_queries,
@@ -288,11 +374,11 @@ pub fn process_file_with_results(
             if debug_mode {
                 println!(
                     "DEBUG: Filtered code block at {}-{}: included={}",
-                    start_line, end_line, should_include
+                    final_start_line, final_end_line, should_include
                 );
                 println!(
                     "DEBUG: Block at {}-{} filtered: included={}",
-                    start_line, end_line, should_include
+                    final_start_line, final_end_line, should_include
                 );
             }
 
@@ -300,8 +386,12 @@ pub fn process_file_with_results(
             if should_include {
                 results.push(SearchResult {
                     file: path.to_string_lossy().to_string(),
-                    lines: (start_line, end_line),
-                    node_type: "file".to_string(),
+                    lines: (final_start_line, final_end_line),
+                    node_type: if is_nested_struct { 
+                        block.parent_node_type.clone().unwrap_or_else(|| block.node_type.clone()) 
+                    } else { 
+                        block.node_type.clone() 
+                    },
                     code: full_code.clone(),
                     matched_by_filename: None,
                     rank: None,
@@ -311,11 +401,15 @@ pub fn process_file_with_results(
                     tfidf_rank: None,
                     bm25_rank: None,
                     new_score: None,
+                    hybrid2_rank: None,
+                    combined_score_rank: None,
                     file_unique_terms: Some(block_unique_terms),
                     file_total_matches: Some(block_total_matches),
                     file_match_rank: None,
                     block_unique_terms: Some(block_unique_terms),
                     block_total_matches: Some(block_total_matches),
+                    parent_file_id: Some(file_id.clone()),
+                    block_id: Some(block_idx),
                 });
             }
         }
@@ -364,8 +458,8 @@ pub fn process_file_with_results(
             }
 
             // Fallback: Get context around the line (20 lines before and after)
-            let context_start = line_num.saturating_sub(20); // Expanded from 10
-            let context_end = std::cmp::min(line_num + 20, lines.len());
+            let context_start = line_num.saturating_sub(10); // Expanded from 10
+            let context_end = std::cmp::min(line_num + 10, lines.len());
 
             // Skip if we don't have enough context
             if context_start >= context_end {
@@ -378,6 +472,13 @@ pub fn process_file_with_results(
             } else {
                 lines[0..context_end].join("\n")
             };
+            
+            // Determine a better node type for the fallback context by analyzing the content
+            let node_type = determine_fallback_node_type(&lines[line_num - 1], Some(extension));
+            
+            if debug_mode {
+                println!("DEBUG: Inferred node type for fallback context: {}", node_type);
+            }
 
             // Calculate block term matches
             let block_terms = preprocess_text(&context_code, false);
@@ -445,7 +546,7 @@ pub fn process_file_with_results(
                     context_start, context_end, should_include
                 );
                 println!(
-                    "DEBUG: Context at {}-{} filtered: included={}",
+                    "DEBUG: Block at {}-{} filtered: included={}",
                     context_start, context_end, should_include
                 );
             }
@@ -455,7 +556,7 @@ pub fn process_file_with_results(
                 results.push(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (context_start, context_end),
-                    node_type: "context".to_string(), // Mark as context-based result
+                    node_type: node_type,
                     code: context_code.clone(), // Clone context_code here to avoid the move
                     matched_by_filename: None,
                     rank: None,
@@ -465,11 +566,15 @@ pub fn process_file_with_results(
                     tfidf_rank: None,
                     bm25_rank: None,
                     new_score: None,
+                    hybrid2_rank: None,
+                    combined_score_rank: None,
                     file_unique_terms: None,
                     file_total_matches: None,
                     file_match_rank: None,
                     block_unique_terms: Some(block_unique_terms),
                     block_total_matches: Some(block_total_matches),
+                    parent_file_id: None,
+                    block_id: None,
                 });
             }
 
@@ -564,11 +669,15 @@ pub fn process_file_with_results(
             tfidf_rank: None,
             bm25_rank: None,
             new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
             file_unique_terms: None,
             file_total_matches: None,
             file_match_rank: None,
             block_unique_terms: Some(block_unique_terms),
             block_total_matches: Some(block_total_matches),
+            parent_file_id: None,
+            block_id: None,
         });
     }
 

@@ -69,7 +69,11 @@ code-search cli --path <DIRECTORY_PATH> --query <SEARCH_PATTERN> [OPTIONS]
 - `--files-only` - Skip AST parsing and just output unique files
 - `--ignore` - Custom patterns to ignore (in addition to .gitignore and common patterns)
 - `--include-filenames` - Include files whose names match query words
-- `--reranker` - Reranking method to use for search results (hybrid, bm25, tfidf)
+- `--reranker` - Reranking method to use for search results (hybrid, hybrid2, bm25, tfidf)
+  - `hybrid` (default) - Simple combination of TF-IDF and BM25 scores
+  - `hybrid2` - Comprehensive multi-metric ranking that considers term matches, code structure, and more
+  - `bm25` - BM25 ranking algorithm (better for natural language queries)
+  - `tfidf` - TF-IDF ranking algorithm (better for code-specific terms)
 - `--frequency` - Use frequency-based search with stemming and stopword removal (enabled by default)
 - `--exact` - Use exact matching without stemming or stopword removal (overrides frequency search)
 - `--max-results` - Maximum number of results to return
@@ -122,6 +126,12 @@ Input schema:
 ```
 
 Note: `frequencySearch` is enabled by default. If you want exact matching without stemming or stopword removal, set `exact` to `true` which will override the frequency search behavior.
+
+The `reranker` parameter can be set to one of the following values:
+- `hybrid` (default) - Simple combination of TF-IDF and BM25 scores
+- `hybrid2` - Comprehensive multi-metric ranking that considers term matches, code structure, and more
+- `bm25` - BM25 ranking algorithm (better for natural language queries)
+- `tfidf` - TF-IDF ranking algorithm (better for code-specific terms)
 
 Example usage with MCP client:
 ```rust

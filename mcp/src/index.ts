@@ -22,7 +22,7 @@ interface SearchCodeArgs {
   filesOnly?: boolean;
   ignore?: string[];
   includeFilenames?: boolean;
-  reranker?: 'hybrid' | 'bm25' | 'tfidf';
+  reranker?: 'hybrid' | 'hybrid2' | 'bm25' | 'tfidf';
   frequencySearch?: boolean;
   exact?: boolean;
   maxResults?: number;
@@ -93,7 +93,7 @@ class CodeSearchServer {
               },
               reranker: {
                 type: 'string',
-                enum: ['hybrid', 'bm25', 'tfidf'],
+                enum: ['hybrid', 'hybrid2', 'bm25', 'tfidf'],
                 description: 'Reranking method to use for search results',
               },
               frequencySearch: {

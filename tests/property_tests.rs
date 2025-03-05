@@ -86,19 +86,19 @@ proptest! {
         let docs_refs: Vec<&str> = docs.iter().map(|s| s.as_str()).collect();
 
         // This should never panic
-        let ranked = rank_documents(&docs_refs, &query);
+        let ranked = rank_documents(&docs_refs, &query, None, None, None, None, None, None);
 
         // The number of ranked documents should match the input
         assert_eq!(ranked.len(), docs.len());
 
         // Each document index should appear exactly once
-        let mut indices: Vec<usize> = ranked.iter().map(|(idx, _, _, _)| *idx).collect();
+        let mut indices: Vec<usize> = ranked.iter().map(|(idx, _, _, _, _)| *idx).collect();
         indices.sort();
         indices.dedup();
         assert_eq!(indices.len(), docs.len());
 
         // Each index should be in the valid range
-        for (idx, _, _, _) in ranked {
+        for (idx, _, _, _, _) in ranked {
             assert!(idx < docs.len());
         }
     }

@@ -20,6 +20,7 @@ pub struct SearchTimings {
     pub result_processing: Option<Duration>,
     pub result_ranking: Option<Duration>,
     pub limit_application: Option<Duration>,
+    pub block_merging: Option<Duration>,
 }
 
 /// Performs a search on code repositories and returns results in a structured format
@@ -37,6 +38,8 @@ pub fn perform_code_search(
     allow_tests: bool, // Parameter to control test file/node inclusion
     any_term: bool,    // Parameter to control multi-term search behavior
     exact: bool,       // Parameter to control exact matching (no stemming/stopwords)
+    merge_blocks: bool, // Parameter to control post-ranking block merging
+    merge_threshold: Option<usize>, // Parameter to control how many lines between blocks to merge
 ) -> Result<LimitedSearchResults> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
@@ -47,6 +50,7 @@ pub fn perform_code_search(
         result_processing: None,
         result_ranking: None,
         limit_application: None,
+        block_merging: None,
     };
 
     // Start timing query preprocessing
@@ -69,6 +73,16 @@ pub fn perform_code_search(
         if debug_mode {
             println!("DEBUG: Using frequency-based search for query: {}", queries[0]);
         }
+        
+        // Print ranking method being used
+        match reranker {
+            "tfidf" => println!("Using TF-IDF for ranking"),
+            "bm25" => println!("Using BM25 for ranking"),
+            "hybrid" => println!("Using hybrid ranking (default - simple TF-IDF + BM25 combination)"),
+            "hybrid2" => println!("Using hybrid2 ranking (advanced - separate ranking components)"),
+            _ => println!("Using {} for ranking", reranker),
+        }
+        
         return perform_frequency_search(
             path,
             &queries[0],
@@ -82,6 +96,8 @@ pub fn perform_code_search(
             allow_tests,
             any_term,
             exact,
+            merge_blocks,
+            merge_threshold,
         );
     }
 
@@ -286,11 +302,15 @@ pub fn perform_code_search(
                 tfidf_rank: None,
                 bm25_rank: None,
                 new_score: None,
+                hybrid2_rank: None,
+                combined_score_rank: None,
                 file_unique_terms: None,
                 file_total_matches: None,
                 file_match_rank: None,
                 block_unique_terms: None,
                 block_total_matches: None,
+                parent_file_id: None,
+                block_id: None,
             });
         }
         if include_filenames {
@@ -310,11 +330,15 @@ pub fn perform_code_search(
                     tfidf_rank: None,
                     bm25_rank: None,
                     new_score: None,
+                    hybrid2_rank: None,
+                    combined_score_rank: None,
                     file_unique_terms: None,
                     file_total_matches: None,
                     file_match_rank: None,
                     block_unique_terms: None,
                     block_total_matches: None,
+                    parent_file_id: None,
+                    block_id: None,
                 });
             }
         }
@@ -466,8 +490,42 @@ pub fn perform_code_search(
 
     // Rank the results
     let result_ranking_start = Instant::now();
+    
+    // Print ranking method being used
+    match reranker {
+        "tfidf" => println!("Using TF-IDF for ranking"),
+        "bm25" => println!("Using BM25 for ranking"),
+        "hybrid" => println!("Using hybrid ranking (default - simple TF-IDF + BM25 combination)"),
+        "hybrid2" => println!("Using hybrid2 ranking (advanced - separate ranking components)"),
+        _ => println!("Using {} for ranking", reranker),
+    }
+    
     if !results.is_empty() {
-        rank_search_results(&mut results, queries, reranker);
+        // For hybrid2, we want to ensure we have two separate ranks
+        if reranker == "hybrid2" {
+            // First calculate regular combined score ranks
+            rank_search_results(&mut results, queries, "combined");
+            
+            // Keep a copy of the combined score ranks
+            for result in &mut results {
+                if let Some(rank) = result.rank {
+                    result.combined_score_rank = Some(rank);
+                }
+            }
+            
+            // Then apply hybrid2 rankings
+            rank_search_results(&mut results, queries, reranker);
+        } else {
+            // For other rerankers, just do the normal ranking
+            rank_search_results(&mut results, queries, reranker);
+            
+            // Set combined_score_rank to be the same as rank for consistency
+            for result in &mut results {
+                if let Some(rank) = result.rank {
+                    result.combined_score_rank = Some(rank);
+                }
+            }
+        }
     }
     timings.result_ranking = Some(result_ranking_start.elapsed());
 
@@ -477,6 +535,28 @@ pub fn perform_code_search(
     let limited_results = apply_limits(results, max_results, max_bytes, default_max_tokens);
     timings.limit_application = Some(limit_application_start.elapsed());
 
+    // Apply post-ranking block merging
+    let block_merging_start = Instant::now();
+    let merged_results = if !limited_results.results.is_empty() && merge_blocks {
+        use crate::search::block_merging::merge_ranked_blocks;
+        let original_count = limited_results.results.len();
+        let merged = merge_ranked_blocks(limited_results.results, merge_threshold);
+        
+        if debug_mode {
+            println!("Post-ranking block merging: {} blocks merged into {} blocks", 
+                     original_count, merged.len());
+        }
+        
+        LimitedSearchResults {
+            results: merged,
+            skipped_files: limited_results.skipped_files,
+            limits_applied: limited_results.limits_applied,
+        }
+    } else {
+        limited_results
+    };
+    timings.block_merging = Some(block_merging_start.elapsed());
+
     // Debug timing info
     if debug_mode {
         println!("Search Timings:");
@@ -485,9 +565,10 @@ pub fn perform_code_search(
         if let Some(d) = timings.result_processing { println!("  Result Processing: {:?}", d); }
         if let Some(d) = timings.result_ranking { println!("  Result Ranking: {:?}", d); }
         if let Some(d) = timings.limit_application { println!("  Limit Application: {:?}", d); }
+        if let Some(d) = timings.block_merging { println!("  Post-Ranking Block Merging: {:?}", d); }
     }
 
-    Ok(limited_results)
+    Ok(merged_results)
 }
 
 /// Performs a frequency-based search for a single query
@@ -504,6 +585,8 @@ pub fn perform_frequency_search(
     allow_tests: bool,
     any_term: bool,
     exact: bool,
+    merge_blocks: bool, // Parameter to control post-ranking block merging
+    merge_threshold: Option<usize>, // Parameter to control how many lines between blocks to merge
 ) -> Result<LimitedSearchResults> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
@@ -513,6 +596,7 @@ pub fn perform_frequency_search(
         result_processing: None,
         result_ranking: None,
         limit_application: None,
+        block_merging: None,
     };
 
     let qp_start = Instant::now();
@@ -644,22 +728,26 @@ pub fn perform_frequency_search(
         for (path, _, _) in &freq_files {
             out_results.push(SearchResult {
                 file: path.to_string_lossy().to_string(),
-                lines: (1, 1),
+                lines: (0, 0), // We'll compute this later when we process the file
                 node_type: "file".to_string(),
-                code: String::new(),
-                matched_by_filename: None,
+                code: "".to_string(), // Will be populated during file processing
                 rank: None,
                 score: None,
+                matched_by_filename: Some(true),
                 tfidf_score: None,
                 bm25_score: None,
                 tfidf_rank: None,
                 bm25_rank: None,
                 new_score: None,
+                hybrid2_rank: None,
+                combined_score_rank: None,
                 file_unique_terms: None,
                 file_total_matches: None,
                 file_match_rank: None,
                 block_unique_terms: None,
                 block_total_matches: None,
+                parent_file_id: None,
+                block_id: None,
             });
         }
 
@@ -670,22 +758,26 @@ pub fn perform_frequency_search(
             for ff in found_filenames {
                 out_results.push(SearchResult {
                     file: ff.to_string_lossy().to_string(),
-                    lines: (1, 1),
+                    lines: (0, 0), // We'll compute this later when we process the file
                     node_type: "file".to_string(),
-                    code: String::new(),
-                    matched_by_filename: None,
+                    code: "".to_string(), // Will be populated during file processing
                     rank: None,
                     score: None,
+                    matched_by_filename: Some(true),
                     tfidf_score: None,
                     bm25_score: None,
                     tfidf_rank: None,
                     bm25_rank: None,
                     new_score: None,
+                    hybrid2_rank: None,
+                    combined_score_rank: None,
                     file_unique_terms: None,
                     file_total_matches: None,
                     file_match_rank: None,
                     block_unique_terms: None,
                     block_total_matches: None,
+                    parent_file_id: None,
+                    block_id: None,
                 });
             }
         }
@@ -716,6 +808,7 @@ pub fn perform_frequency_search(
     }
 
     rank_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    // Assign ranks
     let mut rank_map = HashMap::new();
     for (i, (p, _m)) in rank_vec.into_iter().enumerate() {
         rank_map.insert(p, i + 1);
@@ -798,7 +891,31 @@ pub fn perform_frequency_search(
 
     let rr_start = Instant::now();
     if !results.is_empty() {
-        rank_search_results(&mut results, &[query.to_string()], reranker);
+        // For hybrid2, we want to ensure we have two separate ranks
+        if reranker == "hybrid2" {
+            // First calculate regular combined score ranks
+            rank_search_results(&mut results, &[query.to_string()], "combined");
+            
+            // Keep a copy of the combined score ranks
+            for result in &mut results {
+                if let Some(rank) = result.rank {
+                    result.combined_score_rank = Some(rank);
+                }
+            }
+            
+            // Then apply hybrid2 rankings
+            rank_search_results(&mut results, &[query.to_string()], reranker);
+        } else {
+            // For other rerankers, just do the normal ranking
+            rank_search_results(&mut results, &[query.to_string()], reranker);
+            
+            // Set combined_score_rank to be the same as rank for consistency
+            for result in &mut results {
+                if let Some(rank) = result.rank {
+                    result.combined_score_rank = Some(rank);
+                }
+            }
+        }
     }
     timings.result_ranking = Some(rr_start.elapsed());
 
@@ -808,6 +925,28 @@ pub fn perform_frequency_search(
     let limited = apply_limits(results, max_results, max_bytes, default_max_tokens);
     timings.limit_application = Some(lam_start.elapsed());
 
+    // Apply post-ranking block merging
+    let block_merging_start = Instant::now();
+    let merged_results = if !limited.results.is_empty() && merge_blocks {
+        use crate::search::block_merging::merge_ranked_blocks;
+        let original_count = limited.results.len();
+        let merged = merge_ranked_blocks(limited.results, merge_threshold);
+        
+        if debug_mode {
+            println!("Post-ranking block merging: {} blocks merged into {} blocks", 
+                     original_count, merged.len());
+        }
+        
+        LimitedSearchResults {
+            results: merged,
+            skipped_files: limited.skipped_files,
+            limits_applied: limited.limits_applied,
+        }
+    } else {
+        limited
+    };
+    timings.block_merging = Some(block_merging_start.elapsed());
+
     if debug_mode {
         println!("Search Timings:");
         if let Some(d) = timings.query_preprocessing { println!("  Query Preprocessing: {:?}", d); }
@@ -815,7 +954,8 @@ pub fn perform_frequency_search(
         if let Some(d) = timings.result_processing { println!("  Result Processing: {:?}", d); }
         if let Some(d) = timings.result_ranking { println!("  Result Ranking: {:?}", d); }
         if let Some(d) = timings.limit_application { println!("  Limit Application: {:?}", d); }
+        if let Some(d) = timings.block_merging { println!("  Post-Ranking Block Merging: {:?}", d); }
     }
 
-    Ok(limited)
+    Ok(merged_results)
 }

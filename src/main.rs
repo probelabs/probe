@@ -30,6 +30,8 @@ fn main() -> Result<()> {
             max_tokens,
             allow_tests,
             any_term,
+            merge_blocks,
+            merge_threshold,
         }) => {
             println!("Running in CLI mode (subcommand)");
             // If exact is specified, override frequency_search
@@ -48,6 +50,8 @@ fn main() -> Result<()> {
                 allow_tests,
                 any_term,
                 exact,
+                merge_blocks,
+                merge_threshold,
             )?;
 
             if limited_results.results.is_empty() {
@@ -105,6 +109,8 @@ fn main() -> Result<()> {
                         args.allow_tests,
                         args.any_term,
                         args.exact,
+                        args.merge_blocks,
+                        args.merge_threshold,
                     )?;
 
                     if limited_results.results.is_empty() {

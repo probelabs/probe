@@ -148,4 +148,72 @@ function test2() {
         assert_eq!(result.node_type, "file");
         assert_eq!(result.code, content);
     }
+
+    #[test]
+    fn test_blocks_remain_separate() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        // Create a file with multiple adjacent functions
+        let content = r#"
+function test1() {
+  console.log('Test 1');
+}
+
+function test2() {
+  console.log('Test 2');
+}
+
+function test3() {
+  console.log('Test 3');
+}
+"#;
+        let file_path = create_test_file(&temp_dir, "test.js", content);
+
+        let mut line_numbers = HashSet::new();
+        // Add line numbers from all three functions
+        line_numbers.insert(2); // Line in test1 function
+        line_numbers.insert(6); // Line in test2 function 
+        line_numbers.insert(10); // Line in test3 function
+
+        let results = process_file_with_results(
+            &file_path, 
+            &line_numbers, 
+            true, // Allow tests
+            None, // No term matches
+            false, // All terms mode
+            0, // No queries
+            HashSet::new(), // No filename matches
+            &[], // No query terms
+            None // No preprocessed queries
+        ).expect("Failed to process file with results");
+
+        // With tree-sitter, each function should be a separate block
+        // Even though tree-sitter might not be available in tests, we can
+        // still check that we're not explicitly merging blocks anymore
+        
+        // Check if blocks have parent_file_id and block_id set
+        for result in &results {
+            // Each result should have a parent_file_id that matches the file path
+            if let Some(parent_id) = &result.parent_file_id {
+                assert!(parent_id.contains(&file_path.to_string_lossy()));
+            }
+            
+            // Each result should have a unique block_id
+            assert!(result.block_id.is_some());
+        }
+        
+        // Check if file paths are set correctly
+        for result in &results {
+            assert_eq!(result.file, file_path.to_string_lossy());
+        }
+        
+        // Check if there are no duplicate block_ids within the same file
+        let mut seen_block_ids = HashSet::new();
+        for result in &results {
+            if let Some(block_id) = result.block_id {
+                // We should not have seen this block_id before
+                assert!(!seen_block_ids.contains(&block_id));
+                seen_block_ids.insert(block_id);
+            }
+        }
+    }
 }

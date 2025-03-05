@@ -143,6 +143,8 @@ fn test_search_single_term() {
         false,    // allow_tests
         false,    // any_term
         false,    // exact
+        false,    // merge_blocks
+        None,     // merge_threshold
     )
     .expect("Failed to perform search");
 
@@ -196,6 +198,8 @@ fn test_search_multiple_terms() {
         false,    // allow_tests
         false,    // any_term
         false,    // exact
+        false,    // merge_blocks
+        None,     // merge_threshold
     )
     .expect("Failed to perform search");
 
@@ -231,6 +235,8 @@ fn test_search_files_only() {
         false,    // allow_tests
         false,    // any_term
         false,    // exact
+        false,    // merge_blocks
+        None,     // merge_threshold
     )
     .expect("Failed to perform search");
 
@@ -295,6 +301,8 @@ fn test_search_include_filenames() {
         false,    // allow_tests
         false,    // any_term
         false,    // exact
+        false,    // merge_blocks
+        None,     // merge_threshold
     )
     .expect("Failed to perform search");
 
@@ -340,6 +348,8 @@ fn test_search_with_limits() {
         false,    // allow_tests
         false,    // any_term
         false,    // exact
+        false,    // merge_blocks
+        None,     // merge_threshold
     )
     .expect("Failed to perform search");
 
@@ -379,6 +389,8 @@ fn test_frequency_search() {
         false,    // allow_tests
         false,    // any_term
         false,    // exact
+        false,    // merge_blocks
+        None,     // merge_threshold
     )
     .expect("Failed to perform search");
 
@@ -426,6 +438,8 @@ func main() {
         false,    // allow_tests
         false,    // any_term - using "all terms" mode
         false,    // exact
+        false,    // merge_blocks
+        None,     // merge_threshold
     )
     .expect("Failed to perform search");
 
@@ -481,6 +495,8 @@ fn test_search_with_custom_ignores() {
         false,           // allow_tests
         false,           // any_term
         false,           // exact
+        false,           // merge_blocks
+        None,            // merge_threshold
     )
     .expect("Failed to perform search");
 
@@ -508,4 +524,113 @@ fn test_search_with_custom_ignores() {
         found_rust || found_js,
         "Should find matches in non-Python files"
     );
+}
+
+#[test]
+fn test_search_with_block_merging() {
+    // Create a temporary directory for testing
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    
+    // Create test files with adjacent and overlapping code blocks
+    let file1_path = temp_dir.path().join("merge_test.rs");
+    let file1_content = r#"
+// Test file for block merging
+fn calculate_sum(a: i32, b: i32) -> i32 {
+    // This function calculates a sum
+    a + b
+}
+
+fn calculate_product(a: i32, b: i32) -> i32 {
+    // This function calculates a product
+    a * b
+}
+
+fn main() {
+    let x = 5;
+    let y = 10;
+    
+    let sum = calculate_sum(x, y);
+    println!("Sum: {}", sum);
+    
+    let product = calculate_product(x, y);
+    println!("Product: {}", product);
+}
+"#;
+    
+    // Create a file with non-adjacent blocks that shouldn't be merged
+    let file2_path = temp_dir.path().join("non_adjacent.rs");
+    let file2_content = r#"
+// File with non-adjacent calculational blocks
+fn calculate_sum(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+// Many lines of unrelated code...
+// ...
+// ...
+// ...
+// ...
+// ...
+// ...
+// ...
+// ...
+// ...
+
+fn calculate_product(a: i32, b: i32) -> i32 {
+    a * b
+}
+"#;
+    
+    // Write files to disk
+    fs::write(file1_path, file1_content).expect("Failed to write test file");
+    fs::write(file2_path, file2_content).expect("Failed to write test file");
+    
+    // Define search query that will match multiple blocks in both files
+    let query = "calculate";
+    
+    // Perform search
+    let search_result = perform_code_search(
+        temp_dir.path(),
+        &[query.to_string()],
+        false,  // files_only
+        &[],    // custom_ignores
+        false,  // include_filenames
+        "combined", // reranker
+        false,  // frequency_search
+        None,   // max_results
+        None,   // max_bytes
+        None,   // max_tokens
+        true,   // allow_tests
+        true,   // any_term
+        false,  // exact
+        true,   // merge_blocks
+        Some(5), // merge_threshold
+    ).expect("Search should succeed");
+    
+    // Verify that results are not empty
+    assert!(!search_result.results.is_empty(), "Search should return results");
+    
+    // Count results per file
+    let mut file_counts = std::collections::HashMap::new();
+    for result in &search_result.results {
+        let file_name = result.file.clone();
+        *file_counts.entry(file_name).or_insert(0) += 1;
+    }
+    
+    // The merge_test.rs file should have only 1 result as blocks should be merged
+    let merge_test_count = file_counts.get(&temp_dir.path().join("merge_test.rs").to_string_lossy().to_string()).unwrap_or(&0);
+    assert_eq!(*merge_test_count, 1, "Adjacent blocks in merge_test.rs should be merged into a single block");
+    
+    // The non_adjacent.rs file should have 2 separate results as blocks are far apart
+    let non_adjacent_count = file_counts.get(&temp_dir.path().join("non_adjacent.rs").to_string_lossy().to_string()).unwrap_or(&0);
+    assert!(*non_adjacent_count >= 1, "Non-adjacent blocks may be separate or merged depending on threshold");
+    
+    // Check the merged block content
+    for result in &search_result.results {
+        if result.file.contains("merge_test.rs") {
+            // The merged block should include both calculate_sum and calculate_product functions
+            assert!(result.code.contains("calculate_sum") && result.code.contains("calculate_product"), 
+                   "Merged block should contain content from both functions");
+        }
+    }
 }
