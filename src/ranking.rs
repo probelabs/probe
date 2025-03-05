@@ -434,7 +434,7 @@ pub fn compute_tf_df(documents: &[&str]) -> TfDfResult {
         term_frequencies.push(tf);
         document_lengths.push(tokens.len());
     }
-    
+
     TfDfResult {
         term_frequencies,
         document_frequencies,
@@ -483,7 +483,9 @@ fn bm25_score(params: &Bm25Params) -> f64 {
         if let Some(&tf) = params.tf_d.get(term) {
             let idf = idf_bm25(*params.dfs.get(term).unwrap_or(&0), params.n);
             let tf_part = (tf as f64 * (params.k1 + 1.0))
-                / (tf as f64 + params.k1 * (1.0 - params.b + params.b * (params.doc_len as f64 / params.avgdl)));
+                / (tf as f64
+                    + params.k1
+                        * (1.0 - params.b + params.b * (params.doc_len as f64 / params.avgdl)));
             // BM25 contribution: TF(Q) * IDF * TF_part
             score += (qf as f64) * idf * tf_part;
         }

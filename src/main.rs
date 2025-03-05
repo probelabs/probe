@@ -38,7 +38,7 @@ fn main() -> Result<()> {
         merge_blocks: args.merge_blocks,
         merge_threshold: args.merge_threshold,
     };
-    
+
     let limited_results = perform_probe(&search_options)?;
 
     if limited_results.results.is_empty() {

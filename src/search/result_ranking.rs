@@ -35,7 +35,7 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
         block_total_matches,
         node_type,
     };
-    
+
     let ranked_indices = ranking::rank_documents(&ranking_params);
 
     // Store original document indices and their various scores for later use

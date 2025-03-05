@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use rayon::prelude::*;
 
 use crate::models::{LimitedSearchResults, SearchResult};
-use crate::search::file_processing::{process_file_by_filename, process_file_with_results, FileProcessingParams};
+use crate::search::file_processing::{
+    process_file_by_filename, process_file_with_results, FileProcessingParams,
+};
 use crate::search::file_search::{
     find_files_with_pattern, find_matching_filenames, get_filename_matched_queries,
     get_filename_matched_queries_compat, search_file_for_pattern,
@@ -115,8 +117,10 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     }
 
     // Process each query string into multiple terms and store the term pairs for later use
-    let queries_terms: Vec<Vec<(String, String)>> =
-        queries.iter().map(|q| preprocess_query(q, *exact)).collect();
+    let queries_terms: Vec<Vec<(String, String)>> = queries
+        .iter()
+        .map(|q| preprocess_query(q, *exact))
+        .collect();
 
     // Cache preprocessed query terms for reuse
     let preprocessed_queries: Vec<Vec<String>> = queries_terms
@@ -177,10 +181,10 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     // Start timing file searching
     let file_searching_start = Instant::now();
-    
+
     // Define a type alias for the complex nested type
     type FileTermMatches = HashMap<PathBuf, HashMap<usize, HashSet<usize>>>;
-    
+
     let matches_by_file_and_term: Arc<Mutex<FileTermMatches>> =
         Arc::new(Mutex::new(HashMap::new()));
 
@@ -946,21 +950,22 @@ pub fn perform_frequency_search(options: &FrequencySearchOptions) -> Result<Limi
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_default();
             let fmatch = get_filename_matched_queries_compat(&filename, &[term_pairs.clone()]);
-// Create a longer-lived value for preprocessed queries
-let preprocessed_query_terms: Vec<Vec<String>> = vec![term_pairs.iter().map(|(_, s)| s.clone()).collect()];
+            // Create a longer-lived value for preprocessed queries
+            let preprocessed_query_terms: Vec<Vec<String>> =
+                vec![term_pairs.iter().map(|(_, s)| s.clone()).collect()];
 
-let params = FileProcessingParams {
-    path: &path,
-    line_numbers: &content_lines,
-    allow_tests: *allow_tests,
-    term_matches: Some(&tmp_map),
-    any_term: *any_term,
-    num_queries: term_pairs.len(),
-    filename_matched_queries: fmatch.clone(),
-    queries_terms: &[term_pairs.clone()],
-    preprocessed_queries: Some(&preprocessed_query_terms),
-};
-let _res = process_file_with_results(&params);
+            let params = FileProcessingParams {
+                path: &path,
+                line_numbers: &content_lines,
+                allow_tests: *allow_tests,
+                term_matches: Some(&tmp_map),
+                any_term: *any_term,
+                num_queries: term_pairs.len(),
+                filename_matched_queries: fmatch.clone(),
+                queries_terms: &[term_pairs.clone()],
+                preprocessed_queries: Some(&preprocessed_query_terms),
+            };
+            let _res = process_file_with_results(&params);
             let res = process_file_with_results(&params);
             if let Ok(mut file_results) = res {
                 // Attach file-level stats

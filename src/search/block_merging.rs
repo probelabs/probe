@@ -345,8 +345,7 @@ fn merge_block_content(block1: &SearchResult, block2: &SearchResult) -> String {
                         let mut current_line_in_file = 1;
 
                         for line_content in reader.lines().map_while(Result::ok) {
-                            if current_line_in_file >= gap_start
-                                && current_line_in_file <= gap_end
+                            if current_line_in_file >= gap_start && current_line_in_file <= gap_end
                             {
                                 if debug_mode {
                                     println!(

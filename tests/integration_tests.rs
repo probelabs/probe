@@ -152,8 +152,7 @@ fn test_search_single_term() {
     };
 
     // Search for a single term
-    let search_results = perform_probe(&options)
-        .expect("Failed to perform search");
+    let search_results = perform_probe(&options).expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -214,8 +213,7 @@ fn test_search_multiple_terms() {
     };
 
     // Search for multiple terms
-    let search_results = perform_probe(&options)
-        .expect("Failed to perform search");
+    let search_results = perform_probe(&options).expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -258,8 +256,7 @@ fn test_search_files_only() {
     };
 
     // Search for files only
-    let search_results = perform_probe(&options)
-        .expect("Failed to perform search");
+    let search_results = perform_probe(&options).expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -331,8 +328,7 @@ fn test_search_include_filenames() {
     };
 
     // Search with filename matching enabled
-    let search_results = perform_probe(&options)
-        .expect("Failed to perform search");
+    let search_results = perform_probe(&options).expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -374,7 +370,7 @@ fn test_search_with_limits() {
         include_filenames: false,
         reranker: "hybrid",
         frequency_search: false,
-        max_results: Some(2),  // limit to 2 results
+        max_results: Some(2), // limit to 2 results
         max_bytes: None,
         max_tokens: None,
         allow_tests: false,
@@ -385,8 +381,7 @@ fn test_search_with_limits() {
     };
 
     // Search with limits
-    let search_results = perform_probe(&options)
-        .expect("Failed to perform search");
+    let search_results = perform_probe(&options).expect("Failed to perform search");
 
     // Should find matches but limited to 2
     assert!(!search_results.results.is_empty());
@@ -433,8 +428,7 @@ fn test_frequency_search() {
     };
 
     // Search using frequency-based search
-    let search_results = perform_probe(&options)
-        .expect("Failed to perform search");
+    let search_results = perform_probe(&options).expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -475,22 +469,21 @@ func main() {
         queries: &queries,
         files_only: false,
         custom_ignores: &custom_ignores,
-        include_filenames: true,  // enable this to find files with terms in their filenames
+        include_filenames: true, // enable this to find files with terms in their filenames
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
         max_bytes: None,
         max_tokens: None,
         allow_tests: false,
-        any_term: false,  // using "all terms" mode
+        any_term: false, // using "all terms" mode
         exact: false,
         merge_blocks: false,
         merge_threshold: None,
     };
 
     // Search for both terms in "all terms" mode
-    let search_results = perform_probe(&options)
-        .expect("Failed to perform search");
+    let search_results = perform_probe(&options).expect("Failed to perform search");
 
     // Should find matches
     assert!(
@@ -552,8 +545,7 @@ fn test_search_with_custom_ignores() {
     };
 
     // Search with custom ignore patterns
-    let search_results = perform_probe(&options)
-        .expect("Failed to perform search");
+    let search_results = perform_probe(&options).expect("Failed to perform search");
 
     // Should find matches
     assert!(!search_results.results.is_empty());
@@ -667,8 +659,7 @@ fn calculate_product(a: i32, b: i32) -> i32 {
     };
 
     // Perform search
-    let search_result = perform_probe(&options)
-        .expect("Search should succeed");
+    let search_result = perform_probe(&options).expect("Search should succeed");
 
     // Verify that results are not empty
     assert!(

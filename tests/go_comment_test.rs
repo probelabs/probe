@@ -205,14 +205,19 @@ type DatasourceResponse struct {
 
     // Enable debug mode for this test
     std::env::set_var("DEBUG", "1");
-    
+
     // Parse the file for code blocks
     let blocks = parse_file_for_code_blocks(code, "go", &line_numbers, true, None)?;
-    
+
     println!("Found {} blocks:", blocks.len());
     for (i, block) in blocks.iter().enumerate() {
-        println!("Block {}: type={}, lines={}-{}",
-                 i, block.node_type, block.start_row + 1, block.end_row + 1);
+        println!(
+            "Block {}: type={}, lines={}-{}",
+            i,
+            block.node_type,
+            block.start_row + 1,
+            block.end_row + 1
+        );
     }
 
     // We should have exactly 1 block: the merged comment and struct
@@ -230,14 +235,10 @@ type DatasourceResponse struct {
     );
     assert_eq!(
         blocks[0].start_row + 1,
-        5,  // Should start at the second comment line
+        5, // Should start at the second comment line
         "Block should start at line 5 (second comment line)"
     );
-    assert_eq!(
-        blocks[0].end_row + 1,
-        12,
-        "Block should end at line 12"
-    );
+    assert_eq!(blocks[0].end_row + 1, 12, "Block should end at line 12");
 
     Ok(())
 }

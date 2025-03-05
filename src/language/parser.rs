@@ -353,10 +353,7 @@ fn find_prev_sibling(node: Node<'_>) -> Option<Node<'_>> {
 }
 
 /// Find first acceptable node in a subtree
-fn find_acceptable_child<'a>(
-    node: Node<'a>,
-    language_impl: &dyn LanguageImpl,
-) -> Option<Node<'a>> {
+fn find_acceptable_child<'a>(node: Node<'a>, language_impl: &dyn LanguageImpl) -> Option<Node<'a>> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if language_impl.is_acceptable_parent(&child) {

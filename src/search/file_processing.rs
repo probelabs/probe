@@ -175,12 +175,13 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
     let trimmed = line.trim();
 
     // First try to detect comments
-    if trimmed.starts_with("//") ||
-       trimmed.starts_with("/*") ||
-       trimmed.starts_with("*") ||
-       (trimmed.starts_with("#") && extension.is_some_and(|ext| ext == "py" || ext == "rb")) ||
-       trimmed.starts_with("'''") ||
-       trimmed.starts_with("\"\"\"") {
+    if trimmed.starts_with("//")
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with("*")
+        || (trimmed.starts_with("#") && extension.is_some_and(|ext| ext == "py" || ext == "rb"))
+        || trimmed.starts_with("'''")
+        || trimmed.starts_with("\"\"\"")
+    {
         return "comment".to_string();
     }
 
@@ -205,12 +206,9 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
     // Check for class declarations
     if (trimmed.contains("class ") || trimmed.contains("interface "))
         || (trimmed.contains("struct ")
-            && extension.is_some_and(|ext| {
-                ext == "rs" || ext == "go" || ext == "c" || ext == "cpp"
-            }))
-        || (trimmed.contains("type ")
-            && trimmed.contains("struct")
-            && extension == Some("go"))
+            && extension
+                .is_some_and(|ext| ext == "rs" || ext == "go" || ext == "c" || ext == "cpp"))
+        || (trimmed.contains("type ") && trimmed.contains("struct") && extension == Some("go"))
         || (trimmed.contains("enum "))
     {
         return "class".to_string();
@@ -250,10 +248,15 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
 /// Function to process a file with line numbers and return SearchResult structs
 pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<SearchResult>> {
     // Read the file content
-    let content = fs::read_to_string(params.path).context(format!("Failed to read file: {:?}", params.path))?;
+    let content = fs::read_to_string(params.path)
+        .context(format!("Failed to read file: {:?}", params.path))?;
 
     // Get the file extension
-    let extension = params.path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    let extension = params
+        .path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("");
 
     // Split the content into lines for context processing
     let lines: Vec<&str> = content.lines().collect();
@@ -277,16 +280,24 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
         if !params.filename_matched_queries.is_empty() {
             println!(
                 "DEBUG: Filename '{}' matched queries (indices): {:?}",
-                params.path.file_name().unwrap_or_default().to_string_lossy(),
+                params
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
                 params.filename_matched_queries
             );
         }
     }
 
     // First try to use AST parsing
-    if let Ok(code_blocks) =
-        parse_file_for_code_blocks(&content, extension, params.line_numbers, params.allow_tests, params.term_matches)
-    {
+    if let Ok(code_blocks) = parse_file_for_code_blocks(
+        &content,
+        extension,
+        params.line_numbers,
+        params.allow_tests,
+        params.term_matches,
+    ) {
         if debug_mode {
             println!("DEBUG: AST parsing successful");
             println!("DEBUG:   Found {} code blocks", code_blocks.len());
@@ -314,9 +325,11 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
             // Check if this is a struct_type inside a function in Go code
             let (final_start_line, final_end_line, is_nested_struct) = if extension == "go"
                 && block.node_type == "struct_type"
-                && block.parent_node_type.as_ref().is_some_and(|p| {
-                    p == "function_declaration" || p == "method_declaration"
-                }) {
+                && block
+                    .parent_node_type
+                    .as_ref()
+                    .is_some_and(|p| p == "function_declaration" || p == "method_declaration")
+            {
                 // Use the parent function's boundaries instead of just the struct
                 if let Some(parent_start) = block.parent_start_row {
                     if let Some(parent_end) = block.parent_end_row {
@@ -354,7 +367,8 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                     .flat_map(|terms| terms.iter().cloned())
                     .collect()
             } else {
-                params.queries_terms
+                params
+                    .queries_terms
                     .iter()
                     .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
                     .collect()
@@ -476,7 +490,10 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
             // Skip fallback context for test files if allow_tests is false
             if !params.allow_tests && crate::language::is_test_file(params.path) {
                 if debug_mode {
-                    println!("DEBUG: Skipping fallback context for test file: {:?}", params.path);
+                    println!(
+                        "DEBUG: Skipping fallback context for test file: {:?}",
+                        params.path
+                    );
                 }
                 continue;
             }
@@ -536,7 +553,8 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                     .flat_map(|terms| terms.iter().cloned())
                     .collect()
             } else {
-                params.queries_terms
+                params
+                    .queries_terms
                     .iter()
                     .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
                     .collect()
@@ -678,7 +696,8 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 .flat_map(|terms| terms.iter().cloned())
                 .collect()
         } else {
-            params.queries_terms
+            params
+                .queries_terms
                 .iter()
                 .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
                 .collect()
