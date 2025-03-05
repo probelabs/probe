@@ -1,16 +1,30 @@
 # Makefile for probe Rust project
 
 # Configuration
+VERSION ?= v0.1.0
 CARGO := cargo
 RUSTC := rustc
 RUSTFMT := rustfmt
 CLIPPY := cargo clippy
 SCRIPTS_DIR := scripts
 TESTS_DIR := tests
+RELEASE_DIR := release/$(VERSION)
+BINARY_NAME := probe
+
+# Platform-specific settings
+LINUX_TARGET := x86_64-unknown-linux-gnu
+MACOS_X86_TARGET := x86_64-apple-darwin
+MACOS_ARM_TARGET := aarch64-apple-darwin
+WINDOWS_TARGET := x86_64-pc-windows-msvc
 
 # Default target
 .PHONY: all
 all: build
+
+# Version target
+.PHONY: version
+version:
+	@echo "Probe version: $(VERSION)"
 
 # Build targets
 .PHONY: build
@@ -18,8 +32,52 @@ build:
 	$(CARGO) build
 
 .PHONY: release
-release:
-	$(CARGO) build --release
+release: clean-release version linux macos windows
+	@echo "Release $(VERSION) created in $(RELEASE_DIR)"
+
+.PHONY: clean-release
+clean-release:
+	rm -rf $(RELEASE_DIR)
+	mkdir -p $(RELEASE_DIR)
+
+.PHONY: linux
+linux:
+	@echo "Building for Linux ($(LINUX_TARGET))..."
+	# Note: You may need to install the target with: rustup target add $(LINUX_TARGET)
+	$(CARGO) build --release --target $(LINUX_TARGET)
+	mkdir -p $(RELEASE_DIR)/linux
+	cp target/$(LINUX_TARGET)/release/$(BINARY_NAME) $(RELEASE_DIR)/linux/$(BINARY_NAME)
+	tar -czf $(RELEASE_DIR)/$(BINARY_NAME)-$(VERSION)-linux-x86_64.tar.gz -C $(RELEASE_DIR)/linux $(BINARY_NAME)
+
+.PHONY: macos
+macos: macos-x86 macos-arm
+
+.PHONY: macos-x86
+macos-x86:
+	@echo "Building for macOS x86_64 ($(MACOS_X86_TARGET))..."
+	# Note: You may need to install the target with: rustup target add $(MACOS_X86_TARGET)
+	$(CARGO) build --release --target $(MACOS_X86_TARGET)
+	mkdir -p $(RELEASE_DIR)/macos/x86_64
+	cp target/$(MACOS_X86_TARGET)/release/$(BINARY_NAME) $(RELEASE_DIR)/macos/x86_64/$(BINARY_NAME)
+	tar -czf $(RELEASE_DIR)/$(BINARY_NAME)-$(VERSION)-macos-x86_64.tar.gz -C $(RELEASE_DIR)/macos/x86_64 $(BINARY_NAME)
+
+.PHONY: macos-arm
+macos-arm:
+	@echo "Building for macOS ARM ($(MACOS_ARM_TARGET))..."
+	# Note: You may need to install the target with: rustup target add $(MACOS_ARM_TARGET)
+	$(CARGO) build --release --target $(MACOS_ARM_TARGET)
+	mkdir -p $(RELEASE_DIR)/macos/arm64
+	cp target/$(MACOS_ARM_TARGET)/release/$(BINARY_NAME) $(RELEASE_DIR)/macos/arm64/$(BINARY_NAME)
+	tar -czf $(RELEASE_DIR)/$(BINARY_NAME)-$(VERSION)-macos-arm64.tar.gz -C $(RELEASE_DIR)/macos/arm64 $(BINARY_NAME)
+
+.PHONY: windows
+windows:
+	@echo "Building for Windows ($(WINDOWS_TARGET))..."
+	# Note: You may need to install the target with: rustup target add $(WINDOWS_TARGET)
+	$(CARGO) build --release --target $(WINDOWS_TARGET)
+	mkdir -p $(RELEASE_DIR)/windows
+	cp target/$(WINDOWS_TARGET)/release/$(BINARY_NAME).exe $(RELEASE_DIR)/windows/$(BINARY_NAME).exe
+	zip -j $(RELEASE_DIR)/$(BINARY_NAME)-$(VERSION)-windows-x86_64.zip $(RELEASE_DIR)/windows/$(BINARY_NAME).exe
 
 # Test targets
 .PHONY: test
@@ -91,7 +149,14 @@ help:
 	@echo "Available targets:"
 	@echo "  all               - Build the project (default)"
 	@echo "  build             - Build the project in debug mode"
-	@echo "  release           - Build the project in release mode"
+	@echo "  version           - Print the current version"
+	@echo "  release           - Build release packages for all platforms (VERSION=v0.1.0)"
+	@echo "  linux             - Build release package for Linux"
+	@echo "  macos             - Build release packages for macOS (x86_64 and arm64)"
+	@echo "  macos-x86         - Build release package for macOS (x86_64)"
+	@echo "  macos-arm         - Build release package for macOS (arm64)"
+	@echo "  windows           - Build release package for Windows"
+	@echo "  clean-release     - Clean release directory"
 	@echo "  test              - Run all tests (unit, integration, property, CLI)"
 	@echo "  test-unit         - Run unit tests"
 	@echo "  test-integration  - Run integration tests"
@@ -108,3 +173,8 @@ help:
 	@echo "  run               - Run the application in debug mode"
 	@echo "  run-release       - Run the application in release mode"
 	@echo "  help              - Show this help message"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make release                  - Build release packages with default version ($(VERSION))"
+	@echo "  VERSION=v1.0.0 make release   - Build release packages with specified version"
+	@echo "  make version                  - Print the current version"

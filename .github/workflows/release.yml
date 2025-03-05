@@ -1,158 +1,120 @@
-name: Release
+name: Build and Release Probe Binary
 
 on:
   push:
     tags:
-      - "v*"
+      - "v*" # Trigger on tags like v1.0.0, v1.1.0, etc.
 
-env:
-  CARGO_TERM_COLOR: always
-  BINARY_NAME: probe
+permissions:
+  contents: write # Required to upload release assets
 
 jobs:
-  create-release:
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-      release_id: ${{ steps.create_release.outputs.id }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref_name }}
-          draft: true
-          prerelease: false
-
-  build:
-    needs: create-release
+  build-and-release:
+    name: Build and Release for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
       matrix:
         include:
+          # Linux x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: probe-x86_64-linux.tar.gz
-            cross: false
+            binary_ext: ""
+            archive_ext: "tar.gz"
+
+          # macOS x86_64
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: probe-x86_64-darwin.tar.gz
-            cross: false
+            binary_ext: ""
+            archive_ext: "tar.gz"
+
+          # macOS ARM64 (Apple Silicon)
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: probe-aarch64-darwin.tar.gz
-            cross: true
+            binary_ext: ""
+            archive_ext: "tar.gz"
+
+          # Windows x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: probe-x86_64-windows.zip
-            cross: false
+            binary_ext: ".exe"
+            archive_ext: "zip"
+
+          # Linux ARM64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary_ext: ""
+            archive_ext: "tar.gz"
 
     steps:
-      - uses: actions/checkout@v4
+      # Checkout the repository code
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+      # Install Rust toolchain
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
 
-      - name: Install cross (if needed)
-        if: matrix.cross
-        run: cargo install cross
+      # Setup cross-compilation for ARM Linux
+      - name: Setup cross-compilation
+        if: contains(matrix.target, 'aarch64-unknown-linux-gnu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ matrix.target }}-
+      # Run tests
+      - name: Run tests
+        if: "!contains(matrix.target, 'aarch64')"
+        run: cargo test --target ${{ matrix.target }}
 
-      - name: Build binary
+      # Build the Rust project
+      - name: Build Release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Package the binary into an archive
+      - name: Package Binary
         shell: bash
         run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
+          BINARY_NAME="probe"
+          VERSION="${GITHUB_REF#refs/tags/}" # Extracts tag like v1.0.0
+          ARCHIVE_NAME="$BINARY_NAME-${VERSION}-${{ matrix.target }}"
+          mkdir -p "$ARCHIVE_NAME"
+
+          # Copy binary
+          cp "target/${{ matrix.target }}/release/$BINARY_NAME${{ matrix.binary_ext }}" "$ARCHIVE_NAME/"
+
+          # Copy documentation and license files
+          cp README.md "$ARCHIVE_NAME/" || true
+          cp LICENSE "$ARCHIVE_NAME/" || true
+          cp ABOUT.MD "$ARCHIVE_NAME/" || true
+
+          # Create archive
+          if [ "${{ matrix.archive_ext }}" = "tar.gz" ]; then
+            tar -czf "$ARCHIVE_NAME.tar.gz" "$ARCHIVE_NAME"
+            echo "ASSET=$ARCHIVE_NAME.tar.gz" >> $GITHUB_ENV
+          elif [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            zip -r "$ARCHIVE_NAME.zip" "$ARCHIVE_NAME"
+            echo "ASSET=$ARCHIVE_NAME.zip" >> $GITHUB_ENV
           fi
 
-      - name: Prepare binary (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p release
-          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} release/
-          cp README.md release/ || echo "No README.md found"
-          cp LICENSE release/ || echo "No LICENSE found"
-          cd release
-          if [[ "${{ matrix.artifact_name }}" == *.tar.gz ]]; then
-            tar czf ../${{ matrix.artifact_name }} *
-          else
-            zip -r ../${{ matrix.artifact_name }} *
-          fi
-          cd ..
-          echo "ASSET_PATH=${{ matrix.artifact_name }}" >> $GITHUB_ENV
-
-      - name: Prepare binary (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          mkdir -p release
-          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}.exe release/
-          cp README.md release/ || echo "No README.md found"
-          cp LICENSE release/ || echo "No LICENSE found"
-          cd release
-          7z a -tzip ../${{ matrix.artifact_name }} *
-          cd ..
-          echo "ASSET_PATH=${{ matrix.artifact_name }}" >> $GITHUB_ENV
-
-      - name: Generate checksum
-        shell: bash
-        run: |
+          # Generate SHA256 checksum
           if [ "${{ runner.os }}" = "Windows" ]; then
-            certutil -hashfile ${{ env.ASSET_PATH }} SHA256 > ${{ env.ASSET_PATH }}.sha256
-            sed -i 's/SHA256 hash of file.*: //g' ${{ env.ASSET_PATH }}.sha256
+            certutil -hashfile "$ARCHIVE_NAME.${{ matrix.archive_ext }}" SHA256 | grep -v "^SHA256" | grep -v "^CertUtil" > "$ARCHIVE_NAME.${{ matrix.archive_ext }}.sha256"
           else
-            shasum -a 256 ${{ env.ASSET_PATH }} > ${{ env.ASSET_PATH }}.sha256
+            shasum -a 256 "$ARCHIVE_NAME.${{ matrix.archive_ext }}" > "$ARCHIVE_NAME.${{ matrix.archive_ext }}.sha256"
           fi
+          echo "CHECKSUM=$ARCHIVE_NAME.${{ matrix.archive_ext }}.sha256" >> $GITHUB_ENV
 
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+      # Upload the binary as a release asset
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ASSET }}
+            ${{ env.CHECKSUM }}
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ env.ASSET_PATH }}
-          asset_name: ${{ matrix.artifact_name }}
-          asset_content_type: application/octet-stream
-
-      - name: Upload Checksum
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ env.ASSET_PATH }}.sha256
-          asset_name: ${{ matrix.artifact_name }}.sha256
-          asset_content_type: text/plain
-
-  publish-release:
-    needs: [create-release, build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Publish Release
-        uses: eregon/publish-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          release_id: ${{ needs.create-release.outputs.release_id }}
