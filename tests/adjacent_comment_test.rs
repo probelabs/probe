@@ -37,13 +37,13 @@ function bar() {
         result[0].node_type, "function_declaration",
         "Block should be of type function_declaration"
     );
-    
+
     // The block should start at the comment line
     assert_eq!(
         result[0].start_row, 6,
         "Block should start at the comment line"
     );
-    
+
     // The block should end at or after the function end
     assert!(
         result[0].end_row >= 9,
@@ -103,36 +103,36 @@ function bar() {
         result[0].node_type, "function_declaration",
         "First block should be a function_declaration"
     );
-    
+
     // The second block should be the function containing the keyword in its body
     assert_eq!(
         result[1].node_type, "function",
         "Second block should be the function with keyword in its body"
     );
-    
+
     // Based on the debug output, we can see that the comment at line 7 is being merged with
     // the first function (lines 3-5) instead of with the second function.
     // This is because the parser is finding the previous sibling as the related node.
-    
+
     // Check that one of the blocks contains the comment line (line 6)
-    let has_block_with_comment = result.iter().any(|block|
-        block.start_row <= 6 && block.end_row >= 6
-    );
+    let has_block_with_comment = result
+        .iter()
+        .any(|block| block.start_row <= 6 && block.end_row >= 6);
     assert!(
         has_block_with_comment,
         "One block should contain the comment line (line 6)"
     );
-    
+
     // From the debug output, we can see that the second block is at line 9 but doesn't include line 10
     // where the "keyword" is in the function body. Let's adjust our test to match this behavior.
-    
+
     // Check that one of the blocks is at line 9 (the function declaration line)
     let has_block_at_function_line = result.iter().any(|block| block.start_row == 8);
     assert!(
         has_block_at_function_line,
         "One block should be at line 9 (the function declaration line)"
     );
-    
+
     // Verify the second block is of type 'function'
     assert_eq!(
         result[1].node_type, "function",

@@ -201,7 +201,9 @@ pub fn should_merge_blocks(block1: &SearchResult, block2: &SearchResult, thresho
     // 2. One block contains a comment and is adjacent to a function
     let distance = if start2 > end1 {
         start2 - end1
-    } else { start1.saturating_sub(end2) };
+    } else {
+        start1.saturating_sub(end2)
+    };
 
     let should_merge = distance <= effective_threshold
         || (block1.node_type.contains("comment") && is_function_like(&block2.node_type))

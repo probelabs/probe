@@ -611,7 +611,7 @@ pub fn parse_file_for_code_blocks(
                     if debug_mode {
                         println!(
                             "DEBUG: Found parent {} for struct_type at lines {}-{}, parent at {}-{}", 
-                            parent_type, start_pos.row + 1, end_pos.row + 1, 
+                            parent_type, start_pos.row + 1, end_pos.row + 1,
                             parent_start + 1, parent_end + 1
                         );
                     }

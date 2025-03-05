@@ -223,7 +223,6 @@ pub fn perform_probe(
             }
         });
 
-        
         Arc::try_unwrap(local_matches)
             .expect("Arc error")
             .into_inner()

@@ -28,10 +28,7 @@ fn print_ast_structure(node: tree_sitter::Node, depth: usize) {
 }
 
 // Helper function to find a comment node in the tree
-fn find_comment_node(
-    tree: &tree_sitter::Tree,
-    line: usize,
-) -> Option<tree_sitter::Node<'_>> {
+fn find_comment_node(tree: &tree_sitter::Tree, line: usize) -> Option<tree_sitter::Node<'_>> {
     let root_node = tree.root_node();
 
     println!("\nAST Structure:");

@@ -1,18 +1,18 @@
-use crate::language::parser::{find_code_structure, find_related_code_node};
 use crate::language::block_handling::merge_code_blocks;
+use crate::language::parser::{find_code_structure, find_related_code_node};
 use tree_sitter::Language;
 
 // Import tree-sitter language crates
-extern crate tree_sitter_rust;
-extern crate tree_sitter_javascript;
-extern crate tree_sitter_typescript;
-extern crate tree_sitter_python;
-extern crate tree_sitter_go;
 extern crate tree_sitter_c;
 extern crate tree_sitter_cpp;
+extern crate tree_sitter_go;
 extern crate tree_sitter_java;
-extern crate tree_sitter_ruby;
+extern crate tree_sitter_javascript;
 extern crate tree_sitter_php;
+extern crate tree_sitter_python;
+extern crate tree_sitter_ruby;
+extern crate tree_sitter_rust;
+extern crate tree_sitter_typescript;
 
 // Helper function to get tree-sitter language from file extension
 fn get_language(extension: &str) -> Option<Language> {
@@ -656,7 +656,7 @@ fn test_function() {
     // The test is failing because it expects 2 blocks but only gets 1
     // This is likely because the parser is now merging the comment with its related function
     // Let's update the test to match the new behavior
-    
+
     // We should get one merged code block that includes both the comment and function
     assert_eq!(result.len(), 1);
 
@@ -665,7 +665,7 @@ fn test_function() {
 
     // Verify the block spans from the comment to the end of the function
     assert_eq!(result[0].start_row, 1); // Line 2 (0-indexed) is the comment line
-    assert!(result[0].end_row >= 3);    // Should include at least to line 4 (0-indexed, end of function)
+    assert!(result[0].end_row >= 3); // Should include at least to line 4 (0-indexed, end of function)
 }
 
 // Helper function to print the AST structure

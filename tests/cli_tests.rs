@@ -47,12 +47,7 @@ fn test_cli_basic_search() {
 
     // Run the CLI with basic search
     let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "search",
-            temp_dir.path().to_str().unwrap(),
-        ])
+        .args(["run", "--", "search", temp_dir.path().to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -216,12 +211,7 @@ fn test_cli_default_frequency_search() {
 
     // Run the CLI with default settings (frequency search should be enabled by default)
     let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "search",
-            temp_dir.path().to_str().unwrap(),
-        ])
+        .args(["run", "--", "search", temp_dir.path().to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
