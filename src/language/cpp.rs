@@ -4,6 +4,12 @@ use tree_sitter::{Language as TSLanguage, Node};
 /// Implementation of LanguageImpl for C++
 pub struct CppLanguage;
 
+impl Default for CppLanguage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CppLanguage {
     pub fn new() -> Self {
         CppLanguage

@@ -4,6 +4,12 @@ use tree_sitter::{Language as TSLanguage, Node};
 /// Implementation of LanguageImpl for C
 pub struct CLanguage;
 
+impl Default for CLanguage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CLanguage {
     pub fn new() -> Self {
         CLanguage

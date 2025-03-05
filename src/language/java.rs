@@ -4,6 +4,12 @@ use tree_sitter::{Language as TSLanguage, Node};
 /// Implementation of LanguageImpl for Java
 pub struct JavaLanguage;
 
+impl Default for JavaLanguage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JavaLanguage {
     pub fn new() -> Self {
         JavaLanguage

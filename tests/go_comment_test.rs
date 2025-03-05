@@ -28,20 +28,20 @@ fn print_ast_structure(node: tree_sitter::Node, depth: usize) {
 }
 
 // Helper function to find a comment node in the tree
-fn find_comment_node<'a>(
-    tree: &'a tree_sitter::Tree,
+fn find_comment_node(
+    tree: &tree_sitter::Tree,
     line: usize,
-) -> Option<tree_sitter::Node<'a>> {
+) -> Option<tree_sitter::Node<'_>> {
     let root_node = tree.root_node();
 
     println!("\nAST Structure:");
     print_ast_structure(root_node, 0);
 
     // Helper function to find a comment node recursively
-    fn find_comment_recursive<'a>(
-        node: tree_sitter::Node<'a>,
+    fn find_comment_recursive(
+        node: tree_sitter::Node<'_>,
         target_line: usize,
-    ) -> Option<tree_sitter::Node<'a>> {
+    ) -> Option<tree_sitter::Node<'_>> {
         if (node.kind() == "comment"
             || node.kind() == "line_comment"
             || node.kind() == "block_comment")

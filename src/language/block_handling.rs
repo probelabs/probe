@@ -1,8 +1,7 @@
-use crate::models::CodeBlock;
-
 /// Function to merge overlapping code blocks
-pub fn merge_code_blocks(code_blocks: Vec<CodeBlock>) -> Vec<CodeBlock> {
-    let mut merged_blocks: Vec<CodeBlock> = Vec::new();
+#[cfg(test)]
+pub fn merge_code_blocks(code_blocks: Vec<crate::models::CodeBlock>) -> Vec<crate::models::CodeBlock> {
+    let mut merged_blocks: Vec<crate::models::CodeBlock> = Vec::new();
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     for block in code_blocks {

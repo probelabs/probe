@@ -4,6 +4,12 @@ use tree_sitter::{Language as TSLanguage, Node};
 /// Implementation of LanguageImpl for Go
 pub struct GoLanguage;
 
+impl Default for GoLanguage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GoLanguage {
     pub fn new() -> Self {
         GoLanguage

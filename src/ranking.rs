@@ -250,7 +250,7 @@ fn split_camel_case(s: &str) -> Vec<String> {
     let mut prev_is_lower = false;
     let mut prev_is_numeric = false;
 
-    for (_i, c) in s.chars().enumerate() {
+    for c in s.chars() {
         let is_numeric = c.is_numeric();
         // println!("  Char {}: '{}', prev_is_lower: {}, prev_is_numeric: {}", i, c, prev_is_lower, prev_is_numeric);
 
@@ -599,14 +599,14 @@ pub fn rank_documents(
         let btm = block_total_matches.map(|x| x as f64).unwrap_or(0.0);
 
         // Calculate means and standard deviations for metrics
-        let mean_fut = calculate_mean(&vec![fut]);
-        let std_fut = calculate_std_dev(&vec![fut], mean_fut);
-        let mean_ftm = calculate_mean(&vec![ftm]);
-        let std_ftm = calculate_std_dev(&vec![ftm], mean_ftm);
-        let mean_but = calculate_mean(&vec![but]);
-        let std_but = calculate_std_dev(&vec![but], mean_but);
-        let mean_btm = calculate_mean(&vec![btm]);
-        let std_btm = calculate_std_dev(&vec![btm], mean_btm);
+        let mean_fut = calculate_mean(&[fut]);
+        let std_fut = calculate_std_dev(&[fut], mean_fut);
+        let mean_ftm = calculate_mean(&[ftm]);
+        let std_ftm = calculate_std_dev(&[ftm], mean_ftm);
+        let mean_but = calculate_mean(&[but]);
+        let std_but = calculate_std_dev(&[but], mean_but);
+        let mean_btm = calculate_mean(&[btm]);
+        let std_btm = calculate_std_dev(&[btm], mean_btm);
 
         // Normalize metrics using z-scores
         let fut_norm = zscore(fut, mean_fut, std_fut);

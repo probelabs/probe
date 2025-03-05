@@ -223,11 +223,11 @@ pub fn perform_probe(
             }
         });
 
-        let merged = Arc::try_unwrap(local_matches)
+        
+        Arc::try_unwrap(local_matches)
             .expect("Arc error")
             .into_inner()
-            .expect("Mutex error");
-        merged
+            .expect("Mutex error")
     };
 
     // Search single-term patterns

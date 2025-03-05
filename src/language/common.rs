@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use tree_sitter::Node;
 
 /// Helper function to find the most specific node that contains a given line
-pub fn find_most_specific_node<'a>(node: Node<'a>, line: usize) -> Node<'a> {
+pub fn find_most_specific_node(node: Node<'_>, line: usize) -> Node<'_> {
     let start_line = node.start_position().row + 1;
     let end_line = node.end_position().row + 1;
 

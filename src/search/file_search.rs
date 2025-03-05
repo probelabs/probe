@@ -544,7 +544,7 @@ pub fn get_filename_matched_queries(
         println!("DEBUG: Checking path '{}' for term matches", relative_path);
     }
 
-    for (_query_idx, terms) in term_pairs.iter().enumerate() {
+    for terms in term_pairs.iter() {
         // Convert the terms to the format expected by create_term_patterns
         let term_string_pairs: Vec<(String, String)> = terms
             .iter()
@@ -609,7 +609,7 @@ pub fn get_filename_matched_queries_compat(
 
     let filename_lower = filename.to_lowercase();
 
-    for (_query_idx, term_pairs) in queries_terms.iter().enumerate() {
+    for term_pairs in queries_terms.iter() {
         // Generate flexible patterns for this query's terms
         let patterns_with_term_indices = create_term_patterns(term_pairs);
 

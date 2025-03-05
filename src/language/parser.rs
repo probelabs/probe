@@ -43,10 +43,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
         }
 
         // Get the language implementation for this extension
-        let language_impl = match get_language_impl(extension) {
-            Some(lang) => lang,
-            None => return None,
-        };
+        let language_impl = get_language_impl(extension)?;
 
         // Try to find related code node using AST traversal
         let mut found_node = None;
@@ -110,10 +107,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
     }
 
     // Get the language implementation for this extension
-    let language_impl = match get_language_impl(extension) {
-        Some(lang) => lang,
-        None => return None,
-    };
+    let language_impl = get_language_impl(extension)?;
 
     // First check if the target node itself is an acceptable parent
     if language_impl.is_acceptable_parent(&target_node) {
@@ -175,10 +169,7 @@ pub fn get_comment_context<'a>(comment_node: Node<'a>, extension: &str) -> Optio
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Get the language implementation for this extension
-    let language_impl = match get_language_impl(extension) {
-        Some(lang) => lang,
-        None => return None,
-    };
+    let language_impl = get_language_impl(extension)?;
 
     if debug_mode {
         println!(
@@ -211,7 +202,7 @@ pub fn get_comment_context<'a>(comment_node: Node<'a>, extension: &str) -> Optio
 }
 
 /// Finds the immediate next node that follows a given node in the AST
-fn find_immediate_next_node<'a>(node: Node<'a>) -> Option<Node<'a>> {
+fn find_immediate_next_node(node: Node<'_>) -> Option<Node<'_>> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // First try direct next sibling
@@ -252,10 +243,7 @@ pub fn find_related_code_node<'a>(comment_node: Node<'a>, extension: &str) -> Op
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Get the language implementation for this extension
-    let language_impl = match get_language_impl(extension) {
-        Some(lang) => lang,
-        None => return None,
-    };
+    let language_impl = get_language_impl(extension)?;
 
     if debug_mode {
         println!(
@@ -348,7 +336,7 @@ pub fn find_related_code_node<'a>(comment_node: Node<'a>, extension: &str) -> Op
 }
 
 /// Gets the previous sibling of a node in the AST
-fn find_prev_sibling<'a>(node: Node<'a>) -> Option<Node<'a>> {
+fn find_prev_sibling(node: Node<'_>) -> Option<Node<'_>> {
     let parent = node.parent()?;
 
     let mut cursor = parent.walk();
@@ -553,7 +541,7 @@ pub fn parse_file_for_code_blocks(
         // For non-comments, first check if this line is within any existing block
         let mut existing_block = false;
         for block in &code_blocks {
-            if line >= block.start_row + 1 && line <= block.end_row + 1 {
+            if line > block.start_row && line <= block.end_row + 1 {
                 if debug_mode {
                     println!(
                         "DEBUG: Line {} is within existing block: type='{}', lines={}-{}",

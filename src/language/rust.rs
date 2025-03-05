@@ -4,6 +4,12 @@ use tree_sitter::{Language as TSLanguage, Node};
 /// Implementation of LanguageImpl for Rust
 pub struct RustLanguage;
 
+impl Default for RustLanguage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RustLanguage {
     pub fn new() -> Self {
         RustLanguage

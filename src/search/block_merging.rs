@@ -43,7 +43,7 @@ pub fn merge_ranked_blocks(
     for result in results {
         file_blocks
             .entry(result.file.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(result);
     }
 
@@ -201,11 +201,7 @@ pub fn should_merge_blocks(block1: &SearchResult, block2: &SearchResult, thresho
     // 2. One block contains a comment and is adjacent to a function
     let distance = if start2 > end1 {
         start2 - end1
-    } else if start1 > end2 {
-        start1 - end2
-    } else {
-        0
-    };
+    } else { start1.saturating_sub(end2) };
 
     let should_merge = distance <= effective_threshold
         || (block1.node_type.contains("comment") && is_function_like(&block2.node_type))
@@ -276,9 +272,7 @@ fn merge_block_content(block1: &SearchResult, block2: &SearchResult) -> String {
 
     for (i, line) in lines2.iter().enumerate() {
         let abs_pos = start2 + i;
-        if !line_map.contains_key(&abs_pos) {
-            line_map.insert(abs_pos, line.to_string());
-        }
+        line_map.entry(abs_pos).or_insert_with(|| line.to_string());
     }
 
     // Build the merged content from the line map
@@ -290,7 +284,7 @@ fn merge_block_content(block1: &SearchResult, block2: &SearchResult) -> String {
     let file_path = Path::new(&block1.file);
     let file_result = File::open(file_path);
     let file_content_available = file_result.is_ok();
-    let _reader = file_result.map(|file| BufReader::new(file)).ok(); // Used for debugging purposes only
+    let _reader = file_result.map(BufReader::new).ok(); // Used for debugging purposes only
 
     if debug_mode {
         println!(

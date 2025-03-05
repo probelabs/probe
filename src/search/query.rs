@@ -2,70 +2,6 @@ use crate::ranking;
 use itertools::Itertools;
 use std::collections::HashSet;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    include!("query_tests.rs");
-
-    #[test]
-    fn test_grouped_patterns() {
-        // Test with "ip" and "whitelisting"
-        let term_pairs = vec![
-            ("ip".to_string(), "ip".to_string()),
-            ("whitelisting".to_string(), "whitelist".to_string()),
-        ];
-
-        let patterns = create_term_patterns(&term_pairs);
-
-        // Print the patterns for inspection
-        println!("Generated patterns:");
-        for (pattern, indices) in &patterns {
-            println!("Pattern: {:?}, Indices: {:?}", pattern, indices);
-        }
-
-        // Verify we have the expected number of patterns
-        // 1 pattern for each term (with combined boundaries) + 2 patterns for combinations
-        // (one for each order of terms)
-        assert_eq!(patterns.len(), 4);
-
-        // Verify the first pattern is for "ip" with both boundaries
-        let ip_pattern = patterns
-            .iter()
-            .find(|(_, indices)| indices.len() == 1 && indices.contains(&0));
-        assert!(ip_pattern.is_some());
-        let (ip_pattern, _) = ip_pattern.unwrap();
-        assert!(ip_pattern.contains("\\bip|ip\\b"));
-
-        // Verify the second pattern is for "whitelisting|whitelist" with both boundaries
-        let whitelist_pattern = patterns
-            .iter()
-            .find(|(_, indices)| indices.len() == 1 && indices.contains(&1));
-        assert!(whitelist_pattern.is_some());
-        let (whitelist_pattern, _) = whitelist_pattern.unwrap();
-        assert!(whitelist_pattern.contains("(whitelisting|whitelist)"));
-
-        // Verify there are combination patterns
-        let combo_patterns: Vec<_> = patterns
-            .iter()
-            .filter(|(_, indices)| indices.len() == 2)
-            .collect();
-        assert_eq!(combo_patterns.len(), 2);
-
-        // Check that one combination has "ipwhitelisting|ipwhitelist"
-        let has_ip_first = combo_patterns.iter().any(|(pattern, _)| {
-            pattern.contains("ipwhitelisting") && pattern.contains("ipwhitelist")
-        });
-        assert!(has_ip_first);
-
-        // Check that one combination has "whitelistingip|whitelistip"
-        let has_whitelist_first = combo_patterns.iter().any(|(pattern, _)| {
-            pattern.contains("whitelistingip") && pattern.contains("whitelistip")
-        });
-        assert!(has_whitelist_first);
-    }
-}
-
 /// Preprocesses a query into original and stemmed term pairs
 /// When exact is true, splits only on whitespace and skips stemming/stopword removal
 /// When exact is false, uses stemming/stopword logic but splits primarily on whitespace
@@ -197,4 +133,66 @@ pub fn create_term_patterns(term_pairs: &[(String, String)]) -> Vec<(String, Has
     }
 
     patterns
+}
+
+#[cfg(test)]
+mod tests {
+    include!("query_tests.rs");
+
+    #[test]
+    fn test_grouped_patterns() {
+        // Test with "ip" and "whitelisting"
+        let term_pairs = vec![
+            ("ip".to_string(), "ip".to_string()),
+            ("whitelisting".to_string(), "whitelist".to_string()),
+        ];
+
+        let patterns = create_term_patterns(&term_pairs);
+
+        // Print the patterns for inspection
+        println!("Generated patterns:");
+        for (pattern, indices) in &patterns {
+            println!("Pattern: {:?}, Indices: {:?}", pattern, indices);
+        }
+
+        // Verify we have the expected number of patterns
+        // 1 pattern for each term (with combined boundaries) + 2 patterns for combinations
+        // (one for each order of terms)
+        assert_eq!(patterns.len(), 4);
+
+        // Verify the first pattern is for "ip" with both boundaries
+        let ip_pattern = patterns
+            .iter()
+            .find(|(_, indices)| indices.len() == 1 && indices.contains(&0));
+        assert!(ip_pattern.is_some());
+        let (ip_pattern, _) = ip_pattern.unwrap();
+        assert!(ip_pattern.contains("\\bip|ip\\b"));
+
+        // Verify the second pattern is for "whitelisting|whitelist" with both boundaries
+        let whitelist_pattern = patterns
+            .iter()
+            .find(|(_, indices)| indices.len() == 1 && indices.contains(&1));
+        assert!(whitelist_pattern.is_some());
+        let (whitelist_pattern, _) = whitelist_pattern.unwrap();
+        assert!(whitelist_pattern.contains("(whitelisting|whitelist)"));
+
+        // Verify there are combination patterns
+        let combo_patterns: Vec<_> = patterns
+            .iter()
+            .filter(|(_, indices)| indices.len() == 2)
+            .collect();
+        assert_eq!(combo_patterns.len(), 2);
+
+        // Check that one combination has "ipwhitelisting|ipwhitelist"
+        let has_ip_first = combo_patterns.iter().any(|(pattern, _)| {
+            pattern.contains("ipwhitelisting") && pattern.contains("ipwhitelist")
+        });
+        assert!(has_ip_first);
+
+        // Check that one combination has "whitelistingip|whitelistip"
+        let has_whitelist_first = combo_patterns.iter().any(|(pattern, _)| {
+            pattern.contains("whitelistingip") && pattern.contains("whitelistip")
+        });
+        assert!(has_whitelist_first);
+    }
 }

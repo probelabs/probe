@@ -4,6 +4,12 @@ use tree_sitter::{Language as TSLanguage, Node};
 /// Implementation of LanguageImpl for Python
 pub struct PythonLanguage;
 
+impl Default for PythonLanguage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PythonLanguage {
     pub fn new() -> Self {
         PythonLanguage

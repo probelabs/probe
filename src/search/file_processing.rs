@@ -505,7 +505,7 @@ pub fn process_file_with_results(
             };
 
             // Determine a better node type for the fallback context by analyzing the content
-            let node_type = determine_fallback_node_type(&lines[line_num - 1], Some(extension));
+            let node_type = determine_fallback_node_type(lines[line_num - 1], Some(extension));
 
             if debug_mode {
                 println!(
@@ -596,7 +596,7 @@ pub fn process_file_with_results(
                 results.push(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (context_start, context_end),
-                    node_type: node_type,
+                    node_type,
                     code: context_code.clone(), // Clone context_code here to avoid the move
                     matched_by_filename: None,
                     rank: None,

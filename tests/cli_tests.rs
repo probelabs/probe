@@ -47,13 +47,11 @@ fn test_cli_basic_search() {
 
     // Run the CLI with basic search
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--",
-            "--path",
-            temp_dir.path().to_str().unwrap(),
-            "--query",
             "search",
+            temp_dir.path().to_str().unwrap(),
         ])
         .output()
         .expect("Failed to execute command");
@@ -88,13 +86,11 @@ fn test_cli_files_only() {
 
     // Run the CLI with files-only option
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--",
-            "--path",
-            temp_dir.path().to_str().unwrap(),
-            "--query",
             "search",
+            temp_dir.path().to_str().unwrap(),
             "--files-only",
         ])
         .output()
@@ -147,13 +143,11 @@ fn test_cli_include_filenames() {
 
     // Run the CLI with include-filenames option
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--",
-            "--path",
-            temp_dir.path().to_str().unwrap(),
-            "--query",
             "search",
+            temp_dir.path().to_str().unwrap(),
             "--include-filenames",
         ])
         .output()
@@ -185,13 +179,11 @@ fn test_cli_reranker() {
 
     // Run the CLI with tfidf reranker
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--",
-            "--path",
-            temp_dir.path().to_str().unwrap(),
-            "--query",
             "search",
+            temp_dir.path().to_str().unwrap(),
             "--reranker",
             "tfidf",
         ])
@@ -224,13 +216,11 @@ fn test_cli_default_frequency_search() {
 
     // Run the CLI with default settings (frequency search should be enabled by default)
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--",
-            "--path",
-            temp_dir.path().to_str().unwrap(),
-            "--query",
             "search",
+            temp_dir.path().to_str().unwrap(),
         ])
         .output()
         .expect("Failed to execute command");
@@ -261,13 +251,11 @@ fn test_cli_exact_search() {
 
     // Run the CLI with exact search option
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--",
-            "--path",
-            temp_dir.path().to_str().unwrap(),
-            "--query",
             "search",
+            temp_dir.path().to_str().unwrap(),
             "--exact",
         ])
         .output()
@@ -299,13 +287,11 @@ fn test_cli_custom_ignores() {
 
     // Run the CLI with custom ignore pattern
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--",
-            "--path",
-            temp_dir.path().to_str().unwrap(),
-            "--query",
             "search",
+            temp_dir.path().to_str().unwrap(),
             "--ignore",
             "*.js",
         ])
@@ -349,13 +335,11 @@ fn test_cli_max_results() {
 
     // Run the CLI with max results limit
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--",
-            "--path",
-            temp_dir.path().to_str().unwrap(),
-            "--query",
             "search",
+            temp_dir.path().to_str().unwrap(),
             "--max-results",
             "1",
             "--files-only", // Use files-only mode to simplify results

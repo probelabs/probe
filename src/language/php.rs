@@ -4,6 +4,12 @@ use tree_sitter::{Language as TSLanguage, Node};
 /// Implementation of LanguageImpl for PHP
 pub struct PhpLanguage;
 
+impl Default for PhpLanguage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PhpLanguage {
     pub fn new() -> Self {
         PhpLanguage

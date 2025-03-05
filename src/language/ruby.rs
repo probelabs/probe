@@ -4,6 +4,12 @@ use tree_sitter::{Language as TSLanguage, Node};
 /// Implementation of LanguageImpl for Ruby
 pub struct RubyLanguage;
 
+impl Default for RubyLanguage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RubyLanguage {
     pub fn new() -> Self {
         RubyLanguage

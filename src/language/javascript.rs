@@ -4,6 +4,12 @@ use tree_sitter::{Language as TSLanguage, Node};
 /// Implementation of LanguageImpl for JavaScript
 pub struct JavaScriptLanguage;
 
+impl Default for JavaScriptLanguage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JavaScriptLanguage {
     pub fn new() -> Self {
         JavaScriptLanguage

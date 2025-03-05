@@ -2,6 +2,7 @@
 // using tree-sitter and extracting code blocks.
 
 // Import submodules
+pub mod block_handling;
 pub mod common;
 pub mod factory;
 pub mod language_trait;
