@@ -201,40 +201,42 @@ type DatasourceResponse struct {
 
     // Create a set with the line number of the comment
     let mut line_numbers = HashSet::new();
-    line_numbers.insert(5); // Line with the comment
+    line_numbers.insert(5); // Try the second comment line instead
 
+    // Enable debug mode for this test
+    std::env::set_var("DEBUG", "1");
+    
     // Parse the file for code blocks
     let blocks = parse_file_for_code_blocks(code, "go", &line_numbers, true, None)?;
+    
+    println!("Found {} blocks:", blocks.len());
+    for (i, block) in blocks.iter().enumerate() {
+        println!("Block {}: type={}, lines={}-{}",
+                 i, block.node_type, block.start_row + 1, block.end_row + 1);
+    }
 
-    // We should have exactly 2 blocks: the comment and the struct
+    // We should have exactly 1 block: the merged comment and struct
     assert_eq!(
         blocks.len(),
-        2,
-        "Expected exactly 2 blocks, got {}",
+        1,
+        "Expected exactly 1 block, got {}",
         blocks.len()
     );
 
-    // First block should be the comment
+    // The block should be a type_declaration (the comment is merged with it)
     assert_eq!(
-        blocks[0].node_type, "comment",
-        "First block should be a comment"
-    );
-    assert_eq!(blocks[0].start_row + 1, 5, "Comment should start at line 5");
-
-    // Second block should be the type declaration
-    assert_eq!(
-        blocks[1].node_type, "type_declaration",
-        "Second block should be a type_declaration"
+        blocks[0].node_type, "type_declaration",
+        "Block should be a type_declaration"
     );
     assert_eq!(
-        blocks[1].start_row + 1,
-        6,
-        "Type declaration should start at line 6"
+        blocks[0].start_row + 1,
+        5,  // Should start at the second comment line
+        "Block should start at line 5 (second comment line)"
     );
     assert_eq!(
-        blocks[1].end_row + 1,
+        blocks[0].end_row + 1,
         12,
-        "Type declaration should end at line 12"
+        "Block should end at line 12"
     );
 
     Ok(())

@@ -507,6 +507,8 @@ pub fn parse_file_for_code_blocks(
                         );
                     }
 
+                    // We've added the comment as part of a merged block
+
                     // Skip adding the individual comment block since it's now part of the merged block
                     continue;
                 }

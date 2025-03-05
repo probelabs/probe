@@ -12,9 +12,31 @@ This Rust tool combines ripgrep's searching capabilities with tree-sitter's code
 
 ## Installation
 
-### Using Pre-built Binaries
+### Quick Installation
 
-You can download pre-built binaries for your platform from the [GitHub Releases](https://github.com/yourusername/probe/releases) page.
+You can install Probe with a single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leonidbugaev/code-search/main/install.sh | bash
+```
+
+This command downloads and executes the installation script, which automatically:
+
+1. Detects your operating system and architecture
+2. Fetches the latest release from GitHub
+3. Downloads the appropriate binary for your system
+4. Verifies the checksum for security
+5. Installs the binary to `/usr/local/bin`
+
+### Requirements
+
+- **Operating Systems**: macOS, Linux, or Windows (with MSYS/Git Bash/WSL)
+- **Architectures**: x86_64 (all platforms) or ARM64 (macOS only)
+- **Tools**: curl, bash, and either sudo access or root privileges
+
+### Manual Installation
+
+You can download pre-built binaries for your platform from the [GitHub Releases](https://github.com/leonidbugaev/code-search/releases) page.
 
 1. Download the appropriate binary for your platform:
    - `probe-x86_64-linux.tar.gz` for Linux (x86_64)
@@ -49,8 +71,8 @@ You can download pre-built binaries for your platform from the [GitHub Releases]
 
 2. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/probe.git
-   cd probe
+   git clone https://github.com/leonidbugaev/code-search.git
+   cd code-search
    ```
 
 3. Build the project:
@@ -62,6 +84,31 @@ You can download pre-built binaries for your platform from the [GitHub Releases]
    ```bash
    cargo install --path .
    ```
+
+### Verifying the Installation
+
+After installation, verify that Probe is working correctly:
+
+```bash
+probe --version
+```
+
+### Troubleshooting
+
+If you encounter any issues during installation:
+
+- Ensure you have the necessary permissions to write to `/usr/local/bin`
+- Check that your system meets the requirements
+- Try the manual installation method
+- Report issues on the [GitHub repository](https://github.com/leonidbugaev/code-search/issues)
+
+### Uninstalling
+
+To uninstall Probe:
+
+```bash
+sudo rm /usr/local/bin/probe
+```
 
 ## Releasing New Versions
 
