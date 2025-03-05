@@ -53,7 +53,9 @@ pub fn is_test_file(path: &Path) -> bool {
         }
 
         // C/C++: test_*.c, *_test.c, *_tests.c, test_*.cpp, *_test.cpp, *_tests.cpp
-        if (file_name.starts_with("test_") || file_name.ends_with("_test.c") || file_name.ends_with("_tests.c"))
+        if (file_name.starts_with("test_")
+            || file_name.ends_with("_test.c")
+            || file_name.ends_with("_tests.c"))
             && (file_name.ends_with(".c") || file_name.ends_with(".h"))
             || (file_name.starts_with("test_")
                 || file_name.ends_with("_test.cpp")
@@ -71,7 +73,9 @@ pub fn is_test_file(path: &Path) -> bool {
         }
 
         // Java: *Test.java, Test*.java
-        if file_name.ends_with("Test.java") || file_name.starts_with("Test") && file_name.ends_with(".java") {
+        if file_name.ends_with("Test.java")
+            || file_name.starts_with("Test") && file_name.ends_with(".java")
+        {
             if _debug_mode {
                 println!("DEBUG: Test file detected (Java pattern): {}", file_name);
             }
@@ -90,7 +94,9 @@ pub fn is_test_file(path: &Path) -> bool {
         }
 
         // PHP: *Test.php, Test*.php
-        if file_name.ends_with("Test.php") || file_name.starts_with("Test") && file_name.ends_with(".php") {
+        if file_name.ends_with("Test.php")
+            || file_name.starts_with("Test") && file_name.ends_with(".php")
+        {
             if _debug_mode {
                 println!("DEBUG: Test file detected (PHP pattern): {}", file_name);
             }
@@ -110,11 +116,13 @@ pub fn is_test_file(path: &Path) -> bool {
         || path_str.contains("/__test__/")
     {
         if _debug_mode {
-            println!("DEBUG: Test file detected (in test directory): {}", path_str);
+            println!(
+                "DEBUG: Test file detected (in test directory): {}",
+                path_str
+            );
         }
         return true;
     }
 
     false
 }
-

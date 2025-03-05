@@ -1,5 +1,5 @@
-use tree_sitter::{Language as TSLanguage, Node};
 use super::language_trait::LanguageImpl;
+use tree_sitter::{Language as TSLanguage, Node};
 
 /// Implementation of LanguageImpl for Python
 pub struct PythonLanguage;
@@ -14,19 +14,19 @@ impl LanguageImpl for PythonLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
         tree_sitter_python::language()
     }
-    
+
     fn get_extension(&self) -> &'static str {
         "py"
     }
-    
+
     fn is_acceptable_parent(&self, node: &Node) -> bool {
         matches!(node.kind(), "function_definition" | "class_definition")
     }
-    
+
     fn is_test_node(&self, node: &Node, source: &[u8]) -> bool {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
         let node_type = node.kind();
-        
+
         // Python: Check function_definition nodes with names starting with test_
         if node_type == "function_definition" {
             let mut cursor = node.walk();
@@ -42,7 +42,7 @@ impl LanguageImpl for PythonLanguage {
                 }
             }
         }
-        
+
         false
     }
 }

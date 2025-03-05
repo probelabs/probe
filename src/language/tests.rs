@@ -1,4 +1,4 @@
-use super::{get_language, merge_code_blocks, find_related_code_node, find_code_structure};
+use super::{find_code_structure, find_related_code_node, get_language, merge_code_blocks};
 use crate::language::factory::get_language_impl;
 use crate::language::language_trait::LanguageImpl;
 use crate::language::parser::parse_file_for_code_blocks;
@@ -139,7 +139,7 @@ fn test_merge_code_blocks_no_overlap() {
         },
         CodeBlock {
             start_row: 15, // Changed from 10 to 15 to ensure gap > 10 lines
-            end_row: 30, // Changed from 15 to 30
+            end_row: 30,   // Changed from 15 to 30
             start_byte: 100,
             end_byte: 150,
             node_type: "impl_block".to_string(),
@@ -225,10 +225,10 @@ fn test_merge_code_blocks_struct_type() {
 #[test]
 fn test_find_code_structure_nested_structs() {
     // Import the function we're testing
-    use crate::language::parser::find_code_structure;
     use crate::language::common::find_most_specific_node;
+    use crate::language::parser::find_code_structure;
     use tree_sitter::Parser as TSParser;
-    
+
     // Enable debug mode for this test
     std::env::set_var("DEBUG", "1");
 
@@ -258,7 +258,7 @@ type ModelPriceInput struct {
     parser.set_language(language).unwrap();
     let tree = parser.parse(go_code, None).unwrap();
     let root_node = tree.root_node();
-    
+
     // Debug: Print the full AST structure to understand the parsing
     println!("AST structure:");
     print_ast_structure(root_node, 0);
@@ -266,46 +266,49 @@ type ModelPriceInput struct {
     // Test case 1: Finding the parent for a line inside the innermost struct
     // This should return the outermost struct (ModelPriceInput)
     let line = 10; // Line with CPT field
-    
+
     // Debug: Find most specific node first
     let specific_node = find_most_specific_node(root_node, line);
-    println!("Most specific node for line {}: type='{}', lines={}-{}", 
-        line, 
-        specific_node.kind(), 
-        specific_node.start_position().row + 1, 
+    println!(
+        "Most specific node for line {}: type='{}', lines={}-{}",
+        line,
+        specific_node.kind(),
+        specific_node.start_position().row + 1,
         specific_node.end_position().row + 1
     );
-    
+
     // Debug: Check parent chain
     let mut current = specific_node;
     let mut parent_level = 0;
     while let Some(parent) = current.parent() {
-        println!("Parent level {}: type='{}', lines={}-{}", 
-            parent_level, 
+        println!(
+            "Parent level {}: type='{}', lines={}-{}",
+            parent_level,
             parent.kind(),
-            parent.start_position().row + 1, 
+            parent.start_position().row + 1,
             parent.end_position().row + 1
         );
         current = parent;
         parent_level += 1;
     }
-    
+
     let result = find_code_structure(root_node, line, "go");
-    
+
     assert!(result.is_some());
     let node = result.unwrap();
-    
+
     // Print the result node info
-    println!("Result node: type='{}', lines={}-{}", 
+    println!(
+        "Result node: type='{}', lines={}-{}",
         node.kind(),
-        node.start_position().row + 1, 
+        node.start_position().row + 1,
         node.end_position().row + 1
     );
-    
+
     // Verify we got the outermost struct and not an inner one
     // The start line should be 4 (where ModelPriceInput struct begins)
     assert_eq!(node.start_position().row + 1, 4);
-    
+
     // Reset debug mode
     std::env::remove_var("DEBUG");
 }
@@ -314,7 +317,7 @@ type ModelPriceInput struct {
 fn test_find_code_structure_nested_structs_in_function() {
     // Import tree-sitter Parser
     use tree_sitter::Parser as TSParser;
-    
+
     // Enable debug mode for this test
     std::env::set_var("DEBUG", "1");
 
@@ -344,7 +347,7 @@ func HandleNotFound(c *gin.Context) {
     parser.set_language(language).unwrap();
     let tree = parser.parse(go_code, None).unwrap();
     let root_node = tree.root_node();
-    
+
     // Debug: Print the full AST structure
     println!("AST structure for nested struct in function:");
     print_ast_structure(root_node, 0);
@@ -352,22 +355,23 @@ func HandleNotFound(c *gin.Context) {
     // Test case: Finding the parent for a line inside the nested struct
     // This should return the function as the parent
     let line = 12; // Line with the nested struct field
-    
+
     let result = find_code_structure(root_node, line, "go");
-    
+
     assert!(result.is_some());
     let node = result.unwrap();
-    
+
     // Print the result node info
-    println!("Result node: type='{}', lines={}-{}", 
+    println!(
+        "Result node: type='{}', lines={}-{}",
         node.kind(),
-        node.start_position().row + 1, 
+        node.start_position().row + 1,
         node.end_position().row + 1
     );
-    
+
     // Verify we got the function declaration as parent
     assert_eq!(node.kind(), "function_declaration");
-    
+
     // Reset debug mode
     std::env::remove_var("DEBUG");
 }
@@ -376,7 +380,7 @@ func HandleNotFound(c *gin.Context) {
 fn test_direct_find_related_code_node() {
     // Enable debug mode for this test
     std::env::set_var("DEBUG", "1");
-    
+
     // Test code with comments before functions
     let rust_code = r#"
 // This is a test function
@@ -394,40 +398,45 @@ fn test_function() {
 
     println!("AST Structure for simple function:");
     print_ast_structure(root_node, 0);
-    
+
     // Get the Rust language implementation
     let rust_impl = get_language_impl("rs").unwrap();
-    
+
     // Examine all nodes to find comment and function
     println!("Examining all nodes:");
     let mut cursor = root_node.walk();
     for node in root_node.children(&mut cursor) {
-        println!("Node: type='{}', text='{}', lines={}-{}", 
+        println!(
+            "Node: type='{}', text='{}', lines={}-{}",
             node.kind(),
             node.utf8_text(rust_code.as_bytes()).unwrap_or(""),
             node.start_position().row + 1,
             node.end_position().row + 1
         );
-        
+
         if node.kind() == "line_comment" {
             println!("Found line_comment node");
-            
+
             // Try to get the next sibling
             if let Some(next_sibling) = node.next_sibling() {
                 println!("  Direct next sibling: {}", next_sibling.kind());
-                
+
                 // Check if it's an acceptable parent
                 if rust_impl.is_acceptable_parent(&next_sibling) {
                     println!("  Direct next sibling IS an acceptable parent");
                 } else {
                     println!("  Direct next sibling is NOT an acceptable parent");
                 }
-                
+
                 // Try the find_related_code_node function
                 println!("DEBUG: Calling find_related_code_node directly:");
                 if let Some(related) = find_related_code_node(node, "rs") {
                     println!("Found related node: {}", related.kind());
-                    assert_eq!(related.kind(), "function_item", "Related node should be function_item");
+                    assert_eq!(
+                        related.kind(),
+                        "function_item",
+                        "Related node should be function_item"
+                    );
                 } else {
                     println!("Failed to find related node");
                     println!("Debugging why find_related_code_node failed for a simple case");
@@ -437,7 +446,7 @@ fn test_function() {
             }
         }
     }
-    
+
     // Clean up
     std::env::remove_var("DEBUG");
 }
@@ -446,7 +455,7 @@ fn test_function() {
 fn test_find_related_code_node() {
     // Enable debug mode for this test
     std::env::set_var("DEBUG", "1");
-    
+
     // Test code with comments before functions and structs
     let rust_code = r#"
 // This is a test function that should be linked to the function
@@ -484,42 +493,46 @@ impl TestStruct {
 
     println!("AST Structure:");
     print_ast_structure(root_node, 0);
-    
+
     // Get the Rust language implementation
     let rust_impl = get_language_impl("rs").unwrap();
     println!("Testing with Rust language implementation");
 
     // Map to store comment line to related node type mapping
     let mut line_to_node_type = std::collections::HashMap::new();
-    
+
     // Recursive function to process all nodes
     fn process_nodes<'a>(
-        node: tree_sitter::Node<'a>, 
+        node: tree_sitter::Node<'a>,
         rust_code: &str,
         rust_impl: &Box<dyn LanguageImpl>,
-        line_to_node_type: &mut std::collections::HashMap<usize, String>
+        line_to_node_type: &mut std::collections::HashMap<usize, String>,
     ) {
         // Process current node
         let node_type = node.kind();
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
-        
-        println!("Examining node: type='{}', lines={}-{}", node_type, start_line, end_line);
-        
+
+        println!(
+            "Examining node: type='{}', lines={}-{}",
+            node_type, start_line, end_line
+        );
+
         // Check if this is a comment node
         if node_type == "line_comment" || node_type == "block_comment" {
             let line = start_line;
             let comment_text = node.utf8_text(rust_code.as_bytes()).unwrap_or("");
             println!("Found comment at line {}: {}", line, comment_text);
-            
+
             // Check for next sibling
             if let Some(next_sibling) = node.next_sibling() {
-                println!("  Direct next sibling: type='{}', lines={}-{}", 
+                println!(
+                    "  Direct next sibling: type='{}', lines={}-{}",
                     next_sibling.kind(),
                     next_sibling.start_position().row + 1,
                     next_sibling.end_position().row + 1
                 );
-                
+
                 // Check if it's an acceptable parent
                 if rust_impl.is_acceptable_parent(&next_sibling) {
                     println!("  Direct next sibling IS an acceptable parent");
@@ -529,51 +542,64 @@ impl TestStruct {
             } else {
                 println!("  No direct next sibling found");
             }
-            
+
             // Call the function directly to see debug output
             println!("  Calling find_related_code_node directly:");
             let related = find_related_code_node(node, "rs");
-            
+
             match &related {
                 Some(related_node) => {
-                    println!("  Found related node: type='{}', lines={}-{}", 
+                    println!(
+                        "  Found related node: type='{}', lines={}-{}",
                         related_node.kind(),
                         related_node.start_position().row + 1,
                         related_node.end_position().row + 1
                     );
-                    
+
                     // Add mapping for test validation
                     line_to_node_type.insert(line, related_node.kind().to_string());
-                },
+                }
                 None => {
                     println!("  Failed to find related node!");
                     println!("  DEBUG: Related node is None for comment at line {}", line);
                 }
             }
         }
-        
+
         // Process child nodes
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             process_nodes(child, rust_code, rust_impl, line_to_node_type);
         }
     }
-    
+
     // Process all nodes recursively
     process_nodes(root_node, rust_code, &rust_impl, &mut line_to_node_type);
-    
+
     println!("Line to node type map: {:?}", line_to_node_type);
-    
+
     // Check expected mappings (comment line to node type)
-    assert_eq!(line_to_node_type.get(&2), Some(&"function_item".to_string()), 
-        "Comment before test_function should be linked to function_item");
-    assert_eq!(line_to_node_type.get(&7), Some(&"struct_item".to_string()), 
-        "Comment before TestStruct should be linked to struct_item");
-    assert_eq!(line_to_node_type.get(&13), Some(&"impl_item".to_string()), 
-        "Multi-line comment should be linked to impl_item");
-    assert_eq!(line_to_node_type.get(&18), Some(&"function_item".to_string()), 
-        "Comment inside impl (method comment) should be linked to function_item");
-    
+    assert_eq!(
+        line_to_node_type.get(&2),
+        Some(&"function_item".to_string()),
+        "Comment before test_function should be linked to function_item"
+    );
+    assert_eq!(
+        line_to_node_type.get(&7),
+        Some(&"struct_item".to_string()),
+        "Comment before TestStruct should be linked to struct_item"
+    );
+    assert_eq!(
+        line_to_node_type.get(&13),
+        Some(&"impl_item".to_string()),
+        "Multi-line comment should be linked to impl_item"
+    );
+    assert_eq!(
+        line_to_node_type.get(&18),
+        Some(&"function_item".to_string()),
+        "Comment inside impl (method comment) should be linked to function_item"
+    );
+
     // Clean up
     std::env::remove_var("DEBUG");
 }
@@ -591,19 +617,19 @@ fn test_function() {
     // Create a HashSet of line numbers
     let mut line_numbers = HashSet::new();
     line_numbers.insert(2); // The comment line
-    
+
     // Parse the file for code blocks
     let result = parse_file_for_code_blocks(rust_code, "rs", &line_numbers, true, None).unwrap();
-    
+
     // We should get two code blocks: one for the comment itself and one for the related function
     assert_eq!(result.len(), 2);
-    
+
     // First block should be the comment
     assert_eq!(result[0].node_type, "line_comment");
-    
+
     // Second block should be the function
     assert_eq!(result[1].node_type, "function_item");
-    
+
     // Verify the start rows of both blocks
     assert_eq!(result[0].start_row, 1); // Line 2 (0-indexed) is the comment line
     assert_eq!(result[1].start_row, 2); // Line 3 (0-indexed) is the function line
@@ -612,13 +638,14 @@ fn test_function() {
 // Helper function to print the AST structure
 fn print_ast_structure(node: tree_sitter::Node, depth: usize) {
     let indent = " ".repeat(depth * 2);
-    println!("{}{} ({}-{})", 
-        indent, 
-        node.kind(), 
-        node.start_position().row + 1, 
+    println!(
+        "{}{} ({}-{})",
+        indent,
+        node.kind(),
+        node.start_position().row + 1,
         node.end_position().row + 1
     );
-    
+
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         print_ast_structure(child, depth + 1);

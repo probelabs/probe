@@ -1,5 +1,5 @@
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 use tempfile::TempDir;
 
 use probe::models::SearchResult;
@@ -13,7 +13,9 @@ fn test_merge_ranked_blocks() {
         file: "test_file.rs".to_string(),
         lines: (1, 5),
         node_type: "function".to_string(),
-        code: "fn test_function() {\n    let x = 1;\n    let y = 2;\n    println!(\"{}\", x + y);\n}".to_string(),
+        code:
+            "fn test_function() {\n    let x = 1;\n    let y = 2;\n    println!(\"{}\", x + y);\n}"
+                .to_string(),
         matched_by_filename: None,
         rank: Some(1),
         score: Some(0.9),
@@ -84,40 +86,72 @@ fn test_merge_ranked_blocks() {
 
     // Create a vector with all blocks
     let blocks = vec![block1, block2, block3];
-    
+
     // Call the merge_ranked_blocks function
     let merged_blocks = merge_ranked_blocks(blocks, Some(5));
-    
+
     // Assert that we now have 2 blocks (the first two merged, the third separate)
-    assert_eq!(merged_blocks.len(), 2, "Blocks should be merged from 3 to 2");
-    
+    assert_eq!(
+        merged_blocks.len(),
+        2,
+        "Blocks should be merged from 3 to 2"
+    );
+
     // Find the merged block from test_file.rs and the standalone block from other_file.rs
-    let test_file_blocks: Vec<&SearchResult> = merged_blocks.iter()
+    let test_file_blocks: Vec<&SearchResult> = merged_blocks
+        .iter()
         .filter(|b| b.file == "test_file.rs")
         .collect();
-    
-    let other_file_blocks: Vec<&SearchResult> = merged_blocks.iter()
+
+    let other_file_blocks: Vec<&SearchResult> = merged_blocks
+        .iter()
         .filter(|b| b.file == "other_file.rs")
         .collect();
-    
+
     // Check that we have one block for each file
-    assert_eq!(test_file_blocks.len(), 1, "Should have 1 merged block for test_file.rs");
-    assert_eq!(other_file_blocks.len(), 1, "Should have 1 block for other_file.rs");
-    
+    assert_eq!(
+        test_file_blocks.len(),
+        1,
+        "Should have 1 merged block for test_file.rs"
+    );
+    assert_eq!(
+        other_file_blocks.len(),
+        1,
+        "Should have 1 block for other_file.rs"
+    );
+
     // Check that the first block is merged correctly
     let merged_block = test_file_blocks[0];
-    assert_eq!(merged_block.lines, (1, 10), "Lines should be merged from (1, 5) and (6, 10) to (1, 10)");
-    
+    assert_eq!(
+        merged_block.lines,
+        (1, 10),
+        "Lines should be merged from (1, 5) and (6, 10) to (1, 10)"
+    );
+
     // Check that the score is the maximum of the two blocks
-    assert_eq!(merged_block.score, Some(0.9), "Merged score should be the maximum of the two blocks");
-    
+    assert_eq!(
+        merged_block.score,
+        Some(0.9),
+        "Merged score should be the maximum of the two blocks"
+    );
+
     // Check that the term statistics are combined correctly
-    assert!(merged_block.block_unique_terms.unwrap() >= 2, "Merged block should have at least 2 unique terms");
-    assert!(merged_block.block_total_matches.unwrap() >= 3, "Merged block should have at least 3 total matches");
-    
+    assert!(
+        merged_block.block_unique_terms.unwrap() >= 2,
+        "Merged block should have at least 2 unique terms"
+    );
+    assert!(
+        merged_block.block_total_matches.unwrap() >= 3,
+        "Merged block should have at least 3 total matches"
+    );
+
     // Check that the third block is preserved as is
     let preserved_block = other_file_blocks[0];
-    assert_eq!(preserved_block.lines, (1, 5), "Unmerged block should preserve its line range");
+    assert_eq!(
+        preserved_block.lines,
+        (1, 5),
+        "Unmerged block should preserve its line range"
+    );
 }
 
 #[test]
@@ -125,41 +159,48 @@ fn test_integration_with_search_flow() {
     // Create a temporary directory for testing
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
-    
+
     // Create test files with overlapping code blocks
     create_test_files(temp_path);
-    
+
     // Run a search that should produce multiple overlapping blocks
     let search_results = perform_probe(
         temp_path,
         &["function test".to_string()],
-        false,  // files_only
-        &[],    // custom_ignores
-        true,   // include_filenames
+        false,      // files_only
+        &[],        // custom_ignores
+        true,       // include_filenames
         "combined", // reranker
-        false,  // frequency_search
-        None,   // max_results
-        None,   // max_bytes
-        None,   // max_tokens
-        true,   // allow_tests
-        true,   // any_term
-        false,  // exact
-        true,   // merge_blocks
-        Some(5), // merge_threshold
-    ).unwrap();
-    
+        false,      // frequency_search
+        None,       // max_results
+        None,       // max_bytes
+        None,       // max_tokens
+        true,       // allow_tests
+        true,       // any_term
+        false,      // exact
+        true,       // merge_blocks
+        Some(5),    // merge_threshold
+    )
+    .unwrap();
+
     // Check that we got merged results
-    assert!(!search_results.results.is_empty(), "Search should return results");
-    
+    assert!(
+        !search_results.results.is_empty(),
+        "Search should return results"
+    );
+
     // Verify that blocks from the same file are merged
     let mut file_count = std::collections::HashMap::new();
     for result in &search_results.results {
         *file_count.entry(result.file.clone()).or_insert(0) += 1;
     }
-    
+
     // Each file should have at most one result after merging
     for (_file, count) in file_count {
-        assert!(count <= 1, "Each file should have at most one result after merging");
+        assert!(
+            count <= 1,
+            "Each file should have at most one result after merging"
+        );
     }
 }
 
@@ -189,7 +230,7 @@ fn another_function() {
     println!("Not a test: {}", z);
 }
 "#;
-    
+
     // Create a file with non-adjacent blocks
     let file2_path = temp_dir.join("non_adjacent.rs");
     let file2_content = r#"
@@ -211,7 +252,7 @@ fn another_test_function() {
     println!("Test result: {}", y);
 }
 "#;
-    
+
     // Write files to disk
     fs::write(file1_path, file1_content).unwrap();
     fs::write(file2_path, file2_content).unwrap();

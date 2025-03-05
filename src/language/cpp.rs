@@ -1,5 +1,5 @@
-use tree_sitter::{Language as TSLanguage, Node};
 use super::language_trait::LanguageImpl;
+use tree_sitter::{Language as TSLanguage, Node};
 
 /// Implementation of LanguageImpl for C++
 pub struct CppLanguage;
@@ -14,11 +14,11 @@ impl LanguageImpl for CppLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
         tree_sitter_cpp::language()
     }
-    
+
     fn get_extension(&self) -> &'static str {
         "cpp"
     }
-    
+
     fn is_acceptable_parent(&self, node: &Node) -> bool {
         matches!(
             node.kind(),
@@ -30,11 +30,11 @@ impl LanguageImpl for CppLanguage {
                 | "namespace_definition"
         )
     }
-    
+
     fn is_test_node(&self, node: &Node, source: &[u8]) -> bool {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
         let node_type = node.kind();
-        
+
         // C++: Check function_definition nodes with test in the name
         if node_type == "function_definition" {
             let mut cursor = node.walk();
@@ -55,7 +55,7 @@ impl LanguageImpl for CppLanguage {
                 }
             }
         }
-        
+
         false
     }
 }

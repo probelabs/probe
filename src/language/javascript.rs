@@ -1,5 +1,5 @@
-use tree_sitter::{Language as TSLanguage, Node};
 use super::language_trait::LanguageImpl;
+use tree_sitter::{Language as TSLanguage, Node};
 
 /// Implementation of LanguageImpl for JavaScript
 pub struct JavaScriptLanguage;
@@ -14,11 +14,11 @@ impl LanguageImpl for JavaScriptLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
         tree_sitter_javascript::language()
     }
-    
+
     fn get_extension(&self) -> &'static str {
         "js"
     }
-    
+
     fn is_acceptable_parent(&self, node: &Node) -> bool {
         matches!(
             node.kind(),
@@ -32,29 +32,34 @@ impl LanguageImpl for JavaScriptLanguage {
                 | "lexical_declaration"
         )
     }
-    
+
     fn is_test_node(&self, node: &Node, source: &[u8]) -> bool {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
         let node_type = node.kind();
-        
+
         // JavaScript: Check for describe/it/test blocks
-        if node_type == "function_declaration" || node_type == "method_definition" || node_type == "arrow_function" {
+        if node_type == "function_declaration"
+            || node_type == "method_definition"
+            || node_type == "arrow_function"
+        {
             let mut cursor = node.walk();
-            
+
             // Try to find the function/method name
             for child in node.children(&mut cursor) {
                 if child.kind() == "identifier" {
                     let name = child.utf8_text(source).unwrap_or("");
                     if name.contains("test") || name.contains("Test") {
                         if debug_mode {
-                            println!("DEBUG: Test node detected (JavaScript): test function/method");
+                            println!(
+                                "DEBUG: Test node detected (JavaScript): test function/method"
+                            );
                         }
                         return true;
                     }
                 }
             }
         }
-        
+
         // Check for call expressions like describe(), it(), test()
         if node_type == "call_expression" {
             let mut cursor = node.walk();
@@ -70,7 +75,7 @@ impl LanguageImpl for JavaScriptLanguage {
                 }
             }
         }
-        
+
         false
     }
 }

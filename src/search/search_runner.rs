@@ -8,7 +8,10 @@ use rayon::prelude::*;
 
 use crate::models::{LimitedSearchResults, SearchResult};
 use crate::search::file_processing::{process_file_by_filename, process_file_with_results};
-use crate::search::file_search::{find_files_with_pattern, find_matching_filenames, get_filename_matched_queries, get_filename_matched_queries_compat, search_file_for_pattern};
+use crate::search::file_search::{
+    find_files_with_pattern, find_matching_filenames, get_filename_matched_queries,
+    get_filename_matched_queries_compat, search_file_for_pattern,
+};
 use crate::search::query::{create_term_patterns, preprocess_query};
 use crate::search::result_ranking::rank_search_results;
 use crate::search::search_limiter::apply_limits;
@@ -35,10 +38,10 @@ pub fn perform_probe(
     max_results: Option<usize>,
     max_bytes: Option<usize>,
     max_tokens: Option<usize>,
-    allow_tests: bool, // Parameter to control test file/node inclusion
-    any_term: bool,    // Parameter to control multi-term search behavior
-    exact: bool,       // Parameter to control exact matching (no stemming/stopwords)
-    merge_blocks: bool, // Parameter to control post-ranking block merging
+    allow_tests: bool,              // Parameter to control test file/node inclusion
+    any_term: bool,                 // Parameter to control multi-term search behavior
+    exact: bool,                    // Parameter to control exact matching (no stemming/stopwords)
+    merge_blocks: bool,             // Parameter to control post-ranking block merging
     merge_threshold: Option<usize>, // Parameter to control how many lines between blocks to merge
 ) -> Result<LimitedSearchResults> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -65,24 +68,32 @@ pub fn perform_probe(
         println!("DEBUG:   Include filenames: {}", include_filenames);
         println!("DEBUG:   Reranker: {}", reranker);
         println!("DEBUG:   Frequency search: {}", frequency_search);
-        println!("DEBUG:   Match mode: {}", if any_term { "any term" } else { "all terms" });
+        println!(
+            "DEBUG:   Match mode: {}",
+            if any_term { "any term" } else { "all terms" }
+        );
     }
 
     // If frequency-based search is enabled and we have exactly one query
     if frequency_search && queries.len() == 1 {
         if debug_mode {
-            println!("DEBUG: Using frequency-based search for query: {}", queries[0]);
+            println!(
+                "DEBUG: Using frequency-based search for query: {}",
+                queries[0]
+            );
         }
-        
+
         // Print ranking method being used
         match reranker {
             "tfidf" => println!("Using TF-IDF for ranking"),
             "bm25" => println!("Using BM25 for ranking"),
-            "hybrid" => println!("Using hybrid ranking (default - simple TF-IDF + BM25 combination)"),
+            "hybrid" => {
+                println!("Using hybrid ranking (default - simple TF-IDF + BM25 combination)")
+            }
             "hybrid2" => println!("Using hybrid2 ranking (advanced - separate ranking components)"),
             _ => println!("Using {} for ranking", reranker),
         }
-        
+
         return perform_frequency_search(
             path,
             &queries[0],
@@ -155,7 +166,11 @@ pub fn perform_probe(
         queries.len(),
         all_patterns.len(),
         path,
-        if any_term { "any term matches" } else { "all terms must match" }
+        if any_term {
+            "any term matches"
+        } else {
+            "all terms must match"
+        }
     );
 
     // Start timing file searching
@@ -171,7 +186,10 @@ pub fn perform_probe(
         let term_indices = &pattern_to_terms[pattern_idx];
         if term_indices.len() == 1 {
             let sole = *term_indices.iter().next().unwrap();
-            single_term_patterns.entry(sole).or_default().push(pattern.clone());
+            single_term_patterns
+                .entry(sole)
+                .or_default()
+                .push(pattern.clone());
         } else {
             combo_patterns.push((pattern.clone(), term_indices.clone()));
         }
@@ -186,13 +204,18 @@ pub fn perform_probe(
                 find_files_with_pattern(path, pat, custom_ignores, allow_tests)
             {
                 for file_path in matching_files {
-                    if let Ok((did_match, line_numbers)) = search_file_for_pattern(&file_path, pat, true)
+                    if let Ok((did_match, line_numbers)) =
+                        search_file_for_pattern(&file_path, pat, true)
                     {
                         if did_match {
                             let mut local = local_matches.lock().unwrap();
-                            let file_entry: &mut HashMap<usize, HashSet<usize>> = local.entry(file_path.clone()).or_default();
+                            let file_entry: &mut HashMap<usize, HashSet<usize>> =
+                                local.entry(file_path.clone()).or_default();
                             for &ti in indices {
-                                file_entry.entry(ti).or_default().extend(line_numbers.clone());
+                                file_entry
+                                    .entry(ti)
+                                    .or_default()
+                                    .extend(line_numbers.clone());
                             }
                         }
                     }
@@ -200,7 +223,10 @@ pub fn perform_probe(
             }
         });
 
-        let merged = Arc::try_unwrap(local_matches).expect("Arc error").into_inner().expect("Mutex error");
+        let merged = Arc::try_unwrap(local_matches)
+            .expect("Arc error")
+            .into_inner()
+            .expect("Mutex error");
         merged
     };
 
@@ -314,8 +340,10 @@ pub fn perform_probe(
             });
         }
         if include_filenames {
-            let found_files: HashSet<PathBuf> = results.iter().map(|r| PathBuf::from(&r.file)).collect();
-            let additional_files = find_matching_filenames(path, queries, &found_files, custom_ignores, allow_tests)?;
+            let found_files: HashSet<PathBuf> =
+                results.iter().map(|r| PathBuf::from(&r.file)).collect();
+            let additional_files =
+                find_matching_filenames(path, queries, &found_files, custom_ignores, allow_tests)?;
             for af in additional_files {
                 results.push(SearchResult {
                     file: af.to_string_lossy().to_string(),
@@ -369,11 +397,17 @@ pub fn perform_probe(
     // Build a map from file -> all matched term line sets
     let mut final_matches_by_file = HashMap::new();
     for path in all_files {
-        let content_map = matches_by_file_and_term.get(&path).cloned().unwrap_or_default();
+        let content_map = matches_by_file_and_term
+            .get(&path)
+            .cloned()
+            .unwrap_or_default();
         let content_terms: HashSet<usize> = content_map.keys().cloned().collect();
 
         // Get the filename matches
-        let filename = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+        let filename = path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
         let filename_terms = get_filename_matched_queries_compat(&filename, &queries_terms);
 
         // If any_term is true, any matched term is enough
@@ -395,7 +429,9 @@ pub fn perform_probe(
 
         let combined_set: HashSet<usize> = content_terms.union(&filename_terms).cloned().collect();
         // Compute total matches
-        let line_count = content_map.values().fold(0, |acc, lineset| acc + lineset.len());
+        let line_count = content_map
+            .values()
+            .fold(0, |acc, lineset| acc + lineset.len());
         let total_matches_count = line_count + filename_terms.len();
 
         file_stats.insert(path.clone(), (combined_set.len(), total_matches_count));
@@ -413,7 +449,7 @@ pub fn perform_probe(
 
     // Keep track of which files we've processed to avoid duplicates
     let mut processed_files = HashSet::new();
-    
+
     // Process line-based results
     for (path, (content_map, filename_terms)) in final_matches_by_file.clone() {
         processed_files.insert(path.clone());
@@ -469,7 +505,8 @@ pub fn perform_probe(
     for file_path in filename_matching_files {
         if !processed_files.contains(&file_path) {
             // Strictly matched by filename, no content matches
-            match process_file_by_filename(&file_path, &queries_terms, Some(&preprocessed_queries)) {
+            match process_file_by_filename(&file_path, &queries_terms, Some(&preprocessed_queries))
+            {
                 Ok(mut sr) => {
                     // If we had a rank or stats from earlier
                     let _file_path_str = file_path.to_string_lossy().to_string();
@@ -490,7 +527,7 @@ pub fn perform_probe(
 
     // Rank the results
     let result_ranking_start = Instant::now();
-    
+
     // Print ranking method being used
     match reranker {
         "tfidf" => println!("Using TF-IDF for ranking"),
@@ -499,26 +536,26 @@ pub fn perform_probe(
         "hybrid2" => println!("Using hybrid2 ranking (advanced - separate ranking components)"),
         _ => println!("Using {} for ranking", reranker),
     }
-    
+
     if !results.is_empty() {
         // For hybrid2, we want to ensure we have two separate ranks
         if reranker == "hybrid2" {
             // First calculate regular combined score ranks
             rank_search_results(&mut results, queries, "combined");
-            
+
             // Keep a copy of the combined score ranks
             for result in &mut results {
                 if let Some(rank) = result.rank {
                     result.combined_score_rank = Some(rank);
                 }
             }
-            
+
             // Then apply hybrid2 rankings
             rank_search_results(&mut results, queries, reranker);
         } else {
             // For other rerankers, just do the normal ranking
             rank_search_results(&mut results, queries, reranker);
-            
+
             // Set combined_score_rank to be the same as rank for consistency
             for result in &mut results {
                 if let Some(rank) = result.rank {
@@ -541,12 +578,15 @@ pub fn perform_probe(
         use crate::search::block_merging::merge_ranked_blocks;
         let original_count = limited_results.results.len();
         let merged = merge_ranked_blocks(limited_results.results, merge_threshold);
-        
+
         if debug_mode {
-            println!("Post-ranking block merging: {} blocks merged into {} blocks", 
-                     original_count, merged.len());
+            println!(
+                "Post-ranking block merging: {} blocks merged into {} blocks",
+                original_count,
+                merged.len()
+            );
         }
-        
+
         LimitedSearchResults {
             results: merged,
             skipped_files: limited_results.skipped_files,
@@ -560,12 +600,24 @@ pub fn perform_probe(
     // Debug timing info
     if debug_mode {
         println!("Search Timings:");
-        if let Some(d) = timings.query_preprocessing { println!("  Query Preprocessing: {:?}", d); }
-        if let Some(d) = timings.file_searching { println!("  File Searching: {:?}", d); }
-        if let Some(d) = timings.result_processing { println!("  Result Processing: {:?}", d); }
-        if let Some(d) = timings.result_ranking { println!("  Result Ranking: {:?}", d); }
-        if let Some(d) = timings.limit_application { println!("  Limit Application: {:?}", d); }
-        if let Some(d) = timings.block_merging { println!("  Post-Ranking Block Merging: {:?}", d); }
+        if let Some(d) = timings.query_preprocessing {
+            println!("  Query Preprocessing: {:?}", d);
+        }
+        if let Some(d) = timings.file_searching {
+            println!("  File Searching: {:?}", d);
+        }
+        if let Some(d) = timings.result_processing {
+            println!("  Result Processing: {:?}", d);
+        }
+        if let Some(d) = timings.result_ranking {
+            println!("  Result Ranking: {:?}", d);
+        }
+        if let Some(d) = timings.limit_application {
+            println!("  Limit Application: {:?}", d);
+        }
+        if let Some(d) = timings.block_merging {
+            println!("  Post-Ranking Block Merging: {:?}", d);
+        }
     }
 
     Ok(merged_results)
@@ -628,8 +680,10 @@ pub fn perform_frequency_search(
     }
 
     let fs_start = Instant::now();
-    let file_matched_terms: Arc<Mutex<HashMap<PathBuf, HashSet<usize>>>> = Arc::new(Mutex::new(HashMap::new()));
-    let file_matched_lines: Arc<Mutex<HashMap<PathBuf, HashSet<usize>>>> = Arc::new(Mutex::new(HashMap::new()));
+    let file_matched_terms: Arc<Mutex<HashMap<PathBuf, HashSet<usize>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let file_matched_lines: Arc<Mutex<HashMap<PathBuf, HashSet<usize>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     let mut all_files = HashSet::new();
     for (pattern, _) in &patterns_with_terms {
@@ -638,8 +692,14 @@ pub fn perform_frequency_search(
     }
 
     for f in &all_files {
-        file_matched_terms.lock().unwrap().insert(f.clone(), HashSet::new());
-        file_matched_lines.lock().unwrap().insert(f.clone(), HashSet::new());
+        file_matched_terms
+            .lock()
+            .unwrap()
+            .insert(f.clone(), HashSet::new());
+        file_matched_lines
+            .lock()
+            .unwrap()
+            .insert(f.clone(), HashSet::new());
     }
 
     // Track filename matches
@@ -660,7 +720,8 @@ pub fn perform_frequency_search(
     }
 
     patterns_with_terms.par_iter().for_each(|(pat, tset)| {
-        if let Ok(matching_files) = find_files_with_pattern(path, pat, custom_ignores, allow_tests) {
+        if let Ok(matching_files) = find_files_with_pattern(path, pat, custom_ignores, allow_tests)
+        {
             for mfile in matching_files {
                 if let Ok((matched, lines)) = search_file_for_pattern(&mfile, pat, true) {
                     if matched {
@@ -690,7 +751,12 @@ pub fn perform_frequency_search(
         .map(|(path, tset)| {
             let fmatches = file_filename_matches.get(path).cloned().unwrap_or_default();
             let unioned: HashSet<usize> = tset.union(&fmatches).cloned().collect();
-            let line_count = file_matched_lines.lock().unwrap().get(path).map(|ls| ls.len()).unwrap_or(0);
+            let line_count = file_matched_lines
+                .lock()
+                .unwrap()
+                .get(path)
+                .map(|ls| ls.len())
+                .unwrap_or(0);
             (path.clone(), unioned.len(), line_count + fmatches.len())
         })
         .collect();
@@ -700,7 +766,12 @@ pub fn perform_frequency_search(
     // For frequency search, usually it's "any term" anyway, but let's keep consistent
     if !any_term {
         freq_files.retain(|(p, _unique_count, _)| {
-            let file_terms = file_matched_terms.lock().unwrap().get(p).cloned().unwrap_or_default();
+            let file_terms = file_matched_terms
+                .lock()
+                .unwrap()
+                .get(p)
+                .cloned()
+                .unwrap_or_default();
             let file_name_terms = file_filename_matches.get(p).cloned().unwrap_or_default();
             let unioned: HashSet<usize> = file_terms.union(&file_name_terms).cloned().collect();
             // must match all terms in `term_pairs`
@@ -708,9 +779,7 @@ pub fn perform_frequency_search(
         });
     } else {
         // only keep files that matched something
-        freq_files.retain(|(p, c, _)| {
-            *c > 0 || file_filename_matches.contains_key(p)
-        });
+        freq_files.retain(|(p, c, _)| *c > 0 || file_filename_matches.contains_key(p));
     }
 
     if freq_files.is_empty() && !include_filenames {
@@ -753,8 +822,13 @@ pub fn perform_frequency_search(
 
         if include_filenames {
             let existing: HashSet<PathBuf> = freq_files.iter().map(|(p, _, _)| p.clone()).collect();
-            let found_filenames =
-                find_matching_filenames(path, &[query.to_string()], &existing, custom_ignores, allow_tests)?;
+            let found_filenames = find_matching_filenames(
+                path,
+                &[query.to_string()],
+                &existing,
+                custom_ignores,
+                allow_tests,
+            )?;
             for ff in found_filenames {
                 out_results.push(SearchResult {
                     file: ff.to_string_lossy().to_string(),
@@ -793,7 +867,12 @@ pub fn perform_frequency_search(
             r.bm25_rank = Some(i + 1);
         }
 
-        return Ok(apply_limits(out_results, max_results, max_bytes, max_tokens));
+        return Ok(apply_limits(
+            out_results,
+            max_results,
+            max_bytes,
+            max_tokens,
+        ));
     }
 
     // else, gather final results with line-based context
@@ -818,10 +897,19 @@ pub fn perform_frequency_search(
         let (unique_terms, total_matches) = stats_map.get(&path).cloned().unwrap_or((0, 0));
         let fmrank = rank_map.get(&path).cloned().unwrap_or(0);
 
-        let content_lines = file_matched_lines.lock().unwrap().get(&path).cloned().unwrap_or_default();
+        let content_lines = file_matched_lines
+            .lock()
+            .unwrap()
+            .get(&path)
+            .cloned()
+            .unwrap_or_default();
         if content_lines.is_empty() {
             // purely filename matched
-            match process_file_by_filename(&path, &[term_pairs.clone()], Some(&[term_pairs.iter().map(|(_, s)| s.clone()).collect()])) {
+            match process_file_by_filename(
+                &path,
+                &[term_pairs.clone()],
+                Some(&[term_pairs.iter().map(|(_, s)| s.clone()).collect()]),
+            ) {
                 Ok(mut sr) => {
                     sr.matched_by_filename = Some(true);
                     sr.file_unique_terms = Some(unique_terms);
@@ -836,12 +924,20 @@ pub fn perform_frequency_search(
         } else {
             // line-based content
             let mut tmp_map = HashMap::new();
-            let file_terms = file_matched_terms.lock().unwrap().get(&path).cloned().unwrap_or_default();
+            let file_terms = file_matched_terms
+                .lock()
+                .unwrap()
+                .get(&path)
+                .cloned()
+                .unwrap_or_default();
             for ti in file_terms {
                 tmp_map.insert(ti, content_lines.clone());
             }
             // filename terms
-            let filename = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+            let filename = path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
             let fmatch = get_filename_matched_queries_compat(&filename, &[term_pairs.clone()]);
 
             let res = process_file_with_results(
@@ -870,9 +966,19 @@ pub fn perform_frequency_search(
     if include_filenames {
         let mut found_set: HashSet<PathBuf> = HashSet::new();
         found_set.extend(results.iter().map(|r| PathBuf::from(&r.file)));
-        let extra = find_matching_filenames(path, &[query.to_string()], &found_set, custom_ignores, allow_tests)?;
+        let extra = find_matching_filenames(
+            path,
+            &[query.to_string()],
+            &found_set,
+            custom_ignores,
+            allow_tests,
+        )?;
         for xf in extra {
-            match process_file_by_filename(&xf, &[term_pairs.clone()], Some(&[term_pairs.iter().map(|(_, s)| s.clone()).collect()])) {
+            match process_file_by_filename(
+                &xf,
+                &[term_pairs.clone()],
+                Some(&[term_pairs.iter().map(|(_, s)| s.clone()).collect()]),
+            ) {
                 Ok(mut sr) => {
                     if let Some((u, t)) = stats_map.get(&xf) {
                         sr.file_unique_terms = Some(*u);
@@ -895,20 +1001,20 @@ pub fn perform_frequency_search(
         if reranker == "hybrid2" {
             // First calculate regular combined score ranks
             rank_search_results(&mut results, &[query.to_string()], "combined");
-            
+
             // Keep a copy of the combined score ranks
             for result in &mut results {
                 if let Some(rank) = result.rank {
                     result.combined_score_rank = Some(rank);
                 }
             }
-            
+
             // Then apply hybrid2 rankings
             rank_search_results(&mut results, &[query.to_string()], reranker);
         } else {
             // For other rerankers, just do the normal ranking
             rank_search_results(&mut results, &[query.to_string()], reranker);
-            
+
             // Set combined_score_rank to be the same as rank for consistency
             for result in &mut results {
                 if let Some(rank) = result.rank {
@@ -931,12 +1037,15 @@ pub fn perform_frequency_search(
         use crate::search::block_merging::merge_ranked_blocks;
         let original_count = limited.results.len();
         let merged = merge_ranked_blocks(limited.results, merge_threshold);
-        
+
         if debug_mode {
-            println!("Post-ranking block merging: {} blocks merged into {} blocks", 
-                     original_count, merged.len());
+            println!(
+                "Post-ranking block merging: {} blocks merged into {} blocks",
+                original_count,
+                merged.len()
+            );
         }
-        
+
         LimitedSearchResults {
             results: merged,
             skipped_files: limited.skipped_files,
@@ -949,12 +1058,24 @@ pub fn perform_frequency_search(
 
     if debug_mode {
         println!("Search Timings:");
-        if let Some(d) = timings.query_preprocessing { println!("  Query Preprocessing: {:?}", d); }
-        if let Some(d) = timings.file_searching { println!("  File Searching: {:?}", d); }
-        if let Some(d) = timings.result_processing { println!("  Result Processing: {:?}", d); }
-        if let Some(d) = timings.result_ranking { println!("  Result Ranking: {:?}", d); }
-        if let Some(d) = timings.limit_application { println!("  Limit Application: {:?}", d); }
-        if let Some(d) = timings.block_merging { println!("  Post-Ranking Block Merging: {:?}", d); }
+        if let Some(d) = timings.query_preprocessing {
+            println!("  Query Preprocessing: {:?}", d);
+        }
+        if let Some(d) = timings.file_searching {
+            println!("  File Searching: {:?}", d);
+        }
+        if let Some(d) = timings.result_processing {
+            println!("  Result Processing: {:?}", d);
+        }
+        if let Some(d) = timings.result_ranking {
+            println!("  Result Ranking: {:?}", d);
+        }
+        if let Some(d) = timings.limit_application {
+            println!("  Limit Application: {:?}", d);
+        }
+        if let Some(d) = timings.block_merging {
+            println!("  Post-Ranking Block Merging: {:?}", d);
+        }
     }
 
     Ok(merged_results)

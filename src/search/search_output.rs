@@ -9,7 +9,10 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
 
     for result in results {
         let file_path = Path::new(&result.file);
-        let extension = file_path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+        let extension = file_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("");
         let is_full_file = result.node_type == "file";
 
         if is_full_file {
@@ -28,8 +31,15 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
         if debug_mode {
             if let Some(rank) = result.rank {
                 // Add a display order field to show the actual ordering of results
-                println!("Display Order: {}", results.iter().position(|r| r.file == result.file && r.lines == result.lines).unwrap_or(0) + 1);
-                
+                println!(
+                    "Display Order: {}",
+                    results
+                        .iter()
+                        .position(|r| r.file == result.file && r.lines == result.lines)
+                        .unwrap_or(0)
+                        + 1
+                );
+
                 println!("Rank: {}", rank);
 
                 if let Some(score) = result.score {
@@ -59,12 +69,12 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
                 if let Some(bm25_rank) = result.bm25_rank {
                     println!("BM25 Rank: {}", bm25_rank);
                 }
-                
+
                 // Display Hybrid 2 score and rank with more prominence
                 if let Some(new_score) = result.new_score {
                     println!("Hybrid 2 Score: {:.4}", new_score);
                 }
-                
+
                 if let Some(hybrid2_rank) = result.hybrid2_rank {
                     println!("Hybrid 2 Rank: {}", hybrid2_rank);
                 } else if result.new_score.is_some() {

@@ -163,7 +163,10 @@ pub fn find_files_with_pattern(
         "*.yaml",
         "*.json",
         "go.sum",
-    ].into_iter().map(String::from).collect();
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
 
     // Add test file patterns if allow_tests is false
     if !allow_tests {
@@ -199,7 +202,10 @@ pub fn find_files_with_pattern(
             "**/__test__/**",
             "**/spec/**",
             "**/specs/**",
-        ].into_iter().map(String::from).collect();
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         common_ignores.extend(test_patterns);
     }
 
@@ -392,7 +398,10 @@ pub fn find_matching_filenames(
         "*.yml",
         "*.yaml",
         "*.json",
-    ].into_iter().map(String::from).collect();
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
 
     // Add test file patterns if allow_tests is false
     if !allow_tests {
@@ -428,7 +437,10 @@ pub fn find_matching_filenames(
             "**/__test__/**",
             "**/spec/**",
             "**/specs/**",
-        ].into_iter().map(String::from).collect();
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         common_ignores.extend(test_patterns);
     }
 

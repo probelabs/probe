@@ -12,10 +12,14 @@ use search::{format_and_print_search_results, perform_probe};
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    
+
     // If exact is specified, override frequency_search
-    let use_frequency = if args.exact { false } else { args.frequency_search };
-    
+    let use_frequency = if args.exact {
+        false
+    } else {
+        args.frequency_search
+    };
+
     let query = vec![args.pattern];
     let limited_results = perform_probe(
         &args.paths[0], // First path or "." by default

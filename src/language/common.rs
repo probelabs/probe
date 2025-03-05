@@ -1,5 +1,5 @@
-use tree_sitter::Node;
 use std::collections::HashSet;
+use tree_sitter::Node;
 
 /// Helper function to find the most specific node that contains a given line
 pub fn find_most_specific_node<'a>(node: Node<'a>, line: usize) -> Node<'a> {

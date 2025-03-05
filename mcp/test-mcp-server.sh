@@ -20,7 +20,9 @@ SEARCH_CODE_REQUEST='{
     "arguments": {
       "path": "'"$PWD"'",
       "query": "search",
-      "maxResults": 5
+      "maxResults": 5,
+      "mergeBlocks": true,
+      "mergeThreshold": 3
     }
   }
 }'

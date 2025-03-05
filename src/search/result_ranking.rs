@@ -26,14 +26,14 @@ pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], 
     let node_type = results.first().map(|r| r.node_type.as_str());
 
     let ranked_indices = ranking::rank_documents(
-        &documents_refs, 
+        &documents_refs,
         &combined_query,
         file_unique_terms,
         file_total_matches,
         results.first().and_then(|r| r.file_match_rank),
         block_unique_terms,
         block_total_matches,
-        node_type
+        node_type,
     );
 
     // Store original document indices and their various scores for later use
@@ -43,8 +43,14 @@ pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], 
     for (rank_index, (original_index, combined_score, tfidf_score, bm25_score, new_score)) in
         ranked_indices.iter().enumerate()
     {
-        doc_scores.push((*original_index, *combined_score, *tfidf_score, *bm25_score, *new_score));
-        
+        doc_scores.push((
+            *original_index,
+            *combined_score,
+            *tfidf_score,
+            *bm25_score,
+            *new_score,
+        ));
+
         if let Some(result) = results.get_mut(*original_index) {
             result.rank = Some(rank_index + 1); // 1-based rank
             result.score = Some(*combined_score); // Keep original combined score
@@ -66,7 +72,7 @@ pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], 
         .enumerate()
         .filter_map(|(idx, r)| r.bm25_score.map(|score| (idx, score)))
         .collect();
-    
+
     // Create hybrid2 ranking separately
     let mut hybrid2_ranking: Vec<(usize, f64)> = results
         .iter()
@@ -182,17 +188,18 @@ pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], 
                 .enumerate()
                 .filter_map(|(idx, r)| r.new_score.map(|score| (idx, score)))
                 .collect();
-            
+
             // Sort by score in descending order
-            hybrid2_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            
+            hybrid2_scores
+                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
             // Assign ranks based on sorted scores
             for (rank, (idx, _)) in hybrid2_scores.iter().enumerate() {
                 if let Some(result) = results.get_mut(*idx) {
                     result.hybrid2_rank = Some(rank + 1); // 1-based rank
                 }
             }
-            
+
             // Sort by hybrid2_rank for display
             results.sort_by(|a, b| {
                 let hybrid2_rank_a = a.hybrid2_rank.unwrap_or(usize::MAX);
@@ -200,7 +207,7 @@ pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], 
                 // Sort in ascending order (1 is best)
                 hybrid2_rank_a.cmp(&hybrid2_rank_b)
             });
-            
+
             // Update the main rank field to match the hybrid2 rank to ensure results are displayed in hybrid2 order
             for (i, result) in results.iter_mut().enumerate() {
                 // Keep the combined_score_rank as is, but update the main rank to reflect display order
@@ -231,7 +238,9 @@ pub fn rank_search_results(results: &mut Vec<SearchResult>, queries: &[String], 
         }
         _ => {
             if debug_mode {
-                println!("DEBUG: Using hybrid ranking (default - simple TF-IDF + BM25 combination)");
+                println!(
+                    "DEBUG: Using hybrid ranking (default - simple TF-IDF + BM25 combination)"
+                );
             } else {
                 println!("Using hybrid ranking (default - simple TF-IDF + BM25 combination)");
             }

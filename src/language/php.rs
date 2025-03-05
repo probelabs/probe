@@ -1,5 +1,5 @@
-use tree_sitter::{Language as TSLanguage, Node};
 use super::language_trait::LanguageImpl;
+use tree_sitter::{Language as TSLanguage, Node};
 
 /// Implementation of LanguageImpl for PHP
 pub struct PhpLanguage;
@@ -14,11 +14,11 @@ impl LanguageImpl for PhpLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
         tree_sitter_php::language()
     }
-    
+
     fn get_extension(&self) -> &'static str {
         "php"
     }
-    
+
     fn is_acceptable_parent(&self, node: &Node) -> bool {
         matches!(
             node.kind(),
@@ -29,11 +29,11 @@ impl LanguageImpl for PhpLanguage {
                 | "trait_declaration"
         )
     }
-    
+
     fn is_test_node(&self, node: &Node, source: &[u8]) -> bool {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
         let node_type = node.kind();
-        
+
         // PHP: Check method_declaration nodes with test prefix or PHPUnit annotations
         if node_type == "method_declaration" {
             let mut cursor = node.walk();
@@ -57,7 +57,7 @@ impl LanguageImpl for PhpLanguage {
                 }
             }
         }
-        
+
         false
     }
 }

@@ -6,7 +6,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 const execAsync = promisify(exec);
 // Path to the probe binary
-const PROBE_PATH = process.env.PROBE_PATH || '/Users/leonidbugaev/go/src/code-search/target/release/probe';
+const PROBE_PATH = process.env.PROBE_PATH || '/Users/leonidbugaev/go/src/probe/target/release/probe';
 class ProbeServer {
     constructor() {
         this.server = new Server({
@@ -91,6 +91,14 @@ class ProbeServer {
                                 type: 'boolean',
                                 description: 'Match files that contain any of the search terms (by default, files must contain all terms)',
                             },
+                            mergeBlocks: {
+                                type: 'boolean',
+                                description: 'Merge adjacent code blocks after ranking (disabled by default)',
+                            },
+                            mergeThreshold: {
+                                type: 'number',
+                                description: 'Maximum number of lines between code blocks to consider them adjacent for merging (default: 5)',
+                            },
                         },
                         required: ['path', 'query'],
                     },
@@ -129,15 +137,16 @@ class ProbeServer {
     }
     async executeCodeSearch(args) {
         // Build the command arguments
-        const cliArgs = ['cli'];
-        // Add path
-        cliArgs.push('--path', args.path);
-        // Add query (can be string or array)
+        const cliArgs = [];
+        // Add query as the first positional argument (can be string or array)
         const queries = Array.isArray(args.query) ? args.query : [args.query];
-        for (const q of queries) {
+        // Use the first query as the main pattern (positional argument)
+        if (queries.length > 0) {
             // Wrap query in quotes to handle multi-word queries
-            cliArgs.push('--query', `"${q}"`);
+            cliArgs.push(`"${queries[0]}"`);
         }
+        // Add path
+        cliArgs.push('--paths', args.path);
         // Add optional arguments
         if (args.filesOnly) {
             cliArgs.push('--files-only');
@@ -173,6 +182,13 @@ class ProbeServer {
         }
         if (args.anyTerm) {
             cliArgs.push('--any-term');
+        }
+        // Add new options
+        if (args.mergeBlocks) {
+            cliArgs.push('--merge-blocks');
+        }
+        if (args.mergeThreshold !== undefined) {
+            cliArgs.push('--merge-threshold', args.mergeThreshold.toString());
         }
         // Execute the command
         const command = `${PROBE_PATH} ${cliArgs.join(' ')}`;

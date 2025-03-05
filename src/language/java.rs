@@ -1,5 +1,5 @@
-use tree_sitter::{Language as TSLanguage, Node};
 use super::language_trait::LanguageImpl;
+use tree_sitter::{Language as TSLanguage, Node};
 
 /// Implementation of LanguageImpl for Java
 pub struct JavaLanguage;
@@ -14,11 +14,11 @@ impl LanguageImpl for JavaLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
         tree_sitter_java::language()
     }
-    
+
     fn get_extension(&self) -> &'static str {
         "java"
     }
-    
+
     fn is_acceptable_parent(&self, node: &Node) -> bool {
         matches!(
             node.kind(),
@@ -29,11 +29,11 @@ impl LanguageImpl for JavaLanguage {
                 | "constructor_declaration"
         )
     }
-    
+
     fn is_test_node(&self, node: &Node, source: &[u8]) -> bool {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
         let node_type = node.kind();
-        
+
         // Java: Check method_declaration nodes with @Test annotation
         if node_type == "method_declaration" {
             let mut cursor = node.walk();
@@ -54,7 +54,7 @@ impl LanguageImpl for JavaLanguage {
                 }
             }
         }
-        
+
         false
     }
 }

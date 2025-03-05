@@ -1,14 +1,14 @@
-use crate::language::language_trait::LanguageImpl;
-use crate::language::rust::RustLanguage;
-use crate::language::javascript::JavaScriptLanguage;
-use crate::language::typescript::TypeScriptLanguage;
-use crate::language::python::PythonLanguage;
-use crate::language::go::GoLanguage;
 use crate::language::c::CLanguage;
 use crate::language::cpp::CppLanguage;
+use crate::language::go::GoLanguage;
 use crate::language::java::JavaLanguage;
-use crate::language::ruby::RubyLanguage;
+use crate::language::javascript::JavaScriptLanguage;
+use crate::language::language_trait::LanguageImpl;
 use crate::language::php::PhpLanguage;
+use crate::language::python::PythonLanguage;
+use crate::language::ruby::RubyLanguage;
+use crate::language::rust::RustLanguage;
+use crate::language::typescript::TypeScriptLanguage;
 
 /// Factory function to get the appropriate language implementation based on file extension
 pub fn get_language_impl(extension: &str) -> Option<Box<dyn LanguageImpl>> {
@@ -27,4 +27,3 @@ pub fn get_language_impl(extension: &str) -> Option<Box<dyn LanguageImpl>> {
         _ => None,
     }
 }
-

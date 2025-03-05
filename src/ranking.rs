@@ -474,9 +474,8 @@ fn calculate_std_dev(values: &[f64], mean: f64) -> f64 {
     if values.len() <= 1 {
         return 0.0;
     }
-    let variance = values.iter()
-        .map(|x| (x - mean).powi(2))
-        .sum::<f64>() / (values.len() - 1) as f64;
+    let variance =
+        values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64;
     variance.sqrt()
 }
 
@@ -505,14 +504,14 @@ fn invert_rank(rank: usize, total: usize) -> f64 {
 /// - BM25 score
 /// - new score (incorporating file and block metrics)
 pub fn rank_documents(
-    documents: &[&str], 
+    documents: &[&str],
     query: &str,
     file_unique_terms: Option<usize>,
     file_total_matches: Option<usize>,
     file_match_rank: Option<usize>,
     block_unique_terms: Option<usize>,
     block_total_matches: Option<usize>,
-    node_type: Option<&str>
+    node_type: Option<&str>,
 ) -> Vec<(usize, f64, f64, f64, f64)> {
     // Preprocess documents
     let (tfs, dfs, lengths) = compute_tf_df(documents);
@@ -555,10 +554,14 @@ pub fn rank_documents(
     let std_bm = calculate_std_dev(&bm25_scores, mean_bm);
 
     // Create rankings for TF-IDF and BM25
-    let mut tfidf_ranks: Vec<(usize, f64)> = scores.iter().enumerate()
+    let mut tfidf_ranks: Vec<(usize, f64)> = scores
+        .iter()
+        .enumerate()
         .map(|(i, (_, _, t, _))| (i, *t))
         .collect();
-    let mut bm25_ranks: Vec<(usize, f64)> = scores.iter().enumerate()
+    let mut bm25_ranks: Vec<(usize, f64)> = scores
+        .iter()
+        .enumerate()
         .map(|(i, (_, _, _, b))| (i, *b))
         .collect();
 
@@ -615,23 +618,22 @@ pub fn rank_documents(
         let type_bonus = match node_type {
             Some("method_declaration") => 0.05,
             Some("function_declaration") => 0.03,
-            _ => 0.0
+            _ => 0.0,
         };
 
         // Calculate final score with weights
-        let new_score = 
-            0.20 * cs_norm + 
-            0.10 * tf_norm + 
-            0.10 * bm_norm + 
-            0.05 * fut_norm +
-            0.05 * ftm_norm + 
-            0.20 * but_norm + 
-            0.15 * btm_norm + 
-            0.05 * tr_score +
-            0.05 * br_score +
-            0.05 * fmr_score +
-            type_bonus;
-        
+        let new_score = 0.20 * cs_norm
+            + 0.10 * tf_norm
+            + 0.10 * bm_norm
+            + 0.05 * fut_norm
+            + 0.05 * ftm_norm
+            + 0.20 * but_norm
+            + 0.15 * btm_norm
+            + 0.05 * tr_score
+            + 0.05 * br_score
+            + 0.05 * fmr_score
+            + type_bonus;
+
         println!(
             "Score components for doc {}: cs_norm={:.3}, tf_norm={:.3}, bm_norm={:.3}, fut_norm={:.3}, ftm_norm={:.3}, but_norm={:.3}, btm_norm={:.3}, tr_score={:.3}, br_score={:.3}, fmr_score={:.3}, type_bonus={:.3} => new_score={:.3}",
             i, cs_norm, tf_norm, bm_norm, fut_norm, ftm_norm, but_norm, btm_norm, tr_score, br_score, fmr_score, type_bonus, new_score

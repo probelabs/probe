@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser as TSParser};
 
-use crate::language::factory::get_language_impl;
 use crate::language::common::find_most_specific_node;
+use crate::language::factory::get_language_impl;
 use crate::language::language_trait::LanguageImpl;
 use crate::models::CodeBlock;
 
@@ -31,9 +31,15 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
     }
 
     // Check if this is a comment node
-    if target_node.kind() == "comment" || target_node.kind() == "line_comment" || target_node.kind() == "block_comment" {
+    if target_node.kind() == "comment"
+        || target_node.kind() == "line_comment"
+        || target_node.kind() == "block_comment"
+    {
         if debug_mode {
-            println!("DEBUG: Found comment node at line {}, looking for related code node", line);
+            println!(
+                "DEBUG: Found comment node at line {}, looking for related code node",
+                line
+            );
         }
 
         // Get the language implementation for this extension
@@ -44,7 +50,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
 
         // Try to find related code node using AST traversal
         let mut found_node = None;
-    
+
         // First check next siblings and their subtrees
         if let Some(next_sibling) = target_node.next_sibling() {
             if language_impl.is_acceptable_parent(&next_sibling) {
@@ -54,7 +60,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
                 found_node = find_acceptable_child(next_sibling, &language_impl);
             }
         }
-    
+
         // If no next sibling found, check previous siblings
         if found_node.is_none() {
             if let Some(prev_sibling) = find_prev_sibling(target_node) {
@@ -66,7 +72,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
                 }
             }
         }
-    
+
         // If we found a sibling node, return it
         if let Some(node) = found_node {
             if debug_mode {
@@ -79,7 +85,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
             }
             return Some(node);
         }
-    
+
         // If no siblings are acceptable, check if we're nested in an acceptable parent
         let mut current = target_node;
         while let Some(parent) = current.parent() {
@@ -134,7 +140,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
                     parent.end_position().row + 1
                 );
             }
-            
+
             // Special case for struct_type in Go
             if parent.kind() == "struct_type" && extension == "go" {
                 // Use the language-specific helper to find the topmost struct_type
@@ -150,7 +156,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
                     return Some(top_struct);
                 }
             }
-            
+
             return Some(parent);
         }
         current_node = parent;
@@ -162,19 +168,18 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
     None // Fallback to line-based context if no parent found
 }
 
-
 /// Gets the context for a comment node, which can be either:
 /// 1. An acceptable parent node if the comment is inside a code block
 /// 2. The next acceptable node if the comment is at the root level
 pub fn get_comment_context<'a>(comment_node: Node<'a>, extension: &str) -> Option<Node<'a>> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    
+
     // Get the language implementation for this extension
     let language_impl = match get_language_impl(extension) {
         Some(lang) => lang,
         None => return None,
     };
-    
+
     if debug_mode {
         println!(
             "DEBUG: Finding context for comment at lines {}-{}: {}",
@@ -183,7 +188,7 @@ pub fn get_comment_context<'a>(comment_node: Node<'a>, extension: &str) -> Optio
             comment_node.kind()
         );
     }
-    
+
     // Priority 1: Check if comment has an acceptable parent
     let mut current = comment_node;
     while let Some(parent) = current.parent() {
@@ -200,7 +205,7 @@ pub fn get_comment_context<'a>(comment_node: Node<'a>, extension: &str) -> Optio
         }
         current = parent;
     }
-    
+
     // Priority 2: If no acceptable parent, look for next acceptable node
     find_related_code_node(comment_node, extension)
 }
@@ -245,13 +250,13 @@ fn find_immediate_next_node<'a>(node: Node<'a>) -> Option<Node<'a>> {
 
 pub fn find_related_code_node<'a>(comment_node: Node<'a>, extension: &str) -> Option<Node<'a>> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    
+
     // Get the language implementation for this extension
     let language_impl = match get_language_impl(extension) {
         Some(lang) => lang,
         None => return None,
     };
-    
+
     if debug_mode {
         println!(
             "DEBUG: Finding related node for comment at lines {}-{}: {}",
@@ -345,34 +350,37 @@ pub fn find_related_code_node<'a>(comment_node: Node<'a>, extension: &str) -> Op
 /// Gets the previous sibling of a node in the AST
 fn find_prev_sibling<'a>(node: Node<'a>) -> Option<Node<'a>> {
     let parent = node.parent()?;
-    
+
     let mut cursor = parent.walk();
     let mut prev_child = None;
-    
+
     for child in parent.children(&mut cursor) {
         if child.id() == node.id() {
             return prev_child;
         }
         prev_child = Some(child);
     }
-    
+
     None // No previous sibling found
 }
 
 /// Find first acceptable node in a subtree
-fn find_acceptable_child<'a>(node: Node<'a>, language_impl: &Box<dyn LanguageImpl>) -> Option<Node<'a>> {
+fn find_acceptable_child<'a>(
+    node: Node<'a>,
+    language_impl: &Box<dyn LanguageImpl>,
+) -> Option<Node<'a>> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if language_impl.is_acceptable_parent(&child) {
             return Some(child);
         }
-        
+
         // Recursive search
         if let Some(acceptable) = find_acceptable_child(child, language_impl) {
             return Some(acceptable);
         }
     }
-    
+
     None // No acceptable child found
 }
 
@@ -387,7 +395,12 @@ pub fn parse_file_for_code_blocks(
     // Get the appropriate language implementation
     let language_impl = match get_language_impl(extension) {
         Some(lang) => lang,
-        None => return Err(anyhow::anyhow!(format!("Unsupported file type: {}", extension))),
+        None => {
+            return Err(anyhow::anyhow!(format!(
+                "Unsupported file type: {}",
+                extension
+            )))
+        }
     };
 
     // Get the tree-sitter language
@@ -423,10 +436,10 @@ pub fn parse_file_for_code_blocks(
     // Process each line number
     for &line in line_numbers {
         let target_node = find_most_specific_node(root_node, line);
-        let is_comment = target_node.kind() == "comment" || 
-                         target_node.kind() == "line_comment" || 
-                         target_node.kind() == "block_comment";
-        
+        let is_comment = target_node.kind() == "comment"
+            || target_node.kind() == "line_comment"
+            || target_node.kind() == "block_comment";
+
         // Special handling for comments
         if is_comment {
             if debug_mode {
@@ -436,7 +449,7 @@ pub fn parse_file_for_code_blocks(
                     target_node.kind()
                 );
             }
-            
+
             let start_pos = target_node.start_position();
             let end_pos = target_node.end_position();
             let comment_key = (start_pos.row, end_pos.row);
@@ -473,16 +486,18 @@ pub fn parse_file_for_code_blocks(
                     // create a merged block that includes both the comment and its context
                     let merged_start_row = std::cmp::min(start_pos.row, rel_start_pos.row);
                     let merged_end_row = std::cmp::max(end_pos.row, rel_end_pos.row);
-                    let merged_start_byte = std::cmp::min(target_node.start_byte(), context_node.start_byte());
-                    let merged_end_byte = std::cmp::max(target_node.end_byte(), context_node.end_byte());
-                    
+                    let merged_start_byte =
+                        std::cmp::min(target_node.start_byte(), context_node.start_byte());
+                    let merged_end_byte =
+                        std::cmp::max(target_node.end_byte(), context_node.end_byte());
+
                     // Use the context node's type as the merged block's type
                     let merged_node_type = context_node.kind().to_string();
-                    
+
                     // Mark both the comment and context as seen
                     seen_nodes.insert(comment_key);
                     seen_nodes.insert(rel_key);
-                    
+
                     // Add the merged block
                     code_blocks.push(CodeBlock {
                         start_row: merged_start_row,
@@ -494,7 +509,7 @@ pub fn parse_file_for_code_blocks(
                         parent_start_row: None,
                         parent_end_row: None,
                     });
-                    
+
                     if debug_mode {
                         println!(
                             "DEBUG: Added merged block (comment + context) at lines {}-{}, type: {}",
@@ -503,12 +518,12 @@ pub fn parse_file_for_code_blocks(
                             merged_node_type
                         );
                     }
-                    
+
                     // Skip adding the individual comment block since it's now part of the merged block
                     continue;
                 }
             }
-            
+
             // If we didn't add the comment as part of a merged block, add it individually
             if !added_comment {
                 // Add the comment block
@@ -534,7 +549,7 @@ pub fn parse_file_for_code_blocks(
             }
             continue;
         }
-        
+
         // For non-comments, first check if this line is within any existing block
         let mut existing_block = false;
         for block in &code_blocks {
@@ -552,7 +567,7 @@ pub fn parse_file_for_code_blocks(
                 break;
             }
         }
-        
+
         if existing_block {
             continue;
         }
@@ -596,7 +611,7 @@ pub fn parse_file_for_code_blocks(
 
             // Ensure we never have an empty node_type
             let node_type = node.kind().to_string();
-            
+
             // Check if this node has a parent that is a function or method
             let parent_info = if node_type == "struct_type" {
                 // language_impl is a Box<dyn LanguageImpl>, not an Option
@@ -604,7 +619,7 @@ pub fn parse_file_for_code_blocks(
                     let parent_type = parent_node.kind().to_string();
                     let parent_start = parent_node.start_position().row;
                     let parent_end = parent_node.end_position().row;
-                    
+
                     if debug_mode {
                         println!(
                             "DEBUG: Found parent {} for struct_type at lines {}-{}, parent at {}-{}", 
@@ -612,7 +627,7 @@ pub fn parse_file_for_code_blocks(
                             parent_start + 1, parent_end + 1
                         );
                     }
-                    
+
                     Some((parent_type, parent_start, parent_end))
                 } else {
                     None
@@ -641,21 +656,28 @@ pub fn parse_file_for_code_blocks(
 
     // Deduplicate blocks with overlapping spans
     let mut deduplicated_blocks: Vec<CodeBlock> = Vec::new();
-    
+
     // First add all comment blocks (we want to keep these)
-    for block in code_blocks.iter().filter(|b| b.node_type.contains("comment")) {
+    for block in code_blocks
+        .iter()
+        .filter(|b| b.node_type.contains("comment"))
+    {
         deduplicated_blocks.push(block.clone());
     }
-    
+
     // Then add non-comment blocks that don't overlap
-    for block in code_blocks.into_iter().filter(|b| !b.node_type.contains("comment")) {
+    for block in code_blocks
+        .into_iter()
+        .filter(|b| !b.node_type.contains("comment"))
+    {
         let mut should_add = true;
-        
+
         // Check if this block overlaps with any of the previous blocks
         for prev_block in &deduplicated_blocks {
             if !prev_block.node_type.contains("comment") && // Only check overlap with non-comment blocks
                ((block.start_row >= prev_block.start_row && block.start_row <= prev_block.end_row) ||
-                (block.end_row >= prev_block.start_row && block.end_row <= prev_block.end_row)) {
+                (block.end_row >= prev_block.start_row && block.end_row <= prev_block.end_row))
+            {
                 if debug_mode {
                     println!(
                         "DEBUG: Skipping overlapping block: type='{}', lines={}-{} (overlaps with type='{}', lines={}-{})",
@@ -671,7 +693,7 @@ pub fn parse_file_for_code_blocks(
                 break;
             }
         }
-        
+
         if should_add {
             deduplicated_blocks.push(block);
         }

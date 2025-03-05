@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
-use crate::language::{parse_file_for_code_blocks};
+use crate::language::parse_file_for_code_blocks;
 use crate::models::SearchResult;
 use crate::ranking::preprocess_text;
 use crate::search::file_search::get_filename_matched_queries_compat;
@@ -75,22 +75,22 @@ fn filter_code_block(
 
 /// Function to process a file that was matched by filename
 pub fn process_file_by_filename(
-    path: &Path, 
+    path: &Path,
     queries_terms: &[Vec<(String, String)>],
     preprocessed_queries: Option<&[Vec<String>]>, // Optional preprocessed query terms for optimization
 ) -> Result<SearchResult> {
     // Read the file content
     let content = fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
-    
+
     // Get the filename for matching
     let filename = path
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_default();
-    
+
     // Use get_filename_matched_queries_compat to determine matched terms
     let matched_terms = get_filename_matched_queries_compat(&filename, queries_terms);
-    
+
     // Create a SearchResult with filename match information
     let mut search_result = SearchResult {
         file: path.to_string_lossy().to_string(),
@@ -118,13 +118,17 @@ pub fn process_file_by_filename(
 
     // Use preprocessed query terms if available
     if let Some(preprocessed) = preprocessed_queries {
-        let query_terms: Vec<String> = preprocessed.iter().flat_map(|terms| terms.iter().cloned()).collect();
+        let query_terms: Vec<String> = preprocessed
+            .iter()
+            .flat_map(|terms| terms.iter().cloned())
+            .collect();
         let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
         let block_terms = preprocess_text(&content, false);
         let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
             0
         } else {
-            block_terms.iter()
+            block_terms
+                .iter()
                 .filter(|t| unique_query_terms.contains(*t))
                 .collect::<HashSet<&String>>()
                 .len()
@@ -132,7 +136,8 @@ pub fn process_file_by_filename(
         let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
             0
         } else {
-            block_terms.iter()
+            block_terms
+                .iter()
                 .filter(|t| unique_query_terms.contains(*t))
                 .count()
         };
@@ -146,59 +151,76 @@ pub fn process_file_by_filename(
 /// Determines a better node type for fallback context by analyzing the line content
 fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
     let trimmed = line.trim();
-    
+
     // First try to detect comments
     if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("*") {
         return "comment".to_string();
-    } else if trimmed.starts_with("#") && extension.map_or(false, |ext| ext == "py" || ext == "rb") {
+    } else if trimmed.starts_with("#") && extension.map_or(false, |ext| ext == "py" || ext == "rb")
+    {
         return "comment".to_string();
     } else if trimmed.starts_with("'''") || trimmed.starts_with("\"\"\"") {
         return "comment".to_string();
     }
-    
+
     // Try to detect common code structures based on the line content
     let lowercase = trimmed.to_lowercase();
-    
+
     // Check for function/method declarations
-    if (trimmed.contains("fn ") && (trimmed.contains("(") || trimmed.contains(")")) && extension.map_or(false, |ext| ext == "rs"))
+    if (trimmed.contains("fn ")
+        && (trimmed.contains("(") || trimmed.contains(")"))
+        && extension.map_or(false, |ext| ext == "rs"))
         || (trimmed.contains("func ") && extension.map_or(false, |ext| ext == "go"))
-        || (trimmed.contains("function ") && extension.map_or(false, |ext| ext == "js" || ext == "ts"))
+        || (trimmed.contains("function ")
+            && extension.map_or(false, |ext| ext == "js" || ext == "ts"))
         || (lowercase.contains("def ") && extension.map_or(false, |ext| ext == "py"))
-        || (trimmed.contains("public") && trimmed.contains("void") && extension.map_or(false, |ext| ext == "java" || ext == "kt"))
+        || (trimmed.contains("public")
+            && trimmed.contains("void")
+            && extension.map_or(false, |ext| ext == "java" || ext == "kt"))
     {
         return "function".to_string();
     }
-    
+
     // Check for class declarations
-    if (trimmed.contains("class ") || trimmed.contains("interface ")) 
-        || (trimmed.contains("struct ") && extension.map_or(false, |ext| ext == "rs" || ext == "go" || ext == "c" || ext == "cpp"))
-        || (trimmed.contains("type ") && trimmed.contains("struct") && extension.map_or(false, |ext| ext == "go"))
+    if (trimmed.contains("class ") || trimmed.contains("interface "))
+        || (trimmed.contains("struct ")
+            && extension.map_or(false, |ext| {
+                ext == "rs" || ext == "go" || ext == "c" || ext == "cpp"
+            }))
+        || (trimmed.contains("type ")
+            && trimmed.contains("struct")
+            && extension.map_or(false, |ext| ext == "go"))
         || (trimmed.contains("enum "))
     {
         return "class".to_string();
     }
-    
+
     // Check for imports/requires
-    if trimmed.starts_with("import ") || trimmed.starts_with("from ") || trimmed.starts_with("require ")
-        || trimmed.starts_with("use ") || trimmed.starts_with("#include ")
+    if trimmed.starts_with("import ")
+        || trimmed.starts_with("from ")
+        || trimmed.starts_with("require ")
+        || trimmed.starts_with("use ")
+        || trimmed.starts_with("#include ")
     {
         return "import".to_string();
     }
-    
+
     // Check for variable declarations
     if (trimmed.starts_with("let ") || trimmed.starts_with("var ") || trimmed.starts_with("const "))
         || (trimmed.contains("=") && !trimmed.contains("==") && !trimmed.contains("=>"))
     {
         return "variable_declaration".to_string();
     }
-    
+
     // Check for control flow statements
-    if trimmed.starts_with("if ") || trimmed.starts_with("for ") || trimmed.starts_with("while ")
-        || trimmed.starts_with("switch ") || trimmed.starts_with("match ")
+    if trimmed.starts_with("if ")
+        || trimmed.starts_with("for ")
+        || trimmed.starts_with("while ")
+        || trimmed.starts_with("switch ")
+        || trimmed.starts_with("match ")
     {
         return "control_flow".to_string();
     }
-    
+
     // If we can't determine a specific type, use "code" instead of "context"
     "code".to_string()
 }
@@ -256,7 +278,7 @@ pub fn process_file_with_results(
         if debug_mode {
             println!("DEBUG: AST parsing successful");
             println!("DEBUG:   Found {} code blocks", code_blocks.len());
-            
+
             for (i, block) in code_blocks.iter().enumerate() {
                 println!(
                     "DEBUG:   Block {}: type={}, lines={}-{}",
@@ -278,30 +300,30 @@ pub fn process_file_with_results(
             let end_line = block.end_row + 1;
 
             // Check if this is a struct_type inside a function in Go code
-            let (final_start_line, final_end_line, is_nested_struct) = 
-                if extension == "go" && 
-                   block.node_type == "struct_type" && 
-                   block.parent_node_type.as_ref().map_or(false, |p| p == "function_declaration" || p == "method_declaration") {
-                    
-                    // Use the parent function's boundaries instead of just the struct
-                    if let Some(parent_start) = block.parent_start_row {
-                        if let Some(parent_end) = block.parent_end_row {
-                            if debug_mode {
-                                println!(
+            let (final_start_line, final_end_line, is_nested_struct) = if extension == "go"
+                && block.node_type == "struct_type"
+                && block.parent_node_type.as_ref().map_or(false, |p| {
+                    p == "function_declaration" || p == "method_declaration"
+                }) {
+                // Use the parent function's boundaries instead of just the struct
+                if let Some(parent_start) = block.parent_start_row {
+                    if let Some(parent_end) = block.parent_end_row {
+                        if debug_mode {
+                            println!(
                                     "DEBUG: Expanding nested struct at {}-{} to parent function at {}-{}",
                                     start_line, end_line, parent_start + 1, parent_end + 1
                                 );
-                            }
-                            (parent_start + 1, parent_end + 1, true)
-                        } else {
-                            (start_line, end_line, false)
                         }
+                        (parent_start + 1, parent_end + 1, true)
                     } else {
                         (start_line, end_line, false)
                     }
                 } else {
                     (start_line, end_line, false)
-                };
+                }
+            } else {
+                (start_line, end_line, false)
+            };
 
             // Extract the full code for this block
             let full_code = if final_start_line > 0 && final_end_line <= lines.len() {
@@ -312,33 +334,39 @@ pub fn process_file_with_results(
 
             // Calculate block term matches
             let block_terms = preprocess_text(&full_code, false);
-            
+
             // Use preprocessed query terms if available, otherwise generate them
             let query_terms: Vec<String> = if let Some(preprocessed) = preprocessed_queries {
-                preprocessed.iter().flat_map(|terms| terms.iter().cloned()).collect()
+                preprocessed
+                    .iter()
+                    .flat_map(|terms| terms.iter().cloned())
+                    .collect()
             } else {
-                queries_terms.iter()
+                queries_terms
+                    .iter()
                     .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
                     .collect()
             };
-            
+
             let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
-            
+
             // Calculate unique terms matched in the block
             let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
                 0
             } else {
-                block_terms.iter()
+                block_terms
+                    .iter()
                     .filter(|t| unique_query_terms.contains(*t))
                     .collect::<HashSet<&String>>()
                     .len()
             };
-            
+
             // Calculate total matches in the block
             let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
                 0
             } else {
-                block_terms.iter()
+                block_terms
+                    .iter()
                     .filter(|t| unique_query_terms.contains(*t))
                     .count()
             };
@@ -387,10 +415,13 @@ pub fn process_file_with_results(
                 results.push(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (final_start_line, final_end_line),
-                    node_type: if is_nested_struct { 
-                        block.parent_node_type.clone().unwrap_or_else(|| block.node_type.clone()) 
-                    } else { 
-                        block.node_type.clone() 
+                    node_type: if is_nested_struct {
+                        block
+                            .parent_node_type
+                            .clone()
+                            .unwrap_or_else(|| block.node_type.clone())
+                    } else {
+                        block.node_type.clone()
                     },
                     code: full_code.clone(),
                     matched_by_filename: None,
@@ -472,43 +503,52 @@ pub fn process_file_with_results(
             } else {
                 lines[0..context_end].join("\n")
             };
-            
+
             // Determine a better node type for the fallback context by analyzing the content
             let node_type = determine_fallback_node_type(&lines[line_num - 1], Some(extension));
-            
+
             if debug_mode {
-                println!("DEBUG: Inferred node type for fallback context: {}", node_type);
+                println!(
+                    "DEBUG: Inferred node type for fallback context: {}",
+                    node_type
+                );
             }
 
             // Calculate block term matches
             let block_terms = preprocess_text(&context_code, false);
-            
+
             // Use preprocessed query terms if available, otherwise generate them
             let query_terms: Vec<String> = if let Some(preprocessed) = preprocessed_queries {
-                preprocessed.iter().flat_map(|terms| terms.iter().cloned()).collect()
+                preprocessed
+                    .iter()
+                    .flat_map(|terms| terms.iter().cloned())
+                    .collect()
             } else {
-                queries_terms.iter()
+                queries_terms
+                    .iter()
                     .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
                     .collect()
             };
-            
+
             let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
-            
+
             // Calculate unique terms matched in the block
             let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
                 0
             } else {
-                block_terms.iter()
+                block_terms
+                    .iter()
                     .filter(|t| unique_query_terms.contains(*t))
                     .collect::<HashSet<&String>>()
                     .len()
             };
-            
+
             // Calculate total matches in the block
             let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
                 0
             } else {
-                block_terms.iter()
+                block_terms
+                    .iter()
                     .filter(|t| unique_query_terms.contains(*t))
                     .count()
             };
@@ -618,33 +658,39 @@ pub fn process_file_with_results(
 
         // Calculate block term matches for the entire file
         let block_terms = preprocess_text(&content, false);
-        
+
         // Use preprocessed query terms if available, otherwise generate them
         let query_terms: Vec<String> = if let Some(preprocessed) = preprocessed_queries {
-            preprocessed.iter().flat_map(|terms| terms.iter().cloned()).collect()
+            preprocessed
+                .iter()
+                .flat_map(|terms| terms.iter().cloned())
+                .collect()
         } else {
-            queries_terms.iter()
+            queries_terms
+                .iter()
                 .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
                 .collect()
         };
-        
+
         let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
-        
+
         // Calculate unique terms matched in the file
         let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
             0
         } else {
-            block_terms.iter()
+            block_terms
+                .iter()
                 .filter(|t| unique_query_terms.contains(*t))
                 .collect::<HashSet<&String>>()
                 .len()
         };
-        
+
         // Calculate total matches in the file
         let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
             0
         } else {
-            block_terms.iter()
+            block_terms
+                .iter()
                 .filter(|t| unique_query_terms.contains(*t))
                 .count()
         };
@@ -660,7 +706,7 @@ pub fn process_file_with_results(
             file: path.to_string_lossy().to_string(),
             lines: (1, total_lines),
             node_type: "file".to_string(), // Mark as full file result
-            code: content.clone(), // Clone content here to avoid the move
+            code: content.clone(),         // Clone content here to avoid the move
             matched_by_filename: None,
             rank: None,
             score: None,

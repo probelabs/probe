@@ -2,23 +2,23 @@
 // using tree-sitter and extracting code blocks.
 
 // Import submodules
-pub mod language_trait;
-pub mod factory;
 pub mod common;
+pub mod factory;
+pub mod language_trait;
 pub mod parser;
 pub mod test_detection;
 
 // Language implementations
-pub mod rust;
-pub mod javascript;
-pub mod typescript;
-pub mod python;
-pub mod go;
 pub mod c;
 pub mod cpp;
+pub mod go;
 pub mod java;
-pub mod ruby;
+pub mod javascript;
 pub mod php;
+pub mod python;
+pub mod ruby;
+pub mod rust;
+pub mod typescript;
 
 // Re-export items for backward compatibility
 pub use parser::parse_file_for_code_blocks;
