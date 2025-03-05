@@ -1,5 +1,5 @@
 [package]
-name = "code-search"
+name = "probe"
 version = "0.1.0"
 edition = "2021"
 
@@ -34,9 +34,9 @@ proptest = "1.2"
 criterion = "0.5"
 
 [lib]
-name = "code_search"
+name = "probe"
 path = "src/lib.rs"
 
 [[bin]]
-name = "code-search"
+name = "probe"
 path = "src/main.rs"

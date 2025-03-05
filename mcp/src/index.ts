@@ -13,8 +13,8 @@ import path from 'path';
 
 const execAsync = promisify(exec);
 
-// Path to the code-search binary
-const CODE_SEARCH_PATH = process.env.CODE_SEARCH_PATH || '/Users/leonidbugaev/go/src/code-search/target/release/code-search';
+// Path to the probe binary
+const PROBE_PATH = process.env.PROBE_PATH || '/Users/leonidbugaev/go/src/code-search/target/release/probe';
 
 interface SearchCodeArgs {
   path: string;
@@ -32,13 +32,13 @@ interface SearchCodeArgs {
   anyTerm?: boolean;
 }
 
-class CodeSearchServer {
+class ProbeServer {
   private server: Server;
 
   constructor() {
     this.server = new Server(
       {
-        name: 'code-search-mcp',
+        name: 'probe-mcp',
         version: '0.1.0',
       },
       {
@@ -228,7 +228,7 @@ class CodeSearchServer {
     }
     
     // Execute the command
-    const command = `${CODE_SEARCH_PATH} ${cliArgs.join(' ')}`;
+    const command = `${PROBE_PATH} ${cliArgs.join(' ')}`;
     console.log(`Executing command: ${command}`);
     
     try {
@@ -240,7 +240,7 @@ class CodeSearchServer {
       
       return stdout;
     } catch (error) {
-      console.error('Error executing code-search CLI:', error);
+      console.error('Error executing probe CLI:', error);
       throw error;
     }
   }
@@ -248,9 +248,9 @@ class CodeSearchServer {
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('Code Search MCP server running on stdio');
+    console.error('Probe MCP server running on stdio');
   }
 }
 
-const server = new CodeSearchServer();
+const server = new ProbeServer();
 server.run().catch(console.error);

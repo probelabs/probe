@@ -58,7 +58,7 @@ Based on our analysis of the codebase, this plan outlines a comprehensive approa
 **Objective**: Update main search flow to use new approach
 
 ### Action Steps:
-1. Modify `perform_code_search` in `search_runner.rs`:
+1. Modify `perform_probe` in `search_runner.rs`:
    - Keep collection of individual blocks
    - Proceed with ranking individual blocks
    - Apply limits to ranked individual blocks

@@ -1,10 +1,10 @@
-# Code-Search Project Guidelines
+# Probe Project Guidelines
 
-This file provides guidelines for AI assistants and developers working on the code-search project.
+This file provides guidelines for AI assistants and developers working on the probe project.
 
 ## Project Overview
 
-Code-search is a tool for searching code repositories with powerful filtering and ranking capabilities. It provides:
+Probe is a tool for searching code repositories with powerful filtering and ranking capabilities. It provides:
 - Regex-based code search with stemming and stopword removal
 - Language-aware code block extraction
 - Frequency-based search for better relevance
@@ -14,7 +14,7 @@ Code-search is a tool for searching code repositories with powerful filtering an
 ## Project Structure
 
 ```
-code-search/
+probe/
 ├── src/                    # Main source code
 │   ├── language/           # Language-specific parsing
 │   ├── search/             # Core search functionality
@@ -28,7 +28,7 @@ code-search/
 ├── tests/                  # Integration tests
 │   ├── mocks/              # Mock files for testing
 │   └── ...                 # Various test files
-└── mcp/                    # MCP server for code-search
+└── mcp/                    # MCP server for probe
 ```
 
 ## Code Style Guide
@@ -174,7 +174,7 @@ When making changes to the codebase:
      - Proper regex escaping for special characters
 
 2. **Search Execution**:
-   - When modifying `perform_code_search`, ensure it:
+   - When modifying `perform_probe`, ensure it:
      - Properly maps patterns to terms
      - Handles both "any term" and "all terms" modes
      - Correctly processes filename matches

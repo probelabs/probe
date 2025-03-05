@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Test script for the code-search MCP server using proper JSON-RPC format
+// Test script for the probe MCP server using proper JSON-RPC format
 
 const { spawn } = require('child_process');
 const path = require('path');

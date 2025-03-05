@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 // The integration test needs access to the library crate
-use code_search::search::perform_code_search;
+use probe::search::perform_probe;
 
 // Helper function to create test files
 fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
@@ -129,7 +129,7 @@ fn test_search_single_term() {
     create_test_directory_structure(&temp_dir);
 
     // Search for a single term
-    let search_results = perform_code_search(
+    let search_results = perform_probe(
         temp_dir.path(),
         &["search".to_string()],
         false,    // files_only
@@ -184,7 +184,7 @@ fn test_search_multiple_terms() {
     create_test_directory_structure(&temp_dir);
 
     // Search for multiple terms
-    let search_results = perform_code_search(
+    let search_results = perform_probe(
         temp_dir.path(),
         &["search".to_string(), "function".to_string()],
         false,    // files_only
@@ -221,7 +221,7 @@ fn test_search_files_only() {
     create_test_directory_structure(&temp_dir);
 
     // Search for files only
-    let search_results = perform_code_search(
+    let search_results = perform_probe(
         temp_dir.path(),
         &["search".to_string()],
         true,     // files_only
@@ -287,7 +287,7 @@ fn test_search_include_filenames() {
     println!("Created test file at: {:?}", search_file_path);
 
     // Search with filename matching enabled
-    let search_results = perform_code_search(
+    let search_results = perform_probe(
         temp_dir.path(),
         &["search".to_string()],
         false,    // files_only
@@ -334,7 +334,7 @@ fn test_search_with_limits() {
     create_test_directory_structure(&temp_dir);
 
     // Search with limits
-    let search_results = perform_code_search(
+    let search_results = perform_probe(
         temp_dir.path(),
         &["search".to_string()],
         false,    // files_only
@@ -375,7 +375,7 @@ fn test_frequency_search() {
     create_test_directory_structure(&temp_dir);
 
     // Search using frequency-based search
-    let search_results = perform_code_search(
+    let search_results = perform_probe(
         temp_dir.path(),
         &["search".to_string()],
         false,    // files_only
@@ -424,7 +424,7 @@ func main() {
     create_test_file(&temp_dir, "ip_utils.go", content);
 
     // Search for both terms in "all terms" mode
-    let search_results = perform_code_search(
+    let search_results = perform_probe(
         temp_dir.path(),
         &["ip".to_string(), "whitelist".to_string()],
         false,    // files_only
@@ -481,7 +481,7 @@ fn test_search_with_custom_ignores() {
     let custom_ignores = vec!["*.py".to_string()];
 
     // Search with custom ignore patterns
-    let search_results = perform_code_search(
+    let search_results = perform_probe(
         temp_dir.path(),
         &["search".to_string()],
         false,           // files_only
@@ -589,7 +589,7 @@ fn calculate_product(a: i32, b: i32) -> i32 {
     let query = "calculate";
     
     // Perform search
-    let search_result = perform_code_search(
+    let search_result = perform_probe(
         temp_dir.path(),
         &[query.to_string()],
         false,  // files_only

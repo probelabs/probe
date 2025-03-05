@@ -24,7 +24,7 @@ pub struct SearchTimings {
 }
 
 /// Performs a search on code repositories and returns results in a structured format
-pub fn perform_code_search(
+pub fn perform_probe(
     path: &Path,
     queries: &[String],
     files_only: bool,

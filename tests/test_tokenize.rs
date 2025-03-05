@@ -1,6 +1,6 @@
 fn main() {
-    // Import the tokenize function from our code-search crate
-    use code_search::ranking::tokenize;
+    // Import the tokenize function from our probe crate
+    use probe::ranking::tokenize;
 
     // Test strings
     let test_strings = vec![

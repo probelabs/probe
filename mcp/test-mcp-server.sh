@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Test script for the code-search MCP server
+# Test script for the probe MCP server
 
 # Define JSON-RPC request for listing tools
 LIST_TOOLS_REQUEST='{

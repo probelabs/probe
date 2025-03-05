@@ -2,9 +2,9 @@ use std::path::Path;
 use std::fs;
 use tempfile::TempDir;
 
-use code_search::models::SearchResult;
-use code_search::search::block_merging::merge_ranked_blocks;
-use code_search::search::search_runner::perform_code_search;
+use probe::models::SearchResult;
+use probe::search::block_merging::merge_ranked_blocks;
+use probe::search::search_runner::perform_probe;
 
 #[test]
 fn test_merge_ranked_blocks() {
@@ -130,7 +130,7 @@ fn test_integration_with_search_flow() {
     create_test_files(temp_path);
     
     // Run a search that should produce multiple overlapping blocks
-    let search_results = perform_code_search(
+    let search_results = perform_probe(
         temp_path,
         &["function test".to_string()],
         false,  // files_only

@@ -1,84 +1,18 @@
-use clap::{Parser as ClapParser, Subcommand};
+use clap::Parser as ClapParser;
 use std::path::PathBuf;
-
-#[derive(Subcommand, Debug)]
-pub enum Command {
-    /// Run in CLI mode (default)
-    Cli {
-        /// Path to search in
-        #[arg(short, long)]
-        path: PathBuf,
-
-        /// Query patterns to search for (can specify multiple)
-        #[arg(short, long, required = true)]
-        query: Vec<String>,
-
-        /// Skip AST parsing and just output unique files
-        #[arg(short, long = "files-only")]
-        files_only: bool,
-
-        /// Custom patterns to ignore (in addition to .gitignore and common patterns)
-        #[arg(short, long)]
-        ignore: Vec<String>,
-
-        /// Include files whose names match query words
-        #[arg(short = 'n', long = "include-filenames")]
-        include_filenames: bool,
-
-        /// Reranking method to use for search results
-        #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "hybrid2", "bm25", "tfidf"])]
-        reranker: String,
-
-        /// Use frequency-based search with stemming and stopword removal (enabled by default)
-        #[arg(short = 's', long = "frequency", default_value = "true")]
-        frequency_search: bool,
-
-        /// Use exact matching without stemming or stopword removal
-        #[arg(long = "exact")]
-        exact: bool,
-
-        /// Maximum number of results to return
-        #[arg(long = "max-results")]
-        max_results: Option<usize>,
-
-        /// Maximum total bytes of code content to return
-        #[arg(long = "max-bytes")]
-        max_bytes: Option<usize>,
-
-        /// Maximum total tokens in code content to return (for AI usage)
-        #[arg(long = "max-tokens")]
-        max_tokens: Option<usize>,
-
-        /// Allow test files and test code blocks in search results
-        #[arg(long = "allow-tests")]
-        allow_tests: bool,
-
-        /// Match files that contain any of the search terms (by default, files must contain all terms)
-        #[arg(long = "any-term")]
-        any_term: bool,
-
-        /// Merge adjacent code blocks after ranking (disabled by default)
-        #[arg(long = "merge-blocks", default_value = "false")]
-        merge_blocks: bool,
-
-        /// Maximum number of lines between code blocks to consider them adjacent for merging (default: 5)
-        #[arg(long = "merge-threshold")]
-        merge_threshold: Option<usize>,
-    },
-}
 
 #[derive(ClapParser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
-    /// Path to search in (for CLI mode)
-    #[arg(short, long)]
-    pub path: Option<PathBuf>,
+    /// Search pattern
+    #[arg(value_name = "PATTERN")]
+    pub pattern: String,
 
-    /// Query patterns to search for (for CLI mode)
-    #[arg(short, long)]
-    pub query: Vec<String>,
+    /// Files or directories to search
+    #[arg(value_name = "PATH", default_value = ".")]
+    pub paths: Vec<PathBuf>,
 
-    /// Skip AST parsing and just output unique files (for CLI mode)
+    /// Skip AST parsing and just output unique files
     #[arg(short, long = "files-only")]
     pub files_only: bool,
 
@@ -86,7 +20,7 @@ pub struct Args {
     #[arg(short, long)]
     pub ignore: Vec<String>,
 
-    /// Include files whose names match query words (for CLI mode)
+    /// Include files whose names match query words
     #[arg(short = 'n', long = "include-filenames")]
     pub include_filenames: bool,
 
@@ -129,7 +63,4 @@ pub struct Args {
     /// Maximum number of lines between code blocks to consider them adjacent for merging (default: 5)
     #[arg(long = "merge-threshold")]
     pub merge_threshold: Option<usize>,
-
-    #[command(subcommand)]
-    pub command: Option<Command>,
 }

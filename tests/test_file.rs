@@ -1,4 +1,4 @@
-// This is a test file for code-search
+// This is a test file for probe
 
 fn function1() {
     println!("This is function 1");

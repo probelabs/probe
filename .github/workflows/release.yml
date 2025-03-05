@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: probe
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      release_id: ${{ steps.create_release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+
+  build:
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: probe-x86_64-linux.tar.gz
+            cross: false
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: probe-x86_64-darwin.tar.gz
+            cross: false
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: probe-aarch64-darwin.tar.gz
+            cross: true
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: probe-x86_64-windows.zip
+            cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+
+      - name: Install cross (if needed)
+        if: matrix.cross
+        run: cargo install cross
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+
+      - name: Build binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Prepare binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p release
+          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} release/
+          cp README.md release/ || echo "No README.md found"
+          cp LICENSE release/ || echo "No LICENSE found"
+          cd release
+          if [[ "${{ matrix.artifact_name }}" == *.tar.gz ]]; then
+            tar czf ../${{ matrix.artifact_name }} *
+          else
+            zip -r ../${{ matrix.artifact_name }} *
+          fi
+          cd ..
+          echo "ASSET_PATH=${{ matrix.artifact_name }}" >> $GITHUB_ENV
+
+      - name: Prepare binary (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p release
+          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}.exe release/
+          cp README.md release/ || echo "No README.md found"
+          cp LICENSE release/ || echo "No LICENSE found"
+          cd release
+          7z a -tzip ../${{ matrix.artifact_name }} *
+          cd ..
+          echo "ASSET_PATH=${{ matrix.artifact_name }}" >> $GITHUB_ENV
+
+      - name: Generate checksum
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            certutil -hashfile ${{ env.ASSET_PATH }} SHA256 > ${{ env.ASSET_PATH }}.sha256
+            sed -i 's/SHA256 hash of file.*: //g' ${{ env.ASSET_PATH }}.sha256
+          else
+            shasum -a 256 ${{ env.ASSET_PATH }} > ${{ env.ASSET_PATH }}.sha256
+          fi
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./${{ env.ASSET_PATH }}
+          asset_name: ${{ matrix.artifact_name }}
+          asset_content_type: application/octet-stream
+
+      - name: Upload Checksum
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./${{ env.ASSET_PATH }}.sha256
+          asset_name: ${{ matrix.artifact_name }}.sha256
+          asset_content_type: text/plain
+
+  publish-release:
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish Release
+        uses: eregon/publish-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          release_id: ${{ needs.create-release.outputs.release_id }}

@@ -1,5 +1,5 @@
-use code_search::ranking::{compute_avgdl, rank_documents, tokenize};
-use code_search::search::query::{create_term_patterns, preprocess_query, regex_escape};
+use probe::ranking::{compute_avgdl, rank_documents, tokenize};
+use probe::search::query::{create_term_patterns, preprocess_query, regex_escape};
 use proptest::prelude::*;
 
 proptest! {

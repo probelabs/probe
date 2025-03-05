@@ -10,5 +10,5 @@ mod search_limiter;
 pub mod block_merging;
 
 // Public exports
-pub use search_runner::perform_code_search;
+pub use search_runner::perform_probe;
 pub use search_output::format_and_print_search_results;

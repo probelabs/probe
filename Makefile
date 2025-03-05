@@ -1,4 +1,4 @@
-# Makefile for code-search Rust project
+# Makefile for probe Rust project
 
 # Configuration
 CARGO := cargo

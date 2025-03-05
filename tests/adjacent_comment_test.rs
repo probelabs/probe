@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::collections::HashSet;
 use tree_sitter::Parser as TSParser;
-use code_search::language::parser::parse_file_for_code_blocks;
+use probe::language::parser::parse_file_for_code_blocks;
 
 #[test]
 fn test_search_comment_with_term() -> Result<()> {

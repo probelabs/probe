@@ -5,12 +5,12 @@ import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, } f
 import { exec } from 'child_process';
 import { promisify } from 'util';
 const execAsync = promisify(exec);
-// Path to the code-search binary
-const CODE_SEARCH_PATH = process.env.CODE_SEARCH_PATH || '/Users/leonidbugaev/go/src/code-search/target/release/code-search';
-class CodeSearchServer {
+// Path to the probe binary
+const PROBE_PATH = process.env.PROBE_PATH || '/Users/leonidbugaev/go/src/code-search/target/release/probe';
+class ProbeServer {
     constructor() {
         this.server = new Server({
-            name: 'code-search-mcp',
+            name: 'probe-mcp',
             version: '0.1.0',
         }, {
             capabilities: {
@@ -60,7 +60,7 @@ class CodeSearchServer {
                             },
                             reranker: {
                                 type: 'string',
-                                enum: ['hybrid', 'bm25', 'tfidf'],
+                                enum: ['hybrid', 'hybrid2', 'bm25', 'tfidf'],
                                 description: 'Reranking method to use for search results',
                             },
                             frequencySearch: {
@@ -86,6 +86,10 @@ class CodeSearchServer {
                             allowTests: {
                                 type: 'boolean',
                                 description: 'Allow test files and test code blocks in search results (disabled by default)',
+                            },
+                            anyTerm: {
+                                type: 'boolean',
+                                description: 'Match files that contain any of the search terms (by default, files must contain all terms)',
                             },
                         },
                         required: ['path', 'query'],
@@ -167,8 +171,11 @@ class CodeSearchServer {
         if (args.allowTests) {
             cliArgs.push('--allow-tests');
         }
+        if (args.anyTerm) {
+            cliArgs.push('--any-term');
+        }
         // Execute the command
-        const command = `${CODE_SEARCH_PATH} ${cliArgs.join(' ')}`;
+        const command = `${PROBE_PATH} ${cliArgs.join(' ')}`;
         console.log(`Executing command: ${command}`);
         try {
             const { stdout, stderr } = await execAsync(command);
@@ -178,15 +185,15 @@ class CodeSearchServer {
             return stdout;
         }
         catch (error) {
-            console.error('Error executing code-search CLI:', error);
+            console.error('Error executing probe CLI:', error);
             throw error;
         }
     }
     async run() {
         const transport = new StdioServerTransport();
         await this.server.connect(transport);
-        console.error('Code Search MCP server running on stdio');
+        console.error('Probe MCP server running on stdio');
     }
 }
-const server = new CodeSearchServer();
+const server = new ProbeServer();
 server.run().catch(console.error);

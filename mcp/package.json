@@ -1,5 +1,5 @@
 {
-  "name": "code-search-mcp",
+  "name": "probe-mcp",
   "version": "1.0.0",
   "main": "src/index.js",
   "type": "module",
@@ -10,11 +10,11 @@
   },
   "keywords": [
     "mcp",
-    "code-search"
+    "probe"
   ],
   "author": "",
   "license": "ISC",
-  "description": "MCP server for code-search CLI",
+  "description": "MCP server for probe CLI",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.0"
   },

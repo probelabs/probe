@@ -72,14 +72,14 @@ type Second struct {
     
     // Test first comment - should only relate to First struct
     let first_comment = find_comment_node(&tree, 4).expect("Failed to find first comment");
-    let first_related = code_search::language::parser::find_related_code_node(first_comment, "go")
+    let first_related = probe::language::parser::find_related_code_node(first_comment, "go")
         .expect("Failed to find related node");
     assert_eq!(first_related.kind(), "type_declaration");
     assert_eq!(first_related.start_position().row + 1, 5); // First struct starts on line 5
     
     // Test second comment - should only relate to Second struct
     let second_comment = find_comment_node(&tree, 9).expect("Failed to find second comment");
-    let second_related = code_search::language::parser::find_related_code_node(second_comment, "go")
+    let second_related = probe::language::parser::find_related_code_node(second_comment, "go")
         .expect("Failed to find related node");
     assert_eq!(second_related.kind(), "type_declaration");
     assert_eq!(second_related.start_position().row + 1, 10); // Second struct starts on line 10
@@ -108,13 +108,13 @@ type OuterType struct {
     
     // Test outer comment
     let outer_comment = find_comment_node(&tree, 4).expect("Failed to find outer comment");
-    let outer_related = code_search::language::parser::find_related_code_node(outer_comment, "go")
+    let outer_related = probe::language::parser::find_related_code_node(outer_comment, "go")
         .expect("Failed to find related node");
     assert_eq!(outer_related.kind(), "type_declaration");
     
     // Test inner comment
     let inner_comment = find_comment_node(&tree, 6).expect("Failed to find inner comment");
-    let inner_related = code_search::language::parser::find_related_code_node(inner_comment, "go")
+    let inner_related = probe::language::parser::find_related_code_node(inner_comment, "go")
         .expect("Failed to find related node");
     // The inner comment should be associated with its struct_type
     assert_eq!(inner_related.kind(), "struct_type");
@@ -142,14 +142,14 @@ type StructB struct {
     
     // Test interface comment
     let interface_comment = find_comment_node(&tree, 4).expect("Failed to find interface comment");
-    let interface_related = code_search::language::parser::find_related_code_node(interface_comment, "go")
+    let interface_related = probe::language::parser::find_related_code_node(interface_comment, "go")
         .expect("Failed to find related node");
     assert_eq!(interface_related.kind(), "type_declaration");
     assert_eq!(interface_related.start_position().row + 1, 5);
     
     // Test struct comment
     let struct_comment = find_comment_node(&tree, 9).expect("Failed to find struct comment");
-    let struct_related = code_search::language::parser::find_related_code_node(struct_comment, "go")
+    let struct_related = probe::language::parser::find_related_code_node(struct_comment, "go")
         .expect("Failed to find related node");
     assert_eq!(struct_related.kind(), "type_declaration");
     assert_eq!(struct_related.start_position().row + 1, 10);
@@ -163,7 +163,7 @@ type StructB struct {
 #[test]
 fn test_go_comment_code_block_extraction() -> Result<()> {
     use std::collections::HashSet;
-    use code_search::language::parser::parse_file_for_code_blocks;
+    use probe::language::parser::parse_file_for_code_blocks;
     
     // Sample code with a comment and struct
     let code = r#"
