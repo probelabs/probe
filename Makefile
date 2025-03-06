@@ -144,6 +144,12 @@ run:
 run-release:
 	$(CARGO) run --release
 
+# Git hooks targets
+.PHONY: install-hooks
+install-hooks:
+	git config core.hooksPath .githooks
+	@echo "Git hooks installed successfully! Pre-commit checks are now enabled."
+
 # Help target
 .PHONY: help
 help:

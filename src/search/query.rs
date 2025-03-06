@@ -1,4 +1,5 @@
 use crate::ranking;
+use crate::search::tokenization::{split_camel_case, is_english_stop_word};
 use itertools::Itertools;
 use std::collections::HashSet;
 
@@ -21,16 +22,19 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
             .collect()
     } else {
         // For non-exact matching, apply stemming and stopword removal
-        let stop_words = ranking::stop_words();
         let stemmer = ranking::get_stemmer();
 
-        // Split by whitespace to preserve the original words for testing compatibility
+        // Split by whitespace first
         lowercase_query
             .split_whitespace()
-            .filter(|word| !word.is_empty() && !stop_words.contains(&word.to_string()))
+            .flat_map(|word| {
+                // Split each word on camel case boundaries
+                split_camel_case(word)
+            })
+            .filter(|word| !word.is_empty() && !is_english_stop_word(word))
             .map(|word| {
                 let original = word.to_string();
-                let stemmed = stemmer.stem(word).to_string();
+                let stemmed = stemmer.stem(&word).to_string();
                 (original, stemmed)
             })
             .collect()

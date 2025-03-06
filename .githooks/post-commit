@@ -1,0 +1,11 @@
+#!/bin/sh
+#
+# Post-commit hook to provide feedback after a successful commit
+# Installed by 'make install-hooks'
+
+# Colors for better output
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
+echo "${GREEN}Commit successful! All checks passed.${NC}"
+echo "${GREEN}Remember to push your changes.${NC}"

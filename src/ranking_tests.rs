@@ -1,7 +1,8 @@
 use crate::ranking::{
-    tokenize, stop_words, get_stemmer, compute_tf_df,
+    tokenize, get_stemmer, compute_tf_df,
     compute_avgdl, rank_documents
 };
+use crate::search::tokenization::is_stop_word;
 
 #[cfg(test)]
 mod tests {
@@ -10,17 +11,15 @@ mod tests {
 
     #[test]
     fn test_stop_words() {
-        let stop_words = stop_words();
-        
         // Check common English stop words
-        assert!(stop_words.contains("the"));
-        assert!(stop_words.contains("and"));
-        assert!(stop_words.contains("of"));
+        assert!(is_stop_word("the"));
+        assert!(is_stop_word("and"));
+        assert!(is_stop_word("of"));
         
         // Check programming-specific stop words
-        assert!(stop_words.contains("function"));
-        assert!(stop_words.contains("class"));
-        assert!(stop_words.contains("return"));
+        assert!(is_stop_word("function"));
+        assert!(is_stop_word("class"));
+        assert!(is_stop_word("return"));
     }
 
     #[test]

@@ -9,6 +9,7 @@ mod search_options;
 mod search_output;
 pub mod search_runner;
 mod search_tokens;
+pub mod tokenization;
 
 // Public exports
 pub use search_options::SearchOptions;
