@@ -305,22 +305,6 @@ Each release includes:
 
 ---
 
-## Project Structure
-
-.
-├── src/
-│   ├── language/           # Language-specific parsing modules
-│   ├── search/             # Search implementation modules
-│   └── main.rs             # CLI entry point
-├── tests/
-│   └── mocks/              # Mock data for testing
-├── mcp/                    # MCP server implementation
-├── target/                 # Cargo build artifacts
-└── .github/workflows/      # GitHub Actions CI/CD workflows
-
----
-
-
 We believe that **local, privacy-focused, semantic code search** is essential for the future of AI-assisted development. Probe is built to empower developers and AI alike to navigate and comprehend large codebases more effectively.
 
 For questions or contributions, please open an issue on [GitHub](https://github.com/buger/probe/issues). Happy coding—and searching!
