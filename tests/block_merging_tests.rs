@@ -182,7 +182,7 @@ fn test_integration_with_search_flow() {
         allow_tests: true,
         any_term: true,
         exact: false,
-        merge_blocks: true,
+        no_merge: false,
         merge_threshold: Some(5),
     };
 
@@ -262,4 +262,97 @@ fn another_test_function() {
     // Write files to disk
     fs::write(file1_path, file1_content).unwrap();
     fs::write(file2_path, file2_content).unwrap();
+}
+
+#[test]
+fn test_no_merge_flag() {
+    // Create a temporary directory for testing
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Create test files with overlapping code blocks
+    create_test_files(temp_path);
+
+    // Create search query
+    let queries = vec!["function test".to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // First test with merging enabled (no_merge = false)
+    let options_with_merge = SearchOptions {
+        path: temp_path,
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        include_filenames: true,
+        reranker: "combined",
+        frequency_search: false,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: true,
+        any_term: true,
+        exact: false,
+        no_merge: false,
+        merge_threshold: Some(5),
+    };
+
+    // Run a search that should produce merged blocks
+    let merged_results = perform_probe(&options_with_merge).unwrap();
+
+    // Now test with merging disabled (no_merge = true)
+    let options_without_merge = SearchOptions {
+        path: temp_path,
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        include_filenames: true,
+        reranker: "combined",
+        frequency_search: false,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: true,
+        any_term: true,
+        exact: false,
+        no_merge: true,
+        merge_threshold: Some(5),
+    };
+
+    // Run a search that should not merge blocks
+    let unmerged_results = perform_probe(&options_without_merge).unwrap();
+
+    // Verify that we got results in both cases
+    assert!(!merged_results.results.is_empty(), "Search with merging should return results");
+    assert!(!unmerged_results.results.is_empty(), "Search without merging should return results");
+
+    // Count results per file for both searches
+    let mut merged_file_counts = std::collections::HashMap::new();
+    for result in &merged_results.results {
+        *merged_file_counts.entry(result.file.clone()).or_insert(0) += 1;
+    }
+
+    let mut unmerged_file_counts = std::collections::HashMap::new();
+    for result in &unmerged_results.results {
+        *unmerged_file_counts.entry(result.file.clone()).or_insert(0) += 1;
+    }
+
+    // Find the test_functions.rs file in both result sets
+    let test_functions_file = temp_path.join("test_functions.rs").to_string_lossy().to_string();
+    
+    let merged_count = merged_file_counts.get(&test_functions_file).unwrap_or(&0);
+    let unmerged_count = unmerged_file_counts.get(&test_functions_file).unwrap_or(&0);
+    
+    // With merging enabled, we should have fewer or equal results per file
+    assert!(
+        *merged_count <= *unmerged_count,
+        "With merging enabled, we should have fewer or equal results per file"
+    );
+    
+    // If we found multiple blocks in the unmerged results, we should have fewer blocks in the merged results
+    if *unmerged_count > 1 {
+        assert!(
+            *merged_count < *unmerged_count,
+            "With merging enabled, we should have fewer blocks than without merging"
+        );
+    }
 }

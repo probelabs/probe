@@ -74,6 +74,12 @@ jobs:
       - name: Build Release
         run: cargo build --release --target ${{ matrix.target }}
 
+      # Install zip on Windows
+      - name: Install zip on Windows
+        if: runner.os == 'Windows'
+        run: |
+          choco install zip -y
+
       # Package the binary into an archive
       - name: Package Binary
         shell: bash

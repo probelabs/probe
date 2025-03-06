@@ -15,7 +15,7 @@ pub struct SearchOptions<'a> {
     pub allow_tests: bool,
     pub any_term: bool,
     pub exact: bool,
-    pub merge_blocks: bool,
+    pub no_merge: bool,
     pub merge_threshold: Option<usize>,
 }
 
@@ -33,6 +33,6 @@ pub struct FrequencySearchOptions<'a> {
     pub allow_tests: bool,
     pub any_term: bool,
     pub exact: bool,
-    pub merge_blocks: bool,
+    pub no_merge: bool,
     pub merge_threshold: Option<usize>,
 }

@@ -35,7 +35,7 @@ fn main() -> Result<()> {
         allow_tests: args.allow_tests,
         any_term: args.any_term,
         exact: args.exact,
-        merge_blocks: args.merge_blocks,
+        no_merge: args.no_merge,
         merge_threshold: args.merge_threshold,
     };
 

@@ -45,7 +45,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         allow_tests,
         any_term,
         exact,
-        merge_blocks,
+        no_merge,
         merge_threshold,
     } = options;
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -111,7 +111,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             allow_tests: *allow_tests,
             any_term: *any_term,
             exact: *exact,
-            merge_blocks: *merge_blocks,
+            no_merge: *no_merge,
             merge_threshold: *merge_threshold,
         });
     }
@@ -584,7 +584,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     // Apply post-ranking block merging
     let block_merging_start = Instant::now();
-    let merged_results = if !limited_results.results.is_empty() && *merge_blocks {
+    let merged_results = if !limited_results.results.is_empty() && !*no_merge {
         use crate::search::block_merging::merge_ranked_blocks;
         let original_count = limited_results.results.len();
         let merged = merge_ranked_blocks(limited_results.results, *merge_threshold);
@@ -648,7 +648,7 @@ pub fn perform_frequency_search(options: &FrequencySearchOptions) -> Result<Limi
         allow_tests,
         any_term,
         exact,
-        merge_blocks,
+        no_merge,
         merge_threshold,
     } = options;
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -1049,7 +1049,7 @@ pub fn perform_frequency_search(options: &FrequencySearchOptions) -> Result<Limi
 
     // Apply post-ranking block merging
     let block_merging_start = Instant::now();
-    let merged_results = if !limited.results.is_empty() && *merge_blocks {
+    let merged_results = if !limited.results.is_empty() && !*no_merge {
         use crate::search::block_merging::merge_ranked_blocks;
         let original_count = limited.results.len();
         let merged = merge_ranked_blocks(limited.results, *merge_threshold);

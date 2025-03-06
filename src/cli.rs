@@ -2,7 +2,7 @@ use clap::Parser as ClapParser;
 use std::path::PathBuf;
 
 #[derive(ClapParser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about = "AI-friendly, fully local, semantic code search tool for large codebases", long_about = None)]
 pub struct Args {
     /// Search pattern
     #[arg(value_name = "PATTERN")]
@@ -56,9 +56,9 @@ pub struct Args {
     #[arg(long = "any-term")]
     pub any_term: bool,
 
-    /// Merge adjacent code blocks after ranking (disabled by default)
-    #[arg(long = "merge-blocks", default_value = "false")]
-    pub merge_blocks: bool,
+    /// Disable merging of adjacent code blocks after ranking (merging enabled by default)
+    #[arg(long = "no-merge", default_value = "false")]
+    pub no_merge: bool,
 
     /// Maximum number of lines between code blocks to consider them adjacent for merging (default: 5)
     #[arg(long = "merge-threshold")]

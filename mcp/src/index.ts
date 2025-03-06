@@ -10,11 +10,29 @@ import {
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import { downloadProbeBinary } from './downloader.js';
+import fs from 'fs-extra';
+import { fileURLToPath } from 'url';
 
 const execAsync = promisify(exec);
 
-// Path to the probe binary
-const PROBE_PATH = process.env.PROBE_PATH || '/Users/leonidbugaev/go/src/probe/target/release/probe';
+// Get the package.json to determine the version
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const packageJsonPath = path.resolve(__dirname, '..', '..', 'package.json');
+let packageVersion = '0.0.0';
+
+try {
+  if (fs.existsSync(packageJsonPath)) {
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+    packageVersion = packageJson.version || '0.0.0';
+  }
+} catch (error) {
+  console.error('Error reading package.json:', error);
+}
+
+// Path to the probe binary (will be set after download)
+let PROBE_PATH = process.env.PROBE_PATH || '';
 
 interface SearchCodeArgs {
   path: string;
@@ -30,7 +48,7 @@ interface SearchCodeArgs {
   maxTokens?: number;
   allowTests?: boolean;
   anyTerm?: boolean;
-  mergeBlocks?: boolean;
+  noMerge?: boolean;
   mergeThreshold?: number;
 }
 
@@ -41,7 +59,7 @@ class ProbeServer {
     this.server = new Server(
       {
         name: 'probe-mcp',
-        version: '0.1.0',
+        version: packageVersion,
       },
       {
         capabilities: {
@@ -126,9 +144,9 @@ class ProbeServer {
                 type: 'boolean',
                 description: 'Match files that contain any of the search terms (by default, files must contain all terms)',
               },
-              mergeBlocks: {
+              noMerge: {
                 type: 'boolean',
-                description: 'Merge adjacent code blocks after ranking (disabled by default)',
+                description: 'Disable merging of adjacent code blocks after ranking (merging enabled by default)',
               },
               mergeThreshold: {
                 type: 'number',
@@ -239,8 +257,8 @@ class ProbeServer {
     }
     
     // Add new options
-    if (args.mergeBlocks) {
-      cliArgs.push('--merge-blocks');
+    if (args.noMerge) {
+      cliArgs.push('--no-merge');
     }
     
     if (args.mergeThreshold !== undefined) {
@@ -266,6 +284,21 @@ class ProbeServer {
   }
 
   async run() {
+    // Download the probe binary before starting the server
+    try {
+      console.log(`Downloading probe binary (version: ${packageVersion})...`);
+      PROBE_PATH = await downloadProbeBinary(packageVersion);
+      console.log(`Using probe binary at: ${PROBE_PATH}`);
+    } catch (error) {
+      console.error('Error downloading probe binary:', error);
+      console.log('Falling back to environment variable PROBE_PATH if available');
+      
+      if (!PROBE_PATH) {
+        console.error('No probe binary available. Please set PROBE_PATH environment variable.');
+        process.exit(1);
+      }
+    }
+    
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     console.error('Probe MCP server running on stdio');

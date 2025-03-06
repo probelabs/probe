@@ -1,14 +1,42 @@
+<p align="center">
+  <img src="logo.png" alt="Probe Logo" width="200">
+</p>
+
 # Probe
 
-This Rust tool combines ripgrep's searching capabilities with tree-sitter's code parsing to find and extract complete code blocks (functions, classes, structs, etc.) based on search patterns. Probe can be used as both a CLI tool and an MCP server.
+Probe is an **AI-friendly, fully local, semantic code search** tool designed to power the next generation of AI coding assistants. By combining the speed of [ripgrep](https://github.com/BurntSushi/ripgrep) with the code-aware parsing of [tree-sitter](https://tree-sitter.github.io/tree-sitter/), Probe delivers precise results with complete code blocks—perfect for large codebases and AI-driven development workflows.
+
+---
+
+## Quick Start
+
+**Basic Search Example**  
+Search for code containing the phrase "llm pricing" in the current directory:
+
+~~~bash
+probe "llm pricing" ./
+~~~
+
+**Advanced Search (with Token Limiting)**  
+Search for "partial prompt injection" in the current directory but limit the total tokens to 10000 (useful for AI tools with context window constraints):
+
+~~~bash
+probe "prompt injection" ./ --max-tokens 10000
+~~~
+
+---
 
 ## Features
 
-- Uses ripgrep as a library for fast code searches
-- Leverages tree-sitter to parse code and extract complete code blocks
-- Ensures full functions/structs are extracted, not just matching lines
-- Supports multiple programming languages
-- Can run as a CLI tool or as an MCP server
+- **AI-Friendly**: Extracts **entire functions, classes, or structs** so AI models get full context.  
+- **Fully Local**: Keeps your code on your machine—no external APIs.  
+- **Powered by ripgrep**: Extremely fast scanning of large codebases.  
+- **Tree-sitter Integration**: Parses and understands code structure accurately.  
+- **Re-Rankers & NLP**: Uses tokenization, stemming, BM25, TF-IDF, or hybrid ranking methods for better search results.  
+- **Multi-Language**: Works with popular languages like Rust, Python, JavaScript, TypeScript, Java, Go, C/C++, etc.  
+- **Flexible**: Run as a CLI tool or an MCP server for advanced AI integrations.
+
+---
 
 ## Installation
 
@@ -16,313 +44,283 @@ This Rust tool combines ripgrep's searching capabilities with tree-sitter's code
 
 You can install Probe with a single command:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/leonidbugaev/code-search/main/install.sh | bash
-```
+~~~bash
+curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
+~~~
 
-This command downloads and executes the installation script, which automatically:
+**What this script does**:
 
-1. Detects your operating system and architecture
-2. Fetches the latest release from GitHub
-3. Downloads the appropriate binary for your system
-4. Verifies the checksum for security
+1. Detects your operating system and architecture  
+2. Fetches the latest release from GitHub  
+3. Downloads the appropriate binary for your system  
+4. Verifies the checksum for security  
 5. Installs the binary to `/usr/local/bin`
 
 ### Requirements
 
-- **Operating Systems**: macOS, Linux, or Windows (with MSYS/Git Bash/WSL)
-- **Architectures**: x86_64 (all platforms) or ARM64 (macOS only)
-- **Tools**: curl, bash, and either sudo access or root privileges
+- **Operating Systems**: macOS, Linux, or Windows (with MSYS/Git Bash/WSL)  
+- **Architectures**: x86_64 (all platforms) or ARM64 (macOS only)  
+- **Tools**: `curl`, `bash`, and `sudo`/root privileges  
 
 ### Manual Installation
 
-You can download pre-built binaries for your platform from the [GitHub Releases](https://github.com/leonidbugaev/code-search/releases) page.
-
-1. Download the appropriate binary for your platform:
+1. Download the appropriate binary for your platform from the [GitHub Releases](https://github.com/buger/probe/releases) page:
    - `probe-x86_64-linux.tar.gz` for Linux (x86_64)
    - `probe-x86_64-darwin.tar.gz` for macOS (Intel)
    - `probe-aarch64-darwin.tar.gz` for macOS (Apple Silicon)
    - `probe-x86_64-windows.zip` for Windows
-
 2. Extract the archive:
-   ```bash
+   ~~~bash
    # For Linux/macOS
    tar -xzf probe-*-*.tar.gz
    
    # For Windows
    unzip probe-x86_64-windows.zip
-   ```
-
+   ~~~
 3. Move the binary to a location in your PATH:
-   ```bash
+   ~~~bash
    # For Linux/macOS
    sudo mv probe /usr/local/bin/
    
    # For Windows
    # Move probe.exe to a directory in your PATH
-   ```
+   ~~~
 
 ### Building from Source
 
 1. Install Rust and Cargo (if not already installed):
-   ```bash
+   ~~~bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   ```
-
+   ~~~
 2. Clone this repository:
-   ```bash
-   git clone https://github.com/leonidbugaev/code-search.git
+   ~~~bash
+   git clone https://github.com/buger/probe.git
    cd code-search
-   ```
-
+   ~~~
 3. Build the project:
-   ```bash
+   ~~~bash
    cargo build --release
-   ```
-
+   ~~~
 4. (Optional) Install globally:
-   ```bash
+   ~~~bash
    cargo install --path .
-   ```
+   ~~~
 
 ### Verifying the Installation
 
-After installation, verify that Probe is working correctly:
-
-```bash
+~~~bash
 probe --version
-```
+~~~
 
 ### Troubleshooting
 
-If you encounter any issues during installation:
-
-- Ensure you have the necessary permissions to write to `/usr/local/bin`
-- Check that your system meets the requirements
-- Try the manual installation method
-- Report issues on the [GitHub repository](https://github.com/leonidbugaev/code-search/issues)
+- **Permissions**: Ensure you can write to `/usr/local/bin`.  
+- **System Requirements**: Double-check your OS/architecture.  
+- **Manual Install**: If the quick install script fails, try [Manual Installation](#manual-installation).  
+- **GitHub Issues**: Report issues on the [GitHub repository](https://github.com/buger/probe/issues).
 
 ### Uninstalling
 
-To uninstall Probe:
-
-```bash
+~~~bash
 sudo rm /usr/local/bin/probe
-```
+~~~
 
-## Releasing New Versions
-
-This project uses GitHub Actions to automatically build and release binaries for multiple platforms.
-
-### Creating a New Release
-
-1. Update the version in `Cargo.toml`
-2. Commit your changes
-3. Create and push a new tag:
-   ```bash
-   git tag -a v0.1.0 -m "Release v0.1.0"
-   git push origin v0.1.0
-   ```
-4. GitHub Actions will automatically:
-   - Build binaries for Linux, macOS (Intel and Apple Silicon), and Windows
-   - Create a GitHub release
-   - Upload the binaries as release assets
-   - Generate checksums for verification
-
-### Release Artifacts
-
-Each release includes:
-- Linux binary (x86_64)
-- macOS binaries (x86_64 and aarch64)
-- Windows binary (x86_64)
-- SHA256 checksums for each binary
-
-## Project Structure
-
-The project is organized into the following directories:
-
-- `src/` - Source code for the application
-  - `language/` - Language-specific parsing modules
-  - `search/` - Search implementation modules
-- `tests/` - Test files and utilities
-  - `mocks/` - Mock data files for testing
-- `target/` - Build artifacts (generated by Cargo)
-- `.github/workflows/` - GitHub Actions workflow configurations for CI/CD
+---
 
 ## Usage
 
 ### CLI Mode
 
-```bash
+~~~bash
 probe <SEARCH_PATTERN> [OPTIONS]
-```
+~~~
 
-#### Options
+#### Key Options
 
-- `<SEARCH_PATTERN>` - Pattern to search for (required, positional argument)
-- `--paths` - Directory paths to search in (defaults to current directory)
-- `--files-only` - Skip AST parsing and just output unique files
-- `--ignore` - Custom patterns to ignore (in addition to .gitignore and common patterns)
-- `--include-filenames`, `-n` - Include files whose names match query words
-- `--reranker`, `-r` - Reranking method to use for search results (hybrid, hybrid2, bm25, tfidf)
-  - `hybrid` (default) - Simple combination of TF-IDF and BM25 scores
-  - `hybrid2` - Comprehensive multi-metric ranking that considers term matches, code structure, and more
-  - `bm25` - BM25 ranking algorithm (better for natural language queries)
-  - `tfidf` - TF-IDF ranking algorithm (better for code-specific terms)
-- `--frequency`, `-s` - Use frequency-based search with stemming and stopword removal (enabled by default)
-- `--exact` - Use exact matching without stemming or stopword removal (overrides frequency search)
-- `--max-results` - Maximum number of results to return
-- `--max-bytes` - Maximum total bytes of code content to return
-- `--max-tokens` - Maximum total tokens in code content to return (for AI usage)
-- `--allow-tests` - Allow test files and test code blocks in search results (disabled by default)
-- `--any-term` - Match files that contain any of the search terms (by default, files must contain all terms)
-- `--merge-blocks` - Merge adjacent code blocks after ranking (disabled by default)
-- `--merge-threshold` - Maximum number of lines between code blocks to consider them adjacent for merging (default: 5)
+- `<SEARCH_PATTERN>`: Pattern to search for (required)  
+- `--paths`: Directories to search (defaults to current directory)  
+- `--files-only`: Skip AST parsing; only list files with matches  
+- `--ignore`: Custom ignore patterns (in addition to `.gitignore`)  
+- `--include-filenames, -n`: Include files whose names match query words  
+- `--reranker, -r`: Choose a re-ranking algorithm (`hybrid`, `hybrid2`, `bm25`, `tfidf`)  
+- `--frequency, -s`: Frequency-based search (tokenization, stemming, stopword removal)  
+- `--exact`: Exact matching (overrides frequency search)  
+- `--max-results`: Maximum number of results to return  
+- `--max-bytes`: Maximum total bytes of code to return  
+- `--max-tokens`: Maximum total tokens of code to return (useful for AI)  
+- `--allow-tests`: Include test files and test code blocks  
+- `--any-term`: Match files containing **any** query terms (default is **all** terms)  
+- `--no-merge`: Disable merging of adjacent code blocks after ranking (merging enabled by default)
+- `--merge-threshold`: Max lines between code blocks to consider them adjacent for merging (default: 5)
 
 #### Examples
 
-```bash
-# Search for "setTools" in the current directory (uses frequency search by default)
-probe setTools
+~~~bash
+# 1) Search for "setTools" in the current directory with frequency-based search
+probe "setTools"
 
-# Search for "impl" in the src directory with exact matching
-probe impl --paths ./src --exact
+# 2) Search for "impl" in ./src with exact matching
+probe "impl" --paths ./src --exact
 
-# Search for "search" with a maximum of 5 results
-probe search --max-results 5
+# 3) Search for "search" returning only the top 5 results
+probe "search" --max-tokens 10000
 
-# Search for "function" and merge adjacent code blocks
-probe function --merge-blocks --merge-threshold 3
-```
+# 4) Search for "function" and disable merging of adjacent code blocks
+probe "function" --no-merge
+~~~
 
 ### MCP Server Mode
 
-To run Probe as an MCP server:
+Run Probe as an MCP server:
 
-```bash
+~~~bash
 cd mcp && npm run build && node build/index.js
-```
+~~~
 
-This starts the tool as an MCP server that can be used with the Model Context Protocol. The server exposes a `search_code` tool that can be used to search for code patterns and extract complete code blocks.
+This starts a server exposing a `search_code` tool for use with the [Model Context Protocol (MCP)](https://github.com/multiprocessio/mcp).
 
-#### MCP Tool: search_code
+#### MCP Tool: `search_code`
 
-This tool should be used every time you need to search the codebase for understanding code structure, finding implementations, or identifying patterns. Queries can be any text (including multi-word phrases like "IP whitelist"), but prefer simple, focused queries for better results. Use maxResults parameter to limit the number of results when needed.
+- **Purpose**: Search code blocks based on various parameters.  
+- **Input Schema** (JSON):
+  ~~~json
+  {
+    "path": "Directory path to search in",
+    "query": ["Query patterns to search for"],
+    "filesOnly": false,
+    "ignore": ["Patterns to ignore"],
+    "includeFilenames": false,
+    "reranker": "hybrid",
+    "frequencySearch": true,
+    "exact": false,
+    "maxResults": null,
+    "maxBytes": null,
+    "maxTokens": null,
+    "allowTests": false,
+    "noMerge": false,
+    "mergeThreshold": 5
+  }
+  ~~~
 
-Input schema:
-```json
-{
-  "path": "Directory path to search in",
-  "query": ["Query patterns to search for"],
-  "filesOnly": false,
-  "ignore": ["Patterns to ignore"],
-  "includeFilenames": false,
-  "reranker": "hybrid",
-  "frequencySearch": true,
-  "exact": false,
-  "maxResults": null,
-  "maxBytes": null,
-  "maxTokens": null,
-  "allowTests": false,
-  "mergeBlocks": false,
-  "mergeThreshold": 5
-}
-```
+- **Usage Example** (MCP client in Rust):
+  ~~~rust
+  use std::sync::Arc;
+  use mcp_rust_sdk::{Client, transport::stdio::StdioTransport};
+  use serde_json::json;
 
-Note: `frequencySearch` is enabled by default. If you want exact matching without stemming or stopword removal, set `exact` to `true` which will override the frequency search behavior.
+  #[tokio::main]
+  async fn main() -> Result<(), Box<dyn std::error::Error>> {
+      let (transport, _) = StdioTransport::new();
+      let client = Client::new(transport);
 
-The `reranker` parameter can be set to one of the following values:
-- `hybrid` (default) - Simple combination of TF-IDF and BM25 scores
-- `hybrid2` - Comprehensive multi-metric ranking that considers term matches, code structure, and more
-- `bm25` - BM25 ranking algorithm (better for natural language queries)
-- `tfidf` - TF-IDF ranking algorithm (better for code-specific terms)
+      let response = client.request(
+          "call_tool",
+          Some(json!({
+              "name": "search_code",
+              "arguments": {
+                  "path": "./src",
+                  "query": ["impl", "fn"],
+                  "filesOnly": false,
+                  "exact": true
+              }
+          }))
+      ).await?;
 
-Example usage with MCP client:
-```rust
-use std::sync::Arc;
-use mcp_rust_sdk::{Client, transport::stdio::StdioTransport};
-use serde_json::json;
+      println!("Search results: {:?}", response);
+      Ok(())
+  }
+  ~~~
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a stdio transport to connect to the server
-    let (transport, _) = StdioTransport::new();
-    
-    // Create and connect the client
-    let client = Client::new(transport);
-    
-    // Call the search_code tool
-    let response = client.request(
-        "call_tool",
-        Some(json!({
-            "name": "search_code",
-            "arguments": {
-                "path": "./src",
-                "query": ["impl", "fn"],
-                "filesOnly": false,
-                "exact": true  // Use exact matching instead of frequency-based search
-            }
-        }))
-    ).await?;
-    
-    println!("Search results: {:?}", response);
-    
-    Ok(())
-}
-```
+The MCP server implements:
+- `initialize`  
+- `handle_method` (for `list_tools`, `call_tool`, etc.)  
+- `shutdown`
 
-The server implements the ServerHandler trait from the MCP Rust SDK, providing:
-
-1. `initialize` - Handles client connection and capabilities negotiation
-2. `handle_method` - Processes method calls like list_tools, call_tool, etc.
-3. `shutdown` - Handles graceful server shutdown
-
-The server supports the following MCP methods:
-- `list_tools` - Returns information about the available tools
-- `call_tool` - Executes the search_code tool with the provided parameters
-- `list_resources` - Returns an empty list (no resources implemented)
-- `list_resource_templates` - Returns an empty list (no resource templates implemented)
+---
 
 ## Supported Languages
 
-Currently, the tool supports:
-- Rust (.rs)
-- JavaScript (.js, .jsx)
-- TypeScript (.ts, .tsx)
-- Python (.py)
-- Go (.go)
-- C (.c, .h)
-- C++ (.cpp, .cc, .cxx, .hpp, .hxx)
-- Java (.java)
-- Ruby (.rb)
-- PHP (.php)
-- Markdown (.md, .markdown)
+Probe currently supports:
+
+- **Rust** (`.rs`)  
+- **JavaScript / JSX** (`.js`, `.jsx`)  
+- **TypeScript / TSX** (`.ts`, `.tsx`)  
+- **Python** (`.py`)  
+- **Go** (`.go`)  
+- **C / C++** (`.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx`)  
+- **Java** (`.java`)  
+- **Ruby** (`.rb`)  
+- **PHP** (`.php`)  
+- **Markdown** (`.md`, `.markdown`)
+
+---
 
 ## How It Works
 
-1. The tool scans files in the specified directory using ripgrep
-2. For each match, it parses the file with tree-sitter to build an AST
-3. It then finds the smallest AST node that:
-   - Contains the matching line
-   - Represents a complete code block (function, class, struct, etc.)
-4. Finally, it extracts and displays these code blocks with file information
+Probe combines **fast file scanning** with **deep code parsing** to provide highly relevant, context-aware results:
+
+1. **Ripgrep Scanning**  
+   Probe uses ripgrep to quickly search across your files, identifying lines that match your query. Ripgrep’s efficiency allows it to handle massive codebases at lightning speed.
+
+2. **AST Parsing with Tree-sitter**  
+   For each file containing matches, Probe uses tree-sitter to parse the file into an Abstract Syntax Tree (AST). This process ensures that code blocks (functions, classes, structs) can be identified precisely.
+
+3. **NLP & Re-Rankers**  
+   Next, Probe applies classical NLP methods—tokenization, stemming, and stopword removal—alongside re-rankers such as **BM25**, **TF-IDF**, or the **hybrid** approach (combining multiple ranking signals). This step elevates the most relevant code blocks to the top, especially helpful for AI-driven searches.
+
+4. **Block Extraction**  
+   Probe identifies the smallest complete AST node containing each match (e.g., a full function or class). It extracts these code blocks and aggregates them into search results.
+
+5. **Context for AI**  
+   Finally, these structured blocks can be returned directly or fed into an AI system. By providing the full context of each code segment, Probe helps AI models navigate large codebases and produce more accurate insights.
+
+---
 
 ## Adding Support for New Languages
 
-To add support for a new programming language:
+1. **Tree-sitter Grammar**: In `Cargo.toml`, add the tree-sitter parser for the new language.  
+2. **Language Module**: Create a new file in `src/language/` for parsing logic.  
+3. **Implement Language Trait**: Adapt the parse method for the new language constructs.  
+4. **Factory Update**: Register your new language in Probe’s detection mechanism.
 
-1. Add the tree-sitter grammar as a dependency in `Cargo.toml`:
-   ```toml
-   [dependencies]
-   tree-sitter-go = "0.20"  # Example for Go
-   ```
+---
 
-2. Create a new file in the `src/language` directory for the language
-3. Implement the `Language` trait for the new language
-4. Update the language factory to support the new file extension
+## Releasing New Versions
 
-## Troubleshooting
+Probe uses GitHub Actions for multi-platform builds and releases.
 
-- **No matches found**: Verify your search pattern and check if there are matches using the regular ripgrep tool
-- **File parsing errors**: Some files may have syntax errors or use language features not supported by the tree-sitter grammar
-- **Missing code blocks**: Update the language implementation to support additional node types for your language
+1. **Update `Cargo.toml`** with the new version.  
+2. **Create a new Git tag**:
+   ~~~bash
+   git tag -a vX.Y.Z -m "Release vX.Y.Z"
+   git push origin vX.Y.Z
+   ~~~
+3. **GitHub Actions** will build, package, and draft a new release with checksums.
+
+Each release includes:
+- Linux binary (x86_64)  
+- macOS binaries (x86_64 and aarch64)  
+- Windows binary (x86_64)  
+- SHA256 checksums  
+
+---
+
+## Project Structure
+
+.
+├── src/
+│   ├── language/           # Language-specific parsing modules
+│   ├── search/             # Search implementation modules
+│   └── main.rs             # CLI entry point
+├── tests/
+│   └── mocks/              # Mock data for testing
+├── mcp/                    # MCP server implementation
+├── target/                 # Cargo build artifacts
+└── .github/workflows/      # GitHub Actions CI/CD workflows
+
+---
+
+
+We believe that **local, privacy-focused, semantic code search** is essential for the future of AI-assisted development. Probe is built to empower developers and AI alike to navigate and comprehend large codebases more effectively.
+
+For questions or contributions, please open an issue on [GitHub](https://github.com/buger/probe/issues). Happy coding—and searching!

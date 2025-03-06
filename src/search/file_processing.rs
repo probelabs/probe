@@ -145,10 +145,21 @@ pub fn process_file_by_filename(
             .flat_map(|terms| terms.iter().cloned())
             .collect();
         let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
+        
+        // Ensure we use the same stemming as query processing
         let block_terms = preprocess_text(&content, false);
+        
+        // Debug logging for stemming comparison
+        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        if debug_mode {
+            println!("DEBUG: File by filename terms after stemming: {:?}", block_terms);
+            println!("DEBUG: Query terms after stemming: {:?}", unique_query_terms);
+        }
+        
         let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
             0
         } else {
+            // Use the same stemming approach for comparison
             block_terms
                 .iter()
                 .filter(|t| unique_query_terms.contains(*t))
@@ -357,7 +368,7 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 "".to_string()
             };
 
-            // Calculate block term matches
+            // Calculate block term matches - ensure we use the same stemming as query processing
             let block_terms = preprocess_text(&full_code, false);
 
             // Use preprocessed query terms if available, otherwise generate them
@@ -376,10 +387,17 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
 
             let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
 
+            // Debug logging for stemming comparison
+            if debug_mode {
+                println!("DEBUG: Block terms after stemming: {:?}", block_terms);
+                println!("DEBUG: Query terms after stemming: {:?}", unique_query_terms);
+            }
+
             // Calculate unique terms matched in the block
             let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
                 0
             } else {
+                // Use the same stemming approach for comparison
                 block_terms
                     .iter()
                     .filter(|t| unique_query_terms.contains(*t))
@@ -543,7 +561,7 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 );
             }
 
-            // Calculate block term matches
+            // Calculate block term matches - ensure we use the same stemming as query processing
             let block_terms = preprocess_text(&context_code, false);
 
             // Use preprocessed query terms if available, otherwise generate them
@@ -562,10 +580,17 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
 
             let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
 
+            // Debug logging for stemming comparison
+            if debug_mode {
+                println!("DEBUG: Fallback context block terms after stemming: {:?}", block_terms);
+                println!("DEBUG: Query terms after stemming: {:?}", unique_query_terms);
+            }
+
             // Calculate unique terms matched in the block
             let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
                 0
             } else {
+                // Use the same stemming approach for comparison
                 block_terms
                     .iter()
                     .filter(|t| unique_query_terms.contains(*t))
@@ -658,7 +683,7 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
 
     // Define a function to determine if we should return the full file
     fn should_return_full_file(coverage_percentage: f64, total_lines: usize) -> bool {
-        total_lines >= 5 && coverage_percentage >= 99.0
+        total_lines >= 5 && coverage_percentage >= 80.0
     }
 
     // Calculate coverage percentage with safeguards for division by zero
@@ -686,7 +711,7 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
         // Clear the previous results and return the entire file
         results.clear();
 
-        // Calculate block term matches for the entire file
+        // Calculate block term matches for the entire file - ensure we use the same stemming as query processing
         let block_terms = preprocess_text(&content, false);
 
         // Use preprocessed query terms if available, otherwise generate them
@@ -705,10 +730,17 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
 
         let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
 
+        // Debug logging for stemming comparison
+        if debug_mode {
+            println!("DEBUG: Full file terms after stemming: {:?}", block_terms);
+            println!("DEBUG: Query terms after stemming: {:?}", unique_query_terms);
+        }
+
         // Calculate unique terms matched in the file
         let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
             0
         } else {
+            // Use the same stemming approach for comparison
             block_terms
                 .iter()
                 .filter(|t| unique_query_terms.contains(*t))

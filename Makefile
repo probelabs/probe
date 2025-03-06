@@ -74,10 +74,11 @@ macos-arm:
 windows:
 	@echo "Building for Windows ($(WINDOWS_TARGET))..."
 	# Note: You may need to install the target with: rustup target add $(WINDOWS_TARGET)
+	# Note: You need to have the 'zip' utility installed on Windows (e.g., via chocolatey: choco install zip)
 	$(CARGO) build --release --target $(WINDOWS_TARGET)
 	mkdir -p $(RELEASE_DIR)/windows
 	cp target/$(WINDOWS_TARGET)/release/$(BINARY_NAME).exe $(RELEASE_DIR)/windows/$(BINARY_NAME).exe
-	zip -j $(RELEASE_DIR)/$(BINARY_NAME)-$(VERSION)-windows-x86_64.zip $(RELEASE_DIR)/windows/$(BINARY_NAME).exe
+	zip -j $(RELEASE_DIR)/$(BINARY_NAME)-$(VERSION)-$(WINDOWS_TARGET).zip $(RELEASE_DIR)/windows/$(BINARY_NAME).exe
 
 # Test targets
 .PHONY: test

@@ -147,7 +147,7 @@ fn test_search_single_term() {
         allow_tests: false,
         any_term: false,
         exact: false,
-        merge_blocks: false,
+        no_merge: true,
         merge_threshold: None,
     };
 
@@ -208,7 +208,7 @@ fn test_search_multiple_terms() {
         allow_tests: false,
         any_term: false,
         exact: false,
-        merge_blocks: false,
+        no_merge: true,
         merge_threshold: None,
     };
 
@@ -251,7 +251,7 @@ fn test_search_files_only() {
         allow_tests: false,
         any_term: false,
         exact: false,
-        merge_blocks: false,
+        no_merge: true,
         merge_threshold: None,
     };
 
@@ -323,7 +323,7 @@ fn test_search_include_filenames() {
         allow_tests: false,
         any_term: false,
         exact: false,
-        merge_blocks: false,
+        no_merge: true,
         merge_threshold: None,
     };
 
@@ -376,7 +376,7 @@ fn test_search_with_limits() {
         allow_tests: false,
         any_term: false,
         exact: false,
-        merge_blocks: false,
+        no_merge: true,
         merge_threshold: None,
     };
 
@@ -423,7 +423,7 @@ fn test_frequency_search() {
         allow_tests: false,
         any_term: false,
         exact: false,
-        merge_blocks: false,
+        no_merge: true,
         merge_threshold: None,
     };
 
@@ -478,7 +478,7 @@ func main() {
         allow_tests: false,
         any_term: false, // using "all terms" mode
         exact: false,
-        merge_blocks: false,
+        no_merge: true,
         merge_threshold: None,
     };
 
@@ -540,7 +540,7 @@ fn test_search_with_custom_ignores() {
         allow_tests: false,
         any_term: false,
         exact: false,
-        merge_blocks: false,
+        no_merge: true,
         merge_threshold: None,
     };
 
@@ -654,7 +654,7 @@ fn calculate_product(a: i32, b: i32) -> i32 {
         allow_tests: true,
         any_term: true,
         exact: false,
-        merge_blocks: true,
+        no_merge: false,
         merge_threshold: Some(5),
     };
 
