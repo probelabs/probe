@@ -1,9 +1,7 @@
 use crate::search::query::{preprocess_query, regex_escape, create_term_patterns};
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashSet;
+use std::collections::HashSet;
 
     #[test]
     fn test_preprocess_query() {
@@ -258,4 +256,26 @@ mod tests {
         assert!(pattern_str.contains("ip") && pattern_str.contains("address"), 
                 "Concatenated pattern doesn't contain both terms: {}", pattern_str);
     }
-}
+
+    #[test]
+    fn test_preprocess_query_with_compound_words() {
+        // Test preprocessing with compound words
+        let query = "whitelist";
+        
+        // Get the processed terms
+        let terms = preprocess_query(query, false); // Use non-exact mode
+        
+        // Print the actual result for debugging
+        println!("Processed terms for 'whitelist': {:?}", terms);
+        
+        // Currently, this will fail because "whitelist" is not split into "white" and "list"
+        // The expected behavior should be to split compound words in queries just like in documents
+        let has_white = terms.iter().any(|(_, stemmed)| stemmed == "white");
+        let has_list = terms.iter().any(|(_, stemmed)| stemmed == "list");
+        
+        assert!(
+            has_white && has_list,
+            "Expected 'whitelist' to be split into 'white' and 'list', but got: {:?}",
+            terms
+        );
+    }

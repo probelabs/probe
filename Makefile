@@ -117,6 +117,14 @@ format:
 check-format:
 	$(CARGO) fmt --all -- --check
 
+.PHONY: fix-all
+fix-all:
+	@echo "Fixing all Rust issues..."
+	$(CLIPPY) --all-targets --all-features --fix --allow-staged --allow-dirty -- -D warnings
+	$(CARGO) fmt --all
+	$(CARGO) check
+	@echo "All fixes applied. Run 'make test' to ensure everything still works."
+
 # Documentation
 .PHONY: doc
 doc:
@@ -173,6 +181,7 @@ help:
 	@echo "  lint              - Run clippy linter"
 	@echo "  format            - Format code using rustfmt"
 	@echo "  check-format      - Check if code is properly formatted"
+	@echo "  fix-all           - Fix all Rust issues (clippy, formatting, etc.)"
 	@echo "  doc               - Generate documentation"
 	@echo "  doc-open          - Generate documentation and open in browser"
 	@echo "  clean             - Clean build artifacts"

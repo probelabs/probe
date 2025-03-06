@@ -7,7 +7,10 @@ use crate::search::search_tokens::count_tokens;
 pub fn format_and_print_search_results(results: &[SearchResult]) {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
-    for result in results {
+    // Count valid results (with non-empty file names)
+    let valid_results: Vec<&SearchResult> = results.iter().filter(|r| !r.file.is_empty()).collect();
+
+    for result in &valid_results {
         let file_path = Path::new(&result.file);
         let extension = file_path
             .extension()
@@ -108,10 +111,10 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
         println!("\n");
     }
 
-    println!("Found {} search results", results.len());
+    println!("Found {} search results", valid_results.len());
 
-    let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
-    let total_tokens: usize = results.iter().map(|r| count_tokens(&r.code)).sum();
+    let total_bytes: usize = valid_results.iter().map(|r| r.code.len()).sum();
+    let total_tokens: usize = valid_results.iter().map(|r| count_tokens(&r.code)).sum();
     println!("Total bytes returned: {}", total_bytes);
     println!("Total tokens returned: {}", total_tokens);
 }

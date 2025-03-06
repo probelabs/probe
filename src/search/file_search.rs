@@ -51,12 +51,28 @@ pub fn search_file_for_pattern(
     if let Err(err) = searcher.search_path(
         &matcher,
         file_path,
-        UTF8(|line_number, _line| {
-            if !matched && debug_mode {
-                // Only log the first match
-                println!("  Match found in file: {}", file_name);
+        UTF8(|line_number, line| {
+            // Check if line is longer than 2000 characters
+            if line.len() > 2000 {
+                if debug_mode {
+                    println!(
+                        "  Skipping line {} in file {} - line too long ({} characters)",
+                        line_number,
+                        file_name,
+                        line.len()
+                    );
+                }
+                return Ok(true); // Skip this line but continue searching
             }
-            matched = true;
+
+            if debug_mode {
+                // Log every match
+                println!(
+                    "  Match found in file: {} (term: {}) at line {}",
+                    file_name, adjusted_pattern, line_number
+                );
+            }
+            matched = true; // Still need this for the return value
             let line_num = line_number as usize;
             line_numbers.insert(line_num);
 
@@ -258,19 +274,41 @@ pub fn find_files_with_pattern(
         // Search the file
         let path_clone = file_path.to_owned();
         let mut found_match = false;
+        let mut first_match_line = 0;
 
         if let Err(err) = searcher.search_path(
             &matcher,
             file_path,
-            UTF8(|_, _| {
+            UTF8(|line_number, line| {
+                // Check if line is longer than 2000 characters
+                if line.len() > 2000 {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Skipping line {} in file {:?} - line too long ({} characters)",
+                            line_number,
+                            file_path,
+                            line.len()
+                        );
+                    }
+                    return Ok(true); // Skip this line but continue searching
+                }
+
                 // We only need to know if there's at least one match
                 found_match = true;
+                first_match_line = line_number;
                 Ok(false) // Stop after first match
             }),
         ) {
             // If we found a match, the search was interrupted
             if found_match {
-                matching_files.push(path_clone);
+                matching_files.push(path_clone.clone());
+
+                if debug_mode {
+                    println!(
+                        "DEBUG: Found match in file: {:?} (term: {}) at line {}",
+                        path_clone, pattern, first_match_line
+                    );
+                }
             } else {
                 eprintln!("Error searching file {:?}: {}", file_path, err);
             }
@@ -282,7 +320,10 @@ pub fn find_files_with_pattern(
             matching_files.push(path_clone.clone());
 
             if debug_mode {
-                println!("DEBUG: Found match in file: {:?}", path_clone);
+                println!(
+                    "DEBUG: Found match in file: {:?} (term: {}) at line {}",
+                    path_clone, pattern, first_match_line
+                );
             }
         }
     }

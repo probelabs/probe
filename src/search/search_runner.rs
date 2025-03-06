@@ -497,6 +497,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 filename_matched_queries: filename_terms.clone(),
                 queries_terms: &queries_terms,
                 preprocessed_queries: Some(&preprocessed_queries),
+                no_merge: *no_merge,
             };
             let rres = process_file_with_results(&params);
             if let Ok(mut file_results) = rres {
@@ -964,6 +965,7 @@ pub fn perform_frequency_search(options: &FrequencySearchOptions) -> Result<Limi
                 filename_matched_queries: fmatch.clone(),
                 queries_terms: &[term_pairs.clone()],
                 preprocessed_queries: Some(&preprocessed_query_terms),
+                no_merge: *no_merge,
             };
             let _res = process_file_with_results(&params);
             let res = process_file_with_results(&params);

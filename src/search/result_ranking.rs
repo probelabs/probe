@@ -268,4 +268,66 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
     if debug_mode {
         println!("DEBUG: Ranked {} search results", results.len());
     }
+
+    // Now that all scores have been calculated, filter out results with zero scores and matches
+    // This ensures we only filter after scores have been properly calculated
+    let mut filtered_results = Vec::new();
+
+    for result in results.iter() {
+        let has_matches = result.block_total_matches.unwrap_or(0) > 0;
+        let has_tfidf = result.tfidf_score.unwrap_or(0.0) > 0.0;
+        let has_bm25 = result.bm25_score.unwrap_or(0.0) > 0.0;
+
+        if debug_mode {
+            println!(
+                "DEBUG: Post-ranking filtering - file: {}, matches: {}, tfidf: {}, bm25: {}, retained: {}",
+                result.file,
+                result.block_total_matches.unwrap_or(0),
+                result.tfidf_score.unwrap_or(0.0),
+                result.bm25_score.unwrap_or(0.0),
+                has_matches && has_tfidf && has_bm25
+            );
+        }
+
+        if has_matches && has_tfidf && has_bm25 {
+            filtered_results.push(result.clone());
+        }
+    }
+
+    // Replace original results with filtered results
+    let filtered_len = filtered_results.len();
+    if filtered_len < results.len() {
+        // If we filtered out some results, copy only what we have
+        for (i, result) in filtered_results.into_iter().enumerate() {
+            results[i] = result;
+        }
+
+        // For the remaining slots, fill with empty results but with valid line numbers
+        // This ensures they don't show up as "Lines: 0-0" in the output
+        for result in results.iter_mut().skip(filtered_len) {
+            *result = SearchResult {
+                file: String::new(),
+                lines: (1, 1), // Use valid line numbers (1-1) instead of (0-0)
+                node_type: String::new(),
+                code: String::new(),
+                matched_by_filename: None,
+                rank: None,
+                score: None,
+                tfidf_score: Some(0.0),
+                bm25_score: Some(0.0),
+                tfidf_rank: None,
+                bm25_rank: None,
+                new_score: None,
+                hybrid2_rank: None,
+                combined_score_rank: None,
+                file_unique_terms: Some(0),
+                file_total_matches: Some(0),
+                file_match_rank: None,
+                block_unique_terms: Some(0),
+                block_total_matches: Some(0),
+                parent_file_id: None,
+                block_id: None,
+            };
+        }
+    }
 }

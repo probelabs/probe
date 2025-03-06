@@ -1,11 +1,14 @@
 use crate::ranking;
-use crate::search::tokenization::{split_camel_case, is_english_stop_word};
+use crate::search::tokenization::{
+    is_english_stop_word, load_vocabulary, split_camel_case, split_compound_word,
+};
 use itertools::Itertools;
 use std::collections::HashSet;
 
 /// Preprocesses a query into original and stemmed term pairs
 /// When exact is true, splits only on whitespace and skips stemming/stopword removal
 /// When exact is false, uses stemming/stopword logic but splits primarily on whitespace
+/// and also applies compound word splitting
 pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
     // Convert to lowercase first
     let lowercase_query = query.to_lowercase();
@@ -23,6 +26,7 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
     } else {
         // For non-exact matching, apply stemming and stopword removal
         let stemmer = ranking::get_stemmer();
+        let vocabulary = load_vocabulary();
 
         // Split by whitespace first
         lowercase_query
@@ -32,10 +36,19 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
                 split_camel_case(word)
             })
             .filter(|word| !word.is_empty() && !is_english_stop_word(word))
-            .map(|word| {
-                let original = word.to_string();
-                let stemmed = stemmer.stem(&word).to_string();
-                (original, stemmed)
+            .flat_map(|word| {
+                // Split compound words
+                let compound_parts = split_compound_word(&word, vocabulary);
+
+                // Map each part to (original, stemmed) pairs
+                compound_parts
+                    .into_iter()
+                    .map(|part| {
+                        let original = part.clone();
+                        let stemmed = stemmer.stem(&part).to_string();
+                        (original, stemmed)
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect()
     }

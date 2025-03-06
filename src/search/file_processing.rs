@@ -7,6 +7,7 @@ use crate::language::parse_file_for_code_blocks;
 use crate::models::SearchResult;
 use crate::ranking::preprocess_text;
 use crate::search::file_search::get_filename_matched_queries_compat;
+use crate::search::tokenization;
 
 /// Parameters for file processing
 pub struct FileProcessingParams<'a> {
@@ -28,6 +29,8 @@ pub struct FileProcessingParams<'a> {
     pub queries_terms: &'a [Vec<(String, String)>],
     /// Optional preprocessed query terms for optimization
     pub preprocessed_queries: Option<&'a [Vec<String>]>,
+    /// Whether to disable block merging
+    pub no_merge: bool,
 }
 
 /// Function to check if a code block should be included based on term matches
@@ -63,8 +66,10 @@ fn filter_code_block(
         !matched_queries.is_empty()
     } else {
         // All terms mode: include if all queries are matched either in content or filename
-        (0..num_queries)
-            .all(|i| filename_matched_queries.contains(&i) || matched_queries.contains(&i))
+        // AND at least one term is matched in the content
+        !matched_queries.is_empty()
+            && (0..num_queries)
+                .all(|i| filename_matched_queries.contains(&i) || matched_queries.contains(&i))
     };
 
     // Add debug logging
@@ -78,7 +83,7 @@ fn filter_code_block(
         if any_term {
             println!("DEBUG: Any-term mode: Include if any term matches");
         } else {
-            println!("DEBUG: All-terms mode: Include if all {} queries matched (including filename matches: {:?})", 
+            println!("DEBUG: All-terms mode: Include if all {} queries matched (including filename matches: {:?}) AND at least one term is matched in content", 
                      num_queries, filename_matched_queries);
         }
         println!(
@@ -165,20 +170,60 @@ pub fn process_file_by_filename(
         let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
             0
         } else {
-            // Use the same stemming approach for comparison
-            block_terms
+            // First, check for direct matches
+            let direct_matches: HashSet<&String> = block_terms
                 .iter()
                 .filter(|t| unique_query_terms.contains(*t))
-                .collect::<HashSet<&String>>()
-                .len()
+                .collect();
+
+            // Then, check for compound word matches
+            let mut compound_matches = HashSet::new();
+            for query_term in &unique_query_terms {
+                // Skip terms that were already directly matched
+                if block_terms.iter().any(|t| t == query_term) {
+                    continue;
+                }
+
+                // Check if this query term can be formed by combining adjacent terms in block_terms
+                // For simplicity, we'll just check if all parts of the compound word exist in the block
+                let parts =
+                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
+
+                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                    compound_matches.insert(query_term);
+                }
+            }
+
+            direct_matches.len() + compound_matches.len()
         };
+
         let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
             0
         } else {
-            block_terms
+            // Count direct matches
+            let direct_match_count = block_terms
                 .iter()
                 .filter(|t| unique_query_terms.contains(*t))
-                .count()
+                .count();
+
+            // Count compound matches
+            let mut compound_match_count = 0;
+            for query_term in &unique_query_terms {
+                // Skip terms that were already directly matched
+                if block_terms.iter().any(|t| t == query_term) {
+                    continue;
+                }
+
+                // Check if this query term can be formed by combining adjacent terms in block_terms
+                let parts =
+                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
+
+                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                    compound_match_count += 1;
+                }
+            }
+
+            direct_match_count + compound_match_count
         };
         search_result.file_unique_terms = Some(block_unique_terms);
         search_result.file_total_matches = Some(block_total_matches);
@@ -406,22 +451,65 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
             let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
                 0
             } else {
-                // Use the same stemming approach for comparison
-                block_terms
+                // First, check for direct matches
+                let direct_matches: HashSet<&String> = block_terms
                     .iter()
                     .filter(|t| unique_query_terms.contains(*t))
-                    .collect::<HashSet<&String>>()
-                    .len()
+                    .collect();
+
+                // Then, check for compound word matches
+                let mut compound_matches = HashSet::new();
+                for query_term in &unique_query_terms {
+                    // Skip terms that were already directly matched
+                    if block_terms.iter().any(|t| t == query_term) {
+                        continue;
+                    }
+
+                    // Check if this query term can be formed by combining adjacent terms in block_terms
+                    // For simplicity, we'll just check if all parts of the compound word exist in the block
+                    let parts = tokenization::split_compound_word(
+                        query_term,
+                        tokenization::load_vocabulary(),
+                    );
+
+                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                        compound_matches.insert(query_term);
+                    }
+                }
+
+                direct_matches.len() + compound_matches.len()
             };
 
             // Calculate total matches in the block
             let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
                 0
             } else {
-                block_terms
+                // Count direct matches
+                let direct_match_count = block_terms
                     .iter()
                     .filter(|t| unique_query_terms.contains(*t))
-                    .count()
+                    .count();
+
+                // Count compound matches
+                let mut compound_match_count = 0;
+                for query_term in &unique_query_terms {
+                    // Skip terms that were already directly matched
+                    if block_terms.iter().any(|t| t == query_term) {
+                        continue;
+                    }
+
+                    // Check if this query term can be formed by combining adjacent terms in block_terms
+                    let parts = tokenization::split_compound_word(
+                        query_term,
+                        tokenization::load_vocabulary(),
+                    );
+
+                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                        compound_match_count += 1;
+                    }
+                }
+
+                direct_match_count + compound_match_count
             };
 
             if debug_mode {
@@ -605,22 +693,65 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
             let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
                 0
             } else {
-                // Use the same stemming approach for comparison
-                block_terms
+                // First, check for direct matches
+                let direct_matches: HashSet<&String> = block_terms
                     .iter()
                     .filter(|t| unique_query_terms.contains(*t))
-                    .collect::<HashSet<&String>>()
-                    .len()
+                    .collect();
+
+                // Then, check for compound word matches
+                let mut compound_matches = HashSet::new();
+                for query_term in &unique_query_terms {
+                    // Skip terms that were already directly matched
+                    if block_terms.iter().any(|t| t == query_term) {
+                        continue;
+                    }
+
+                    // Check if this query term can be formed by combining adjacent terms in block_terms
+                    // For simplicity, we'll just check if all parts of the compound word exist in the block
+                    let parts = tokenization::split_compound_word(
+                        query_term,
+                        tokenization::load_vocabulary(),
+                    );
+
+                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                        compound_matches.insert(query_term);
+                    }
+                }
+
+                direct_matches.len() + compound_matches.len()
             };
 
             // Calculate total matches in the block
             let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
                 0
             } else {
-                block_terms
+                // Count direct matches
+                let direct_match_count = block_terms
                     .iter()
                     .filter(|t| unique_query_terms.contains(*t))
-                    .count()
+                    .count();
+
+                // Count compound matches
+                let mut compound_match_count = 0;
+                for query_term in &unique_query_terms {
+                    // Skip terms that were already directly matched
+                    if block_terms.iter().any(|t| t == query_term) {
+                        continue;
+                    }
+
+                    // Check if this query term can be formed by combining adjacent terms in block_terms
+                    let parts = tokenization::split_compound_word(
+                        query_term,
+                        tokenization::load_vocabulary(),
+                    );
+
+                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                        compound_match_count += 1;
+                    }
+                }
+
+                direct_match_count + compound_match_count
             };
 
             if debug_mode {
@@ -697,8 +828,12 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
     }
 
     // Define a function to determine if we should return the full file
-    fn should_return_full_file(coverage_percentage: f64, total_lines: usize) -> bool {
-        total_lines >= 5 && coverage_percentage >= 80.0
+    fn should_return_full_file(
+        coverage_percentage: f64,
+        total_lines: usize,
+        no_merge: bool,
+    ) -> bool {
+        !no_merge && total_lines >= 5 && coverage_percentage >= 80.0
     }
 
     // Calculate coverage percentage with safeguards for division by zero
@@ -718,7 +853,7 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
     }
 
     // Check if we should return the full file based on coverage and minimum line count
-    if should_return_full_file(coverage_percentage, total_lines) {
+    if should_return_full_file(coverage_percentage, total_lines, params.no_merge) {
         if debug_mode {
             println!("DEBUG: Coverage exceeds 80%, returning entire file");
         }
@@ -758,22 +893,61 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
         let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
             0
         } else {
-            // Use the same stemming approach for comparison
-            block_terms
+            // First, check for direct matches
+            let direct_matches: HashSet<&String> = block_terms
                 .iter()
                 .filter(|t| unique_query_terms.contains(*t))
-                .collect::<HashSet<&String>>()
-                .len()
+                .collect();
+
+            // Then, check for compound word matches
+            let mut compound_matches = HashSet::new();
+            for query_term in &unique_query_terms {
+                // Skip terms that were already directly matched
+                if block_terms.iter().any(|t| t == query_term) {
+                    continue;
+                }
+
+                // Check if this query term can be formed by combining adjacent terms in block_terms
+                // For simplicity, we'll just check if all parts of the compound word exist in the block
+                let parts =
+                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
+
+                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                    compound_matches.insert(query_term);
+                }
+            }
+
+            direct_matches.len() + compound_matches.len()
         };
 
         // Calculate total matches in the file
         let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
             0
         } else {
-            block_terms
+            // Count direct matches
+            let direct_match_count = block_terms
                 .iter()
                 .filter(|t| unique_query_terms.contains(*t))
-                .count()
+                .count();
+
+            // Count compound matches
+            let mut compound_match_count = 0;
+            for query_term in &unique_query_terms {
+                // Skip terms that were already directly matched
+                if block_terms.iter().any(|t| t == query_term) {
+                    continue;
+                }
+
+                // Check if this query term can be formed by combining adjacent terms in block_terms
+                let parts =
+                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
+
+                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                    compound_match_count += 1;
+                }
+            }
+
+            direct_match_count + compound_match_count
         };
 
         if debug_mode {

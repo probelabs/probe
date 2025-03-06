@@ -150,7 +150,7 @@ fn test_merge_code_blocks() {
     // Check that the merged block covers the full range
     let full_coverage = merged
         .iter()
-        .any(|block| block.start_row <= 0 && block.end_row >= 10);
+        .any(|block| block.start_row == 0 && block.end_row >= 10);
 
     assert!(full_coverage);
 }
@@ -537,7 +537,7 @@ impl TestStruct {
     fn process_nodes(
         node: tree_sitter::Node<'_>,
         rust_code: &str,
-        rust_impl: &Box<dyn LanguageImpl>,
+        rust_impl: &dyn LanguageImpl,
         line_to_node_type: &mut std::collections::HashMap<usize, String>,
     ) {
         // Process current node
@@ -606,7 +606,12 @@ impl TestStruct {
     }
 
     // Process all nodes recursively
-    process_nodes(root_node, rust_code, &rust_impl, &mut line_to_node_type);
+    process_nodes(
+        root_node,
+        rust_code,
+        rust_impl.as_ref(),
+        &mut line_to_node_type,
+    );
 
     println!("Line to node type map: {:?}", line_to_node_type);
 
