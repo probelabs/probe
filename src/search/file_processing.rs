@@ -145,17 +145,23 @@ pub fn process_file_by_filename(
             .flat_map(|terms| terms.iter().cloned())
             .collect();
         let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
-        
+
         // Ensure we use the same stemming as query processing
         let block_terms = preprocess_text(&content, false);
-        
+
         // Debug logging for stemming comparison
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
         if debug_mode {
-            println!("DEBUG: File by filename terms after stemming: {:?}", block_terms);
-            println!("DEBUG: Query terms after stemming: {:?}", unique_query_terms);
+            println!(
+                "DEBUG: File by filename terms after stemming: {:?}",
+                block_terms
+            );
+            println!(
+                "DEBUG: Query terms after stemming: {:?}",
+                unique_query_terms
+            );
         }
-        
+
         let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
             0
         } else {
@@ -390,7 +396,10 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
             // Debug logging for stemming comparison
             if debug_mode {
                 println!("DEBUG: Block terms after stemming: {:?}", block_terms);
-                println!("DEBUG: Query terms after stemming: {:?}", unique_query_terms);
+                println!(
+                    "DEBUG: Query terms after stemming: {:?}",
+                    unique_query_terms
+                );
             }
 
             // Calculate unique terms matched in the block
@@ -582,8 +591,14 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
 
             // Debug logging for stemming comparison
             if debug_mode {
-                println!("DEBUG: Fallback context block terms after stemming: {:?}", block_terms);
-                println!("DEBUG: Query terms after stemming: {:?}", unique_query_terms);
+                println!(
+                    "DEBUG: Fallback context block terms after stemming: {:?}",
+                    block_terms
+                );
+                println!(
+                    "DEBUG: Query terms after stemming: {:?}",
+                    unique_query_terms
+                );
             }
 
             // Calculate unique terms matched in the block
@@ -733,7 +748,10 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
         // Debug logging for stemming comparison
         if debug_mode {
             println!("DEBUG: Full file terms after stemming: {:?}", block_terms);
-            println!("DEBUG: Query terms after stemming: {:?}", unique_query_terms);
+            println!(
+                "DEBUG: Query terms after stemming: {:?}",
+                unique_query_terms
+            );
         }
 
         // Calculate unique terms matched in the file

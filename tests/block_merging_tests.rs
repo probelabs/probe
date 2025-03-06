@@ -322,8 +322,14 @@ fn test_no_merge_flag() {
     let unmerged_results = perform_probe(&options_without_merge).unwrap();
 
     // Verify that we got results in both cases
-    assert!(!merged_results.results.is_empty(), "Search with merging should return results");
-    assert!(!unmerged_results.results.is_empty(), "Search without merging should return results");
+    assert!(
+        !merged_results.results.is_empty(),
+        "Search with merging should return results"
+    );
+    assert!(
+        !unmerged_results.results.is_empty(),
+        "Search without merging should return results"
+    );
 
     // Count results per file for both searches
     let mut merged_file_counts = std::collections::HashMap::new();
@@ -337,17 +343,20 @@ fn test_no_merge_flag() {
     }
 
     // Find the test_functions.rs file in both result sets
-    let test_functions_file = temp_path.join("test_functions.rs").to_string_lossy().to_string();
-    
+    let test_functions_file = temp_path
+        .join("test_functions.rs")
+        .to_string_lossy()
+        .to_string();
+
     let merged_count = merged_file_counts.get(&test_functions_file).unwrap_or(&0);
     let unmerged_count = unmerged_file_counts.get(&test_functions_file).unwrap_or(&0);
-    
+
     // With merging enabled, we should have fewer or equal results per file
     assert!(
         *merged_count <= *unmerged_count,
         "With merging enabled, we should have fewer or equal results per file"
     );
-    
+
     // If we found multiple blocks in the unmerged results, we should have fewer blocks in the merged results
     if *unmerged_count > 1 {
         assert!(
