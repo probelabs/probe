@@ -10,47 +10,68 @@ use std::collections::HashSet;
 /// When exact is false, uses stemming/stopword logic but splits primarily on whitespace
 /// and also applies compound word splitting
 pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
-    // Convert to lowercase first
-    let lowercase_query = query.to_lowercase();
+    // Debug print
+    println!("Original query: {}", query);
 
     if exact {
         // For exact matching, just split on whitespace and return as-is without stemming
-        lowercase_query
+        let result = query
+            .to_lowercase()
             .split_whitespace()
             .filter(|word| !word.is_empty())
             .map(|word| {
                 let original = word.to_string();
                 (original.clone(), original)
             })
-            .collect()
+            .collect();
+
+        println!("Exact mode result: {:?}", result);
+        result
     } else {
         // For non-exact matching, apply stemming and stopword removal
         let stemmer = ranking::get_stemmer();
         let vocabulary = load_vocabulary();
 
-        // Split by whitespace first
-        lowercase_query
+        // Add specific programming terms to the vocabulary for this query
+        let mut enhanced_vocab = vocabulary.clone();
+        for term in [
+            "rpc", "storage", "handler", "client", "server", "api", "service",
+        ] {
+            enhanced_vocab.insert(term.to_string());
+        }
+
+        // Split by whitespace first, but preserve original case for camelCase detection
+        let result = query
             .split_whitespace()
             .flat_map(|word| {
-                // Split each word on camel case boundaries
-                split_camel_case(word)
-            })
-            .filter(|word| !word.is_empty() && !is_english_stop_word(word))
-            .flat_map(|word| {
-                // Split compound words
-                let compound_parts = split_compound_word(&word, vocabulary);
+                // Debug print
+                println!("Processing word: {}", word);
 
-                // Map each part to (original, stemmed) pairs
-                compound_parts
+                // First try to split on camel case boundaries - use original case
+                let camel_parts = split_camel_case(word);
+                println!("After camel case split: {:?}", camel_parts);
+
+                // For each camel case part, try to split compound words
+                camel_parts
                     .into_iter()
-                    .map(|part| {
-                        let original = part.clone();
-                        let stemmed = stemmer.stem(&part).to_string();
-                        (original, stemmed)
+                    .flat_map(|part| {
+                        let compound_parts = split_compound_word(&part, &enhanced_vocab);
+                        println!("After compound split of '{}': {:?}", part, compound_parts);
+                        compound_parts
                     })
                     .collect::<Vec<_>>()
             })
-            .collect()
+            .filter(|word| !word.is_empty() && !is_english_stop_word(word))
+            .map(|part| {
+                let original = part.clone();
+                let stemmed = stemmer.stem(&part).to_string();
+                println!("Term: {} (stemmed to {})", original, stemmed);
+                (original, stemmed)
+            })
+            .collect();
+
+        println!("Final preprocessed terms: {:?}", result);
+        result
     }
 }
 
@@ -83,22 +104,37 @@ pub fn regex_escape(s: &str) -> String {
 pub fn create_term_patterns(term_pairs: &[(String, String)]) -> Vec<(String, HashSet<usize>)> {
     let mut patterns: Vec<(String, HashSet<usize>)> = Vec::new();
 
+    // Debug print
+    // println!("Creating patterns for terms: {:?}", term_pairs);
+
     // Generate individual term patterns with combined start and end boundaries
     for (term_idx, (original, stemmed)) in term_pairs.iter().enumerate() {
+        // Determine the pattern to use - avoid redundant patterns
         let base_pattern = if original == stemmed {
+            // If original and stemmed are the same, just use one
             regex_escape(original)
+        } else if stemmed.len() < original.len() && original.starts_with(stemmed) {
+            // If stemmed is just a prefix of original (common with stemming algorithms)
+            // Use only the original to avoid redundancy
+            regex_escape(original)
+        } else if original.len() < stemmed.len() && stemmed.starts_with(original) {
+            // If original is just a prefix of stemmed (rare but possible)
+            // Use only the stemmed version
+            regex_escape(stemmed)
         } else {
-            format!("({}|{})", regex_escape(original), regex_escape(stemmed))
+            // They're truly different, include only the original for simplicity
+            // This is a key change to avoid redundant patterns
+            regex_escape(original)
         };
 
         // Create a HashSet with just this term's index
         let term_indices = HashSet::from([term_idx]);
 
         // Add combined boundary pattern (start OR end boundary)
-        patterns.push((
-            format!("(\\b{}|{}\\b)", base_pattern, base_pattern),
-            term_indices.clone(),
-        ));
+        let pattern = format!("(\\b{}|{}\\b)", base_pattern, base_pattern);
+        // println!("Term {}: Pattern: {}", term_idx, pattern);
+
+        patterns.push((pattern, term_indices.clone()));
     }
 
     // Generate concatenated combinations for multi-term queries
@@ -185,13 +221,14 @@ mod tests {
         let (ip_pattern, _) = ip_pattern.unwrap();
         assert!(ip_pattern.contains("\\bip|ip\\b"));
 
-        // Verify the second pattern is for "whitelisting|whitelist" with both boundaries
+        // Verify the second pattern is for "whitelisting" with both boundaries
+        // The current implementation uses the original term only, not both original and stemmed
         let whitelist_pattern = patterns
             .iter()
             .find(|(_, indices)| indices.len() == 1 && indices.contains(&1));
         assert!(whitelist_pattern.is_some());
         let (whitelist_pattern, _) = whitelist_pattern.unwrap();
-        assert!(whitelist_pattern.contains("(whitelisting|whitelist)"));
+        assert!(whitelist_pattern.contains("\\bwhitelisting|whitelisting\\b"));
 
         // Verify there are combination patterns
         let combo_patterns: Vec<_> = patterns
@@ -200,16 +237,16 @@ mod tests {
             .collect();
         assert_eq!(combo_patterns.len(), 2);
 
-        // Check that one combination has "ipwhitelisting|ipwhitelist"
-        let has_ip_first = combo_patterns.iter().any(|(pattern, _)| {
-            pattern.contains("ipwhitelisting") && pattern.contains("ipwhitelist")
-        });
+        // Check that one combination has "ipwhitelisting"
+        let has_ip_first = combo_patterns
+            .iter()
+            .any(|(pattern, _)| pattern.contains("ipwhitelisting"));
         assert!(has_ip_first);
 
-        // Check that one combination has "whitelistingip|whitelistip"
-        let has_whitelist_first = combo_patterns.iter().any(|(pattern, _)| {
-            pattern.contains("whitelistingip") && pattern.contains("whitelistip")
-        });
+        // Check that one combination has "whitelistingip"
+        let has_whitelist_first = combo_patterns
+            .iter()
+            .any(|(pattern, _)| pattern.contains("whitelistingip"));
         assert!(has_whitelist_first);
     }
 }

@@ -273,23 +273,66 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
     // This ensures we only filter after scores have been properly calculated
     let mut filtered_results = Vec::new();
 
+    // First, determine the total number of unique terms across all queries
+    // We'll use the maximum file_unique_terms value as an approximation
+    let total_unique_terms = results
+        .iter()
+        .filter_map(|r| r.file_unique_terms)
+        .max()
+        .unwrap_or(1);
+
+    if debug_mode {
+        println!(
+            "DEBUG: Total unique terms across all queries: {}",
+            total_unique_terms
+        );
+    }
+
     for result in results.iter() {
         let has_matches = result.block_total_matches.unwrap_or(0) > 0;
         let has_tfidf = result.tfidf_score.unwrap_or(0.0) > 0.0;
         let has_bm25 = result.bm25_score.unwrap_or(0.0) > 0.0;
 
+        // Get the number of unique terms in the block
+        let block_unique_terms = result.block_unique_terms.unwrap_or(0);
+
+        // Calculate the minimum required terms based on the total number of unique terms
+        // Using the corrected formula:
+        // 1 term: require 1 term
+        // 2 terms: require 1 term
+        // 3 terms: require 2 terms
+        // 4 terms: require 2 terms
+        // 5 terms: require 3 terms
+        // 6 terms: require 3 terms
+        // 7 terms: require 4 terms
+        let min_required_terms = match total_unique_terms {
+            0 => 0,
+            1 | 2 => 1,
+            3 | 4 => 2,
+            5 | 6 => 3,
+            7 | 8 => 4,
+            9 | 10 => 5,
+            11 | 12 => 6,
+            n => (n + 1) / 2, // General formula: ceil(n/2)
+        };
+
+        // Check if the block has enough unique terms
+        let has_enough_unique_terms = block_unique_terms >= min_required_terms;
+
         if debug_mode {
             println!(
-                "DEBUG: Post-ranking filtering - file: {}, matches: {}, tfidf: {}, bm25: {}, retained: {}",
+                "DEBUG: Post-ranking filtering - file: {}, matches: {}, tfidf: {}, bm25: {}, unique_terms: {}/{}, retained: {}",
                 result.file,
                 result.block_total_matches.unwrap_or(0),
                 result.tfidf_score.unwrap_or(0.0),
                 result.bm25_score.unwrap_or(0.0),
-                has_matches && has_tfidf && has_bm25
+                block_unique_terms,
+                min_required_terms,
+                has_matches && has_tfidf && has_bm25 && has_enough_unique_terms
             );
         }
 
-        if has_matches && has_tfidf && has_bm25 {
+        if has_matches && has_tfidf && has_bm25 && has_enough_unique_terms {
             filtered_results.push(result.clone());
         }
     }

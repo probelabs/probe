@@ -59,8 +59,11 @@ fn filter_code_block(
         }
     }
 
-    // Determine if the block should be included
-    let should_include = if any_term {
+    // Calculate the number of unique terms in the block
+    let block_unique_terms = matched_queries.len();
+
+    // Determine if the block should be included based on term matches
+    let term_match_criteria = if any_term {
         // Any term mode: include if any term matches in content
         // (we don't use filename matches in any_term mode to maintain precision)
         !matched_queries.is_empty()
@@ -72,6 +75,30 @@ fn filter_code_block(
                 .all(|i| filename_matched_queries.contains(&i) || matched_queries.contains(&i))
     };
 
+    // Filtering criteria with corrected formula:
+    // 1 term: require 1 term
+    // 2 terms: require 1 term
+    // 3 terms: require 2 terms
+    // 4 terms: require 2 terms
+    // 5 terms: require 3 terms
+    // 6 terms: require 3 terms
+    // 7 terms: require 4 terms
+    let min_required_terms = match num_queries {
+        0 => 0,
+        1 | 2 => 1,
+        3 | 4 => 2,
+        5 | 6 => 3,
+        7 | 8 => 4,
+        9 | 10 => 5,
+        11 | 12 => 6,
+        n => (n + 1) / 2, // General formula: ceil(n/2)
+    };
+
+    let unique_terms_criteria = block_unique_terms >= min_required_terms;
+
+    // Final decision: both criteria must be met
+    let should_include = term_match_criteria && unique_terms_criteria;
+
     // Add debug logging
     if debug_mode {
         println!(
@@ -79,20 +106,34 @@ fn filter_code_block(
             block_lines.0, block_lines.1
         );
         println!("DEBUG: Matched queries (indices): {:?}", matched_queries);
-        println!("DEBUG: Total matched queries: {}", matched_queries.len());
+        println!("DEBUG: Block unique terms: {}", block_unique_terms);
+        println!(
+            "DEBUG: Total queries: {}, Min required terms: {}",
+            num_queries, min_required_terms
+        );
+
         if any_term {
             println!("DEBUG: Any-term mode: Include if any term matches");
         } else {
-            println!("DEBUG: All-terms mode: Include if all {} queries matched (including filename matches: {:?}) AND at least one term is matched in content", 
+            println!("DEBUG: All-terms mode: Include if all {} queries matched (including filename matches: {:?}) AND at least one term is matched in content",
                      num_queries, filename_matched_queries);
         }
+
+        println!("DEBUG: Term match criteria met: {}", term_match_criteria);
+        println!(
+            "DEBUG: Unique terms criteria met: {} (need {} of {} terms)",
+            unique_terms_criteria, min_required_terms, num_queries
+        );
+
         println!(
             "DEBUG: Block included: {} (Reason: {})",
             should_include,
             if should_include {
-                "Matched criteria"
+                "All criteria met"
+            } else if !term_match_criteria {
+                "Failed term match criteria"
             } else {
-                "Insufficient matches"
+                "Insufficient unique terms"
             }
         );
     }

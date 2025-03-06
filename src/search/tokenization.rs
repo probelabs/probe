@@ -284,6 +284,8 @@ static SPECIAL_CASE_WORDS: Lazy<HashSet<String>> = Lazy::new(|| {
         "prettier",
         "axios",
         "fetch",
+        "grpc",
+        "http2",
     ]
     .into_iter()
     .map(String::from)
@@ -323,6 +325,7 @@ fn is_special_case(word: &str) -> bool {
 /// - PascalCase -> ["pascal", "case"]
 /// - acronyms and numbers -> ["parse", "json", "to", "html", "5"]
 /// - special cases like OAuth2 -> ["oauth2"]
+/// - also attempts to split lowercase identifiers that might have been camelCase originally
 pub fn split_camel_case(input: &str) -> Vec<String> {
     if input.is_empty() {
         return vec![];
@@ -330,6 +333,7 @@ pub fn split_camel_case(input: &str) -> Vec<String> {
 
     // Check if the input is a special case word
     if is_special_case(input) {
+        // println!("Special case word: {}", input);
         return vec![input.to_lowercase()];
     }
 
@@ -354,6 +358,81 @@ pub fn split_camel_case(input: &str) -> Vec<String> {
                 let mut result = vec![special_case.clone()];
                 result.extend(split_camel_case(remaining));
                 return result;
+            }
+        }
+    }
+
+    // If input is all lowercase, try to identify potential camelCase boundaries
+    // This is for handling cases where the input was already lowercased
+    if input == lowercase && !input.contains('_') && input.len() > 3 {
+        // Check for common patterns in identifiers
+        let _potential_splits: Vec<String> = Vec::new();
+
+        // Try to identify common programming terms and split on them
+        let common_terms = [
+            "rpc",
+            "api",
+            "http",
+            "json",
+            "xml",
+            "html",
+            "css",
+            "js",
+            "db",
+            "sql",
+            "handler",
+            "controller",
+            "service",
+            "repository",
+            "manager",
+            "factory",
+            "provider",
+            "client",
+            "server",
+            "config",
+            "util",
+            "helper",
+            "storage",
+            "cache",
+            "queue",
+            "worker",
+            "job",
+            "task",
+            "event",
+            "listener",
+            "callback",
+            "middleware",
+            "filter",
+            "validator",
+            "converter",
+            "transformer",
+            "parser",
+            "serializer",
+            "deserializer",
+            "encoder",
+            "decoder",
+            "reader",
+            "writer",
+        ];
+
+        for term in common_terms {
+            if input.contains(term) && term != input {
+                let parts: Vec<&str> = input.split(term).collect();
+                if parts.len() > 1 {
+                    let mut result = Vec::new();
+                    for (i, part) in parts.iter().enumerate() {
+                        if !part.is_empty() {
+                            result.push(part.to_string());
+                        }
+                        if i < parts.len() - 1 {
+                            result.push(term.to_string());
+                        }
+                    }
+                    if !result.is_empty() {
+                        // println!("Split by common term '{}': {:?}", term, result);
+                        return result;
+                    }
+                }
             }
         }
     }
@@ -406,6 +485,8 @@ pub fn split_camel_case(input: &str) -> Vec<String> {
     }
 
     // Convert all to lowercase for consistency
+
+    // println!("Camel case split result: {:?}", final_result);
     result.into_iter().map(|word| word.to_lowercase()).collect()
 }
 
@@ -948,6 +1029,8 @@ pub fn tokenize(text: &str) -> Vec<String> {
     let stemmer = get_stemmer();
     let vocabulary = load_vocabulary();
 
+    // println!("Tokenizing text: {}", text);
+
     // Split by whitespace and collect words
     let mut tokens = Vec::new();
     for word in text.split_whitespace() {
@@ -975,15 +1058,9 @@ pub fn tokenize(text: &str) -> Vec<String> {
 
     // Process each token: filter stop words, apply stemming, and add to result if unique
     for token in tokens {
-        // First, split camelCase/PascalCase identifiers
-        let mut parts = Vec::new();
-
-        // Only try to split if the original token has mixed case
-        if token.chars().any(|c| c.is_uppercase()) {
-            parts = split_camel_case(&token);
-        } else {
-            parts.push(token.to_lowercase());
-        }
+        // Always try to split using camel case rules, even for lowercase tokens
+        // This allows us to handle tokens that were already lowercased
+        let parts = split_camel_case(&token);
 
         // Process each part
         for part in parts {
