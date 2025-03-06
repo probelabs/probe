@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Code Search with Probe and Claude</title>
+	<!-- Add Marked.js for Markdown rendering -->
+	<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+	<!-- Add Highlight.js for syntax highlighting -->
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github.min.css">
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+	<!-- Add Mermaid.js for diagram rendering -->
+	<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+	<style>
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+			margin: 20px;
+			line-height: 1.5;
+			color: #333;
+		}
+
+		#chat-container {
+			max-width: 900px;
+			margin: auto;
+		}
+
+		#messages {
+			border: 1px solid #ddd;
+			border-radius: 8px;
+			padding: 16px;
+			height: 500px;
+			overflow-y: auto;
+			background-color: #fff;
+			box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+		}
+
+		#input-form {
+			margin-top: 16px;
+			display: flex;
+		}
+
+		#message-input {
+			flex: 1;
+			padding: 12px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			font-size: 16px;
+		}
+
+		button {
+			padding: 12px 20px;
+			margin-left: 8px;
+			background-color: #2196F3;
+			color: white;
+			border: none;
+			border-radius: 4px;
+			cursor: pointer;
+			font-weight: bold;
+		}
+
+		button:hover {
+			background-color: #0b7dda;
+		}
+
+		#allowed-folders {
+			margin-top: 16px;
+			padding: 12px;
+			background-color: #f5f5f5;
+			border-radius: 4px;
+			border-left: 4px solid #2196F3;
+		}
+
+		#allowed-folders h3 {
+			margin-top: 0;
+			margin-bottom: 8px;
+			font-size: 16px;
+			color: #333;
+		}
+
+		#folder-list {
+			margin-top: 8px;
+			font-size: 14px;
+		}
+
+		.folder-item {
+			padding: 4px 0;
+		}
+
+		#probe-info {
+			margin-top: 20px;
+			padding: 16px;
+			background-color: #e9f7fe;
+			border-radius: 4px;
+			border-left: 4px solid #2196F3;
+		}
+
+		#probe-info h3 {
+			margin-top: 0;
+			color: #2196F3;
+			font-size: 18px;
+		}
+
+		.example {
+			font-style: italic;
+			color: #666;
+			margin: 8px 0;
+		}
+
+		/* Markdown styling */
+		.markdown-content {
+			line-height: 1.6;
+		}
+
+		.markdown-content h1,
+		.markdown-content h2,
+		.markdown-content h3 {
+			margin-top: 24px;
+			margin-bottom: 16px;
+			font-weight: 600;
+			line-height: 1.25;
+		}
+
+		.markdown-content h1 {
+			font-size: 2em;
+		}
+
+		.markdown-content h2 {
+			font-size: 1.5em;
+		}
+
+		.markdown-content h3 {
+			font-size: 1.25em;
+		}
+
+		.markdown-content p,
+		.markdown-content ul,
+		.markdown-content ol {
+			margin-top: 0;
+			margin-bottom: 16px;
+		}
+
+		.markdown-content code {
+			padding: 0.2em 0.4em;
+			margin: 0;
+			font-size: 85%;
+			background-color: rgba(27, 31, 35, 0.05);
+			border-radius: 3px;
+			font-family: SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace;
+		}
+
+		.markdown-content pre {
+			padding: 16px;
+			overflow: auto;
+			font-size: 85%;
+			line-height: 1.45;
+			background-color: #f6f8fa;
+			border-radius: 3px;
+			margin-top: 0;
+			margin-bottom: 16px;
+		}
+
+		.markdown-content pre code {
+			padding: 0;
+			margin: 0;
+			font-size: 100%;
+			background-color: transparent;
+			border: 0;
+		}
+
+		.user-message {
+			background-color: #f1f1f1;
+			padding: 10px 14px;
+			border-radius: 18px;
+			margin-bottom: 12px;
+			max-width: 80%;
+			align-self: flex-end;
+			font-weight: 500;
+		}
+
+		.ai-message {
+			background-color: #e3f2fd;
+			padding: 10px 14px;
+			border-radius: 18px;
+			margin-bottom: 12px;
+			max-width: 90%;
+			align-self: flex-start;
+		}
+
+		.message-container {
+			display: flex;
+			flex-direction: column;
+		}
+
+		/* Mermaid diagram styling */
+		.mermaid {
+			background-color: #f8f9fa;
+			padding: 16px;
+			border-radius: 8px;
+			margin: 16px 0;
+			overflow-x: auto;
+			text-align: center;
+		}
+
+		.mermaid svg {
+			max-width: 100%;
+			height: auto;
+		}
+	</style>
+</head>
+
+<body>
+	<div id="chat-container">
+		<h1>Code Search with Probe and Claude</h1>
+		<div id="messages" class="message-container"></div>
+		<form id="input-form">
+			<input type="text" id="message-input" placeholder="Ask about code or search for patterns..." required>
+			<button type="submit">Send</button>
+		</form>
+		<div id="allowed-folders">
+			<h3>Configured Search Folders:</h3>
+			<div id="folder-list">Loading configured folders...</div>
+		</div>
+		<div id="probe-info">
+			<h3>About Probe Tool</h3>
+			<p>This chat interface uses the Probe semantic code search tool. Claude can search through your codebase to find
+				relevant code blocks and create diagrams to explain code structure.</p>
+			<p class="example">Example queries:</p>
+			<ul>
+				<li>"Search for functions that handle authentication"</li>
+				<li>"Find code related to database connections"</li>
+				<li>"Look for implementations of the Observer pattern"</li>
+				<li>"Create a diagram of the authentication flow"</li>
+				<li>"Explain the project structure with a flowchart"</li>
+			</ul>
+			<p>You can specify a folder to search in: "Search for API handlers in folder /Users/leonidbugaev/go/src/tyk"
+			</p>
+			<p>Probe extracts complete code blocks (functions, classes, methods) to provide full context for AI analysis.</p>
+		</div>
+	</div>
+
+	<script>
+		const messagesDiv = document.getElementById('messages');
+		const form = document.getElementById('input-form');
+		const input = document.getElementById('message-input');
+		const folderListDiv = document.getElementById('folder-list');
+
+		// Initialize mermaid
+		mermaid.initialize({
+			startOnLoad: true,
+			theme: 'default',
+			securityLevel: 'loose',
+			flowchart: { htmlLabels: true }
+		});
+
+		// Configure marked.js
+		marked.setOptions({
+			highlight: function (code, lang) {
+				if (lang === 'mermaid') {
+					return `<div class="mermaid">${code}</div>`;
+				}
+				const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+				return hljs.highlight(code, { language }).value;
+			},
+			langPrefix: 'hljs language-',
+			gfm: true,
+			breaks: true
+		});
+
+		let allowedFolders = []; // Array to store allowed folder paths from server
+
+		// Fetch allowed folders from server on page load
+		window.addEventListener('DOMContentLoaded', async () => {
+			try {
+				const response = await fetch('/folders');
+				const data = await response.json();
+				allowedFolders = data.folders || [];
+				updateFolderListUI();
+			} catch (error) {
+				console.error('Error fetching allowed folders:', error);
+				folderListDiv.textContent = 'Error loading configured folders';
+			}
+		});
+
+		// Update the UI with allowed folders
+		function updateFolderListUI() {
+			if (allowedFolders.length === 0) {
+				folderListDiv.textContent = 'No folders configured. Please set ALLOWED_FOLDERS in .env';
+			} else {
+				folderListDiv.innerHTML = allowedFolders.map(f =>
+					`<div class="folder-item">- ${f}</div>`
+				).join('');
+			}
+		}
+
+		// Render markdown content
+		function renderMarkdown(text) {
+			return marked.parse(text);
+		}
+
+		// Handle form submission
+		form.addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const message = input.value.trim();
+			if (!message) return;
+
+			// Display user message
+			const userMsgDiv = document.createElement('div');
+			userMsgDiv.className = 'user-message';
+			userMsgDiv.textContent = message;
+			messagesDiv.appendChild(userMsgDiv);
+			input.value = '';
+
+			// Create AI message container
+			const aiMsgDiv = document.createElement('div');
+			aiMsgDiv.className = 'ai-message markdown-content';
+			messagesDiv.appendChild(aiMsgDiv);
+
+			// Send message to server
+			try {
+				const response = await fetch('/chat', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ message }),
+				});
+
+				const reader = response.body.getReader();
+				const decoder = new TextDecoder();
+				let aiResponse = '';
+
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					const chunk = decoder.decode(value, { stream: true });
+					aiResponse += chunk;
+					aiMsgDiv.innerHTML = renderMarkdown(aiResponse);
+
+					// Apply syntax highlighting to code blocks
+					aiMsgDiv.querySelectorAll('pre code').forEach((block) => {
+						hljs.highlightElement(block);
+					});
+
+					// Render any mermaid diagrams
+					try {
+						mermaid.init('.mermaid');
+					} catch (error) {
+						console.warn('Mermaid rendering error:', error);
+					}
+
+					messagesDiv.scrollTop = messagesDiv.scrollHeight;
+				}
+			} catch (error) {
+				console.error('Error:', error);
+				const errorMsg = document.createElement('div');
+				errorMsg.className = 'ai-message';
+				errorMsg.textContent = 'Error occurred while processing your request.';
+				messagesDiv.appendChild(errorMsg);
+			}
+
+			messagesDiv.scrollTop = messagesDiv.scrollHeight;
+		});
+	</script>
+</body>
+
+</html>

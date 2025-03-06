@@ -431,10 +431,12 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64, f64, f64, f64)
             + 0.05 * fmr_score
             + type_bonus;
 
-        println!(
-            "Score components for doc {}: cs_norm={:.3}, tf_norm={:.3}, bm_norm={:.3}, fut_norm={:.3}, ftm_norm={:.3}, but_norm={:.3}, btm_norm={:.3}, tr_score={:.3}, br_score={:.3}, fmr_score={:.3}, type_bonus={:.3} => new_score={:.3}",
-            i, cs_norm, tf_norm, bm_norm, fut_norm, ftm_norm, but_norm, btm_norm, tr_score, br_score, fmr_score, type_bonus, new_score
-        );
+        if debug_mode {
+            println!(
+                "Score components for doc {}: cs_norm={:.3}, tf_norm={:.3}, bm_norm={:.3}, fut_norm={:.3}, ftm_norm={:.3}, but_norm={:.3}, btm_norm={:.3}, tr_score={:.3}, br_score={:.3}, fmr_score={:.3}, type_bonus={:.3} => new_score={:.3}",
+                i, cs_norm, tf_norm, bm_norm, fut_norm, ftm_norm, but_norm, btm_norm, tr_score, br_score, fmr_score, type_bonus, new_score
+            );
+        }
 
         new_scores.push((i, *combined, *tfidf, *bm25, new_score));
     }
