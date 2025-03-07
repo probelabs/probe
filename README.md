@@ -34,18 +34,28 @@ Probe is an **AI-friendly, fully local, semantic code search** tool designed to 
 
 ## Quick Start
 
-**Basic Search Example**  
+**Basic Search Example**
 Search for code containing the phrase "llm pricing" in the current directory:
 
 ~~~bash
 probe "llm pricing" ./
 ~~~
 
-**Advanced Search (with Token Limiting)**  
+**Advanced Search (with Token Limiting)**
 Search for "partial prompt injection" in the current directory but limit the total tokens to 10000 (useful for AI tools with context window constraints):
 
 ~~~bash
 probe "prompt injection" ./ --max-tokens 10000
+~~~
+
+**Interactive AI Chat**
+Use the built-in AI assistant to ask questions about your codebase:
+
+~~~bash
+# Set your API key first
+export ANTHROPIC_API_KEY=your_api_key
+# Then start the chat interface
+probe chat
 ~~~
 
 ---
@@ -272,7 +282,7 @@ The MCP server implements:
 Run Probe as an interactive AI assistant:
 
 ~~~bash
-cargo run -- chat
+probe chat
 ~~~
 
 This starts an interactive CLI interface where you can ask questions about your codebase and get AI-powered responses.
@@ -292,18 +302,23 @@ Configure the chat using environment variables:
 ~~~bash
 # Use Claude models (recommended)
 export ANTHROPIC_API_KEY=your_api_key
-cargo run -- chat
+probe chat
 
 # Or use OpenAI models
 export OPENAI_API_KEY=your_api_key
-cargo run -- chat
+probe chat
 
 # Override the default model
 export MODEL_NAME=claude-3-opus-20240229
-cargo run -- chat
+probe chat
+
+# Override API URLs (useful for proxies or enterprise deployments)
+export ANTHROPIC_API_URL=https://your-anthropic-proxy.com
+export OPENAI_API_URL=https://your-openai-proxy.com/v1
+probe chat
 
 # Enable debug mode for detailed logging
-export DEBUG=1 cargo run -- chat
+export DEBUG=1 probe chat
 ~~~
 
 #### Example Usage
