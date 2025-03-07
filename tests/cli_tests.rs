@@ -47,7 +47,13 @@ fn test_cli_basic_search() {
 
     // Run the CLI with basic search
     let output = Command::new("cargo")
-        .args(["run", "--", "search", temp_dir.path().to_str().unwrap()])
+        .args([
+            "run",
+            "--",
+            "search",
+            "search", // Pattern to search for
+            temp_dir.path().to_str().unwrap(),
+        ])
         .output()
         .expect("Failed to execute command");
 
@@ -85,6 +91,7 @@ fn test_cli_files_only() {
             "run",
             "--",
             "search",
+            "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--files-only",
         ])
@@ -142,6 +149,7 @@ fn test_cli_include_filenames() {
             "run",
             "--",
             "search",
+            "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--include-filenames",
         ])
@@ -178,10 +186,12 @@ fn test_cli_reranker() {
             "run",
             "--",
             "search",
+            "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--reranker",
             "tfidf",
         ])
+        .env("DEBUG", "1") // Enable debug mode to see ranking messages
         .output()
         .expect("Failed to execute command");
 
@@ -211,7 +221,14 @@ fn test_cli_default_frequency_search() {
 
     // Run the CLI with default settings (frequency search should be enabled by default)
     let output = Command::new("cargo")
-        .args(["run", "--", "search", temp_dir.path().to_str().unwrap()])
+        .args([
+            "run",
+            "--",
+            "search",
+            "search", // Pattern to search for
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .env("DEBUG", "1") // Enable debug mode to see frequency search messages
         .output()
         .expect("Failed to execute command");
 
@@ -245,6 +262,7 @@ fn test_cli_exact_search() {
             "run",
             "--",
             "search",
+            "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--exact",
         ])
@@ -281,6 +299,7 @@ fn test_cli_custom_ignores() {
             "run",
             "--",
             "search",
+            "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--ignore",
             "*.js",
@@ -329,6 +348,7 @@ fn test_cli_max_results() {
             "run",
             "--",
             "search",
+            "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--max-results",
             "1",

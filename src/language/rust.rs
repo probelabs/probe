@@ -18,7 +18,7 @@ impl RustLanguage {
 
 impl LanguageImpl for RustLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        tree_sitter_rust::language()
+        tree_sitter_rust::LANGUAGE.into()
     }
 
     fn get_extension(&self) -> &'static str {

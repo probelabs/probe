@@ -18,7 +18,7 @@ impl JavaLanguage {
 
 impl LanguageImpl for JavaLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        tree_sitter_java::language()
+        tree_sitter_java::LANGUAGE.into()
     }
 
     fn get_extension(&self) -> &'static str {

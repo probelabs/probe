@@ -34,6 +34,8 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
     if target_node.kind() == "comment"
         || target_node.kind() == "line_comment"
         || target_node.kind() == "block_comment"
+        || target_node.kind() == "//"
+    // Add support for comment token in new tree-sitter
     {
         if debug_mode {
             println!(
@@ -393,7 +395,7 @@ pub fn parse_file_for_code_blocks(
 
     // Parse the file
     let mut parser = TSParser::new();
-    parser.set_language(language)?;
+    parser.set_language(&language)?;
 
     let tree = parser
         .parse(content, None)
@@ -423,7 +425,8 @@ pub fn parse_file_for_code_blocks(
         let target_node = find_most_specific_node(root_node, line);
         let is_comment = target_node.kind() == "comment"
             || target_node.kind() == "line_comment"
-            || target_node.kind() == "block_comment";
+            || target_node.kind() == "block_comment"
+            || target_node.kind() == "//"; // Add support for comment token in new tree-sitter
 
         // Special handling for comments
         if is_comment {

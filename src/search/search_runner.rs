@@ -87,15 +87,19 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             );
         }
 
-        // Print ranking method being used
-        match *reranker {
-            "tfidf" => println!("Using TF-IDF for ranking"),
-            "bm25" => println!("Using BM25 for ranking"),
-            "hybrid" => {
-                println!("Using hybrid ranking (default - simple TF-IDF + BM25 combination)")
+        if debug_mode {
+            // Print ranking method being used
+            match *reranker {
+                "tfidf" => println!("Using TF-IDF for ranking"),
+                "bm25" => println!("Using BM25 for ranking"),
+                "hybrid" => {
+                    println!("Using hybrid ranking (default - simple TF-IDF + BM25 combination)")
+                }
+                "hybrid2" => {
+                    println!("Using hybrid2 ranking (advanced - separate ranking components)")
+                }
+                _ => println!("Using {} for ranking", reranker),
             }
-            "hybrid2" => println!("Using hybrid2 ranking (advanced - separate ranking components)"),
-            _ => println!("Using {} for ranking", reranker),
         }
 
         return perform_frequency_search(&FrequencySearchOptions {
@@ -682,8 +686,9 @@ pub fn perform_frequency_search(options: &FrequencySearchOptions) -> Result<Limi
 
     timings.query_preprocessing = Some(qp_start.elapsed());
 
-    println!("Frequency search enabled");
     if debug_mode {
+        println!("Frequency search enabled");
+
         println!("Original query: {}", query);
         for (i, (orig, stem)) in term_pairs.iter().enumerate() {
             println!("  Term {}: {} (stemmed to {})", i + 1, orig, stem);

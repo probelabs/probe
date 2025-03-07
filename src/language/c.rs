@@ -18,7 +18,7 @@ impl CLanguage {
 
 impl LanguageImpl for CLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        tree_sitter_c::language()
+        tree_sitter_c::LANGUAGE.into()
     }
 
     fn get_extension(&self) -> &'static str {

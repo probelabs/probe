@@ -18,7 +18,7 @@ impl GoLanguage {
 
 impl LanguageImpl for GoLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        tree_sitter_go::language()
+        tree_sitter_go::LANGUAGE.into()
     }
 
     fn get_extension(&self) -> &'static str {

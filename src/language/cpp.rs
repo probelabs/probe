@@ -18,7 +18,7 @@ impl CppLanguage {
 
 impl LanguageImpl for CppLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        tree_sitter_cpp::language()
+        tree_sitter_cpp::LANGUAGE.into()
     }
 
     fn get_extension(&self) -> &'static str {

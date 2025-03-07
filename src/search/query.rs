@@ -10,8 +10,11 @@ use std::collections::HashSet;
 /// When exact is false, uses stemming/stopword logic but splits primarily on whitespace
 /// and also applies compound word splitting
 pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
-    // Debug print
-    println!("Original query: {}", query);
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    if debug_mode {
+        println!("Original query: {}", query);
+    }
 
     if exact {
         // For exact matching, just split on whitespace and return as-is without stemming
@@ -44,19 +47,24 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
         let result = query
             .split_whitespace()
             .flat_map(|word| {
-                // Debug print
-                println!("Processing word: {}", word);
+                if debug_mode {
+                    println!("Processing word: {}", word);
+                }
 
                 // First try to split on camel case boundaries - use original case
                 let camel_parts = split_camel_case(word);
-                println!("After camel case split: {:?}", camel_parts);
+                if debug_mode {
+                    println!("After camel case split: {:?}", camel_parts);
+                }
 
                 // For each camel case part, try to split compound words
                 camel_parts
                     .into_iter()
                     .flat_map(|part| {
                         let compound_parts = split_compound_word(&part, &enhanced_vocab);
-                        println!("After compound split of '{}': {:?}", part, compound_parts);
+                        if debug_mode {
+                            println!("After compound split of '{}': {:?}", part, compound_parts);
+                        }
                         compound_parts
                     })
                     .collect::<Vec<_>>()
@@ -65,12 +73,16 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
             .map(|part| {
                 let original = part.clone();
                 let stemmed = stemmer.stem(&part).to_string();
-                println!("Term: {} (stemmed to {})", original, stemmed);
+                if debug_mode {
+                    println!("Term: {} (stemmed to {})", original, stemmed);
+                }
                 (original, stemmed)
             })
             .collect();
 
-        println!("Final preprocessed terms: {:?}", result);
+        if debug_mode {
+            println!("Final preprocessed terms: {:?}", result);
+        }
         result
     }
 }

@@ -8,6 +8,30 @@ Probe is an **AI-friendly, fully local, semantic code search** tool designed to 
 
 ---
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Features](#features)
+- [Installation](#installation)
+  - [Quick Installation](#quick-installation)
+  - [Requirements](#requirements)
+  - [Manual Installation](#manual-installation)
+  - [Building from Source](#building-from-source)
+  - [Verifying the Installation](#verifying-the-installation)
+  - [Troubleshooting](#troubleshooting)
+  - [Uninstalling](#uninstalling)
+- [Usage](#usage)
+  - [CLI Mode](#cli-mode)
+  - [MCP Server Mode](#mcp-server-mode)
+  - [AI Chat Mode](#ai-chat-mode)
+  - [Web Interface](#web-interface)
+- [Supported Languages](#supported-languages)
+- [How It Works](#how-it-works)
+- [Adding Support for New Languages](#adding-support-for-new-languages)
+- [Releasing New Versions](#releasing-new-versions)
+
+---
+
 ## Quick Start
 
 **Basic Search Example**  
@@ -28,13 +52,14 @@ probe "prompt injection" ./ --max-tokens 10000
 
 ## Features
 
-- **AI-Friendly**: Extracts **entire functions, classes, or structs** so AI models get full context.  
-- **Fully Local**: Keeps your code on your machine—no external APIs.  
-- **Powered by ripgrep**: Extremely fast scanning of large codebases.  
-- **Tree-sitter Integration**: Parses and understands code structure accurately.  
-- **Re-Rankers & NLP**: Uses tokenization, stemming, BM25, TF-IDF, or hybrid ranking methods for better search results.  
-- **Multi-Language**: Works with popular languages like Rust, Python, JavaScript, TypeScript, Java, Go, C/C++, etc.  
-- **Flexible**: Run as a CLI tool or an MCP server for advanced AI integrations.
+- **AI-Friendly**: Extracts **entire functions, classes, or structs** so AI models get full context.
+- **Fully Local**: Keeps your code on your machine—no external APIs.
+- **Powered by ripgrep**: Extremely fast scanning of large codebases.
+- **Tree-sitter Integration**: Parses and understands code structure accurately.
+- **Re-Rankers & NLP**: Uses tokenization, stemming, BM25, TF-IDF, or hybrid ranking methods for better search results.
+- **Multi-Language**: Works with popular languages like Rust, Python, JavaScript, TypeScript, Java, Go, C/C++, etc.
+- **Interactive AI Chat**: Built-in AI assistant that can answer questions about your codebase using Claude or GPT models.
+- **Flexible**: Run as a CLI tool, an MCP server, or an interactive AI chat.
 
 ---
 
@@ -126,8 +151,13 @@ sudo rm /usr/local/bin/probe
 ~~~
 
 ---
-
 ## Usage
+
+Probe can be used in three main modes:
+
+1. **CLI Mode**: Direct code search from the command line
+2. **MCP Server Mode**: Run as a server exposing search functionality via MCP
+3. **AI Chat Mode**: Interactive AI assistant for code exploration
 
 ### CLI Mode
 
@@ -137,19 +167,19 @@ probe <SEARCH_PATTERN> [OPTIONS]
 
 #### Key Options
 
-- `<SEARCH_PATTERN>`: Pattern to search for (required)  
-- `--paths`: Directories to search (defaults to current directory)  
-- `--files-only`: Skip AST parsing; only list files with matches  
-- `--ignore`: Custom ignore patterns (in addition to `.gitignore`)  
-- `--include-filenames, -n`: Include files whose names match query words  
-- `--reranker, -r`: Choose a re-ranking algorithm (`hybrid`, `hybrid2`, `bm25`, `tfidf`)  
-- `--frequency, -s`: Frequency-based search (tokenization, stemming, stopword removal)  
-- `--exact`: Exact matching (overrides frequency search)  
-- `--max-results`: Maximum number of results to return  
-- `--max-bytes`: Maximum total bytes of code to return  
-- `--max-tokens`: Maximum total tokens of code to return (useful for AI)  
-- `--allow-tests`: Include test files and test code blocks  
-- `--any-term`: Match files containing **any** query terms (default is **all** terms)  
+- `<SEARCH_PATTERN>`: Pattern to search for (required)
+- `--paths`: Directories to search (defaults to current directory)
+- `--files-only`: Skip AST parsing; only list files with matches
+- `--ignore`: Custom ignore patterns (in addition to `.gitignore`)
+- `--include-filenames, -n`: Include files whose names match query words
+- `--reranker, -r`: Choose a re-ranking algorithm (`hybrid`, `hybrid2`, `bm25`, `tfidf`)
+- `--frequency, -s`: Frequency-based search (tokenization, stemming, stopword removal)
+- `--exact`: Exact matching (overrides frequency search)
+- `--max-results`: Maximum number of results to return
+- `--max-bytes`: Maximum total bytes of code to return
+- `--max-tokens`: Maximum total tokens of code to return (useful for AI)
+- `--allow-tests`: Include test files and test code blocks
+- `--any-term`: Match files containing **any** query terms (default is **all** terms)
 - `--no-merge`: Disable merging of adjacent code blocks after ranking (merging enabled by default)
 - `--merge-threshold`: Max lines between code blocks to consider them adjacent for merging (default: 5)
 
@@ -168,6 +198,7 @@ probe "search" --max-tokens 10000
 # 4) Search for "function" and disable merging of adjacent code blocks
 probe "function" --no-merge
 ~~~
+~~~
 
 ### MCP Server Mode
 
@@ -181,7 +212,7 @@ This starts a server exposing a `search_code` tool for use with the [Model Conte
 
 #### MCP Tool: `search_code`
 
-- **Purpose**: Search code blocks based on various parameters.  
+- **Purpose**: Search code blocks based on various parameters.
 - **Input Schema** (JSON):
   ~~~json
   {
@@ -232,9 +263,146 @@ This starts a server exposing a `search_code` tool for use with the [Model Conte
   ~~~
 
 The MCP server implements:
-- `initialize`  
-- `handle_method` (for `list_tools`, `call_tool`, etc.)  
+- `initialize`
+- `handle_method` (for `list_tools`, `call_tool`, etc.)
 - `shutdown`
+
+### AI Chat Mode
+
+Run Probe as an interactive AI assistant:
+
+~~~bash
+cargo run -- chat
+~~~
+
+This starts an interactive CLI interface where you can ask questions about your codebase and get AI-powered responses.
+
+#### Features
+
+- **AI-Powered Search**: Uses LLMs to understand your questions and search the codebase intelligently
+- **Multi-Model Support**: Works with both Anthropic's Claude and OpenAI's GPT models
+- **Token Tracking**: Monitors token usage for both requests and responses
+- **Conversation History**: Maintains context across multiple interactions
+- **Colored Output**: Provides a user-friendly terminal interface with syntax highlighting
+
+#### Configuration
+
+Configure the chat using environment variables:
+
+~~~bash
+# Use Claude models (recommended)
+export ANTHROPIC_API_KEY=your_api_key
+cargo run -- chat
+
+# Or use OpenAI models
+export OPENAI_API_KEY=your_api_key
+cargo run -- chat
+
+# Override the default model
+export MODEL_NAME=claude-3-opus-20240229
+cargo run -- chat
+
+# Enable debug mode for detailed logging
+export DEBUG=1 cargo run -- chat
+~~~
+
+#### Example Usage
+
+~~~
+❯ How does the ranking algorithm work?
+
+─ Response ─────────────────────────────────────────────────────────
+I'll explain how the ranking algorithm works in the codebase.
+
+The ranking system in Probe uses multiple algorithms to sort search results by relevance. The main ranking algorithms are:
+
+1. TF-IDF (Term Frequency-Inverse Document Frequency)
+2. BM25 (Best Matching 25)
+3. Hybrid (a combination approach)
+
+Let me break down each approach:
+
+## TF-IDF Ranking
+
+TF-IDF weighs terms based on how frequently they appear in a document versus how common they are across all documents.
+
+Key implementation details:
+- Term frequency (TF) measures how often a term appears in a document
+- Inverse document frequency (IDF) measures how rare a term is across all documents
+- Final score is calculated as TF × IDF
+
+## BM25 Ranking
+
+BM25 is an advanced ranking function that improves upon TF-IDF by adding document length normalization.
+
+Key implementation details:
+- Uses parameters k1 (term frequency saturation) and b (document length normalization)
+- Handles edge cases like empty documents and rare terms
+- Provides better results for longer documents
+
+## Hybrid Ranking
+
+The hybrid approach combines multiple ranking signals for better results:
+
+1. Combines scores from both TF-IDF and BM25
+2. Considers document length and term positions
+3. Applies normalization to ensure fair comparison
+
+The default reranker is "hybrid" which provides the best overall results for code search.
+
+The ranking implementation can be found in `src/search/result_ranking.rs`.
+─────────────────────────────────────────────────────────────────────
+Token Usage: Request: 1245 Response: 1532 (Current message only: ~1532)
+Total: 2777 tokens (Cumulative for entire session)
+─────────────────────────────────────────────────────────────────────
+~~~
+
+### Web Interface
+
+Probe includes a web-based chat interface that provides a user-friendly way to interact with your codebase using AI. The web interface is located in the `web/` folder and offers a modern UI for code search and AI-powered code exploration.
+
+#### Features
+
+- **Interactive Chat UI**: Clean, modern interface with markdown and syntax highlighting
+- **AI-Powered Code Search**: Uses Claude AI to search and explain your codebase
+- **Mermaid Diagram Support**: Renders visual diagrams for code architecture and flows
+- **Configurable Search Paths**: Define which directories can be searched via environment variables
+
+#### Setup and Configuration
+
+1. **Navigate to the web directory**:
+   ```bash
+   cd web
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+
+3. **Configure environment variables**:
+   Create or edit the `.env` file in the web directory:
+   ```
+   ANTHROPIC_API_KEY=your_anthropic_api_key
+   PORT=8080
+   ALLOWED_FOLDERS=/path/to/folder1,/path/to/folder2
+   ```
+
+4. **Start the server**:
+   ```bash
+   npm start
+   ```
+
+5. **Access the web interface**:
+   Open your browser and navigate to `http://localhost:8080`
+
+#### Technical Details
+
+- Built with vanilla JavaScript and Node.js
+- Uses the Vercel AI SDK for Claude integration
+- Executes Probe commands via the probeTool.js module
+- Renders markdown with Marked.js and syntax highlighting with Highlight.js
+- Supports Mermaid.js for diagram generation and visualization
 
 ---
 
@@ -260,7 +428,7 @@ Probe currently supports:
 Probe combines **fast file scanning** with **deep code parsing** to provide highly relevant, context-aware results:
 
 1. **Ripgrep Scanning**  
-   Probe uses ripgrep to quickly search across your files, identifying lines that match your query. Ripgrep’s efficiency allows it to handle massive codebases at lightning speed.
+   Probe uses ripgrep to quickly search across your files, identifying lines that match your query. Ripgrep's efficiency allows it to handle massive codebases at lightning speed.
 
 2. **AST Parsing with Tree-sitter**  
    For each file containing matches, Probe uses tree-sitter to parse the file into an Abstract Syntax Tree (AST). This process ensures that code blocks (functions, classes, structs) can be identified precisely.
@@ -281,7 +449,7 @@ Probe combines **fast file scanning** with **deep code parsing** to provide high
 1. **Tree-sitter Grammar**: In `Cargo.toml`, add the tree-sitter parser for the new language.  
 2. **Language Module**: Create a new file in `src/language/` for parsing logic.  
 3. **Implement Language Trait**: Adapt the parse method for the new language constructs.  
-4. **Factory Update**: Register your new language in Probe’s detection mechanism.
+4. **Factory Update**: Register your new language in Probe's detection mechanism.
 
 ---
 

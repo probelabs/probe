@@ -18,7 +18,7 @@ impl RubyLanguage {
 
 impl LanguageImpl for RubyLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        tree_sitter_ruby::language()
+        tree_sitter_ruby::LANGUAGE.into()
     }
 
     fn get_extension(&self) -> &'static str {

@@ -18,7 +18,7 @@ impl PhpLanguage {
 
 impl LanguageImpl for PhpLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        tree_sitter_php::language()
+        tree_sitter_php::LANGUAGE_PHP.into()
     }
 
     fn get_extension(&self) -> &'static str {

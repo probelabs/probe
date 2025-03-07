@@ -4,8 +4,8 @@ use tree_sitter::Parser as TSParser;
 // Helper function to parse test code and get the root node
 fn parse_rust_code(code: &str) -> tree_sitter::Tree {
     let mut parser = TSParser::new();
-    let language = tree_sitter_rust::language();
-    parser.set_language(language).expect("Error loading Rust grammar");
+    let language = tree_sitter_rust::LANGUAGE.into();
+    parser.set_language(&language).expect("Error loading Rust grammar");
     parser.parse(code, None).expect("Failed to parse code")
 }
 

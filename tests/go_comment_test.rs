@@ -4,9 +4,9 @@ use tree_sitter::Parser as TSParser;
 // Helper function to parse Go code and get the root node
 fn parse_go_code(code: &str) -> tree_sitter::Tree {
     let mut parser = TSParser::new();
-    let language = tree_sitter_go::language();
+    let language = tree_sitter_go::LANGUAGE.into();
     parser
-        .set_language(language)
+        .set_language(&language)
         .expect("Error loading Go grammar");
     parser.parse(code, None).expect("Failed to parse code")
 }

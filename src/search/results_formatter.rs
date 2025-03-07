@@ -1,12 +1,23 @@
 use std::path::Path;
 use crate::models::SearchResult;
+use colored::*;
 
 /// Function to format and print search results according to the specified format
 pub fn format_and_print_search_results(results: &[SearchResult]) {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    
+    // Check if colors should be disabled
+    let no_color = std::env::var("NO_COLOR").is_ok();
+    
+    if !results.is_empty() {
+        println!("{}", "╭─────────────────────────────────────────────────╮".cyan());
+        println!("{} {} {}", "│".cyan(), format!("Found {} results", results.len()).bold(), "│".cyan());
+        println!("{}", "╰─────────────────────────────────────────────────╯".cyan());
+        println!();
+    }
 
-    for result in results {
+    for (index, result) in results.iter().enumerate() {
         // Get file extension
         let file_path = Path::new(&result.file);
         let extension = file_path
@@ -17,46 +28,49 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
         // Check if this is a full file or partial file
         let is_full_file = result.node_type == "file";
 
-        // Print the file path and node info
+        // Print result number
+        println!("{} {}", "Result".bold().blue(), format!("#{}", index + 1).bold().blue());
+        
+        // Print the file path and node info with color
         if is_full_file {
-            println!("File: {}", result.file);
+            println!("{} {}", "File:".bold().green(), result.file.yellow());
         } else {
-            println!("File: {} ({})", result.file, result.node_type);
+            println!("{} {} ({})", "File:".bold().green(), result.file.yellow(), result.node_type.cyan());
             if !result.node_path.is_empty() {
-                println!("Node: {}", result.node_path);
+                println!("{} {}", "Node:".bold().green(), result.node_path.cyan());
             }
         }
 
         // Print the score if available and in debug mode
         if debug_mode {
             if let Some(score) = result.score {
-                println!("Score: {:.6}", score);
+                println!("{} {:.6}", "Score:".dimmed(), score);
             }
             if let Some(tfidf_score) = result.tfidf_score {
-                println!("TF-IDF Score: {:.6}", tfidf_score);
+                println!("{} {:.6}", "TF-IDF Score:".dimmed(), tfidf_score);
             }
             if let Some(bm25_score) = result.bm25_score {
-                println!("BM25 Score: {:.6}", bm25_score);
+                println!("{} {:.6}", "BM25 Score:".dimmed(), bm25_score);
             }
             if let Some(content_matches) = &result.content_matches {
-                println!("Content matches: {}", content_matches.join(", "));
+                println!("{} {}", "Content matches:".dimmed(), content_matches.join(", "));
             }
             if let Some(filename_matches) = &result.filename_matches {
-                println!("Filename matches: {}", filename_matches.join(", "));
+                println!("{} {}", "Filename matches:".dimmed(), filename_matches.join(", "));
             }
             if let Some(unique_terms) = result.unique_terms {
-                println!("Unique terms matched: {}", unique_terms);
+                println!("{} {}", "Unique terms matched:".dimmed(), unique_terms);
             }
             if let Some(total_matches) = result.total_matches {
-                println!("Total term matches: {}", total_matches);
+                println!("{} {}", "Total term matches:".dimmed(), total_matches);
             }
             
             // Display block-level match statistics in debug mode
             if let Some(block_unique_terms) = result.block_unique_terms {
-                println!("Block unique terms matched: {}", block_unique_terms);
+                println!("{} {}", "Block unique terms matched:".dimmed(), block_unique_terms);
             }
             if let Some(block_total_matches) = result.block_total_matches {
-                println!("Block total term matches: {}", block_total_matches);
+                println!("{} {}", "Block total term matches:".dimmed(), block_total_matches);
             }
         }
 
@@ -95,19 +109,25 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
                 _ => "",
             };
 
+            println!("{}", "Code:".bold().magenta());
+            
             // Print the content with or without syntax highlighting
             if !language.is_empty() {
-                println!("```{}", language);
+                println!("{}", format!("```{}", language).cyan());
                 println!("{}", result.content);
-                println!("```");
+                println!("{}", "```".cyan());
             } else {
-                println!("```");
+                println!("{}", "```".cyan());
                 println!("{}", result.content);
-                println!("```");
+                println!("{}", "```".cyan());
             }
         }
 
         // Print a separator between results
-        println!();
+        if index < results.len() - 1 {
+            println!();
+            println!("{}", "─".repeat(50).cyan());
+            println!();
+        }
     }
 }

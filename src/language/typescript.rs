@@ -19,9 +19,9 @@ impl TypeScriptLanguage {
 impl LanguageImpl for TypeScriptLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
         if self.tsx {
-            tree_sitter_typescript::language_tsx()
+            tree_sitter_typescript::LANGUAGE_TSX.into()
         } else {
-            tree_sitter_typescript::language_typescript()
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
         }
     }
 

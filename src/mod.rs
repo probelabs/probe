@@ -1,3 +1,4 @@
+pub mod chat;
 pub mod models;
 pub mod language;
 pub mod search;

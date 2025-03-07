@@ -18,7 +18,7 @@ impl PythonLanguage {
 
 impl LanguageImpl for PythonLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        tree_sitter_python::language()
+        tree_sitter_python::LANGUAGE.into()
     }
 
     fn get_extension(&self) -> &'static str {

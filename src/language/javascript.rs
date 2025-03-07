@@ -18,7 +18,7 @@ impl JavaScriptLanguage {
 
 impl LanguageImpl for JavaScriptLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        tree_sitter_javascript::language()
+        tree_sitter_javascript::LANGUAGE.into()
     }
 
     fn get_extension(&self) -> &'static str {

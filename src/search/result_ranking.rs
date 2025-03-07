@@ -219,8 +219,6 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
         "hybrid" => {
             if debug_mode {
                 println!("DEBUG: Using hybrid ranking (simple TF-IDF + BM25 combination)");
-            } else {
-                println!("Using hybrid ranking (simple TF-IDF + BM25 combination)");
             }
 
             // Sort by combined score (original hybrid method)

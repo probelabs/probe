@@ -23,6 +23,7 @@ probe/
 │   │   ├── query.rs              # Query processing
 │   │   ├── result_ranking.rs     # Result ranking algorithms
 │   │   └── search_execution.rs   # Main search execution
+│   ├── agent.rs            # AI agent implementation
 │   ├── lib.rs              # Library entry point
 │   └── main.rs             # CLI application entry point
 ├── tests/                  # Integration tests
@@ -184,7 +185,6 @@ When making changes to the codebase:
      - Properly calculate TF-IDF and BM25 scores
      - Handle edge cases (empty documents, rare terms)
      - Maintain backward compatibility with existing code
-
 ## Debugging Tips
 
 1. **Debug Mode**:
@@ -203,4 +203,87 @@ When making changes to the codebase:
    - If ranking seems incorrect, check:
      - Term frequency calculation
      - Document length normalization
+     - Score combination logic
+
+## AI Agent
+
+The `agent.rs` file implements an AI-powered assistant that can interact with the code search functionality.
+
+### Agent Overview
+
+- **Purpose**: Provides an interactive AI assistant that can search code repositories and answer questions about the codebase
+- **Models**: Supports both Anthropic's Claude and OpenAI's GPT models
+- **Features**:
+  - Interactive CLI interface
+  - Token usage tracking
+  - Conversation history management
+  - Tool integration with code search functionality
+  - Colored output formatting
+
+### Components
+
+1. **ProbeSearch Tool**:
+   - Implements the `Tool` trait from the `rig` crate
+   - Allows the AI to search code using the core probe functionality
+   - Configurable with various search parameters (pattern, path, exact matching, etc.)
+   - Returns formatted search results to the AI
+
+2. **ModelType Enum**:
+   - Represents different LLM backends:
+     - `Anthropic`: Uses Claude models via Anthropic's API
+     - `OpenAI`: Uses GPT models via OpenAI's API
+
+3. **ProbeAgent Struct**:
+   - Main agent implementation
+   - Handles model initialization based on available API keys
+   - Tracks token usage for requests and responses
+   - Implements conversation handling
+
+4. **Chat Implementation**:
+   - Implements the `RigChat` trait for handling conversations
+   - Manages conversation history with a limit to prevent context explosion
+   - Processes tool calls within AI responses
+   - Handles continuation prompts after tool execution
+
+### Usage
+
+1. **Starting the Agent**:
+   ```bash
+   cargo run -- agent
+   ```
+
+2. **Environment Variables**:
+   - `ANTHROPIC_API_KEY`: API key for Anthropic (Claude models)
+   - `OPENAI_API_KEY`: API key for OpenAI (GPT models)
+   - `MODEL_NAME`: Override the default model (optional)
+   - `ANTHROPIC_API_URL`: Override the default Anthropic API URL (optional)
+   - `OPENAI_API_URL`: Override the default OpenAI API URL (optional)
+   - `DEBUG`: Enable debug output (set to any value)
+
+3. **CLI Commands**:
+   - `help`: Display help information
+   - `quit`: Exit the assistant
+
+### Implementation Details
+
+1. **Token Tracking**:
+   - Uses `tiktoken_rs::cl100k_base` for token counting
+   - Tracks request and response tokens separately
+   - Displays token usage information after each interaction
+
+2. **Conversation Management**:
+   - Limits history to `MAX_HISTORY_MESSAGES` (4) to prevent context explosion
+   - Filters out tool outputs from history to save tokens
+   - Uses continuation prompts to maintain context after tool execution
+
+3. **Tool Execution**:
+   - Detects "tool:" calls in AI responses
+   - Executes the ProbeSearch tool with provided parameters
+   - Returns results to the AI for further processing
+   - Handles errors and provides appropriate error messages
+
+4. **Model-Specific Handling**:
+   - Different prompt formats for Anthropic vs OpenAI
+   - Adjusts token limits based on model capabilities
+   - Handles API-specific requirements and response formats
      - Score combination logic

@@ -45,10 +45,10 @@ pub fn perform_frequency_search(
     // Extract just the patterns for compatibility with existing code
     let term_patterns: Vec<String> = patterns_with_terms.iter().map(|(pattern, _)| pattern.clone()).collect();
     
-    // Always print this message for test compatibility
-    println!("Frequency search enabled");
-    
     if debug_mode {
+        // Always print this message for test compatibility
+        println!("Frequency search enabled");
+    
         println!("Original query: {}", query);
         println!("After preprocessing:");
         for (i, (original, stemmed)) in term_pairs.iter().enumerate() {
