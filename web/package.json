@@ -1,7 +1,7 @@
 {
-  "name": "simple-anthropic-chat",
+  "name": "code-search-chat",
   "version": "1.0.0",
-  "description": "A simple chat app using Vercel AI SDK and Anthropic",
+  "description": "A code search chat app using Vercel AI SDK with Anthropic and OpenAI support",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -13,6 +13,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@ai-sdk/anthropic": "^1.1.15",
+    "@ai-sdk/openai": "^1.1.15",
     "ai": "^4.1.54",
     "dotenv": "^16.4.7",
     "zod": "^3.24.2"

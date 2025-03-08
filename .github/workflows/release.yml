@@ -48,6 +48,23 @@ jobs:
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
 
+      # Setup Rust cache
+      - name: Setup Rust cache
+        uses: actions/cache@v4
+        timeout-minutes: 5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain', 'rust-toolchain.toml') || 'stable' }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+            ${{ runner.os }}-cargo-
+
       - name: Configure APT sources for arm64
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |

@@ -18,16 +18,18 @@ function escapeShellArg(arg) {
  */
 export const probeTool = tool({
 	// Description helps the AI understand when to use this tool
-	description: 'Search code repositories. Try have more general queries and simpler queries. Example: instead of `rpc layer implementation` just use `rpc` etc. Avoid unnecessary verbs or nouns, focus on main keywrods.',
+	description: 'Search code in the repository using patterns. Use this tool to find relevant code snippets based on keywords or patterns. Always use this tool first before attempting to answer questions about the codebase.',
 
 	// Define the parameters schema using Zod - simplified to just query and folder
 	parameters: z.object({
-		keywords: z.string().describe('The search query to find in the codebase. Do not add name of the folder to query. Try have more general queries and simpler queries - It is not a search engine. Example: instead of `rpc layer implementation` just use `rpc` etc. '),
-		folder: z.string().optional().describe('Specific directory to search (defaults to all allowed folders from environment). Only 1 directory per call.')
+		keywords: z.string().describe('Search pattern. Try to use simpler queries and focus on keywords that can appear in code. For example, use "config" instead of "configuration settings".'),
+		folder: z.string().optional().describe('Path to search in. Specify one of the allowed folders.'),
+		exact: z.boolean().optional().default(false).describe('Use exact match when you explicitly want to match specific search pattern, without stemming. Used when you exactly know function or Struct name.'),
+		allow_tests: z.boolean().optional().default(false).describe('Allow test files in search results.')
 	}),
 
 	// The execute function contains the tool's logic
-	execute: async ({ keywords, folder }) => {
+	execute: async ({ keywords, folder, exact, allow_tests }) => {
 		try {
 			// Build the command with properly escaped arguments
 			let command = `probe ${escapeShellArg(keywords)}`;
@@ -36,7 +38,20 @@ export const probeTool = tool({
 			if (folder) {
 				command += ` ${escapeShellArg(folder)}`;
 			} else if (process.env.ALLOWED_FOLDERS) {
-				command += ` ${escapeShellArg(process.env.ALLOWED_FOLDERS[0])}`;
+				const folders = process.env.ALLOWED_FOLDERS.split(',').map(f => f.trim());
+				if (folders.length > 0) {
+					command += ` ${escapeShellArg(folders[0])}`;
+				}
+			}
+
+			// Add exact match flag if specified
+			if (exact) {
+				command += ' --exact';
+			}
+
+			// Add allow tests flag if specified
+			if (allow_tests) {
+				command += ' --allow-tests';
 			}
 
 			// Add some sensible defaults for AI context
@@ -62,7 +77,7 @@ export const probeTool = tool({
 			console.error('Error executing probe command:', error);
 			return {
 				error: error.message,
-				command: `probe ${escapeShellArg(keywords)} ${folder ? escapeShellArg(folder) : ''}`,
+				command: `probe ${keywords} ${folder || ''}`,
 				timestamp: new Date().toISOString()
 			};
 		}
