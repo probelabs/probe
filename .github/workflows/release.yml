@@ -61,9 +61,9 @@ jobs:
       - name: Setup cross-compilation
         if: contains(matrix.target, 'aarch64-unknown-linux-gnu')
         run: |
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-          sudo apt-get install -y pkg-config libssl-dev:arm64 libc6-dev-arm64-cross
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config libssl-dev:arm64 libc6-dev-arm64-cross
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
           echo "OPENSSL_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
