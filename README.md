@@ -38,14 +38,14 @@ Probe is an **AI-friendly, fully local, semantic code search** tool designed to 
 Search for code containing the phrase "llm pricing" in the current directory:
 
 ~~~bash
-probe "llm pricing" ./
+probe search "llm pricing" ./
 ~~~
 
 **Advanced Search (with Token Limiting)**
 Search for "partial prompt injection" in the current directory but limit the total tokens to 10000 (useful for AI tools with context window constraints):
 
 ~~~bash
-probe "prompt injection" ./ --max-tokens 10000
+probe search "prompt injection" ./ --max-tokens 10000
 ~~~
 
 **Interactive AI Chat**
@@ -195,13 +195,12 @@ Probe can be used in three main modes:
 ### CLI Mode
 
 ~~~bash
-probe <SEARCH_PATTERN> [OPTIONS]
+probe search <SEARCH_PATTERN> [OPTIONS]
 ~~~
 
 #### Key Options
 
 - `<SEARCH_PATTERN>`: Pattern to search for (required)
-- `--paths`: Directories to search (defaults to current directory)
 - `--files-only`: Skip AST parsing; only list files with matches
 - `--ignore`: Custom ignore patterns (in addition to `.gitignore`)
 - `--include-filenames, -n`: Include files whose names match query words
@@ -220,16 +219,16 @@ probe <SEARCH_PATTERN> [OPTIONS]
 
 ~~~bash
 # 1) Search for "setTools" in the current directory with frequency-based search
-probe "setTools"
+probe search "setTools"
 
 # 2) Search for "impl" in ./src with exact matching
-probe "impl" --paths ./src --exact
+probe search "impl"  ./src --exact
 
-# 3) Search for "search" returning only the top 5 results
-probe "search" --max-tokens 10000
+# 3) Search for "keyword" returning only the top 5 results
+probe search "keyword" --max-tokens 10000
 
 # 4) Search for "function" and disable merging of adjacent code blocks
-probe "function" --no-merge
+probe search "function" --no-merge
 ~~~
 ~~~
 

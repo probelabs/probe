@@ -225,18 +225,7 @@ class ProbeServer {
   private async executeCodeSearch(args: SearchCodeArgs): Promise<string> {
     // Build the command arguments
     const cliArgs: string[] = [];
-    // Add query as the first positional argument (can be string or array)
-    const queries = Array.isArray(args.query) ? args.query : [args.query];
-    // Use the first query as the main pattern (positional argument)
-    if (queries.length > 0) {
-      // Wrap query in quotes to handle multi-word queries
-      cliArgs.push(`"${queries[0]}"`);
-    }
-    
-    // Add path as the second positional argument (not with --paths flag)
-    cliArgs.push(`"${args.path}"`);
-    cliArgs.push('--paths', args.path);
-    
+ 
     // Add optional arguments
     if (args.filesOnly) {
       cliArgs.push('--files-only');
@@ -293,9 +282,20 @@ class ProbeServer {
       cliArgs.push('--merge-threshold', args.mergeThreshold.toString());
     }
     
+   // Add query as the first positional argument (can be string or array)
+   const queries = Array.isArray(args.query) ? args.query : [args.query];
+   // Use the first query as the main pattern (positional argument)
+   if (queries.length > 0) {
+     // Wrap query in quotes to handle multi-word queries
+     cliArgs.push(`"${queries[0]}"`);
+   }
+   
+   // Add path as the second positional argument (not with --paths flag)
+   cliArgs.push(`"${args.path}"`);
+   
     // Execute the command
     // No "search" subcommand needed
-    const command = `${PROBE_PATH} ${cliArgs.join(' ')}`;
+    const command = `${PROBE_PATH} search ${cliArgs.join(' ')}`;
     console.log(`Executing command: ${command}`);
     
     try {
