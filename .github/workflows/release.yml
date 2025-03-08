@@ -170,6 +170,7 @@ jobs:
           node-version: "18"
           registry-url: "https://registry.npmjs.org/"
           scope: "@buger"
+          token: ${{ secrets.NPM_TOKEN }} # Let setup-node handle authentication
 
       - name: Install dependencies
         run: cd mcp && npm install
@@ -183,12 +184,6 @@ jobs:
 
       - name: Build
         run: cd mcp && npm run build
-
-      - name: Create .npmrc file
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-          echo "registry=https://registry.npmjs.org/" >> ~/.npmrc
-          echo "always-auth=true" >> ~/.npmrc
 
       - name: Publish to npm
         run: cd mcp && npm publish --access public
