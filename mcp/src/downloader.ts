@@ -284,17 +284,18 @@ async function extractBinary(assetPath: string, outputDir: string): Promise<stri
     
     // Find the binary in the extracted files
     const files = await fs.readdir(extractDir, { recursive: true });
-    const binaryFile = files.find(file => 
-      path.basename(file) === binaryName || 
-      (isWindows && path.basename(file).endsWith('.exe'))
-    );
+    const binaryFile = files.find(file => {
+      const fileName = file.toString(); // Convert Buffer to string if needed
+      return path.basename(fileName) === binaryName ||
+        (isWindows && path.basename(fileName).endsWith('.exe'));
+    });
     
     if (!binaryFile) {
       throw new Error(`Binary not found in the archive`);
     }
     
     // Move the binary to the output directory
-    const sourcePath = path.join(extractDir, binaryFile);
+    const sourcePath = path.join(extractDir, binaryFile.toString());
     binaryPath = path.join(outputDir, binaryName);
     await fs.move(sourcePath, binaryPath, { overwrite: true });
     
@@ -310,17 +311,18 @@ async function extractBinary(assetPath: string, outputDir: string): Promise<stri
     
     // Find the binary in the extracted files
     const files = await fs.readdir(extractDir, { recursive: true });
-    const binaryFile = files.find(file => 
-      path.basename(file) === binaryName || 
-      (isWindows && path.basename(file).endsWith('.exe'))
-    );
+    const binaryFile = files.find(file => {
+      const fileName = file.toString(); // Convert Buffer to string if needed
+      return path.basename(fileName) === binaryName ||
+        (isWindows && path.basename(fileName).endsWith('.exe'));
+    });
     
     if (!binaryFile) {
       throw new Error(`Binary not found in the archive`);
     }
     
     // Move the binary to the output directory
-    const sourcePath = path.join(extractDir, binaryFile);
+    const sourcePath = path.join(extractDir, binaryFile.toString());
     binaryPath = path.join(outputDir, binaryName);
     await fs.move(sourcePath, binaryPath, { overwrite: true });
     
