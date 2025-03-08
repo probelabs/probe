@@ -19,16 +19,43 @@ const execAsync = promisify(exec);
 // Get the package.json to determine the version
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const packageJsonPath = path.resolve(__dirname, '..', '..', 'package.json');
-let packageVersion = '0.0.0';
 
-try {
-  if (fs.existsSync(packageJsonPath)) {
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-    packageVersion = packageJson.version || '0.0.0';
+// Try multiple possible locations for package.json
+let packageVersion = '0.0.0';
+const possiblePaths = [
+  path.resolve(__dirname, '..', 'package.json'),      // When installed from npm: build/../package.json
+  path.resolve(__dirname, '..', '..', 'package.json') // In development: src/../package.json
+];
+
+for (const packageJsonPath of possiblePaths) {
+  try {
+    if (fs.existsSync(packageJsonPath)) {
+      console.log(`Found package.json at: ${packageJsonPath}`);
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+      if (packageJson.version) {
+        packageVersion = packageJson.version;
+        console.log(`Using version from package.json: ${packageVersion}`);
+        break;
+      }
+    }
+  } catch (error) {
+    console.error(`Error reading package.json at ${packageJsonPath}:`, error);
   }
-} catch (error) {
-  console.error('Error reading package.json:', error);
+}
+
+// If we still have 0.0.0, try to get version from npm package
+if (packageVersion === '0.0.0') {
+  try {
+    // Try to get version from the package name itself
+    const result = await execAsync('npm list -g @buger/probe-mcp --json');
+    const npmList = JSON.parse(result.stdout);
+    if (npmList.dependencies && npmList.dependencies['@buger/probe-mcp']) {
+      packageVersion = npmList.dependencies['@buger/probe-mcp'].version;
+      console.log(`Using version from npm list: ${packageVersion}`);
+    }
+  } catch (error) {
+    console.error('Error getting version from npm:', error);
+  }
 }
 
 // Path to the probe binary (will be set after download)

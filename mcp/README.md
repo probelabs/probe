@@ -23,16 +23,24 @@ This package provides an MCP server that allows AI assistants to use the Probe c
 ```json
 {
   "mcpServers": {
-    "probe": {
+    "memory": {
       "command": "npx",
-      "args": ["@buger/probe-mcp"],
-      "env": {}
+      "args": [
+        "-y",
+        "@buger/probe"
+      ]
     }
   }
 }
 ```
 
-2. Ask Claude to search your codebase using the probe tool.
+2. Ask your AI assistant to search your codebase using natural language queries like:
+
+   - "Search my codebase for implementations of the ranking algorithm"
+   - "Find all functions related to error handling in the src directory"
+   - "Look for code that handles user authentication"
+
+The AI will use the Probe tool to search your codebase and provide relevant code snippets and explanations.
 
 ## License
 

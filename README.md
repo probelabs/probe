@@ -243,39 +243,37 @@ This starts a server exposing a `search_code` tool for use with the [Model Conte
   }
   ~~~
 
-- **Usage Example** (MCP client in Rust):
-  ~~~rust
-  use std::sync::Arc;
-  use mcp_rust_sdk::{Client, transport::stdio::StdioTransport};
-  use serde_json::json;
-
-  #[tokio::main]
-  async fn main() -> Result<(), Box<dyn std::error::Error>> {
-      let (transport, _) = StdioTransport::new();
-      let client = Client::new(transport);
-
-      let response = client.request(
-          "call_tool",
-          Some(json!({
-              "name": "search_code",
-              "arguments": {
-                  "path": "./src",
-                  "query": ["impl", "fn"],
-                  "filesOnly": false,
-                  "exact": true
-              }
-          }))
-      ).await?;
-
-      println!("Search results: {:?}", response);
-      Ok(())
+- **Configuration Example**:
+  
+  Add the following to your AI editor's MCP configuration file:
+  
+  ~~~json
+  {
+    "mcpServers": {
+      "memory": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@buger/probe"
+        ]
+      }
+    }
   }
   ~~~
+  
+  For Claude Desktop, add this to `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%\Claude\claude_desktop_config.json` on Windows.
+  
+  For VSCode with Roo, add this to `~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json` on macOS or `%APPDATA%\Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\cline_mcp_settings.json` on Windows.
 
-The MCP server implements:
-- `initialize`
-- `handle_method` (for `list_tools`, `call_tool`, etc.)
-- `shutdown`
+- **Example Usage in AI Editors**:
+  
+  Once configured, you can ask your AI assistant to search your codebase with natural language queries like:
+  
+  > "Search my codebase for implementations of the ranking algorithm"
+  >
+  > "Find all functions related to error handling in the src directory"
+  >
+  > "Look for code that handles user authentication"
 
 ### AI Chat Mode
 

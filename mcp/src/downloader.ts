@@ -121,7 +121,7 @@ async function getLatestRelease(version?: string): Promise<{ tag: string; assets
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 404) {
       // If the specific version is not found, try to get all releases
-      console.log('Release not found, trying to fetch all releases...');
+      console.log(`Release v${version} not found, trying to fetch all releases...`);
       
       const response = await axios.get(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases`);
       
@@ -129,14 +129,35 @@ async function getLatestRelease(version?: string): Promise<{ tag: string; assets
         throw new Error('No releases found');
       }
       
-      // Use the first release
-      const tag = response.data[0].tag_name;
-      const assets: ReleaseAsset[] = response.data[0].assets.map((asset: any) => ({
+      // Try to find a release that matches the version prefix
+      let bestRelease = response.data[0]; // Default to first release
+      
+      if (version && version !== '0.0.0') {
+        // Try to find a release that starts with the same version prefix
+        const versionParts = version.split('.');
+        const versionPrefix = versionParts.slice(0, 2).join('.'); // e.g., "0.2" from "0.2.2-rc7"
+        
+        console.log(`Looking for releases matching prefix: ${versionPrefix}`);
+        
+        for (const release of response.data) {
+          const releaseTag = release.tag_name.startsWith('v') ?
+            release.tag_name.substring(1) : release.tag_name;
+            
+          if (releaseTag.startsWith(versionPrefix)) {
+            console.log(`Found matching release: ${release.tag_name}`);
+            bestRelease = release;
+            break;
+          }
+        }
+      }
+      
+      const tag = bestRelease.tag_name;
+      const assets: ReleaseAsset[] = bestRelease.assets.map((asset: any) => ({
         name: asset.name,
         url: asset.browser_download_url
       }));
       
-      console.log(`Found release: ${tag} with ${assets.length} assets`);
+      console.log(`Using release: ${tag} with ${assets.length} assets`);
       return { tag, assets };
     }
     
@@ -351,9 +372,11 @@ export async function downloadProbeBinary(version?: string): Promise<string> {
     // Create the local directory if it doesn't exist
     await fs.ensureDir(LOCAL_DIR);
     
+    console.log(`Downloading probe binary (version: ${version || 'latest'})...`);
+    
     // Check if we already have the binary for this version
-    const versionDir = version ? 
-      path.join(LOCAL_DIR, version) : 
+    const versionDir = version ?
+      path.join(LOCAL_DIR, version) :
       path.join(LOCAL_DIR, 'latest');
     
     const isWindows = os.platform() === 'win32';
@@ -368,7 +391,17 @@ export async function downloadProbeBinary(version?: string): Promise<string> {
     
     // Otherwise, download it
     const { os: osInfo, arch: archInfo } = detectOsArch();
-    const { tag, assets } = await getLatestRelease(version);
+    
+    // Log the version we're looking for
+    if (version && version !== '0.0.0') {
+      console.log(`Looking for release with version: ${version}`);
+    } else if (version === '0.0.0') {
+      console.log(`Version is 0.0.0, which is likely a placeholder. Will try to find the latest release.`);
+    } else {
+      console.log(`No version specified, will use the latest release.`);
+    }
+    
+    const { tag, assets } = await getLatestRelease(version === '0.0.0' ? undefined : version);
     
     // Create a directory for this version
     const tagVersion = tag.startsWith('v') ? tag.substring(1) : tag;
