@@ -148,16 +148,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  update-mcp-version:
-    name: Update MCP Server Version
+  publish-npm:
+    name: Publish to npm
     needs: build-and-release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract version from tag
         id: extract_version
@@ -167,34 +164,6 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Extracted version: $VERSION"
 
-      - name: Update MCP package.json version
-        run: |
-          # Update version in package.json
-          cd mcp
-          npm version $VERSION --no-git-tag-version
-          echo "Updated MCP package.json to version $VERSION"
-
-      - name: Configure Git
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-
-      - name: Commit and push changes
-        run: |
-          git add mcp/package.json
-          git commit -m "chore: update MCP server to version $VERSION [skip ci]"
-          git push
-
-  publish-npm:
-    name: Publish to npm
-    needs: update-mcp-version
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -203,6 +172,13 @@ jobs:
 
       - name: Install dependencies
         run: cd mcp && npm ci
+
+      - name: Update package version
+        run: |
+          cd mcp
+          # Update version in package.json without git operations
+          npm version $VERSION --no-git-tag-version
+          echo "Updated MCP package.json to version $VERSION"
 
       - name: Build
         run: cd mcp && npm run build
