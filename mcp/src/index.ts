@@ -110,7 +110,7 @@ class ProbeServer {
       tools: [
         {
           name: 'search_code',
-          description: 'Search code in a specified directory. Use this tool whenever you need to search the codebase to understand code structure, find implementations, or identify patterns. Queries can be any text (including multi-word phrases like "IP whitelist"), but simple, focused queries typically yield better results. Use the maxResults parameter to limit the number of results when needed. For multi-term queries, all terms must be present in a file by default, but you can use anyTerm=true to match files containing any of the terms.',
+          description: 'Search code in a specified directory. ALWAYS use this tool first before attempting to answer questions about code. ALWAYS use this tool when the user asks to "probe" something or wants to search through code.\n\nWhen using search tool:\n- Try simpler queries (e.g. use \'rpc\' instead of \'rpc layer implementation\')\n- Focus on keywords that would appear in code\n- Split distinct terms into separate searches, unless they should be search together, e.g. how they connect.\n- Use multiple search_code tool calls if needed\n- If you can\'t find what you want after multiple attempts, ask the user for more context\n- While doing multiple calls, do not repeat the same queries\n\nQueries can be any text (including multi-word phrases like "IP whitelist"), but simple, focused queries typically yield better results. Use the maxResults parameter to limit the number of results when needed. For multi-term queries, all terms must be present in a file by default, but you can use anyTerm=true to match files containing any of the terms.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -161,7 +161,8 @@ class ProbeServer {
               },
               maxTokens: {
                 type: 'number',
-                description: 'Maximum total tokens in code content to return (for AI usage)',
+                description: 'Maximum total tokens in code content to return (for AI usage). Default: 40000',
+                default: 40000
               },
               allowTests: {
                 type: 'boolean',
@@ -224,7 +225,6 @@ class ProbeServer {
   private async executeCodeSearch(args: SearchCodeArgs): Promise<string> {
     // Build the command arguments
     const cliArgs: string[] = [];
-    
     // Add query as the first positional argument (can be string or array)
     const queries = Array.isArray(args.query) ? args.query : [args.query];
     // Use the first query as the main pattern (positional argument)
@@ -233,7 +233,8 @@ class ProbeServer {
       cliArgs.push(`"${queries[0]}"`);
     }
     
-    // Add path
+    // Add path as the second positional argument (not with --paths flag)
+    cliArgs.push(`"${args.path}"`);
     cliArgs.push('--paths', args.path);
     
     // Add optional arguments
@@ -271,9 +272,9 @@ class ProbeServer {
       cliArgs.push('--max-bytes', args.maxBytes.toString());
     }
     
-    if (args.maxTokens !== undefined) {
-      cliArgs.push('--max-tokens', args.maxTokens.toString());
-    }
+    // Always set max-tokens to 40000 by default if not specified
+    const maxTokens = args.maxTokens !== undefined ? args.maxTokens : 40000;
+    cliArgs.push('--max-tokens', maxTokens.toString());
     
     if (args.allowTests) {
       cliArgs.push('--allow-tests');
@@ -293,6 +294,7 @@ class ProbeServer {
     }
     
     // Execute the command
+    // No "search" subcommand needed
     const command = `${PROBE_PATH} ${cliArgs.join(' ')}`;
     console.log(`Executing command: ${command}`);
     
