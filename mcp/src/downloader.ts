@@ -426,13 +426,9 @@ export async function downloadProbeBinary(version?: string): Promise<string> {
       await fs.remove(versionAgnosticBinaryPath);
     }
     
-    if (isWindows) {
-      // Windows doesn't support symlinks well, so copy the file
-      await fs.copyFile(extractedBinaryPath, versionAgnosticBinaryPath);
-    } else {
-      // Create a symlink on Unix-like systems
-      await fs.symlink(extractedBinaryPath, versionAgnosticBinaryPath);
-    }
+    // Always use file copies instead of symlinks to avoid "Too many levels of symbolic links" errors
+    await fs.copyFile(extractedBinaryPath, versionAgnosticBinaryPath);
+    console.log(`Copied binary from ${extractedBinaryPath} to ${versionAgnosticBinaryPath}`);
     
     console.log(`Binary ready at ${versionAgnosticBinaryPath}`);
     return versionAgnosticBinaryPath;
