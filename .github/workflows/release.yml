@@ -1,92 +1,132 @@
-name: Release
+name: Build and Release Probe Binary
 
-# Trigger the workflow when a release is created
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - "v*" # Trigger on tags like v1.0.0, v1.1.0, etc.
+
+permissions:
+  contents: write # Required to upload release assets
 
 jobs:
-  build:
+  build-and-release:
+    name: Build and Release for ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-
     strategy:
       matrix:
         include:
-          # Windows x86_64 (native)
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            use_cross: false
-            artifact_name: myapp-windows-x64.exe
-
-          # macOS x86_64 (native)
-          - os: macos-13
-            target: x86_64-apple-darwin
-            use_cross: false
-            artifact_name: myapp-macos-x64
-
-          # macOS ARM64 (native)
-          - os: macos-14
-            target: aarch64-apple-darwin
-            use_cross: false
-            artifact_name: myapp-macos-arm64
-
-          # Linux x86_64 (native)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            use_cross: false
-            artifact_name: myapp-linux-x64
-
-          # Linux ARM64 (cross-compiled)
-          - os: ubuntu-latest
+            binary_ext: ""
+            archive_ext: "tar.gz"
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary_ext: ""
+            archive_ext: "tar.gz"
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_ext: ""
+            archive_ext: "tar.gz"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_ext: ".exe"
+            archive_ext: "zip"
+          - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
-            use_cross: true
-            artifact_name: myapp-linux-arm64
+            binary_ext: ""
+            archive_ext: "tar.gz"
 
     steps:
       # Checkout the repository code
-      - name: Checkout
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      # Install Perl and NASM on Windows for OpenSSL vendored build
-      - name: Install dependencies (Windows)
-        if: matrix.os == 'windows-latest'
-        run: choco install -y perl nasm
-
-      # Install Rust toolchain and specify targets
+      # Install Rust toolchain
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          components: rustfmt, clippy
 
-      # Install `cross` for cross-compilation (Linux ARM64 only)
-      - name: Install cross
-        if: matrix.use_cross
-        shell: bash
-        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Configure APT sources for arm64
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo bash -c 'cat > /etc/apt/sources.list << EOF
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
+          EOF'
 
-      # Build the project
-      - name: Build
+      - name: Setup cross-compilation
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config libssl-dev:arm64 libc6-dev-arm64-cross
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=/usr/include" >> $GITHUB_ENV
+
+      # Run tests (skip for aarch64 targets)
+      - name: Run tests
+        if: "!contains(matrix.target, 'aarch64')"
+        run: cargo test --target ${{ matrix.target }}
+
+      # Build the Rust project
+      - name: Build Release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Install zip on Windows
+      - name: Install zip on Windows
+        if: runner.os == 'Windows'
+        run: |
+          choco install zip -y
+
+      # Package the binary into an archive
+      - name: Package Binary
         shell: bash
         run: |
-          if ${{ matrix.use_cross }}; then
-            cross build --release --target=${{ matrix.target }}
-          else
-            cargo build --release --target=${{ matrix.target }}
+          BINARY_NAME="probe"
+          VERSION="${GITHUB_REF#refs/tags/}" # Extracts tag like v1.0.0
+          ARCHIVE_NAME="$BINARY_NAME-${VERSION}-${{ matrix.target }}"
+          mkdir -p "$ARCHIVE_NAME"
+
+          # Copy binary
+          cp "target/${{ matrix.target }}/release/$BINARY_NAME${{ matrix.binary_ext }}" "$ARCHIVE_NAME/"
+
+          # Copy documentation and license files
+          cp README.md "$ARCHIVE_NAME/" || true
+          cp LICENSE "$ARCHIVE_NAME/" || true
+          cp ABOUT.MD "$ARCHIVE_NAME/" || true
+
+          # Create archive
+          if [ "${{ matrix.archive_ext }}" = "tar.gz" ]; then
+            tar -czf "$ARCHIVE_NAME.tar.gz" "$ARCHIVE_NAME"
+            echo "ASSET=$ARCHIVE_NAME.tar.gz" >> $GITHUB_ENV
+          elif [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            zip -r "$ARCHIVE_NAME.zip" "$ARCHIVE_NAME"
+            echo "ASSET=$ARCHIVE_NAME.zip" >> $GITHUB_ENV
           fi
 
-      # Prepare the binary with a platform-specific name
-      - name: Prepare binary
-        shell: bash
-        run: |
-          if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            binary_path="target/${{ matrix.target }}/release/myapp.exe"
+          # Generate SHA256 checksum
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            certutil -hashfile "$ARCHIVE_NAME.${{ matrix.archive_ext }}" SHA256 | grep -v "^SHA256" | grep -v "^CertUtil" > "$ARCHIVE_NAME.${{ matrix.archive_ext }}.sha256"
           else
-            binary_path="target/${{ matrix.target }}/release/myapp"
+            shasum -a 256 "$ARCHIVE_NAME.${{ matrix.archive_ext }}" > "$ARCHIVE_NAME.${{ matrix.archive_ext }}.sha256"
           fi
-          mv "$binary_path" "${{ matrix.artifact_name }}"
+          echo "CHECKSUM=$ARCHIVE_NAME.${{ matrix.archive_ext }}.sha256" >> $GITHUB_ENV
 
-      # Upload the binary to the GitHub release
-      - name: Upload binary to release
-        uses: softprops/action-gh-release@v1
+      # Upload the binary as a release asset
+      - name: Release
+        uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.artifact_name }}
+          files: |
+            ${{ env.ASET }}
+            ${{ env.CHECKSUM }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

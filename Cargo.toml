@@ -38,7 +38,6 @@ thiserror = "2.0.12"
 tracing-subscriber = "0.3"
 rig-core = "0.9.1"
 lazy_static = "1.4.0"
-openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = "3.7"
