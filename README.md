@@ -58,6 +58,29 @@ export ANTHROPIC_API_KEY=your_api_key
 probe chat
 ~~~
 
+**MCP server**
+
+Integrate with any AI editor:
+
+  ~~~json
+  {
+    "mcpServers": {
+      "memory": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@buger/probe-mcp"
+        ]
+      }
+    }
+  }
+  ~~~
+
+Example queries:
+> "Do the probe and search my codebase for implementations of the ranking algorithm"
+>
+> "Using probe find all functions related to error handling in the src directory"
+
 ---
 
 ## Features
@@ -210,42 +233,9 @@ probe "function" --no-merge
 ~~~
 ~~~
 
-### MCP Server Mode
+### MCP Server
 
-Run Probe as an MCP server:
-
-~~~bash
-cd mcp && npm run build && node build/index.js
-~~~
-
-This starts a server exposing a `search_code` tool for use with the [Model Context Protocol (MCP)](https://github.com/multiprocessio/mcp).
-
-#### MCP Tool: `search_code`
-
-- **Purpose**: Search code blocks based on various parameters.
-- **Input Schema** (JSON):
-  ~~~json
-  {
-    "path": "Directory path to search in",
-    "query": ["Query patterns to search for"],
-    "filesOnly": false,
-    "ignore": ["Patterns to ignore"],
-    "includeFilenames": false,
-    "reranker": "hybrid",
-    "frequencySearch": true,
-    "exact": false,
-    "maxResults": null,
-    "maxBytes": null,
-    "maxTokens": null,
-    "allowTests": false,
-    "noMerge": false,
-    "mergeThreshold": 5
-  }
-  ~~~
-
-- **Configuration Example**:
-  
-  Add the following to your AI editor's MCP configuration file:
+Add the following to your AI editor's MCP configuration file:
   
   ~~~json
   {
@@ -254,26 +244,20 @@ This starts a server exposing a `search_code` tool for use with the [Model Conte
         "command": "npx",
         "args": [
           "-y",
-          "@buger/probe"
+          "@buger/probe-mcp"
         ]
       }
     }
   }
   ~~~
   
-  For Claude Desktop, add this to `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%\Claude\claude_desktop_config.json` on Windows.
-  
-  For VSCode with Roo, add this to `~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json` on macOS or `%APPDATA%\Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\cline_mcp_settings.json` on Windows.
-
 - **Example Usage in AI Editors**:
   
   Once configured, you can ask your AI assistant to search your codebase with natural language queries like:
   
-  > "Search my codebase for implementations of the ranking algorithm"
+  > "Do the probe and search my codebase for implementations of the ranking algorithm"
   >
-  > "Find all functions related to error handling in the src directory"
-  >
-  > "Look for code that handles user authentication"
+  > "Using probe find all functions related to error handling in the src directory"
 
 ### AI Chat Mode
 
