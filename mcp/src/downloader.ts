@@ -96,11 +96,11 @@ async function getLatestRelease(version?: string): Promise<{ tag: string; assets
   
   try {
     let releaseUrl;
-    if (version && version !== '0.0.0' && version !== '1.0.0') {
-      // Use the specified version
+    if (version) {
+      // Always use the specified version from package.json
       releaseUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/tags/v${version}`;
     } else {
-      // Use the latest release
+      // Use the latest release only if no version is specified
       releaseUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
     }
     

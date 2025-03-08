@@ -147,3 +147,67 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-mcp-version:
+    name: Update MCP Server Version
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: extract_version
+        run: |
+          # Remove 'v' prefix from tag (e.g., v1.0.0 -> 1.0.0)
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Extracted version: $VERSION"
+
+      - name: Update MCP package.json version
+        run: |
+          # Update version in package.json
+          cd mcp
+          npm version $VERSION --no-git-tag-version
+          echo "Updated MCP package.json to version $VERSION"
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      - name: Commit and push changes
+        run: |
+          git add mcp/package.json
+          git commit -m "chore: update MCP server to version $VERSION [skip ci]"
+          git push
+
+  publish-npm:
+    name: Publish to npm
+    needs: update-mcp-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          registry-url: "https://registry.npmjs.org/"
+
+      - name: Install dependencies
+        run: cd mcp && npm ci
+
+      - name: Build
+        run: cd mcp && npm run build
+
+      - name: Publish to npm
+        run: cd mcp && npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -58,7 +58,7 @@ class ProbeServer {
   constructor() {
     this.server = new Server(
       {
-        name: 'probe-mcp',
+        name: '@buger/probe-mcp',
         version: packageVersion,
       },
       {
@@ -83,20 +83,20 @@ class ProbeServer {
       tools: [
         {
           name: 'search_code',
-          description: 'Search code in a specified directory. This tool should be used every time you need to search the codebase for understanding code structure, finding implementations, or identifying patterns. Queries can be any text (including multi-word phrases like "IP whitelist"), but prefer simple, focused queries for better results. Use maxResults parameter to limit the number of results when needed.',
+          description: 'Search code in a specified directory. Use this tool whenever you need to search the codebase to understand code structure, find implementations, or identify patterns. Queries can be any text (including multi-word phrases like "IP whitelist"), but simple, focused queries typically yield better results. Use the maxResults parameter to limit the number of results when needed. For multi-term queries, all terms must be present in a file by default, but you can use anyTerm=true to match files containing any of the terms.',
           inputSchema: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
-                description: 'Path to search in',
+                description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject"). Using absolute paths ensures reliable search results regardless of the current working directory.',
               },
               query: {
                 oneOf: [
                   { type: 'string' },
                   { type: 'array', items: { type: 'string' } }
                 ],
-                description: 'Query patterns to search for (string or array of strings)',
+                description: 'Query patterns to search for (string or array of strings). Can be keywords, phrases, or regex patterns. For multiple terms, provide either a space-separated string ("term1 term2") or an array of strings (["term1", "term2"]). By default, all terms must be present in a file unless anyTerm=true is specified.',
               },
               filesOnly: {
                 type: 'boolean',
@@ -291,10 +291,31 @@ class ProbeServer {
       console.log(`Using probe binary at: ${PROBE_PATH}`);
     } catch (error) {
       console.error('Error downloading probe binary:', error);
+      
+      // Provide more detailed error information and suggestions
+      if (error instanceof Error) {
+        if (error.message.includes('404')) {
+          console.error(`Version "${packageVersion}" not found in the repository.`);
+          console.error('Expected version format: x.y.z (e.g., 1.2.3)');
+          console.error('Suggestions:');
+          console.error('1. Check if the version in package.json is correct');
+          console.error('2. Verify that a release with tag v${packageVersion} exists in the repository');
+          console.error('3. If using a development version, consider using a published release version');
+        } else if (error.message.includes('network')) {
+          console.error('Network error occurred while downloading the binary.');
+          console.error('Suggestions:');
+          console.error('1. Check your internet connection');
+          console.error('2. Verify that GitHub API is accessible from your network');
+          console.error('3. Try again later if GitHub might be experiencing issues');
+        } else {
+          console.error(`Error details: ${error.message}`);
+        }
+      }
+      
       console.log('Falling back to environment variable PROBE_PATH if available');
       
       if (!PROBE_PATH) {
-        console.error('No probe binary available. Please set PROBE_PATH environment variable.');
+        console.error('No probe binary available. Please set PROBE_PATH environment variable or fix the version issue.');
         process.exit(1);
       }
     }

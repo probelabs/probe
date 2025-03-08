@@ -1,8 +1,21 @@
 {
-  "name": "probe-mcp",
+  "name": "@buger/probe-mcp",
   "version": "1.0.0",
-  "main": "src/index.js",
+  "main": "build/index.js",
   "type": "module",
+  "bin": {
+    "probe-mcp": "build/index.js"
+  },
+  "files": [
+    "build/**/*"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/buger/probe.git"
+  },
   "scripts": {
     "build": "tsc && chmod +x build/index.js",
     "start": "node build/index.js",
@@ -10,9 +23,10 @@
   },
   "keywords": [
     "mcp",
-    "probe"
+    "probe",
+    "code-search"
   ],
-  "author": "",
+  "author": "buger",
   "license": "ISC",
   "description": "MCP server for probe CLI",
   "dependencies": {
