@@ -48,7 +48,18 @@ jobs:
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
 
-      # Setup cross-compilation for Linux ARM64
+      - name: Configure APT sources for arm64
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo bash -c 'cat > /etc/apt/sources.list << EOF
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
+          EOF'
+      
       - name: Setup cross-compilation
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
