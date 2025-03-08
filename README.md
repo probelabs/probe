@@ -67,7 +67,7 @@ probe chat
 - **Powered by ripgrep**: Extremely fast scanning of large codebases.
 - **Tree-sitter Integration**: Parses and understands code structure accurately.
 - **Re-Rankers & NLP**: Uses tokenization, stemming, BM25, TF-IDF, or hybrid ranking methods for better search results.
-- **Multi-Language**: Works with popular languages like Rust, Python, JavaScript, TypeScript, Java, Go, C/C++, etc.
+- **Multi-Language**: Works with popular languages like Rust, Python, JavaScript, TypeScript, Java, Go, C/C++, Swift, C#, and more.
 - **Interactive AI Chat**: Built-in AI assistant that can answer questions about your codebase using Claude or GPT models.
 - **Flexible**: Run as a CLI tool, an MCP server, or an interactive AI chat.
 
@@ -425,15 +425,17 @@ Probe includes a web-based chat interface that provides a user-friendly way to i
 
 Probe currently supports:
 
-- **Rust** (`.rs`)  
-- **JavaScript / JSX** (`.js`, `.jsx`)  
-- **TypeScript / TSX** (`.ts`, `.tsx`)  
-- **Python** (`.py`)  
-- **Go** (`.go`)  
-- **C / C++** (`.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx`)  
-- **Java** (`.java`)  
-- **Ruby** (`.rb`)  
-- **PHP** (`.php`)  
+- **Rust** (`.rs`)
+- **JavaScript / JSX** (`.js`, `.jsx`)
+- **TypeScript / TSX** (`.ts`, `.tsx`)
+- **Python** (`.py`)
+- **Go** (`.go`)
+- **C / C++** (`.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx`)
+- **Java** (`.java`)
+- **Ruby** (`.rb`)
+- **PHP** (`.php`)
+- **Swift** (`.swift`)
+- **C#** (`.cs`)
 - **Markdown** (`.md`, `.markdown`)
 
 ---

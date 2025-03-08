@@ -4,6 +4,7 @@ use tree_sitter::Language;
 
 // Import tree-sitter language crates
 extern crate tree_sitter_c;
+extern crate tree_sitter_c_sharp;
 extern crate tree_sitter_cpp;
 extern crate tree_sitter_go;
 extern crate tree_sitter_java;
@@ -12,6 +13,7 @@ extern crate tree_sitter_php;
 extern crate tree_sitter_python;
 extern crate tree_sitter_ruby;
 extern crate tree_sitter_rust;
+extern crate tree_sitter_swift;
 extern crate tree_sitter_typescript;
 
 // Helper function to get tree-sitter language from file extension
@@ -27,6 +29,8 @@ fn get_language(extension: &str) -> Option<Language> {
         "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some(tree_sitter_cpp::LANGUAGE.into()),
         "java" => Some(tree_sitter_java::LANGUAGE.into()),
         "rb" => Some(tree_sitter_ruby::LANGUAGE.into()),
+        "swift" => Some(tree_sitter_swift::LANGUAGE.into()),
+        "cs" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
         // It seems tree_sitter_php::LANGUAGE doesn't exist, so we'll return None for PHP
         "php" => None,
         _ => None,
@@ -50,6 +54,8 @@ fn test_get_language() {
     assert!(get_language("cpp").is_some()); // C++
     assert!(get_language("java").is_some()); // Java
     assert!(get_language("rb").is_some()); // Ruby
+    assert!(get_language("swift").is_some()); // Swift
+    assert!(get_language("cs").is_some()); // C#
     assert!(get_language("php").is_none()); // PHP (not supported in current tree-sitter version)
 
     // Test unsupported language
@@ -696,6 +702,50 @@ fn test_function() {
 
     // Clean up
     std::env::remove_var("DEBUG");
+}
+
+#[test]
+fn test_swift_language_implementation() {
+    // Import the Swift language implementation
+    use crate::language::factory::get_language_impl;
+
+    // Get the Swift language implementation through the factory
+    let swift_impl = get_language_impl("swift");
+
+    // Verify that we can get a Swift language implementation
+    assert!(
+        swift_impl.is_some(),
+        "Should be able to get Swift language implementation"
+    );
+
+    // Test that the Swift language implementation is registered correctly
+    let language = get_language("swift");
+    assert!(
+        language.is_some(),
+        "Should be able to get Swift tree-sitter language"
+    );
+}
+
+#[test]
+fn test_csharp_language_implementation() {
+    // Import the C# language implementation
+    use crate::language::factory::get_language_impl;
+
+    // Get the C# language implementation through the factory
+    let csharp_impl = get_language_impl("cs");
+
+    // Verify that we can get a C# language implementation
+    assert!(
+        csharp_impl.is_some(),
+        "Should be able to get C# language implementation"
+    );
+
+    // Test that the C# language implementation is registered correctly
+    let language = get_language("cs");
+    assert!(
+        language.is_some(),
+        "Should be able to get C# tree-sitter language"
+    );
 }
 
 // Helper function to print the AST structure
