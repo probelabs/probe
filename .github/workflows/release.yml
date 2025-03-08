@@ -10,37 +10,28 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build and Release for ${{ matrix.os }}
+    name: Build and Release for ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
-          # Linux x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary_ext: ""
             archive_ext: "tar.gz"
-
-          # macOS x86_64
           - os: macos-latest
             target: x86_64-apple-darwin
             binary_ext: ""
             archive_ext: "tar.gz"
-
-          # macOS ARM64 (Apple Silicon)
           - os: macos-latest
             target: aarch64-apple-darwin
             binary_ext: ""
             archive_ext: "tar.gz"
-
-          # Windows x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary_ext: ".exe"
             archive_ext: "zip"
-
-          # Linux ARM64
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             binary_ext: ""
             archive_ext: "tar.gz"
@@ -57,32 +48,19 @@ jobs:
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
 
+      # Setup cross-compilation for Linux ARM64
       - name: Setup cross-compilation
-        if: contains(matrix.target, 'aarch64-unknown-linux-gnu')
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          # Remove any existing APT sources that might interfere
-          sudo rm -f /etc/apt/sources.list.d/*
-          # Enable arm64 architecture
           sudo dpkg --add-architecture arm64
-          # Replace the default sources list with jammy-only sources
-          sudo bash -c 'cat > /etc/apt/sources.list << EOF
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
-          EOF'
-          # Update package lists and install dependencies
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config libssl-dev:arm64 libc6-dev-arm64-cross
-          # Set environment variables for cross-compilation
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu" >> $GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=/usr/include" >> $GITHUB_ENV
 
-      # Run tests
+      # Run tests (skip for aarch64 targets)
       - name: Run tests
         if: "!contains(matrix.target, 'aarch64')"
         run: cargo test --target ${{ matrix.target }}
@@ -136,7 +114,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ env.ASSET }}
+            ${{ env.ASET }}
             ${{ env.CHECKSUM }}
           generate_release_notes: true
         env:
