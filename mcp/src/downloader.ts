@@ -293,75 +293,96 @@ async function extractBinary(assetPath: string, outputDir: string): Promise<stri
   const binaryName = isWindows ? `${BINARY_NAME}.exe` : BINARY_NAME;
   let binaryPath: string;
   
-  // Determine file type and extract accordingly
-  if (assetName.endsWith('.tar.gz') || assetName.endsWith('.tgz')) {
-    // Extract the tar.gz file
-    const extractDir = path.join(outputDir, 'extract');
-    await fs.ensureDir(extractDir);
-    await tar.extract({
-      file: assetPath,
-      cwd: extractDir
-    });
-    
-    // Find the binary in the extracted files
-    const files = await fs.readdir(extractDir, { recursive: true });
-    const binaryFile = files.find(file => {
-      const fileName = file.toString(); // Convert Buffer to string if needed
-      return path.basename(fileName) === binaryName ||
-        (isWindows && path.basename(fileName).endsWith('.exe'));
-    });
-    
-    if (!binaryFile) {
-      throw new Error(`Binary not found in the archive`);
+  try {
+    // Determine file type and extract accordingly
+    if (assetName.endsWith('.tar.gz') || assetName.endsWith('.tgz')) {
+      // Extract the tar.gz file
+      const extractDir = path.join(outputDir, 'extract');
+      await fs.ensureDir(extractDir);
+      
+      console.log(`Extracting tar.gz to ${extractDir}...`);
+      await tar.extract({
+        file: assetPath,
+        cwd: extractDir
+      });
+      
+      // List extracted files for debugging
+      const files = await fs.readdir(extractDir, { recursive: true });
+      console.log(`Extracted ${files.length} files: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}`);
+      
+      // Find the binary in the extracted files
+      const binaryFile = files.find(file => {
+        const fileName = file.toString(); // Convert Buffer to string if needed
+        return path.basename(fileName) === binaryName ||
+          (isWindows && path.basename(fileName).endsWith('.exe'));
+      });
+      
+      if (!binaryFile) {
+        throw new Error(`Binary not found in the archive. Extracted files: ${files.join(', ')}`);
+      }
+      
+      // Move the binary to the output directory
+      const sourcePath = path.join(extractDir, binaryFile.toString());
+      binaryPath = path.join(outputDir, binaryName);
+      
+      console.log(`Moving binary from ${sourcePath} to ${binaryPath}`);
+      if (!await fs.pathExists(sourcePath)) {
+        throw new Error(`Source binary not found at ${sourcePath}`);
+      }
+      
+      await fs.move(sourcePath, binaryPath, { overwrite: true });
+      
+      // Verify the binary was moved successfully
+      if (!await fs.pathExists(binaryPath)) {
+        throw new Error(`Failed to move binary to ${binaryPath}`);
+      }
+      
+      // Clean up
+      await fs.remove(extractDir);
+    } else if (assetName.endsWith('.zip')) {
+      // For zip files, we need to use a different approach
+      const extractDir = path.join(outputDir, 'extract');
+      await fs.ensureDir(extractDir);
+      
+      // Use unzip command
+      await exec(`unzip -q "${assetPath}" -d "${extractDir}"`);
+      
+      // Find the binary in the extracted files
+      const files = await fs.readdir(extractDir, { recursive: true });
+      const binaryFile = files.find(file => {
+        const fileName = file.toString(); // Convert Buffer to string if needed
+        return path.basename(fileName) === binaryName ||
+          (isWindows && path.basename(fileName).endsWith('.exe'));
+      });
+      
+      if (!binaryFile) {
+        throw new Error(`Binary not found in the archive`);
+      }
+      
+      // Move the binary to the output directory
+      const sourcePath = path.join(extractDir, binaryFile.toString());
+      binaryPath = path.join(outputDir, binaryName);
+      await fs.move(sourcePath, binaryPath, { overwrite: true });
+      
+      // Clean up
+      await fs.remove(extractDir);
+    } else {
+      // Assume it's a direct binary
+      binaryPath = path.join(outputDir, binaryName);
+      await fs.move(assetPath, binaryPath, { overwrite: true });
     }
     
-    // Move the binary to the output directory
-    const sourcePath = path.join(extractDir, binaryFile.toString());
-    binaryPath = path.join(outputDir, binaryName);
-    await fs.move(sourcePath, binaryPath, { overwrite: true });
-    
-    // Clean up
-    await fs.remove(extractDir);
-  } else if (assetName.endsWith('.zip')) {
-    // For zip files, we need to use a different approach
-    const extractDir = path.join(outputDir, 'extract');
-    await fs.ensureDir(extractDir);
-    
-    // Use unzip command
-    await exec(`unzip -q "${assetPath}" -d "${extractDir}"`);
-    
-    // Find the binary in the extracted files
-    const files = await fs.readdir(extractDir, { recursive: true });
-    const binaryFile = files.find(file => {
-      const fileName = file.toString(); // Convert Buffer to string if needed
-      return path.basename(fileName) === binaryName ||
-        (isWindows && path.basename(fileName).endsWith('.exe'));
-    });
-    
-    if (!binaryFile) {
-      throw new Error(`Binary not found in the archive`);
+    // Make the binary executable
+    if (!isWindows) {
+      await fs.chmod(binaryPath, 0o755);
     }
     
-    // Move the binary to the output directory
-    const sourcePath = path.join(extractDir, binaryFile.toString());
-    binaryPath = path.join(outputDir, binaryName);
-    await fs.move(sourcePath, binaryPath, { overwrite: true });
-    
-    // Clean up
-    await fs.remove(extractDir);
-  } else {
-    // Assume it's a direct binary
-    binaryPath = path.join(outputDir, binaryName);
-    await fs.move(assetPath, binaryPath, { overwrite: true });
+    console.log(`Binary installed to ${binaryPath}`);
+    return binaryPath;
+  } catch (error) {
+    console.error(`Error extracting binary: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
   }
-  
-  // Make the binary executable
-  if (!isWindows) {
-    await fs.chmod(binaryPath, 0o755);
-  }
-  
-  console.log(`Binary installed to ${binaryPath}`);
-  return binaryPath;
 }
 
 /**
@@ -426,9 +447,19 @@ export async function downloadProbeBinary(version?: string): Promise<string> {
       await fs.remove(versionAgnosticBinaryPath);
     }
     
-    // Always use file copies instead of symlinks to avoid "Too many levels of symbolic links" errors
-    await fs.copyFile(extractedBinaryPath, versionAgnosticBinaryPath);
-    console.log(`Copied binary from ${extractedBinaryPath} to ${versionAgnosticBinaryPath}`);
+    // Check if the extracted binary exists
+    if (!await fs.pathExists(extractedBinaryPath)) {
+      throw new Error(`Extracted binary not found at ${extractedBinaryPath}`);
+    }
+    
+    // Check if source and destination paths are different before copying
+    if (extractedBinaryPath !== versionAgnosticBinaryPath) {
+      // Always use file copies instead of symlinks to avoid "Too many levels of symbolic links" errors
+      await fs.copyFile(extractedBinaryPath, versionAgnosticBinaryPath);
+      console.log(`Copied binary from ${extractedBinaryPath} to ${versionAgnosticBinaryPath}`);
+    } else {
+      console.log(`Binary already at the correct location: ${versionAgnosticBinaryPath}`);
+    }
     
     console.log(`Binary ready at ${versionAgnosticBinaryPath}`);
     return versionAgnosticBinaryPath;
