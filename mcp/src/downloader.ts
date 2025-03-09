@@ -20,7 +20,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Local storage directory for downloaded binaries - relative to the MCP directory
-const LOCAL_DIR = path.resolve(__dirname, '..', '..', 'bin');
+// Make sure we're using the bin directory relative to the MCP server location
+const LOCAL_DIR = path.resolve(__dirname, '..', 'bin');
 
 // Version info file path
 const VERSION_INFO_PATH = path.join(LOCAL_DIR, 'version-info.json');

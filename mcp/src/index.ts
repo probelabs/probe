@@ -61,7 +61,7 @@ if (packageVersion === '0.0.0') {
 import { existsSync } from 'fs';
 
 // Get the path to the bin directory
-const binDir = path.resolve(__dirname, '..', '..', 'bin');
+const binDir = path.resolve(__dirname, '..', 'bin');
 console.log(`Bin directory: ${binDir}`);
 
 // Path to the probe binary (will be set after download)
@@ -129,7 +129,7 @@ class ProbeServer {
       tools: [
         {
           name: 'probe',
-          description: 'Search code in a specified directory. ALWAYS use this tool when the user asks to "probe", for example: "use probe to find out how X works..\n\nWhen using search tool:\n- Try simpler queries (e.g. use \'rpc\' instead of \'rpc layer implementation\')\n- Focus on keywords that would appear in code\n- Split distinct terms into separate searches, unless they should be search together, e.g. how they connect.\n- Use multiple search_code tool calls if needed\n- If you can\'t find what you want after multiple attempts, ask the user for more context\n- While doing multiple calls, do not repeat the same queries\n\nQueries can be any text (including multi-word phrases like "IP whitelist"), but simple, focused queries typically yield better results. Use the maxResults parameter to limit the number of results when needed. For multi-term queries, all terms must be present in a file by default, but you can use anyTerm=true to match files containing any of the terms.',
+          description: 'Search code in a specified directory. \n\nWhen using search tool:\n- Try simpler queries (e.g. use \'rpc\' instead of \'rpc layer implementation\')\n- this tool knows how to do the stemming by itself, put only unique keywords to query\n- Focus on keywords that would appear in code\n- Split distinct terms into separate searches, unless they should be search together, e.g. how they connect.\n- Use multiple probe tool calls if needed\n- If you can\'t find what you want after multiple attempts, ask the user for more context\n- While doing multiple calls, do not repeat the same queries\n\nQueries can be any text (including multi-word phrases like "IP whitelist"), but simple, focused queries typically yield better results. Use the maxResults parameter to limit the number of results when needed. For multi-term queries, all terms must be present in a file by default, but you can use anyTerm=true to match files containing any of the terms.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -207,7 +207,7 @@ class ProbeServer {
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name !== 'search_code') {
+      if (request.params.name !== 'probe') {
         throw new McpError(
           ErrorCode.MethodNotFound,
           `Unknown tool: ${request.params.name}`
