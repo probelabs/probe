@@ -6,6 +6,7 @@ import { promisify } from 'util';
 import { exec as execCallback } from 'child_process';
 import tar from 'tar';
 import os from 'os';
+import { fileURLToPath } from 'url';
 
 const exec = promisify(execCallback);
 
@@ -14,8 +15,15 @@ const REPO_OWNER = "buger";
 const REPO_NAME = "probe";
 const BINARY_NAME = "probe";
 
-// Local storage directory for downloaded binaries
-const LOCAL_DIR = path.join(os.homedir(), '.probe-mcp');
+// Get the directory of the current module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Local storage directory for downloaded binaries - relative to the MCP directory
+const LOCAL_DIR = path.resolve(__dirname, '..', '..', 'bin');
+
+// Version info file path
+const VERSION_INFO_PATH = path.join(LOCAL_DIR, 'version-info.json');
 
 interface OsInfo {
   type: string;
@@ -291,98 +299,119 @@ async function extractBinary(assetPath: string, outputDir: string): Promise<stri
   const assetName = path.basename(assetPath);
   const isWindows = os.platform() === 'win32';
   const binaryName = isWindows ? `${BINARY_NAME}.exe` : BINARY_NAME;
-  let binaryPath: string;
+  const binaryPath = path.join(outputDir, binaryName);
   
   try {
+    // Create a temporary extraction directory
+    const extractDir = path.join(outputDir, 'temp_extract');
+    await fs.ensureDir(extractDir);
+    
     // Determine file type and extract accordingly
     if (assetName.endsWith('.tar.gz') || assetName.endsWith('.tgz')) {
-      // Extract the tar.gz file
-      const extractDir = path.join(outputDir, 'extract');
-      await fs.ensureDir(extractDir);
-      
       console.log(`Extracting tar.gz to ${extractDir}...`);
       await tar.extract({
         file: assetPath,
         cwd: extractDir
       });
-      
-      // List extracted files for debugging
-      const files = await fs.readdir(extractDir, { recursive: true });
-      console.log(`Extracted ${files.length} files: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}`);
-      
-      // Find the binary in the extracted files
-      const binaryFile = files.find(file => {
-        const fileName = file.toString(); // Convert Buffer to string if needed
-        return path.basename(fileName) === binaryName ||
-          (isWindows && path.basename(fileName).endsWith('.exe'));
-      });
-      
-      if (!binaryFile) {
-        throw new Error(`Binary not found in the archive. Extracted files: ${files.join(', ')}`);
-      }
-      
-      // Move the binary to the output directory
-      const sourcePath = path.join(extractDir, binaryFile.toString());
-      binaryPath = path.join(outputDir, binaryName);
-      
-      console.log(`Moving binary from ${sourcePath} to ${binaryPath}`);
-      if (!await fs.pathExists(sourcePath)) {
-        throw new Error(`Source binary not found at ${sourcePath}`);
-      }
-      
-      await fs.move(sourcePath, binaryPath, { overwrite: true });
-      
-      // Verify the binary was moved successfully
-      if (!await fs.pathExists(binaryPath)) {
-        throw new Error(`Failed to move binary to ${binaryPath}`);
-      }
-      
-      // Clean up
-      await fs.remove(extractDir);
     } else if (assetName.endsWith('.zip')) {
-      // For zip files, we need to use a different approach
-      const extractDir = path.join(outputDir, 'extract');
-      await fs.ensureDir(extractDir);
-      
-      // Use unzip command
+      console.log(`Extracting zip to ${extractDir}...`);
       await exec(`unzip -q "${assetPath}" -d "${extractDir}"`);
-      
-      // Find the binary in the extracted files
-      const files = await fs.readdir(extractDir, { recursive: true });
-      const binaryFile = files.find(file => {
-        const fileName = file.toString(); // Convert Buffer to string if needed
-        return path.basename(fileName) === binaryName ||
-          (isWindows && path.basename(fileName).endsWith('.exe'));
-      });
-      
-      if (!binaryFile) {
-        throw new Error(`Binary not found in the archive`);
-      }
-      
-      // Move the binary to the output directory
-      const sourcePath = path.join(extractDir, binaryFile.toString());
-      binaryPath = path.join(outputDir, binaryName);
-      await fs.move(sourcePath, binaryPath, { overwrite: true });
-      
-      // Clean up
-      await fs.remove(extractDir);
     } else {
       // Assume it's a direct binary
-      binaryPath = path.join(outputDir, binaryName);
-      await fs.move(assetPath, binaryPath, { overwrite: true });
+      console.log(`Copying binary directly to ${binaryPath}`);
+      await fs.copyFile(assetPath, binaryPath);
+      
+      // Make the binary executable
+      if (!isWindows) {
+        await fs.chmod(binaryPath, 0o755);
+      }
+      
+      // Clean up the extraction directory
+      await fs.remove(extractDir);
+      console.log(`Binary installed to ${binaryPath}`);
+      return binaryPath;
     }
+    
+    // Find the binary in the extracted files
+    console.log(`Searching for binary in extracted files...`);
+    const findBinary = async (dir: string): Promise<string | null> => {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        
+        if (entry.isDirectory()) {
+          const result = await findBinary(fullPath);
+          if (result) return result;
+        } else if (entry.isFile()) {
+          // Check if this is the binary we're looking for
+          if (entry.name === binaryName ||
+              entry.name === BINARY_NAME ||
+              (isWindows && entry.name.endsWith('.exe'))) {
+            return fullPath;
+          }
+        }
+      }
+      
+      return null;
+    };
+    
+    const binaryFilePath = await findBinary(extractDir);
+    
+    if (!binaryFilePath) {
+      // List all extracted files for debugging
+      const allFiles = await fs.readdir(extractDir, { recursive: true });
+      console.error(`Binary not found in extracted files. Found: ${allFiles.join(', ')}`);
+      throw new Error(`Binary not found in the archive.`);
+    }
+    
+    // Copy the binary directly to the final location
+    console.log(`Found binary at ${binaryFilePath}`);
+    console.log(`Copying binary to ${binaryPath}`);
+    await fs.copyFile(binaryFilePath, binaryPath);
     
     // Make the binary executable
     if (!isWindows) {
       await fs.chmod(binaryPath, 0o755);
     }
     
-    console.log(`Binary installed to ${binaryPath}`);
+    // Clean up
+    await fs.remove(extractDir);
+    
+    console.log(`Binary successfully installed to ${binaryPath}`);
     return binaryPath;
   } catch (error) {
     console.error(`Error extracting binary: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
   }
+}
+/**
+ * Gets version info from the version file
+ */
+async function getVersionInfo(): Promise<{ version: string; lastUpdated: string } | null> {
+  try {
+    if (await fs.pathExists(VERSION_INFO_PATH)) {
+      const content = await fs.readFile(VERSION_INFO_PATH, 'utf-8');
+      return JSON.parse(content);
+    }
+    return null;
+  } catch (error) {
+    console.warn(`Warning: Could not read version info: ${error}`);
+    return null;
+  }
+}
+
+/**
+ * Saves version info to the version file
+ */
+async function saveVersionInfo(version: string): Promise<void> {
+  const versionInfo = {
+    version,
+    lastUpdated: new Date().toISOString()
+  };
+  
+  await fs.writeFile(VERSION_INFO_PATH, JSON.stringify(versionInfo, null, 2));
+  console.log(`Version info saved: ${version}`);
 }
 
 /**
@@ -390,79 +419,73 @@ async function extractBinary(assetPath: string, outputDir: string): Promise<stri
  */
 export async function downloadProbeBinary(version?: string): Promise<string> {
   try {
-    // Create the local directory if it doesn't exist
+    // Create the bin directory if it doesn't exist
     await fs.ensureDir(LOCAL_DIR);
     
     console.log(`Downloading probe binary (version: ${version || 'latest'})...`);
     
-    // Check if we already have the binary for this version
-    const versionDir = version ?
-      path.join(LOCAL_DIR, version) :
-      path.join(LOCAL_DIR, 'latest');
-    
     const isWindows = os.platform() === 'win32';
     const binaryName = isWindows ? `${BINARY_NAME}.exe` : BINARY_NAME;
-    const binaryPath = path.join(versionDir, binaryName);
+    const binaryPath = path.join(LOCAL_DIR, binaryName);
     
-    // If the binary already exists, return its path
+    // Check if the binary already exists and version matches
     if (await fs.pathExists(binaryPath)) {
-      console.log(`Using existing binary at ${binaryPath}`);
-      return binaryPath;
+      const versionInfo = await getVersionInfo();
+      
+      // If no specific version was requested or versions match, use existing binary
+      if ((!version || version === '0.0.0' || (versionInfo && versionInfo.version === version))) {
+        console.log(`Using existing binary at ${binaryPath} (version: ${versionInfo?.version || 'unknown'})`);
+        return binaryPath;
+      }
+      
+      console.log(`Existing binary version (${versionInfo?.version || 'unknown'}) doesn't match requested version (${version}). Downloading new version...`);
     }
     
-    // Otherwise, download it
+    // Get OS and architecture information
     const { os: osInfo, arch: archInfo } = detectOsArch();
     
-    // Log the version we're looking for
-    if (version && version !== '0.0.0') {
-      console.log(`Looking for release with version: ${version}`);
-    } else if (version === '0.0.0') {
-      console.log(`Version is 0.0.0, which is likely a placeholder. Will try to find the latest release.`);
+    // Determine which version to download
+    let versionToUse = version;
+    if (!versionToUse || versionToUse === '0.0.0') {
+      console.log('No specific version requested, will use the latest release');
+      versionToUse = undefined;
     } else {
-      console.log(`No version specified, will use the latest release.`);
+      console.log(`Looking for release with version: ${versionToUse}`);
     }
     
-    const { tag, assets } = await getLatestRelease(version === '0.0.0' ? undefined : version);
-    
-    // Create a directory for this version
+    // Get release information
+    const { tag, assets } = await getLatestRelease(versionToUse);
     const tagVersion = tag.startsWith('v') ? tag.substring(1) : tag;
-    const versionDirWithTag = path.join(LOCAL_DIR, tagVersion);
-    await fs.ensureDir(versionDirWithTag);
+    console.log(`Found release version: ${tagVersion}`);
     
+    // Find and download the appropriate asset
     const bestAsset = findBestAsset(assets, osInfo, archInfo);
-    const { assetPath, checksumPath } = await downloadAsset(bestAsset, versionDirWithTag);
+    const { assetPath, checksumPath } = await downloadAsset(bestAsset, LOCAL_DIR);
     
+    // Verify checksum if available
     const checksumValid = await verifyChecksum(assetPath, checksumPath);
     if (!checksumValid) {
       throw new Error('Checksum verification failed');
     }
     
-    const extractedBinaryPath = await extractBinary(assetPath, versionDirWithTag);
+    // Extract the binary
+    const extractedBinaryPath = await extractBinary(assetPath, LOCAL_DIR);
     
-    // Create a symlink or copy to the version-agnostic directory
-    await fs.ensureDir(versionDir);
-    const versionAgnosticBinaryPath = path.join(versionDir, binaryName);
+    // Save the version information
+    await saveVersionInfo(tagVersion);
     
-    if (await fs.pathExists(versionAgnosticBinaryPath)) {
-      await fs.remove(versionAgnosticBinaryPath);
+    // Clean up the downloaded archive
+    try {
+      await fs.remove(assetPath);
+      if (checksumPath) {
+        await fs.remove(checksumPath);
+      }
+    } catch (err) {
+      console.log(`Warning: Could not clean up temporary files: ${err}`);
     }
     
-    // Check if the extracted binary exists
-    if (!await fs.pathExists(extractedBinaryPath)) {
-      throw new Error(`Extracted binary not found at ${extractedBinaryPath}`);
-    }
-    
-    // Check if source and destination paths are different before copying
-    if (extractedBinaryPath !== versionAgnosticBinaryPath) {
-      // Always use file copies instead of symlinks to avoid "Too many levels of symbolic links" errors
-      await fs.copyFile(extractedBinaryPath, versionAgnosticBinaryPath);
-      console.log(`Copied binary from ${extractedBinaryPath} to ${versionAgnosticBinaryPath}`);
-    } else {
-      console.log(`Binary already at the correct location: ${versionAgnosticBinaryPath}`);
-    }
-    
-    console.log(`Binary ready at ${versionAgnosticBinaryPath}`);
-    return versionAgnosticBinaryPath;
+    console.log(`Binary successfully installed at ${extractedBinaryPath} (version: ${tagVersion})`);
+    return extractedBinaryPath;
   } catch (error) {
     console.error('Error downloading probe binary:', error);
     throw error;

@@ -58,8 +58,27 @@ if (packageVersion === '0.0.0') {
   }
 }
 
+import { existsSync } from 'fs';
+
+// Get the path to the bin directory
+const binDir = path.resolve(__dirname, '..', '..', 'bin');
+console.log(`Bin directory: ${binDir}`);
+
 // Path to the probe binary (will be set after download)
 let PROBE_PATH = process.env.PROBE_PATH || '';
+
+// Check if the binary exists at the environment variable path
+if (PROBE_PATH && !existsSync(PROBE_PATH)) {
+  console.warn(`Warning: PROBE_PATH environment variable set to ${PROBE_PATH}, but no binary found at that location.`);
+  PROBE_PATH = '';
+}
+
+// Ensure the bin directory exists
+try {
+  fs.ensureDirSync(binDir);
+} catch (error) {
+  console.error(`Error creating bin directory: ${error}`);
+}
 
 interface SearchCodeArgs {
   path: string;
@@ -314,39 +333,91 @@ class ProbeServer {
 
   async run() {
     // Download the probe binary before starting the server
-    try {
-      console.log(`Downloading probe binary (version: ${packageVersion})...`);
-      PROBE_PATH = await downloadProbeBinary(packageVersion);
-      console.log(`Using probe binary at: ${PROBE_PATH}`);
-    } catch (error) {
-      console.error('Error downloading probe binary:', error);
-      
-      // Provide more detailed error information and suggestions
-      if (error instanceof Error) {
-        if (error.message.includes('404')) {
-          console.error(`Version "${packageVersion}" not found in the repository.`);
-          console.error('Expected version format: x.y.z (e.g., 1.2.3)');
-          console.error('Suggestions:');
-          console.error('1. Check if the version in package.json is correct');
-          console.error('2. Verify that a release with tag v${packageVersion} exists in the repository');
-          console.error('3. If using a development version, consider using a published release version');
-        } else if (error.message.includes('network')) {
-          console.error('Network error occurred while downloading the binary.');
-          console.error('Suggestions:');
-          console.error('1. Check your internet connection');
-          console.error('2. Verify that GitHub API is accessible from your network');
-          console.error('3. Try again later if GitHub might be experiencing issues');
+    if (!PROBE_PATH) {
+      try {
+        console.log(`Downloading probe binary (version: ${packageVersion})...`);
+        
+        // Download the binary
+        PROBE_PATH = await downloadProbeBinary(packageVersion);
+        console.log(`Successfully downloaded probe binary to: ${PROBE_PATH}`);
+      } catch (error) {
+        console.error('Error downloading probe binary:', error);
+        
+        // Provide more detailed error information and suggestions
+        if (error instanceof Error) {
+          if (error.message.includes('404')) {
+            console.error(`Version "${packageVersion}" not found in the repository.`);
+            console.error('Expected version format: x.y.z (e.g., 1.2.3)');
+            console.error('Suggestions:');
+            console.error('1. Check if the version in package.json is correct');
+            console.error(`2. Verify that a release with tag v${packageVersion} exists in the repository`);
+          } else if (error.message.includes('network')) {
+            console.error('Network error occurred while downloading the binary.');
+            console.error('Suggestions:');
+            console.error('1. Check your internet connection');
+            console.error('2. Verify that GitHub API is accessible from your network');
+          } else if (error.message.includes('permission') || error.message.includes('EACCES')) {
+            console.error('Permission error occurred while downloading or extracting the binary.');
+            console.error('Suggestions:');
+            console.error('1. Check if you have write permissions to the bin directory');
+            console.error('2. Try running the command with elevated privileges');
+          } else if (error.message.includes('not found in the archive')) {
+            console.error('Binary extraction failed - could not find the binary in the downloaded archive.');
+            console.error('Suggestions:');
+            console.error('1. Check if the release archive contains the binary in the expected format');
+            console.error('2. Try downloading a different version');
+          } else {
+            console.error(`Error details: ${error.message}`);
+          }
+        }
+        
+        // Look for existing binary in the bin directory as a fallback
+        const isWindows = process.platform === 'win32';
+        const binaryName = isWindows ? 'probe.exe' : 'probe';
+        const localBinaryPath = path.join(binDir, binaryName);
+        
+        if (fs.existsSync(localBinaryPath)) {
+          console.log(`Found existing binary in bin directory: ${localBinaryPath}`);
+          PROBE_PATH = localBinaryPath;
+        }
+        // Check if PROBE_PATH environment variable is set as a fallback
+        else if (process.env.PROBE_PATH) {
+          console.log(`Falling back to environment variable PROBE_PATH: ${process.env.PROBE_PATH}`);
+          PROBE_PATH = process.env.PROBE_PATH;
+          
+          // Verify the binary exists
+          if (!fs.existsSync(PROBE_PATH)) {
+            console.error(`Error: Binary not found at ${PROBE_PATH}`);
+            process.exit(1);
+          }
         } else {
-          console.error(`Error details: ${error.message}`);
+          console.error('No probe binary available. Please set PROBE_PATH environment variable or fix the download issue.');
+          process.exit(1);
+        }
+      }
+    } else {
+      console.log(`Using probe binary from environment variable: ${PROBE_PATH}`);
+    }
+    
+    // Verify the binary is executable
+    try {
+      // Make sure the binary is executable (on non-Windows platforms)
+      if (process.platform !== 'win32') {
+        try {
+          await fs.chmod(PROBE_PATH, 0o755);
+          console.log(`Made binary executable: ${PROBE_PATH}`);
+        } catch (err) {
+          console.warn(`Warning: Could not set executable permissions on binary: ${err}`);
         }
       }
       
-      console.log('Falling back to environment variable PROBE_PATH if available');
-      
-      if (!PROBE_PATH) {
-        console.error('No probe binary available. Please set PROBE_PATH environment variable or fix the version issue.');
-        process.exit(1);
-      }
+      // Test the binary
+      const { stdout } = await execAsync(`${PROBE_PATH} --version`);
+      console.log(`Probe binary version: ${stdout.trim()}`);
+    } catch (error) {
+      console.error(`Error executing probe binary: ${error instanceof Error ? error.message : String(error)}`);
+      console.error('Please ensure the binary is executable and valid.');
+      process.exit(1);
     }
     
     const transport = new StdioServerTransport();

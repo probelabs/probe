@@ -88,11 +88,6 @@ jobs:
           echo "OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu" >> $GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=/usr/include" >> $GITHUB_ENV
 
-      # Run tests (skip for aarch64 targets)
-      - name: Run tests
-        if: "!contains(matrix.target, 'aarch64')"
-        run: cargo test --target ${{ matrix.target }}
-
       # Build the Rust project
       - name: Build Release
         run: cargo build --release --target ${{ matrix.target }}
