@@ -1,6 +1,6 @@
 use crate::ranking;
 use crate::search::tokenization::{
-    is_english_stop_word, load_vocabulary, split_camel_case, split_compound_word,
+    is_english_stop_word, load_vocabulary, split_camel_case, split_compound_word, tokenize,
 };
 use itertools::Itertools;
 use std::collections::HashSet;
@@ -9,6 +9,9 @@ use std::collections::HashSet;
 /// When exact is true, splits only on whitespace and skips stemming/stopword removal
 /// When exact is false, uses stemming/stopword logic but splits primarily on whitespace
 /// and also applies compound word splitting
+///
+/// This function now uses the tokenize function for non-exact mode while maintaining
+/// backward compatibility.
 pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
@@ -28,7 +31,9 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
             })
             .collect();
 
-        println!("Exact mode result: {:?}", result);
+        if debug_mode {
+            println!("Exact mode result: {:?}", result);
+        }
         result
     } else {
         // For non-exact matching, apply stemming and stopword removal
@@ -44,7 +49,7 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
         }
 
         // Split by whitespace first, but preserve original case for camelCase detection
-        let result = query
+        let mut result = query
             .split_whitespace()
             .flat_map(|word| {
                 if debug_mode {
@@ -78,7 +83,27 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
                 }
                 (original, stemmed)
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        // Also use tokenize to ensure we catch any additional tokens
+        // This is particularly important for special cases like ENGLISH_STOP_WORDS
+        let tokens = tokenize(query);
+
+        if debug_mode {
+            println!("After tokenization: {:?}", tokens);
+        }
+
+        // Add any tokens from tokenize that aren't already in the result
+        for token in tokens {
+            // Check if this token is already in the result
+            let already_exists = result.iter().any(|(_, stemmed)| stemmed == &token);
+
+            if !already_exists {
+                // Find a suitable original form for this token
+                // For simplicity, we'll use the token itself as both original and stemmed
+                result.push((token.clone(), token));
+            }
+        }
 
         if debug_mode {
             println!("Final preprocessed terms: {:?}", result);

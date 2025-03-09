@@ -271,8 +271,7 @@ use std::collections::HashSet;
         // Print the actual result for debugging
         println!("Processed terms for 'whitelist': {:?}", terms);
         
-        // Currently, this will fail because "whitelist" is not split into "white" and "list"
-        // The expected behavior should be to split compound words in queries just like in documents
+        // Check that "whitelist" is split into "white" and "list"
         let has_white = terms.iter().any(|(_, stemmed)| stemmed == "white");
         let has_list = terms.iter().any(|(_, stemmed)| stemmed == "list");
         
@@ -281,4 +280,22 @@ use std::collections::HashSet;
             "Expected 'whitelist' to be split into 'white' and 'list', but got: {:?}",
             terms
         );
+    }
+    
+    #[test]
+    fn test_preprocess_query_english_stop_words() {
+        // Test with "ENGLISH_STOP_WORDS"
+        let query = "ENGLISH_STOP_WORDS";
+        let terms = preprocess_query(query, false); // Use non-exact mode
+        
+        println!("Preprocessed terms for 'ENGLISH_STOP_WORDS': {:?}", terms);
+        
+        // Check that it's stemmed correctly
+        let has_english = terms.iter().any(|(_, stemmed)| stemmed == "english");
+        let has_stop = terms.iter().any(|(_, stemmed)| stemmed == "stop");
+        let has_word = terms.iter().any(|(_, stemmed)| stemmed == "word");
+        
+        assert!(has_english, "Expected 'english' in the stemmed terms");
+        assert!(has_stop, "Expected 'stop' in the stemmed terms");
+        assert!(has_word, "Expected 'word' in the stemmed terms");
     }
