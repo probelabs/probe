@@ -6,8 +6,9 @@ use ignore::WalkBuilder;
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+// No need for term_exceptions import
 
-use crate::search::query::{create_term_patterns, preprocess_query};
+use crate::search::query::{create_term_patterns, preprocess_query, regex_escape};
 
 /// Searches a file for a pattern and returns whether it matched and the matching line numbers
 pub fn search_file_for_pattern(
@@ -178,6 +179,8 @@ pub fn find_files_with_pattern(
         "*.yml",
         "*.yaml",
         "*.json",
+        "*.tconf",
+        "*.conf",
         "go.sum",
     ]
     .into_iter()
@@ -354,10 +357,21 @@ pub fn find_matching_filenames(
     allow_tests: bool,
 ) -> Result<Vec<PathBuf>> {
     let mut matching_files = Vec::new();
+    let mut excluded_files = HashSet::new();
+
+    // First, identify excluded terms from queries
+    let mut excluded_terms = HashSet::new();
+    for query in queries {
+        if query.starts_with('-') {
+            let term = query.trim_start_matches('-');
+            excluded_terms.insert(term.to_string());
+        }
+    }
 
     // Process queries to get both original and stemmed terms
     let queries_terms: Vec<Vec<(String, String)>> = queries
         .iter()
+        .filter(|q| !q.starts_with('-')) // Skip negative queries for filename matching
         .map(|q| preprocess_query(q, false)) // Use non-exact mode for filename matching
         .collect();
 
@@ -373,6 +387,16 @@ pub fn find_matching_filenames(
         })
         .collect();
 
+    // Generate patterns for excluded terms
+    let excluded_patterns: Vec<String> = excluded_terms
+        .iter()
+        .map(|term| {
+            // Create a pattern for the exact term
+            let base_pattern = regex_escape(term);
+            format!("(\\b{}|{}\\b)", base_pattern, base_pattern)
+        })
+        .collect();
+
     println!(
         "Looking for filenames matching queries (with flexible patterns): {:?}",
         queries
@@ -383,6 +407,13 @@ pub fn find_matching_filenames(
     if debug_mode && !all_patterns.is_empty() {
         println!("DEBUG: Using the following patterns for filename matching:");
         for (i, pattern) in all_patterns.iter().enumerate() {
+            println!("DEBUG:   {}. {}", i + 1, pattern);
+        }
+    }
+
+    if debug_mode && !excluded_patterns.is_empty() {
+        println!("DEBUG: Using the following patterns for excluded filenames:");
+        for (i, pattern) in excluded_patterns.iter().enumerate() {
             println!("DEBUG:   {}. {}", i + 1, pattern);
         }
     }
@@ -538,6 +569,25 @@ pub fn find_matching_filenames(
             None => continue,
         };
 
+        // Check if any excluded pattern matches the file name
+        let is_excluded = excluded_patterns
+            .iter()
+            .any(|pattern| match Regex::new(pattern) {
+                Ok(re) => re.is_match(&file_name),
+                Err(e) => {
+                    eprintln!("Error compiling regex pattern '{}': {}", pattern, e);
+                    false
+                }
+            });
+
+        if is_excluded {
+            if debug_mode {
+                println!("DEBUG: File '{}' matched an excluded pattern", file_name);
+            }
+            excluded_files.insert(file_path.to_owned());
+            continue;
+        }
+
         // Check if any pattern matches the file name
         if all_patterns
             .iter()
@@ -556,81 +606,13 @@ pub fn find_matching_filenames(
         }
     }
 
+    // No special handling for compound words in excluded terms
+
     println!(
         "Found {} files with names matching flexible patterns (including concatenated forms)",
         matching_files.len()
     );
     Ok(matching_files)
-}
-
-/// Function to determine which terms match in a filename or path
-pub fn get_filename_matched_queries(
-    file_path: &Path,
-    search_root: &Path,
-    term_pairs: &[Vec<(String, usize)>],
-) -> HashSet<usize> {
-    // Get the relative path from the search root
-    let relative_path = file_path
-        .strip_prefix(search_root)
-        .unwrap_or(file_path)
-        .to_string_lossy()
-        .to_lowercase();
-
-    let mut matched_indices = HashSet::new();
-
-    // Check if debug mode is enabled
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    if debug_mode {
-        println!("DEBUG: Checking path '{}' for term matches", relative_path);
-    }
-
-    for terms in term_pairs.iter() {
-        // Convert the terms to the format expected by create_term_patterns
-        let term_string_pairs: Vec<(String, String)> = terms
-            .iter()
-            .map(|(term, _)| (term.clone(), term.clone()))
-            .collect();
-
-        // Generate patterns with term indices
-        let patterns_with_term_indices = create_term_patterns(&term_string_pairs);
-
-        // Check each pattern against the path
-        for (pattern, pattern_term_indices) in patterns_with_term_indices {
-            match Regex::new(&pattern) {
-                Ok(re) => {
-                    if re.is_match(&relative_path) {
-                        // Map the pattern's term indices to the original term indices
-                        for pattern_term_idx in pattern_term_indices {
-                            if pattern_term_idx < terms.len() {
-                                let (term, original_index) = &terms[pattern_term_idx];
-                                if debug_mode {
-                                    println!(
-                                        "DEBUG:   Term '{}' (index {}) matched in path '{}'",
-                                        term, original_index, relative_path
-                                    );
-                                }
-                                matched_indices.insert(*original_index);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error compiling regex pattern '{}': {}", pattern, e);
-                }
-            }
-        }
-    }
-
-    if debug_mode && !matched_indices.is_empty() {
-        println!(
-            "DEBUG:   Found {} term matches in path '{}'",
-            matched_indices.len(),
-            relative_path
-        );
-    }
-
-    matched_indices
 }
 
 /// Compatibility function for the old get_filename_matched_queries signature

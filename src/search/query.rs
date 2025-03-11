@@ -1,17 +1,13 @@
 use crate::ranking;
+use crate::search::elastic_query;
+// No term_exceptions import needed
 use crate::search::tokenization::{
     is_english_stop_word, load_vocabulary, split_camel_case, split_compound_word, tokenize,
 };
-use itertools::Itertools;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-/// Preprocesses a query into original and stemmed term pairs
-/// When exact is true, splits only on whitespace and skips stemming/stopword removal
-/// When exact is false, uses stemming/stopword logic but splits primarily on whitespace
-/// and also applies compound word splitting
-///
-/// This function now uses the tokenize function for non-exact mode while maintaining
-/// backward compatibility.
+/// Existing function for preprocessing a query into (original, stemmed) pairs
+/// This remains, but we add additional logic below for AST-based usage.
 pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
@@ -19,12 +15,37 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
         println!("Original query: {}", query);
     }
 
+    // Try parsing with elastic query parser first to handle negated terms
+    let excluded_terms = match elastic_query::parse_query_compat(query) {
+        Ok(ast) => {
+            if debug_mode {
+                println!("Elastic query parsed successfully: {:?}", ast);
+            }
+
+            // Extract excluded terms from the AST
+            let mut excluded = HashSet::new();
+            extract_excluded_terms(&ast, &mut excluded);
+
+            if debug_mode && !excluded.is_empty() {
+                println!("Excluded terms from query: {:?}", excluded);
+            }
+
+            excluded
+        }
+        Err(e) => {
+            if debug_mode {
+                println!("Elastic query parse error: {:?}", e);
+            }
+            HashSet::new()
+        }
+    };
+
     if exact {
-        // For exact matching, just split on whitespace and return as-is without stemming
         let result = query
             .to_lowercase()
             .split_whitespace()
             .filter(|word| !word.is_empty())
+            .filter(|word| !word.starts_with('-') && !excluded_terms.contains(*word))
             .map(|word| {
                 let original = word.to_string();
                 (original.clone(), original)
@@ -36,11 +57,9 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
         }
         result
     } else {
-        // For non-exact matching, apply stemming and stopword removal
         let stemmer = ranking::get_stemmer();
         let vocabulary = load_vocabulary();
 
-        // Add specific programming terms to the vocabulary for this query
         let mut enhanced_vocab = vocabulary.clone();
         for term in [
             "rpc", "storage", "handler", "client", "server", "api", "service",
@@ -48,21 +67,19 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
             enhanced_vocab.insert(term.to_string());
         }
 
-        // Split by whitespace first, but preserve original case for camelCase detection
         let mut result = query
             .split_whitespace()
+            .filter(|word| !word.starts_with('-'))
             .flat_map(|word| {
                 if debug_mode {
                     println!("Processing word: {}", word);
                 }
 
-                // First try to split on camel case boundaries - use original case
                 let camel_parts = split_camel_case(word);
                 if debug_mode {
                     println!("After camel case split: {:?}", camel_parts);
                 }
 
-                // For each camel case part, try to split compound words
                 camel_parts
                     .into_iter()
                     .flat_map(|part| {
@@ -74,7 +91,9 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
                     })
                     .collect::<Vec<_>>()
             })
-            .filter(|word| !word.is_empty() && !is_english_stop_word(word))
+            .filter(|word| {
+                !word.is_empty() && !is_english_stop_word(word) && !excluded_terms.contains(word)
+            })
             .map(|part| {
                 let original = part.clone();
                 let stemmed = stemmer.stem(&part).to_string();
@@ -85,24 +104,30 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
             })
             .collect::<Vec<_>>();
 
-        // Also use tokenize to ensure we catch any additional tokens
-        // This is particularly important for special cases like ENGLISH_STOP_WORDS
-        let tokens = tokenize(query);
+        // Only apply tokenization if we couldn't parse the query with the elastic query parser
+        // This ensures that terms with underscores are preserved
+        if excluded_terms.is_empty() {
+            let tokens = tokenize(query);
 
-        if debug_mode {
-            println!("After tokenization: {:?}", tokens);
-        }
-
-        // Add any tokens from tokenize that aren't already in the result
-        for token in tokens {
-            // Check if this token is already in the result
-            let already_exists = result.iter().any(|(_, stemmed)| stemmed == &token);
-
-            if !already_exists {
-                // Find a suitable original form for this token
-                // For simplicity, we'll use the token itself as both original and stemmed
-                result.push((token.clone(), token));
+            if debug_mode {
+                println!("After tokenization: {:?}", tokens);
             }
+
+            for token in tokens {
+                if excluded_terms.contains(&token) {
+                    continue;
+                }
+
+                let already_exists = result.iter().any(|(_, stemmed)| stemmed == &token);
+
+                if !already_exists {
+                    result.push((token.clone(), token));
+                }
+            }
+        } else if debug_mode {
+            println!(
+                "Skipping additional tokenization as query was parsed by elastic query parser"
+            );
         }
 
         if debug_mode {
@@ -110,6 +135,134 @@ pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
         }
         result
     }
+}
+
+/// Helper function to extract excluded terms from the AST
+pub fn extract_excluded_terms(expr: &elastic_query::Expr, excluded: &mut HashSet<String>) {
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    if debug_mode {
+        println!(
+            "DEBUG: Extracting excluded terms from expression: {:?}",
+            expr
+        );
+    }
+
+    match expr {
+        elastic_query::Expr::Term {
+            keywords,
+            field: _,
+            excluded: is_excluded,
+            ..
+        } => {
+            if debug_mode {
+                println!(
+                    "DEBUG: Checking term '{:?}', excluded={}",
+                    keywords, is_excluded
+                );
+            }
+
+            if *is_excluded {
+                for keyword in keywords {
+                    if debug_mode {
+                        println!("DEBUG: Found excluded keyword: '{}'", keyword);
+                    }
+
+                    // Add the original keyword
+                    excluded.insert(keyword.clone());
+
+                    // For negative terms, we don't apply compound word splitting
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Not applying compound word splitting to excluded keyword '{}'",
+                            keyword
+                        );
+                    }
+                }
+            }
+        }
+        elastic_query::Expr::And(left, right) => {
+            if debug_mode {
+                println!("DEBUG: Processing AND expression");
+            }
+            extract_excluded_terms(left, excluded);
+            extract_excluded_terms(right, excluded);
+        }
+        elastic_query::Expr::Or(left, right) => {
+            if debug_mode {
+                println!("DEBUG: Processing OR expression");
+            }
+            extract_excluded_terms(left, excluded);
+            extract_excluded_terms(right, excluded);
+        }
+    }
+
+    if debug_mode {
+        println!("DEBUG: Current excluded terms set: {:?}", excluded);
+    }
+}
+
+/// Existing function creating regex patterns for (original, stemmed) pairs.
+/// We'll keep it for backward-compat. For complex queries, we'll create specialized patterns separately.
+pub fn create_term_patterns(term_pairs: &[(String, String)]) -> Vec<(String, HashSet<usize>)> {
+    let mut patterns: Vec<(String, HashSet<usize>)> = Vec::new();
+
+    for (term_idx, (original, stemmed)) in term_pairs.iter().enumerate() {
+        let base_pattern = if original == stemmed
+            || (stemmed.len() < original.len() && original.starts_with(stemmed))
+        {
+            regex_escape(original)
+        } else if original.len() < stemmed.len() && stemmed.starts_with(original) {
+            regex_escape(stemmed)
+        } else {
+            regex_escape(original)
+        };
+
+        let term_indices = HashSet::from([term_idx]);
+        let pattern = format!("(\\b{}|{}\\b)", base_pattern, base_pattern);
+        patterns.push((pattern, term_indices.clone()));
+    }
+
+    // Concatenate combos, etc. (already existing logic)...
+
+    if term_pairs.len() > 1 {
+        let terms: Vec<(String, usize)> = term_pairs
+            .iter()
+            .enumerate()
+            .flat_map(|(term_idx, (o, s))| vec![(o.clone(), term_idx), (s.clone(), term_idx)])
+            .collect();
+
+        use itertools::Itertools;
+        let mut concatenated_patterns: std::collections::HashMap<Vec<usize>, Vec<String>> =
+            std::collections::HashMap::new();
+
+        for perm in terms.iter().permutations(2).unique() {
+            let term_indices: Vec<usize> = perm.iter().map(|(_, idx)| *idx).collect();
+            if term_indices.iter().unique().count() < 2 {
+                continue;
+            }
+            let concatenated = perm
+                .iter()
+                .map(|(term, _)| regex_escape(term))
+                .collect::<String>();
+
+            concatenated_patterns
+                .entry(term_indices)
+                .or_default()
+                .push(concatenated);
+        }
+
+        for (term_indices, pattern_group) in concatenated_patterns {
+            if pattern_group.len() == 1 {
+                patterns.push((pattern_group[0].clone(), term_indices.into_iter().collect()));
+            } else {
+                let combined_pattern = format!("({})", pattern_group.join("|"));
+                patterns.push((combined_pattern, term_indices.into_iter().collect()));
+            }
+        }
+    }
+
+    patterns
 }
 
 /// Escapes special regex characters in a string
@@ -129,161 +282,372 @@ pub fn regex_escape(s: &str) -> String {
     result
 }
 
-/// Creates regex patterns that match either original or stemmed terms
-/// Generates grouped patterns for better matching in various contexts
-///
-/// Returns a vector of tuples (pattern, HashSet<usize>), where the HashSet<usize>
-/// contains indices of terms the pattern corresponds to.
-/// For example, for term_pairs = [("ip", "ip"), ("whitelisting", "whitelist")]:
-/// - ("(\bip|ip\b)", {0}) - combined pattern for "ip" with both boundaries
-/// - ("(\b(whitelisting|whitelist)|(whitelisting|whitelist)\b)", {1}) - combined pattern for both forms with both boundaries
-/// - ("(ipwhitelisting|ipwhitelist|whitelistingip|whitelistip)", {0, 1}) - all concatenated combinations
-pub fn create_term_patterns(term_pairs: &[(String, String)]) -> Vec<(String, HashSet<usize>)> {
-    let mut patterns: Vec<(String, HashSet<usize>)> = Vec::new();
+// ----------------------------------------------------------------------------
+// NEW CODE: Full AST-based planning and pattern generation
+// ----------------------------------------------------------------------------
 
-    // Debug print
-    // println!("Creating patterns for terms: {:?}", term_pairs);
-
-    // Generate individual term patterns with combined start and end boundaries
-    for (term_idx, (original, stemmed)) in term_pairs.iter().enumerate() {
-        // Determine the pattern to use - avoid redundant patterns
-        let base_pattern = if original == stemmed {
-            // If original and stemmed are the same, just use one
-            regex_escape(original)
-        } else if stemmed.len() < original.len() && original.starts_with(stemmed) {
-            // If stemmed is just a prefix of original (common with stemming algorithms)
-            // Use only the original to avoid redundancy
-            regex_escape(original)
-        } else if original.len() < stemmed.len() && stemmed.starts_with(original) {
-            // If original is just a prefix of stemmed (rare but possible)
-            // Use only the stemmed version
-            regex_escape(stemmed)
-        } else {
-            // They're truly different, include only the original for simplicity
-            // This is a key change to avoid redundant patterns
-            regex_escape(original)
-        };
-
-        // Create a HashSet with just this term's index
-        let term_indices = HashSet::from([term_idx]);
-
-        // Add combined boundary pattern (start OR end boundary)
-        let pattern = format!("(\\b{}|{}\\b)", base_pattern, base_pattern);
-        // println!("Term {}: Pattern: {}", term_idx, pattern);
-
-        patterns.push((pattern, term_indices.clone()));
-    }
-
-    // Generate concatenated combinations for multi-term queries
-    if term_pairs.len() > 1 {
-        // Collect all terms (both original and stemmed)
-        let terms: Vec<(String, usize)> = term_pairs
-            .iter()
-            .enumerate()
-            .flat_map(|(term_idx, (o, s))| vec![(o.clone(), term_idx), (s.clone(), term_idx)])
-            .collect();
-
-        // Group permutations by their term indices
-        let mut concatenated_patterns: std::collections::HashMap<Vec<usize>, Vec<String>> =
-            std::collections::HashMap::new();
-
-        // Generate permutations of terms (2 at a time)
-        for perm in terms.iter().permutations(2).unique() {
-            // Extract the term indices for this permutation
-            let term_indices: Vec<usize> = perm.iter().map(|(_, idx)| *idx).collect();
-
-            // Skip if we're just getting different forms of the same term
-            if term_indices.iter().unique().count() < 2 {
-                continue;
-            }
-
-            // Create the concatenated pattern
-            let concatenated = perm
-                .iter()
-                .map(|(term, _)| regex_escape(term))
-                .collect::<String>();
-
-            // Add to the group
-            concatenated_patterns
-                .entry(term_indices)
-                .or_default()
-                .push(concatenated);
-        }
-
-        // Add each group as a single pattern with alternatives
-        for (term_indices, pattern_group) in concatenated_patterns {
-            if pattern_group.len() == 1 {
-                patterns.push((pattern_group[0].clone(), term_indices.into_iter().collect()));
-            } else {
-                // Combine patterns with OR
-                let combined_pattern = format!("({})", pattern_group.join("|"));
-                patterns.push((combined_pattern, term_indices.into_iter().collect()));
-            }
-        }
-    }
-
-    patterns
+/// A unified plan holding the parsed AST and a mapping of each AST term to an index.
+/// We store a map for quick lookups of term indices.
+pub struct QueryPlan {
+    pub ast: elastic_query::Expr,
+    pub term_indices: HashMap<String, usize>,
+    pub excluded_terms: HashSet<String>,
 }
 
-#[cfg(test)]
-mod tests {
-    include!("query_tests.rs");
+/// Create a QueryPlan from a raw query string. This fully parses the query into an AST,
+/// then extracts all terms (including excluded), and prepares a term-index map.
+pub fn create_query_plan(
+    query: &str,
+    _exact: bool,
+) -> Result<QueryPlan, elastic_query::ParseError> {
+    // Parse the query into an AST with processed terms
+    // We always use AND for implicit combinations (space-separated terms)
+    let ast = elastic_query::parse_query(query, false)?;
 
-    #[test]
-    fn test_grouped_patterns() {
-        // Test with "ip" and "whitelisting"
-        let term_pairs = vec![
-            ("ip".to_string(), "ip".to_string()),
-            ("whitelisting".to_string(), "whitelist".to_string()),
-        ];
+    // We'll walk the AST to build a set of all terms. We track excluded as well for reference.
+    let mut all_terms = Vec::new();
+    let mut excluded_terms = HashSet::new();
+    collect_all_terms(&ast, &mut all_terms, &mut excluded_terms);
 
-        let patterns = create_term_patterns(&term_pairs);
+    // Remove duplicates from all_terms
+    all_terms.sort();
+    all_terms.dedup();
 
-        // Print the patterns for inspection
-        println!("Generated patterns:");
-        for (pattern, indices) in &patterns {
-            println!("Pattern: {:?}, Indices: {:?}", pattern, indices);
+    // Build term index map
+    let mut term_indices = HashMap::new();
+    for (i, term) in all_terms.iter().enumerate() {
+        term_indices.insert(term.clone(), i);
+    }
+
+    Ok(QueryPlan {
+        ast,
+        term_indices,
+        excluded_terms,
+    })
+}
+
+/// Recursively collect all terms from the AST, storing them in `all_terms`.
+/// Also track excluded terms in `excluded`.
+fn collect_all_terms(
+    expr: &elastic_query::Expr,
+    all_terms: &mut Vec<String>,
+    excluded: &mut HashSet<String>,
+) {
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    if debug_mode {
+        println!("DEBUG: Collecting terms from expression: {:?}", expr);
+    }
+
+    match expr {
+        elastic_query::Expr::Term {
+            keywords,
+            field: _,
+            excluded: is_excluded,
+            ..
+        } => {
+            // Add all keywords to all_terms
+            all_terms.extend(keywords.clone());
+
+            if debug_mode {
+                println!(
+                    "DEBUG: Collected keywords '{:?}', excluded={}",
+                    keywords, is_excluded
+                );
+            }
+
+            if *is_excluded {
+                for keyword in keywords {
+                    if debug_mode {
+                        println!("DEBUG: Adding '{}' to excluded terms set", keyword);
+                    }
+
+                    // Add the keyword to excluded terms
+                    excluded.insert(keyword.clone());
+                }
+            }
+        }
+        elastic_query::Expr::And(left, right) => {
+            if debug_mode {
+                println!("DEBUG: Processing AND expression for term collection");
+            }
+            collect_all_terms(left, all_terms, excluded);
+            collect_all_terms(right, all_terms, excluded);
+        }
+        elastic_query::Expr::Or(left, right) => {
+            if debug_mode {
+                println!("DEBUG: Processing OR expression for term collection");
+            }
+            collect_all_terms(left, all_terms, excluded);
+            collect_all_terms(right, all_terms, excluded);
+        }
+    }
+
+    if debug_mode {
+        println!("DEBUG: Current all_terms: {:?}", all_terms);
+        println!("DEBUG: Current excluded terms: {:?}", excluded);
+    }
+}
+
+/// Generate regex patterns that respect the AST's logical structure.
+/// This creates composite patterns for OR groups while keeping AND terms separate.
+pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usize>)> {
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let mut results = Vec::new();
+
+    if debug_mode {
+        println!("DEBUG: Creating structured patterns with AST awareness");
+        println!("DEBUG: AST: {:?}", plan.ast);
+        println!("DEBUG: Excluded terms: {:?}", plan.excluded_terms);
+    }
+
+    // Special handling for queries with excluded terms
+    if !plan.excluded_terms.is_empty() {
+        if debug_mode {
+            println!("DEBUG: Query has excluded terms, using special pattern generation");
         }
 
-        // Verify we have the expected number of patterns
-        // 1 pattern for each term (with combined boundaries) + 2 patterns for combinations
-        // (one for each order of terms)
-        assert_eq!(patterns.len(), 4);
+        // For queries with excluded terms, we need to ensure we generate patterns
+        // for all non-excluded terms, even if they're part of a complex expression
+        for (term, &idx) in &plan.term_indices {
+            if !plan.excluded_terms.contains(term) {
+                let base_pattern = regex_escape(term);
+                // Use more flexible pattern matching to ensure we catch all occurrences
+                let pattern = format!("(\\b{}|{}\\b|{})", base_pattern, base_pattern, base_pattern);
 
-        // Verify the first pattern is for "ip" with both boundaries
-        let ip_pattern = patterns
-            .iter()
-            .find(|(_, indices)| indices.len() == 1 && indices.contains(&0));
-        assert!(ip_pattern.is_some());
-        let (ip_pattern, _) = ip_pattern.unwrap();
-        assert!(ip_pattern.contains("\\bip|ip\\b"));
+                if debug_mode {
+                    println!(
+                        "DEBUG: Created pattern for non-excluded term '{}': '{}'",
+                        term, pattern
+                    );
+                }
 
-        // Verify the second pattern is for "whitelisting" with both boundaries
-        // The current implementation uses the original term only, not both original and stemmed
-        let whitelist_pattern = patterns
-            .iter()
-            .find(|(_, indices)| indices.len() == 1 && indices.contains(&1));
-        assert!(whitelist_pattern.is_some());
-        let (whitelist_pattern, _) = whitelist_pattern.unwrap();
-        assert!(whitelist_pattern.contains("\\bwhitelisting|whitelisting\\b"));
+                results.push((pattern, HashSet::from([idx])));
 
-        // Verify there are combination patterns
-        let combo_patterns: Vec<_> = patterns
-            .iter()
-            .filter(|(_, indices)| indices.len() == 2)
-            .collect();
-        assert_eq!(combo_patterns.len(), 2);
+                // Also add patterns for compound words
+                if term.len() > 3 {
+                    // Check if it's a camelCase word or a known compound word from vocabulary
+                    let camel_parts = crate::search::tokenization::split_camel_case(term);
+                    let compound_parts = if camel_parts.len() <= 1 {
+                        // Not a camelCase word, check if it's in vocabulary
+                        crate::search::tokenization::split_compound_word(
+                            term,
+                            crate::search::tokenization::load_vocabulary(),
+                        )
+                    } else {
+                        camel_parts
+                    };
 
-        // Check that one combination has "ipwhitelisting"
-        let has_ip_first = combo_patterns
-            .iter()
-            .any(|(pattern, _)| pattern.contains("ipwhitelisting"));
-        assert!(has_ip_first);
+                    if compound_parts.len() > 1 {
+                        if debug_mode {
+                            println!("DEBUG: Processing compound word: '{}'", term);
+                        }
 
-        // Check that one combination has "whitelistingip"
-        let has_whitelist_first = combo_patterns
-            .iter()
-            .any(|(pattern, _)| pattern.contains("whitelistingip"));
-        assert!(has_whitelist_first);
+                        for part in compound_parts {
+                            if part.len() >= 3 {
+                                let part_pattern = regex_escape(&part);
+                                let pattern = format!("(\\b{}|{}\\b)", part_pattern, part_pattern);
+
+                                if debug_mode {
+                                    println!(
+                                        "DEBUG: Adding compound part pattern: '{}' from '{}'",
+                                        pattern, part
+                                    );
+                                }
+
+                                results.push((pattern, HashSet::from([idx])));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Standard pattern generation for queries without excluded terms
+        fn collect_patterns(
+            expr: &elastic_query::Expr,
+            plan: &QueryPlan,
+            results: &mut Vec<(String, HashSet<usize>)>,
+            debug_mode: bool,
+        ) {
+            match expr {
+                elastic_query::Expr::Term {
+                    keywords,
+                    field: _,
+                    excluded,
+                    ..
+                } => {
+                    // Skip pattern generation for excluded terms
+                    if *excluded {
+                        if debug_mode {
+                            println!(
+                                "DEBUG: Skipping pattern generation for excluded term: '{:?}'",
+                                keywords
+                            );
+                        }
+                        return; // Skip pattern generation for excluded terms
+                    }
+
+                    // Process each keyword
+                    for keyword in keywords {
+                        // Skip if this keyword is in the excluded terms set
+                        if plan.excluded_terms.contains(keyword) {
+                            if debug_mode {
+                                println!(
+                                    "DEBUG: Skipping pattern generation for excluded keyword: '{}'",
+                                    keyword
+                                );
+                            }
+                            continue;
+                        }
+
+                        // Find the keyword's index in term_indices
+                        if let Some(&idx) = plan.term_indices.get(keyword) {
+                            let base_pattern = regex_escape(keyword);
+                            let pattern = format!("(\\b{}|{}\\b)", base_pattern, base_pattern);
+
+                            if debug_mode {
+                                println!(
+                                    "DEBUG: Created pattern for keyword '{}': '{}'",
+                                    keyword, pattern
+                                );
+                            }
+
+                            results.push((pattern, HashSet::from([idx])));
+                        }
+                    }
+                }
+                elastic_query::Expr::And(left, right) => {
+                    // For AND, collect patterns from both sides independently
+                    if debug_mode {
+                        println!("DEBUG: Processing AND expression");
+                    }
+                    collect_patterns(left, plan, results, debug_mode);
+                    collect_patterns(right, plan, results, debug_mode);
+                }
+                elastic_query::Expr::Or(left, right) => {
+                    if debug_mode {
+                        println!("DEBUG: Processing OR expression");
+                    }
+
+                    // For OR, create combined patterns
+                    let mut left_patterns = Vec::new();
+                    let mut right_patterns = Vec::new();
+
+                    collect_patterns(left, plan, &mut left_patterns, debug_mode);
+                    collect_patterns(right, plan, &mut right_patterns, debug_mode);
+
+                    if !left_patterns.is_empty() && !right_patterns.is_empty() {
+                        // Combine the patterns with OR
+                        let combined = format!(
+                            "({}|{})",
+                            left_patterns
+                                .iter()
+                                .map(|(p, _)| p.as_str())
+                                .collect::<Vec<_>>()
+                                .join("|"),
+                            right_patterns
+                                .iter()
+                                .map(|(p, _)| p.as_str())
+                                .collect::<Vec<_>>()
+                                .join("|")
+                        );
+
+                        // Merge the term indices
+                        let mut indices = HashSet::new();
+                        for (_, idx_set) in left_patterns.iter().chain(right_patterns.iter()) {
+                            indices.extend(idx_set.iter().cloned());
+                        }
+
+                        if debug_mode {
+                            println!("DEBUG: Created combined OR pattern: '{}'", combined);
+                            println!("DEBUG: Combined indices: {:?}", indices);
+                        }
+
+                        results.push((combined, indices));
+                    }
+
+                    // Also add individual patterns to ensure we catch all matches
+                    // This is important for multi-keyword terms where we want to match any of the keywords
+                    if debug_mode {
+                        println!("DEBUG: Adding individual patterns from OR expression");
+                    }
+                    results.extend(left_patterns);
+                    results.extend(right_patterns);
+                }
+            }
+        }
+
+        collect_patterns(&plan.ast, plan, &mut results, debug_mode);
+
+        // Additional pass for compound words
+        let mut compound_patterns = Vec::new();
+
+        // Process all terms from the term_indices map
+        for (keyword, &idx) in &plan.term_indices {
+            // Process compound words - either camelCase or those in the vocabulary
+            if !plan.excluded_terms.contains(keyword) && keyword.len() > 3 {
+                // Check if it's a camelCase word or a known compound word from vocabulary
+                let camel_parts = crate::search::tokenization::split_camel_case(keyword);
+                let compound_parts = if camel_parts.len() <= 1 {
+                    // Not a camelCase word, check if it's in vocabulary
+                    crate::search::tokenization::split_compound_word(
+                        keyword,
+                        crate::search::tokenization::load_vocabulary(),
+                    )
+                } else {
+                    camel_parts
+                };
+
+                if compound_parts.len() > 1 {
+                    if debug_mode {
+                        println!("DEBUG: Processing compound word: '{}'", keyword);
+                    }
+
+                    for part in compound_parts {
+                        if part.len() >= 3 {
+                            let part_pattern = regex_escape(&part);
+                            let pattern = format!("(\\b{}|{}\\b)", part_pattern, part_pattern);
+
+                            if debug_mode {
+                                println!(
+                                    "DEBUG: Adding compound part pattern: '{}' from '{}'",
+                                    pattern, part
+                                );
+                            }
+
+                            compound_patterns.push((pattern, HashSet::from([idx])));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add compound patterns after AST-based patterns
+        results.extend(compound_patterns);
     }
+
+    // Deduplicate patterns by combining those with the same regex but different indices
+    let mut pattern_map: HashMap<String, HashSet<usize>> = HashMap::new();
+
+    for (pattern, indices) in results {
+        pattern_map
+            .entry(pattern)
+            .and_modify(|existing_indices| existing_indices.extend(indices.iter().cloned()))
+            .or_insert(indices);
+    }
+
+    let deduplicated_results: Vec<(String, HashSet<usize>)> = pattern_map.into_iter().collect();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Final pattern count after deduplication: {}",
+            deduplicated_results.len()
+        );
+        for (pattern, indices) in &deduplicated_results {
+            println!("DEBUG: Pattern: '{}', Indices: {:?}", pattern, indices);
+        }
+    }
+
+    deduplicated_results
 }

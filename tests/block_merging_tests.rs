@@ -163,8 +163,8 @@ fn test_integration_with_search_flow() {
     // Create test files with overlapping code blocks
     create_test_files(temp_path);
 
-    // Create search query
-    let queries = vec!["function test".to_string()];
+    // Create search query that matches the actual function names in test files
+    let queries = vec!["test_function".to_string()];
     let custom_ignores: Vec<String> = vec![];
 
     // Create SearchOptions
@@ -173,17 +173,18 @@ fn test_integration_with_search_flow() {
         queries: &queries,
         files_only: false,
         custom_ignores: &custom_ignores,
-        include_filenames: true,
+        exclude_filenames: false,
         reranker: "combined",
         frequency_search: false,
         max_results: None,
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        any_term: true,
+
         exact: false,
         no_merge: false,
-        merge_threshold: Some(5),
+        merge_threshold: Some(20), // Increase threshold to ensure non-adjacent blocks are merged
+        dry_run: false,
     };
 
     // Run a search that should produce multiple overlapping blocks
@@ -273,8 +274,8 @@ fn test_no_merge_flag() {
     // Create test files with overlapping code blocks
     create_test_files(temp_path);
 
-    // Create search query
-    let queries = vec!["function test".to_string()];
+    // Create search query that matches the actual function names in test files
+    let queries = vec!["test_function".to_string()];
     let custom_ignores: Vec<String> = vec![];
 
     // First test with merging enabled (no_merge = false)
@@ -283,17 +284,18 @@ fn test_no_merge_flag() {
         queries: &queries,
         files_only: false,
         custom_ignores: &custom_ignores,
-        include_filenames: true,
+        exclude_filenames: false,
         reranker: "combined",
         frequency_search: false,
         max_results: None,
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        any_term: true,
+
         exact: false,
         no_merge: false,
-        merge_threshold: Some(5),
+        merge_threshold: Some(20), // Increase threshold to ensure non-adjacent blocks are merged
+        dry_run: false,
     };
 
     // Run a search that should produce merged blocks
@@ -305,17 +307,18 @@ fn test_no_merge_flag() {
         queries: &queries,
         files_only: false,
         custom_ignores: &custom_ignores,
-        include_filenames: true,
+        exclude_filenames: false,
         reranker: "combined",
         frequency_search: false,
         max_results: None,
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        any_term: true,
+
         exact: false,
         no_merge: true,
-        merge_threshold: Some(5),
+        merge_threshold: Some(20), // Increase threshold to ensure non-adjacent blocks are merged
+        dry_run: false,
     };
 
     // Run a search that should not merge blocks

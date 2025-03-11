@@ -281,7 +281,6 @@ use std::collections::HashSet;
             terms
         );
     }
-    
     #[test]
     fn test_preprocess_query_english_stop_words() {
         // Test with "ENGLISH_STOP_WORDS"
@@ -298,4 +297,38 @@ use std::collections::HashSet;
         assert!(has_english, "Expected 'english' in the stemmed terms");
         assert!(has_stop, "Expected 'stop' in the stemmed terms");
         assert!(has_word, "Expected 'word' in the stemmed terms");
+    }
+    
+    #[test]
+    fn test_preprocess_query_with_negated_terms() {
+        // Test with negated terms
+        let query = "foo AND -bar";
+        let terms = preprocess_query(query, false); // Use non-exact mode
+        
+        println!("Preprocessed terms for 'foo AND -bar': {:?}", terms);
+        
+        // Check that "foo" is included
+        let has_foo = terms.iter().any(|(orig, _)| orig == "foo");
+        assert!(has_foo, "Expected 'foo' in the terms");
+        
+        // Check that "bar" is NOT included (since it's negated)
+        let has_bar = terms.iter().any(|(orig, _)| orig == "bar");
+        assert!(!has_bar, "Did not expect 'bar' in the terms as it was negated");
+        
+        // Test with multiple negated terms
+        let query = "search -test -ignore";
+        let terms = preprocess_query(query, false);
+        
+        println!("Preprocessed terms for 'search -test -ignore': {:?}", terms);
+        
+        // Check that "search" is included
+        let has_search = terms.iter().any(|(orig, _)| orig == "search");
+        assert!(has_search, "Expected 'search' in the terms");
+        
+        // Check that negated terms are NOT included
+        let has_test = terms.iter().any(|(orig, _)| orig == "test");
+        let has_ignore = terms.iter().any(|(orig, _)| orig == "ignore");
+        
+        assert!(!has_test, "Did not expect 'test' in the terms as it was negated");
+        assert!(!has_ignore, "Did not expect 'ignore' in the terms as it was negated");
     }

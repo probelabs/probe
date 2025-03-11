@@ -85,7 +85,7 @@ interface SearchCodeArgs {
   query: string | string[];
   filesOnly?: boolean;
   ignore?: string[];
-  includeFilenames?: boolean;
+  excludeFilenames?: boolean;
   reranker?: 'hybrid' | 'hybrid2' | 'bm25' | 'tfidf';
   frequencySearch?: boolean;
   exact?: boolean;
@@ -153,9 +153,9 @@ class ProbeServer {
                 items: { type: 'string' },
                 description: 'Custom patterns to ignore (in addition to .gitignore and common patterns)',
               },
-              includeFilenames: {
+              excludeFilenames: {
                 type: 'boolean',
-                description: 'Include files whose names match query words',
+                description: 'Exclude files whose names match query words (filename matching is enabled by default)',
               },
               reranker: {
                 type: 'string',
@@ -256,8 +256,8 @@ class ProbeServer {
       }
     }
     
-    if (args.includeFilenames) {
-      cliArgs.push('--include-filenames');
+    if (args.excludeFilenames) {
+      cliArgs.push('--exclude-filenames');
     }
     
     if (args.reranker) {

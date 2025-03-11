@@ -31,7 +31,7 @@ pub struct ProbeSearchArgs {
     #[serde(default)]
     files_only: bool,
     #[serde(default)]
-    include_filenames: bool,
+    exclude_filenames: bool,
     #[serde(default = "default_reranker")]
     reranker: String,
     #[serde(default = "default_true")]
@@ -40,8 +40,6 @@ pub struct ProbeSearchArgs {
     exact: bool,
     #[serde(default)]
     allow_tests: bool,
-    #[serde(default)]
-    any_term: bool,
 }
 
 #[derive(Serialize)]
@@ -126,11 +124,10 @@ impl Tool for ProbeSearch {
         if debug_mode {
             println!("\n[DEBUG] Search configuration:");
             println!("[DEBUG] - Files only: {}", args.files_only);
-            println!("[DEBUG] - Include filenames: {}", args.include_filenames);
+            println!("[DEBUG] - Exclude filenames: {}", args.exclude_filenames);
             println!("[DEBUG] - Frequency search: {}", args.frequency_search);
             println!("[DEBUG] - Exact match: {}", args.exact);
             println!("[DEBUG] - Allow tests: {}", args.allow_tests);
-            println!("[DEBUG] - Any term: {}", args.any_term);
 
             println!("[DEBUG] Query vector: {:?}", query);
             println!("[DEBUG] Search path exists: {}", path.exists());
@@ -141,7 +138,7 @@ impl Tool for ProbeSearch {
             queries: &query,
             files_only: args.files_only,
             custom_ignores: &[],
-            include_filenames: args.include_filenames,
+            exclude_filenames: args.exclude_filenames,
             reranker: &args.reranker,
             frequency_search: if args.exact {
                 false
@@ -152,10 +149,10 @@ impl Tool for ProbeSearch {
             max_bytes: None,
             max_tokens: Some(40000),
             allow_tests: args.allow_tests,
-            any_term: args.any_term,
             exact: args.exact,
             no_merge: false,
             merge_threshold: None,
+            dry_run: false, // Chat mode doesn't use dry-run
         };
 
         if debug_mode {
@@ -164,15 +161,14 @@ impl Tool for ProbeSearch {
             println!("[DEBUG] - Queries: {:?}", search_options.queries);
             println!("[DEBUG] - Files only: {}", search_options.files_only);
             println!(
-                "[DEBUG] - Include filenames: {}",
-                search_options.include_filenames
+                "[DEBUG] - Exclude filenames: {}",
+                search_options.exclude_filenames
             );
             println!("[DEBUG] - Reranker: {}", search_options.reranker);
             println!(
                 "[DEBUG] - Frequency search: {}",
                 search_options.frequency_search
             );
-            println!("[DEBUG] - Any term: {}", search_options.any_term);
             println!("[DEBUG] - Exact: {}", search_options.exact);
         }
 

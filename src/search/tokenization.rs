@@ -1,4 +1,5 @@
 use crate::ranking::get_stemmer;
+use crate::search::term_exceptions::{is_exception_term, EXCEPTION_TERMS};
 use decompound::{decompound, DecompositionOptions};
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
@@ -316,7 +317,17 @@ fn is_special_case(word: &str) -> bool {
     let lowercase = word.to_lowercase();
 
     // Check if the word is in the special case list
-    SPECIAL_CASE_WORDS.contains(&lowercase)
+    let result = SPECIAL_CASE_WORDS.contains(&lowercase);
+
+    // Debug output to help diagnose issues
+    if std::env::var("DEBUG").unwrap_or_default() == "1" {
+        println!(
+            "Checking if '{}' (lowercase: '{}') is a special case: {}",
+            word, lowercase, result
+        );
+    }
+
+    result
 }
 
 /// Splits a string on camel case boundaries
@@ -327,18 +338,30 @@ fn is_special_case(word: &str) -> bool {
 /// - special cases like OAuth2 -> ["oauth2"]
 /// - also attempts to split lowercase identifiers that might have been camelCase originally
 pub fn split_camel_case(input: &str) -> Vec<String> {
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    if debug_mode {
+        println!("split_camel_case input: '{}'", input);
+    }
+
     if input.is_empty() {
         return vec![];
     }
 
     // Check if the input is a special case word
     if is_special_case(input) {
-        // println!("Special case word: {}", input);
+        if debug_mode {
+            println!("Special case word detected: '{}'", input);
+        }
         return vec![input.to_lowercase()];
     }
 
     // Special case for OAuth2Provider and similar patterns
     let lowercase = input.to_lowercase();
+
+    if debug_mode {
+        println!("Lowercase version: '{}'", lowercase);
+    }
 
     // Special case for OAuth2Provider -> ["oauth2", "provider"]
     if lowercase.starts_with("oauth2") {
@@ -350,13 +373,40 @@ pub fn split_camel_case(input: &str) -> Vec<String> {
         }
     }
 
+    // Get all special case words and sort by length (longest first)
+    // This ensures that longer matches like "ipv4" are checked before shorter ones like "ipv"
+    let mut special_cases: Vec<&String> = SPECIAL_CASE_WORDS.iter().collect();
+    special_cases.sort_by_key(|b| std::cmp::Reverse(b.len()));
+
     // General special case handling
-    for special_case in SPECIAL_CASE_WORDS.iter() {
+    for special_case in special_cases {
         if lowercase.starts_with(special_case) {
+            if debug_mode {
+                println!(
+                    "Found special case '{}' at start of '{}'",
+                    special_case, lowercase
+                );
+            }
+
+            // Find the corresponding part in the original input
+            let original_part = &input[0..special_case.len()];
             let remaining = &input[special_case.len()..];
+
+            if debug_mode {
+                println!(
+                    "Original part: '{}', Remaining: '{}'",
+                    original_part, remaining
+                );
+            }
+
             if !remaining.is_empty() {
                 let mut result = vec![special_case.clone()];
                 result.extend(split_camel_case(remaining));
+
+                if debug_mode {
+                    println!("Returning result with special case: {:?}", result);
+                }
+
                 return result;
             }
         }
@@ -368,52 +418,11 @@ pub fn split_camel_case(input: &str) -> Vec<String> {
         // Check for common patterns in identifiers
         let _potential_splits: Vec<String> = Vec::new();
 
-        // Try to identify common programming terms and split on them
-        let common_terms = [
-            "rpc",
-            "api",
-            "http",
-            "json",
-            "xml",
-            "html",
-            "css",
-            "js",
-            "db",
-            "sql",
-            "handler",
-            "controller",
-            "service",
-            "repository",
-            "manager",
-            "factory",
-            "provider",
-            "client",
-            "server",
-            "config",
-            "util",
-            "helper",
-            "storage",
-            "cache",
-            "queue",
-            "worker",
-            "job",
-            "task",
-            "event",
-            "listener",
-            "callback",
-            "middleware",
-            "filter",
-            "validator",
-            "converter",
-            "transformer",
-            "parser",
-            "serializer",
-            "deserializer",
-            "encoder",
-            "decoder",
-            "reader",
-            "writer",
-        ];
+        // Use the exception terms from our centralized list
+        let common_terms = EXCEPTION_TERMS
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>();
 
         for term in common_terms {
             if input.contains(term) && term != input {
@@ -490,8 +499,15 @@ pub fn split_camel_case(input: &str) -> Vec<String> {
     result.into_iter().map(|word| word.to_lowercase()).collect()
 }
 
-/// Checks if a word is a common English stop word
+/// Checks if a word is a common English stop word or a simple number (0-10)
 pub fn is_english_stop_word(word: &str) -> bool {
+    // Check if the word is a simple number (0-10)
+    if let Ok(num) = word.parse::<u32>() {
+        if num <= 10 {
+            return true;
+        }
+    }
+
     ENGLISH_STOP_WORDS.contains(word)
 }
 
@@ -508,6 +524,24 @@ pub fn is_stop_word(word: &str) -> bool {
 /// Attempts to split a compound word into its constituent parts using a vocabulary
 /// Returns the original word if it cannot be split
 pub fn split_compound_word(word: &str, vocab: &HashSet<String>) -> Vec<String> {
+    // Use the exception terms from our centralized list
+    let common_terms = EXCEPTION_TERMS
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>();
+
+    // If the word is in common_terms, don't split it
+    if common_terms.contains(&word.to_lowercase().as_str()) {
+        return vec![word.to_string()];
+    }
+
+    // Check if the word is in the vocabulary as a whole
+    // This handles cases where the vocabulary contains both the compound word
+    // and its constituent parts
+    if vocab.contains(&word.to_lowercase()) {
+        return vec![word.to_string()];
+    }
+
     let is_valid_word = |w: &str| vocab.contains(&w.to_lowercase());
 
     match decompound(word, &is_valid_word, DecompositionOptions::empty()) {
@@ -537,6 +571,7 @@ pub fn load_vocabulary() -> &'static HashSet<String> {
             "pass",
             "fire",
             "wall",
+            "firewall",
             "water",
             "fall",
             "data",
@@ -1013,34 +1048,88 @@ pub fn load_vocabulary() -> &'static HashSet<String> {
     &VOCABULARY
 }
 
+/// Tokenize and stem a keyword, handling camel case and compound word splitting
+/// This function is used by the elastic query parser to process terms in the AST
+#[allow(dead_code)]
+pub fn tokenize_and_stem(keyword: &str) -> Vec<String> {
+    let stemmer = get_stemmer();
+    let vocabulary = load_vocabulary();
+
+    // First try camel case splitting
+    let camel_parts = split_camel_case(keyword);
+
+    if camel_parts.len() > 1 {
+        // Return stemmed camel case parts, filtering out stop words
+        camel_parts
+            .into_iter()
+            .filter(|part| !is_stop_word(part))
+            .map(|part| stemmer.stem(&part).to_string())
+            .collect()
+    } else {
+        // Try compound word splitting
+        let compound_parts = split_compound_word(keyword, vocabulary);
+
+        if compound_parts.len() > 1 {
+            // Return stemmed compound parts, filtering out stop words
+            compound_parts
+                .into_iter()
+                .filter(|part| !is_stop_word(part))
+                .map(|part| stemmer.stem(&part).to_string())
+                .collect()
+        } else {
+            // Just stem the original keyword
+            vec![stemmer.stem(keyword).to_string()]
+        }
+    }
+}
+
 /// Tokenizes text into words by splitting on whitespace and non-alphanumeric characters,
 /// removes stop words, and applies stemming. Also splits camelCase/PascalCase identifiers
 /// and compound words.
 ///
 /// The tokenization flow follows these steps:
 /// 1. Split input text on whitespace
-/// 2. For each token, further split on non-alphanumeric characters
+/// 2. For each token, further split on non-alphanumeric characters (except for leading "-")
 /// 3. For each resulting token, check if it has mixed case
 /// 4. If it has mixed case, split using camel case rules
 /// 5. For each part, attempt to split compound words
 /// 6. Process each part: remove stop words and apply stemming
 /// 7. Collect unique tokens
+/// 8. Exclude terms that were negated with a "-" prefix
 pub fn tokenize(text: &str) -> Vec<String> {
     let stemmer = get_stemmer();
     let vocabulary = load_vocabulary();
+
+    // Track negated terms to exclude them from the final result
+    let mut negated_terms = HashSet::new();
 
     // println!("Tokenizing text: {}", text);
 
     // Split by whitespace and collect words
     let mut tokens = Vec::new();
     for word in text.split_whitespace() {
+        // Check if this is a negated term
+        let is_negated = word.starts_with('-');
+
         // Further split by non-alphanumeric characters
         let mut current_token = String::new();
-        for c in word.chars() {
+
+        // Process the characters, skipping the leading "-" if this is a negated term
+        let mut chars = word.chars();
+        if is_negated {
+            // Skip the leading "-"
+            chars.next();
+        }
+
+        for c in chars {
             if c.is_alphanumeric() {
                 current_token.push(c);
             } else if !current_token.is_empty() {
                 // We found a non-alphanumeric character, add the current token if not empty
+                if is_negated {
+                    // Track this as a negated term
+                    negated_terms.insert(current_token.to_lowercase());
+                }
                 tokens.push(current_token);
                 current_token = String::new();
             }
@@ -1048,6 +1137,10 @@ pub fn tokenize(text: &str) -> Vec<String> {
 
         // Add the last token if not empty
         if !current_token.is_empty() {
+            if is_negated {
+                // Track this as a negated term
+                negated_terms.insert(current_token.to_lowercase());
+            }
             tokens.push(current_token);
         }
     }
@@ -1071,6 +1164,11 @@ pub fn tokenize(text: &str) -> Vec<String> {
                 continue;
             }
 
+            // Skip if this is a negated term
+            if negated_terms.contains(&lowercase_part) {
+                continue;
+            }
+
             // Try to split compound words
             let compound_parts = split_compound_word(&lowercase_part, vocabulary);
 
@@ -1080,8 +1178,25 @@ pub fn tokenize(text: &str) -> Vec<String> {
                     continue;
                 }
 
-                // Add the stemmed part if it's unique
+                // Skip if this is a negated term
+                if negated_terms.contains(&compound_part) {
+                    continue;
+                }
+
+                // Preserve the original form for all exception terms
+                if is_exception_term(&compound_part)
+                    && processed_tokens.insert(compound_part.clone())
+                {
+                    result.push(compound_part.clone());
+                }
+
+                // Also add the stemmed part if it's unique
                 let stemmed_part = stemmer.stem(&compound_part).to_string();
+                // Skip if the stemmed version is a negated term
+                if negated_terms.contains(&stemmed_part) {
+                    continue;
+                }
+
                 if processed_tokens.insert(stemmed_part.clone()) {
                     result.push(stemmed_part);
                 }
@@ -1158,7 +1273,8 @@ mod tests {
         assert!(tokens.contains(&"pars".to_string())); // stemmed "parse"
         assert!(tokens.contains(&"json".to_string()));
         assert!(tokens.contains(&"html".to_string()));
-        assert!(tokens.contains(&"5".to_string()));
+        // Numbers 0-10 are now treated as stop words, so we don't expect "5" to be included
+        // assert!(tokens.contains(&"5".to_string()));
 
         // Test mixed case with type prefix
         let tokens = tokenize("typeIgnore typeWhitelist");
@@ -1170,14 +1286,12 @@ mod tests {
         assert!(tokens.contains(&"list".to_string()));
         assert!(tokens.contains(&"black".to_string()));
         assert!(tokens.contains(&"mail".to_string()));
-        assert!(tokens.contains(&"fire".to_string()));
-        assert!(tokens.contains(&"wall".to_string()));
+        assert!(tokens.contains(&"firewall".to_string()));
 
         // Test compound word in camelCase
         let tokens = tokenize("enableFirewallWhitelist");
         assert!(tokens.contains(&"enabl".to_string())); // stemmed "enable"
-        assert!(tokens.contains(&"fire".to_string()));
-        assert!(tokens.contains(&"wall".to_string()));
+        assert!(tokens.contains(&"firewall".to_string())); // Now we keep firewall as a whole
         assert!(tokens.contains(&"white".to_string()));
         assert!(tokens.contains(&"list".to_string()));
     }
@@ -1213,7 +1327,6 @@ mod tests {
         assert!(tokens.contains(&"list".to_string()));
         assert!(tokens.contains(&"black".to_string()));
         assert!(tokens.contains(&"mail".to_string()));
-        assert!(tokens.contains(&"fire".to_string()));
-        assert!(tokens.contains(&"wall".to_string()));
+        assert!(tokens.contains(&"firewall".to_string()));
     }
 }

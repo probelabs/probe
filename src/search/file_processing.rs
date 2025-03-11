@@ -3,53 +3,39 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
-use crate::language::parse_file_for_code_blocks;
+use crate::language::{is_test_file, parse_file_for_code_blocks};
 use crate::models::SearchResult;
-use crate::ranking::preprocess_text;
+use crate::ranking;
 use crate::search::file_search::get_filename_matched_queries_compat;
 use crate::search::tokenization;
 
 /// Parameters for file processing
 pub struct FileProcessingParams<'a> {
-    /// Path to the file
     pub path: &'a Path,
-    /// Line numbers to process
     pub line_numbers: &'a HashSet<usize>,
-    /// Whether to allow test files/functions
     pub allow_tests: bool,
-    /// Map of query indices to matching line numbers
     pub term_matches: Option<&'a HashMap<usize, HashSet<usize>>>,
-    /// Whether to include blocks matching any term (true) or all terms (false)
-    pub any_term: bool,
-    /// Total number of queries being searched
     pub num_queries: usize,
-    /// Query indices that match the filename
     pub filename_matched_queries: HashSet<usize>,
-    /// The query terms for calculating block matches
     pub queries_terms: &'a [Vec<(String, String)>],
-    /// Optional preprocessed query terms for optimization
     pub preprocessed_queries: Option<&'a [Vec<String>]>,
-    /// Whether to disable block merging
+    pub query_plan: Option<&'a crate::search::query::QueryPlan>,
+
+    #[allow(dead_code)]
     pub no_merge: bool,
 }
 
 /// Function to check if a code block should be included based on term matches
+/// This is a simplified version that relies on the AST evaluation
 fn filter_code_block(
     block_lines: (usize, usize),
     term_matches: &HashMap<usize, HashSet<usize>>,
-    any_term: bool,
     num_queries: usize,
-    filename_matched_queries: &HashSet<usize>, // New parameter for filename matches
-    debug_mode: bool,                          // Added debug_mode parameter
+    filename_matched_queries: &HashSet<usize>,
+    debug_mode: bool,
 ) -> bool {
-    // Note: For large files with many blocks, performance could be improved by
-    // pre-computing term matches per line range instead of scanning term_matches
-    // for each block. This optimization should be considered if performance
-    // becomes an issue.
-
     let mut matched_queries = HashSet::new();
 
-    // Check which queries have matches within the block's line range
     for (query_idx, lines) in term_matches {
         if lines
             .iter()
@@ -59,30 +45,19 @@ fn filter_code_block(
         }
     }
 
-    // Calculate the number of unique terms in the block
     let block_unique_terms = matched_queries.len();
 
-    // Determine if the block should be included based on term matches
-    let term_match_criteria = if any_term {
-        // Any term mode: include if any term matches in content
-        // (we don't use filename matches in any_term mode to maintain precision)
-        !matched_queries.is_empty()
-    } else {
-        // All terms mode: include if all queries are matched either in content or filename
-        // AND at least one term is matched in the content
-        !matched_queries.is_empty()
-            && (0..num_queries)
-                .all(|i| filename_matched_queries.contains(&i) || matched_queries.contains(&i))
-    };
+    // We need to ensure all required terms are matched
+    // Either directly in the content or via filename matches
+    if matched_queries.is_empty() {
+        // If no terms matched in content, we can't satisfy the criteria
+        return false;
+    }
 
-    // Filtering criteria with corrected formula:
-    // 1 term: require 1 term
-    // 2 terms: require 1 term
-    // 3 terms: require 2 terms
-    // 4 terms: require 2 terms
-    // 5 terms: require 3 terms
-    // 6 terms: require 3 terms
-    // 7 terms: require 4 terms
+    // Check if all required terms are covered
+    let term_match_criteria = (0..num_queries)
+        .all(|i| filename_matched_queries.contains(&i) || matched_queries.contains(&i));
+
     let min_required_terms = match num_queries {
         0 => 0,
         1 | 2 => 1,
@@ -91,15 +66,12 @@ fn filter_code_block(
         7 | 8 => 4,
         9 | 10 => 5,
         11 | 12 => 6,
-        n => (n + 1) / 2, // General formula: ceil(n/2)
+        n => (n + 1) / 2,
     };
 
     let unique_terms_criteria = block_unique_terms >= min_required_terms;
-
-    // Final decision: both criteria must be met
     let should_include = term_match_criteria && unique_terms_criteria;
 
-    // Add debug logging
     if debug_mode {
         println!(
             "DEBUG: Considering block at lines {}-{}",
@@ -112,12 +84,8 @@ fn filter_code_block(
             num_queries, min_required_terms
         );
 
-        if any_term {
-            println!("DEBUG: Any-term mode: Include if any term matches");
-        } else {
-            println!("DEBUG: All-terms mode: Include if all {} queries matched (including filename matches: {:?}) AND at least one term is matched in content",
-                     num_queries, filename_matched_queries);
-        }
+        println!("DEBUG: All-terms mode: Include if all {} queries matched (including filename matches: {:?}) AND at least one term is matched in content",
+                 num_queries, filename_matched_queries);
 
         println!("DEBUG: Term match criteria met: {}", term_match_criteria);
         println!(
@@ -126,45 +94,175 @@ fn filter_code_block(
         );
 
         println!(
-            "DEBUG: Block included: {} (Reason: {})",
-            should_include,
-            if should_include {
-                "All criteria met"
-            } else if !term_match_criteria {
-                "Failed term match criteria"
-            } else {
-                "Insufficient unique terms"
-            }
+            "DEBUG: Block lines {}-{} => matched {} terms; should_include={}",
+            block_lines.0, block_lines.1, block_unique_terms, should_include
         );
     }
-
     should_include
 }
 
-/// Function to process a file that was matched by filename
+/// Evaluate whether a block of lines satisfies a complex AST query
+/// using the 'evaluate' method in `elastic_query::Expr`. We assume
+/// the 'term_matches' map uses the same indexing as the AST's QueryPlan term_indices.
+pub fn filter_code_block_with_ast(
+    block_lines: (usize, usize),
+    term_matches: &HashMap<usize, HashSet<usize>>,
+    plan: &crate::search::query::QueryPlan,
+    debug_mode: bool,
+) -> bool {
+    // Gather matched term indices for this block
+    let mut matched_terms = HashSet::new();
+    for (&term_idx, lines) in term_matches {
+        if lines
+            .iter()
+            .any(|&l| l >= block_lines.0 && l <= block_lines.1)
+        {
+            matched_terms.insert(term_idx);
+        }
+    }
+
+    if debug_mode {
+        println!(
+            "DEBUG: Checking for terms in block {}-{}",
+            block_lines.0, block_lines.1
+        );
+        println!("DEBUG: Matched terms: {:?}", matched_terms);
+        println!("DEBUG: Term indices: {:?}", plan.term_indices);
+        println!("DEBUG: Excluded terms: {:?}", plan.excluded_terms);
+        println!("DEBUG: AST: {:?}", plan.ast);
+    }
+
+    // Check if we have any matches at all
+    if matched_terms.is_empty() {
+        if debug_mode {
+            println!(
+                "DEBUG: No matched terms in block {}-{}, returning false",
+                block_lines.0, block_lines.1
+            );
+        }
+        return false;
+    }
+
+    // Check if any excluded term is present
+    let has_excluded_term = plan.excluded_terms.iter().any(|term| {
+        // For excluded terms, we only check if the exact term is present
+        // We don't do compound word splitting for excluded terms
+        if let Some(&idx) = plan.term_indices.get(term) {
+            if matched_terms.contains(&idx) {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Block contains excluded term '{}', returning false",
+                        term
+                    );
+                }
+                return true;
+            }
+        }
+
+        // We don't check for compound words or substrings for excluded terms
+        // This ensures we only exclude exact matches of the excluded term
+        false
+    });
+
+    if has_excluded_term {
+        if debug_mode {
+            println!("DEBUG: Block contains excluded term, returning false");
+        }
+        return false;
+    }
+
+    // Special handling for expressions with excluded terms
+    // If we have a query like "keyword1 -keyword3" or "(key OR word OR 1) -keyword3",
+    // we need to make sure we find blocks that match the required terms but don't contain the excluded term
+    let has_excluded_terms = !plan.excluded_terms.is_empty();
+
+    // Check if we have any OR expressions in the AST
+    let has_or_expr = match &plan.ast {
+        crate::search::elastic_query::Expr::Or(_, _) => true,
+        crate::search::elastic_query::Expr::And(left, right) => {
+            matches!(**left, crate::search::elastic_query::Expr::Or(_, _))
+                || matches!(**right, crate::search::elastic_query::Expr::Or(_, _))
+        }
+        _ => false,
+    };
+
+    // If we have excluded terms, we need to handle them specially
+    let decision = if has_excluded_terms {
+        // First check if any required terms match
+        let mut required_term_matches = false;
+
+        // For OR expressions, any term can match
+        // For AND expressions, we rely on the AST evaluation
+        if has_or_expr {
+            for (term, &idx) in &plan.term_indices {
+                if !plan.excluded_terms.contains(term) && matched_terms.contains(&idx) {
+                    required_term_matches = true;
+                    break;
+                }
+            }
+        } else {
+            // For non-OR expressions, use the AST evaluation but ignore excluded terms
+            // We'll check excluded terms separately
+            required_term_matches = plan.ast.evaluate(&matched_terms, &plan.term_indices);
+        }
+
+        // Then check if any excluded term is present
+        let excluded_term_present = plan.excluded_terms.iter().any(|term| {
+            if let Some(&idx) = plan.term_indices.get(term) {
+                matched_terms.contains(&idx)
+            } else {
+                false
+            }
+        });
+
+        if debug_mode {
+            println!("DEBUG: Required term matches: {}", required_term_matches);
+            println!("DEBUG: Excluded term present: {}", excluded_term_present);
+        }
+
+        // Return true if required terms match and no excluded term is present
+        required_term_matches && !excluded_term_present
+    } else {
+        // Use the normal AST evaluation when there are no excluded terms
+        plan.ast.evaluate(&matched_terms, &plan.term_indices)
+    };
+
+    if debug_mode {
+        println!(
+            "DEBUG: Block {}-{} matched terms: {:?}",
+            block_lines.0, block_lines.1, matched_terms
+        );
+        println!("DEBUG: AST evaluation result: {}", decision);
+    }
+
+    if debug_mode {
+        println!(
+            "DEBUG: filter_code_block_with_ast => lines {:?} => matched {:?}, decision={}",
+            block_lines, matched_terms, decision
+        );
+    }
+    decision
+}
+
+/// Existing code below (abbreviated) --------------------------------------
 pub fn process_file_by_filename(
     path: &Path,
     queries_terms: &[Vec<(String, String)>],
-    preprocessed_queries: Option<&[Vec<String>]>, // Optional preprocessed query terms for optimization
+    preprocessed_queries: Option<&[Vec<String>]>,
 ) -> Result<SearchResult> {
-    // Read the file content
     let content = fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
-
-    // Get the filename for matching
     let filename = path
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    // Use get_filename_matched_queries_compat to determine matched terms
     let matched_terms = get_filename_matched_queries_compat(&filename, queries_terms);
 
-    // Create a SearchResult with filename match information
     let mut search_result = SearchResult {
         file: path.to_string_lossy().to_string(),
         lines: (1, content.lines().count()),
         node_type: "file".to_string(),
-        code: content.clone(), // Clone content here to avoid the move
+        code: content.clone(),
         matched_by_filename: Some(true),
         rank: None,
         score: None,
@@ -184,19 +282,60 @@ pub fn process_file_by_filename(
         block_id: None,
     };
 
-    // Use preprocessed query terms if available
     if let Some(preprocessed) = preprocessed_queries {
         let query_terms: Vec<String> = preprocessed
             .iter()
             .flat_map(|terms| terms.iter().cloned())
             .collect();
         let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
-
-        // Ensure we use the same stemming as query processing
-        let block_terms = preprocess_text(&content, false);
-
-        // Debug logging for stemming comparison
+        let block_terms = ranking::preprocess_text(&content, false);
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+        let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
+            0
+        } else {
+            let direct_matches: HashSet<&String> = block_terms
+                .iter()
+                .filter(|t| unique_query_terms.contains(*t))
+                .collect();
+            let mut compound_matches = HashSet::new();
+            for query_term in &unique_query_terms {
+                if block_terms.iter().any(|t| t == query_term) {
+                    continue;
+                }
+                let parts =
+                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
+                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                    compound_matches.insert(query_term);
+                }
+            }
+            direct_matches.len() + compound_matches.len()
+        };
+
+        let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
+            0
+        } else {
+            let direct_match_count = block_terms
+                .iter()
+                .filter(|t| unique_query_terms.contains(*t))
+                .count();
+
+            let mut compound_match_count = 0;
+            for query_term in &unique_query_terms {
+                if block_terms.iter().any(|t| t == query_term) {
+                    continue;
+                }
+                let parts =
+                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
+                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                    compound_match_count += 1;
+                }
+            }
+            direct_match_count + compound_match_count
+        };
+        search_result.file_unique_terms = Some(block_unique_terms);
+        search_result.file_total_matches = Some(block_total_matches);
+
         if debug_mode {
             println!(
                 "DEBUG: File by filename terms after stemming: {:?}",
@@ -207,67 +346,6 @@ pub fn process_file_by_filename(
                 unique_query_terms
             );
         }
-
-        let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
-            0
-        } else {
-            // First, check for direct matches
-            let direct_matches: HashSet<&String> = block_terms
-                .iter()
-                .filter(|t| unique_query_terms.contains(*t))
-                .collect();
-
-            // Then, check for compound word matches
-            let mut compound_matches = HashSet::new();
-            for query_term in &unique_query_terms {
-                // Skip terms that were already directly matched
-                if block_terms.iter().any(|t| t == query_term) {
-                    continue;
-                }
-
-                // Check if this query term can be formed by combining adjacent terms in block_terms
-                // For simplicity, we'll just check if all parts of the compound word exist in the block
-                let parts =
-                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
-
-                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                    compound_matches.insert(query_term);
-                }
-            }
-
-            direct_matches.len() + compound_matches.len()
-        };
-
-        let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
-            0
-        } else {
-            // Count direct matches
-            let direct_match_count = block_terms
-                .iter()
-                .filter(|t| unique_query_terms.contains(*t))
-                .count();
-
-            // Count compound matches
-            let mut compound_match_count = 0;
-            for query_term in &unique_query_terms {
-                // Skip terms that were already directly matched
-                if block_terms.iter().any(|t| t == query_term) {
-                    continue;
-                }
-
-                // Check if this query term can be formed by combining adjacent terms in block_terms
-                let parts =
-                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
-
-                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                    compound_match_count += 1;
-                }
-            }
-
-            direct_match_count + compound_match_count
-        };
-        search_result.file_unique_terms = Some(block_unique_terms);
-        search_result.file_total_matches = Some(block_total_matches);
     }
 
     Ok(search_result)
@@ -277,7 +355,6 @@ pub fn process_file_by_filename(
 fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
     let trimmed = line.trim();
 
-    // First try to detect comments
     if trimmed.starts_with("//")
         || trimmed.starts_with("/*")
         || trimmed.starts_with("*")
@@ -288,10 +365,8 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
         return "comment".to_string();
     }
 
-    // Try to detect common code structures based on the line content
     let lowercase = trimmed.to_lowercase();
 
-    // Check for function/method declarations
     if (trimmed.contains("fn ")
         && (trimmed.contains("(") || trimmed.contains(")"))
         && extension == Some("rs"))
@@ -306,7 +381,6 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
         return "function".to_string();
     }
 
-    // Check for class declarations
     if (trimmed.contains("class ") || trimmed.contains("interface "))
         || (trimmed.contains("struct ")
             && extension
@@ -317,7 +391,6 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
         return "class".to_string();
     }
 
-    // Check for imports/requires
     if trimmed.starts_with("import ")
         || trimmed.starts_with("from ")
         || trimmed.starts_with("require ")
@@ -327,14 +400,12 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
         return "import".to_string();
     }
 
-    // Check for variable declarations
     if (trimmed.starts_with("let ") || trimmed.starts_with("var ") || trimmed.starts_with("const "))
         || (trimmed.contains("=") && !trimmed.contains("==") && !trimmed.contains("=>"))
     {
         return "variable_declaration".to_string();
     }
 
-    // Check for control flow statements
     if trimmed.starts_with("if ")
         || trimmed.starts_with("for ")
         || trimmed.starts_with("while ")
@@ -344,56 +415,30 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
         return "control_flow".to_string();
     }
 
-    // If we can't determine a specific type, use "code" instead of "context"
     "code".to_string()
 }
 
-/// Function to process a file with line numbers and return SearchResult structs
+/// Main function for processing a file with matched lines
 pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<SearchResult>> {
-    // Read the file content
     let content = fs::read_to_string(params.path)
         .context(format!("Failed to read file: {:?}", params.path))?;
 
-    // Get the file extension
     let extension = params
         .path
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or("");
 
-    // Split the content into lines for context processing
     let lines: Vec<&str> = content.lines().collect();
-
-    // Create SearchResult structs for each match
     let mut results = Vec::new();
-
-    // Track which line numbers have been covered
     let mut covered_lines = HashSet::new();
-
-    // Debug mode
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: Processing file with results: {:?}", params.path);
-        println!("DEBUG:   Matched line numbers: {:?}", params.line_numbers);
-        println!("DEBUG:   File extension: {}", extension);
-        println!("DEBUG:   Total lines in file: {}", lines.len());
-
-        // Log filename matches if present
-        if !params.filename_matched_queries.is_empty() {
-            println!(
-                "DEBUG: Filename '{}' matched queries (indices): {:?}",
-                params
-                    .path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy(),
-                params.filename_matched_queries
-            );
-        }
+        println!("DEBUG: Processing file: {:?}", params.path);
+        println!("DEBUG:   matched lines: {:?}", params.line_numbers);
     }
 
-    // First try to use AST parsing
     if let Ok(code_blocks) = parse_file_for_code_blocks(
         &content,
         extension,
@@ -416,16 +461,12 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
             }
         }
 
-        // Generate a unique file ID for block correlation
         let file_id = format!("{}", params.path.to_string_lossy());
 
-        // Process all individual blocks (no merging)
         for (block_idx, block) in code_blocks.iter().enumerate() {
-            // Get the line start and end based on AST
-            let start_line = block.start_row + 1; // Convert to 1-based line numbers
+            let start_line = block.start_row + 1;
             let end_line = block.end_row + 1;
 
-            // Check if this is a struct_type inside a function in Go code
             let (final_start_line, final_end_line, is_nested_struct) = if extension == "go"
                 && block.node_type == "struct_type"
                 && block
@@ -433,16 +474,9 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                     .as_ref()
                     .is_some_and(|p| p == "function_declaration" || p == "method_declaration")
             {
-                // Use the parent function's boundaries instead of just the struct
-                if let Some(parent_start) = block.parent_start_row {
-                    if let Some(parent_end) = block.parent_end_row {
-                        if debug_mode {
-                            println!(
-                                    "DEBUG: Expanding nested struct at {}-{} to parent function at {}-{}",
-                                    start_line, end_line, parent_start + 1, parent_end + 1
-                                );
-                        }
-                        (parent_start + 1, parent_end + 1, true)
+                if let Some(ps) = block.parent_start_row {
+                    if let Some(pe) = block.parent_end_row {
+                        (ps + 1, pe + 1, true)
                     } else {
                         (start_line, end_line, false)
                     }
@@ -453,146 +487,96 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 (start_line, end_line, false)
             };
 
-            // Extract the full code for this block
             let full_code = if final_start_line > 0 && final_end_line <= lines.len() {
                 lines[final_start_line - 1..final_end_line].join("\n")
             } else {
                 "".to_string()
             };
 
-            // Calculate block term matches - ensure we use the same stemming as query processing
-            let block_terms = preprocess_text(&full_code, false);
-
-            // Use preprocessed query terms if available, otherwise generate them
-            let query_terms: Vec<String> = if let Some(preprocessed) = params.preprocessed_queries {
-                preprocessed
-                    .iter()
-                    .flat_map(|terms| terms.iter().cloned())
-                    .collect()
+            let block_terms = ranking::preprocess_text(&full_code, false);
+            let query_terms: Vec<String> = if let Some(prep) = params.preprocessed_queries {
+                prep.iter().flat_map(|v| v.iter().cloned()).collect()
             } else {
                 params
                     .queries_terms
                     .iter()
-                    .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
+                    .flat_map(|pairs| pairs.iter().map(|(_, s)| s.clone()))
                     .collect()
             };
-
             let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
 
-            // Debug logging for stemming comparison
-            if debug_mode {
-                println!("DEBUG: Block terms after stemming: {:?}", block_terms);
-                println!(
-                    "DEBUG: Query terms after stemming: {:?}",
-                    unique_query_terms
-                );
+            let direct_matches: HashSet<&String> = block_terms
+                .iter()
+                .filter(|t| unique_query_terms.contains(*t))
+                .collect();
+            let mut compound_matches = HashSet::new();
+            for qterm in &unique_query_terms {
+                if block_terms.iter().any(|bt| bt == qterm) {
+                    continue;
+                }
+                let parts =
+                    tokenization::split_compound_word(qterm, tokenization::load_vocabulary());
+                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                    compound_matches.insert(qterm);
+                }
             }
+            let block_unique_terms = direct_matches.len() + compound_matches.len();
 
-            // Calculate unique terms matched in the block
-            let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
-                0
-            } else {
-                // First, check for direct matches
-                let direct_matches: HashSet<&String> = block_terms
-                    .iter()
-                    .filter(|t| unique_query_terms.contains(*t))
-                    .collect();
-
-                // Then, check for compound word matches
-                let mut compound_matches = HashSet::new();
-                for query_term in &unique_query_terms {
-                    // Skip terms that were already directly matched
-                    if block_terms.iter().any(|t| t == query_term) {
+            let block_total_matches = {
+                let direct_count = direct_matches.len();
+                let mut comp_count = 0;
+                for qterm in &unique_query_terms {
+                    if block_terms.iter().any(|bt| bt == qterm) {
                         continue;
                     }
-
-                    // Check if this query term can be formed by combining adjacent terms in block_terms
-                    // For simplicity, we'll just check if all parts of the compound word exist in the block
-                    let parts = tokenization::split_compound_word(
-                        query_term,
-                        tokenization::load_vocabulary(),
-                    );
-
+                    let parts =
+                        tokenization::split_compound_word(qterm, tokenization::load_vocabulary());
                     if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                        compound_matches.insert(query_term);
+                        comp_count += 1;
                     }
                 }
-
-                direct_matches.len() + compound_matches.len()
+                direct_count + comp_count
             };
 
-            // Calculate total matches in the block
-            let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
-                0
-            } else {
-                // Count direct matches
-                let direct_match_count = block_terms
-                    .iter()
-                    .filter(|t| unique_query_terms.contains(*t))
-                    .count();
-
-                // Count compound matches
-                let mut compound_match_count = 0;
-                for query_term in &unique_query_terms {
-                    // Skip terms that were already directly matched
-                    if block_terms.iter().any(|t| t == query_term) {
-                        continue;
-                    }
-
-                    // Check if this query term can be formed by combining adjacent terms in block_terms
-                    let parts = tokenization::split_compound_word(
-                        query_term,
-                        tokenization::load_vocabulary(),
-                    );
-
-                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                        compound_match_count += 1;
-                    }
-                }
-
-                direct_match_count + compound_match_count
-            };
-
-            if debug_mode {
-                println!(
-                    "DEBUG: Block at {}-{} has {} unique term matches and {} total matches",
-                    final_start_line, final_end_line, block_unique_terms, block_total_matches
-                );
-            }
-
-            // Mark all lines in this block as covered
             for line_num in final_start_line..=final_end_line {
                 covered_lines.insert(line_num);
             }
 
-            // Apply term filtering if term_matches is provided
-            let should_include = if let Some(term_matches_map) = params.term_matches {
-                // Use the filter_code_block function with the filename_matched_queries parameter
-                filter_code_block(
-                    (final_start_line, final_end_line),
-                    term_matches_map,
-                    params.any_term,
-                    params.num_queries,
-                    &params.filename_matched_queries,
-                    debug_mode,
-                )
+            let should_include = if let Some(tm) = params.term_matches {
+                if let Some(plan) = params.query_plan {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Using filter_code_block_with_ast for lines {}-{}",
+                            final_start_line, final_end_line
+                        );
+                    }
+                    filter_code_block_with_ast(
+                        (final_start_line, final_end_line),
+                        tm,
+                        plan,
+                        debug_mode,
+                    )
+                } else {
+                    // Fall back to original filtering when no query plan is present
+                    filter_code_block(
+                        (final_start_line, final_end_line),
+                        tm,
+                        params.num_queries,
+                        &params.filename_matched_queries,
+                        debug_mode,
+                    )
+                }
             } else {
-                // If no term_matches provided, include all blocks
                 true
             };
 
             if debug_mode {
                 println!(
-                    "DEBUG: Filtered code block at {}-{}: included={}",
-                    final_start_line, final_end_line, should_include
-                );
-                println!(
-                    "DEBUG: Block at {}-{} filtered: included={}",
+                    "DEBUG: Block lines {}-{} => should_include={}",
                     final_start_line, final_end_line, should_include
                 );
             }
 
-            // Add to results only if it passes the filter
             if should_include {
                 results.push(SearchResult {
                     file: params.path.to_string_lossy().to_string(),
@@ -624,10 +608,10 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                     parent_file_id: Some(file_id.clone()),
                     block_id: Some(block_idx),
                 });
+            } else if debug_mode {
+                println!("DEBUG: AST parsing failed, using line-based context only");
             }
         }
-    } else if debug_mode {
-        println!("DEBUG: AST parsing failed, using line-based context only");
     }
 
     // Check for any line numbers that weren't covered
@@ -644,7 +628,7 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
             }
 
             // Skip fallback context for test files if allow_tests is false
-            if !params.allow_tests && crate::language::is_test_file(params.path) {
+            if !params.allow_tests && is_test_file(params.path) {
                 if debug_mode {
                     println!(
                         "DEBUG: Skipping fallback context for test file: {:?}",
@@ -674,7 +658,7 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
             }
 
             // Fallback: Get context around the line (20 lines before and after)
-            let context_start = line_num.saturating_sub(10); // Expanded from 10
+            let context_start = line_num.saturating_sub(10);
             let context_end = std::cmp::min(line_num + 10, lines.len());
 
             // Skip if we don't have enough context
@@ -699,134 +683,36 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 );
             }
 
-            // Calculate block term matches - ensure we use the same stemming as query processing
-            let block_terms = preprocess_text(&context_code, false);
-
-            // Use preprocessed query terms if available, otherwise generate them
-            let query_terms: Vec<String> = if let Some(preprocessed) = params.preprocessed_queries {
-                preprocessed
-                    .iter()
-                    .flat_map(|terms| terms.iter().cloned())
-                    .collect()
-            } else {
-                params
-                    .queries_terms
-                    .iter()
-                    .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
-                    .collect()
-            };
-
-            let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
-
-            // Debug logging for stemming comparison
-            if debug_mode {
-                println!(
-                    "DEBUG: Fallback context block terms after stemming: {:?}",
-                    block_terms
-                );
-                println!(
-                    "DEBUG: Query terms after stemming: {:?}",
-                    unique_query_terms
-                );
-            }
-
-            // Calculate unique terms matched in the block
-            let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
-                0
-            } else {
-                // First, check for direct matches
-                let direct_matches: HashSet<&String> = block_terms
-                    .iter()
-                    .filter(|t| unique_query_terms.contains(*t))
-                    .collect();
-
-                // Then, check for compound word matches
-                let mut compound_matches = HashSet::new();
-                for query_term in &unique_query_terms {
-                    // Skip terms that were already directly matched
-                    if block_terms.iter().any(|t| t == query_term) {
-                        continue;
-                    }
-
-                    // Check if this query term can be formed by combining adjacent terms in block_terms
-                    // For simplicity, we'll just check if all parts of the compound word exist in the block
-                    let parts = tokenization::split_compound_word(
-                        query_term,
-                        tokenization::load_vocabulary(),
-                    );
-
-                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                        compound_matches.insert(query_term);
-                    }
-                }
-
-                direct_matches.len() + compound_matches.len()
-            };
-
-            // Calculate total matches in the block
-            let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
-                0
-            } else {
-                // Count direct matches
-                let direct_match_count = block_terms
-                    .iter()
-                    .filter(|t| unique_query_terms.contains(*t))
-                    .count();
-
-                // Count compound matches
-                let mut compound_match_count = 0;
-                for query_term in &unique_query_terms {
-                    // Skip terms that were already directly matched
-                    if block_terms.iter().any(|t| t == query_term) {
-                        continue;
-                    }
-
-                    // Check if this query term can be formed by combining adjacent terms in block_terms
-                    let parts = tokenization::split_compound_word(
-                        query_term,
-                        tokenization::load_vocabulary(),
-                    );
-
-                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                        compound_match_count += 1;
-                    }
-                }
-
-                direct_match_count + compound_match_count
-            };
-
-            if debug_mode {
-                println!(
-                    "DEBUG: Context block at {}-{} has {} unique term matches and {} total matches",
-                    context_start, context_end, block_unique_terms, block_total_matches
-                );
-                println!(
-                    "DEBUG: Fallback context at lines {}-{}",
-                    context_start, context_end
-                );
-            }
-
             // Apply term filtering if term_matches is provided
             let should_include = if let Some(term_matches_map) = params.term_matches {
-                // Use the filter_code_block function with the filename_matched_queries parameter
-                filter_code_block(
-                    (context_start, context_end),
-                    term_matches_map,
-                    params.any_term,
-                    params.num_queries,
-                    &params.filename_matched_queries,
-                    debug_mode,
-                )
+                if let Some(plan) = params.query_plan {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Using filter_code_block_with_ast for fallback context {}-{}",
+                            context_start, context_end
+                        );
+                    }
+                    filter_code_block_with_ast(
+                        (context_start, context_end),
+                        term_matches_map,
+                        plan,
+                        debug_mode,
+                    )
+                } else {
+                    filter_code_block(
+                        (context_start, context_end),
+                        term_matches_map,
+                        params.num_queries,
+                        &params.filename_matched_queries,
+                        debug_mode,
+                    )
+                }
             } else {
                 // If no term_matches provided, include all blocks
                 true
             };
 
             if debug_mode {
-                println!(
-                    "DEBUG: Filtered context block at {}-{}: included={}",
-                    context_start, context_end, should_include
-                );
                 println!(
                     "DEBUG: Block at {}-{} filtered: included={}",
                     context_start, context_end, should_include
@@ -839,7 +725,7 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                     file: params.path.to_string_lossy().to_string(),
                     lines: (context_start, context_end),
                     node_type,
-                    code: context_code.clone(), // Clone context_code here to avoid the move
+                    code: context_code,
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -853,8 +739,8 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                     file_unique_terms: None,
                     file_total_matches: None,
                     file_match_rank: None,
-                    block_unique_terms: Some(block_unique_terms),
-                    block_total_matches: Some(block_total_matches),
+                    block_unique_terms: None,
+                    block_total_matches: None,
                     parent_file_id: None,
                     block_id: None,
                 });
@@ -866,170 +752,6 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 covered_lines.insert(line);
             }
         }
-    }
-
-    // Define a function to determine if we should return the full file
-    fn should_return_full_file(
-        coverage_percentage: f64,
-        total_lines: usize,
-        no_merge: bool,
-    ) -> bool {
-        !no_merge && total_lines >= 5 && coverage_percentage >= 80.0
-    }
-
-    // Calculate coverage percentage with safeguards for division by zero
-    let total_lines = lines.len();
-    let covered_line_count = covered_lines.len();
-    let coverage_percentage = if total_lines > 0 {
-        (covered_line_count as f64 / total_lines as f64) * 100.0
-    } else {
-        0.0
-    };
-
-    if debug_mode {
-        println!(
-            "DEBUG: File coverage: {}/{} lines ({:.2}%)",
-            covered_line_count, total_lines, coverage_percentage
-        );
-    }
-
-    // Check if we should return the full file based on coverage and minimum line count
-    if should_return_full_file(coverage_percentage, total_lines, params.no_merge) {
-        if debug_mode {
-            println!("DEBUG: Coverage exceeds 80%, returning entire file");
-        }
-
-        // Clear the previous results and return the entire file
-        results.clear();
-
-        // Calculate block term matches for the entire file - ensure we use the same stemming as query processing
-        let block_terms = preprocess_text(&content, false);
-
-        // Use preprocessed query terms if available, otherwise generate them
-        let query_terms: Vec<String> = if let Some(preprocessed) = params.preprocessed_queries {
-            preprocessed
-                .iter()
-                .flat_map(|terms| terms.iter().cloned())
-                .collect()
-        } else {
-            params
-                .queries_terms
-                .iter()
-                .flat_map(|terms| terms.iter().map(|(_, stemmed)| stemmed.clone()))
-                .collect()
-        };
-
-        let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
-
-        // Debug logging for stemming comparison
-        if debug_mode {
-            println!("DEBUG: Full file terms after stemming: {:?}", block_terms);
-            println!(
-                "DEBUG: Query terms after stemming: {:?}",
-                unique_query_terms
-            );
-        }
-
-        // Calculate unique terms matched in the file
-        let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
-            0
-        } else {
-            // First, check for direct matches
-            let direct_matches: HashSet<&String> = block_terms
-                .iter()
-                .filter(|t| unique_query_terms.contains(*t))
-                .collect();
-
-            // Then, check for compound word matches
-            let mut compound_matches = HashSet::new();
-            for query_term in &unique_query_terms {
-                // Skip terms that were already directly matched
-                if block_terms.iter().any(|t| t == query_term) {
-                    continue;
-                }
-
-                // Check if this query term can be formed by combining adjacent terms in block_terms
-                // For simplicity, we'll just check if all parts of the compound word exist in the block
-                let parts =
-                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
-
-                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                    compound_matches.insert(query_term);
-                }
-            }
-
-            direct_matches.len() + compound_matches.len()
-        };
-
-        // Calculate total matches in the file
-        let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
-            0
-        } else {
-            // Count direct matches
-            let direct_match_count = block_terms
-                .iter()
-                .filter(|t| unique_query_terms.contains(*t))
-                .count();
-
-            // Count compound matches
-            let mut compound_match_count = 0;
-            for query_term in &unique_query_terms {
-                // Skip terms that were already directly matched
-                if block_terms.iter().any(|t| t == query_term) {
-                    continue;
-                }
-
-                // Check if this query term can be formed by combining adjacent terms in block_terms
-                let parts =
-                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
-
-                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                    compound_match_count += 1;
-                }
-            }
-
-            direct_match_count + compound_match_count
-        };
-
-        if debug_mode {
-            println!(
-                "DEBUG: Full file has {} unique term matches and {} total matches",
-                block_unique_terms, block_total_matches
-            );
-        }
-
-        results.push(SearchResult {
-            file: params.path.to_string_lossy().to_string(),
-            lines: (1, total_lines),
-            node_type: "file".to_string(), // Mark as full file result
-            code: content.clone(),         // Clone content here to avoid the move
-            matched_by_filename: None,
-            rank: None,
-            score: None,
-            tfidf_score: None,
-            bm25_score: None,
-            tfidf_rank: None,
-            bm25_rank: None,
-            new_score: None,
-            hybrid2_rank: None,
-            combined_score_rank: None,
-            file_unique_terms: None,
-            file_total_matches: None,
-            file_match_rank: None,
-            block_unique_terms: Some(block_unique_terms),
-            block_total_matches: Some(block_total_matches),
-            parent_file_id: None,
-            block_id: None,
-        });
-    }
-
-    // Log debug information outside the conditional block
-    if debug_mode {
-        println!(
-            "DEBUG: Generated {} search results for file {:?}",
-            results.len(),
-            params.path
-        );
     }
 
     Ok(results)

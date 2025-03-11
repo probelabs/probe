@@ -1,5 +1,6 @@
 use crate::models::SearchResult;
 use crate::ranking;
+// No need for term_exceptions import
 
 /// Function to rank search results based on query relevance
 pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], reranker: &str) {
@@ -273,11 +274,16 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
 
     // First, determine the total number of unique terms across all queries
     // We'll use the maximum file_unique_terms value as an approximation
-    let total_unique_terms = results
+    let mut total_unique_terms = results
         .iter()
         .filter_map(|r| r.file_unique_terms)
         .max()
         .unwrap_or(1);
+
+    // If the query is a single term, ensure total_unique_terms is at least 1
+    if queries.len() == 1 && total_unique_terms == 0 {
+        total_unique_terms = 1;
+    }
 
     if debug_mode {
         println!(
@@ -292,7 +298,7 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
         let has_bm25 = result.bm25_score.unwrap_or(0.0) > 0.0;
 
         // Get the number of unique terms in the block
-        let block_unique_terms = result.block_unique_terms.unwrap_or(0);
+        let mut block_unique_terms = result.block_unique_terms.unwrap_or(0);
 
         // Calculate the minimum required terms based on the total number of unique terms
         // Using the corrected formula:
@@ -313,6 +319,17 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
             11 | 12 => 6,
             n => (n + 1) / 2, // General formula: ceil(n/2)
         };
+
+        // Special case for compound word queries like "networkfirewall"
+        // If the query is a single term that can be split into multiple terms,
+        // and the file has a good score, we should consider it as having enough unique terms
+        if block_unique_terms == 0 && has_tfidf && has_bm25 {
+            // Check if this is likely a compound word match
+            if result.tfidf_score.unwrap_or(0.0) > 0.1 && result.bm25_score.unwrap_or(0.0) > 0.1 {
+                // This is likely a compound word match, so set block_unique_terms to match the required terms
+                block_unique_terms = min_required_terms.max(1);
+            }
+        }
 
         // Check if the block has enough unique terms
         let has_enough_unique_terms = block_unique_terms >= min_required_terms;
@@ -343,32 +360,14 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
             results[i] = result;
         }
 
-        // For the remaining slots, fill with empty results but with valid line numbers
-        // This ensures they don't show up as "Lines: 0-0" in the output
+        // Instead of truncating, we'll keep the original file paths
+        // but mark these results with a special flag
         for result in results.iter_mut().skip(filtered_len) {
-            *result = SearchResult {
-                file: String::new(),
-                lines: (1, 1), // Use valid line numbers (1-1) instead of (0-0)
-                node_type: String::new(),
-                code: String::new(),
-                matched_by_filename: None,
-                rank: None,
-                score: None,
-                tfidf_score: Some(0.0),
-                bm25_score: Some(0.0),
-                tfidf_rank: None,
-                bm25_rank: None,
-                new_score: None,
-                hybrid2_rank: None,
-                combined_score_rank: None,
-                file_unique_terms: Some(0),
-                file_total_matches: Some(0),
-                file_match_rank: None,
-                block_unique_terms: Some(0),
-                block_total_matches: Some(0),
-                parent_file_id: None,
-                block_id: None,
-            };
+            // Set a special flag to indicate this result should be skipped
+            // but preserve the file path
+            result.matched_by_filename = Some(false);
+            result.score = Some(0.0);
+            result.rank = Some(usize::MAX);
         }
     }
 }

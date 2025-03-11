@@ -107,3 +107,84 @@ fn test_multiple_word_query() {
             || term_strings.contains(&"whitelist".to_string())
     );
 }
+
+#[test]
+fn test_underscore_handling() {
+    use probe::search::elastic_query;
+
+    // Test tokenization with underscores
+    let query = "keyword_underscore";
+    let terms = preprocess_query(query, false);
+
+    println!("Preprocessed terms for '{}': {:?}", query, terms);
+
+    // Check if the term is preserved with the underscore
+    let term_strings: Vec<String> = terms.iter().map(|(original, _)| original.clone()).collect();
+
+    // We expect to see "keyword_underscore" as a single term
+    assert!(
+        term_strings.contains(&"keyword_underscore".to_string()),
+        "Expected 'keyword_underscore' to be preserved as a single term in {:?}",
+        term_strings
+    );
+
+    // Now we need to check if the term is properly tokenized in the elastic query parser
+    // So we'll use a different assertion
+
+    // Check if the term is properly tokenized in the elastic query parser
+    let ast = elastic_query::parse_query("keyword_underscore", true).unwrap();
+    if let elastic_query::Expr::Term { keywords, .. } = ast {
+        // The term should be tokenized into ["key", "word", "under", "score"]
+        // Note: "under" might be filtered out as a stop word
+        assert!(
+            keywords.contains(&"key".to_string()),
+            "Expected 'key' in keywords: {:?}",
+            keywords
+        );
+        assert!(
+            keywords.contains(&"word".to_string()),
+            "Expected 'word' in keywords: {:?}",
+            keywords
+        );
+        assert!(
+            keywords.contains(&"score".to_string()),
+            "Expected 'score' in keywords: {:?}",
+            keywords
+        );
+    } else {
+        panic!("Expected Term expression");
+    }
+}
+
+#[test]
+fn test_underscore_in_elastic_query() {
+    use probe::search::elastic_query;
+
+    // Test that the elastic query parser preserves underscores
+    let query = "keyword_underscore";
+    // Use parse_query with any_term=true instead of parse_query_test
+    let ast = elastic_query::parse_query(query, true).unwrap();
+
+    // Check that the AST contains the tokenized terms from "keyword_underscore"
+    if let elastic_query::Expr::Term { keywords, .. } = ast {
+        // The term should be tokenized into ["key", "word", "under", "score"]
+        // Note: "under" might be filtered out as a stop word
+        assert!(
+            keywords.contains(&"key".to_string()),
+            "Expected 'key' in keywords: {:?}",
+            keywords
+        );
+        assert!(
+            keywords.contains(&"word".to_string()),
+            "Expected 'word' in keywords: {:?}",
+            keywords
+        );
+        assert!(
+            keywords.contains(&"score".to_string()),
+            "Expected 'score' in keywords: {:?}",
+            keywords
+        );
+    } else {
+        panic!("Expected Term expression");
+    }
+}

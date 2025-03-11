@@ -4,7 +4,7 @@ use crate::models::SearchResult;
 use crate::search::search_tokens::count_tokens;
 
 /// Function to format and print search results according to the specified format
-pub fn format_and_print_search_results(results: &[SearchResult]) {
+pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Count valid results (with non-empty file names)
@@ -18,17 +18,30 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
             .unwrap_or("");
         let is_full_file = result.node_type == "file";
 
-        if is_full_file {
-            println!("File: {}", result.file);
-            println!("```{}", extension);
-            println!("{}", result.code);
-            println!("```");
+        if dry_run {
+            // In dry-run mode, only print file names and line numbers
+            if is_full_file {
+                println!("File: {}", result.file);
+            } else {
+                println!(
+                    "File: {}, Lines: {}-{}",
+                    result.file, result.lines.0, result.lines.1
+                );
+            }
         } else {
-            println!("File: {}", result.file);
-            println!("Lines: {}-{}", result.lines.0, result.lines.1);
-            println!("```{}", extension);
-            println!("{}", result.code);
-            println!("```");
+            // Normal mode with full content
+            if is_full_file {
+                println!("File: {}", result.file);
+                println!("```{}", extension);
+                println!("{}", result.code);
+                println!("```");
+            } else {
+                println!("File: {}", result.file);
+                println!("Lines: {}-{}", result.lines.0, result.lines.1);
+                println!("```{}", extension);
+                println!("{}", result.code);
+                println!("```");
+            }
         }
 
         if debug_mode {
@@ -108,7 +121,9 @@ pub fn format_and_print_search_results(results: &[SearchResult]) {
             }
         }
 
-        println!("\n");
+        if !dry_run {
+            println!("\n");
+        }
     }
 
     println!("Found {} search results", valid_results.len());

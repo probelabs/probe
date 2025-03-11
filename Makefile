@@ -122,7 +122,7 @@ fix-all:
 	@echo "Fixing all Rust issues..."
 	$(CLIPPY) --all-targets --all-features --fix --allow-staged --allow-dirty -- -D warnings
 	$(CARGO) fmt --all
-	$(CARGO) check
+	$(CARGO) check --tests
 	@echo "All fixes applied. Run 'make test' to ensure everything still works."
 
 # Documentation

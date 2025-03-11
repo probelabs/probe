@@ -68,77 +68,91 @@ pub fn merge_ranked_blocks(
         // Sort blocks by start line for merging
         blocks.sort_by_key(|block| block.lines.0);
 
-        // Process blocks one by one to merge adjacent ones
-        let mut processed_blocks = Vec::new();
-        let mut i = 0;
+        // Sort blocks by start line
+        blocks.sort_by_key(|block| block.lines.0);
 
-        while i < blocks.len() {
+        // Keep track of blocks we've already processed
+        let mut processed_indices = std::collections::HashSet::new();
+        let mut merged_blocks = Vec::new();
+
+        // Process each block
+        for i in 0..blocks.len() {
+            if processed_indices.contains(&i) {
+                continue;
+            }
+
+            // Start with the current block
             let mut current_block = blocks[i].clone();
-            let mut j = i + 1;
+            processed_indices.insert(i);
 
-            // Check for any blocks that overlap with the current one
-            while j < blocks.len() {
-                // Check for blocks that overlap or are adjacent within the threshold
-                if should_merge_blocks(&current_block, &blocks[j], threshold) {
-                    let next_block = &blocks[j];
+            // Keep track of which blocks we're merging in this group
+            let mut merged_indices = vec![i];
+            let mut changed = true;
 
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Merging blocks - current: {}-{}, next: {}-{}",
-                            current_block.lines.0,
-                            current_block.lines.1,
-                            next_block.lines.0,
-                            next_block.lines.1
-                        );
+            // Keep trying to merge blocks until no more merges are possible
+            while changed {
+                changed = false;
+
+                // Try to merge with any remaining unprocessed block
+                for (j, next_block) in blocks.iter().enumerate() {
+                    if processed_indices.contains(&j) {
+                        continue;
                     }
 
-                    // Merge the blocks
-                    let merged_start = current_block.lines.0.min(next_block.lines.0);
-                    let merged_end = current_block.lines.1.max(next_block.lines.1);
+                    if should_merge_blocks(&current_block, next_block, threshold) {
+                        if debug_mode {
+                            println!(
+                                "DEBUG: Merging blocks - current: {}-{}, next: {}-{}",
+                                current_block.lines.0,
+                                current_block.lines.1,
+                                next_block.lines.0,
+                                next_block.lines.1
+                            );
+                        }
 
-                    // Get content for the merged block
-                    let merged_code = merge_block_content(&current_block, next_block);
+                        // Merge the blocks
+                        let merged_start = current_block.lines.0.min(next_block.lines.0);
+                        let merged_end = current_block.lines.1.max(next_block.lines.1);
+                        let merged_code = merge_block_content(&current_block, next_block);
 
-                    // Combine node types
-                    let merged_node_type = if current_block.node_type == next_block.node_type {
-                        current_block.node_type.clone()
-                    } else {
-                        format!("{}/{}", current_block.node_type, next_block.node_type)
-                    };
+                        // Use node type from the highest-ranked block
+                        let merged_node_type = if current_block.rank.unwrap_or(usize::MAX)
+                            <= next_block.rank.unwrap_or(usize::MAX)
+                        {
+                            current_block.node_type.clone()
+                        } else {
+                            next_block.node_type.clone()
+                        };
 
-                    // Combine scores
-                    let merged_score = merge_scores(&current_block, next_block);
+                        // Combine scores and term statistics
+                        let merged_score = merge_scores(&current_block, next_block);
+                        let merged_term_stats = merge_term_statistics(&current_block, next_block);
 
-                    // Combine term statistics
-                    let merged_term_stats = merge_term_statistics(&current_block, next_block);
+                        // Update the current block
+                        current_block.lines = (merged_start, merged_end);
+                        current_block.code = merged_code;
+                        current_block.node_type = merged_node_type;
+                        current_block.score = merged_score.0;
+                        current_block.tfidf_score = merged_score.1;
+                        current_block.bm25_score = merged_score.2;
+                        current_block.new_score = merged_score.3;
+                        current_block.block_unique_terms = merged_term_stats.0;
+                        current_block.block_total_matches = merged_term_stats.1;
 
-                    // Update the current block with merged information
-                    current_block.lines = (merged_start, merged_end);
-                    current_block.code = merged_code;
-                    current_block.node_type = merged_node_type;
-
-                    // Update scores
-                    current_block.score = merged_score.0;
-                    current_block.tfidf_score = merged_score.1;
-                    current_block.bm25_score = merged_score.2;
-                    current_block.new_score = merged_score.3;
-
-                    // Update term statistics
-                    current_block.block_unique_terms = merged_term_stats.0;
-                    current_block.block_total_matches = merged_term_stats.1;
-
-                    j += 1;
-                } else {
-                    break;
+                        // Mark this block as processed
+                        processed_indices.insert(j);
+                        merged_indices.push(j);
+                        changed = true;
+                    }
                 }
             }
 
-            processed_blocks.push(current_block);
-            i = j;
+            // Add the merged block to results
+            merged_blocks.push(current_block);
         }
 
-        // Add all processed blocks to the final results
-        merged_results.extend(processed_blocks);
+        // Add the merged blocks to the final results
+        merged_results.extend(merged_blocks);
     }
 
     if debug_mode {
@@ -186,35 +200,37 @@ pub fn should_merge_blocks(block1: &SearchResult, block2: &SearchResult, thresho
     let (start1, end1) = block1.lines;
     let (start2, end2) = block2.lines;
 
-    // Use a more aggressive threshold for function-like blocks
-    let effective_threshold =
-        if is_function_like(&block1.node_type) && is_function_like(&block2.node_type) {
-            // Double the threshold for functions to be more aggressive about merging them
-            threshold * 2
-        } else {
-            threshold
-        };
+    // Blocks should be merged if:
+    // 1. They overlap
+    // 2. Or they are within the threshold distance
+    // 3. Or one is a comment and is adjacent to a function
 
-    // Check for line number overlap or adjacency using the provided threshold
-    // The blocks overlap if:
-    // 1. They are within the effective threshold distance
-    // 2. One block contains a comment and is adjacent to a function
-    let distance = if start2 > end1 {
-        start2 - end1
+    // Check for overlap first
+    let overlapping = start1 <= end2 && start2 <= end1;
+
+    // If not overlapping, check the gap size
+    let distance = if overlapping {
+        0
+    } else if start2 > end1 {
+        start2 - end1 - 1 // Subtract 1 because we want the gap size
     } else {
-        start1.saturating_sub(end2)
+        start1 - end2 - 1
     };
 
-    let should_merge = distance <= effective_threshold
-        || (block1.node_type.contains("comment") && is_function_like(&block2.node_type))
+    let comment_with_function = (block1.node_type.contains("comment")
+        && is_function_like(&block2.node_type))
         || (block2.node_type.contains("comment") && is_function_like(&block1.node_type));
+
+    let should_merge = overlapping
+        || distance <= threshold
+        || (comment_with_function && distance <= threshold * 2);
 
     if debug_mode {
         println!("DEBUG: Considering merging blocks - Block1: type='{}' lines {}-{}, Block2: type='{}' lines {}-{}, threshold: {}",
-                 block1.node_type, start1, end1, block2.node_type, start2, end2, effective_threshold);
+                 block1.node_type, start1, end1, block2.node_type, start2, end2, threshold);
         println!(
-            "DEBUG: Should merge: {} (distance: {}, effective_threshold: {})",
-            should_merge, distance, effective_threshold
+            "DEBUG: Should merge: {} (distance: {}, threshold: {})",
+            should_merge, distance, threshold
         );
     }
 

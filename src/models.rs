@@ -12,6 +12,7 @@ pub struct SearchLimits {
     pub max_results: Option<usize>,
     pub max_bytes: Option<usize>,
     pub max_tokens: Option<usize>,
+
     #[allow(dead_code)]
     pub total_bytes: usize,
     #[allow(dead_code)]
@@ -26,7 +27,6 @@ pub struct SearchResult {
     pub node_type: String,
     pub code: String,
     // Indicates if this result was found by filename matching
-    #[allow(dead_code)]
     pub matched_by_filename: Option<bool>,
     // Ranking information
     pub rank: Option<usize>,

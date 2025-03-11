@@ -48,6 +48,19 @@ Search for "partial prompt injection" in the current directory but limit the tot
 probe search "prompt injection" ./ --max-tokens 10000
 ~~~
 
+**Extract Code Blocks**
+Extract a specific function or code block containing line 42 in main.rs:
+
+~~~bash
+probe extract src/main.rs:42
+~~~
+
+You can even paste failing test output and it will extract needed files and AST out of it, like:
+
+~~~bash
+go test | probe extract
+~~~
+
 **Interactive AI Chat**
 Use the built-in AI assistant to ask questions about your codebase:
 
@@ -90,6 +103,7 @@ Example queries:
 - **Powered by ripgrep**: Extremely fast scanning of large codebases.
 - **Tree-sitter Integration**: Parses and understands code structure accurately.
 - **Re-Rankers & NLP**: Uses tokenization, stemming, BM25, TF-IDF, or hybrid ranking methods for better search results.
+- **Code Extraction**: Extract specific code blocks or entire files with the `extract` command.
 - **Multi-Language**: Works with popular languages like Rust, Python, JavaScript, TypeScript, Java, Go, C/C++, Swift, C#, and more.
 - **Interactive AI Chat**: Built-in AI assistant that can answer questions about your codebase using Claude or GPT models.
 - **Flexible**: Run as a CLI tool, an MCP server, or an interactive AI chat.
@@ -186,24 +200,27 @@ sudo rm /usr/local/bin/probe
 ---
 ## Usage
 
-Probe can be used in three main modes:
+Probe can be used in four main modes:
 
-1. **CLI Mode**: Direct code search from the command line
+1. **CLI Mode**: Direct code search and extraction from the command line
 2. **MCP Server Mode**: Run as a server exposing search functionality via MCP
 3. **AI Chat Mode**: Interactive AI assistant for code exploration
+4. **Web Interface**: Browser-based UI for code exploration
 
 ### CLI Mode
+
+#### Search Command
 
 ~~~bash
 probe search <SEARCH_PATTERN> [OPTIONS]
 ~~~
 
-#### Key Options
+##### Key Options
 
 - `<SEARCH_PATTERN>`: Pattern to search for (required)
 - `--files-only`: Skip AST parsing; only list files with matches
 - `--ignore`: Custom ignore patterns (in addition to `.gitignore`)
-- `--include-filenames, -n`: Include files whose names match query words
+- `--exclude-filenames, -n`: Exclude files whose names match query words (filename matching is enabled by default)
 - `--reranker, -r`: Choose a re-ranking algorithm (`hybrid`, `hybrid2`, `bm25`, `tfidf`)
 - `--frequency, -s`: Frequency-based search (tokenization, stemming, stopword removal)
 - `--exact`: Exact matching (overrides frequency search)
@@ -211,11 +228,11 @@ probe search <SEARCH_PATTERN> [OPTIONS]
 - `--max-bytes`: Maximum total bytes of code to return
 - `--max-tokens`: Maximum total tokens of code to return (useful for AI)
 - `--allow-tests`: Include test files and test code blocks
-- `--any-term`: Match files containing **any** query terms (default is **all** terms)
+- `--any-term`: Match files containing **any** query terms (default behavior)
 - `--no-merge`: Disable merging of adjacent code blocks after ranking (merging enabled by default)
 - `--merge-threshold`: Max lines between code blocks to consider them adjacent for merging (default: 5)
 
-#### Examples
+##### Examples
 
 ~~~bash
 # 1) Search for "setTools" in the current directory with frequency-based search
@@ -230,6 +247,46 @@ probe search "keyword" --max-tokens 10000
 # 4) Search for "function" and disable merging of adjacent code blocks
 probe search "function" --no-merge
 ~~~
+
+#### Extract Command
+
+The extract command allows you to extract code blocks from files. When a line number is specified, it uses tree-sitter to find the closest suitable parent node (function, struct, class, etc.) for that line.
+
+~~~bash
+probe extract <FILES> [OPTIONS]
+~~~
+
+##### Key Options
+
+- `<FILES>`: Files to extract from (can include line numbers with colon, e.g., `file.rs:10`)
+- `--allow-tests`: Include test files and test code blocks in results
+- `-c, --context <LINES>`: Number of context lines to include before and after the extracted block (default: 0)
+- `-f, --format <FORMAT>`: Output format (`markdown`, `plain`, `json`) (default: `markdown`)
+
+##### Examples
+
+~~~bash
+# 1) Extract a function containing line 42 from main.rs
+probe extract src/main.rs:42
+
+# 2) Extract multiple files or blocks
+probe extract src/main.rs:42 src/lib.rs:15 src/cli.rs
+
+# 3) Extract with JSON output format
+probe extract src/main.rs:42 --format json
+
+# 4) Extract with 5 lines of context around the specified line
+probe extract src/main.rs:42 --context 5
+
+# 5) Extract from stdin (useful with error messages or compiler output)
+cat error_log.txt | probe extract
+~~~
+
+The extract command can also read file paths from stdin, making it useful for processing compiler errors or log files:
+
+~~~bash
+# Extract code blocks from files mentioned in error logs
+grep -r "error" ./logs/ | probe extract
 ~~~
 
 ### MCP Server

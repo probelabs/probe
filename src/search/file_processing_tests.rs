@@ -46,7 +46,7 @@ mod tests {
             line_numbers: &line_numbers,
             allow_tests: false,
             term_matches: None,
-            any_term: false,
+            
             num_queries: 0,
             filename_matched_queries: HashSet::new(),
             queries_terms: &[],
@@ -89,7 +89,7 @@ function test2() {
             line_numbers: &line_numbers,
             allow_tests: false,
             term_matches: None,
-            any_term: false,
+            
             num_queries: 0,
             filename_matched_queries: HashSet::new(),
             queries_terms: &[],
@@ -124,7 +124,7 @@ function test2() {
             line_numbers: &line_numbers,
             allow_tests: false,
             term_matches: None,
-            any_term: false,
+            
             num_queries: 0,
             filename_matched_queries: HashSet::new(),
             queries_terms: &[],
@@ -188,7 +188,7 @@ function test3() {
             line_numbers: &line_numbers,
             allow_tests: true, // Allow tests
             term_matches: None, // No term matches
-            any_term: false, // All terms mode
+             // All terms mode
             num_queries: 0, // No queries
             filename_matched_queries: HashSet::new(), // No filename matches
             queries_terms: &[], // No query terms
@@ -282,7 +282,7 @@ function processResults(results) {
             line_numbers: &line_numbers,
             allow_tests: true,
             term_matches: Some(&term_matches),
-            any_term: true,
+            
             num_queries: 2, // "processing" and "data"
             filename_matched_queries: HashSet::new(),
             queries_terms: &[term_pairs.clone()],
@@ -382,7 +382,7 @@ function allTermsFunction() {
             line_numbers: &line_numbers,
             allow_tests: true,
             term_matches: Some(&term_matches),
-            any_term: false, // all terms mode
+             // all terms mode
             num_queries: 3, // "search", "index", "query"
             filename_matched_queries: HashSet::new(),
             queries_terms: &[term_pairs.clone()],

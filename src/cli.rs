@@ -28,9 +28,9 @@ pub enum Commands {
         #[arg(short, long)]
         ignore: Vec<String>,
 
-        /// Include files whose names match query words
-        #[arg(short = 'n', long = "include-filenames")]
-        include_filenames: bool,
+        /// Exclude files whose names match query words (filename matching is enabled by default)
+        #[arg(short = 'n', long = "exclude-filenames")]
+        exclude_filenames: bool,
 
         /// Reranking method to use for search results
         #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "hybrid2", "bm25", "tfidf"])]
@@ -60,10 +60,6 @@ pub enum Commands {
         #[arg(long = "allow-tests")]
         allow_tests: bool,
 
-        /// Match files that contain any of the search terms (by default, files must contain all terms)
-        #[arg(long = "any-term")]
-        any_term: bool,
-
         /// Disable merging of adjacent code blocks after ranking (merging enabled by default)
         #[arg(long = "no-merge", default_value = "false")]
         no_merge: bool,
@@ -71,6 +67,33 @@ pub enum Commands {
         /// Maximum number of lines between code blocks to consider them adjacent for merging (default: 5)
         #[arg(long = "merge-threshold")]
         merge_threshold: Option<usize>,
+
+        /// Output only file names and line numbers without full content
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+
+    /// Extract code blocks from files
+    ///
+    /// This command extracts code blocks from files based on file paths and optional line numbers.
+    /// When a line number is specified (e.g., file.rs:10), the command uses tree-sitter to find
+    /// the closest suitable parent node (function, struct, class, etc.) for that line.
+    Extract {
+        /// Files to extract from (can include line numbers with colon, e.g., file.rs:10)
+        #[arg(value_name = "FILES")]
+        files: Vec<String>,
+
+        /// Allow test files and test code blocks in results
+        #[arg(long = "allow-tests")]
+        allow_tests: bool,
+
+        /// Number of context lines to include before and after the extracted block
+        #[arg(short = 'c', long = "context", default_value = "0")]
+        context_lines: usize,
+
+        /// Output format (default: markdown)
+        #[arg(short = 'f', long = "format", default_value = "markdown", value_parser = ["markdown", "plain", "json"])]
+        format: String,
     },
 
     /// Use AI chat to interact with codebase

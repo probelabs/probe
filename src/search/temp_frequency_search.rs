@@ -1,18 +1,28 @@
+use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet};
+use anyhow::Result;
+use crate::models::{LimitedSearchResults, SearchResult};
+use crate::search::query::{preprocess_query, create_term_patterns};
+use crate::search::file_search::{find_files_with_pattern, search_file_for_pattern, find_matching_filenames, get_filename_matched_queries};
+use crate::search::file_processing::{process_file_by_filename, process_file_with_results};
+use crate::search::result_ranking::rank_search_results;
+use crate::search::search_limiter::apply_limits;
+use crate::search::search_options::FrequencySearchOptions;
+
 /// Performs a search using frequency-based approach with stemming and stopword removal
-pub fn perform_frequency_search(
-    path: &Path,
-    query: &str,
-    files_only: bool,
-    custom_ignores: &[String],
-    include_filenames: bool,
-    reranker: &str,
-    max_results: Option<usize>,
-    max_bytes: Option<usize>,
-    max_tokens: Option<usize>,
-    allow_tests: bool,
-    any_term: bool, // Default is false (all terms must match)
-    exact: bool, // Parameter to control exact matching (no stemming/stopwords)
-) -> Result<LimitedSearchResults> {
+pub fn perform_frequency_search(options: &FrequencySearchOptions) -> Result<LimitedSearchResults> {
+    let path = options.path;
+    let query = options.query;
+    let files_only = options.files_only;
+    let custom_ignores = options.custom_ignores;
+    let include_filenames = !options.exclude_filenames;
+    let reranker = options.reranker;
+    let max_results = options.max_results;
+    let max_bytes = options.max_bytes;
+    let max_tokens = options.max_tokens;
+    let allow_tests = options.allow_tests;
+    let any_term = options.any_term;
+    let exact = options.exact;
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
