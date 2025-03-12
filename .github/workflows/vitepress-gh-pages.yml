@@ -33,7 +33,7 @@ jobs:
           # Temporarily disable cache to troubleshoot the issue
 
       - name: Install Dependencies
-        run: cd site && npm ci # Use npm ci for a clean install in the site directory
+        run: cd site && npm install # Use npm install instead of npm ci to ensure package-lock.json is generated
 
       - name: Build VitePress Site
         run: cd site && npm run docs:build # Build the VitePress site in the site directory

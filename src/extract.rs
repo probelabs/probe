@@ -15,17 +15,18 @@ use std::path::Path;
 
 /// Process a single file and extract the specified code block
 ///
-/// This function takes a file path, an optional line number, and options for
+/// This function takes a file path, optional line numbers, and options for
 /// extraction. It returns a SearchResult containing the extracted code.
 ///
-/// If a line number is specified, the function uses tree-sitter to find the
-/// closest suitable parent node for that line. If no line number is specified,
-/// the entire file is extracted.
+/// If a single line number is specified, the function uses tree-sitter to find the
+/// closest suitable parent node for that line. If a line range is specified (start and end),
+/// it extracts exactly those lines. If no line number is specified, the entire file is extracted.
 ///
 /// # Arguments
 ///
 /// * `path` - The path to the file to extract from
-/// * `line` - Optional line number to extract a specific code block
+/// * `start_line` - Optional start line number to extract a specific code block or range
+/// * `end_line` - Optional end line number for extracting a range of lines
 /// * `allow_tests` - Whether to include test files and test code blocks
 /// * `context_lines` - Number of context lines to include before and after the specified line
 ///
@@ -35,7 +36,8 @@ use std::path::Path;
 /// couldn't be read or the line number is out of bounds.
 pub fn process_file_for_extraction(
     path: &Path,
-    line: Option<usize>,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
     allow_tests: bool,
     context_lines: usize,
 ) -> Result<SearchResult> {
@@ -49,9 +51,51 @@ pub fn process_file_for_extraction(
 
     // Read the file content
     let content = fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
+    let lines: Vec<&str> = content.lines().collect();
 
-    if let Some(line_num) = line {
-        // Line specified, extract the code block
+    // If both start and end lines are specified, extract that exact range
+    if let (Some(start), Some(end)) = (start_line, end_line) {
+        // Ensure line numbers are within bounds
+        if start == 0 || start > lines.len() || end == 0 || end > lines.len() || start > end {
+            return Err(anyhow::anyhow!(
+                "Line range {}-{} is invalid (file has {} lines)",
+                start,
+                end,
+                lines.len()
+            ));
+        }
+
+        // Extract the specified range (adjusting for 0-indexed arrays)
+        let start_idx = start - 1;
+        let end_idx = end;
+        let range_content = lines[start_idx..end_idx].join("\n");
+
+        return Ok(SearchResult {
+            file: path.to_string_lossy().to_string(),
+            lines: (start, end),
+            node_type: "range".to_string(),
+            code: range_content,
+            matched_by_filename: None,
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            bm25_score: None,
+            tfidf_rank: None,
+            bm25_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            parent_file_id: None,
+            block_id: None,
+            matched_keywords: None,
+        });
+    } else if let Some(line_num) = start_line {
+        // Single line specified, extract the code block
         let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
         // Create a set with the specified line number
@@ -104,8 +148,6 @@ pub fn process_file_for_extraction(
             }
             Ok(_) | Err(_) => {
                 // Fallback: If no code block found or parsing failed, extract context around the line
-                let lines: Vec<&str> = content.lines().collect();
-
                 // Ensure line_num is within bounds
                 if line_num == 0 || line_num > lines.len() {
                     return Err(anyhow::anyhow!(

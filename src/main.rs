@@ -176,38 +176,60 @@ use std::io::{self, Read};
 /// Extract file paths from text (for stdin mode)
 ///
 /// This function takes a string of text and extracts file paths with optional
-/// line numbers. It's used when the extract command receives input from stdin.
+/// line numbers or ranges. It's used when the extract command receives input from stdin.
 ///
 /// The function looks for patterns like:
 /// - File paths with extensions (e.g., file.rs, path/to/file.go)
 /// - Optional line numbers after a colon (e.g., file.rs:10)
+/// - Optional line ranges after a colon (e.g., file.rs:1-60)
 /// - File paths with line and column numbers (e.g., file.rs:10:42)
-fn extract_file_paths_from_text(text: &str) -> Vec<(PathBuf, Option<usize>)> {
+fn extract_file_paths_from_text(text: &str) -> Vec<(PathBuf, Option<usize>, Option<usize>)> {
     let mut results = Vec::new();
     let mut processed_paths = HashSet::new();
 
-    // First, try to match file paths with line numbers (and optional column numbers)
+    // First, try to match file paths with line ranges (e.g., file.rs:1-60)
+    let file_range_regex =
+        Regex::new(r"(?:^|\s)([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+):(\d+)-(\d+)").unwrap();
+
+    for cap in file_range_regex.captures_iter(text) {
+        let file_path = cap.get(1).unwrap().as_str();
+        let start_line = cap.get(2).and_then(|m| m.as_str().parse::<usize>().ok());
+        let end_line = cap.get(3).and_then(|m| m.as_str().parse::<usize>().ok());
+
+        if let (Some(start), Some(end)) = (start_line, end_line) {
+            processed_paths.insert(file_path.to_string());
+            results.push((PathBuf::from(file_path), Some(start), Some(end)));
+        }
+    }
+
+    // Then, try to match file paths with single line numbers (and optional column numbers)
     let file_line_regex =
         Regex::new(r"(?:^|\s)([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+):(\d+)(?::\d+)?").unwrap();
 
     for cap in file_line_regex.captures_iter(text) {
         let file_path = cap.get(1).unwrap().as_str();
+        
+        // Skip if we've already processed this path with a line range
+        if processed_paths.contains(file_path) {
+            continue;
+        }
+        
         let line_num = cap.get(2).and_then(|m| m.as_str().parse::<usize>().ok());
 
         processed_paths.insert(file_path.to_string());
-        results.push((PathBuf::from(file_path), line_num));
+        results.push((PathBuf::from(file_path), line_num, None));
     }
 
-    // Then, match file paths without line numbers
+    // Finally, match file paths without line numbers
     // We use a simpler regex and filter out paths we've already processed
     let simple_file_regex = Regex::new(r"(?:^|\s)([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)").unwrap();
 
     for cap in simple_file_regex.captures_iter(text) {
         let file_path = cap.get(1).unwrap().as_str();
 
-        // Skip if we've already processed this path with a line number
+        // Skip if we've already processed this path with a line number or range
         if !processed_paths.contains(file_path) {
-            results.push((PathBuf::from(file_path), None));
+            results.push((PathBuf::from(file_path), None, None));
             processed_paths.insert(file_path.to_string());
         }
     }
@@ -215,17 +237,30 @@ fn extract_file_paths_from_text(text: &str) -> Vec<(PathBuf, Option<usize>)> {
     results
 }
 
-/// Parse a file path with optional line number (e.g., "file.rs:10")
-fn parse_file_with_line(input: &str) -> (PathBuf, Option<usize>) {
+/// Parse a file path with optional line number or range (e.g., "file.rs:10" or "file.rs:1-60")
+fn parse_file_with_line(input: &str) -> (PathBuf, Option<usize>, Option<usize>) {
     if let Some((file_part, rest)) = input.split_once(':') {
-        // Extract the line number from the rest (which might contain more colons)
-        let line_num = rest.split(':').next().and_then(|s| s.parse::<usize>().ok());
-
-        if let Some(num) = line_num {
-            return (PathBuf::from(file_part), Some(num));
+        // Extract the line specification from the rest (which might contain more colons)
+        let line_spec = rest.split(':').next().unwrap_or("");
+        
+        // Check if it's a range (contains a hyphen)
+        if let Some((start_str, end_str)) = line_spec.split_once('-') {
+            let start_num = start_str.parse::<usize>().ok();
+            let end_num = end_str.parse::<usize>().ok();
+            
+            if let (Some(start), Some(end)) = (start_num, end_num) {
+                return (PathBuf::from(file_part), Some(start), Some(end));
+            }
+        } else {
+            // Try to parse as a single line number
+            let line_num = line_spec.parse::<usize>().ok();
+            
+            if let Some(num) = line_num {
+                return (PathBuf::from(file_part), Some(num), None);
+            }
         }
     }
-    (PathBuf::from(input), None)
+    (PathBuf::from(input), None, None)
 }
 
 /// Handle the extract command
@@ -255,15 +290,17 @@ fn handle_extract(
     } else {
         // Parse command-line arguments
         for file in files {
-            let (path, line) = parse_file_with_line(&file);
-            file_paths.push((path, line));
+            let (path, start_line, end_line) = parse_file_with_line(&file);
+            file_paths.push((path, start_line, end_line));
         }
     }
 
     println!("{}", "Files to extract:".bold().green());
 
-    for (path, line) in &file_paths {
-        if let Some(line_num) = line {
+    for (path, start_line, end_line) in &file_paths {
+        if let (Some(start), Some(end)) = (start_line, end_line) {
+            println!("  {} (lines {}-{})", path.display(), start, end);
+        } else if let Some(line_num) = start_line {
             println!("  {} (line {})", path.display(), line_num);
         } else {
             println!("  {}", path.display());
@@ -285,8 +322,8 @@ fn handle_extract(
     let mut errors = Vec::new();
 
     // Process each file
-    for (path, line) in file_paths {
-        match process_file_for_extraction(&path, line, allow_tests, context_lines) {
+    for (path, start_line, end_line) in file_paths {
+        match process_file_for_extraction(&path, start_line, end_line, allow_tests, context_lines) {
             Ok(result) => results.push(result),
             Err(e) => {
                 let error_msg = format!("Error processing file {:?}: {}", path, e);
@@ -422,29 +459,40 @@ mod tests {
     #[test]
     fn test_parse_file_with_line() {
         // Test with no line number
-        let (path, line) = parse_file_with_line("src/main.rs");
+        let (path, start, end) = parse_file_with_line("src/main.rs");
         assert_eq!(path, PathBuf::from("src/main.rs"));
-        assert_eq!(line, None);
+        assert_eq!(start, None);
+        assert_eq!(end, None);
 
         // Test with line number
-        let (path, line) = parse_file_with_line("src/main.rs:42");
+        let (path, start, end) = parse_file_with_line("src/main.rs:42");
         assert_eq!(path, PathBuf::from("src/main.rs"));
-        assert_eq!(line, Some(42));
+        assert_eq!(start, Some(42));
+        assert_eq!(end, None);
+
+        // Test with line range
+        let (path, start, end) = parse_file_with_line("src/main.rs:1-60");
+        assert_eq!(path, PathBuf::from("src/main.rs"));
+        assert_eq!(start, Some(1));
+        assert_eq!(end, Some(60));
 
         // Test with invalid line number
-        let (path, line) = parse_file_with_line("src/main.rs:abc");
+        let (path, start, end) = parse_file_with_line("src/main.rs:abc");
         assert_eq!(path, PathBuf::from("src/main.rs:abc"));
-        assert_eq!(line, None);
+        assert_eq!(start, None);
+        assert_eq!(end, None);
 
         // Test with multiple colons (should extract the first number after the first colon)
-        let (path, line) = parse_file_with_line("src/main.rs:42:10");
+        let (path, start, end) = parse_file_with_line("src/main.rs:42:10");
         assert_eq!(path, PathBuf::from("src/main.rs"));
-        assert_eq!(line, Some(42));
+        assert_eq!(start, Some(42));
+        assert_eq!(end, None);
 
         // Test with the format from compiler/editor error messages (file:line:column)
-        let (path, line) = parse_file_with_line("tests/extract_command_tests.rs:214:41");
+        let (path, start, end) = parse_file_with_line("tests/extract_command_tests.rs:214:41");
         assert_eq!(path, PathBuf::from("tests/extract_command_tests.rs"));
-        assert_eq!(line, Some(214));
+        assert_eq!(start, Some(214));
+        assert_eq!(end, None);
     }
 
     #[test]
@@ -455,6 +503,15 @@ mod tests {
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0].0, PathBuf::from("src/main.rs"));
         assert_eq!(paths[0].1, Some(42));
+        assert_eq!(paths[0].2, None);
+
+        // Test with line range
+        let text = "Extract lines src/main.rs:1-60 for the example";
+        let paths = extract_file_paths_from_text(text);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].0, PathBuf::from("src/main.rs"));
+        assert_eq!(paths[0].1, Some(1));
+        assert_eq!(paths[0].2, Some(60));
 
         // Test with backtrace
         let text = r#"
@@ -468,10 +525,13 @@ mod tests {
         assert_eq!(paths.len(), 3);
         assert_eq!(paths[0].0, PathBuf::from("src/lib.rs"));
         assert_eq!(paths[0].1, Some(15));
+        assert_eq!(paths[0].2, None);
         assert_eq!(paths[1].0, PathBuf::from("src/main.rs"));
         assert_eq!(paths[1].1, Some(42));
+        assert_eq!(paths[1].2, None);
         assert_eq!(paths[2].0, PathBuf::from("src/cli.rs"));
         assert_eq!(paths[2].1, Some(10));
+        assert_eq!(paths[2].2, None);
 
         // Test with no file paths
         let text = "This text contains no file paths";
@@ -484,15 +544,18 @@ mod tests {
         assert_eq!(paths.len(), 3);
         assert_eq!(paths[0].0, PathBuf::from("src/main.rs"));
         assert_eq!(paths[0].1, Some(10));
+        assert_eq!(paths[0].2, None);
         assert_eq!(paths[1].0, PathBuf::from("src/cli.rs"));
         assert_eq!(paths[1].1, Some(20));
+        assert_eq!(paths[1].2, None);
         assert_eq!(paths[2].0, PathBuf::from("src/lib.rs"));
         assert_eq!(paths[2].1, None);
+        assert_eq!(paths[2].2, None);
 
         // Test with file:line:column format (common in compiler/editor error messages)
         let text = "Error at tests/extract_command_tests.rs:214:41: unexpected token";
         let paths = extract_file_paths_from_text(text);
-        assert!(paths.iter().any(|(path, line)| path
+        assert!(paths.iter().any(|(path, line, _)| path
             == &PathBuf::from("tests/extract_command_tests.rs")
             && *line == Some(214)));
 
@@ -504,11 +567,33 @@ mod tests {
         "#;
         let paths = extract_file_paths_from_text(text);
         assert_eq!(paths.len(), 2);
-        assert!(paths.iter().any(|(path, line)| path
+        assert!(paths.iter().any(|(path, line, _)| path
             == &PathBuf::from("tests/extract_command_tests.rs")
             && *line == Some(214)));
         assert!(paths
             .iter()
-            .any(|(path, line)| path == &PathBuf::from("src/main.rs") && *line == Some(42)));
+            .any(|(path, line, _)| path == &PathBuf::from("src/main.rs") && *line == Some(42)));
+
+        // Test with mixed line numbers and ranges
+        let text = r#"
+        Files to process:
+        - src/main.rs:1-60
+        - src/lib.rs:42
+        - src/cli.rs
+        "#;
+        let paths = extract_file_paths_from_text(text);
+        assert_eq!(paths.len(), 3);
+        assert!(paths.iter().any(|(path, start, end)| path
+            == &PathBuf::from("src/main.rs")
+            && *start == Some(1)
+            && *end == Some(60)));
+        assert!(paths.iter().any(|(path, line, end)| path
+            == &PathBuf::from("src/lib.rs")
+            && *line == Some(42)
+            && *end == None));
+        assert!(paths.iter().any(|(path, line, end)| path
+            == &PathBuf::from("src/cli.rs")
+            && *line == None
+            && *end == None));
     }
 }

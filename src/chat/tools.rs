@@ -73,6 +73,8 @@ pub struct ExtractArgs {
     #[serde(default)]
     pub line: Option<usize>,
     #[serde(default)]
+    pub end_line: Option<usize>,
+    #[serde(default)]
     pub allow_tests: bool,
     #[serde(default = "default_context_lines")]
     pub context_lines: usize,
@@ -113,11 +115,16 @@ impl Tool for Extract {
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the file to extract from. Can include a line number (e.g., 'src/main.rs:42')"
+                        "description": "Path to the file to extract from. Can include a line number (e.g., 'src/main.rs:42') or a line range (e.g., 'src/main.rs:1-60')"
                     },
                     "line": {
                         "type": "integer",
-                        "description": "Line number to extract a specific code block. If provided, the tool will find the closest suitable parent node (function, struct, class, etc.) for that line",
+                        "description": "Start line number to extract a specific code block. If provided alone, the tool will find the closest suitable parent node (function, struct, class, etc.) for that line",
+                        "default": null
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "End line number for extracting a range of lines. Used together with 'line' parameter to specify a range",
                         "default": null
                     },
                     "allow_tests": {
@@ -145,37 +152,61 @@ impl Tool for Extract {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() != "";
 
-        // Parse file_path to extract line number if present (e.g., "src/main.rs:42")
-        let (file_path, line_number) = if args.file_path.contains(':') {
+        // Parse file_path to extract line number or range if present (e.g., "src/main.rs:42" or "src/main.rs:1-60")
+        let (file_path, start_line, end_line) = if args.file_path.contains(':') {
             let parts: Vec<&str> = args.file_path.split(':').collect();
             if parts.len() >= 2 {
                 let path = parts[0];
-                if let Ok(line) = parts[1].parse::<usize>() {
-                    (path.to_string(), Some(line))
+                let line_spec = parts[1];
+                
+                // Check if it's a range (contains a hyphen)
+                if line_spec.contains('-') {
+                    let range_parts: Vec<&str> = line_spec.split('-').collect();
+                    if range_parts.len() == 2 {
+                        let start = range_parts[0].parse::<usize>().ok();
+                        let end = range_parts[1].parse::<usize>().ok();
+                        
+                        if let (Some(s), Some(e)) = (start, end) {
+                            (path.to_string(), Some(s), Some(e))
+                        } else {
+                            (args.file_path.clone(), args.line, args.end_line)
+                        }
+                    } else {
+                        (args.file_path.clone(), args.line, args.end_line)
+                    }
                 } else {
-                    (args.file_path.clone(), args.line)
+                    // Try to parse as a single line number
+                    if let Ok(line) = line_spec.parse::<usize>() {
+                        (path.to_string(), Some(line), args.end_line)
+                    } else {
+                        (args.file_path.clone(), args.line, args.end_line)
+                    }
                 }
             } else {
-                (args.file_path.clone(), args.line)
+                (args.file_path.clone(), args.line, args.end_line)
             }
         } else {
-            (args.file_path.clone(), args.line)
+            (args.file_path.clone(), args.line, args.end_line)
+        };
+
+        // Prepare message about what we're extracting
+        let extraction_info = match (start_line, end_line) {
+            (Some(start), Some(end)) => format!(" lines {}-{}", start, end),
+            (Some(line), None) => format!(" at line {}", line),
+            _ => String::new(),
         };
 
         println!(
             "\nExtracting code from file: {}{}",
             file_path,
-            if let Some(line) = line_number {
-                format!(" at line {}", line)
-            } else {
-                String::new()
-            }
+            extraction_info
         );
 
         if debug_mode {
             println!("\n[DEBUG] ===== Extract Tool Called =====");
             println!("[DEBUG] File path: '{}'", file_path);
-            println!("[DEBUG] Line number: {:?}", line_number);
+            println!("[DEBUG] Start line: {:?}", start_line);
+            println!("[DEBUG] End line: {:?}", end_line);
             println!("[DEBUG] Allow tests: {}", args.allow_tests);
             println!("[DEBUG] Context lines: {}", args.context_lines);
             println!("[DEBUG] Format: {}", args.format);
@@ -190,7 +221,8 @@ impl Tool for Extract {
         // Process the file for extraction
         let probe_result = extract::process_file_for_extraction(
             &path,
-            line_number,
+            start_line,
+            end_line,
             args.allow_tests,
             args.context_lines,
         )
