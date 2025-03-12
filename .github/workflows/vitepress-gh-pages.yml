@@ -30,8 +30,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: "npm" # Cache npm dependencies
-          cache-dependency-path: site/package-lock.json # Specify the path to package-lock.json
+          # Temporarily disable cache to troubleshoot the issue
 
       - name: Install Dependencies
         run: cd site && npm ci # Use npm ci for a clean install in the site directory
