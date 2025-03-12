@@ -1,0 +1,19 @@
+{
+  "name": "probe-docs",
+  "version": "1.0.0",
+  "description": "Documentation for Probe - AI-friendly code search tool",
+  "scripts": {
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview",
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview"
+  },
+  "dependencies": {
+    "vitepress": "^1.0.0-rc.40"
+  },
+  "devDependencies": {
+    "markdown-it": "^14.0.0"
+  }
+}
