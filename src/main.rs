@@ -8,6 +8,7 @@ mod chat;
 mod cli;
 mod language;
 mod models;
+mod query;
 mod ranking;
 mod search;
 
@@ -391,6 +392,15 @@ async fn main() -> Result<()> {
             context_lines,
             format,
         }) => handle_extract(files, allow_tests, context_lines, format)?,
+        Some(Commands::Query {
+            pattern,
+            path,
+            language,
+            ignore,
+            allow_tests,
+            max_results,
+            format,
+        }) => query::handle_query(&pattern, &path, language.as_deref(), &ignore, allow_tests, max_results, &format)?,
         Some(Commands::Chat) => chat::handle_chat().await?,
     }
 

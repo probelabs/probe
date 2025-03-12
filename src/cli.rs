@@ -164,6 +164,43 @@ pub enum Commands {
         format: String,
     },
 
+    /// Search code using ast-grep patterns
+    ///
+    /// This command uses ast-grep to search for structural patterns in code.
+    /// It allows for more precise code searching based on the Abstract Syntax Tree.
+    Query {
+        /// AST pattern to search for (e.g., "fn $NAME() { $$$BODY }")
+        #[arg(value_name = "PATTERN")]
+        pattern: String,
+
+        /// Files or directories to search
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+
+        /// Programming language to use for parsing (auto-detected if not specified)
+        #[arg(short = 'l', long = "language", value_parser = [
+            "rust", "javascript", "typescript", "python", "go",
+            "c", "cpp", "java", "ruby", "php", "swift", "csharp"
+        ])]
+        language: Option<String>,
+
+        /// Custom patterns to ignore (in addition to .gitignore and common patterns)
+        #[arg(short, long)]
+        ignore: Vec<String>,
+
+        /// Allow test files in search results
+        #[arg(long = "allow-tests")]
+        allow_tests: bool,
+
+        /// Maximum number of results to return
+        #[arg(long = "max-results")]
+        max_results: Option<usize>,
+
+        /// Output format (default: color)
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "color"])]
+        format: String,
+    },
+
     /// Use AI chat to interact with codebase
     Chat,
 }

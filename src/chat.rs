@@ -17,11 +17,16 @@ use serde_json::json;
 use std::{io::Write, path::PathBuf};
 use tiktoken_rs::cl100k_base;
 
+use crate::query::{handle_query, QueryOptions};
 use crate::search::{perform_probe, SearchOptions};
 
 #[derive(Debug, thiserror::Error)]
 #[error("Search error: {0}")]
 pub struct SearchError(String);
+
+#[derive(Debug, thiserror::Error)]
+#[error("Query error: {0}")]
+pub struct QueryError(String);
 
 #[derive(Deserialize, Serialize)]
 pub struct ProbeSearchArgs {
@@ -40,6 +45,21 @@ pub struct ProbeSearchArgs {
     exact: bool,
     #[serde(default)]
     allow_tests: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct AstGrepQueryArgs {
+    pattern: String,
+    #[serde(default = "default_path")]
+    path: String,
+    #[serde(default = "default_language")]
+    language: String,
+    #[serde(default)]
+    allow_tests: bool,
+}
+
+fn default_language() -> String {
+    "rust".to_string()
 }
 
 #[derive(Serialize)]
@@ -61,6 +81,178 @@ fn default_true() -> bool {
 
 #[derive(Serialize, Deserialize)]
 pub struct ProbeSearch;
+
+#[derive(Serialize, Deserialize)]
+pub struct AstGrepQuery;
+
+impl Tool for AstGrepQuery {
+    const NAME: &'static str = "query";
+
+    type Error = QueryError;
+    type Args = AstGrepQueryArgs;
+    type Output = Vec<SearchResult>;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: "query".to_string(),
+            description: "Search code using ast-grep structural pattern matching".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "AST pattern to search for. Use $NAME for variable names, $$$PARAMS for parameter lists, $$$BODY for function bodies, etc.",
+                        "examples": [
+                            "fn $NAME($$$PARAMS) $$$BODY",
+                            "function $NAME($$$PARAMS) $$$BODY",
+                            "class $CLASS { $$$METHODS }",
+                            "struct $NAME { $$$FIELDS }",
+                            "const $NAME = ($$$PARAMS) => $$$BODY"
+                        ]
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Path to search in",
+                        "default": "."
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Programming language to use for parsing",
+                        "enum": ["rust", "javascript", "typescript", "python", "go", "c", "cpp", "java", "ruby", "php", "swift", "csharp"],
+                        "default": "rust"
+                    },
+                    "allow_tests": {
+                        "type": "boolean",
+                        "description": "Allow test files in search results",
+                        "default": false
+                    }
+                },
+                "required": ["pattern"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let debug_mode = std::env::var("DEBUG").unwrap_or_default() != "";
+
+        println!("\nDoing ast-grep query: \"{}\" in {}", args.pattern, args.path);
+
+        if debug_mode {
+            println!("\n[DEBUG] ===== Query Tool Called =====");
+            println!("[DEBUG] Pattern: '{}'", args.pattern);
+            println!("[DEBUG] Search path: '{}'", args.path);
+            println!("[DEBUG] Language: '{}'", args.language);
+        }
+
+        let path = PathBuf::from(args.path);
+
+        if debug_mode {
+            println!("\n[DEBUG] Query configuration:");
+            println!("[DEBUG] - Allow tests: {}", args.allow_tests);
+            println!("[DEBUG] Search path exists: {}", path.exists());
+        }
+
+        let query_options = QueryOptions {
+            path: &path,
+            pattern: &args.pattern,
+            language: Some(&args.language),
+            ignore: &[],
+            allow_tests: args.allow_tests,
+            max_results: None,
+            format: "plain",
+        };
+
+        // Use std::panic::catch_unwind to handle potential panics from ast-grep
+        let result = std::panic::catch_unwind(|| {
+            handle_query(
+                &args.pattern,
+                &path,
+                Some(&args.language),
+                &[],
+                args.allow_tests,
+                None,
+                "plain",
+            )
+        });
+
+        match result {
+            Ok(Ok(_)) => {
+                // Successfully executed query, now we need to perform the query again to get the results
+                // This is because handle_query prints the results directly and doesn't return them
+                let matches = crate::query::perform_query(&query_options)
+                    .map_err(|e| QueryError(e.to_string()))?;
+
+                if debug_mode {
+                    println!("\n[DEBUG] ===== Query Results =====");
+                    println!("[DEBUG] Found {} matches", matches.len());
+                }
+
+                if matches.is_empty() {
+                    if debug_mode {
+                        println!("[DEBUG] No results found for pattern: '{}'", args.pattern);
+                        println!("[DEBUG] ===== End Query =====\n");
+                    }
+                    // Return a clear message instead of an empty vector
+                    Ok(vec![SearchResult {
+                        result: format!("No results found for the pattern: '{}'.", args.pattern),
+                    }])
+                } else {
+                    let results: Vec<SearchResult> = matches
+                        .iter()
+                        .map(|m| {
+                            if debug_mode {
+                                println!(
+                                    "\n[DEBUG] Processing match from file: {}",
+                                    m.file_path.display()
+                                );
+                            }
+
+                            let formatted = format!(
+                                "File: {}:{}:{}\n\nCode:\n{}",
+                                m.file_path.display(),
+                                m.line_start,
+                                m.column_start,
+                                m.matched_text
+                            );
+
+                            if debug_mode {
+                                println!(
+                                    "[DEBUG] Formatted result length: {} chars",
+                                    formatted.len()
+                                );
+                            }
+
+                            SearchResult { result: formatted }
+                        })
+                        .collect();
+
+                    let matches_text = match results.len() {
+                        0 => "no matches".to_string(),
+                        1 => "1 match".to_string(),
+                        n => format!("{} matches", n),
+                    };
+                    println!("Found {}", matches_text);
+
+                    if debug_mode {
+                        println!("[DEBUG] ===== End Query =====\n");
+                    }
+                    Ok(results)
+                }
+            }
+            Ok(Err(e)) => Err(QueryError(e.to_string())),
+            Err(e) => {
+                let error_msg = if let Some(s) = e.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = e.downcast_ref::<&'static str>() {
+                    s.to_string()
+                } else {
+                    "Unknown error occurred during query execution".to_string()
+                };
+                Err(QueryError(error_msg))
+            }
+        }
+    }
+}
 
 impl Tool for ProbeSearch {
     const NAME: &'static str = "search";
@@ -280,8 +472,9 @@ impl ProbeChat {
         // Common preamble for both models
         let preamble = r#"You are a helpful assistant that can search code repositories, and answer user questions in detail.
 
-You have access to a powerful search tool that you MUST use to answer questions about the codebase.
-ALWAYS use the search tool first before attempting to answer questions about the code.
+<search_tool>
+You have access to a powerful search tool that you can use to answer questions about the codebase.
+Use the search tool when you need to find specific text, keywords, or patterns in the code.
 Also output the main code structure related to query, with file names and line numbers.
 
 To use the search tool, you MUST format your response exactly like this:
@@ -304,9 +497,6 @@ Examples:
 - Field-specific: "function:evaluate"
 - Complex query: "(parse OR tokenize) AND query"
 
-Always base your knowledge only on results from the search tool.
-When you do not know something, do one more request, and if it failed to answer, acknowledge the issue and ask for more context.
-
 When using search tool:
 - Try simpler queries (e.g. use 'rpc' instead of 'rpc layer implementation')
 - This tool knows how to do the stemming by itself, put only unique keywords to query
@@ -314,6 +504,46 @@ When using search tool:
 - Use multiple search tool calls if needed
 - If you can't find what you want after multiple attempts, ask the user for more context
 - While doing multiple calls, do not repeat the same queries
+</search_tool>
+
+<query_tool>
+You also have access to an ast-grep query tool that can search for structural patterns in code.
+Use the query tool when you need to find specific code structures like functions, classes, or methods.
+
+To use the query tool, you MUST format your response exactly like this:
+tool: query {"pattern": "your pattern here", "language": "language_name", "path": "."}
+
+For example, if the user asks about function definitions in Rust code, your response should be:
+tool: query {"pattern": "fn $NAME($$$PARAMS) $$$BODY", "language": "rust", "path": "."}
+
+The query tool supports the following pattern syntax:
+- $NAME: Matches a single identifier (variable name, function name, etc.)
+- $$$PARAMS: Matches multiple parameters in a parameter list
+- $$$BODY: Matches a function or method body
+- $$$FIELDS: Matches struct or class fields
+- $$$METHODS: Matches class methods
+
+Examples:
+- Find Rust functions: {"pattern": "fn $NAME($$$PARAMS) $$$BODY", "language": "rust"}
+- Find JavaScript functions: {"pattern": "function $NAME($$$PARAMS) $$$BODY", "language": "javascript"}
+- Find JavaScript arrow functions: {"pattern": "const $NAME = ($$$PARAMS) => $$$BODY", "language": "javascript"}
+- Find classes: {"pattern": "class $CLASS { $$$METHODS }", "language": "javascript"}
+- Find structs: {"pattern": "struct $NAME { $$$FIELDS }", "language": "rust"}
+
+Supported languages: rust, javascript, typescript, python, go, c, cpp, java, ruby, php, swift, csharp
+
+When using query tool:
+- Use the appropriate language parameter for the code you're searching
+- Use specific patterns that match the code structure you're looking for
+- If a pattern doesn't return results, try a simpler pattern
+- For complex structures, break them down into smaller patterns
+</query_tool>
+
+ALWAYS use the search tool first before attempting to answer questions about the code.
+If you need to find specific code structures, use the query tool after using the search tool.
+
+Always base your knowledge only on results from the tools.
+When you do not know something, do one more request, and if it failed to answer, acknowledge the issue and ask for more context.
 
 After receiving search results, you can provide a detailed answer based on the code you found.
 Where relevant, include diagrams in nice ASCII format."#;
@@ -350,6 +580,7 @@ Where relevant, include diagrams in nice ASCII format."#;
                 .max_tokens(8096)
                 .temperature(0.1)
                 .tool(ProbeSearch)
+                .tool(AstGrepQuery)
                 .build();
 
             ModelType::Anthropic(anthropic_chat)
@@ -383,6 +614,7 @@ Where relevant, include diagrams in nice ASCII format."#;
                 .max_tokens(4096) // OpenAI typically has lower token limits
                 .temperature(0.1)
                 .tool(ProbeSearch)
+                .tool(AstGrepQuery)
                 .build();
 
             if debug_mode {
@@ -745,7 +977,7 @@ impl RigChat for ProbeChat {
 
                         // Manual parsing approach instead of regex
                         let parts: Vec<&str> = tool_call.split_whitespace().collect();
-                        if parts.len() >= 2 && parts[0] == "search" {
+                        if parts.len() >= 2 && (parts[0] == "search" || parts[0] == "query") {
                             let tool_name = parts[0];
 
                             // Find the start of the JSON object (the first '{')
@@ -1376,6 +1608,7 @@ fn display_help() {
         "  DEBUG             - Set to any value to enable debug output".dimmed()
     );
     println!();
+    println!("{}", "Example Queries:".bold());
     println!(
         "{}",
         "  \"Find all implementations of the search function\"".dimmed()
@@ -1384,5 +1617,13 @@ fn display_help() {
     println!(
         "{}",
         "  \"Show me the main entry point of the application\"".dimmed()
+    );
+    println!(
+        "{}",
+        "  \"Find all Rust functions that return a Result\"".dimmed()
+    );
+    println!(
+        "{}",
+        "  \"Show me all JavaScript classes in the codebase\"".dimmed()
     );
 }
