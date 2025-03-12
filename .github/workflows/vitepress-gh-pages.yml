@@ -3,7 +3,7 @@ name: Build and Deploy VitePress Site
 
 on:
   push:
-    branches: ['main'] # Trigger on push to main branch
+    branches: ["main"] # Trigger on push to main branch
   workflow_dispatch: # Allow manual trigger from GitHub Actions tab
 
 # Sets permissions for the GITHUB_TOKEN to allow deployment to GitHub Pages
@@ -14,7 +14,7 @@ permissions:
 
 # Allow only one concurrent deployment
 concurrency:
-  group: 'pages'
+  group: "pages"
   cancel-in-progress: false
 
 jobs:
@@ -30,13 +30,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm' # Cache npm dependencies
+          cache: "npm" # Cache npm dependencies
+          cache-dependency-path: site/package-lock.json # Specify the path to package-lock.json
 
       - name: Install Dependencies
-        run: npm ci # Use npm ci for a clean install
+        run: cd site && npm ci # Use npm ci for a clean install in the site directory
 
       - name: Build VitePress Site
-        run: npm run docs:build # Assumes 'docs:build' is set to 'vitepress build docs'
+        run: cd site && npm run docs:build # Build the VitePress site in the site directory
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -44,7 +45,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./site # Upload the 'site' folder as the artifact
+          path: ./site/.vitepress/dist # Upload the VitePress build output as the artifact
 
       - name: Deploy to GitHub Pages
         id: deployment
