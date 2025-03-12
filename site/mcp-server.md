@@ -122,11 +122,12 @@ You can set default limits for search results:
 
 If you encounter issues with the MCP server:
 
-1. **Check Installation**: Ensure Probe is correctly installed and accessible in your PATH
+1. **Check Installation**: Ensure the Probe binary was downloaded correctly during package installation
 2. **Verify Configuration**: Double-check your MCP configuration file for errors
 3. **Check Permissions**: Make sure the AI editor has permission to execute the MCP server
 4. **Check Logs**: Look for error messages in your AI editor's logs
 5. **Update Packages**: Ensure you're using the latest version of the `@buger/probe-mcp` package
+6. **Manual Binary Download**: If the automatic download failed, you can manually download the binary from [GitHub Releases](https://github.com/buger/probe/releases) and place it in the `node_modules/@buger/probe-mcp/bin` directory
 
 ## Best Practices
 
