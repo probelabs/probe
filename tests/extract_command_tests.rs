@@ -180,7 +180,7 @@ fn test_process_file_for_extraction_with_range() {
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert_eq!(result.lines, (1, 10));
     assert_eq!(result.node_type, "range");
-    
+
     // Check that the extracted content contains exactly lines 1-10
     let expected_content = content.lines().take(10).collect::<Vec<_>>().join("\n");
     assert_eq!(result.code, expected_content);
@@ -188,9 +188,14 @@ fn test_process_file_for_extraction_with_range() {
     // Test with a different range
     let result = process_file_for_extraction(&file_path, Some(5), Some(15), false, 0).unwrap();
     assert_eq!(result.lines, (5, 15));
-    
+
     // Check that the extracted content contains exactly lines 5-15
-    let expected_content = content.lines().skip(4).take(11).collect::<Vec<_>>().join("\n");
+    let expected_content = content
+        .lines()
+        .skip(4)
+        .take(11)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert_eq!(result.code, expected_content);
 
     // Test with invalid range (start > end)
@@ -272,7 +277,7 @@ struct Point {
     // Check that the output is in markdown format
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("## File:"));
-    
+
     // Run with a line range
     let output = Command::new("cargo")
         .args([

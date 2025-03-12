@@ -208,12 +208,12 @@ fn extract_file_paths_from_text(text: &str) -> Vec<(PathBuf, Option<usize>, Opti
 
     for cap in file_line_regex.captures_iter(text) {
         let file_path = cap.get(1).unwrap().as_str();
-        
+
         // Skip if we've already processed this path with a line range
         if processed_paths.contains(file_path) {
             continue;
         }
-        
+
         let line_num = cap.get(2).and_then(|m| m.as_str().parse::<usize>().ok());
 
         processed_paths.insert(file_path.to_string());
@@ -242,19 +242,19 @@ fn parse_file_with_line(input: &str) -> (PathBuf, Option<usize>, Option<usize>) 
     if let Some((file_part, rest)) = input.split_once(':') {
         // Extract the line specification from the rest (which might contain more colons)
         let line_spec = rest.split(':').next().unwrap_or("");
-        
+
         // Check if it's a range (contains a hyphen)
         if let Some((start_str, end_str)) = line_spec.split_once('-') {
             let start_num = start_str.parse::<usize>().ok();
             let end_num = end_str.parse::<usize>().ok();
-            
+
             if let (Some(start), Some(end)) = (start_num, end_num) {
                 return (PathBuf::from(file_part), Some(start), Some(end));
             }
         } else {
             // Try to parse as a single line number
             let line_num = line_spec.parse::<usize>().ok();
-            
+
             if let Some(num) = line_num {
                 return (PathBuf::from(file_part), Some(num), None);
             }
@@ -583,17 +583,20 @@ mod tests {
         "#;
         let paths = extract_file_paths_from_text(text);
         assert_eq!(paths.len(), 3);
-        assert!(paths.iter().any(|(path, start, end)| path
-            == &PathBuf::from("src/main.rs")
-            && *start == Some(1)
-            && *end == Some(60)));
-        assert!(paths.iter().any(|(path, line, end)| path
-            == &PathBuf::from("src/lib.rs")
-            && *line == Some(42)
-            && *end == None));
-        assert!(paths.iter().any(|(path, line, end)| path
-            == &PathBuf::from("src/cli.rs")
-            && *line == None
-            && *end == None));
+        assert!(paths
+            .iter()
+            .any(|(path, start, end)| path == &PathBuf::from("src/main.rs")
+                && *start == Some(1)
+                && *end == Some(60)));
+        assert!(paths
+            .iter()
+            .any(|(path, line, end)| path == &PathBuf::from("src/lib.rs")
+                && *line == Some(42)
+                && end.is_none()));
+        assert!(paths
+            .iter()
+            .any(|(path, line, end)| path == &PathBuf::from("src/cli.rs")
+                && line.is_none()
+                && end.is_none()));
     }
 }

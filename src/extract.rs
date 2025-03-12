@@ -70,7 +70,7 @@ pub fn process_file_for_extraction(
         let end_idx = end;
         let range_content = lines[start_idx..end_idx].join("\n");
 
-        return Ok(SearchResult {
+        Ok(SearchResult {
             file: path.to_string_lossy().to_string(),
             lines: (start, end),
             node_type: "range".to_string(),
@@ -93,7 +93,7 @@ pub fn process_file_for_extraction(
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
-        });
+        })
     } else if let Some(line_num) = start_line {
         // Single line specified, extract the code block
         let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");

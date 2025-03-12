@@ -158,14 +158,14 @@ impl Tool for Extract {
             if parts.len() >= 2 {
                 let path = parts[0];
                 let line_spec = parts[1];
-                
+
                 // Check if it's a range (contains a hyphen)
                 if line_spec.contains('-') {
                     let range_parts: Vec<&str> = line_spec.split('-').collect();
                     if range_parts.len() == 2 {
                         let start = range_parts[0].parse::<usize>().ok();
                         let end = range_parts[1].parse::<usize>().ok();
-                        
+
                         if let (Some(s), Some(e)) = (start, end) {
                             (path.to_string(), Some(s), Some(e))
                         } else {
@@ -198,8 +198,7 @@ impl Tool for Extract {
 
         println!(
             "\nExtracting code from file: {}{}",
-            file_path,
-            extraction_info
+            file_path, extraction_info
         );
 
         if debug_mode {
