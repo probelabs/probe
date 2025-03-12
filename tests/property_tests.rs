@@ -1,5 +1,5 @@
 use probe::ranking::{compute_avgdl, rank_documents, tokenize, RankingParams};
-use probe::search::query::{create_term_patterns, preprocess_query, regex_escape};
+use probe::search::query::{create_query_plan, create_structured_patterns, regex_escape};
 use proptest::prelude::*;
 
 proptest! {
@@ -35,22 +35,25 @@ proptest! {
         }
     }
 
-    // Test that preprocess_query and create_term_patterns work together
+    // Test that create_query_plan and create_structured_patterns work together
     #[test]
     #[ignore] // Temporarily disabled due to changes in regex escaping
     fn test_query_preprocessing_pipeline(query in "\\PC{1,50}") {
         // This should never panic
-        let term_pairs = preprocess_query(&query, false); // Use non-exact mode for property tests
-        let patterns = create_term_patterns(&term_pairs);
+        let plan = match create_query_plan(&query, false) {
+            Ok(plan) => plan,
+            Err(_) => return proptest::test_runner::TestCaseResult::Ok(()), // Skip invalid queries
+        };
 
-        // Since create_term_patterns now returns a Vec<(String, HashSet<usize>)>,
-        // we need to check the patterns differently
+        let patterns = create_structured_patterns(&plan);
 
         // Check that we have at least one pattern for each term
-        for i in 0..term_pairs.len() {
-            // Find at least one pattern that contains the term index i
-            let found = patterns.iter().any(|(_, indices)| indices.contains(&i));
-            assert!(found, "No pattern found for term at index {}", i);
+        for (term, &idx) in &plan.term_indices {
+            if !plan.excluded_terms.contains(term) {
+                // Find at least one pattern that contains the term index
+                let found = patterns.iter().any(|(_, indices)| indices.contains(&idx));
+                assert!(found, "No pattern found for term '{}' at index {}", term, idx);
+            }
         }
 
         // Check that each pattern has the correct format

@@ -256,6 +256,7 @@ pub enum Token {
 /// A simple error type for parsing/tokenizing.
 #[derive(Debug)]
 pub enum ParseError {
+    #[allow(dead_code)]
     UnexpectedChar(char),
     UnexpectedEndOfInput,
     UnexpectedToken(Token),
@@ -278,6 +279,7 @@ impl std::error::Error for ParseError {}
 fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
     let mut chars = input.chars().peekable();
     let mut tokens = Vec::new();
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     while let Some(&ch) = chars.peek() {
         match ch {
@@ -306,8 +308,8 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
 
             // Possible AND/OR keywords or just an identifier
             _ => {
-                // If it starts with a letter, let's check if it's 'AND' or 'OR'
-                if ch.is_alphanumeric() {
+                // If it starts with a letter, number, underscore, or dot, treat it as an identifier
+                if ch.is_alphanumeric() || ch == '_' || ch == '.' {
                     let ident = lex_identifier(&mut chars);
                     let ident_upper = ident.to_ascii_uppercase();
                     if ident_upper == "AND" {
@@ -318,10 +320,21 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
                         tokens.push(Token::Ident(ident));
                     }
                 } else {
-                    return Err(ParseError::UnexpectedChar(ch));
+                    // Skip unknown characters instead of returning an error
+                    if debug_mode {
+                        println!("DEBUG: Skipping unknown character: '{}'", ch);
+                    }
+                    chars.next();
                 }
             }
         }
+    }
+
+    // If we have no tokens, return an error
+    if tokens.is_empty() {
+        return Err(ParseError::Generic(
+            "No valid tokens found in input".to_string(),
+        ));
     }
 
     Ok(tokens)
@@ -330,7 +343,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
 fn lex_identifier(chars: &mut Peekable<Chars>) -> String {
     let mut buf = String::new();
     while let Some(&ch) = chars.peek() {
-        if ch.is_alphanumeric() || ch == '_' {
+        if ch.is_alphanumeric() || ch == '_' || ch == '.' {
             buf.push(ch);
             chars.next();
         } else {
@@ -560,25 +573,108 @@ fn process_ast_terms(expr: Expr) -> Expr {
 
 /// Parse the query string into an AST
 pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
-    let tokens = tokenize(input)?;
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Try to tokenize the input
+    let tokens_result = tokenize(input);
+
+    if let Err(e) = &tokens_result {
+        if debug_mode {
+            println!("DEBUG: Tokenization failed: {:?}", e);
+        }
+
+        // If tokenization fails, extract any valid identifiers from the input
+        // and create a simple Term expression with them
+        let cleaned_input = input
+            .chars()
+            .filter(|&c| c.is_alphanumeric() || c.is_whitespace() || c == '_' || c == '.')
+            .collect::<String>();
+
+        if debug_mode {
+            println!("DEBUG: Cleaned input: '{}'", cleaned_input);
+        }
+
+        if cleaned_input.trim().is_empty() {
+            return Err(ParseError::Generic(
+                "No valid tokens found in input".to_string(),
+            ));
+        }
+
+        // Create a simple Term expression with the cleaned input
+        let keywords = cleaned_input
+            .split_whitespace()
+            .map(|s| s.to_lowercase())
+            .collect::<Vec<String>>();
+
+        if debug_mode {
+            println!("DEBUG: Created fallback keywords: {:?}", keywords);
+        }
+
+        return Ok(Expr::Term {
+            keywords,
+            field: None,
+            required: false,
+            excluded: false,
+        });
+    }
+
+    let tokens = tokens_result.unwrap();
 
     // Pass any_term to the parser to control how implicit combinations are handled
     let mut parser = Parser::new(tokens, any_term);
-    let raw_ast = parser.parse_expr()?;
 
-    if parser.pos < parser.tokens.len() {
-        Err(ParseError::Generic(
-            "Extra tokens after complete parse".to_string(),
-        ))
-    } else {
-        // Apply tokenization and stemming to the AST
-        let processed_ast = process_ast_terms(raw_ast);
+    // Try to parse the tokens into an AST
+    let raw_ast_result = parser.parse_expr();
 
-        Ok(processed_ast)
+    if let Err(e) = &raw_ast_result {
+        if debug_mode {
+            println!("DEBUG: AST parsing failed: {:?}", e);
+        }
+
+        // If parsing fails, extract any identifiers from the tokens
+        // and create a simple Term expression with them
+        let idents = parser
+            .tokens
+            .iter()
+            .filter_map(|t| match t {
+                Token::Ident(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect::<Vec<String>>();
+
+        if debug_mode {
+            println!("DEBUG: Extracted identifiers from tokens: {:?}", idents);
+        }
+
+        if idents.is_empty() {
+            return Err(ParseError::Generic(
+                "No valid identifiers found in tokens".to_string(),
+            ));
+        }
+
+        return Ok(Expr::Term {
+            keywords: idents,
+            field: None,
+            required: false,
+            excluded: false,
+        });
     }
+
+    let raw_ast = raw_ast_result.unwrap();
+
+    // Check if we consumed all tokens
+    if parser.pos < parser.tokens.len() && debug_mode {
+        println!("DEBUG: Extra tokens after complete parse, using partial AST");
+    }
+
+    // Apply tokenization and stemming to the AST
+    let processed_ast = process_ast_terms(raw_ast);
+
+    Ok(processed_ast)
 }
 
 /// Backward compatibility wrapper for parse_query
+#[allow(dead_code)]
 pub fn parse_query_compat(input: &str) -> Result<Expr, ParseError> {
     // Default to any_term = true for backward compatibility
     parse_query(input, true)

@@ -1,10 +1,12 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use tempfile::TempDir;
 
 use crate::search::file_processing::{process_file_by_filename, process_file_with_results};
+use crate::search::query::QueryPlan;
+use crate::search::elastic_query;
 
 #[cfg(test)]
 mod tests {
@@ -15,6 +17,35 @@ mod tests {
         let mut file = File::create(&file_path).expect("Failed to create test file");
         file.write_all(content.as_bytes()).expect("Failed to write test content");
         file_path
+    }
+
+    // Helper function to create a simple QueryPlan for testing
+    fn create_test_query_plan(terms: &[&str]) -> QueryPlan {
+        let mut term_indices = HashMap::new();
+        for (i, &term) in terms.iter().enumerate() {
+            term_indices.insert(term.to_string(), i);
+        }
+
+        // Create a simple Term expression for testing
+        let ast = elastic_query::Expr::Term {
+            keywords: terms.iter().map(|&s| s.to_string()).collect(),
+            field: None,
+            required: false,
+            excluded: false,
+        };
+
+        QueryPlan {
+            ast,
+            term_indices,
+            excluded_terms: HashSet::new(),
+        }
+    }
+
+    // Helper function to preprocess query for testing (replacement for removed function)
+    fn preprocess_query_for_tests(query: &str, _exact: bool) -> Vec<(String, String)> {
+        query.split_whitespace()
+            .map(|term| (term.to_string(), term.to_string()))
+            .collect()
     }
 
     #[test]
@@ -41,16 +72,25 @@ mod tests {
         let mut line_numbers = HashSet::new();
         line_numbers.insert(3);  // Match on "line 3"
 
+        // Create a simple term matches map
+        let mut term_matches = HashMap::new();
+        let mut matches_for_term = HashSet::new();
+        matches_for_term.insert(3);  // Line 3 matches term index 0
+        term_matches.insert(0, matches_for_term);
+
+        // Create a simple query plan
+        let query_plan = create_test_query_plan(&["line"]);
+
         let params = crate::search::file_processing::FileProcessingParams {
             path: &file_path,
             line_numbers: &line_numbers,
             allow_tests: false,
-            term_matches: None,
-            
-            num_queries: 0,
+            term_matches: &term_matches,
+            num_queries: 1,
             filename_matched_queries: HashSet::new(),
-            queries_terms: &[],
+            queries_terms: &[vec![("line".to_string(), "line".to_string())]],
             preprocessed_queries: None,
+            query_plan: &query_plan,
             no_merge: false,
         };
 
@@ -84,16 +124,30 @@ function test2() {
         line_numbers.insert(3);  // Line in test1 function
         line_numbers.insert(7);  // Line in test2 function
 
+        // Create term matches map
+        let mut term_matches = HashMap::new();
+        let mut matches_for_term1 = HashSet::new();
+        matches_for_term1.insert(3);  // Line 3 matches term index 0
+        term_matches.insert(0, matches_for_term1);
+        
+        let mut matches_for_term2 = HashSet::new();
+        matches_for_term2.insert(7);  // Line 7 matches term index 1
+        term_matches.insert(1, matches_for_term2);
+
+        // Create a simple query plan
+        let query_plan = create_test_query_plan(&["test1", "test2"]);
+
         let params = crate::search::file_processing::FileProcessingParams {
             path: &file_path,
             line_numbers: &line_numbers,
             allow_tests: false,
-            term_matches: None,
-            
-            num_queries: 0,
+            term_matches: &term_matches,
+            num_queries: 2,
             filename_matched_queries: HashSet::new(),
-            queries_terms: &[],
+            queries_terms: &[vec![("test1".to_string(), "test1".to_string()),
+                                 ("test2".to_string(), "test2".to_string())]],
             preprocessed_queries: None,
+            query_plan: &query_plan,
             no_merge: false,
         };
 
@@ -119,16 +173,28 @@ function test2() {
         line_numbers.insert(3);
         line_numbers.insert(4);
 
+        // Create term matches map with high coverage
+        let mut term_matches = HashMap::new();
+        let mut matches_for_term = HashSet::new();
+        matches_for_term.insert(1);
+        matches_for_term.insert(2);
+        matches_for_term.insert(3);
+        matches_for_term.insert(4);
+        term_matches.insert(0, matches_for_term);
+
+        // Create a simple query plan
+        let query_plan = create_test_query_plan(&["line"]);
+
         let params = crate::search::file_processing::FileProcessingParams {
             path: &file_path,
             line_numbers: &line_numbers,
             allow_tests: false,
-            term_matches: None,
-            
-            num_queries: 0,
+            term_matches: &term_matches,
+            num_queries: 1,
             filename_matched_queries: HashSet::new(),
-            queries_terms: &[],
+            queries_terms: &[vec![("line".to_string(), "line".to_string())]],
             preprocessed_queries: None,
+            query_plan: &query_plan,
             no_merge: false,
         };
 
@@ -183,16 +249,37 @@ function test3() {
         line_numbers.insert(6); // Line in test2 function
         line_numbers.insert(10); // Line in test3 function
 
+        // Create term matches map
+        let mut term_matches = HashMap::new();
+        let mut matches_for_term1 = HashSet::new();
+        matches_for_term1.insert(2);  // Line 2 matches term index 0
+        term_matches.insert(0, matches_for_term1);
+        
+        let mut matches_for_term2 = HashSet::new();
+        matches_for_term2.insert(6);  // Line 6 matches term index 1
+        term_matches.insert(1, matches_for_term2);
+        
+        let mut matches_for_term3 = HashSet::new();
+        matches_for_term3.insert(10);  // Line 10 matches term index 2
+        term_matches.insert(2, matches_for_term3);
+
+        // Create a simple query plan
+        let query_plan = create_test_query_plan(&["test1", "test2", "test3"]);
+
         let params = crate::search::file_processing::FileProcessingParams {
             path: &file_path,
             line_numbers: &line_numbers,
             allow_tests: true, // Allow tests
-            term_matches: None, // No term matches
-             // All terms mode
-            num_queries: 0, // No queries
+            term_matches: &term_matches,
+            num_queries: 3, // Three terms
             filename_matched_queries: HashSet::new(), // No filename matches
-            queries_terms: &[], // No query terms
+            queries_terms: &[vec![
+                ("test1".to_string(), "test1".to_string()),
+                ("test2".to_string(), "test2".to_string()),
+                ("test3".to_string(), "test3".to_string())
+            ]],
             preprocessed_queries: None, // No preprocessed queries
+            query_plan: &query_plan,
             no_merge: false,
         };
 
@@ -231,7 +318,6 @@ function test3() {
 
     #[test]
     fn test_block_unique_terms_with_stemming() {
-        use crate::search::query::preprocess_query;
         use std::collections::HashMap;
 
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -258,10 +344,7 @@ function processResults(results) {
         // Create query with different forms of the same words
         // "processing" and "process" should stem to the same root
         let query = "processing data";
-        let term_pairs = preprocess_query(query, false);
-        
-        // Verify that stemming is working in the query preprocessing
-        assert!(term_pairs.iter().any(|(orig, stemmed)| orig == "processing" && stemmed == "process"));
+        let term_pairs = preprocess_query_for_tests(query, false);
         
         // Create preprocessed queries for the test
         let preprocessed_queries = vec![term_pairs.iter().map(|(_, s)| s.clone()).collect()];
@@ -276,17 +359,20 @@ function processResults(results) {
         matches_for_term.insert(3);
         term_matches.insert(0, matches_for_term); // Term index 0 matches line 3
         
+        // Create a query plan
+        let query_plan = create_test_query_plan(&["processing", "data"]);
+        
         // Process the file
         let params = crate::search::file_processing::FileProcessingParams {
             path: &file_path,
             line_numbers: &line_numbers,
             allow_tests: true,
-            term_matches: Some(&term_matches),
-            
+            term_matches: &term_matches,
             num_queries: 2, // "processing" and "data"
             filename_matched_queries: HashSet::new(),
             queries_terms: &[term_pairs.clone()],
             preprocessed_queries: Some(&preprocessed_queries),
+            query_plan: &query_plan,
         };
         
         let results = process_file_with_results(&params).expect("Failed to process file with results");
@@ -309,7 +395,6 @@ function processResults(results) {
     
     #[test]
     fn test_filter_blocks_with_insufficient_unique_terms() {
-        use crate::search::query::preprocess_query;
         use std::collections::HashMap;
 
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -343,7 +428,7 @@ function allTermsFunction() {
 
         // Create query with three terms
         let query = "search index query";
-        let term_pairs = preprocess_query(query, false);
+        let term_pairs = preprocess_query_for_tests(query, false);
         
         // Create preprocessed queries for the test
         let preprocessed_queries = vec![term_pairs.iter().map(|(_, s)| s.clone()).collect()];
@@ -376,17 +461,20 @@ function allTermsFunction() {
         query_matches.insert(21); // Line in allTermsFunction
         term_matches.insert(2, query_matches);
         
+        // Create a query plan
+        let query_plan = create_test_query_plan(&["search", "index", "query"]);
+        
         // Process the file with all_terms mode (requiring all terms to match)
         let params = crate::search::file_processing::FileProcessingParams {
             path: &file_path,
             line_numbers: &line_numbers,
             allow_tests: true,
-            term_matches: Some(&term_matches),
-             // all terms mode
+            term_matches: &term_matches,
             num_queries: 3, // "search", "index", "query"
             filename_matched_queries: HashSet::new(),
             queries_terms: &[term_pairs.clone()],
             preprocessed_queries: Some(&preprocessed_queries),
+            query_plan: &query_plan,
             no_merge: false,
         };
         

@@ -308,13 +308,6 @@ type ModelPriceInput struct {
 
     // Debug: Find most specific node first
     let specific_node = find_most_specific_node(root_node, line);
-    println!(
-        "Most specific node for line {}: type='{}', lines={}-{}",
-        line,
-        specific_node.kind(),
-        specific_node.start_position().row + 1,
-        specific_node.end_position().row + 1
-    );
 
     // Debug: Check parent chain
     let mut current = specific_node;

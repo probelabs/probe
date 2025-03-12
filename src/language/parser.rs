@@ -20,16 +20,6 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let target_node = find_most_specific_node(node, line);
 
-    if debug_mode {
-        println!(
-            "DEBUG: Most specific node for line {}: type='{}', lines={}-{}",
-            line,
-            target_node.kind(),
-            target_node.start_position().row + 1,
-            target_node.end_position().row + 1
-        );
-    }
-
     // Check if this is a comment node
     if target_node.kind() == "comment"
         || target_node.kind() == "line_comment"
@@ -636,8 +626,6 @@ pub fn parse_file_for_code_blocks(
                 parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
                 parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
             });
-        } else if debug_mode {
-            println!("DEBUG: No node found for line {}", line);
         }
     }
 

@@ -18,13 +18,13 @@ function escapeShellArg(arg) {
  */
 export const probeTool = tool({
 	// Description helps the AI understand when to use this tool
-	description: 'Search code in the repository using patterns. Use this tool to find relevant code snippets based on keywords or patterns. Always use this tool first before attempting to answer questions about the codebase.',
+	description: 'Search code in the repository using Elasticsearch-like query syntax. Use this tool to find relevant code snippets based on keywords or patterns. Always use this tool first before attempting to answer questions about the codebase.',
 
 	// Define the parameters schema using Zod - simplified to just query and folder
 	parameters: z.object({
-		keywords: z.string().describe('Search pattern. Try to use simpler queries and focus on keywords that can appear in code. For example, use "config" instead of "configuration settings".'),
+		keywords: z.string().describe('Search query with Elasticsearch-like syntax support. Supports logical operators (AND, OR), required (+) and excluded (-) terms, and grouping with parentheses. Examples: "config", "+required -excluded", "(term1 OR term2) AND term3"'),
 		folder: z.string().optional().describe('Path to search in. Specify one of the allowed folders.'),
-		exact: z.boolean().optional().default(false).describe('Use exact match when you explicitly want to match specific search pattern, without stemming. Used when you exactly know function or Struct name.'),
+		exact: z.boolean().optional().default(false).describe('Use exact match when you explicitly want to match specific search query, without stemming. Used when you exactly know function or Struct name.'),
 		allow_tests: z.boolean().optional().default(false).describe('Allow test files in search results.')
 	}),
 

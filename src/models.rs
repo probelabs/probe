@@ -61,6 +61,8 @@ pub struct SearchResult {
     // Identifier for the individual block within a file (used for block merging)
     #[allow(dead_code)]
     pub block_id: Option<usize>,
+    // The actual keywords that matched in this result
+    pub matched_keywords: Option<Vec<String>>,
 }
 
 // Structure to hold node information for merging

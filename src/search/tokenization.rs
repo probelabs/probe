@@ -317,17 +317,8 @@ fn is_special_case(word: &str) -> bool {
     let lowercase = word.to_lowercase();
 
     // Check if the word is in the special case list
-    let result = SPECIAL_CASE_WORDS.contains(&lowercase);
 
-    // Debug output to help diagnose issues
-    if std::env::var("DEBUG").unwrap_or_default() == "1" {
-        println!(
-            "Checking if '{}' (lowercase: '{}') is a special case: {}",
-            word, lowercase, result
-        );
-    }
-
-    result
+    SPECIAL_CASE_WORDS.contains(&lowercase)
 }
 
 /// Splits a string on camel case boundaries
@@ -340,28 +331,17 @@ fn is_special_case(word: &str) -> bool {
 pub fn split_camel_case(input: &str) -> Vec<String> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
-    if debug_mode {
-        println!("split_camel_case input: '{}'", input);
-    }
-
     if input.is_empty() {
         return vec![];
     }
 
     // Check if the input is a special case word
     if is_special_case(input) {
-        if debug_mode {
-            println!("Special case word detected: '{}'", input);
-        }
         return vec![input.to_lowercase()];
     }
 
     // Special case for OAuth2Provider and similar patterns
     let lowercase = input.to_lowercase();
-
-    if debug_mode {
-        println!("Lowercase version: '{}'", lowercase);
-    }
 
     // Special case for OAuth2Provider -> ["oauth2", "provider"]
     if lowercase.starts_with("oauth2") {

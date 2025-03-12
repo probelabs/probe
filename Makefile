@@ -31,6 +31,10 @@ version:
 build:
 	$(CARGO) build
 
+.PHONY: install
+install:
+	$(CARGO) install --path .
+
 .PHONY: release
 release: clean-release version linux macos windows
 	@echo "Release $(VERSION) created in $(RELEASE_DIR)"
@@ -164,6 +168,7 @@ help:
 	@echo "Available targets:"
 	@echo "  all               - Build the project (default)"
 	@echo "  build             - Build the project in debug mode"
+	@echo "  install           - Install the binary on your system using cargo install"
 	@echo "  version           - Print the current version"
 	@echo "  release           - Build release packages for all platforms (VERSION=v0.1.0)"
 	@echo "  linux             - Build release package for Linux"

@@ -101,3 +101,5 @@ rust-project.json
 *.pb.css
 *.pb.h
 *.pb.*
+
+mcp/bin/probe

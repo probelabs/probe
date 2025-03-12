@@ -64,7 +64,6 @@ pub fn get_stemmer() -> &'static Stemmer {
 pub fn tokenize(text: &str) -> Vec<String> {
     tokenization::tokenize(text)
 }
-
 /// Preprocesses text for search by tokenizing and removing duplicates
 pub fn preprocess_text(text: &str, exact: bool) -> Vec<String> {
     if exact {
@@ -74,6 +73,36 @@ pub fn preprocess_text(text: &str, exact: bool) -> Vec<String> {
             .collect()
     } else {
         tokenize(text)
+    }
+}
+
+/// Preprocesses text with filename for search by tokenizing and removing duplicates
+/// This is used for filename matching - it adds the filename to the tokens
+pub fn preprocess_text_with_filename(text: &str, filename: &str, exact: bool) -> Vec<String> {
+    if exact {
+        let mut tokens: Vec<String> = text
+            .to_lowercase()
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+
+        // Add filename tokens
+        let filename_tokens: Vec<String> = filename
+            .to_lowercase()
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+
+        tokens.extend(filename_tokens);
+        tokens
+    } else {
+        let mut tokens = tokenize(text);
+
+        // Add filename tokens
+        let filename_tokens = tokenize(filename);
+
+        tokens.extend(filename_tokens);
+        tokens
     }
 }
 
@@ -151,42 +180,42 @@ fn tfidf_score(
             let df = *dfs.get(term).unwrap_or(&0);
             let idf = idf_tf(df, n);
 
-            if debug_mode {
-                println!(
-                    "DEBUG: TF-IDF term '{}': TF={}, DF={}, IDF={}",
-                    term, tf, df, idf
-                );
-            }
+            // if debug_mode {
+            //     println!(
+            //         "DEBUG: TF-IDF term '{}': TF={}, DF={}, IDF={}",
+            //         term, tf, df, idf
+            //     );
+            // }
 
             // TF-IDF contribution: TF(Q) * TF(D) * IDF^2
             let contribution = (qf as f64) * (tf as f64) * idf * idf;
             score += contribution;
 
-            if debug_mode {
-                println!(
-                    "DEBUG: TF-IDF contribution for '{}': {}",
-                    term, contribution
-                );
-            }
+            // if debug_mode {
+            //     println!(
+            //         "DEBUG: TF-IDF contribution for '{}': {}",
+            //         term, contribution
+            //     );
+            // }
         }
     }
 
-    if debug_mode {
-        println!("DEBUG: Final TF-IDF score: {}", score);
-    }
+    // if debug_mode {
+    //     println!("DEBUG: Final TF-IDF score: {}", score);
+    // }
 
     score
 }
 
 /// Computes the BM25 score for a document given a query.
 fn bm25_score(params: &Bm25Params) -> f64 {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let _debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let mut score = 0.0;
 
-    if debug_mode {
-        // println!("DEBUG: BM25 calculation - Document frequencies: {:?}, Total documents: {}", params.dfs, params.n);
-        // println!("DEBUG: BM25 parameters - k1: {}, b: {}, avgdl: {}, doc_len: {}", params.k1, params.b, params.avgdl, params.doc_len);
-    }
+    // if debug_mode {
+    //     // println!("DEBUG: BM25 calculation - Document frequencies: {:?}, Total documents: {}", params.dfs, params.n);
+    //     // println!("DEBUG: BM25 parameters - k1: {}, b: {}, avgdl: {}, doc_len: {}", params.k1, params.b, params.avgdl, params.doc_len);
+    // }
 
     for (term, &qf) in &params.query_tf {
         if let Some(&tf) = params.tf_d.get(term) {
@@ -197,26 +226,26 @@ fn bm25_score(params: &Bm25Params) -> f64 {
                     + params.k1
                         * (1.0 - params.b + params.b * (params.doc_len as f64 / params.avgdl)));
 
-            if debug_mode {
-                println!(
-                    "DEBUG: BM25 term '{}': TF={}, DF={}, IDF={}, TF_part={}",
-                    term, tf, df, idf, tf_part
-                );
-            }
+            // if debug_mode {
+            //     println!(
+            //         "DEBUG: BM25 term '{}': TF={}, DF={}, IDF={}, TF_part={}",
+            //         term, tf, df, idf, tf_part
+            //     );
+            // }
 
             // BM25 contribution: TF(Q) * IDF * TF_part
             let contribution = (qf as f64) * idf * tf_part;
             score += contribution;
 
-            if debug_mode {
-                println!("DEBUG: BM25 contribution for '{}': {}", term, contribution);
-            }
+            // if debug_mode {
+            //     println!("DEBUG: BM25 contribution for '{}': {}", term, contribution);
+            // }
         }
     }
 
-    if debug_mode {
-        println!("DEBUG: Final BM25 score: {}", score);
-    }
+    // if debug_mode {
+    //     println!("DEBUG: Final BM25 score: {}", score);
+    // }
 
     score
 }
@@ -305,10 +334,10 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64, f64, f64, f64)
     for (i, tf_d) in tf_df_result.term_frequencies.iter().enumerate() {
         // Debug output for document tokens
         if debug_mode && i < params.documents.len() {
-            println!(
-                "DEBUG: Document {} tokens: {:?}",
-                i, tf_df_result.document_lengths[i]
-            );
+            // println!(
+            //     "DEBUG: Document {} tokens: {:?}",
+            //     i, tf_df_result.document_lengths[i]
+            // );
             // println!("DEBUG: Document {} term frequencies: {:?}", i, tf_d);
         }
 

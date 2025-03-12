@@ -25,7 +25,7 @@ pub struct SearchError(String);
 
 #[derive(Deserialize, Serialize)]
 pub struct ProbeSearchArgs {
-    pattern: String,
+    query: String,
     #[serde(default = "default_path")]
     path: String,
     #[serde(default)]
@@ -72,14 +72,21 @@ impl Tool for ProbeSearch {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "search".to_string(),
-            description: "Search code in the repository using patterns".to_string(),
+            description: "Search code in the repository using Elasticsearch-like query syntax"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "pattern": {
+                    "query": {
                         "type": "string",
-                        "description": "Search pattern. Try to use simpler queries and focus on keywords that can appear in code",
-                        "examples": ["hybrid", "Config", "RPC"]
+                        "description": "Search query with Elasticsearch-like syntax support. Supports logical operators (AND, OR), required (+) and excluded (-) terms, and grouping with parentheses.",
+                        "examples": [
+                            "hybrid",
+                            "Config",
+                            "RPC",
+                            "+required -excluded",
+                            "(term1 OR term2) AND term3"
+                        ]
                     },
                     "path": {
                         "type": "string",
@@ -88,7 +95,7 @@ impl Tool for ProbeSearch {
                     },
                     "exact": {
                         "type": "boolean",
-                        "description": "Use exact match when you explicitly want to match specific search pattern, without stemming. Used when you exaclty know function or Struct name",
+                        "description": "Use exact match when you explicitly want to match specific search query, without stemming. Used when you exactly know function or Struct name",
                         "default": false
                     },
                     "allow_tests": {
@@ -97,7 +104,7 @@ impl Tool for ProbeSearch {
                         "default": false
                     }
                 },
-                "required": ["pattern"]
+                "required": ["query"]
             }),
         }
     }
@@ -105,20 +112,20 @@ impl Tool for ProbeSearch {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() != "";
 
-        println!("\nDoing code search: \"{}\" in {}", args.pattern, args.path);
+        println!("\nDoing code search: \"{}\" in {}", args.query, args.path);
 
         if debug_mode {
             println!("\n[DEBUG] ===== Search Tool Called =====");
-            println!("[DEBUG] Raw pattern: '{}'", args.pattern);
+            println!("[DEBUG] Raw query: '{}'", args.query);
             println!("[DEBUG] Search path: '{}'", args.path);
         }
 
-        let pattern = args.pattern.trim().to_lowercase();
+        let query_text = args.query.trim().to_lowercase();
         if debug_mode {
-            println!("[DEBUG] Normalized pattern: '{}'", pattern);
+            println!("[DEBUG] Normalized query: '{}'", query_text);
         }
 
-        let query = vec![pattern];
+        let query = vec![query_text];
         let path = PathBuf::from(args.path);
 
         if debug_mode {
@@ -182,10 +189,13 @@ impl Tool for ProbeSearch {
 
         if limited_results.results.is_empty() {
             if debug_mode {
-                println!("[DEBUG] No results found for pattern: '{}'", args.pattern);
+                println!("[DEBUG] No results found for query: '{}'", args.query);
                 println!("[DEBUG] ===== End Search =====\n");
             }
-            Ok(vec![])
+            // Return a clear message instead of an empty vector
+            Ok(vec![SearchResult {
+                result: format!("No results found for the query: '{}'.", args.query),
+            }])
         } else {
             let results: Vec<SearchResult> = limited_results
                 .results
@@ -275,18 +285,32 @@ ALWAYS use the search tool first before attempting to answer questions about the
 Also output the main code structure related to query, with file names and line numbers.
 
 To use the search tool, you MUST format your response exactly like this:
-tool: search {"pattern": "your search pattern", "path": "."}
+tool: search {"query": "your search query", "path": "."}
 
 For example, if the user asks about chat functionality, your response should be:
-tool: search {"pattern": "chat", "path": "."}
+tool: search {"query": "chat", "path": "."}
 
-Always based your knowledge only based on results from the search tool.
-When you do not know smth, do one more request, and if it failed to answer, acknowledge issue and ask for more context.
+The search tool supports Elasticsearch-like query syntax with the following features:
+- Basic term searching: "config" or "search"
+- Field-specific searching: "field:value" (e.g., "function:parse")
+- Required terms with + prefix: "+required"
+- Excluded terms with - prefix: "-excluded"
+- Logical operators: "term1 AND term2", "term1 OR term2"
+- Grouping with parentheses: "(term1 OR term2) AND term3"
+
+Examples:
+- Simple search: "config"
+- Required and excluded terms: "+parse -test"
+- Field-specific: "function:evaluate"
+- Complex query: "(parse OR tokenize) AND query"
+
+Always base your knowledge only on results from the search tool.
+When you do not know something, do one more request, and if it failed to answer, acknowledge the issue and ask for more context.
 
 When using search tool:
 - Try simpler queries (e.g. use 'rpc' instead of 'rpc layer implementation')
+- This tool knows how to do the stemming by itself, put only unique keywords to query
 - Focus on keywords that would appear in code
-- Split distinct terms into separate searches, unless they should be search together, e.g. how they connect.
 - Use multiple search tool calls if needed
 - If you can't find what you want after multiple attempts, ask the user for more context
 - While doing multiple calls, do not repeat the same queries
@@ -450,16 +474,106 @@ const MAX_HISTORY_MESSAGES: usize = 4;
 // Maximum length of tool result to include in prompt (in characters)
 const MAX_TOOL_RESULT_LENGTH: usize = 999999999;
 
-// Define static regex patterns
+// Define static regex patterns - more permissive to handle formatting variations
 static TOOL_OUTPUT_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<tool_output>\n.*?\n</tool_output>\n\n").unwrap());
+    Lazy::new(|| Regex::new(r"(?is)<tool_output>\s*.*?\s*</tool_output>").unwrap());
 
 static MULTILINE_TOOL_OUTPUT_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?s)<tool_output>\n.*?\n</tool_output>\n\n").unwrap());
+    Lazy::new(|| Regex::new(r"(?is)<tool_output>\s*.*?\s*</tool_output>").unwrap());
 
 static SEARCH_RESULTS_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?s)Here are the search results for '.*?':\n.*?\n\nProvide a detailed").unwrap()
+    Regex::new(r"(?s)Here are the search results for query '.*?':\n.*?\n\nProvide a detailed")
+        .unwrap()
 });
+
+impl ProbeChat {
+    // Helper function to simplify a search query by removing special operators
+    fn simplify_query(query: &str) -> String {
+        // Extract the actual query from the JSON string if present
+        let query_text = if query.contains("\"query\":") {
+            if let Some(start) = query.find("\"query\":") {
+                let start_idx = start + 9; // Length of "\"query\":"
+                if let Some(quote_start) = query[start_idx..].find('"') {
+                    let content_start = start_idx + quote_start + 1;
+                    if let Some(quote_end) = query[content_start..].find('"') {
+                        query[content_start..(content_start + quote_end)].trim()
+                    } else {
+                        query
+                    }
+                } else {
+                    query
+                }
+            } else {
+                query
+            }
+        } else {
+            query
+        };
+
+        // Remove special operators and simplify the query
+        query_text
+            .split_whitespace()
+            .filter(|&word| {
+                !word.starts_with('+')
+                    && !word.starts_with('-')
+                    && !word.starts_with('(')
+                    && !word.ends_with(')')
+                    && !word.contains("AND")
+                    && !word.contains("OR")
+            })
+            .take(2) // Only take the first two terms for a broader search
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    // Helper function to generate a summary of chat history
+    fn generate_history_summary(chat_history: &[Message]) -> String {
+        chat_history
+            .iter()
+            .map(|msg| match msg {
+                Message::User { content } => {
+                    let text = content
+                        .iter()
+                        .filter_map(|c| {
+                            if let UserContent::Text(t) = c {
+                                Some(t.text.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<&str>>()
+                        .join(" ");
+                    format!("User: {}", text)
+                }
+                Message::Assistant { content } => {
+                    // Filter out tool output from assistant messages to save tokens
+                    let text = content
+                        .iter()
+                        .filter_map(|c| {
+                            if let AssistantContent::Text(t) = c {
+                                // Remove tool output sections with fallback for unmatched cases
+                                let filtered = if TOOL_OUTPUT_REGEX.is_match(&t.text) {
+                                    TOOL_OUTPUT_REGEX
+                                        .replace_all(&t.text, "[Tool results omitted]")
+                                        .to_string()
+                                } else {
+                                    // If no match found, just use the original text
+                                    t.text.clone()
+                                };
+                                Some(filtered)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    format!("Assistant: {}", text)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
 
 impl RigChat for ProbeChat {
     fn chat(
@@ -534,13 +648,18 @@ impl RigChat for ProbeChat {
                     Message::Assistant { content } => {
                         for ai_item in content.iter() {
                             if let AssistantContent::Text(t) = ai_item {
-                                // Filter out tool output from history to save tokens
-                                let filtered_text = TOOL_OUTPUT_REGEX
-                                    .replace_all(
-                                        &t.text,
-                                        "[Tool results omitted to save context]\n\n",
-                                    )
-                                    .to_string();
+                                // Filter out tool output from history to save tokens with fallback
+                                let filtered_text = if TOOL_OUTPUT_REGEX.is_match(&t.text) {
+                                    TOOL_OUTPUT_REGEX
+                                        .replace_all(
+                                            &t.text,
+                                            "[Tool results omitted to save context]\n\n",
+                                        )
+                                        .to_string()
+                                } else {
+                                    // If no match found, just use the original text
+                                    t.text.clone()
+                                };
                                 context.push_str(&format!("Assistant: {}\n", filtered_text));
                             }
                         }
@@ -598,7 +717,12 @@ impl RigChat for ProbeChat {
                 );
             }
 
-            while current_result.contains("tool:") {
+            // Add a maximum limit on tool calls to prevent infinite loops
+            const MAX_TOOL_CALLS: usize = 5;
+            let mut tool_call_count = 0;
+
+            while current_result.contains("tool:") && tool_call_count < MAX_TOOL_CALLS {
+                tool_call_count += 1;
                 if debug_mode {
                     println!("[DEBUG] Found 'tool:' in response");
                 }
@@ -619,259 +743,378 @@ impl RigChat for ProbeChat {
                             println!("\n[DEBUG] Processing tool call: {}", tool_call);
                         }
 
-                        // Attempt to split into name and params
-                        let parts: Vec<&str> = tool_call.splitn(2, char::is_whitespace).collect();
-                        if parts.len() == 2 {
-                            // Call the tool
+                        // Manual parsing approach instead of regex
+                        let parts: Vec<&str> = tool_call.split_whitespace().collect();
+                        if parts.len() >= 2 && parts[0] == "search" {
                             let tool_name = parts[0];
-                            let tool_params = parts[1].to_string();
-                            let tool_params_clone = tool_params.clone();
-                            // Call the tool based on the model type
-                            let tool_result = match &self_ref.chat {
-                                ModelType::Anthropic(agent) => {
-                                    agent.tools.call(tool_name, tool_params.clone()).await
+
+                            // Find the start of the JSON object (the first '{')
+                            if let Some(json_start) = tool_call.find('{') {
+                                // Extract everything from the first '{' to the end of the string
+                                let raw_json = &tool_call[json_start..];
+
+                                if debug_mode {
+                                    println!("[DEBUG] Extracted tool name: {}", tool_name);
+                                    println!("[DEBUG] Raw JSON: '{}'", raw_json);
                                 }
-                                ModelType::OpenAI(agent) => {
-                                    agent.tools.call(tool_name, tool_params.clone()).await
-                                }
-                            };
 
-                            match tool_result {
-                                Ok(tool_result) => {
-                                    if debug_mode {
-                                        println!("\n[DEBUG] Tool result: {}", tool_result);
-                                    }
-
-                                    // Add the tool call and result to the response
-                                    if debug_mode {
-                                        response_accumulator.push_str(&format!(
-                                            "tool: {} {}\n\nTool result:\n{}\n\n",
-                                            tool_name, tool_params_clone, tool_result
-                                        ));
-                                    } else {
-                                        // In non-debug mode, wrap the tool result in XML tags
-                                        response_accumulator.push_str(&format!(
-                                            "<tool_output>\n{}\n</tool_output>\n\n",
-                                            tool_result
-                                        ));
-                                    }
-
-                                    // Truncate tool result if it's too long to save tokens
-                                    let truncated_result = if tool_result.len()
-                                        > MAX_TOOL_RESULT_LENGTH
-                                    {
-                                        let truncated = &tool_result[..MAX_TOOL_RESULT_LENGTH];
-                                        format!("{}\n[Result truncated to save context]", truncated)
-                                    } else {
-                                        tool_result.clone()
-                                    };
-
-                                    // Continue the conversation with just the latest user message and tool result
-                                    // This prevents context explosion by not including the entire history again
-                                    let continuation_prompt = match &self_ref.chat {
-                                        ModelType::Anthropic(_) => format!(
-                                            "User: {}\n\ntool: {} {}\n\nTool result:\n<tool_output>\n{}\n</tool_output>\n\nPlease continue based on this information.",
-                                            latest_user_text_for_continuation, tool_name, tool_params_clone, truncated_result
-                                        ),
-                                        ModelType::OpenAI(_) => {
-                                            // For OpenAI, use a direct format similar to the example
-                                            if debug_mode {
-                                                println!("[DEBUG] Creating OpenAI continuation prompt with direct format");
-                                                println!("[DEBUG] Tool result length: {} characters", truncated_result.len());
-                                            }
-
-                                            // Format similar to the example, very direct
-                                            format!(
-                                                "You are a code search assistant. The user asked: {}\n\nHere are the search results for '{}':\n{}\n\nProvide a detailed answer based on these search results.",
-                                                latest_user_text_for_continuation,
-                                                tool_params_clone,
-                                                truncated_result
-                                            )
-                                        },
-                                    };
-
-                                    // Count tokens in the continuation prompt
-                                    self_ref.add_request_tokens(&continuation_prompt);
-                                    // Send the continuation prompt based on the model type
-                                    let continuation_result = match &self_ref.chat {
-                                        ModelType::Anthropic(_) => {
-                                            self_ref.chat.prompt(continuation_prompt).await
-                                        }
-                                        ModelType::OpenAI(agent) => {
-                                            // For OpenAI, we need to ensure the tool result is properly processed
-                                            if debug_mode {
-                                                println!("[DEBUG] Directly calling OpenAI agent with tool result");
-                                            }
-
-                                            // Create a new prompt that includes the original question and the search results
-                                            let direct_prompt = format!(
-                                                "The user asked: '{}'\n\nI searched the codebase and found:\n{}\n\nBased on these search results, provide a detailed answer about the user's question.",
-                                                latest_user_text_for_continuation,
-                                                truncated_result
-                                            );
-
+                                // Validate JSON parameters
+                                let tool_params =
+                                    match serde_json::from_str::<serde_json::Value>(raw_json) {
+                                        Ok(json_value) => {
+                                            // JSON is valid, use the raw string
                                             if debug_mode {
                                                 println!(
-                                                    "[DEBUG] Direct OpenAI prompt:\n{}",
-                                                    direct_prompt
+                                                    "[DEBUG] Valid JSON parameters: {}",
+                                                    json_value
                                                 );
                                             }
-
-                                            // Call the OpenAI agent directly
-                                            agent.prompt(direct_prompt).await
-                                        }
-                                    };
-
-                                    match continuation_result {
-                                        Ok(next_result) => {
-                                            current_result = next_result;
-
-                                            // Count tokens in the response
-                                            self_ref.add_response_tokens(&current_result);
-
-                                            // Get current token usage
-                                            let (request_tokens, response_tokens) =
-                                                self_ref.get_token_usage();
-
-                                            // Debug the continuation response
-                                            if debug_mode {
-                                                println!("\n[DEBUG] Continuation response:");
-                                                println!("{}", current_result);
-                                                println!("\n[DEBUG] Updated token usage - Request: {}, Response: {}, Total: {}",
-                                                    request_tokens, response_tokens, request_tokens + response_tokens);
-                                            }
-
-                                            // If there are no more tool calls, add the result to the response
-                                            if !current_result.contains("tool:") {
-                                                response_accumulator.push_str(&current_result);
-                                                break;
-                                            }
+                                            raw_json.to_string()
                                         }
                                         Err(e) => {
                                             if debug_mode {
+                                                println!("[DEBUG] Invalid JSON parameters: {}", e);
+                                                println!("[DEBUG] Raw JSON: '{}'", raw_json);
+                                            }
+
+                                            // Add error to response and skip this tool call
+                                            response_accumulator.push_str(&format!(
+                                            "tool: {} {}\n\nTool parse error: invalid syntax.\n\n",
+                                            tool_name, raw_json
+                                        ));
+
+                                            // Skip to the next part of the response
+                                            if let Some(end_idx) = rest.find('\n') {
+                                                current_result = rest[end_idx + 1..].to_string();
+                                            } else {
+                                                current_result = String::new();
+                                            }
+                                            continue;
+                                        }
+                                    };
+
+                                let tool_params_clone = tool_params.clone();
+
+                                // Call the tool based on the model type
+                                let tool_result = match &self_ref.chat {
+                                    ModelType::Anthropic(agent) => {
+                                        agent.tools.call(tool_name, tool_params.clone()).await
+                                    }
+                                    ModelType::OpenAI(agent) => {
+                                        agent.tools.call(tool_name, tool_params.clone()).await
+                                    }
+                                };
+
+                                match tool_result {
+                                    Ok(tool_result) => {
+                                        if debug_mode {
+                                            println!("\n[DEBUG] Tool result: {}", tool_result);
+                                        }
+
+                                        // Check if the search returned no results and retry with a simplified query
+                                        if tool_name == "search"
+                                            && tool_result.contains("No results found")
+                                        {
+                                            if debug_mode {
+                                                println!("[DEBUG] No results found. Attempting a broader search...");
+                                            }
+
+                                            // Add a message about retrying
+                                            response_accumulator.push_str(&format!(
+                                                "<tool_output>\n{}\n</tool_output>\n\n",
+                                                tool_result
+                                            ));
+                                            response_accumulator.push_str("\nNo results found. Attempting a broader search...\n\n");
+
+                                            // Simplify the query and retry
+                                            let simplified_query =
+                                                ProbeChat::simplify_query(&tool_params_clone);
+
+                                            if debug_mode {
                                                 println!(
-                                                    "\n[DEBUG] Error getting continuation: {}",
-                                                    e
+                                                    "[DEBUG] Simplified query: '{}'",
+                                                    simplified_query
                                                 );
                                             }
-                                            response_accumulator
-                                                .push_str(&format!("\nError: {}\n", e));
-                                            break;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    if debug_mode {
-                                        println!("\n[DEBUG] Tool error: {}", e);
-                                    }
-                                    if debug_mode {
-                                        response_accumulator.push_str(&format!(
-                                            "tool: {} {}\n\nTool error: {}\n\n",
-                                            tool_name, tool_params_clone, e
-                                        ));
-                                    } else {
-                                        // In non-debug mode, wrap the error in XML tags
-                                        response_accumulator.push_str(&format!(
-                                            "<tool_output>\nError: {}\n</tool_output>\n\n",
-                                            e
-                                        ));
-                                    }
 
-                                    // Continue with the error information - simplified prompt
-                                    let error_prompt = match &self_ref.chat {
-                                        ModelType::Anthropic(_) => format!(
-                                            "User: {}\n\ntool: {} {}\n\nTool error: <tool_output>\n{}\n</tool_output>\n\nPlease continue based on this information.",
-                                            latest_user_text_for_continuation, tool_name, tool_params_clone, e
-                                        ),
-                                        ModelType::OpenAI(_) => {
-                                            // For OpenAI, use a direct format similar to the example
-                                            if debug_mode {
-                                                println!("[DEBUG] Creating OpenAI error prompt with direct format");
+                                            // Only retry if the simplified query is different and not empty
+                                            if !simplified_query.is_empty()
+                                                && simplified_query != tool_params_clone
+                                            {
+                                                let retry_prompt = format!("tool: search {{\"query\": \"{}\", \"path\": \".\"}}", simplified_query);
+                                                current_result = retry_prompt;
+                                                continue;
                                             }
+                                        }
 
-                                            // Format similar to the example, very direct
+                                        // Add the tool call and result to the response
+                                        if debug_mode {
+                                            response_accumulator.push_str(&format!(
+                                                "tool: {} {}\n\nTool result:\n{}\n\n",
+                                                tool_name, tool_params_clone, tool_result
+                                            ));
+                                        } else {
+                                            // In non-debug mode, wrap the tool result in XML tags
+                                            response_accumulator.push_str(&format!(
+                                                "<tool_output>\n{}\n</tool_output>\n\n",
+                                                tool_result
+                                            ));
+                                        }
+
+                                        // Truncate tool result if it's too long to save tokens
+                                        let truncated_result = if tool_result.len()
+                                            > MAX_TOOL_RESULT_LENGTH
+                                        {
+                                            let truncated = &tool_result[..MAX_TOOL_RESULT_LENGTH];
                                             format!(
-                                                "You are a code search assistant. The user asked: {}\n\nI tried to search for '{}' but encountered this error: {}\n\nPlease apologize to the user and suggest alternative search terms.",
-                                                latest_user_text_for_continuation,
-                                                tool_params_clone,
-                                                e
+                                                "{}\n[Result truncated to save context]",
+                                                truncated
                                             )
-                                        },
-                                    };
+                                        } else {
+                                            tool_result.clone()
+                                        };
 
-                                    // Count tokens in the error prompt
-                                    self_ref.add_request_tokens(&error_prompt);
-                                    // Send the error prompt based on the model type
-                                    let error_result = match &self_ref.chat {
-                                        ModelType::Anthropic(_) => {
-                                            self_ref.chat.prompt(error_prompt).await
-                                        }
-                                        ModelType::OpenAI(agent) => {
-                                            // For OpenAI, we need to ensure the error is properly processed
-                                            if debug_mode {
-                                                println!("[DEBUG] Directly calling OpenAI agent with error");
+                                        // Generate a summary of the chat history to provide context
+                                        let history_summary =
+                                            ProbeChat::generate_history_summary(&chat_history);
+
+                                        // Continue the conversation with chat history, latest user message, and tool result
+                                        let continuation_prompt = match &self_ref.chat {
+                                            ModelType::Anthropic(_) => format!(
+                                                "Previous conversation:\n{}\n\nUser: {}\n\ntool: {} {}\n\nTool result:\n<tool_output>\n{}\n</tool_output>\n\nPlease continue based on this information.",
+                                                history_summary, latest_user_text_for_continuation, tool_name, tool_params_clone, truncated_result
+                                            ),
+                                            ModelType::OpenAI(_) => {
+                                                // For OpenAI, use a direct format similar to the example
+                                                if debug_mode {
+                                                    println!("[DEBUG] Creating OpenAI continuation prompt with direct format");
+                                                    println!("[DEBUG] Tool result length: {} characters", truncated_result.len());
+                                                }
+
+                                                // Format similar to the example, but include chat history
+                                                format!(
+                                                    "You are a code search assistant. Previous conversation:\n{}\n\nThe user asked: {}\n\nHere are the search results for query '{}':\n{}\n\nProvide a detailed answer based on these search results.",
+                                                    history_summary,
+                                                    latest_user_text_for_continuation,
+                                                    tool_params_clone,
+                                                    truncated_result
+                                                )
+                                            },
+                                        };
+
+                                        // Count tokens in the continuation prompt
+                                        self_ref.add_request_tokens(&continuation_prompt);
+                                        // Send the continuation prompt based on the model type
+                                        let continuation_result = match &self_ref.chat {
+                                            ModelType::Anthropic(_) => {
+                                                self_ref.chat.prompt(continuation_prompt).await
                                             }
+                                            ModelType::OpenAI(agent) => {
+                                                // For OpenAI, we need to ensure the tool result is properly processed
+                                                if debug_mode {
+                                                    println!("[DEBUG] Directly calling OpenAI agent with tool result");
+                                                }
 
-                                            // Create a new prompt that includes the original question and the error
-                                            let direct_error_prompt = format!(
-                                                "The user asked: '{}'\n\nI tried to search the codebase but encountered an error: {}\n\nPlease apologize to the user and suggest alternative search terms.",
-                                                latest_user_text_for_continuation,
-                                                e
-                                            );
-
-                                            if debug_mode {
-                                                println!(
-                                                    "[DEBUG] Direct OpenAI error prompt:\n{}",
-                                                    direct_error_prompt
+                                                // Create a new prompt that includes chat history, original question, and search results
+                                                let direct_prompt = format!(
+                                                    "Previous conversation:\n{}\n\nThe user asked: '{}'\n\nI searched the codebase and found:\n{}\n\nBased on these search results, provide a detailed answer about the user's question.",
+                                                    history_summary,
+                                                    latest_user_text_for_continuation,
+                                                    truncated_result
                                                 );
+
+                                                if debug_mode {
+                                                    println!(
+                                                        "[DEBUG] Direct OpenAI prompt:\n{}",
+                                                        direct_prompt
+                                                    );
+                                                }
+
+                                                // Call the OpenAI agent directly
+                                                agent.prompt(direct_prompt).await
                                             }
+                                        };
 
-                                            // Call the OpenAI agent directly
-                                            agent.prompt(direct_error_prompt).await
-                                        }
-                                    };
+                                        match continuation_result {
+                                            Ok(next_result) => {
+                                                current_result = next_result;
 
-                                    match error_result {
-                                        Ok(next_result) => {
-                                            current_result = next_result;
+                                                // Count tokens in the response
+                                                self_ref.add_response_tokens(&current_result);
 
-                                            // Count tokens in the response
-                                            self_ref.add_response_tokens(&current_result);
+                                                // Get current token usage
+                                                let (request_tokens, response_tokens) =
+                                                    self_ref.get_token_usage();
 
-                                            // Get current token usage
-                                            let (request_tokens, response_tokens) =
-                                                self_ref.get_token_usage();
+                                                // Debug the continuation response
+                                                if debug_mode {
+                                                    println!("\n[DEBUG] Continuation response:");
+                                                    println!("{}", current_result);
+                                                    println!("\n[DEBUG] Updated token usage - Request: {}, Response: {}, Total: {}",
+                                                        request_tokens, response_tokens, request_tokens + response_tokens);
+                                                }
 
-                                            if debug_mode {
-                                                println!("\n[DEBUG] Error continuation response:");
-                                                println!("{}", current_result);
-                                                println!("\n[DEBUG] Updated token usage - Request: {}, Response: {}, Total: {}",
-                                                    request_tokens, response_tokens, request_tokens + response_tokens);
+                                                // If there are no more tool calls, add the result to the response
+                                                if !current_result.contains("tool:") {
+                                                    response_accumulator.push_str(&current_result);
+                                                    break;
+                                                }
                                             }
-
-                                            // If there are no more tool calls, add the result to the response
-                                            if !current_result.contains("tool:") {
-                                                response_accumulator.push_str(&current_result);
+                                            Err(e) => {
+                                                if debug_mode {
+                                                    println!(
+                                                        "\n[DEBUG] Error getting continuation: {}",
+                                                        e
+                                                    );
+                                                }
+                                                response_accumulator
+                                                    .push_str(&format!("\nError: {}\n", e));
                                                 break;
                                             }
                                         }
-                                        Err(e) => {
-                                            if debug_mode {
-                                                println!(
-                                                    "\n[DEBUG] Error getting continuation: {}",
+                                    }
+                                    Err(e) => {
+                                        if debug_mode {
+                                            println!("\n[DEBUG] Tool error: {}", e);
+                                        }
+                                        if debug_mode {
+                                            response_accumulator.push_str(&format!(
+                                                "tool: {} {}\n\nTool error: {}\n\n",
+                                                tool_name, tool_params_clone, e
+                                            ));
+                                        } else {
+                                            // In non-debug mode, wrap the error in XML tags
+                                            response_accumulator.push_str(&format!(
+                                                "<tool_output>\nError: {}\n</tool_output>\n\n",
+                                                e
+                                            ));
+                                        }
+
+                                        // Generate a summary of the chat history for error handling
+                                        let history_summary =
+                                            ProbeChat::generate_history_summary(&chat_history);
+
+                                        // Continue with the error information including chat history
+                                        let error_prompt = match &self_ref.chat {
+                                            ModelType::Anthropic(_) => format!(
+                                                "Previous conversation:\n{}\n\nUser: {}\n\ntool: {} {}\n\nTool error: <tool_output>\n{}\n</tool_output>\n\nPlease continue based on this information.",
+                                                history_summary, latest_user_text_for_continuation, tool_name, tool_params_clone, e
+                                            ),
+                                            ModelType::OpenAI(_) => {
+                                                // For OpenAI, use a direct format similar to the example
+                                                if debug_mode {
+                                                    println!("[DEBUG] Creating OpenAI error prompt with direct format");
+                                                }
+
+                                                // Format similar to the example, but include chat history
+                                                format!(
+                                                    "You are a code search assistant. Previous conversation:\n{}\n\nThe user asked: {}\n\nI tried to search with query '{}' but encountered this error: {}\n\nPlease apologize to the user and suggest alternative search terms.",
+                                                    history_summary,
+                                                    latest_user_text_for_continuation,
+                                                    tool_params_clone,
+                                                    e
+                                                )
+                                            },
+                                        };
+
+                                        // Count tokens in the error prompt
+                                        self_ref.add_request_tokens(&error_prompt);
+                                        // Send the error prompt based on the model type
+                                        let error_result = match &self_ref.chat {
+                                            ModelType::Anthropic(_) => {
+                                                self_ref.chat.prompt(error_prompt).await
+                                            }
+                                            ModelType::OpenAI(agent) => {
+                                                // For OpenAI, we need to ensure the error is properly processed
+                                                if debug_mode {
+                                                    println!("[DEBUG] Directly calling OpenAI agent with error");
+                                                }
+
+                                                // Create a new prompt that includes chat history, original question, and the error
+                                                let direct_error_prompt = format!(
+                                                    "Previous conversation:\n{}\n\nThe user asked: '{}'\n\nI tried to search the codebase with the query but encountered an error: {}\n\nPlease apologize to the user and suggest alternative search terms.",
+                                                    history_summary,
+                                                    latest_user_text_for_continuation,
                                                     e
                                                 );
+
+                                                if debug_mode {
+                                                    println!(
+                                                        "[DEBUG] Direct OpenAI error prompt:\n{}",
+                                                        direct_error_prompt
+                                                    );
+                                                }
+
+                                                // Call the OpenAI agent directly
+                                                agent.prompt(direct_error_prompt).await
                                             }
-                                            response_accumulator
-                                                .push_str(&format!("\nError: {}\n", e));
-                                            break;
+                                        };
+
+                                        match error_result {
+                                            Ok(next_result) => {
+                                                current_result = next_result;
+
+                                                // Count tokens in the response
+                                                self_ref.add_response_tokens(&current_result);
+
+                                                // Get current token usage
+                                                let (request_tokens, response_tokens) =
+                                                    self_ref.get_token_usage();
+
+                                                if debug_mode {
+                                                    println!(
+                                                        "\n[DEBUG] Error continuation response:"
+                                                    );
+                                                    println!("{}", current_result);
+                                                    println!("\n[DEBUG] Updated token usage - Request: {}, Response: {}, Total: {}",
+                                                        request_tokens, response_tokens, request_tokens + response_tokens);
+                                                }
+
+                                                // If there are no more tool calls, add the result to the response
+                                                if !current_result.contains("tool:") {
+                                                    response_accumulator.push_str(&current_result);
+                                                    break;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                if debug_mode {
+                                                    println!(
+                                                        "\n[DEBUG] Error getting continuation: {}",
+                                                        e
+                                                    );
+                                                }
+                                                response_accumulator
+                                                    .push_str(&format!("\nError: {}\n", e));
+                                                break;
+                                            }
                                         }
                                     }
                                 }
+                            } else {
+                                // No JSON object found
+                                if debug_mode {
+                                    println!(
+                                        "[DEBUG] No JSON object found in tool call: {}",
+                                        tool_call
+                                    );
+                                }
+                                response_accumulator.push_str(&format!(
+                                    "tool: {}\n\nTool parse error: invalid syntax.\n\n",
+                                    tool_call
+                                ));
+
+                                // Skip to the next part of the response
+                                if let Some(end_idx) = rest.find('\n') {
+                                    current_result = rest[end_idx + 1..].to_string();
+                                } else {
+                                    current_result = String::new();
+                                }
+                                continue;
                             }
                         } else {
                             // Invalid tool call format
                             if debug_mode {
+                                println!("[DEBUG] Invalid tool call format: {}", tool_call);
                                 response_accumulator.push_str(&format!(
                                     "tool: {}\n\nTool parse error: invalid syntax.\n\n",
                                     tool_call
@@ -883,8 +1126,11 @@ impl RigChat for ProbeChat {
                             }
 
                             // Skip this tool call and continue with the rest of the response
-                            let remaining_text = rest[end..].trim().to_string();
-                            current_result = remaining_text;
+                            if let Some(end_idx) = rest.find('\n') {
+                                current_result = rest[end_idx + 1..].to_string();
+                            } else {
+                                current_result = String::new();
+                            }
 
                             // If there are no more tool calls, add the result to the response
                             if !current_result.contains("tool:") {
@@ -898,6 +1144,12 @@ impl RigChat for ProbeChat {
                         break;
                     }
                 }
+            }
+
+            // Add a message if the maximum tool calls limit was reached
+            if tool_call_count >= MAX_TOOL_CALLS {
+                response_accumulator
+                    .push_str("\nMaximum tool calls reached. Please refine your query.\n");
             }
 
             if debug_mode {
@@ -916,7 +1168,7 @@ pub async fn handle_chat() -> Result<()> {
     let mut conversation_history = Vec::new();
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() != "";
 
-    // Get model information for display
+    // Get model information for display (prefixed with underscore to indicate intentional non-use)
     let (api_name, model_name) = match &chat.chat {
         ModelType::Anthropic(_) => {
             let model =
@@ -929,38 +1181,22 @@ pub async fn handle_chat() -> Result<()> {
         }
     };
 
-    // Display a nice welcome message
+    println!("{}", "Welcome to Probe AI Assistant".bold().bright_blue());
     println!(
         "{}",
-        "╭───────────────────────────────────────────────────────────────────╮".cyan()
-    );
-    println!(
-        "{} {:<65} {}",
-        "│".cyan(),
-        "Welcome to Probe AI Assistant".bold().bright_blue(),
-        "│".cyan()
-    );
-    println!(
-        "{} {:<65} {}",
-        "│".cyan(),
-        format!("Using {} API with model: {}", api_name, model_name.dimmed()).dimmed(),
-        "│".cyan()
-    );
-    println!(
-        "{} {:<65} {}",
-        "│".cyan(),
-        "Ask questions about your codebase or search for code patterns".dimmed(),
-        "│".cyan()
-    );
-    println!(
-        "{} {:<65} {}",
-        "│".cyan(),
-        "Type 'quit' to exit, 'help' for command list".dimmed(),
-        "│".cyan()
+        format!("Using {} API with model: {}", api_name, model_name.dimmed()).dimmed()
     );
     println!(
         "{}",
-        "╰───────────────────────────────────────────────────────────────────╯".cyan()
+        "Ask questions about your codebase or search for code patterns".dimmed()
+    );
+    println!(
+        "{}",
+        "Type 'quit' to exit, 'help' for command list".dimmed()
+    );
+    println!(
+        "{}",
+        "───────────────────────────────────────────────────────────────────".cyan()
     );
 
     loop {
@@ -1007,28 +1243,38 @@ pub async fn handle_chat() -> Result<()> {
                 // Use a more robust regex that handles multiline tool outputs
                 let filtered_response = match &chat.chat {
                     ModelType::Anthropic(_) => {
-                        // For Anthropic, look for the <tool_output> tags
-                        MULTILINE_TOOL_OUTPUT_REGEX
-                            .replace_all(
-                                &response,
-                                format!(
-                                    "{}\n\n",
-                                    "Tool results processed (hidden from output)"
-                                        .italic()
-                                        .dimmed()
+                        // For Anthropic, look for the <tool_output> tags with fallback
+                        if MULTILINE_TOOL_OUTPUT_REGEX.is_match(&response) {
+                            MULTILINE_TOOL_OUTPUT_REGEX
+                                .replace_all(
+                                    &response,
+                                    format!(
+                                        "{}\n\n",
+                                        "Tool results processed (hidden from output)"
+                                            .italic()
+                                            .dimmed()
+                                    )
+                                    .as_str(),
                                 )
-                                .as_str(),
-                            )
-                            .to_string()
+                                .to_string()
+                        } else {
+                            // If no match found, just use the original response
+                            response.clone()
+                        }
                     }
                     ModelType::OpenAI(_) => {
-                        // For OpenAI, look for the search results section with our new format
-                        SEARCH_RESULTS_REGEX
-                            .replace_all(
-                                &response,
-                                "I have analyzed the search results. Provide a detailed",
-                            )
-                            .to_string()
+                        // For OpenAI, look for the search results section with our new format with fallback
+                        if SEARCH_RESULTS_REGEX.is_match(&response) {
+                            SEARCH_RESULTS_REGEX
+                                .replace_all(
+                                    &response,
+                                    "I have analyzed the search results. Provide a detailed",
+                                )
+                                .to_string()
+                        } else {
+                            // If no match found, just use the original response
+                            response.clone()
+                        }
                     }
                 };
 
@@ -1130,7 +1376,6 @@ fn display_help() {
         "  DEBUG             - Set to any value to enable debug output".dimmed()
     );
     println!();
-    println!("{}", "Example queries:".bold());
     println!(
         "{}",
         "  \"Find all implementations of the search function\"".dimmed()

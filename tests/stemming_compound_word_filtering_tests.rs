@@ -489,27 +489,23 @@ fn test_negative_compound_word_in_existing_tests(temp_path: &Path) {
     );
     println!("✓ Negative compound word properly excludes files with compound parts");
 
-    // Test excluded terms extraction directly
-    // Check if ANY_TERM environment variable is set
-    let any_term = std::env::var("ANY_TERM").unwrap_or_default() == "1";
-    let ast = parse_query(query, any_term).unwrap();
-    let mut excluded_terms = HashSet::new();
-    probe::search::query::extract_excluded_terms(&ast, &mut excluded_terms);
+    // Test excluded terms extraction directly using QueryPlan
+    let plan = create_query_plan(query, false).unwrap();
 
-    // Check that the original term is excluded
+    // Check that the original term is in the excluded_terms set
     assert!(
-        excluded_terms.contains("networkfirewall"),
-        "Original term 'networkfirewall' should be excluded"
+        plan.excluded_terms.contains("networkfirewall"),
+        "Original term 'networkfirewall' should be in excluded_terms"
     );
 
     // We don't split excluded terms, so compound parts should not be in the excluded terms set
     assert!(
-        !excluded_terms.contains("network"),
-        "Compound part 'network' should not be excluded"
+        !plan.excluded_terms.contains("network"),
+        "Compound part 'network' should not be in excluded_terms"
     );
     assert!(
-        !excluded_terms.contains("firewall"),
-        "Compound part 'firewall' should not be excluded"
+        !plan.excluded_terms.contains("firewall"),
+        "Compound part 'firewall' should not be in excluded_terms"
     );
     println!("✓ Excluded terms extraction properly handles compound words");
 

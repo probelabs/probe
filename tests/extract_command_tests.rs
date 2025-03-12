@@ -151,6 +151,7 @@ fn test_format_and_print_extraction_results() {
         block_total_matches: None,
         parent_file_id: None,
         block_id: None,
+        matched_keywords: None,
     };
 
     // Test different formats

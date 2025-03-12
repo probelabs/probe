@@ -27,7 +27,7 @@ if (AUTH_ENABLED) {
 }
 
 // Get custom API URLs if provided
-const ANTHROPIC_API_URL = process.env.ANTHROPIC_API_URL || 'https://api.anthropic.com';
+const ANTHROPIC_API_URL = process.env.ANTHROPIC_API_URL || 'https://api.anthropic.com/v1';
 const OPENAI_API_URL = process.env.OPENAI_API_URL || 'https://api.openai.com/v1';
 
 // Get model override if provided
@@ -138,7 +138,7 @@ async function handleNonStreamingChatRequest(req, res, message) {
 		};
 
 		// Add API-specific options
-		if (apiType === 'anthropic') {
+		if (apiType === 'anthropic' && defaultModel.includes('3-7')) {
 			generateOptions.experimental_thinking = {
 				enabled: true,
 				budget: 8000
@@ -167,10 +167,41 @@ async function handleNonStreamingChatRequest(req, res, message) {
 		console.log('Finished generating non-streaming response');
 	} catch (error) {
 		console.error('Error generating response:', error);
-		res.writeHead(500, { 'Content-Type': 'application/json' });
+
+		// Determine the appropriate status code and error message
+		let statusCode = 500;
+		let errorMessage = 'Internal server error';
+
+		if (error.status) {
+			// Handle API-specific error codes
+			statusCode = error.status;
+
+			// Provide more specific error messages based on status code
+			if (statusCode === 401) {
+				errorMessage = 'Authentication failed: Invalid API key';
+			} else if (statusCode === 403) {
+				errorMessage = 'Authorization failed: Insufficient permissions';
+			} else if (statusCode === 404) {
+				errorMessage = 'Resource not found: Check API endpoint URL';
+			} else if (statusCode === 429) {
+				errorMessage = 'Rate limit exceeded: Too many requests';
+			} else if (statusCode >= 500) {
+				errorMessage = 'API server error: Service may be unavailable';
+			}
+		} else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+			// Handle connection errors
+			statusCode = 503;
+			errorMessage = 'Connection failed: Unable to reach API server';
+		} else if (error.message && error.message.includes('timeout')) {
+			statusCode = 504;
+			errorMessage = 'Request timeout: API server took too long to respond';
+		}
+
+		res.writeHead(statusCode, { 'Content-Type': 'application/json' });
 		res.end(JSON.stringify({
-			error: 'Error generating response',
-			message: error.message
+			error: errorMessage,
+			message: error.message,
+			status: statusCode
 		}));
 	}
 }
@@ -222,7 +253,7 @@ async function handleStreamingChatRequest(req, res, message) {
 		};
 
 		// Add API-specific options
-		if (apiType === 'anthropic') {
+		if (apiType === 'anthropic' && defaultModel.includes('3-7')) {
 			streamOptions.experimental_thinking = {
 				enabled: true,
 				budget: 8000
@@ -251,8 +282,39 @@ async function handleStreamingChatRequest(req, res, message) {
 		console.log('Finished streaming response');
 	} catch (error) {
 		console.error('Error streaming response:', error);
-		res.writeHead(500, { 'Content-Type': 'text/plain' });
-		res.end('Error generating response');
+
+		// Determine the appropriate status code and error message
+		let statusCode = 500;
+		let errorMessage = 'Internal server error';
+
+		if (error.status) {
+			// Handle API-specific error codes
+			statusCode = error.status;
+
+			// Provide more specific error messages based on status code
+			if (statusCode === 401) {
+				errorMessage = 'Authentication failed: Invalid API key';
+			} else if (statusCode === 403) {
+				errorMessage = 'Authorization failed: Insufficient permissions';
+			} else if (statusCode === 404) {
+				errorMessage = 'Resource not found: Check API endpoint URL';
+			} else if (statusCode === 429) {
+				errorMessage = 'Rate limit exceeded: Too many requests';
+			} else if (statusCode >= 500) {
+				errorMessage = 'API server error: Service may be unavailable';
+			}
+		} else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+			// Handle connection errors
+			statusCode = 503;
+			errorMessage = 'Connection failed: Unable to reach API server';
+		} else if (error.message && error.message.includes('timeout')) {
+			statusCode = 504;
+			errorMessage = 'Request timeout: API server took too long to respond';
+		}
+
+		// For streaming responses, we need to send a plain text error
+		res.writeHead(statusCode, { 'Content-Type': 'text/plain' });
+		res.end(`Error: ${errorMessage} - ${error.message}`);
 	}
 }
 
@@ -260,25 +322,83 @@ async function handleStreamingChatRequest(req, res, message) {
  * Get system message with folder context
  */
 function getSystemMessage() {
-	let systemMessage = `You are a helpful assistant that can search code repositories, and answer user questions in detail.
+	let systemMessage = `## Revised Prompt/Guidelines
 
-You have access to a powerful searchCode tool that you MUST use to answer questions about the codebase.
-ALWAYS use the searchCode tool first before attempting to answer questions about the code.
-Also output the main code structure related to query, with file names and line numbers.
+**Role:**
+You are a helpful assistant that can search a codebase using a specialized tool called 'searchCode'. You must:
+1. **Always** use the 'searchCode' tool before providing an answer that references the code.
+2. Base your code-related answers **only** on what is found using the 'searchCode' tool.
+3. Provide detailed answers, including relevant file names and line numbers.
 
-When using searchCode tool:
-- Try simpler queries (e.g. use 'rpc' instead of 'rpc layer implementation')
-- Focus on keywords that would appear in code
-- Split distinct terms into separate searches, unless they should be search together
-- Use multiple searchCode tool calls if needed
-- If you can't find what you want after multiple attempts, ask the user for more context
-- While doing multiple calls, do not repeat the same queries
+---
 
-Always base your knowledge only on results from the searchCode tool.
-When you do not know something, do one more request, and if it fails to answer, acknowledge the issue and ask for more context.
+### 1. Use the 'searchCode' Tool First
+Whenever a user’s question involves code (e.g., wanting to see how something is implemented, or referencing functions/classes/configuration), **immediately** make one or more calls to the 'searchCode' tool. 
 
-After receiving search results, provide a detailed answer based on the code you found.
-Where relevant, include diagrams in mermaid format.`;
+- **Examples** of usage:
+  - If the user asks: “How is request size and response size handled in an analytics plugin?”  
+    Use 'searchCode' with queries like:
+    '(analytics OR plugin) AND (requestSize OR responseSize)'
+    or more refined approaches:
+    '+analytics +request +response'
+    or:
+    'plugin AND "request size" AND "response size"'
+    adjusting as needed to narrow or broaden results.
+
+### 2. Elasticsearch-Like Query Syntax
+The 'searchCode' tool supports an Elasticsearch-like syntax. Use it to refine searches:
+- **Basic Term Search:** 'config'
+- **Required Terms:** '+parse +request'
+- **Excluded Terms:** 'rpc -test'
+- **Logical Operators:** 
+  - 'term1 AND term2'
+  - 'term1 OR term2'
+- **Field-Specific Searching:** 
+  - 'function:parse'
+  - 'file:PluginAnalytics'
+- **Grouping:** '(analytics OR plugin) AND (requestSize OR responseSize)'
+
+**Tips**:
+- Start with the most **relevant** keywords.
+- Incorporate additional terms (like +, -, AND, OR) only as needed.
+- If nothing is found or results are insufficient, **broaden** or **change** your search in subsequent calls.
+- Keep queries concise, focusing on key terms that are likely present in the code.
+
+### 3. Provide a Detailed Response
+After you have search results from the 'searchCode' tool, **use them directly** to form your answer:
+1. **Summarize** what the code does, referencing relevant lines.
+2. Include **file names** and **line numbers** for clarity.
+3. If the code does not answer the question directly or more context is needed, state that clearly.
+
+### 4. If No Relevant Results
+- If you cannot find the requested information after **multiple** refined searches, ask for further context:
+  - Example: “I couldn’t find references to the 'AnalyticsPlugin' handling both request and response sizes in the codebase. Could you clarify which repository or module you’re referring to?”
+
+### 5. General Flow for Each User Query
+1. **Read** the user’s question.
+2. **Determine** relevant keywords and combine them using the syntax guidelines.
+3. **Call** the 'searchCode' tool with your best guess.
+4. If needed, **refine** or **broaden** your search in one or two more attempts.
+5. **Provide** an answer referencing the search results (file name, line number, code snippet).
+6. If no results, ask the user to clarify.
+
+---
+
+## Example Interaction Flow
+
+**User:** “Would an analytics plugin provide both request and response sizes?”
+
+1. **searchCode** call:
+   '(analytics OR plugin) AND (requestSize OR responseSize)'
+2. Suppose the search results show a file 'plugins/AnalyticsPlugin.java' lines 45-60 referencing request size, and lines 61-70 referencing response size.
+
+3. **Answer** (example):
+   - Summarize: “Yes, the 'AnalyticsPlugin' in 'plugins/AnalyticsPlugin.java' calculates both request and response sizes.”
+   - Show code references:
+     - Lines 45-60 for request size
+     - Lines 61-70 for response size
+
+This flow ensures you always rely on real code references and provide a structured, detailed explanation.`;
 
 	if (allowedFolders.length > 0) {
 		const folderList = allowedFolders.map(f => `"${f}"`).join(', ');
@@ -344,10 +464,30 @@ const server = createServer(async (req, res) => {
 						res.end(JSON.stringify(result));
 					} catch (error) {
 						console.error('Error executing probe command:', error);
-						res.writeHead(500, { 'Content-Type': 'application/json' });
+
+						// Determine the appropriate status code and error message
+						let statusCode = 500;
+						let errorMessage = 'Error executing probe command';
+
+						if (error.code === 'ENOENT') {
+							statusCode = 404;
+							errorMessage = 'Folder not found or not accessible';
+						} else if (error.code === 'EACCES') {
+							statusCode = 403;
+							errorMessage = 'Permission denied to access folder';
+						} else if (error.message && error.message.includes('Invalid folder')) {
+							statusCode = 400;
+							errorMessage = 'Invalid folder specified';
+						} else if (error.message && error.message.includes('timeout')) {
+							statusCode = 504;
+							errorMessage = 'Search operation timed out';
+						}
+
+						res.writeHead(statusCode, { 'Content-Type': 'application/json' });
 						res.end(JSON.stringify({
-							error: 'Error executing probe command',
-							message: error.message
+							error: errorMessage,
+							message: error.message,
+							status: statusCode
 						}));
 					}
 				} catch (error) {
@@ -448,12 +588,12 @@ const server = createServer(async (req, res) => {
 							tools: {
 								searchCode: probeTool
 							},
-							maxSteps: 15,                // Allow up to 15 tool calls
+							maxSteps: 30,                // Allow up to 15 tool calls
 							temperature: 0.1             // Low temperature for more deterministic responses
 						};
 
 						// Add API-specific options
-						if (apiType === 'anthropic') {
+						if (apiType === 'anthropic' && defaultModel.includes('3-7')) {
 							streamOptions.experimental_thinking = {
 								enabled: true,           // Enable thinking mode for Anthropic
 								budget: 8000             // Increased thinking budget to match chat.rs max_tokens
@@ -464,6 +604,9 @@ const server = createServer(async (req, res) => {
 
 						// Stream the response chunks
 						for await (const chunk of result.textStream) {
+							if (DEBUG) {
+								console.log('[DEBUG] Received chunk:', chunk);
+							}
 							res.write(chunk);
 						}
 
@@ -482,13 +625,60 @@ const server = createServer(async (req, res) => {
 						console.log('Finished streaming response');
 					} catch (error) {
 						console.error('Error streaming response:', error);
-						res.writeHead(500, { 'Content-Type': 'text/plain' });
-						res.end('Error generating response');
+
+						// Determine the appropriate status code and error message
+						let statusCode = 500;
+						let errorMessage = 'Internal server error';
+
+						if (error.status) {
+							// Handle API-specific error codes
+							statusCode = error.status;
+
+							// Provide more specific error messages based on status code
+							if (statusCode === 401) {
+								errorMessage = 'Authentication failed: Invalid API key';
+							} else if (statusCode === 403) {
+								errorMessage = 'Authorization failed: Insufficient permissions';
+							} else if (statusCode === 404) {
+								errorMessage = 'Resource not found: Check API endpoint URL';
+							} else if (statusCode === 429) {
+								errorMessage = 'Rate limit exceeded: Too many requests';
+							} else if (statusCode >= 500) {
+								errorMessage = 'API server error: Service may be unavailable';
+							}
+						} else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+							// Handle connection errors
+							statusCode = 503;
+							errorMessage = 'Connection failed: Unable to reach API server';
+						} else if (error.message && error.message.includes('timeout')) {
+							statusCode = 504;
+							errorMessage = 'Request timeout: API server took too long to respond';
+						}
+
+						// For streaming responses, we need to send a plain text error
+						res.writeHead(statusCode, { 'Content-Type': 'text/plain' });
+						res.end(`Error: ${errorMessage} - ${error.message}`);
 					}
 				} catch (error) {
-					console.error(error);
-					res.writeHead(500, { 'Content-Type': 'text/plain' });
-					res.end('Internal Server Error');
+					console.error('Error processing chat request:', error);
+
+					// Determine the appropriate status code and error message
+					let statusCode = 500;
+					let errorMessage = 'Internal Server Error';
+
+					if (error instanceof SyntaxError) {
+						statusCode = 400;
+						errorMessage = 'Invalid JSON in request body';
+					} else if (error.code === 'EACCES') {
+						statusCode = 403;
+						errorMessage = 'Permission denied';
+					} else if (error.code === 'ENOENT') {
+						statusCode = 404;
+						errorMessage = 'Resource not found';
+					}
+
+					res.writeHead(statusCode, { 'Content-Type': 'text/plain' });
+					res.end(`${errorMessage}: ${error.message}`);
 				}
 			});
 		})
@@ -519,7 +709,7 @@ const server = createServer(async (req, res) => {
 });
 
 // Start the server
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
 	console.log(`Server running on http://localhost:${PORT}`);
 	console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);

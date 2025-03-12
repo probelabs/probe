@@ -1,47 +1,365 @@
 use std::path::Path;
 
 use crate::models::SearchResult;
+use crate::search::query::QueryPlan;
 use crate::search::search_tokens::count_tokens;
 
 /// Function to format and print search results according to the specified format
-pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) {
+pub fn format_and_print_search_results(
+    results: &[SearchResult],
+    dry_run: bool,
+    format: &str,
+    query_plan: Option<&QueryPlan>,
+) {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Count valid results (with non-empty file names)
     let valid_results: Vec<&SearchResult> = results.iter().filter(|r| !r.file.is_empty()).collect();
 
-    for result in &valid_results {
+    // Check if terminal supports colors and if output is being piped
+    let use_color = match format {
+        "color" => colored::control::SHOULD_COLORIZE.should_colorize(),
+        _ => false,
+    };
+
+    // Handle different output formats
+    if use_color {
+        format_and_print_color_results(&valid_results, dry_run, query_plan, debug_mode);
+    } else {
+        // Default format (terminal)
+        for result in &valid_results {
+            let file_path = Path::new(&result.file);
+            let extension = file_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("");
+            let is_full_file = result.node_type == "file";
+
+            if dry_run {
+                // In dry-run mode, only print file names and line numbers
+                if is_full_file {
+                    println!("File: {}", result.file);
+                } else {
+                    println!(
+                        "File: {}, Lines: {}-{}",
+                        result.file, result.lines.0, result.lines.1
+                    );
+                }
+            } else {
+                // Normal mode with full content
+                if is_full_file {
+                    println!("File: {}", result.file);
+                    println!("```{}", extension);
+                    println!("{}", result.code);
+                    println!("```");
+                } else {
+                    println!("File: {}", result.file);
+                    println!("Lines: {}-{}", result.lines.0, result.lines.1);
+                    println!("```{}", extension);
+                    println!("{}", result.code);
+                    println!("```");
+                }
+            }
+            if debug_mode {
+                if let Some(rank) = result.rank {
+                    // Add a display order field to show the actual ordering of results
+                    println!(
+                        "Display Order: {}",
+                        results
+                            .iter()
+                            .position(|r| r.file == result.file && r.lines == result.lines)
+                            .unwrap_or(0)
+                            + 1
+                    );
+
+                    println!("Rank: {}", rank);
+
+                    if let Some(score) = result.score {
+                        println!("Combined Score: {:.4}", score);
+                    }
+
+                    // Display the combined score rank if available, otherwise calculate it
+                    if let Some(combined_rank) = result.combined_score_rank {
+                        println!("Combined Score Rank: {}", combined_rank);
+                    } else {
+                        // Fall back to the old behavior if the field isn't set
+                        println!("Combined Score Rank: {}", rank);
+                    }
+
+                    if let Some(tfidf_score) = result.tfidf_score {
+                        println!("TF-IDF Score: {:.4}", tfidf_score);
+                    }
+
+                    if let Some(tfidf_rank) = result.tfidf_rank {
+                        println!("TF-IDF Rank: {}", tfidf_rank);
+                    }
+
+                    if let Some(bm25_score) = result.bm25_score {
+                        println!("BM25 Score: {:.4}", bm25_score);
+                    }
+
+                    if let Some(bm25_rank) = result.bm25_rank {
+                        println!("BM25 Rank: {}", bm25_rank);
+                    }
+
+                    // Display Hybrid 2 score and rank with more prominence
+                    if let Some(new_score) = result.new_score {
+                        println!("Hybrid 2 Score: {:.4}", new_score);
+                    }
+
+                    if let Some(hybrid2_rank) = result.hybrid2_rank {
+                        println!("Hybrid 2 Rank: {}", hybrid2_rank);
+                    } else if result.new_score.is_some() {
+                        println!("Hybrid 2 Rank: N/A");
+                    }
+
+                    if let Some(file_unique_terms) = result.file_unique_terms {
+                        println!("File Unique Terms: {}", file_unique_terms);
+                    }
+
+                    if let Some(file_total_matches) = result.file_total_matches {
+                        println!("File Total Matches: {}", file_total_matches);
+                    }
+
+                    if let Some(file_match_rank) = result.file_match_rank {
+                        println!("File Match Rank: {}", file_match_rank);
+                    }
+
+                    if let Some(block_unique_terms) = result.block_unique_terms {
+                        println!("Block Unique Terms: {}", block_unique_terms);
+                    }
+
+                    if let Some(block_total_matches) = result.block_total_matches {
+                        println!("Block Total Matches: {}", block_total_matches);
+                    }
+
+                    println!("Type: {}", result.node_type);
+                }
+            }
+        }
+    }
+
+    println!("Found {} search results", valid_results.len());
+
+    let total_bytes: usize = valid_results.iter().map(|r| r.code.len()).sum();
+    let total_tokens: usize = valid_results.iter().map(|r| count_tokens(&r.code)).sum();
+    println!("Total bytes returned: {}", total_bytes);
+    println!("Total tokens returned: {}", total_tokens);
+}
+
+/// Format and print search results with color highlighting for matching words
+fn format_and_print_color_results(
+    results: &[&SearchResult],
+    dry_run: bool,
+    query_plan: Option<&QueryPlan>,
+    debug_mode: bool,
+) {
+    use colored::*;
+    use regex::Regex;
+
+    if results.is_empty() {
+        println!("No results found.");
+        return;
+    }
+
+    // Print a header with the number of results
+    println!("{}", format!("Found {} results", results.len()).bold());
+    println!();
+
+    // Print the results
+    for (index, result) in results.iter().enumerate() {
+        // Get file extension
         let file_path = Path::new(&result.file);
         let extension = file_path
             .extension()
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
+
+        // Check if this is a full file or partial file
         let is_full_file = result.node_type == "file";
 
-        if dry_run {
-            // In dry-run mode, only print file names and line numbers
-            if is_full_file {
-                println!("File: {}", result.file);
-            } else {
-                println!(
-                    "File: {}, Lines: {}-{}",
-                    result.file, result.lines.0, result.lines.1
-                );
-            }
+        // Print result number
+        println!(
+            "{} {}",
+            "Result".bold().blue(),
+            format!("#{}", index + 1).bold().blue()
+        );
+
+        // Print the file path and node info with color
+        if is_full_file {
+            println!("{} {}", "File:".bold().green(), result.file.yellow());
         } else {
-            // Normal mode with full content
-            if is_full_file {
-                println!("File: {}", result.file);
-                println!("```{}", extension);
-                println!("{}", result.code);
-                println!("```");
-            } else {
-                println!("File: {}", result.file);
-                println!("Lines: {}-{}", result.lines.0, result.lines.1);
-                println!("```{}", extension);
-                println!("{}", result.code);
-                println!("```");
+            println!(
+                "{} {} ({})",
+                "File:".bold().green(),
+                result.file.yellow(),
+                result.node_type.cyan()
+            );
+            println!(
+                "{} {}-{}",
+                "Lines:".bold().green(),
+                result.lines.0,
+                result.lines.1
+            );
+        }
+
+        // Print additional debug information if in debug mode
+        if debug_mode {
+            // Print the same debug info that would be shown in standard mode
+            if let Some(keywords) = &result.matched_keywords {
+                println!("{} {:?}", "Matched Keywords:".bold().green(), keywords);
             }
+            if let Some(score) = result.score {
+                println!("{} {:.4}", "Score:".bold().green(), score);
+            }
+            if let Some(query_plan) = query_plan {
+                println!("{} {:?}", "Query Plan:".bold().green(), query_plan);
+            }
+        }
+
+        if dry_run {
+            // In dry-run mode, don't print the content
+            continue;
+        }
+
+        // Determine the language for syntax highlighting
+        let language = match extension {
+            "rs" => "rust",
+            "py" => "python",
+            "js" => "javascript",
+            "ts" => "typescript",
+            "go" => "go",
+            "c" | "h" => "c",
+            "cpp" | "cc" | "cxx" | "hpp" => "cpp",
+            "java" => "java",
+            "rb" => "ruby",
+            "php" => "php",
+            "sh" => "bash",
+            "md" => "markdown",
+            "json" => "json",
+            "yaml" | "yml" => "yaml",
+            "html" => "html",
+            "css" => "css",
+            "sql" => "sql",
+            "kt" | "kts" => "kotlin",
+            "swift" => "swift",
+            "scala" => "scala",
+            "dart" => "dart",
+            "ex" | "exs" => "elixir",
+            "hs" => "haskell",
+            "clj" => "clojure",
+            "lua" => "lua",
+            "r" => "r",
+            "pl" | "pm" => "perl",
+            "proto" => "protobuf",
+            _ => "",
+        };
+
+        println!("{}", "Code:".bold().magenta());
+
+        // Print the code with syntax highlighting
+        if !language.is_empty() {
+            println!("{}", format!("```{}", language).cyan());
+        } else {
+            println!("{}", "```".cyan());
+        }
+
+        // Generate patterns from the matched keywords in the search result
+        let mut patterns = Vec::new();
+
+        // Use the matched keywords from the search result if available
+        if let Some(keywords) = &result.matched_keywords {
+            for keyword in keywords {
+                // Create a case-insensitive regex for the keyword with word boundaries
+                if let Ok(regex) = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(keyword))) {
+                    patterns.push(regex);
+                }
+
+                // Also try to match camelCase/PascalCase variations
+                if let Ok(regex) = Regex::new(&format!(r"(?i){}", regex::escape(keyword))) {
+                    patterns.push(regex);
+                }
+            }
+        }
+
+        // If no patterns were generated, add some default patterns
+        if patterns.is_empty() {
+            // Use lazily initialized static regexes to avoid recompilation
+            lazy_static::lazy_static! {
+                static ref STRUCT_REGEX: Regex = Regex::new(r"(?i)struct").unwrap();
+                static ref SEARCH_REGEX: Regex = Regex::new(r"(?i)search").unwrap();
+                static ref RESULT_REGEX: Regex = Regex::new(r"(?i)result").unwrap();
+            }
+
+            patterns.push(STRUCT_REGEX.clone());
+            patterns.push(SEARCH_REGEX.clone());
+            patterns.push(RESULT_REGEX.clone());
+        }
+
+        // Process the code line by line with inline highlighting
+        for line in result.code.lines() {
+            let mut output_line = String::new();
+            let mut last_end = 0;
+            let mut matches = Vec::new();
+
+            // Collect all matches from all patterns
+            for pattern in &patterns {
+                for mat in pattern.find_iter(line) {
+                    matches.push((mat.start(), mat.end()));
+                }
+            }
+
+            // Sort matches by start position
+            matches.sort_by_key(|&(start, _)| start);
+
+            // Merge overlapping matches
+            let mut merged_matches = Vec::new();
+            for (start, end) in matches {
+                if let Some((_, prev_end)) = merged_matches.last() {
+                    if start <= *prev_end {
+                        // Overlapping match, extend the previous one
+                        let last_idx = merged_matches.len() - 1;
+                        merged_matches[last_idx].1 = end.max(*prev_end);
+                        continue;
+                    }
+                }
+                merged_matches.push((start, end));
+            }
+
+            // Build the highlighted line
+            for &(start, end) in &merged_matches {
+                // Add text before the match
+                if start > last_end {
+                    output_line.push_str(&line[last_end..start]);
+                }
+
+                // Add the highlighted match
+                let matched_text = &line[start..end];
+                output_line.push_str(&matched_text.yellow().bold().to_string());
+
+                last_end = end;
+            }
+
+            // Add any remaining text
+            if last_end < line.len() {
+                output_line.push_str(&line[last_end..]);
+            }
+
+            // Print the line (highlighted or original if no matches)
+            if !merged_matches.is_empty() {
+                println!("{}", output_line);
+            } else {
+                println!("{}", line);
+            }
+        }
+
+        println!();
+
+        // Print a separator between results
+        if index < results.len() - 1 {
+            println!();
+            println!("{}", "─".repeat(50).cyan());
+            println!();
         }
 
         if debug_mode {
@@ -120,16 +438,5 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
                 println!("Type: {}", result.node_type);
             }
         }
-
-        if !dry_run {
-            println!("\n");
-        }
     }
-
-    println!("Found {} search results", valid_results.len());
-
-    let total_bytes: usize = valid_results.iter().map(|r| r.code.len()).sum();
-    let total_tokens: usize = valid_results.iter().map(|r| count_tokens(&r.code)).sum();
-    println!("Total bytes returned: {}", total_bytes);
-    println!("Total tokens returned: {}", total_tokens);
 }

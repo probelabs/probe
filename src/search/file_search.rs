@@ -3,12 +3,9 @@ use grep::regex::RegexMatcherBuilder;
 use grep::searcher::sinks::UTF8;
 use grep::searcher::{BinaryDetection, SearcherBuilder};
 use ignore::WalkBuilder;
-use regex::Regex;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 // No need for term_exceptions import
-
-use crate::search::query::{create_term_patterns, preprocess_query, regex_escape};
 
 /// Searches a file for a pattern and returns whether it matched and the matching line numbers
 pub fn search_file_for_pattern(
@@ -349,274 +346,34 @@ pub fn find_files_with_pattern(
 }
 
 /// Function to find files whose names match query words
+/// This is now a simplified version that returns an empty vector since we're
+/// adding the filename to the top of each code block instead of using pattern matching
 pub fn find_matching_filenames(
-    path: &Path,
+    _path: &Path,
     queries: &[String],
-    already_found_files: &HashSet<PathBuf>,
-    custom_ignores: &[String],
-    allow_tests: bool,
+    _already_found_files: &HashSet<PathBuf>,
+    _custom_ignores: &[String],
+    _allow_tests: bool,
 ) -> Result<Vec<PathBuf>> {
-    let mut matching_files = Vec::new();
-    let mut excluded_files = HashSet::new();
-
-    // First, identify excluded terms from queries
-    let mut excluded_terms = HashSet::new();
-    for query in queries {
-        if query.starts_with('-') {
-            let term = query.trim_start_matches('-');
-            excluded_terms.insert(term.to_string());
-        }
-    }
-
-    // Process queries to get both original and stemmed terms
-    let queries_terms: Vec<Vec<(String, String)>> = queries
-        .iter()
-        .filter(|q| !q.starts_with('-')) // Skip negative queries for filename matching
-        .map(|q| preprocess_query(q, false)) // Use non-exact mode for filename matching
-        .collect();
-
-    // Generate all patterns using the new create_term_patterns function
-    let all_patterns: Vec<String> = queries_terms
-        .iter()
-        .flat_map(|term_pairs| {
-            // Extract just the pattern strings from the tuples
-            create_term_patterns(term_pairs)
-                .into_iter()
-                .map(|(pattern, _)| pattern)
-                .collect::<Vec<String>>()
-        })
-        .collect();
-
-    // Generate patterns for excluded terms
-    let excluded_patterns: Vec<String> = excluded_terms
-        .iter()
-        .map(|term| {
-            // Create a pattern for the exact term
-            let base_pattern = regex_escape(term);
-            format!("(\\b{}|{}\\b)", base_pattern, base_pattern)
-        })
-        .collect();
-
-    println!(
-        "Looking for filenames matching queries (with flexible patterns): {:?}",
-        queries
-    );
-
-    // Debug output for patterns
+    // Debug output
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    if debug_mode && !all_patterns.is_empty() {
-        println!("DEBUG: Using the following patterns for filename matching:");
-        for (i, pattern) in all_patterns.iter().enumerate() {
-            println!("DEBUG:   {}. {}", i + 1, pattern);
-        }
+
+    if debug_mode {
+        println!("DEBUG: Filename matching is now handled by adding the filename to the top of each code block");
+        println!("DEBUG: Queries: {:?}", queries);
     }
-
-    if debug_mode && !excluded_patterns.is_empty() {
-        println!("DEBUG: Using the following patterns for excluded filenames:");
-        for (i, pattern) in excluded_patterns.iter().enumerate() {
-            println!("DEBUG:   {}. {}", i + 1, pattern);
-        }
-    }
-
-    // Create a WalkBuilder that respects .gitignore files and common ignore patterns
-    let mut builder = WalkBuilder::new(path);
-
-    // Configure the builder to respect .gitignore files
-    builder.git_ignore(true);
-    builder.git_global(true);
-    builder.git_exclude(true);
-
-    // Add common directories to ignore
-    let mut common_ignores: Vec<String> = vec![
-        "node_modules",
-        "vendor",
-        "target",
-        "dist",
-        "build",
-        ".git",
-        ".svn",
-        ".hg",
-        ".idea",
-        ".vscode",
-        "__pycache__",
-        "*.pyc",
-        "*.pyo",
-        "*.class",
-        "*.o",
-        "*.obj",
-        "*.a",
-        "*.lib",
-        "*.so",
-        "*.dylib",
-        "*.dll",
-        "*.exe",
-        "*.out",
-        "*.app",
-        "*.jar",
-        "*.war",
-        "*.ear",
-        "*.zip",
-        "*.tar.gz",
-        "*.rar",
-        "*.log",
-        "*.tmp",
-        "*.temp",
-        "*.swp",
-        "*.swo",
-        "*.bak",
-        "*.orig",
-        "*.DS_Store",
-        "Thumbs.db",
-        "*.yml",
-        "*.yaml",
-        "*.json",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
-
-    // Add test file patterns if allow_tests is false
-    if !allow_tests {
-        let test_patterns: Vec<String> = vec![
-            "*_test.rs",
-            "*_tests.rs",
-            "test_*.rs",
-            "tests.rs",
-            "*.spec.js",
-            "*.test.js",
-            "*.spec.ts",
-            "*.test.ts",
-            "*.spec.jsx",
-            "*.test.jsx",
-            "*.spec.tsx",
-            "*.test.tsx",
-            "test_*.py",
-            "*_test.go",
-            "test_*.c",
-            "*_test.c",
-            "*_test.cpp",
-            "*_test.cc",
-            "*_test.cxx",
-            "*Test.java",
-            "*_test.rb",
-            "test_*.rb",
-            "*_spec.rb",
-            "*Test.php",
-            "test_*.php",
-            "**/tests/**",
-            "**/test/**",
-            "**/__tests__/**",
-            "**/__test__/**",
-            "**/spec/**",
-            "**/specs/**",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
-        common_ignores.extend(test_patterns);
-    }
-
-    // Add custom ignore patterns to the common ignores
-    for pattern in custom_ignores {
-        common_ignores.push(pattern.clone());
-    }
-
-    // Create a single override builder for all ignore patterns
-    let mut override_builder = ignore::overrides::OverrideBuilder::new(path);
-
-    // Add all ignore patterns to the override builder
-    for pattern in &common_ignores {
-        if let Err(err) = override_builder.add(&format!("!**/{}", pattern)) {
-            eprintln!("Error adding ignore pattern {:?}: {}", pattern, err);
-        }
-    }
-
-    // Build and apply the overrides
-    match override_builder.build() {
-        Ok(overrides) => {
-            builder.overrides(overrides);
-        }
-        Err(err) => {
-            eprintln!("Error building ignore overrides: {}", err);
-        }
-    }
-
-    // Recursively walk the directory and check each file
-    for result in builder.build() {
-        let entry = match result {
-            Ok(entry) => entry,
-            Err(err) => {
-                eprintln!("Error walking directory: {}", err);
-                continue;
-            }
-        };
-
-        // Skip directories
-        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
-        }
-
-        let file_path = entry.path();
-
-        // Skip if this file was already found in the code search
-        if already_found_files.contains(file_path) {
-            continue;
-        }
-
-        // Get the file name as a string
-        let file_name = match file_path.file_name() {
-            Some(name) => name.to_string_lossy().to_lowercase(),
-            None => continue,
-        };
-
-        // Check if any excluded pattern matches the file name
-        let is_excluded = excluded_patterns
-            .iter()
-            .any(|pattern| match Regex::new(pattern) {
-                Ok(re) => re.is_match(&file_name),
-                Err(e) => {
-                    eprintln!("Error compiling regex pattern '{}': {}", pattern, e);
-                    false
-                }
-            });
-
-        if is_excluded {
-            if debug_mode {
-                println!("DEBUG: File '{}' matched an excluded pattern", file_name);
-            }
-            excluded_files.insert(file_path.to_owned());
-            continue;
-        }
-
-        // Check if any pattern matches the file name
-        if all_patterns
-            .iter()
-            .any(|pattern| match Regex::new(pattern) {
-                Ok(re) => re.is_match(&file_name),
-                Err(e) => {
-                    eprintln!("Error compiling regex pattern '{}': {}", pattern, e);
-                    false
-                }
-            })
-        {
-            if debug_mode {
-                println!("DEBUG: File '{}' matched a pattern", file_name);
-            }
-            matching_files.push(file_path.to_owned());
-        }
-    }
-
-    // No special handling for compound words in excluded terms
 
     println!(
-        "Found {} files with names matching flexible patterns (including concatenated forms)",
-        matching_files.len()
+        "Filename matching is now handled by adding the filename to the top of each code block"
     );
-    Ok(matching_files)
+
+    // Return an empty vector since we're not using pattern matching anymore
+    Ok(Vec::new())
 }
 
 /// Compatibility function for the old get_filename_matched_queries signature
-/// This will be used by existing code until it's updated to use the new function
+/// This is now a simplified version that returns a set with all query indices
+/// since we're adding the filename to the top of each code block
 pub fn get_filename_matched_queries_compat(
     filename: &str,
     queries_terms: &[Vec<(String, String)>],
@@ -627,46 +384,30 @@ pub fn get_filename_matched_queries_compat(
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: Checking filename '{}' for term matches", filename);
+        println!(
+            "DEBUG: Filename '{}' will be added to the top of code blocks",
+            filename
+        );
     }
 
-    let filename_lower = filename.to_lowercase();
+    // Add all query indices to the matched_terms set
+    // This ensures that all terms are considered "matched" by the filename
+    for (query_idx, term_pairs) in queries_terms.iter().enumerate() {
+        matched_terms.insert(query_idx);
 
-    for term_pairs in queries_terms.iter() {
-        // Generate flexible patterns for this query's terms
-        let patterns_with_term_indices = create_term_patterns(term_pairs);
-
-        // Check each pattern against the filename
-        for (pattern, term_indices) in patterns_with_term_indices {
-            match Regex::new(&pattern) {
-                Ok(re) => {
-                    if re.is_match(&filename_lower) {
-                        // If the pattern matches, add all the term indices it corresponds to
-                        for term_idx in term_indices {
-                            if debug_mode {
-                                // Get the original term for debugging
-                                if term_idx < term_pairs.len() {
-                                    let (original_term, _) = &term_pairs[term_idx];
-                                    println!(
-                                        "DEBUG:   Term '{}' (index {}) matched in filename '{}'",
-                                        original_term, term_idx, filename
-                                    );
-                                }
-                            }
-                            matched_terms.insert(term_idx);
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error compiling regex pattern '{}': {}", pattern, e);
-                }
+        if debug_mode {
+            for (term_idx, (original_term, _)) in term_pairs.iter().enumerate() {
+                println!(
+                    "DEBUG:   Term '{}' (index {}) considered matched by filename '{}'",
+                    original_term, term_idx, filename
+                );
             }
         }
     }
 
-    if debug_mode && !matched_terms.is_empty() {
+    if debug_mode {
         println!(
-            "DEBUG:   Found {} term matches in filename '{}'",
+            "DEBUG:   Added {} term indices for filename '{}'",
             matched_terms.len(),
             filename
         );

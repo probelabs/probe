@@ -1,269 +1,6 @@
-use crate::ranking;
 use crate::search::elastic_query;
 // No term_exceptions import needed
-use crate::search::tokenization::{
-    is_english_stop_word, load_vocabulary, split_camel_case, split_compound_word, tokenize,
-};
 use std::collections::{HashMap, HashSet};
-
-/// Existing function for preprocessing a query into (original, stemmed) pairs
-/// This remains, but we add additional logic below for AST-based usage.
-pub fn preprocess_query(query: &str, exact: bool) -> Vec<(String, String)> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    if debug_mode {
-        println!("Original query: {}", query);
-    }
-
-    // Try parsing with elastic query parser first to handle negated terms
-    let excluded_terms = match elastic_query::parse_query_compat(query) {
-        Ok(ast) => {
-            if debug_mode {
-                println!("Elastic query parsed successfully: {:?}", ast);
-            }
-
-            // Extract excluded terms from the AST
-            let mut excluded = HashSet::new();
-            extract_excluded_terms(&ast, &mut excluded);
-
-            if debug_mode && !excluded.is_empty() {
-                println!("Excluded terms from query: {:?}", excluded);
-            }
-
-            excluded
-        }
-        Err(e) => {
-            if debug_mode {
-                println!("Elastic query parse error: {:?}", e);
-            }
-            HashSet::new()
-        }
-    };
-
-    if exact {
-        let result = query
-            .to_lowercase()
-            .split_whitespace()
-            .filter(|word| !word.is_empty())
-            .filter(|word| !word.starts_with('-') && !excluded_terms.contains(*word))
-            .map(|word| {
-                let original = word.to_string();
-                (original.clone(), original)
-            })
-            .collect();
-
-        if debug_mode {
-            println!("Exact mode result: {:?}", result);
-        }
-        result
-    } else {
-        let stemmer = ranking::get_stemmer();
-        let vocabulary = load_vocabulary();
-
-        let mut enhanced_vocab = vocabulary.clone();
-        for term in [
-            "rpc", "storage", "handler", "client", "server", "api", "service",
-        ] {
-            enhanced_vocab.insert(term.to_string());
-        }
-
-        let mut result = query
-            .split_whitespace()
-            .filter(|word| !word.starts_with('-'))
-            .flat_map(|word| {
-                if debug_mode {
-                    println!("Processing word: {}", word);
-                }
-
-                let camel_parts = split_camel_case(word);
-                if debug_mode {
-                    println!("After camel case split: {:?}", camel_parts);
-                }
-
-                camel_parts
-                    .into_iter()
-                    .flat_map(|part| {
-                        let compound_parts = split_compound_word(&part, &enhanced_vocab);
-                        if debug_mode {
-                            println!("After compound split of '{}': {:?}", part, compound_parts);
-                        }
-                        compound_parts
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .filter(|word| {
-                !word.is_empty() && !is_english_stop_word(word) && !excluded_terms.contains(word)
-            })
-            .map(|part| {
-                let original = part.clone();
-                let stemmed = stemmer.stem(&part).to_string();
-                if debug_mode {
-                    println!("Term: {} (stemmed to {})", original, stemmed);
-                }
-                (original, stemmed)
-            })
-            .collect::<Vec<_>>();
-
-        // Only apply tokenization if we couldn't parse the query with the elastic query parser
-        // This ensures that terms with underscores are preserved
-        if excluded_terms.is_empty() {
-            let tokens = tokenize(query);
-
-            if debug_mode {
-                println!("After tokenization: {:?}", tokens);
-            }
-
-            for token in tokens {
-                if excluded_terms.contains(&token) {
-                    continue;
-                }
-
-                let already_exists = result.iter().any(|(_, stemmed)| stemmed == &token);
-
-                if !already_exists {
-                    result.push((token.clone(), token));
-                }
-            }
-        } else if debug_mode {
-            println!(
-                "Skipping additional tokenization as query was parsed by elastic query parser"
-            );
-        }
-
-        if debug_mode {
-            println!("Final preprocessed terms: {:?}", result);
-        }
-        result
-    }
-}
-
-/// Helper function to extract excluded terms from the AST
-pub fn extract_excluded_terms(expr: &elastic_query::Expr, excluded: &mut HashSet<String>) {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    if debug_mode {
-        println!(
-            "DEBUG: Extracting excluded terms from expression: {:?}",
-            expr
-        );
-    }
-
-    match expr {
-        elastic_query::Expr::Term {
-            keywords,
-            field: _,
-            excluded: is_excluded,
-            ..
-        } => {
-            if debug_mode {
-                println!(
-                    "DEBUG: Checking term '{:?}', excluded={}",
-                    keywords, is_excluded
-                );
-            }
-
-            if *is_excluded {
-                for keyword in keywords {
-                    if debug_mode {
-                        println!("DEBUG: Found excluded keyword: '{}'", keyword);
-                    }
-
-                    // Add the original keyword
-                    excluded.insert(keyword.clone());
-
-                    // For negative terms, we don't apply compound word splitting
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Not applying compound word splitting to excluded keyword '{}'",
-                            keyword
-                        );
-                    }
-                }
-            }
-        }
-        elastic_query::Expr::And(left, right) => {
-            if debug_mode {
-                println!("DEBUG: Processing AND expression");
-            }
-            extract_excluded_terms(left, excluded);
-            extract_excluded_terms(right, excluded);
-        }
-        elastic_query::Expr::Or(left, right) => {
-            if debug_mode {
-                println!("DEBUG: Processing OR expression");
-            }
-            extract_excluded_terms(left, excluded);
-            extract_excluded_terms(right, excluded);
-        }
-    }
-
-    if debug_mode {
-        println!("DEBUG: Current excluded terms set: {:?}", excluded);
-    }
-}
-
-/// Existing function creating regex patterns for (original, stemmed) pairs.
-/// We'll keep it for backward-compat. For complex queries, we'll create specialized patterns separately.
-pub fn create_term_patterns(term_pairs: &[(String, String)]) -> Vec<(String, HashSet<usize>)> {
-    let mut patterns: Vec<(String, HashSet<usize>)> = Vec::new();
-
-    for (term_idx, (original, stemmed)) in term_pairs.iter().enumerate() {
-        let base_pattern = if original == stemmed
-            || (stemmed.len() < original.len() && original.starts_with(stemmed))
-        {
-            regex_escape(original)
-        } else if original.len() < stemmed.len() && stemmed.starts_with(original) {
-            regex_escape(stemmed)
-        } else {
-            regex_escape(original)
-        };
-
-        let term_indices = HashSet::from([term_idx]);
-        let pattern = format!("(\\b{}|{}\\b)", base_pattern, base_pattern);
-        patterns.push((pattern, term_indices.clone()));
-    }
-
-    // Concatenate combos, etc. (already existing logic)...
-
-    if term_pairs.len() > 1 {
-        let terms: Vec<(String, usize)> = term_pairs
-            .iter()
-            .enumerate()
-            .flat_map(|(term_idx, (o, s))| vec![(o.clone(), term_idx), (s.clone(), term_idx)])
-            .collect();
-
-        use itertools::Itertools;
-        let mut concatenated_patterns: std::collections::HashMap<Vec<usize>, Vec<String>> =
-            std::collections::HashMap::new();
-
-        for perm in terms.iter().permutations(2).unique() {
-            let term_indices: Vec<usize> = perm.iter().map(|(_, idx)| *idx).collect();
-            if term_indices.iter().unique().count() < 2 {
-                continue;
-            }
-            let concatenated = perm
-                .iter()
-                .map(|(term, _)| regex_escape(term))
-                .collect::<String>();
-
-            concatenated_patterns
-                .entry(term_indices)
-                .or_default()
-                .push(concatenated);
-        }
-
-        for (term_indices, pattern_group) in concatenated_patterns {
-            if pattern_group.len() == 1 {
-                patterns.push((pattern_group[0].clone(), term_indices.into_iter().collect()));
-            } else {
-                let combined_pattern = format!("({})", pattern_group.join("|"));
-                patterns.push((combined_pattern, term_indices.into_iter().collect()));
-            }
-        }
-    }
-
-    patterns
-}
 
 /// Escapes special regex characters in a string
 pub fn regex_escape(s: &str) -> String {
@@ -288,6 +25,7 @@ pub fn regex_escape(s: &str) -> String {
 
 /// A unified plan holding the parsed AST and a mapping of each AST term to an index.
 /// We store a map for quick lookups of term indices.
+#[derive(Debug)]
 pub struct QueryPlan {
     pub ast: elastic_query::Expr,
     pub term_indices: HashMap<String, usize>,
@@ -296,13 +34,49 @@ pub struct QueryPlan {
 
 /// Create a QueryPlan from a raw query string. This fully parses the query into an AST,
 /// then extracts all terms (including excluded), and prepares a term-index map.
-pub fn create_query_plan(
-    query: &str,
-    _exact: bool,
-) -> Result<QueryPlan, elastic_query::ParseError> {
+pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_query::ParseError> {
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    if exact {
+        if debug_mode {
+            println!("DEBUG: Using exact mode, bypassing complex AST parsing");
+        }
+
+        // For exact mode, create a simple Term expression with the exact query
+        // Split by whitespace to handle multi-word queries
+        let keywords: Vec<String> = query.split_whitespace().map(|s| s.to_lowercase()).collect();
+
+        // Create a simple Term expression
+        let ast = elastic_query::Expr::Term {
+            keywords: keywords.clone(),
+            field: None,
+            required: false,
+            excluded: false,
+        };
+
+        // Build term index map directly
+        let mut term_indices = HashMap::new();
+        for (i, term) in keywords.iter().enumerate() {
+            term_indices.insert(term.clone(), i);
+        }
+
+        if debug_mode {
+            println!("DEBUG: Created exact mode AST: {:?}", ast);
+            println!("DEBUG: Term indices: {:?}", term_indices);
+        }
+
+        return Ok(QueryPlan {
+            ast,
+            term_indices,
+            excluded_terms: HashSet::new(),
+        });
+    }
+
+    // For non-exact mode, use the regular AST parsing
     // Parse the query into an AST with processed terms
     // We always use AND for implicit combinations (space-separated terms)
-    let ast = elastic_query::parse_query(query, false)?;
+    let ast = elastic_query::parse_query(query, true)?;
+    println!("{}", ast);
 
     // We'll walk the AST to build a set of all terms. We track excluded as well for reference.
     let mut all_terms = Vec::new();

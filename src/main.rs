@@ -30,6 +30,7 @@ struct SearchParams {
     no_merge: bool,
     merge_threshold: Option<usize>,
     dry_run: bool,
+    format: String,
 }
 
 fn handle_search(params: SearchParams) -> Result<()> {
@@ -119,7 +120,26 @@ fn handle_search(params: SearchParams) -> Result<()> {
         println!("Search completed in {:.2?}", duration);
         println!();
 
-        format_and_print_search_results(&limited_results.results, search_options.dry_run);
+        // Pass the query plan to the format_and_print_search_results function
+        // We need to recreate the query plan here since we don't have access to it from perform_probe
+        let query_plan = if search_options.queries.len() > 1 {
+            // Join multiple queries with AND
+            let combined_query = search_options.queries.join(" AND ");
+            crate::search::query::create_query_plan(&combined_query, search_options.exact).ok()
+        } else {
+            crate::search::query::create_query_plan(
+                &search_options.queries[0],
+                search_options.exact,
+            )
+            .ok()
+        };
+
+        format_and_print_search_results(
+            &limited_results.results,
+            search_options.dry_run,
+            &params.format,
+            query_plan.as_ref(),
+        );
 
         if !limited_results.skipped_files.is_empty() {
             if let Some(limits) = &limited_results.limits_applied {
@@ -299,24 +319,37 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
-        // When no subcommand provided, default to search with empty pattern
-        None => handle_search(SearchParams {
-            pattern: String::new(),
-            paths: vec![std::path::PathBuf::from(".")],
-            files_only: false,
-            ignore: Vec::new(),
-            exclude_filenames: false,
-            reranker: String::from("hybrid"),
-            frequency_search: true,
-            exact: false,
-            max_results: None,
-            max_bytes: None,
-            max_tokens: None,
-            allow_tests: false,
-            no_merge: false,
-            merge_threshold: None,
-            dry_run: false,
-        })?,
+        // When no subcommand provided, fallback to search mode
+        None => {
+            // Use provided pattern or default to empty string
+            let pattern = args.pattern.unwrap_or_else(String::new);
+
+            // Use provided paths or default to current directory
+            let paths = if args.paths.is_empty() {
+                vec![std::path::PathBuf::from(".")]
+            } else {
+                args.paths
+            };
+
+            handle_search(SearchParams {
+                pattern,
+                paths,
+                files_only: args.files_only,
+                ignore: args.ignore,
+                exclude_filenames: args.exclude_filenames,
+                reranker: args.reranker,
+                frequency_search: args.frequency_search,
+                exact: args.exact,
+                max_results: args.max_results,
+                max_bytes: args.max_bytes,
+                max_tokens: args.max_tokens,
+                allow_tests: args.allow_tests,
+                no_merge: args.no_merge,
+                merge_threshold: args.merge_threshold,
+                dry_run: args.dry_run,
+                format: args.format,
+            })?
+        }
         Some(Commands::Search {
             pattern,
             paths,
@@ -333,6 +366,7 @@ async fn main() -> Result<()> {
             no_merge,
             merge_threshold,
             dry_run,
+            format,
         }) => handle_search(SearchParams {
             pattern,
             paths,
@@ -349,6 +383,7 @@ async fn main() -> Result<()> {
             no_merge,
             merge_threshold,
             dry_run,
+            format,
         })?,
         Some(Commands::Extract {
             files,

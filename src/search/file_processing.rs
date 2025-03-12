@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use tree_sitter;
 
 use crate::language::{is_test_file, parse_file_for_code_blocks};
 use crate::models::SearchResult;
@@ -14,91 +15,17 @@ pub struct FileProcessingParams<'a> {
     pub path: &'a Path,
     pub line_numbers: &'a HashSet<usize>,
     pub allow_tests: bool,
-    pub term_matches: Option<&'a HashMap<usize, HashSet<usize>>>,
+    pub term_matches: &'a HashMap<usize, HashSet<usize>>,
+    #[allow(dead_code)]
     pub num_queries: usize,
+    #[allow(dead_code)]
     pub filename_matched_queries: HashSet<usize>,
     pub queries_terms: &'a [Vec<(String, String)>],
     pub preprocessed_queries: Option<&'a [Vec<String>]>,
-    pub query_plan: Option<&'a crate::search::query::QueryPlan>,
+    pub query_plan: &'a crate::search::query::QueryPlan,
 
     #[allow(dead_code)]
     pub no_merge: bool,
-}
-
-/// Function to check if a code block should be included based on term matches
-/// This is a simplified version that relies on the AST evaluation
-fn filter_code_block(
-    block_lines: (usize, usize),
-    term_matches: &HashMap<usize, HashSet<usize>>,
-    num_queries: usize,
-    filename_matched_queries: &HashSet<usize>,
-    debug_mode: bool,
-) -> bool {
-    let mut matched_queries = HashSet::new();
-
-    for (query_idx, lines) in term_matches {
-        if lines
-            .iter()
-            .any(|&l| l >= block_lines.0 && l <= block_lines.1)
-        {
-            matched_queries.insert(*query_idx);
-        }
-    }
-
-    let block_unique_terms = matched_queries.len();
-
-    // We need to ensure all required terms are matched
-    // Either directly in the content or via filename matches
-    if matched_queries.is_empty() {
-        // If no terms matched in content, we can't satisfy the criteria
-        return false;
-    }
-
-    // Check if all required terms are covered
-    let term_match_criteria = (0..num_queries)
-        .all(|i| filename_matched_queries.contains(&i) || matched_queries.contains(&i));
-
-    let min_required_terms = match num_queries {
-        0 => 0,
-        1 | 2 => 1,
-        3 | 4 => 2,
-        5 | 6 => 3,
-        7 | 8 => 4,
-        9 | 10 => 5,
-        11 | 12 => 6,
-        n => (n + 1) / 2,
-    };
-
-    let unique_terms_criteria = block_unique_terms >= min_required_terms;
-    let should_include = term_match_criteria && unique_terms_criteria;
-
-    if debug_mode {
-        println!(
-            "DEBUG: Considering block at lines {}-{}",
-            block_lines.0, block_lines.1
-        );
-        println!("DEBUG: Matched queries (indices): {:?}", matched_queries);
-        println!("DEBUG: Block unique terms: {}", block_unique_terms);
-        println!(
-            "DEBUG: Total queries: {}, Min required terms: {}",
-            num_queries, min_required_terms
-        );
-
-        println!("DEBUG: All-terms mode: Include if all {} queries matched (including filename matches: {:?}) AND at least one term is matched in content",
-                 num_queries, filename_matched_queries);
-
-        println!("DEBUG: Term match criteria met: {}", term_match_criteria);
-        println!(
-            "DEBUG: Unique terms criteria met: {} (need {} of {} terms)",
-            unique_terms_criteria, min_required_terms, num_queries
-        );
-
-        println!(
-            "DEBUG: Block lines {}-{} => matched {} terms; should_include={}",
-            block_lines.0, block_lines.1, block_unique_terms, should_include
-        );
-    }
-    should_include
 }
 
 /// Evaluate whether a block of lines satisfies a complex AST query
@@ -130,6 +57,25 @@ pub fn filter_code_block_with_ast(
         println!("DEBUG: Term indices: {:?}", plan.term_indices);
         println!("DEBUG: Excluded terms: {:?}", plan.excluded_terms);
         println!("DEBUG: AST: {:?}", plan.ast);
+
+        // Add detailed information about which exact keywords matched
+        println!("DEBUG: ===== MATCHED KEYWORDS DETAILS =====");
+        let mut matched_keywords = Vec::new();
+        for (term, &idx) in &plan.term_indices {
+            if matched_terms.contains(&idx) {
+                matched_keywords.push(term);
+                println!(
+                    "DEBUG: Keyword '{}' matched in block {}-{}",
+                    term, block_lines.0, block_lines.1
+                );
+            }
+        }
+        if matched_keywords.is_empty() {
+            println!("DEBUG: No keywords matched in this block");
+        } else {
+            println!("DEBUG: All matched keywords: {:?}", matched_keywords);
+        }
+        println!("DEBUG: ===================================");
     }
 
     // Check if we have any matches at all
@@ -144,6 +90,7 @@ pub fn filter_code_block_with_ast(
     }
 
     // Check if any excluded term is present
+    let mut excluded_terms_found = Vec::new();
     let has_excluded_term = plan.excluded_terms.iter().any(|term| {
         // For excluded terms, we only check if the exact term is present
         // We don't do compound word splitting for excluded terms
@@ -155,6 +102,7 @@ pub fn filter_code_block_with_ast(
                         term
                     );
                 }
+                excluded_terms_found.push(term.clone());
                 return true;
             }
         }
@@ -166,7 +114,13 @@ pub fn filter_code_block_with_ast(
 
     if has_excluded_term {
         if debug_mode {
-            println!("DEBUG: Block contains excluded term, returning false");
+            println!("DEBUG: ===== EXCLUDED TERMS FOUND =====");
+            println!(
+                "DEBUG: Block {}-{} contains excluded terms: {:?}",
+                block_lines.0, block_lines.1, excluded_terms_found
+            );
+            println!("DEBUG: Block will be EXCLUDED due to excluded terms");
+            println!("DEBUG: ================================");
         }
         return false;
     }
@@ -223,8 +177,27 @@ pub fn filter_code_block_with_ast(
         // Return true if required terms match and no excluded term is present
         required_term_matches && !excluded_term_present
     } else {
+        if debug_mode {
+            println!("DEBUG: ===== AST EVALUATION =====");
+            println!("DEBUG: Matched terms: {:?}", matched_terms);
+            println!("DEBUG: Term indices: {:?}", plan.term_indices);
+        }
         // Use the normal AST evaluation when there are no excluded terms
-        plan.ast.evaluate(&matched_terms, &plan.term_indices)
+        let result = plan.ast.evaluate(&matched_terms, &plan.term_indices);
+
+        if debug_mode {
+            println!("DEBUG: ===== EVALUATION RESULT =====");
+            println!("DEBUG: AST evaluation result: {}", result);
+            println!(
+                "DEBUG: Block {}-{} will be {}",
+                block_lines.0,
+                block_lines.1,
+                if result { "INCLUDED" } else { "EXCLUDED" }
+            );
+            println!("DEBUG: ============================");
+        }
+
+        result
     };
 
     if debug_mode {
@@ -258,6 +231,21 @@ pub fn process_file_by_filename(
 
     let matched_terms = get_filename_matched_queries_compat(&filename, queries_terms);
 
+    // Convert matched_terms from indices to actual terms
+    let matched_keywords = matched_terms
+        .iter()
+        .filter_map(|&idx| {
+            if idx < queries_terms.len() {
+                // Get the original term from the queries_terms
+                queries_terms
+                    .get(idx)
+                    .and_then(|terms| terms.first().map(|(original, _)| original.clone()))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<String>>();
+
     let mut search_result = SearchResult {
         file: path.to_string_lossy().to_string(),
         lines: (1, content.lines().count()),
@@ -280,6 +268,11 @@ pub fn process_file_by_filename(
         block_total_matches: Some(0),
         parent_file_id: None,
         block_id: None,
+        matched_keywords: if matched_keywords.is_empty() {
+            None
+        } else {
+            Some(matched_keywords)
+        },
     };
 
     if let Some(preprocessed) = preprocessed_queries {
@@ -288,7 +281,7 @@ pub fn process_file_by_filename(
             .flat_map(|terms| terms.iter().cloned())
             .collect();
         let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
-        let block_terms = ranking::preprocess_text(&content, false);
+        let block_terms = ranking::preprocess_text_with_filename(&content, &filename, false);
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
         let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
@@ -444,7 +437,7 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
         extension,
         params.line_numbers,
         params.allow_tests,
-        params.term_matches,
+        Some(params.term_matches),
     ) {
         if debug_mode {
             println!("DEBUG: AST parsing successful");
@@ -493,7 +486,15 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 "".to_string()
             };
 
-            let block_terms = ranking::preprocess_text(&full_code, false);
+            // Get the filename for tokenization
+            let filename = params
+                .path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            // Use the new function that includes filename in tokenization
+            let block_terms = ranking::preprocess_text_with_filename(&full_code, &filename, false);
             let query_terms: Vec<String> = if let Some(prep) = params.preprocessed_queries {
                 prep.iter().flat_map(|v| v.iter().cloned()).collect()
             } else {
@@ -542,32 +543,19 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 covered_lines.insert(line_num);
             }
 
-            let should_include = if let Some(tm) = params.term_matches {
-                if let Some(plan) = params.query_plan {
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Using filter_code_block_with_ast for lines {}-{}",
-                            final_start_line, final_end_line
-                        );
-                    }
-                    filter_code_block_with_ast(
-                        (final_start_line, final_end_line),
-                        tm,
-                        plan,
-                        debug_mode,
-                    )
-                } else {
-                    // Fall back to original filtering when no query plan is present
-                    filter_code_block(
-                        (final_start_line, final_end_line),
-                        tm,
-                        params.num_queries,
-                        &params.filename_matched_queries,
-                        debug_mode,
-                    )
+            let should_include = {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Using filter_code_block_with_ast for lines {}-{}",
+                        final_start_line, final_end_line
+                    );
                 }
-            } else {
-                true
+                filter_code_block_with_ast(
+                    (final_start_line, final_end_line),
+                    params.term_matches,
+                    params.query_plan,
+                    debug_mode,
+                )
             };
 
             if debug_mode {
@@ -578,6 +566,39 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
             }
 
             if should_include {
+                // Collect the actual matched keywords
+                let mut matched_keywords = Vec::new();
+
+                // Add direct matches
+                matched_keywords.extend(direct_matches.iter().map(|s| (*s).clone()));
+
+                // Add compound matches
+                matched_keywords.extend(compound_matches.iter().map(|s| (*s).clone()));
+
+                // Get the matched term indices for this block
+                let mut matched_term_indices = HashSet::new();
+                for (&term_idx, lines) in params.term_matches {
+                    if lines
+                        .iter()
+                        .any(|&l| l >= final_start_line && l <= final_end_line)
+                    {
+                        matched_term_indices.insert(term_idx);
+                    }
+                }
+
+                // Add the corresponding terms from the query plan
+                for (term, &idx) in &params.query_plan.term_indices {
+                    if matched_term_indices.contains(&idx)
+                        && !params.query_plan.excluded_terms.contains(term)
+                    {
+                        matched_keywords.push(term.clone());
+                    }
+                }
+
+                // Remove duplicates
+                matched_keywords.sort();
+                matched_keywords.dedup();
+
                 results.push(SearchResult {
                     file: params.path.to_string_lossy().to_string(),
                     lines: (final_start_line, final_end_line),
@@ -607,6 +628,11 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                     block_total_matches: Some(block_total_matches),
                     parent_file_id: Some(file_id.clone()),
                     block_id: Some(block_idx),
+                    matched_keywords: if matched_keywords.is_empty() {
+                        None
+                    } else {
+                        Some(matched_keywords)
+                    },
                 });
             } else if debug_mode {
                 println!("DEBUG: AST parsing failed, using line-based context only");
@@ -638,22 +664,35 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 continue;
             }
 
-            // Check if the line is in a test function/module by examining its content
+            // Check if the line is in a test function/module using language-specific detection
             if !params.allow_tests && line_num <= lines.len() {
-                let line_content = lines[line_num - 1];
-                // Simple heuristic check for test functions/modules
-                if line_content.contains("fn test_")
-                    || line_content.contains("#[test]")
-                    || line_content.contains("#[cfg(test)]")
-                    || line_content.contains("mod tests")
+                // Get the language implementation for this file extension
+                if let Some(language_impl) = crate::language::factory::get_language_impl(extension)
                 {
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Skipping fallback context for test code: '{}'",
-                            line_content.trim()
-                        );
+                    let line_content = lines[line_num - 1];
+
+                    // Create a simple parser to check this line
+                    let mut parser = tree_sitter::Parser::new();
+                    if parser
+                        .set_language(&language_impl.get_tree_sitter_language())
+                        .is_ok()
+                    {
+                        // Try to parse just this line to get a node
+                        if let Some(tree) = parser.parse(line_content, None) {
+                            let node = tree.root_node();
+
+                            // Use the language-specific test detection
+                            if language_impl.is_test_node(&node, line_content.as_bytes()) {
+                                if debug_mode {
+                                    println!(
+                                        "DEBUG: Skipping fallback context for test code: '{}'",
+                                        line_content.trim()
+                                    );
+                                }
+                                continue;
+                            }
+                        }
                     }
-                    continue;
                 }
             }
 
@@ -683,33 +722,20 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 );
             }
 
-            // Apply term filtering if term_matches is provided
-            let should_include = if let Some(term_matches_map) = params.term_matches {
-                if let Some(plan) = params.query_plan {
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Using filter_code_block_with_ast for fallback context {}-{}",
-                            context_start, context_end
-                        );
-                    }
-                    filter_code_block_with_ast(
-                        (context_start, context_end),
-                        term_matches_map,
-                        plan,
-                        debug_mode,
-                    )
-                } else {
-                    filter_code_block(
-                        (context_start, context_end),
-                        term_matches_map,
-                        params.num_queries,
-                        &params.filename_matched_queries,
-                        debug_mode,
-                    )
+            // Apply term filtering
+            let should_include = {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Using filter_code_block_with_ast for fallback context {}-{}",
+                        context_start, context_end
+                    );
                 }
-            } else {
-                // If no term_matches provided, include all blocks
-                true
+                filter_code_block_with_ast(
+                    (context_start, context_end),
+                    params.term_matches,
+                    params.query_plan,
+                    debug_mode,
+                )
             };
 
             if debug_mode {
@@ -721,6 +747,33 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
 
             // Add to results only if it passes the filter
             if should_include {
+                // Collect matched keywords for fallback context
+                let mut matched_keywords = Vec::new();
+
+                // Get the matched term indices for this context block
+                let mut matched_term_indices = HashSet::new();
+                for (&term_idx, lines) in params.term_matches {
+                    if lines
+                        .iter()
+                        .any(|&l| l >= context_start && l <= context_end)
+                    {
+                        matched_term_indices.insert(term_idx);
+                    }
+                }
+
+                // Add the corresponding terms from the query plan
+                for (term, &idx) in &params.query_plan.term_indices {
+                    if matched_term_indices.contains(&idx)
+                        && !params.query_plan.excluded_terms.contains(term)
+                    {
+                        matched_keywords.push(term.clone());
+                    }
+                }
+
+                // Remove duplicates
+                matched_keywords.sort();
+                matched_keywords.dedup();
+
                 results.push(SearchResult {
                     file: params.path.to_string_lossy().to_string(),
                     lines: (context_start, context_end),
@@ -743,6 +796,11 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                     block_total_matches: None,
                     parent_file_id: None,
                     block_id: None,
+                    matched_keywords: if matched_keywords.is_empty() {
+                        None
+                    } else {
+                        Some(matched_keywords)
+                    },
                 });
             }
 

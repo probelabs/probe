@@ -135,6 +135,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 block_total_matches: None,
                 parent_file_id: None,
                 block_id: None,
+                matched_keywords: None,
             });
         }
         return Ok(apply_limits(res, *max_results, *max_bytes, *max_tokens));
@@ -158,91 +159,100 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         // We'll handle excluded terms at the block level in filter_code_block_with_ast
         // This allows for more precise filtering based on the AST
 
-        let empty_map = HashMap::new();
-        let term_map = file_term_map.get(pathbuf).unwrap_or(&empty_map);
+        // Check if the file has term matches
+        if let Some(term_map) = file_term_map.get(pathbuf) {
+            if debug_mode {
+                println!("DEBUG: Term map for file: {:?}", term_map);
+            }
 
-        if debug_mode {
-            println!("DEBUG: Term map for file: {:?}", term_map);
-        }
+            if term_map.is_empty() {
+                // File matched by filename only
+                if debug_mode {
+                    println!("DEBUG: File matched by filename only");
+                }
+                if let Ok(sr) = process_file_by_filename(pathbuf, &[], None) {
+                    final_results.push(sr);
+                }
+                continue;
+            }
 
-        if term_map.is_empty() {
-            // File matched by filename only
+            // Gather matched lines
+            let mut all_lines = HashSet::new();
+            for lineset in term_map.values() {
+                all_lines.extend(lineset.iter());
+            }
+
+            if debug_mode {
+                println!("DEBUG: Found {} matched lines in file", all_lines.len());
+            }
+
+            // Process file with matched lines
+            let mut filename_matched_queries = HashSet::new();
+
+            // For compound words like "networkfirewall", we need to ensure that
+            // the individual terms "network" and "firewall" are counted as matches
+            if queries.len() == 1 {
+                let query = &queries[0];
+
+                // Check if this is a compound word query
+                let parts: Vec<&str> = query.split_whitespace().collect();
+                if parts.len() == 1 {
+                    // This is a single word query, check if it's a compound word
+                    let compound_parts = tokenization::split_camel_case(query);
+                    if compound_parts.len() > 1 {
+                        // This is a compound word, add all term indices to filename_matched_queries
+                        for idx in 0..plan.term_indices.len() {
+                            filename_matched_queries.insert(idx);
+                        }
+                    }
+                }
+            }
+
+            // Create a list of term pairs for backward compatibility
+            let term_pairs: Vec<(String, String)> = plan
+                .term_indices
+                .keys()
+                .map(|term| (term.clone(), term.clone()))
+                .collect();
+
+            let pparams = FileProcessingParams {
+                path: pathbuf,
+                line_numbers: &all_lines,
+                allow_tests: *allow_tests,
+                term_matches: term_map,
+                num_queries: plan.term_indices.len(),
+                filename_matched_queries,
+                queries_terms: &[term_pairs],
+                preprocessed_queries: None,
+                no_merge: *no_merge,
+                query_plan: &plan,
+            };
+
+            if debug_mode {
+                println!("DEBUG: Processing file with params: {:?}", pparams.path);
+            }
+
+            match process_file_with_results(&pparams) {
+                Ok(mut file_res) => {
+                    if debug_mode {
+                        println!("DEBUG: Got {} results from file processing", file_res.len());
+                    }
+                    final_results.append(&mut file_res);
+                }
+                Err(e) => {
+                    if debug_mode {
+                        println!("DEBUG: Error processing file: {:?}", e);
+                    }
+                }
+            }
+        } else {
+            // File not found in file_term_map, but it was in all_files
+            // This means it was matched by filename only
             if debug_mode {
                 println!("DEBUG: File matched by filename only");
             }
             if let Ok(sr) = process_file_by_filename(pathbuf, &[], None) {
                 final_results.push(sr);
-            }
-            continue;
-        }
-
-        // Gather matched lines
-        let mut all_lines = HashSet::new();
-        for lineset in term_map.values() {
-            all_lines.extend(lineset.iter());
-        }
-
-        if debug_mode {
-            println!("DEBUG: Found {} matched lines in file", all_lines.len());
-        }
-
-        // Process file with matched lines
-        let mut filename_matched_queries = HashSet::new();
-
-        // For compound words like "networkfirewall", we need to ensure that
-        // the individual terms "network" and "firewall" are counted as matches
-        if queries.len() == 1 {
-            let query = &queries[0];
-
-            // Check if this is a compound word query
-            let parts: Vec<&str> = query.split_whitespace().collect();
-            if parts.len() == 1 {
-                // This is a single word query, check if it's a compound word
-                let compound_parts = tokenization::split_camel_case(query);
-                if compound_parts.len() > 1 {
-                    // This is a compound word, add all term indices to filename_matched_queries
-                    for idx in 0..plan.term_indices.len() {
-                        filename_matched_queries.insert(idx);
-                    }
-                }
-            }
-        }
-
-        // Create a list of term pairs for backward compatibility
-        let term_pairs: Vec<(String, String)> = plan
-            .term_indices
-            .keys()
-            .map(|term| (term.clone(), term.clone()))
-            .collect();
-
-        let pparams = FileProcessingParams {
-            path: pathbuf,
-            line_numbers: &all_lines,
-            allow_tests: *allow_tests,
-            term_matches: Some(term_map),
-            num_queries: plan.term_indices.len(),
-            filename_matched_queries,
-            queries_terms: &[term_pairs],
-            preprocessed_queries: None,
-            no_merge: *no_merge,
-            query_plan: Some(&plan),
-        };
-
-        if debug_mode {
-            println!("DEBUG: Processing file with params: {:?}", pparams.path);
-        }
-
-        match process_file_with_results(&pparams) {
-            Ok(mut file_res) => {
-                if debug_mode {
-                    println!("DEBUG: Got {} results from file processing", file_res.len());
-                }
-                final_results.append(&mut file_res);
-            }
-            Err(e) => {
-                if debug_mode {
-                    println!("DEBUG: Error processing file: {:?}", e);
-                }
             }
         }
     }

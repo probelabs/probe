@@ -33,30 +33,31 @@ fn test_merge_different_node_types() {
         block_total_matches: Some(3),
         parent_file_id: None,
         block_id: None,
+        matched_keywords: None,
     };
-
     let block2 = SearchResult {
-        file: "mixed_types.rs".to_string(),
-        lines: (6, 10),
-        node_type: "comment".to_string(),
-        code: "// This is a comment block\n// It explains the function above\n// And provides context\n// For the next function\n// Below".to_string(),
-        matched_by_filename: None,
-        rank: Some(2),
-        score: Some(0.8),
-        tfidf_score: Some(0.7),
-        bm25_score: Some(0.75),
-        tfidf_rank: Some(2),
-        bm25_rank: Some(2),
-        new_score: Some(0.77),
-        hybrid2_rank: Some(2),
-        combined_score_rank: Some(2),
-        file_unique_terms: Some(3),
-        file_total_matches: Some(5),
-        file_match_rank: Some(1),
-        block_unique_terms: Some(2),
-        block_total_matches: Some(2),
-        parent_file_id: None,
-        block_id: None,
+    file: "mixed_types.rs".to_string(),
+    lines: (6, 10),
+    node_type: "comment".to_string(),
+    code: "// This is a comment block\n// It explains the function above\n// And provides context\n// For the next function\n// Below".to_string(),
+    matched_by_filename: None,
+    rank: Some(2),
+    score: Some(0.8),
+    tfidf_score: Some(0.7),
+    bm25_score: Some(0.75),
+    tfidf_rank: Some(2),
+    bm25_rank: Some(2),
+    new_score: Some(0.77),
+    hybrid2_rank: Some(2),
+    combined_score_rank: Some(2),
+    file_unique_terms: Some(3),
+    file_total_matches: Some(5),
+    file_match_rank: Some(1),
+    block_unique_terms: Some(2),
+    block_total_matches: Some(2),
+    parent_file_id: None,
+    block_id: None,
+    matched_keywords: None,
     };
 
     let block3 = SearchResult {
@@ -81,6 +82,7 @@ fn test_merge_different_node_types() {
         block_total_matches: Some(2),
         parent_file_id: None,
         block_id: None,
+        matched_keywords: None,
     };
 
     // Create a vector with all blocks
@@ -146,6 +148,7 @@ fn test_merge_with_gaps() {
         block_total_matches: Some(3),
         parent_file_id: None,
         block_id: None,
+        matched_keywords: None,
     };
 
     // Gap of 3 lines between block1 and block2
@@ -171,6 +174,7 @@ fn test_merge_with_gaps() {
         block_total_matches: Some(2),
         parent_file_id: None,
         block_id: None,
+        matched_keywords: None,
     };
 
     // Gap of 2 lines between block2 and block3
@@ -198,6 +202,7 @@ fn test_merge_with_gaps() {
         block_total_matches: Some(2),
         parent_file_id: None,
         block_id: None,
+        matched_keywords: None,
     };
 
     // Test with default threshold (5)
@@ -291,6 +296,7 @@ fn test_merge_overlapping_blocks() {
         block_total_matches: Some(3),
         parent_file_id: None,
         block_id: None,
+        matched_keywords: None,
     };
 
     // Overlaps with block1 (lines 5-7 are shared)
@@ -316,6 +322,7 @@ fn test_merge_overlapping_blocks() {
         block_total_matches: Some(2),
         parent_file_id: None,
         block_id: None,
+        matched_keywords: None,
     };
 
     // Create a vector with both blocks
@@ -483,6 +490,7 @@ fn test_merge_parent_child_blocks() {
         block_total_matches: Some(3),
         parent_file_id: Some("parent_child.rs".to_string()),
         block_id: Some(0),
+        matched_keywords: None,
     };
 
     // Child block (method inside the struct)
@@ -508,6 +516,7 @@ fn test_merge_parent_child_blocks() {
         block_total_matches: Some(2),
         parent_file_id: Some("parent_child.rs".to_string()),
         block_id: Some(1),
+        matched_keywords: None,
     };
 
     // Create a vector with both blocks

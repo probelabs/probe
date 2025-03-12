@@ -98,6 +98,13 @@ interface SearchCodeArgs {
   mergeThreshold?: number;
 }
 
+interface ExtractCodeArgs {
+  files: string[];
+  allowTests?: boolean;
+  contextLines?: number;
+  format?: 'markdown' | 'plain' | 'json';
+}
+
 class ProbeServer {
   private server: Server;
 
@@ -128,8 +135,8 @@ class ProbeServer {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
-          name: 'probe',
-          description: 'Search code in a specified directory. \n\nWhen using search tool:\n- Try simpler queries (e.g. use \'rpc\' instead of \'rpc layer implementation\')\n- this tool knows how to do the stemming by itself, put only unique keywords to query\n- Focus on keywords that would appear in code\n- Split distinct terms into separate searches, unless they should be search together, e.g. how they connect.\n- Use multiple probe tool calls if needed\n- If you can\'t find what you want after multiple attempts, ask the user for more context\n- While doing multiple calls, do not repeat the same queries\n\nQueries can be any text (including multi-word phrases like "IP whitelist"), but simple, focused queries typically yield better results. Use the maxResults parameter to limit the number of results when needed. For multi-term queries, all terms must be present in a file by default, but you can use anyTerm=true to match files containing any of the terms.',
+          name: 'search_code',
+          description: 'Search code in a specified directory using Elasticsearch-like query syntax. \n\nThe search tool supports Elasticsearch-like query syntax with the following features:\n- Basic term searching: "config" or "search"\n- Field-specific searching: "field:value" (e.g., "function:parse")\n- Required terms with + prefix: "+required"\n- Excluded terms with - prefix: "-excluded"\n- Logical operators: "term1 AND term2", "term1 OR term2"\n- Grouping with parentheses: "(term1 OR term2) AND term3"\n\nExamples:\n- Simple search: "config"\n- Required and excluded terms: "+parse -test"\n- Field-specific: "function:evaluate"\n- Complex query: "(parse OR tokenize) AND query"\n\nWhen using search tool:\n- Try simpler queries (e.g. use \'rpc\' instead of \'rpc layer implementation\')\n- This tool knows how to do the stemming by itself, put only unique keywords to query\n- Focus on keywords that would appear in code\n- Split distinct terms into separate searches, unless they should be search together, e.g. how they connect\n- Use multiple probe tool calls if needed\n- If you can\'t find what you want after multiple attempts, ask the user for more context\n- While doing multiple calls, do not repeat the same queries\n\nElasticsearch-like Query Syntax Details:\n- Terms are case-insensitive and automatically stemmed (e.g., "parsing" matches "parse")\n- Use quotes for exact phrases: "white list" (matches the exact phrase)\n- Use + for required terms: +config (must be present)\n- Use - for excluded terms: -test (must not be present)\n- Use field specifiers: function:parse (search in specific code elements)\n- Combine with AND/OR: config AND (parse OR tokenize)\n- Group with parentheses for complex expressions\n\nQueries can be any text (including multi-word phrases like "IP whitelist"), but simple, focused queries typically yield better results. Use the maxResults parameter to limit the number of results when needed. For multi-term queries, all terms must be present in a file by default, but you can use anyTerm=true to match files containing any of the terms.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -142,7 +149,7 @@ class ProbeServer {
                   { type: 'string' },
                   { type: 'array', items: { type: 'string' } }
                 ],
-                description: 'Query patterns to search for (string or array of strings). Can be keywords, phrases, or regex patterns. For multiple terms, provide either a space-separated string ("term1 term2") or an array of strings (["term1", "term2"]). By default, all terms must be present in a file unless anyTerm=true is specified.',
+                description: 'Query patterns to search for with Elasticsearch-like syntax support. Supports logical operators (AND, OR), required (+) and excluded (-) terms, and grouping with parentheses. Examples: "config", "+required -excluded", "(term1 OR term2) AND term3". For multiple terms, provide either a space-separated string ("term1 term2") or an array of strings (["term1", "term2"]). By default, all terms must be present in a file unless anyTerm=true is specified.',
               },
               filesOnly: {
                 type: 'boolean',
@@ -155,7 +162,7 @@ class ProbeServer {
               },
               excludeFilenames: {
                 type: 'boolean',
-                description: 'Exclude files whose names match query words (filename matching is enabled by default)',
+                description: 'Exclude filenames from being used for matching (filename matching is enabled by default and adds filename tokens during tokenization)',
               },
               reranker: {
                 type: 'string',
@@ -203,21 +210,58 @@ class ProbeServer {
             required: ['path', 'query'],
           },
         },
+        {
+          name: 'extract_code',
+          description: 'Extract code blocks from files based on file paths and optional line numbers. \n\nThis tool uses tree-sitter to find the closest suitable parent node (function, struct, class, etc.) for a specified line. When a line number is provided, it extracts the entire code block containing that line. If no line number is specified, it extracts the entire file.\n\nUse this tool when you need to:\n- Extract a specific function, class, or method from a file\n- Get the full context around a particular line of code\n- Understand the structure and implementation of a specific code element\n- Extract an entire file when you need its complete content\n\nThe extracted code maintains proper syntax highlighting based on the file extension and includes information about the type of code block (function, class, method, etc.).\n\nExamples:\n- Extract a function at line 42: "/path/to/file.rs:42"\n- Extract an entire file: "/path/to/file.rs"\n- Extract with context lines: "/path/to/file.rs:42" with contextLines=5',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              files: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Files to extract from (can include line numbers with colon, e.g., "/path/to/file.rs:10"). Each entry should be an absolute path to ensure reliable extraction.',
+              },
+              allowTests: {
+                type: 'boolean',
+                description: 'Allow test files and test code blocks in results (disabled by default)',
+              },
+              contextLines: {
+                type: 'number',
+                description: 'Number of context lines to include before and after the extracted block when AST parsing fails to find a suitable node',
+                default: 0
+              },
+              format: {
+                type: 'string',
+                enum: ['markdown', 'plain', 'json'],
+                description: 'Output format for the extracted code',
+                default: 'markdown'
+              },
+            },
+            required: ['files'],
+          },
+        },
       ],
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name !== 'probe') {
+      if (request.params.name !== 'probe' && request.params.name !== 'extract') {
         throw new McpError(
           ErrorCode.MethodNotFound,
           `Unknown tool: ${request.params.name}`
         );
       }
 
-      const args = request.params.arguments as unknown as SearchCodeArgs;
-      
       try {
-        const result = await this.executeCodeSearch(args);
+        let result: string;
+        
+        if (request.params.name === 'probe') {
+          const args = request.params.arguments as unknown as SearchCodeArgs;
+          result = await this.executeCodeSearch(args);
+        } else { // extract
+          const args = request.params.arguments as unknown as ExtractCodeArgs;
+          result = await this.executeCodeExtract(args);
+        }
+        
         return {
           content: [
             {
@@ -227,12 +271,12 @@ class ProbeServer {
           ],
         };
       } catch (error) {
-        console.error('Error executing code search:', error);
+        console.error(`Error executing ${request.params.name}:`, error);
         return {
           content: [
             {
               type: 'text',
-              text: `Error executing code search: ${error instanceof Error ? error.message : String(error)}`,
+              text: `Error executing ${request.params.name}: ${error instanceof Error ? error.message : String(error)}`,
             },
           ],
           isError: true,
@@ -313,7 +357,6 @@ class ProbeServer {
    cliArgs.push(`"${args.path}"`);
    
     // Execute the command
-    // No "search" subcommand needed
     const command = `${PROBE_PATH} search ${cliArgs.join(' ')}`;
     console.log(`Executing command: ${command}`);
     
@@ -327,6 +370,46 @@ class ProbeServer {
       return stdout;
     } catch (error) {
       console.error('Error executing probe CLI:', error);
+      throw error;
+    }
+  }
+
+  private async executeCodeExtract(args: ExtractCodeArgs): Promise<string> {
+    // Build the command arguments
+    const cliArgs: string[] = [];
+    
+    // Add optional arguments
+    if (args.allowTests) {
+      cliArgs.push('--allow-tests');
+    }
+    
+    if (args.contextLines !== undefined) {
+      cliArgs.push('--context', args.contextLines.toString());
+    }
+    
+    if (args.format) {
+      cliArgs.push('--format', args.format);
+    }
+    
+    // Add files as positional arguments
+    for (const file of args.files) {
+      cliArgs.push(`"${file}"`);
+    }
+    
+    // Execute the command
+    const command = `${PROBE_PATH} extract ${cliArgs.join(' ')}`;
+    console.log(`Executing command: ${command}`);
+    
+    try {
+      const { stdout, stderr } = await execAsync(command);
+      
+      if (stderr) {
+        console.error(`stderr: ${stderr}`);
+      }
+      
+      return stdout;
+    } catch (error) {
+      console.error('Error executing probe extract:', error);
       throw error;
     }
   }

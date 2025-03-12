@@ -237,6 +237,13 @@
 			<p>You can specify a folder to search in: "Search for API handlers in folder /Users/leonidbugaev/go/src/tyk"
 			</p>
 			<p>Probe extracts complete code blocks (functions, classes, methods) to provide full context for AI analysis.</p>
+			
+			<!-- Test Mermaid diagram -->
+			<div class="mermaid">
+				graph TD
+					A[Client] --> B[Server]
+					B --> C[Database]
+			</div>
 		</div>
 	</div>
 
@@ -246,13 +253,37 @@
 		const input = document.getElementById('message-input');
 		const folderListDiv = document.getElementById('folder-list');
 
+		// Check if Mermaid is properly loaded
+		function checkMermaidLoaded() {
+			if (typeof mermaid === 'undefined') {
+				console.error('Mermaid is not loaded properly');
+				return false;
+			}
+			console.log('Mermaid version:', mermaid.version);
+			return true;
+		}
+
 		// Initialize mermaid
-		mermaid.initialize({
-			startOnLoad: true,
-			theme: 'default',
-			securityLevel: 'loose',
-			flowchart: { htmlLabels: true }
-		});
+		if (checkMermaidLoaded()) {
+			mermaid.initialize({
+				startOnLoad: false,
+				theme: 'default',
+				securityLevel: 'loose',
+				flowchart: { htmlLabels: true }
+			});
+			
+			// Run mermaid on page load to render the test diagram
+			window.addEventListener('DOMContentLoaded', () => {
+				setTimeout(() => {
+					try {
+						console.log('Running mermaid on page load');
+						mermaid.run();
+					} catch (error) {
+						console.error('Error initializing mermaid:', error);
+					}
+				}, 500);
+			});
+		}
 
 		// Configure marked.js
 		marked.setOptions({
@@ -296,8 +327,50 @@
 
 		// Render markdown content
 		function renderMarkdown(text) {
+			// Just parse the markdown and return the HTML
 			return marked.parse(text);
 		}
+
+		// Test function to manually render a Mermaid diagram
+		function testMermaidRendering() {
+			console.log('Testing Mermaid rendering...');
+			try {
+				// Create a simple test diagram directly
+				const testDiv = document.createElement('div');
+				testDiv.className = 'ai-message markdown-content';
+				
+				// First try with direct mermaid div
+				const directMermaidDiv = document.createElement('div');
+				directMermaidDiv.className = 'mermaid';
+				directMermaidDiv.textContent = `graph TD
+    A[Direct Test] --> B[No Markdown]
+    B --> C[Just Mermaid]`;
+				
+				testDiv.appendChild(directMermaidDiv);
+				messagesDiv.appendChild(testDiv);
+				
+				// Render the direct mermaid div
+				setTimeout(() => {
+					try {
+						console.log('Running mermaid on direct div');
+						if (typeof mermaid.run === 'function') {
+							mermaid.run();
+						} else if (typeof mermaid.init === 'function') {
+							mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+						}
+					} catch (error) {
+						console.error('Error rendering direct mermaid:', error);
+					}
+				}, 100);
+			} catch (error) {
+				console.error('Unexpected error in test function:', error);
+			}
+		}
+
+		// Run test on page load
+		window.addEventListener('DOMContentLoaded', () => {
+			setTimeout(testMermaidRendering, 1000);
+		});
 
 		// Handle form submission
 		form.addEventListener('submit', async (e) => {
@@ -334,22 +407,55 @@
 					if (done) break;
 					const chunk = decoder.decode(value, { stream: true });
 					aiResponse += chunk;
-					aiMsgDiv.innerHTML = renderMarkdown(aiResponse);
-
-					// Apply syntax highlighting to code blocks
-					aiMsgDiv.querySelectorAll('pre code').forEach((block) => {
-						hljs.highlightElement(block);
-					});
-
-					// Render any mermaid diagrams
+					
 					try {
-						mermaid.init('.mermaid');
+						// Render markdown content
+						aiMsgDiv.innerHTML = renderMarkdown(aiResponse);
+						
+						// Apply syntax highlighting to code blocks
+						aiMsgDiv.querySelectorAll('pre code').forEach((block) => {
+							hljs.highlightElement(block);
+						});
+						
+						// Render any mermaid diagrams
+						try {
+							if (typeof mermaid.run === 'function') {
+								mermaid.run();
+							} else if (typeof mermaid.init === 'function') {
+								mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+							}
+						} catch (error) {
+							console.warn('Mermaid rendering error:', error);
+						}
+						
+						messagesDiv.scrollTop = messagesDiv.scrollHeight;
 					} catch (error) {
-						console.warn('Mermaid rendering error:', error);
+						console.error('Error processing response chunk:', error);
+						// If there's an error with markdown parsing, just show the raw text
+						aiMsgDiv.textContent = aiResponse;
 					}
-
-					messagesDiv.scrollTop = messagesDiv.scrollHeight;
 				}
+				
+				// Final render after all content is received
+				setTimeout(() => {
+					try {
+						const finalMermaidDivs = aiMsgDiv.querySelectorAll('.mermaid');
+						if (finalMermaidDivs.length > 0) {
+							console.log(`Final render: Found ${finalMermaidDivs.length} mermaid diagrams`);
+							// Try direct rendering as a fallback if needed
+							if (typeof mermaid.run === 'function') {
+								mermaid.run();
+							} else if (typeof mermaid.init === 'function') {
+								// Fallback to older mermaid versions
+								mermaid.init(undefined, finalMermaidDivs);
+							} else {
+								console.error('No suitable mermaid rendering method found');
+							}
+						}
+					} catch (error) {
+						console.warn('Final mermaid rendering error:', error);
+					}
+				}, 300);
 			} catch (error) {
 				console.error('Error:', error);
 				const errorMsg = document.createElement('div');

@@ -1,10 +1,8 @@
-use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-use probe::search::elastic_query::parse_query;
-use probe::search::query::extract_excluded_terms;
+use probe::search::query::create_query_plan;
 use probe::search::{perform_probe, SearchOptions};
 
 /// Test negative compound word handling
@@ -208,20 +206,14 @@ fn test_complex_negative_compound_word(temp_path: &Path) {
 fn test_excluded_terms_extraction() {
     println!("\n=== Testing excluded terms extraction ===");
 
-    // Parse a query with a negative compound word
+    // Create a query plan with a negative compound word
     let query = "-networkfirewall";
-    // Check if ANY_TERM environment variable is set
-    let any_term = std::env::var("ANY_TERM").unwrap_or_default() == "1";
-    let ast = parse_query(query, any_term).unwrap();
+    let plan = create_query_plan(query, false).unwrap();
 
-    // Extract excluded terms
-    let mut excluded_terms = HashSet::new();
-    extract_excluded_terms(&ast, &mut excluded_terms);
-
-    // Check that the original term is excluded
+    // Check that the original term is in the excluded_terms set
     assert!(
-        excluded_terms.contains("networkfirewall"),
-        "Original term 'networkfirewall' should be excluded"
+        plan.excluded_terms.contains("networkfirewall"),
+        "Original term 'networkfirewall' should be in excluded_terms"
     );
 
     // For negative terms, we don't apply compound word splitting anymore
@@ -229,18 +221,12 @@ fn test_excluded_terms_extraction() {
 
     // Test with a more complex query
     let complex_query = "settings AND -networkfirewall";
-    // Check if ANY_TERM environment variable is set
-    let any_term = std::env::var("ANY_TERM").unwrap_or_default() == "1";
-    let complex_ast = parse_query(complex_query, any_term).unwrap();
+    let complex_plan = create_query_plan(complex_query, false).unwrap();
 
-    // Extract excluded terms
-    let mut complex_excluded_terms = HashSet::new();
-    extract_excluded_terms(&complex_ast, &mut complex_excluded_terms);
-
-    // Check that the original term is excluded
+    // Check that the original term is in the excluded_terms set
     assert!(
-        complex_excluded_terms.contains("networkfirewall"),
-        "Original term 'networkfirewall' should be excluded"
+        complex_plan.excluded_terms.contains("networkfirewall"),
+        "Original term 'networkfirewall' should be in excluded_terms"
     );
 
     // For negative terms, we don't apply compound word splitting anymore
