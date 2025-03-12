@@ -400,8 +400,16 @@ async fn main() -> Result<()> {
             allow_tests,
             max_results,
             format,
-        }) => query::handle_query(&pattern, &path, language.as_deref(), &ignore, allow_tests, max_results, &format)?,
-        Some(Commands::Chat) => chat::handle_chat().await?,
+        }) => query::handle_query(
+            &pattern,
+            &path,
+            language.as_deref(),
+            &ignore,
+            allow_tests,
+            max_results,
+            &format,
+        )?,
+        Some(Commands::Chat) => probe::handle_chat().await?,
     }
 
     Ok(())

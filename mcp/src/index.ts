@@ -98,6 +98,16 @@ interface SearchCodeArgs {
   mergeThreshold?: number;
 }
 
+interface QueryCodeArgs {
+  path: string;
+  pattern: string;
+  language?: string;
+  ignore?: string[];
+  allowTests?: boolean;
+  maxResults?: number;
+  format?: 'markdown' | 'plain' | 'json' | 'color';
+}
+
 interface ExtractCodeArgs {
   files: string[];
   allowTests?: boolean;
@@ -211,6 +221,47 @@ class ProbeServer {
           },
         },
         {
+          name: 'query_code',
+          description: 'Find specific code structures (functions, classes, etc.) using tree-sitter patterns. \n\nThis tool uses ast-grep to find code structures that match a specified pattern. It\'s particularly useful for finding specific types of code elements like functions, classes, or methods across a codebase.\n\nPattern Syntax:\n- `$NAME`: Matches an identifier (e.g., function name)\n- `$$$PARAMS`: Matches parameter lists\n- `$$$BODY`: Matches function bodies\n- `$$$FIELDS`: Matches struct/class fields\n- `$$$METHODS`: Matches class methods\n\nExamples:\n- Find Rust functions: `fn $NAME($$$PARAMS) $$$BODY`\n- Find Python functions: `def $NAME($$$PARAMS): $$$BODY`\n- Find Go structs: `type $NAME struct { $$$FIELDS }`\n- Find C++ classes: `class $NAME { $$$METHODS };`\n\nSupported languages: rust, javascript, typescript, python, go, c, cpp, java, ruby, php, swift, csharp',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              path: {
+                type: 'string',
+                description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject"). Using absolute paths ensures reliable search results regardless of the current working directory.',
+              },
+              pattern: {
+                type: 'string',
+                description: 'The ast-grep pattern to search for. Examples: "fn $NAME($$$PARAMS) $$$BODY" for Rust functions, "def $NAME($$$PARAMS): $$$BODY" for Python functions.',
+              },
+              language: {
+                type: 'string',
+                description: 'The programming language to search in. If not specified, the tool will try to infer the language from file extensions. Supported languages: rust, javascript, typescript, python, go, c, cpp, java, ruby, php, swift, csharp.',
+              },
+              ignore: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Custom patterns to ignore (in addition to common patterns)',
+              },
+              allowTests: {
+                type: 'boolean',
+                description: 'Allow test files and test code blocks in results (disabled by default)',
+              },
+              maxResults: {
+                type: 'number',
+                description: 'Maximum number of results to return',
+              },
+              format: {
+                type: 'string',
+                enum: ['markdown', 'plain', 'json', 'color'],
+                description: 'Output format for the query results',
+                default: 'markdown'
+              },
+            },
+            required: ['path', 'pattern'],
+          },
+        },
+        {
           name: 'extract_code',
           description: 'Extract code blocks from files based on file paths and optional line numbers. \n\nThis tool uses tree-sitter to find the closest suitable parent node (function, struct, class, etc.) for a specified line. When a line number is provided, it extracts the entire code block containing that line. If no line number is specified, it extracts the entire file.\n\nUse this tool when you need to:\n- Extract a specific function, class, or method from a file\n- Get the full context around a particular line of code\n- Understand the structure and implementation of a specific code element\n- Extract an entire file when you need its complete content\n\nThe extracted code maintains proper syntax highlighting based on the file extension and includes information about the type of code block (function, class, method, etc.).\n\nExamples:\n- Extract a function at line 42: "/path/to/file.rs:42"\n- Extract an entire file: "/path/to/file.rs"\n- Extract with context lines: "/path/to/file.rs:42" with contextLines=5',
           inputSchema: {
@@ -244,7 +295,8 @@ class ProbeServer {
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name !== 'probe' && request.params.name !== 'extract') {
+      if (request.params.name !== 'search_code' && request.params.name !== 'query_code' && request.params.name !== 'extract_code' &&
+          request.params.name !== 'probe' && request.params.name !== 'query' && request.params.name !== 'extract') {
         throw new McpError(
           ErrorCode.MethodNotFound,
           `Unknown tool: ${request.params.name}`
@@ -254,10 +306,14 @@ class ProbeServer {
       try {
         let result: string;
         
-        if (request.params.name === 'probe') {
+        // Handle both new tool names and legacy tool names
+        if (request.params.name === 'search_code' || request.params.name === 'probe') {
           const args = request.params.arguments as unknown as SearchCodeArgs;
           result = await this.executeCodeSearch(args);
-        } else { // extract
+        } else if (request.params.name === 'query_code' || request.params.name === 'query') {
+          const args = request.params.arguments as unknown as QueryCodeArgs;
+          result = await this.executeCodeQuery(args);
+        } else { // extract_code or extract
           const args = request.params.arguments as unknown as ExtractCodeArgs;
           result = await this.executeCodeExtract(args);
         }
@@ -370,6 +426,54 @@ class ProbeServer {
       return stdout;
     } catch (error) {
       console.error('Error executing probe CLI:', error);
+      throw error;
+    }
+  }
+
+  private async executeCodeQuery(args: QueryCodeArgs): Promise<string> {
+    // Build the command arguments
+    const cliArgs: string[] = [];
+    
+    // Add optional arguments
+    if (args.language) {
+      cliArgs.push('--language', args.language);
+    }
+    
+    if (args.ignore && args.ignore.length > 0) {
+      for (const ignorePattern of args.ignore) {
+        cliArgs.push('--ignore', ignorePattern);
+      }
+    }
+    
+    if (args.allowTests) {
+      cliArgs.push('--allow-tests');
+    }
+    
+    if (args.maxResults !== undefined) {
+      cliArgs.push('--max-results', args.maxResults.toString());
+    }
+    
+    if (args.format) {
+      cliArgs.push('--format', args.format);
+    }
+    
+    // Add pattern and path as positional arguments
+    cliArgs.push(`"${args.pattern}"`, `"${args.path}"`);
+    
+    // Execute the command
+    const command = `${PROBE_PATH} query ${cliArgs.join(' ')}`;
+    console.log(`Executing command: ${command}`);
+    
+    try {
+      const { stdout, stderr } = await execAsync(command);
+      
+      if (stderr) {
+        console.error(`stderr: ${stderr}`);
+      }
+      
+      return stdout;
+    } catch (error) {
+      console.error('Error executing probe query:', error);
       throw error;
     }
   }
