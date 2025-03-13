@@ -6,7 +6,6 @@
 // Make the library available as `probe` within itself
 extern crate self as probe;
 
-pub mod chat;
 pub mod extract;
 pub mod language;
 pub mod models;
@@ -15,7 +14,6 @@ pub mod ranking;
 pub mod search;
 
 // Re-export commonly used types for convenience
-pub use chat::handle_chat;
 pub use extract::{
     format_and_print_extraction_results, handle_extract, process_file_for_extraction,
 };

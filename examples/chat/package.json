@@ -1,0 +1,31 @@
+{
+  "name": "probe-chat-cli",
+  "version": "1.0.0",
+  "description": "A CLI chat application using Vercel AI SDK with Probe tools",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "probe",
+    "chat",
+    "ai",
+    "cli"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@ai-sdk/anthropic": "^1.1.15",
+    "@ai-sdk/openai": "^1.1.15",
+    "ai": "^4.1.54",
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
+    "dotenv": "^16.4.7",
+    "inquirer": "^9.2.12",
+    "ora": "^7.0.1",
+    "tiktoken": "^1.0.20",
+    "zod": "^3.24.2"
+  }
+}

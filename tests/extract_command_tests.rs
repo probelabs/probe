@@ -13,7 +13,7 @@ fn test_process_file_for_extraction_full_file() {
     fs::write(&file_path, content).unwrap();
 
     // Test processing the full file
-    let result = process_file_for_extraction(&file_path, None, None, false, 0).unwrap();
+    let result = process_file_for_extraction(&file_path, None, None, None, false, 0).unwrap();
 
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert_eq!(result.lines, (1, 3)); // 3 lines in the content
@@ -22,7 +22,7 @@ fn test_process_file_for_extraction_full_file() {
 
     // Test with non-existent file
     let non_existent = temp_dir.path().join("non_existent.txt");
-    let err = process_file_for_extraction(&non_existent, None, None, false, 0).unwrap_err();
+    let err = process_file_for_extraction(&non_existent, None, None, None, false, 0).unwrap_err();
     assert!(err.to_string().contains("does not exist"));
 }
 
@@ -57,14 +57,14 @@ impl Point {
     fs::write(&file_path, content).unwrap();
 
     // Test extracting a function
-    let result = process_file_for_extraction(&file_path, Some(3), None, false, 0).unwrap();
+    let result = process_file_for_extraction(&file_path, Some(3), None, None, false, 0).unwrap();
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert!(result.lines.0 <= 3 && result.lines.1 >= 3);
     assert!(result.code.contains("fn main()"));
     assert!(result.code.contains("Hello, world!"));
 
     // Test extracting a struct
-    let result = process_file_for_extraction(&file_path, Some(13), None, false, 0).unwrap();
+    let result = process_file_for_extraction(&file_path, Some(13), None, None, false, 0).unwrap();
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert!(result.lines.0 <= 13 && result.lines.1 >= 13);
     assert!(result.code.contains("struct Point"));
@@ -72,7 +72,8 @@ impl Point {
     assert!(result.code.contains("y: i32"));
 
     // Test with out-of-bounds line number
-    let err = process_file_for_extraction(&file_path, Some(1000), None, false, 0).unwrap_err();
+    let err =
+        process_file_for_extraction(&file_path, Some(1000), None, None, false, 0).unwrap_err();
     assert!(err.to_string().contains("out of bounds"));
 }
 
@@ -89,7 +90,7 @@ fn test_process_file_for_extraction_fallback() {
     fs::write(&file_path, content).unwrap();
 
     // Test fallback to line-based context with default context lines (10)
-    let result = process_file_for_extraction(&file_path, Some(15), None, false, 10).unwrap();
+    let result = process_file_for_extraction(&file_path, Some(15), None, None, false, 10).unwrap();
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert_eq!(result.node_type, "context");
 
@@ -102,17 +103,17 @@ fn test_process_file_for_extraction_fallback() {
     assert!(end_line - start_line >= 10); // At least 10 lines of context
 
     // Test with a line at the beginning of the file
-    let result = process_file_for_extraction(&file_path, Some(2), None, false, 10).unwrap();
+    let result = process_file_for_extraction(&file_path, Some(2), None, None, false, 10).unwrap();
     assert!(result.lines.0 <= 2); // Should start at or before line 2
     assert!(result.lines.1 >= 2); // Should include line 2
 
     // Test with a line at the end of the file
-    let result = process_file_for_extraction(&file_path, Some(25), None, false, 10).unwrap();
+    let result = process_file_for_extraction(&file_path, Some(25), None, None, false, 10).unwrap();
     assert!(result.lines.0 <= 25); // Should include some lines before line 25
     assert_eq!(result.lines.1, 25); // Can't go beyond the last line
 
     // Test with custom context lines
-    let result = process_file_for_extraction(&file_path, Some(15), None, false, 5).unwrap();
+    let result = process_file_for_extraction(&file_path, Some(15), None, None, false, 5).unwrap();
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert_eq!(result.node_type, "context");
 
@@ -176,7 +177,8 @@ fn test_process_file_for_extraction_with_range() {
     fs::write(&file_path, &content).unwrap();
 
     // Test extracting a range of lines
-    let result = process_file_for_extraction(&file_path, Some(1), Some(10), false, 0).unwrap();
+    let result =
+        process_file_for_extraction(&file_path, Some(1), Some(10), None, false, 0).unwrap();
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert_eq!(result.lines, (1, 10));
     assert_eq!(result.node_type, "range");
@@ -186,7 +188,8 @@ fn test_process_file_for_extraction_with_range() {
     assert_eq!(result.code, expected_content);
 
     // Test with a different range
-    let result = process_file_for_extraction(&file_path, Some(5), Some(15), false, 0).unwrap();
+    let result =
+        process_file_for_extraction(&file_path, Some(5), Some(15), None, false, 0).unwrap();
     assert_eq!(result.lines, (5, 15));
 
     // Check that the extracted content contains exactly lines 5-15
@@ -199,11 +202,13 @@ fn test_process_file_for_extraction_with_range() {
     assert_eq!(result.code, expected_content);
 
     // Test with invalid range (start > end)
-    let err = process_file_for_extraction(&file_path, Some(10), Some(5), false, 0).unwrap_err();
+    let err =
+        process_file_for_extraction(&file_path, Some(10), Some(5), None, false, 0).unwrap_err();
     assert!(err.to_string().contains("invalid"));
 
     // Test with out-of-bounds range
-    let err = process_file_for_extraction(&file_path, Some(15), Some(25), false, 0).unwrap_err();
+    let err =
+        process_file_for_extraction(&file_path, Some(15), Some(25), None, false, 0).unwrap_err();
     assert!(err.to_string().contains("invalid"));
 }
 

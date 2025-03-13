@@ -1,0 +1,51 @@
+{
+  "name": "@buger/probe",
+  "version": "1.0.0",
+  "description": "Node.js wrapper for the probe code search tool",
+  "main": "src/index.js",
+  "type": "module",
+  "bin": {
+    "probe": "bin/probe"
+  },
+  "files": [
+    "src/**/*",
+    "bin/probe",
+    "bin/.gitkeep",
+    "scripts/postinstall.js"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "keywords": [
+    "probe",
+    "code-search",
+    "search",
+    "ast",
+    "code-analysis",
+    "ai",
+    "llm",
+    "tools"
+  ],
+  "author": "buger",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.8.3",
+    "fs-extra": "^11.1.1",
+    "tar": "^6.2.0",
+    "zod": "^3.24.2"
+  },
+  "peerDependencies": {
+    "ai": "^4.1.60"
+  },
+  "engines": {
+    "node": ">=14.16.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/buger/probe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/buger/probe/issues"
+  },
+  "homepage": "https://github.com/buger/probe#readme"
+}

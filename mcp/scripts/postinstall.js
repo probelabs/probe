@@ -23,16 +23,12 @@ try {
 	const readmePath = path.join(binDir, 'README.md');
 	const readmeContent = `# Probe Binary Directory
 
-This directory is used to store the downloaded probe binary.
+This directory is used by the MCP server.
 
-The binary is automatically downloaded during package installation.
-If you encounter any issues with the download, you can manually place the probe binary in this directory.
+The probe binary is now handled by the @buger/probe package, which is a dependency of this package.
+You don't need to manually download the binary anymore.
 
-Binary name should be:
-- \`probe\` (on Linux/macOS)
-- \`probe.exe\` (on Windows)
-
-You can download the binary from: https://github.com/buger/probe/releases
+If you encounter any issues, please check that @buger/probe is properly installed.
 `;
 
 	fs.writeFileSync(readmePath, readmeContent);
@@ -56,85 +52,47 @@ You can download the binary from: https://github.com/buger/probe/releases
 	console.error('You may need to manually create the bin directory or run with elevated privileges.');
 }
 
-// Download the probe binary
-async function downloadBinary() {
+// Check if the probe package is installed
+async function checkProbePackage() {
 	try {
-		// Try to get the package version
-		let packageVersion = '0.0.0';
-		const possiblePaths = [
-			path.resolve(__dirname, '..', 'package.json'),      // When installed from npm: scripts/../package.json
-			path.resolve(__dirname, '..', '..', 'package.json') // In development: scripts/../../package.json
-		];
-
-		for (const packageJsonPath of possiblePaths) {
-			try {
-				if (fs.existsSync(packageJsonPath)) {
-					console.log(`Found package.json at: ${packageJsonPath}`);
-					const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-					if (packageJson.version) {
-						packageVersion = packageJson.version;
-						console.log(`Using version from package.json: ${packageVersion}`);
-						break;
-					}
-				}
-			} catch (err) {
-				console.error(`Error reading package.json at ${packageJsonPath}:`, err);
+		// Try to import the probe package
+		try {
+			const probe = await import('@buger/probe');
+			console.log('Successfully imported @buger/probe package');
+			
+			// Get the binary path from the probe package
+			const binaryPath = probe.getBinaryPath();
+			console.log(`Probe binary path from package: ${binaryPath}`);
+			
+			// Check if the binary exists
+			if (fs.existsSync(binaryPath)) {
+				console.log('Probe binary exists and is ready to use');
+				return true;
+			} else {
+				console.log('Probe binary does not exist yet, it will be downloaded when needed');
+				return false;
 			}
+		} catch (importError) {
+			console.error('Error importing @buger/probe package:', importError);
+			console.error('Make sure @buger/probe is installed as a dependency');
+			return false;
 		}
-
-		// If we still have 0.0.0, try to get version from npm package
-		if (packageVersion === '0.0.0') {
-			try {
-				const execAsync = promisify(exec);
-				// Try to get version from the package name itself
-				const result = await execAsync('npm list -g @buger/probe-mcp --json');
-				const npmList = JSON.parse(result.stdout);
-				if (npmList.dependencies && npmList.dependencies['@buger/probe-mcp']) {
-					packageVersion = npmList.dependencies['@buger/probe-mcp'].version;
-					console.log(`Using version from npm list: ${packageVersion}`);
-				}
-			} catch (err) {
-				console.error('Error getting version from npm:', err);
-			}
-		}
-
-		// Import the downloader module
-		const { downloadProbeBinary } = await import('../build/downloader.js');
-
-		console.log(`Downloading probe binary (version: ${packageVersion})...`);
-		const binaryPath = await downloadProbeBinary(packageVersion);
-		console.log(`Successfully downloaded probe binary to: ${binaryPath}`);
-
-		// Make sure the binary is executable (on non-Windows platforms)
-		if (process.platform !== 'win32') {
-			try {
-				await fs.chmod(binaryPath, 0o755);
-				console.log(`Made binary executable: ${binaryPath}`);
-			} catch (err) {
-				console.warn(`Warning: Could not set executable permissions on binary: ${err}`);
-			}
-		}
-
-		return binaryPath;
 	} catch (error) {
-		console.error('Error downloading probe binary:', error);
-		console.error('You can manually download the binary from https://github.com/buger/probe/releases');
-		console.error('and place it in the bin directory with the name "probe" (or "probe.exe" on Windows).');
-
-		// Don't fail the installation, just warn the user
-		return null;
+		console.error('Error checking probe package:', error);
+		console.error('You may need to manually install the @buger/probe package');
+		return false;
 	}
 }
 
-// Execute the download
-downloadBinary().then(binaryPath => {
-	if (binaryPath) {
-		console.log('\nProbe binary was successfully downloaded during installation.');
-		console.log('The MCP server will use this binary when it runs.');
+// Execute the check
+checkProbePackage().then(isInstalled => {
+	if (isInstalled) {
+		console.log('\nProbe package is successfully installed and ready to use.');
+		console.log('The MCP server will use this package when it runs.');
 	} else {
-		console.log('\nNote: The probe binary will need to be downloaded when you first run the MCP server.');
-		console.log('If you encounter any issues, you can manually place the binary in the bin directory.');
+		console.log('\nNote: The @buger/probe package may need to be installed or configured.');
+		console.log('If you encounter any issues, please check your dependencies.');
 	}
 }).catch(error => {
-	console.error('Unexpected error during binary download:', error);
+	console.error('Unexpected error during package check:', error);
 });

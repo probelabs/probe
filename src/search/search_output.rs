@@ -1,3 +1,4 @@
+use anyhow::Result;
 use std::path::Path;
 
 use crate::models::SearchResult;
@@ -23,117 +24,132 @@ pub fn format_and_print_search_results(
     };
 
     // Handle different output formats
-    if use_color {
-        format_and_print_color_results(&valid_results, dry_run, query_plan, debug_mode);
-    } else {
-        // Default format (terminal)
-        for result in &valid_results {
-            let file_path = Path::new(&result.file);
-            let extension = file_path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("");
-            let is_full_file = result.node_type == "file";
-
-            if dry_run {
-                // In dry-run mode, only print file names and line numbers
-                if is_full_file {
-                    println!("File: {}", result.file);
-                } else {
-                    println!(
-                        "File: {}, Lines: {}-{}",
-                        result.file, result.lines.0, result.lines.1
-                    );
-                }
-            } else {
-                // Normal mode with full content
-                if is_full_file {
-                    println!("File: {}", result.file);
-                    println!("```{}", extension);
-                    println!("{}", result.code);
-                    println!("```");
-                } else {
-                    println!("File: {}", result.file);
-                    println!("Lines: {}-{}", result.lines.0, result.lines.1);
-                    println!("```{}", extension);
-                    println!("{}", result.code);
-                    println!("```");
-                }
+    match format {
+        "color" if use_color => {
+            format_and_print_color_results(&valid_results, dry_run, query_plan, debug_mode);
+        }
+        "json" => {
+            if let Err(e) = format_and_print_json_results(&valid_results) {
+                eprintln!("Error formatting JSON: {}", e);
             }
-            if debug_mode {
-                if let Some(rank) = result.rank {
-                    // Add a display order field to show the actual ordering of results
-                    println!(
-                        "Display Order: {}",
-                        results
-                            .iter()
-                            .position(|r| r.file == result.file && r.lines == result.lines)
-                            .unwrap_or(0)
-                            + 1
-                    );
+            return; // Skip the summary output at the end
+        }
+        "xml" => {
+            if let Err(e) = format_and_print_xml_results(&valid_results) {
+                eprintln!("Error formatting XML: {}", e);
+            }
+            return; // Skip the summary output at the end
+        }
+        _ => {
+            // Default format (terminal)
+            for result in &valid_results {
+                let file_path = Path::new(&result.file);
+                let extension = file_path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or("");
+                let is_full_file = result.node_type == "file";
 
-                    println!("Rank: {}", rank);
-
-                    if let Some(score) = result.score {
-                        println!("Combined Score: {:.4}", score);
-                    }
-
-                    // Display the combined score rank if available, otherwise calculate it
-                    if let Some(combined_rank) = result.combined_score_rank {
-                        println!("Combined Score Rank: {}", combined_rank);
+                if dry_run {
+                    // In dry-run mode, only print file names and line numbers
+                    if is_full_file {
+                        println!("File: {}", result.file);
                     } else {
-                        // Fall back to the old behavior if the field isn't set
-                        println!("Combined Score Rank: {}", rank);
+                        println!(
+                            "File: {}, Lines: {}-{}",
+                            result.file, result.lines.0, result.lines.1
+                        );
                     }
-
-                    if let Some(tfidf_score) = result.tfidf_score {
-                        println!("TF-IDF Score: {:.4}", tfidf_score);
+                } else {
+                    // Normal mode with full content
+                    if is_full_file {
+                        println!("File: {}", result.file);
+                        println!("```{}", extension);
+                        println!("{}", result.code);
+                        println!("```");
+                    } else {
+                        println!("File: {}", result.file);
+                        println!("Lines: {}-{}", result.lines.0, result.lines.1);
+                        println!("```{}", extension);
+                        println!("{}", result.code);
+                        println!("```");
                     }
+                }
+                if debug_mode {
+                    if let Some(rank) = result.rank {
+                        // Add a display order field to show the actual ordering of results
+                        println!(
+                            "Display Order: {}",
+                            results
+                                .iter()
+                                .position(|r| r.file == result.file && r.lines == result.lines)
+                                .unwrap_or(0)
+                                + 1
+                        );
 
-                    if let Some(tfidf_rank) = result.tfidf_rank {
-                        println!("TF-IDF Rank: {}", tfidf_rank);
+                        println!("Rank: {}", rank);
+
+                        if let Some(score) = result.score {
+                            println!("Combined Score: {:.4}", score);
+                        }
+
+                        // Display the combined score rank if available, otherwise calculate it
+                        if let Some(combined_rank) = result.combined_score_rank {
+                            println!("Combined Score Rank: {}", combined_rank);
+                        } else {
+                            // Fall back to the old behavior if the field isn't set
+                            println!("Combined Score Rank: {}", rank);
+                        }
+
+                        if let Some(tfidf_score) = result.tfidf_score {
+                            println!("TF-IDF Score: {:.4}", tfidf_score);
+                        }
+
+                        if let Some(tfidf_rank) = result.tfidf_rank {
+                            println!("TF-IDF Rank: {}", tfidf_rank);
+                        }
+
+                        if let Some(bm25_score) = result.bm25_score {
+                            println!("BM25 Score: {:.4}", bm25_score);
+                        }
+
+                        if let Some(bm25_rank) = result.bm25_rank {
+                            println!("BM25 Rank: {}", bm25_rank);
+                        }
+
+                        // Display Hybrid 2 score and rank with more prominence
+                        if let Some(new_score) = result.new_score {
+                            println!("Hybrid 2 Score: {:.4}", new_score);
+                        }
+
+                        if let Some(hybrid2_rank) = result.hybrid2_rank {
+                            println!("Hybrid 2 Rank: {}", hybrid2_rank);
+                        } else if result.new_score.is_some() {
+                            println!("Hybrid 2 Rank: N/A");
+                        }
+
+                        if let Some(file_unique_terms) = result.file_unique_terms {
+                            println!("File Unique Terms: {}", file_unique_terms);
+                        }
+
+                        if let Some(file_total_matches) = result.file_total_matches {
+                            println!("File Total Matches: {}", file_total_matches);
+                        }
+
+                        if let Some(file_match_rank) = result.file_match_rank {
+                            println!("File Match Rank: {}", file_match_rank);
+                        }
+
+                        if let Some(block_unique_terms) = result.block_unique_terms {
+                            println!("Block Unique Terms: {}", block_unique_terms);
+                        }
+
+                        if let Some(block_total_matches) = result.block_total_matches {
+                            println!("Block Total Matches: {}", block_total_matches);
+                        }
+
+                        println!("Type: {}", result.node_type);
                     }
-
-                    if let Some(bm25_score) = result.bm25_score {
-                        println!("BM25 Score: {:.4}", bm25_score);
-                    }
-
-                    if let Some(bm25_rank) = result.bm25_rank {
-                        println!("BM25 Rank: {}", bm25_rank);
-                    }
-
-                    // Display Hybrid 2 score and rank with more prominence
-                    if let Some(new_score) = result.new_score {
-                        println!("Hybrid 2 Score: {:.4}", new_score);
-                    }
-
-                    if let Some(hybrid2_rank) = result.hybrid2_rank {
-                        println!("Hybrid 2 Rank: {}", hybrid2_rank);
-                    } else if result.new_score.is_some() {
-                        println!("Hybrid 2 Rank: N/A");
-                    }
-
-                    if let Some(file_unique_terms) = result.file_unique_terms {
-                        println!("File Unique Terms: {}", file_unique_terms);
-                    }
-
-                    if let Some(file_total_matches) = result.file_total_matches {
-                        println!("File Total Matches: {}", file_total_matches);
-                    }
-
-                    if let Some(file_match_rank) = result.file_match_rank {
-                        println!("File Match Rank: {}", file_match_rank);
-                    }
-
-                    if let Some(block_unique_terms) = result.block_unique_terms {
-                        println!("Block Unique Terms: {}", block_unique_terms);
-                    }
-
-                    if let Some(block_total_matches) = result.block_total_matches {
-                        println!("Block Total Matches: {}", block_total_matches);
-                    }
-
-                    println!("Type: {}", result.node_type);
                 }
             }
         }
@@ -439,4 +455,148 @@ fn format_and_print_color_results(
             }
         }
     }
+}
+
+/// Helper function to escape XML special characters
+fn escape_xml(s: &str) -> String {
+    s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&apos;")
+}
+
+/// Format and print search results in JSON format
+fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
+    // Create a simplified version of the results for JSON output
+    #[derive(serde::Serialize)]
+    struct JsonResult<'a> {
+        file: &'a str,
+        lines: (usize, usize),
+        node_type: &'a str,
+        code: &'a str,
+        // Include other relevant fields
+        matched_keywords: Option<&'a Vec<String>>,
+        score: Option<f64>,
+        tfidf_score: Option<f64>,
+        bm25_score: Option<f64>,
+        file_unique_terms: Option<usize>,
+        file_total_matches: Option<usize>,
+        block_unique_terms: Option<usize>,
+        block_total_matches: Option<usize>,
+    }
+
+    let json_results: Vec<JsonResult> = results
+        .iter()
+        .map(|r| JsonResult {
+            file: &r.file,
+            lines: r.lines,
+            node_type: &r.node_type,
+            code: &r.code,
+            matched_keywords: r.matched_keywords.as_ref(),
+            score: r.score,
+            tfidf_score: r.tfidf_score,
+            bm25_score: r.bm25_score,
+            file_unique_terms: r.file_unique_terms,
+            file_total_matches: r.file_total_matches,
+            block_unique_terms: r.block_unique_terms,
+            block_total_matches: r.block_total_matches,
+        })
+        .collect();
+
+    // Create a wrapper object with results and summary
+    let wrapper = serde_json::json!({
+        "results": json_results,
+        "summary": {
+            "count": results.len(),
+            "total_bytes": results.iter().map(|r| r.code.len()).sum::<usize>(),
+            "total_tokens": results.iter().map(|r| count_tokens(&r.code)).sum::<usize>(),
+        }
+    });
+
+    println!("{}", serde_json::to_string_pretty(&wrapper)?);
+    Ok(())
+}
+
+/// Format and print search results in XML format
+fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
+    println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+    println!("<search_results>");
+
+    for result in results {
+        println!("  <result>");
+        println!("    <file>{}</file>", escape_xml(&result.file));
+        println!("    <lines>{}-{}</lines>", result.lines.0, result.lines.1);
+        println!(
+            "    <node_type>{}</node_type>",
+            escape_xml(&result.node_type)
+        );
+
+        if let Some(keywords) = &result.matched_keywords {
+            println!("    <matched_keywords>");
+            for keyword in keywords {
+                println!("      <keyword>{}</keyword>", escape_xml(keyword));
+            }
+            println!("    </matched_keywords>");
+        }
+
+        if let Some(score) = result.score {
+            println!("    <score>{:.4}</score>", score);
+        }
+
+        if let Some(tfidf_score) = result.tfidf_score {
+            println!("    <tfidf_score>{:.4}</tfidf_score>", tfidf_score);
+        }
+
+        if let Some(bm25_score) = result.bm25_score {
+            println!("    <bm25_score>{:.4}</bm25_score>", bm25_score);
+        }
+
+        if let Some(file_unique_terms) = result.file_unique_terms {
+            println!(
+                "    <file_unique_terms>{}</file_unique_terms>",
+                file_unique_terms
+            );
+        }
+
+        if let Some(file_total_matches) = result.file_total_matches {
+            println!(
+                "    <file_total_matches>{}</file_total_matches>",
+                file_total_matches
+            );
+        }
+
+        if let Some(block_unique_terms) = result.block_unique_terms {
+            println!(
+                "    <block_unique_terms>{}</block_unique_terms>",
+                block_unique_terms
+            );
+        }
+
+        if let Some(block_total_matches) = result.block_total_matches {
+            println!(
+                "    <block_total_matches>{}</block_total_matches>",
+                block_total_matches
+            );
+        }
+
+        println!("    <code><![CDATA[{}]]></code>", result.code);
+        println!("  </result>");
+    }
+
+    // Add summary section
+    println!("  <summary>");
+    println!("    <count>{}</count>", results.len());
+    println!(
+        "    <total_bytes>{}</total_bytes>",
+        results.iter().map(|r| r.code.len()).sum::<usize>()
+    );
+    println!(
+        "    <total_tokens>{}</total_tokens>",
+        results.iter().map(|r| count_tokens(&r.code)).sum::<usize>()
+    );
+    println!("  </summary>");
+
+    println!("</search_results>");
+    Ok(())
 }

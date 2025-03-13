@@ -55,7 +55,7 @@ probe extract <FILES> [OPTIONS]
 
 | Option | Function |
 |--------|----------|
-| `<FILES>` | Files to extract from (e.g., `main.rs:42`) |
+| `<FILES>` | Files to extract from (e.g., `main.rs:42` or `main.rs#function_name`) |
 | `--allow-tests` | Include test code blocks |
 | `-c, --context <N>` | Add N context lines |
 | `-f, --format <TYPE>` | Output as: `markdown`, `plain`, `json` |
@@ -68,6 +68,9 @@ probe extract src/main.rs:42
 
 # EXTRACT MULTIPLE BLOCKS
 probe extract src/auth.js:15 src/api.js:27
+
+# EXTRACT BY SYMBOL NAME
+probe extract src/main.rs#handle_extract
 
 # OUTPUT AS JSON
 probe extract src/handlers.rs:108 --format json

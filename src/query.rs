@@ -266,6 +266,15 @@ pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
     Ok(all_matches)
 }
 
+/// Helper function to escape XML special characters
+fn escape_xml(s: &str) -> String {
+    s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&apos;")
+}
+
 /// Format and print the query results
 pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Result<()> {
     match format {
@@ -320,6 +329,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             }
         }
         "json" => {
+            // First collect the results into a Vec
             let json_matches: Vec<_> = matches
                 .iter()
                 .map(|m| {
@@ -334,7 +344,63 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
                 })
                 .collect();
 
-            println!("{}", serde_json::to_string_pretty(&json_matches)?);
+            // Import the count_tokens function locally
+            use crate::search::search_tokens::count_tokens;
+            let total_tokens = matches
+                .iter()
+                .map(|m| count_tokens(&m.matched_text))
+                .sum::<usize>();
+
+            // Create the wrapper object
+            let wrapper = serde_json::json!({
+                "results": json_matches,
+                "summary": {
+                    "count": matches.len(),
+                    "total_bytes": matches.iter().map(|m| m.matched_text.len()).sum::<usize>(),
+                    "total_tokens": total_tokens
+                }
+            });
+
+            println!("{}", serde_json::to_string_pretty(&wrapper)?);
+        }
+        "xml" => {
+            println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+            println!("<query_results>");
+
+            for m in matches {
+                println!("  <match>");
+                println!(
+                    "    <file>{}</file>",
+                    escape_xml(&m.file_path.to_string_lossy())
+                );
+                println!("    <line_start>{}</line_start>", m.line_start);
+                println!("    <line_end>{}</line_end>", m.line_end);
+                println!("    <column_start>{}</column_start>", m.column_start);
+                println!("    <column_end>{}</column_end>", m.column_end);
+                println!("    <text><![CDATA[{}]]></text>", m.matched_text.trim());
+                println!("  </match>");
+            }
+
+            // Add summary section
+            println!("  <summary>");
+            println!("    <count>{}</count>", matches.len());
+            println!(
+                "    <total_bytes>{}</total_bytes>",
+                matches.iter().map(|m| m.matched_text.len()).sum::<usize>()
+            );
+
+            // Import the count_tokens function locally to avoid unused import warning
+            use crate::search::search_tokens::count_tokens;
+            println!(
+                "    <total_tokens>{}</total_tokens>",
+                matches
+                    .iter()
+                    .map(|m| count_tokens(&m.matched_text))
+                    .sum::<usize>()
+            );
+            println!("  </summary>");
+
+            println!("</query_results>");
         }
         _ => {
             // Default to color format
@@ -355,31 +421,34 @@ pub fn handle_query(
     max_results: Option<usize>,
     format: &str,
 ) -> Result<()> {
-    println!("{} {}", "Pattern:".bold().green(), pattern);
-    println!("{} {}", "Path:".bold().green(), path.display());
+    // Only print information for non-JSON/XML formats
+    if format != "json" && format != "xml" {
+        println!("{} {}", "Pattern:".bold().green(), pattern);
+        println!("{} {}", "Path:".bold().green(), path.display());
 
-    // Print language if provided, otherwise show auto-detect
-    if let Some(lang) = language {
-        println!("{} {}", "Language:".bold().green(), lang);
-    } else {
-        println!("{} auto-detect", "Language:".bold().green());
-    }
+        // Print language if provided, otherwise show auto-detect
+        if let Some(lang) = language {
+            println!("{} {}", "Language:".bold().green(), lang);
+        } else {
+            println!("{} auto-detect", "Language:".bold().green());
+        }
 
-    // Show advanced options if they differ from defaults
-    let mut advanced_options = Vec::<String>::new();
-    if allow_tests {
-        advanced_options.push("Including tests".to_string());
-    }
-    if let Some(max) = max_results {
-        advanced_options.push(format!("Max results: {}", max));
-    }
+        // Show advanced options if they differ from defaults
+        let mut advanced_options = Vec::<String>::new();
+        if allow_tests {
+            advanced_options.push("Including tests".to_string());
+        }
+        if let Some(max) = max_results {
+            advanced_options.push(format!("Max results: {}", max));
+        }
 
-    if !advanced_options.is_empty() {
-        println!(
-            "{} {}",
-            "Options:".bold().green(),
-            advanced_options.join(", ")
-        );
+        if !advanced_options.is_empty() {
+            println!(
+                "{} {}",
+                "Options:".bold().green(),
+                advanced_options.join(", ")
+            );
+        }
     }
 
     let start_time = Instant::now();
@@ -400,27 +469,39 @@ pub fn handle_query(
     let duration = start_time.elapsed();
 
     if matches.is_empty() {
-        println!("{}", "No results found.".yellow().bold());
-        println!("Search completed in {:.2?}", duration);
+        // For JSON and XML formats, still call format_and_print_query_results
+        if format == "json" || format == "xml" {
+            format_and_print_query_results(&matches, format)?;
+        } else {
+            // For other formats, print the "No results found" message
+            println!("{}", "No results found.".yellow().bold());
+            println!("Search completed in {:.2?}", duration);
+        }
     } else {
-        println!("Found {} matches in {:.2?}", matches.len(), duration);
-        println!();
+        // For non-JSON/XML formats, print search time
+        if format != "json" && format != "xml" {
+            println!("Found {} matches in {:.2?}", matches.len(), duration);
+            println!();
+        }
 
         format_and_print_query_results(&matches, format)?;
 
-        // Calculate and display total bytes and tokens
-        let total_bytes: usize = matches.iter().map(|m| m.matched_text.len()).sum();
-        let total_tokens: usize = matches
-            .iter()
-            .map(|m| {
-                // Import the count_tokens function locally to avoid unused import warning
-                use crate::search::search_tokens::count_tokens;
-                count_tokens(&m.matched_text)
-            })
-            .sum();
+        // Skip summary for JSON and XML formats
+        if format != "json" && format != "xml" {
+            // Calculate and display total bytes and tokens
+            let total_bytes: usize = matches.iter().map(|m| m.matched_text.len()).sum();
+            let total_tokens: usize = matches
+                .iter()
+                .map(|m| {
+                    // Import the count_tokens function locally to avoid unused import warning
+                    use crate::search::search_tokens::count_tokens;
+                    count_tokens(&m.matched_text)
+                })
+                .sum();
 
-        println!("Total bytes returned: {}", total_bytes);
-        println!("Total tokens returned: {}", total_tokens);
+            println!("Total bytes returned: {}", total_bytes);
+            println!("Total tokens returned: {}", total_tokens);
+        }
     }
 
     Ok(())

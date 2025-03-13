@@ -10,9 +10,11 @@ import {
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
-import { downloadProbeBinary } from './downloader.js';
 import fs from 'fs-extra';
 import { fileURLToPath } from 'url';
+// Import the probe package with type declarations
+// @ts-ignore - Ignore missing type declarations for @buger/probe
+import { search, query, extract, getBinaryPath, setBinaryPath } from '@buger/probe';
 
 const execAsync = promisify(exec);
 
@@ -347,184 +349,91 @@ class ProbeServer {
   }
 
   private async executeCodeSearch(args: SearchCodeArgs): Promise<string> {
-    // Build the command arguments
-    const cliArgs: string[] = [];
- 
-    // Add optional arguments
-    if (args.filesOnly) {
-      cliArgs.push('--files-only');
-    }
-    
-    if (args.ignore && args.ignore.length > 0) {
-      for (const ignorePattern of args.ignore) {
-        cliArgs.push('--ignore', ignorePattern);
-      }
-    }
-    
-    if (args.excludeFilenames) {
-      cliArgs.push('--exclude-filenames');
-    }
-    
-    if (args.reranker) {
-      cliArgs.push('--reranker', args.reranker);
-    }
-    
-    if (args.frequencySearch) {
-      cliArgs.push('--frequency');
-    }
-    
-    if (args.exact) {
-      cliArgs.push('--exact');
-    }
-    
-    if (args.maxResults !== undefined) {
-      cliArgs.push('--max-results', args.maxResults.toString());
-    }
-    
-    if (args.maxBytes !== undefined) {
-      cliArgs.push('--max-bytes', args.maxBytes.toString());
-    }
-    
-    // Always set max-tokens to 40000 by default if not specified
-    const maxTokens = args.maxTokens !== undefined ? args.maxTokens : 40000;
-    cliArgs.push('--max-tokens', maxTokens.toString());
-    
-    if (args.allowTests) {
-      cliArgs.push('--allow-tests');
-    }
-    
-    if (args.anyTerm) {
-      cliArgs.push('--any-term');
-    }
-    
-    // Add new options
-    if (args.noMerge) {
-      cliArgs.push('--no-merge');
-    }
-    
-    if (args.mergeThreshold !== undefined) {
-      cliArgs.push('--merge-threshold', args.mergeThreshold.toString());
-    }
-    
-    // Add session parameter if provided
-    if (args.session !== undefined) {
-      cliArgs.push('--session', args.session);
-    }
-    
-   // Add query as the first positional argument (can be string or array)
-   const queries = Array.isArray(args.query) ? args.query : [args.query];
-   // Use the first query as the main pattern (positional argument)
-   if (queries.length > 0) {
-     // Wrap query in quotes to handle multi-word queries
-     cliArgs.push(`"${queries[0]}"`);
-   }
-   
-   // Add path as the second positional argument (not with --paths flag)
-   cliArgs.push(`"${args.path}"`);
-   
-    // Execute the command
-    const command = `${PROBE_PATH} search ${cliArgs.join(' ')}`;
-    console.log(`Executing command: ${command}`);
-    
     try {
-      const { stdout, stderr } = await execAsync(command);
+      // Use the probe package's search function instead of executing the binary directly
+      const searchOptions = {
+        path: args.path,
+        filesOnly: args.filesOnly,
+        ignore: args.ignore,
+        excludeFilenames: args.excludeFilenames,
+        reranker: args.reranker,
+        frequencySearch: args.frequencySearch,
+        exact: args.exact,
+        maxResults: args.maxResults,
+        maxBytes: args.maxBytes,
+        maxTokens: args.maxTokens,
+        allowTests: args.allowTests,
+        anyTerm: args.anyTerm,
+        noMerge: args.noMerge,
+        mergeThreshold: args.mergeThreshold,
+        session: args.session
+      };
+
+      // Handle both string and array queries
+      const queryValue = Array.isArray(args.query) ? args.query.join(' ') : args.query;
       
-      if (stderr) {
-        console.error(`stderr: ${stderr}`);
-      }
-      
-      return stdout;
-    } catch (error) {
-      console.error('Error executing probe CLI:', error);
-      throw error;
+      const result = await search(queryValue, searchOptions);
+      return result;
+    } catch (error: any) {
+      console.error('Error executing code search:', error);
+      throw new McpError(
+        'MethodNotFound' as unknown as ErrorCode,
+        `Error executing code search: ${error.message || String(error)}`
+      );
     }
   }
 
   private async executeCodeQuery(args: QueryCodeArgs): Promise<string> {
-    // Build the command arguments
-    const cliArgs: string[] = [];
-    
-    // Add optional arguments
-    if (args.language) {
-      cliArgs.push('--language', args.language);
-    }
-    
-    if (args.ignore && args.ignore.length > 0) {
-      for (const ignorePattern of args.ignore) {
-        cliArgs.push('--ignore', ignorePattern);
-      }
-    }
-    
-    if (args.allowTests) {
-      cliArgs.push('--allow-tests');
-    }
-    
-    if (args.maxResults !== undefined) {
-      cliArgs.push('--max-results', args.maxResults.toString());
-    }
-    
-    if (args.format) {
-      cliArgs.push('--format', args.format);
-    }
-    
-    // Add pattern and path as positional arguments
-    cliArgs.push(`"${args.pattern}"`, `"${args.path}"`);
-    
-    // Execute the command
-    const command = `${PROBE_PATH} query ${cliArgs.join(' ')}`;
-    console.log(`Executing command: ${command}`);
-    
     try {
-      const { stdout, stderr } = await execAsync(command);
+      // Use the probe package's query function instead of executing the binary directly
+      const queryOptions = {
+        path: args.path,
+        language: args.language,
+        ignore: args.ignore,
+        allowTests: args.allowTests,
+        maxResults: args.maxResults,
+        format: args.format
+      };
       
-      if (stderr) {
-        console.error(`stderr: ${stderr}`);
-      }
-      
-      return stdout;
-    } catch (error) {
-      console.error('Error executing probe query:', error);
-      throw error;
+      const result = await query(args.pattern, queryOptions);
+      return result;
+    } catch (error: any) {
+      console.error('Error executing code query:', error);
+      throw new McpError(
+        'MethodNotFound' as unknown as ErrorCode,
+        `Error executing code query: ${error.message || String(error)}`
+      );
     }
   }
 
   private async executeCodeExtract(args: ExtractCodeArgs): Promise<string> {
-    // Build the command arguments
-    const cliArgs: string[] = [];
-    
-    // Add optional arguments
-    if (args.allowTests) {
-      cliArgs.push('--allow-tests');
-    }
-    
-    if (args.contextLines !== undefined) {
-      cliArgs.push('--context', args.contextLines.toString());
-    }
-    
-    if (args.format) {
-      cliArgs.push('--format', args.format);
-    }
-    
-    // Add files as positional arguments
-    for (const file of args.files) {
-      cliArgs.push(`"${file}"`);
-    }
-    
-    // Execute the command
-    const command = `${PROBE_PATH} extract ${cliArgs.join(' ')}`;
-    console.log(`Executing command: ${command}`);
-    
     try {
-      const { stdout, stderr } = await execAsync(command);
+      // Use the probe package's extract function instead of executing the binary directly
+      const extractOptions = {
+        allowTests: args.allowTests,
+        contextLines: args.contextLines,
+        format: args.format
+      };
       
-      if (stderr) {
-        console.error(`stderr: ${stderr}`);
-      }
+      // Extract can handle multiple files, but we need to call it for each file and combine the results
+      const results = await Promise.all(
+        args.files.map(async (file) => {
+          try {
+            return await extract(file, extractOptions);
+          } catch (error: any) {
+            console.error(`Error extracting from ${file}:`, error);
+            return `Error extracting from ${file}: ${error.message || String(error)}`;
+          }
+        })
+      );
       
-      return stdout;
-    } catch (error) {
-      console.error('Error executing probe extract:', error);
-      throw error;
+      return results.join('\n\n');
+    } catch (error: any) {
+      console.error('Error executing code extract:', error);
+      throw new McpError(
+        'MethodNotFound' as unknown as ErrorCode,
+        `Error executing code extract: ${error.message || String(error)}`
+      );
     }
   }
 
@@ -553,13 +462,14 @@ class ProbeServer {
       } else {
         // If binary not found, try to download it as a fallback
         try {
-          console.log(`Binary not found. Downloading probe binary (version: ${packageVersion})...`);
+          console.log(`Binary not found. Using probe package to get binary...`);
           
-          // Download the binary
-          PROBE_PATH = await downloadProbeBinary(packageVersion);
-          console.log(`Successfully downloaded probe binary to: ${PROBE_PATH}`);
+          // Get the binary path from the probe package
+          const binaryPath = getBinaryPath();
+          PROBE_PATH = binaryPath;
+          console.log(`Using probe binary from @buger/probe package: ${PROBE_PATH}`);
         } catch (error) {
-          console.error('Error downloading probe binary:', error);
+          console.error('Error getting probe binary:', error);
           
           // Provide more detailed error information and suggestions
           if (error instanceof Error) {

@@ -1,10 +1,9 @@
 use anyhow::Result;
-use clap::Parser as ClapParser;
+use clap::{CommandFactory, Parser as ClapParser};
 use colored::*;
 use std::path::PathBuf;
 use std::time::Instant;
 
-mod chat;
 mod cli;
 mod extract;
 mod language;
@@ -120,26 +119,36 @@ fn handle_search(params: SearchParams) -> Result<()> {
     // Calculate search time
     let duration = start_time.elapsed();
 
-    if limited_results.results.is_empty() {
-        println!("{}", "No results found.".yellow().bold());
-        println!("Search completed in {:.2?}", duration);
+    // Create the query plan regardless of whether we have results
+    let query_plan = if search_options.queries.len() > 1 {
+        // Join multiple queries with AND
+        let combined_query = search_options.queries.join(" AND ");
+        crate::search::query::create_query_plan(&combined_query, search_options.exact).ok()
     } else {
-        println!("Search completed in {:.2?}", duration);
-        println!();
-
-        // Pass the query plan to the format_and_print_search_results function
-        // We need to recreate the query plan here since we don't have access to it from perform_probe
-        let query_plan = if search_options.queries.len() > 1 {
-            // Join multiple queries with AND
-            let combined_query = search_options.queries.join(" AND ");
-            crate::search::query::create_query_plan(&combined_query, search_options.exact).ok()
-        } else {
-            crate::search::query::create_query_plan(
-                &search_options.queries[0],
-                search_options.exact,
-            )
+        crate::search::query::create_query_plan(&search_options.queries[0], search_options.exact)
             .ok()
-        };
+    };
+
+    if limited_results.results.is_empty() {
+        // For JSON and XML formats, still call format_and_print_search_results
+        if params.format == "json" || params.format == "xml" {
+            format_and_print_search_results(
+                &limited_results.results,
+                search_options.dry_run,
+                &params.format,
+                query_plan.as_ref(),
+            );
+        } else {
+            // For other formats, print the "No results found" message
+            println!("{}", "No results found.".yellow().bold());
+            println!("Search completed in {:.2?}", duration);
+        }
+    } else {
+        // For non-JSON/XML formats, print search time
+        if params.format != "json" && params.format != "xml" {
+            println!("Search completed in {:.2?}", duration);
+            println!();
+        }
 
         format_and_print_search_results(
             &limited_results.results,
@@ -192,10 +201,15 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
-        // When no subcommand provided, fallback to search mode
+        // When no subcommand provided and no pattern, show help
+        None if args.pattern.is_none() || args.pattern.as_ref().unwrap().is_empty() => {
+            Args::command().print_help()?;
+            return Ok(());
+        }
+        // When no subcommand but pattern is provided, fallback to search mode
         None => {
-            // Use provided pattern or default to empty string
-            let pattern = args.pattern.unwrap_or_else(String::new);
+            // Use provided pattern
+            let pattern = args.pattern.unwrap();
 
             // Use provided paths or default to current directory
             let paths = if args.paths.is_empty() {
@@ -266,7 +280,16 @@ async fn main() -> Result<()> {
             allow_tests,
             context_lines,
             format,
-        }) => extract::handle_extract(files, allow_tests, context_lines, format)?,
+            from_clipboard,
+            to_clipboard,
+        }) => extract::handle_extract(
+            files,
+            allow_tests,
+            context_lines,
+            format,
+            from_clipboard,
+            to_clipboard,
+        )?,
         Some(Commands::Query {
             pattern,
             path,
@@ -284,7 +307,6 @@ async fn main() -> Result<()> {
             max_results,
             &format,
         )?,
-        Some(Commands::Chat) => probe::handle_chat().await?,
     }
 
     Ok(())

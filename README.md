@@ -23,7 +23,7 @@ Probe is an **AI-friendly, fully local, semantic code search** tool designed to 
 - [Usage](#usage)
   - [CLI Mode](#cli-mode)
   - [MCP Server Mode](#mcp-server-mode)
-  - [AI Chat Mode](#ai-chat-mode)
+  - [AI Chat Mode](#ai-chat-mode) (Example in examples/chat)
   - [Web Interface](#web-interface)
 - [Supported Languages](#supported-languages)
 - [How It Works](#how-it-works)
@@ -62,13 +62,17 @@ go test | probe extract
 ~~~
 
 **Interactive AI Chat**
-Use the built-in AI assistant to ask questions about your codebase:
+Use the AI assistant from the examples directory to ask questions about your codebase:
 
 ~~~bash
+# Navigate to the examples directory
+cd examples/chat
+# Install dependencies
+npm install
 # Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
 # Then start the chat interface
-probe chat
+node index.js
 ~~~
 
 **MCP server**
@@ -105,7 +109,7 @@ Example queries:
 - **Re-Rankers & NLP**: Uses tokenization, stemming, BM25, TF-IDF, or hybrid ranking methods for better search results.
 - **Code Extraction**: Extract specific code blocks or entire files with the `extract` command.
 - **Multi-Language**: Works with popular languages like Rust, Python, JavaScript, TypeScript, Java, Go, C/C++, Swift, C#, and more.
-- **Interactive AI Chat**: Built-in AI assistant that can answer questions about your codebase using Claude or GPT models.
+- **Interactive AI Chat**: AI assistant example in the examples directory that can answer questions about your codebase using Claude or GPT models.
 - **Flexible**: Run as a CLI tool, an MCP server, or an interactive AI chat.
 
 ---
@@ -200,12 +204,16 @@ sudo rm /usr/local/bin/probe
 ---
 ## Usage
 
-Probe can be used in four main modes:
+Probe can be used in three main modes:
 
 1. **CLI Mode**: Direct code search and extraction from the command line
 2. **MCP Server Mode**: Run as a server exposing search functionality via MCP
-3. **AI Chat Mode**: Interactive AI assistant for code exploration
-4. **Web Interface**: Browser-based UI for code exploration
+3. **Web Interface**: Browser-based UI for code exploration
+
+Additionally, there are example implementations in the examples directory:
+
+- **AI Chat Example**: Interactive AI assistant for code exploration (in examples/chat)
+- **Web Interface Example**: Browser-based UI for code exploration (in examples/web)
 
 ### CLI Mode
 
@@ -250,7 +258,7 @@ probe search "function" --no-merge
 
 #### Extract Command
 
-The extract command allows you to extract code blocks from files. When a line number is specified, it uses tree-sitter to find the closest suitable parent node (function, struct, class, etc.) for that line.
+The extract command allows you to extract code blocks from files. When a line number is specified, it uses tree-sitter to find the closest suitable parent node (function, struct, class, etc.) for that line. You can also specify a symbol name to extract the code block for that specific symbol.
 
 ~~~bash
 probe extract <FILES> [OPTIONS]
@@ -258,7 +266,7 @@ probe extract <FILES> [OPTIONS]
 
 ##### Key Options
 
-- `<FILES>`: Files to extract from (can include line numbers with colon, e.g., `file.rs:10`)
+- `<FILES>`: Files to extract from (can include line numbers with colon, e.g., `file.rs:10`, or symbol names with hash, e.g., `file.rs#function_name`)
 - `--allow-tests`: Include test files and test code blocks in results
 - `-c, --context <LINES>`: Number of context lines to include before and after the extracted block (default: 0)
 - `-f, --format <FORMAT>`: Output format (`markdown`, `plain`, `json`) (default: `markdown`)
@@ -278,7 +286,10 @@ probe extract src/main.rs:42 --format json
 # 4) Extract with 5 lines of context around the specified line
 probe extract src/main.rs:42 --context 5
 
-# 5) Extract from stdin (useful with error messages or compiler output)
+# 5) Extract a specific function by name
+probe extract src/main.rs#handle_extract
+
+# 6) Extract from stdin (useful with error messages or compiler output)
 cat error_log.txt | probe extract
 ~~~
 
@@ -317,10 +328,42 @@ Add the following to your AI editor's MCP configuration file:
 
 ### AI Chat Mode
 
-Run Probe as an interactive AI assistant:
+The AI chat functionality is now available as a standalone npm package `@buger/probe-chat` and as an example in the examples directory. This provides more flexibility and allows for easier customization.
+
+#### Using the npm package (Recommended)
 
 ~~~bash
-probe chat
+# Install globally
+npm install -g @buger/probe-chat
+
+# Set your API key
+export ANTHROPIC_API_KEY=your_api_key
+# Or for OpenAI
+# export OPENAI_API_KEY=your_api_key
+
+# Start the chat interface
+probe-chat
+
+# Or specify a directory to search
+probe-chat /path/to/your/project
+~~~
+
+#### Using the example code
+
+~~~bash
+# Navigate to the examples directory
+cd examples/chat
+
+# Install dependencies
+npm install
+
+# Set your API key
+export ANTHROPIC_API_KEY=your_api_key
+# Or for OpenAI
+# export OPENAI_API_KEY=your_api_key
+
+# Start the chat interface
+node index.js
 ~~~
 
 This starts an interactive CLI interface where you can ask questions about your codebase and get AI-powered responses.
@@ -340,23 +383,19 @@ Configure the chat using environment variables:
 ~~~bash
 # Use Claude models (recommended)
 export ANTHROPIC_API_KEY=your_api_key
-probe chat
 
 # Or use OpenAI models
 export OPENAI_API_KEY=your_api_key
-probe chat
 
 # Override the default model
 export MODEL_NAME=claude-3-opus-20240229
-probe chat
 
 # Override API URLs (useful for proxies or enterprise deployments)
 export ANTHROPIC_API_URL=https://your-anthropic-proxy.com
 export OPENAI_API_URL=https://your-openai-proxy.com/v1
-probe chat
 
 # Enable debug mode for detailed logging
-export DEBUG=1 probe chat
+export DEBUG=1
 ~~~
 
 #### Example Usage

@@ -1,0 +1,54 @@
+{
+  "name": "@buger/probe-chat",
+  "version": "1.0.0",
+  "description": "CLI chat interface for Probe code search",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "probe-chat": "./bin/probe-chat.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepublishOnly": "chmod +x ./bin/probe-chat.js"
+  },
+  "keywords": [
+    "probe",
+    "code-search",
+    "chat",
+    "ai",
+    "cli"
+  ],
+  "author": "Leonid Bugaev",
+  "license": "ISC",
+  "dependencies": {
+    "@ai-sdk/anthropic": "^0.0.9",
+    "@ai-sdk/openai": "^0.0.9",
+    "@buger/probe": "*",
+    "ai": "^4.1.41",
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
+    "dotenv": "^16.3.1",
+    "inquirer": "^9.2.12",
+    "ora": "^7.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/buger/probe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/buger/probe/issues"
+  },
+  "homepage": "https://github.com/buger/probe#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "bin/",
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ]
+}

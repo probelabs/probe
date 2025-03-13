@@ -1,0 +1,7 @@
+# Ignore all files in this directory
+*
+# Except these files
+!.gitignore
+!.gitkeep
+!README.md
+!probe

@@ -12,7 +12,7 @@ npm install -g @buger/probe-mcp
 npx @buger/probe-mcp
 ```
 
-During installation, the package will automatically download the appropriate Probe binary for your system. This binary is required for the MCP server to function.
+This package now uses the `@buger/probe` package as a dependency, which will automatically handle downloading the appropriate Probe binary for your system when needed.
 
 ## Usage
 
@@ -48,9 +48,13 @@ The AI will use the Probe tool to search your codebase and provide relevant code
 
 If you encounter issues with the MCP server:
 
-1. **Binary Download**: The Probe binary should be automatically downloaded during package installation. If this fails, you can manually download it from [GitHub Releases](https://github.com/buger/probe/releases) and place it in the `node_modules/@buger/probe-mcp/bin` directory (or in the global npm package location if installed globally).
+1. **Package Dependencies**: Make sure both `@buger/probe-mcp` and `@buger/probe` are properly installed. The `@buger/probe` package handles the binary download and management.
 
-2. **Environment Variable**: You can set the `PROBE_PATH` environment variable to specify the location of an existing Probe binary.
+2. **Binary Issues**: If you encounter issues with the Probe binary, you can check the binary path using:
+   ```javascript
+   import { getBinaryPath } from '@buger/probe';
+   console.log(getBinaryPath());
+   ```
 
 3. **Package Name**: Make sure you're using `@buger/probe-mcp` (not `@buger/probe`) in your MCP configuration.
 

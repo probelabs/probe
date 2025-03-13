@@ -8,6 +8,7 @@ pub struct SearchOptions<'a> {
     pub custom_ignores: &'a [String],
     pub exclude_filenames: bool,
     pub reranker: &'a str,
+    #[allow(dead_code)]
     pub frequency_search: bool,
     pub max_results: Option<usize>,
     pub max_bytes: Option<usize>,

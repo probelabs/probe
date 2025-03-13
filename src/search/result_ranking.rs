@@ -347,9 +347,9 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
             );
         }
 
-        if has_matches && has_tfidf && has_bm25 && has_enough_unique_terms {
-            filtered_results.push(result.clone());
-        }
+        // if has_matches && has_tfidf && has_bm25 && has_enough_unique_terms {
+        filtered_results.push(result.clone());
+        // }
     }
 
     // Replace original results with filtered results

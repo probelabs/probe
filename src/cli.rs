@@ -2,7 +2,14 @@ use clap::{Parser as ClapParser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(ClapParser, Debug)]
-#[command(author, version, about = "AI-friendly, fully local, semantic code search tool for large codebases", long_about = None)]
+#[command(
+    author,
+    version,
+    about = "AI-friendly, fully local, semantic code search tool for large codebases",
+    long_about = "Probe is a powerful code search tool designed for developers and AI assistants. \
+    It provides semantic code search with intelligent ranking, code block extraction, \
+    and language-aware parsing. Run without arguments to see this help message."
+)]
 pub struct Args {
     /// Search pattern (used when no subcommand is provided)
     #[arg(value_name = "PATTERN")]
@@ -65,7 +72,7 @@ pub struct Args {
     pub dry_run: bool,
 
     /// Output format (default: color)
-    #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "color"])]
+    #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color"])]
     pub format: String,
 
     /// Session ID for caching search results
@@ -78,13 +85,18 @@ pub struct Args {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Search code using patterns
+    /// Search code using patterns with intelligent ranking
+    ///
+    /// This command searches your codebase using regex patterns with semantic understanding.
+    /// It uses frequency-based search with stemming and stopword removal by default,
+    /// and ranks results using a hybrid algorithm that combines TF-IDF and BM25.
+    /// Results are presented as code blocks with relevant context.
     Search {
-        /// Search pattern
+        /// Search pattern (regex supported)
         #[arg(value_name = "PATTERN")]
         pattern: String,
 
-        /// Files or directories to search
+        /// Files or directories to search (defaults to current directory)
         #[arg(value_name = "PATH", default_value = ".")]
         paths: Vec<PathBuf>,
 
@@ -141,7 +153,7 @@ pub enum Commands {
         dry_run: bool,
 
         /// Output format (default: color)
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "color"])]
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color"])]
         format: String,
 
         /// Session ID for caching search results
@@ -154,8 +166,10 @@ pub enum Commands {
     /// This command extracts code blocks from files based on file paths and optional line numbers.
     /// When a line number is specified (e.g., file.rs:10), the command uses tree-sitter to find
     /// the closest suitable parent node (function, struct, class, etc.) for that line.
+    /// You can also specify a symbol name using the hash syntax (e.g., file.rs#function_name) to
+    /// extract the code block for that specific symbol.
     Extract {
-        /// Files to extract from (can include line numbers with colon, e.g., file.rs:10)
+        /// Files to extract from (can include line numbers with colon, e.g., file.rs:10, or symbol names with hash, e.g., file.rs#function_name)
         #[arg(value_name = "FILES")]
         files: Vec<String>,
 
@@ -168,20 +182,31 @@ pub enum Commands {
         context_lines: usize,
 
         /// Output format (default: color)
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "color"])]
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color"])]
         format: String,
+
+        /// Read input from clipboard instead of files
+        #[arg(short = 'f', long = "from-clipboard")]
+        from_clipboard: bool,
+
+        /// Write output to clipboard
+        #[arg(short = 't', long = "to-clipboard")]
+        to_clipboard: bool,
     },
 
-    /// Search code using ast-grep patterns
+    /// Search code using AST patterns for precise structural matching
     ///
     /// This command uses ast-grep to search for structural patterns in code.
-    /// It allows for more precise code searching based on the Abstract Syntax Tree.
+    /// It allows for more precise code searching based on the Abstract Syntax Tree,
+    /// which is particularly useful for finding specific code structures regardless
+    /// of variable names or formatting. This is more powerful than regex for
+    /// certain types of code searches.
     Query {
         /// AST pattern to search for (e.g., "fn $NAME() { $$$BODY }")
         #[arg(value_name = "PATTERN")]
         pattern: String,
 
-        /// Files or directories to search
+        /// Files or directories to search (defaults to current directory)
         #[arg(value_name = "PATH", default_value = ".")]
         path: PathBuf,
 
@@ -205,10 +230,7 @@ pub enum Commands {
         max_results: Option<usize>,
 
         /// Output format (default: color)
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "color"])]
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color"])]
         format: String,
     },
-
-    /// Use AI chat to interact with codebase
-    Chat,
 }
