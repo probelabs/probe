@@ -34,6 +34,13 @@ Probe is an **AI-friendly, fully local, semantic code search** tool designed to 
 
 ## Quick Start
 
+**NPM Installation**
+The easiest way to install Probe is via npm, which also installs the binary:
+
+~~~bash
+npm install -g @buger/probe
+~~~
+
 **Basic Search Example**
 Search for code containing the phrase "llm pricing" in the current directory:
 
@@ -46,6 +53,26 @@ Search for "partial prompt injection" in the current directory but limit the tot
 
 ~~~bash
 probe search "prompt injection" ./ --max-tokens 10000
+~~~
+
+**Elastic Search Queries**
+Use advanced query syntax for more powerful searches:
+
+~~~bash
+# Use AND operator for terms that must appear together
+probe search "error AND handling" ./
+
+# Use OR operator for alternative terms
+probe search "login OR authentication OR auth" ./src
+
+# Group terms with parentheses for complex queries
+probe search "(error OR exception) AND (handle OR process)" ./
+
+# Use wildcards for partial matching
+probe search "auth* connect*" ./
+
+# Exclude terms with NOT operator
+probe search "database NOT sqlite" ./
 ~~~
 
 **Extract Code Blocks**
@@ -62,17 +89,50 @@ go test | probe extract
 ~~~
 
 **Interactive AI Chat**
-Use the AI assistant from the examples directory to ask questions about your codebase:
+Use the AI assistant to ask questions about your codebase:
 
 ~~~bash
-# Navigate to the examples directory
-cd examples/chat
-# Install dependencies
-npm install
+# Run directly with npx (no installation needed)
+npx -y @buger/probe-chat
+
 # Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
-# Then start the chat interface
-node index.js
+# Or for OpenAI
+# export OPENAI_API_KEY=your_api_key
+
+# Specify a directory to search (optional)
+npx -y @buger/probe-chat /path/to/your/project
+~~~
+
+**Node.js SDK Usage**
+Use Probe programmatically in your Node.js applications with the Vercel AI SDK:
+
+~~~javascript
+import { ProbeChat } from '@buger/probe-chat';
+import { StreamingTextResponse } from 'ai';
+
+// Create a chat instance
+const chat = new ProbeChat({
+  model: 'claude-3-sonnet-20240229',
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  allowedFolders: ['/path/to/your/project']
+});
+
+// In an API route or Express handler
+export async function POST(req) {
+  const { messages } = await req.json();
+  const userMessage = messages[messages.length - 1].content;
+  
+  // Get a streaming response from the AI
+  const stream = await chat.chat(userMessage, { stream: true });
+  
+  // Return a streaming response
+  return new StreamingTextResponse(stream);
+}
+
+// Or use it in a non-streaming way
+const response = await chat.chat('How is authentication implemented?');
+console.log(response);
 ~~~
 
 **MCP server**
@@ -118,13 +178,19 @@ Example queries:
 
 ### Quick Installation
 
-You can install Probe with a single command:
+You can install Probe with a single command using either npm or curl:
 
+**Using npm (Recommended for Node.js users)**
+~~~bash
+npm install -g @buger/probe
+~~~
+
+**Using curl (For any platform)**
 ~~~bash
 curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
 ~~~
 
-**What this script does**:
+**What the curl script does**:
 
 1. Detects your operating system and architecture  
 2. Fetches the latest release from GitHub  
@@ -286,10 +352,13 @@ probe extract src/main.rs:42 --format json
 # 4) Extract with 5 lines of context around the specified line
 probe extract src/main.rs:42 --context 5
 
-# 5) Extract a specific function by name
+# 5) Extract a specific function by name (using # symbol syntax)
 probe extract src/main.rs#handle_extract
 
-# 6) Extract from stdin (useful with error messages or compiler output)
+# 6) Extract a specific line range (using : syntax)
+probe extract src/main.rs:10-20
+
+# 7) Extract from stdin (useful with error messages or compiler output)
 cat error_log.txt | probe extract
 ~~~
 
@@ -328,24 +397,31 @@ Add the following to your AI editor's MCP configuration file:
 
 ### AI Chat Mode
 
-The AI chat functionality is now available as a standalone npm package `@buger/probe-chat` and as an example in the examples directory. This provides more flexibility and allows for easier customization.
+The AI chat functionality is available as a standalone npm package that can be run directly with npx.
 
-#### Using the npm package (Recommended)
+#### Using npx (Recommended)
 
 ~~~bash
-# Install globally
-npm install -g @buger/probe-chat
+# Run directly with npx (no installation needed)
+npx -y @buger/probe-chat
 
 # Set your API key
 export ANTHROPIC_API_KEY=your_api_key
 # Or for OpenAI
 # export OPENAI_API_KEY=your_api_key
 
+# Or specify a directory to search
+npx -y @buger/probe-chat /path/to/your/project
+~~~
+
+#### Using the npm package
+
+~~~bash
+# Install globally
+npm install -g @buger/probe-chat
+
 # Start the chat interface
 probe-chat
-
-# Or specify a directory to search
-probe-chat /path/to/your/project
 ~~~
 
 #### Using the example code
@@ -451,16 +527,22 @@ Total: 2777 tokens (Cumulative for entire session)
 
 ### Web Interface
 
-Probe includes a web-based chat interface that provides a user-friendly way to interact with your codebase using AI. The web interface is located in the `web/` folder and offers a modern UI for code search and AI-powered code exploration.
+Probe includes a web-based chat interface that provides a user-friendly way to interact with your codebase using AI. You can run it directly with npx or set it up manually.
 
-#### Features
+#### Quick Start with npx
 
-- **Interactive Chat UI**: Clean, modern interface with markdown and syntax highlighting
-- **AI-Powered Code Search**: Uses Claude AI to search and explain your codebase
-- **Mermaid Diagram Support**: Renders visual diagrams for code architecture and flows
-- **Configurable Search Paths**: Define which directories can be searched via environment variables
+~~~bash
+# Run directly with npx (no installation needed)
+npx -y @buger/probe-web
 
-#### Setup and Configuration
+# Set your API key first
+export ANTHROPIC_API_KEY=your_api_key
+
+# Configure allowed folders (optional)
+export ALLOWED_FOLDERS=/path/to/folder1,/path/to/folder2
+~~~
+
+#### Manual Setup and Configuration
 
 1. **Navigate to the web directory**:
    ```bash
