@@ -17,4 +17,5 @@ pub struct SearchOptions<'a> {
     pub no_merge: bool,
     pub merge_threshold: Option<usize>,
     pub dry_run: bool,
+    pub session: Option<&'a str>,
 }

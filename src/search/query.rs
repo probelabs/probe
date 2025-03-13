@@ -52,6 +52,7 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
             field: None,
             required: false,
             excluded: false,
+            exact: true, // Mark as exact match
         };
 
         // Build term index map directly
@@ -118,6 +119,7 @@ fn collect_all_terms(
             keywords,
             field: _,
             excluded: is_excluded,
+            exact: _,
             ..
         } => {
             // Add all keywords to all_terms
@@ -249,6 +251,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                     keywords,
                     field: _,
                     excluded,
+                    exact,
                     ..
                 } => {
                     // Skip pattern generation for excluded terms
@@ -278,7 +281,13 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                         // Find the keyword's index in term_indices
                         if let Some(&idx) = plan.term_indices.get(keyword) {
                             let base_pattern = regex_escape(keyword);
-                            let pattern = format!("(\\b{}|{}\\b)", base_pattern, base_pattern);
+
+                            // For exact terms, use stricter word boundary matching
+                            let pattern = if *exact {
+                                format!("\\b{}\\b", base_pattern)
+                            } else {
+                                format!("(\\b{}|{}\\b)", base_pattern, base_pattern)
+                            };
 
                             if debug_mode {
                                 println!(

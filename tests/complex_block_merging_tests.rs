@@ -415,6 +415,7 @@ fn third_function() {
             no_merge: false,
             merge_threshold: Some(threshold),
             dry_run: false,
+            session: None,
         };
 
         // Run the search

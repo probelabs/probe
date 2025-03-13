@@ -10,6 +10,7 @@ fn create_term(keyword: &str) -> Expr {
         field: None,
         required: false,
         excluded: false,
+        exact: false,
     }
 }
 
@@ -21,6 +22,7 @@ fn create_required_term(keyword: &str) -> Expr {
         field: None,
         required: true,
         excluded: false,
+        exact: false,
     }
 }
 
@@ -32,6 +34,19 @@ fn create_excluded_term(keyword: &str) -> Expr {
         field: None,
         required: false,
         excluded: true,
+        exact: false,
+    }
+}
+
+fn create_exact_term(keyword: &str) -> Expr {
+    // For testing purposes, we'll bypass the tokenization and stemming
+    // by directly creating a term with the exact keyword
+    Expr::Term {
+        keywords: vec![keyword.to_string()],
+        field: None,
+        required: false,
+        excluded: false,
+        exact: true,
     }
 }
 
@@ -346,5 +361,51 @@ fn test_evaluate_optional_terms() {
     
     // No match when excluded is present, even with the OR behavior
     let matched_terms = create_matched_terms(&[0, 2]);
+    assert!(!expr.evaluate(&matched_terms, &term_indices));
+}
+
+#[test]
+fn test_evaluate_exact_terms() {
+    // Create term indices with original and stemmed terms
+    let term_indices = create_term_indices(&["running", "run", "whitelist", "white", "list"]);
+    
+    // Test exact term
+    let expr = create_exact_term("running");
+    
+    // Match when the exact term is present
+    let matched_terms = create_matched_terms(&[0]); // "running"
+    assert!(expr.evaluate(&matched_terms, &term_indices));
+    
+    // No match when only the stemmed term is present
+    let matched_terms = create_matched_terms(&[1]); // "run"
+    assert!(!expr.evaluate(&matched_terms, &term_indices));
+    
+    // Test non-exact term
+    let expr = create_term("running");
+    
+    // Match when the exact term is present
+    let matched_terms = create_matched_terms(&[0]); // "running"
+    assert!(expr.evaluate(&matched_terms, &term_indices));
+    
+    // Match when only the stemmed term is present
+    let matched_terms = create_matched_terms(&[1]); // "run"
+    assert!(expr.evaluate(&matched_terms, &term_indices));
+    
+    // Test compound expression with exact term
+    let expr = Expr::And(
+        Box::new(create_term("running")),
+        Box::new(create_exact_term("whitelist"))
+    );
+    
+    // Match when both terms are present (exact and stemmed)
+    let matched_terms = create_matched_terms(&[0, 2]); // "running", "whitelist"
+    assert!(expr.evaluate(&matched_terms, &term_indices));
+    
+    // Match when the non-exact term is stemmed and the exact term is present
+    let matched_terms = create_matched_terms(&[1, 2]); // "run", "whitelist"
+    assert!(expr.evaluate(&matched_terms, &term_indices));
+    
+    // No match when the exact term is only present as stemmed parts
+    let matched_terms = create_matched_terms(&[0, 3, 4]); // "running", "white", "list"
     assert!(!expr.evaluate(&matched_terms, &term_indices));
 }

@@ -361,6 +361,142 @@ fn find_acceptable_child<'a>(node: Node<'a>, language_impl: &dyn LanguageImpl) -
     None // No acceptable child found
 }
 
+/// Function to extract all top-level AST blocks from a file
+pub fn extract_all_top_level_blocks(
+    content: &str,
+    extension: &str,
+    allow_tests: bool,
+) -> Result<Vec<CodeBlock>> {
+    // Get the appropriate language implementation
+    let language_impl = match get_language_impl(extension) {
+        Some(lang) => lang,
+        None => {
+            return Err(anyhow::anyhow!(format!(
+                "Unsupported file type: {}",
+                extension
+            )))
+        }
+    };
+
+    // Get the tree-sitter language
+    let language = language_impl.get_tree_sitter_language();
+
+    // Parse the file
+    let mut parser = TSParser::new();
+    parser.set_language(&language)?;
+
+    let tree = parser
+        .parse(content, None)
+        .context("Failed to parse the file")?;
+
+    let root_node = tree.root_node();
+
+    // Check for debug mode
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    if debug_mode {
+        println!(
+            "DEBUG: Extracting all top-level blocks from file with extension: {}",
+            extension
+        );
+        println!("DEBUG: Root node type: {}", root_node.kind());
+    }
+
+    // Collect all top-level code blocks
+    let mut code_blocks: Vec<CodeBlock> = Vec::new();
+    let mut seen_nodes: HashSet<(usize, usize)> = HashSet::new();
+
+    // Recursive function to find all acceptable parent nodes
+    fn find_all_acceptable_parents(
+        node: Node<'_>,
+        language_impl: &dyn LanguageImpl,
+        seen_nodes: &mut HashSet<(usize, usize)>,
+        code_blocks: &mut Vec<CodeBlock>,
+        allow_tests: bool,
+        content: &[u8],
+        debug_mode: bool,
+    ) {
+        // Check if this node is an acceptable parent
+        if language_impl.is_acceptable_parent(&node) {
+            let start_pos = node.start_position();
+            let end_pos = node.end_position();
+            let node_key = (start_pos.row, end_pos.row);
+
+            // Skip if we've already seen this node
+            if !seen_nodes.contains(&node_key) {
+                seen_nodes.insert(node_key);
+
+                // Skip test nodes unless allow_tests is true
+                if !allow_tests && language_impl.is_test_node(&node, content) {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Skipping test node at lines {}-{}, type: {}",
+                            start_pos.row + 1,
+                            end_pos.row + 1,
+                            node.kind()
+                        );
+                    }
+                } else {
+                    // Add this node as a code block
+                    code_blocks.push(CodeBlock {
+                        start_row: start_pos.row,
+                        end_row: end_pos.row,
+                        start_byte: node.start_byte(),
+                        end_byte: node.end_byte(),
+                        node_type: node.kind().to_string(),
+                        parent_node_type: None,
+                        parent_start_row: None,
+                        parent_end_row: None,
+                    });
+
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Added top-level block: type='{}', lines={}-{}",
+                            node.kind(),
+                            start_pos.row + 1,
+                            end_pos.row + 1
+                        );
+                    }
+                }
+            }
+        }
+
+        // Recursively process all children
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            find_all_acceptable_parents(
+                child,
+                language_impl,
+                seen_nodes,
+                code_blocks,
+                allow_tests,
+                content,
+                debug_mode,
+            );
+        }
+    }
+
+    // Start the recursive search from the root node
+    find_all_acceptable_parents(
+        root_node,
+        language_impl.as_ref(),
+        &mut seen_nodes,
+        &mut code_blocks,
+        allow_tests,
+        content.as_bytes(),
+        debug_mode,
+    );
+
+    // Sort code blocks by start position
+    code_blocks.sort_by_key(|block| block.start_row);
+
+    if debug_mode {
+        println!("DEBUG: Extracted {} top-level blocks", code_blocks.len());
+    }
+
+    Ok(code_blocks)
+}
+
 /// Function to parse a file and extract code blocks for the given line numbers
 pub fn parse_file_for_code_blocks(
     content: &str,

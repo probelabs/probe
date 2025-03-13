@@ -346,29 +346,247 @@ pub fn find_files_with_pattern(
 }
 
 /// Function to find files whose names match query words
-/// This is now a simplified version that returns an empty vector since we're
-/// adding the filename to the top of each code block instead of using pattern matching
 pub fn find_matching_filenames(
-    _path: &Path,
+    path: &Path,
     queries: &[String],
-    _already_found_files: &HashSet<PathBuf>,
-    _custom_ignores: &[String],
-    _allow_tests: bool,
+    already_found_files: &HashSet<PathBuf>,
+    custom_ignores: &[String],
+    allow_tests: bool,
 ) -> Result<Vec<PathBuf>> {
     // Debug output
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: Filename matching is now handled by adding the filename to the top of each code block");
+        println!("DEBUG: Finding files whose names match query words");
         println!("DEBUG: Queries: {:?}", queries);
     }
 
-    println!(
-        "Filename matching is now handled by adding the filename to the top of each code block"
-    );
+    let mut matching_files = Vec::new();
 
-    // Return an empty vector since we're not using pattern matching anymore
-    Ok(Vec::new())
+    // Create a WalkBuilder that respects .gitignore files and common ignore patterns
+    let mut builder = WalkBuilder::new(path);
+
+    // Configure the builder
+    builder.git_ignore(true);
+    builder.git_global(true);
+    builder.git_exclude(true);
+
+    // Add common directories to ignore
+    let mut common_ignores: Vec<String> = vec![
+        "node_modules",
+        "vendor",
+        "target",
+        "dist",
+        "build",
+        ".git",
+        ".svn",
+        ".hg",
+        ".idea",
+        ".vscode",
+        "__pycache__",
+        "*.pyc",
+        "*.pyo",
+        "*.class",
+        "*.o",
+        "*.obj",
+        "*.a",
+        "*.lib",
+        "*.so",
+        "*.dylib",
+        "*.dll",
+        "*.exe",
+        "*.out",
+        "*.app",
+        "*.jar",
+        "*.war",
+        "*.ear",
+        "*.zip",
+        "*.tar.gz",
+        "*.rar",
+        "*.log",
+        "*.tmp",
+        "*.temp",
+        "*.swp",
+        "*.swo",
+        "*.bak",
+        "*.orig",
+        "*.DS_Store",
+        "Thumbs.db",
+        "*.yml",
+        "*.yaml",
+        "*.json",
+        "*.tconf",
+        "*.conf",
+        "go.sum",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+
+    // Add test file patterns if allow_tests is false
+    if !allow_tests {
+        let test_patterns: Vec<String> = vec![
+            "*_test.rs",
+            "*_tests.rs",
+            "test_*.rs",
+            "tests.rs",
+            "*.spec.js",
+            "*.test.js",
+            "*.spec.ts",
+            "*.test.ts",
+            "*.spec.jsx",
+            "*.test.jsx",
+            "*.spec.tsx",
+            "*.test.tsx",
+            "test_*.py",
+            "*_test.go",
+            "test_*.c",
+            "*_test.c",
+            "*_test.cpp",
+            "*_test.cc",
+            "*_test.cxx",
+            "*Test.java",
+            "*_test.rb",
+            "test_*.rb",
+            "*_spec.rb",
+            "*Test.php",
+            "test_*.php",
+            "**/tests/**",
+            "**/test/**",
+            "**/__tests__/**",
+            "**/__test__/**",
+            "**/spec/**",
+            "**/specs/**",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        common_ignores.extend(test_patterns);
+    }
+
+    // Add custom ignore patterns to the common ignores
+    for pattern in custom_ignores {
+        common_ignores.push(pattern.clone());
+    }
+
+    // Create a single override builder for all ignore patterns
+    let mut override_builder = ignore::overrides::OverrideBuilder::new(path);
+
+    // Add all ignore patterns to the override builder
+    for pattern in &common_ignores {
+        if let Err(err) = override_builder.add(&format!("!**/{}", pattern)) {
+            eprintln!("Error adding ignore pattern {:?}: {}", pattern, err);
+        }
+    }
+
+    // Build and apply the overrides
+    match override_builder.build() {
+        Ok(overrides) => {
+            builder.overrides(overrides);
+        }
+        Err(err) => {
+            eprintln!("Error building ignore overrides: {}", err);
+        }
+    }
+
+    // Tokenize query terms for matching
+    let query_tokens: Vec<String> = queries
+        .iter()
+        .flat_map(|q| {
+            q.split_whitespace()
+                .map(|term| term.to_lowercase())
+                .collect::<Vec<String>>()
+        })
+        .collect();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Query tokens for filename matching: {:?}",
+            query_tokens
+        );
+    }
+
+    // Count how many files we're searching
+    let mut total_files = 0;
+
+    // Recursively walk the directory and check each file
+    for result in builder.build() {
+        total_files += 1;
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(err) => {
+                eprintln!("Error walking directory: {}", err);
+                continue;
+            }
+        };
+
+        // Skip directories
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+
+        let file_path = entry.path();
+
+        // Skip if this file is already in the results
+        if already_found_files.contains(&file_path.to_path_buf()) {
+            continue;
+        }
+
+        // Get the filename
+        let filename = match file_path.file_name() {
+            Some(name) => name.to_string_lossy().to_lowercase(),
+            None => continue,
+        };
+
+        // Tokenize the filename
+        let filename_tokens: Vec<String> = filename
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_lowercase())
+            .collect();
+
+        if debug_mode {
+            println!(
+                "DEBUG: Checking filename: {} with tokens: {:?}",
+                filename, filename_tokens
+            );
+        }
+
+        // Check if any query token matches any filename token
+        let mut matched = false;
+        for query_token in &query_tokens {
+            if filename_tokens
+                .iter()
+                .any(|token| token.contains(query_token))
+            {
+                matched = true;
+                if debug_mode {
+                    println!(
+                        "DEBUG: Filename '{}' matched query token '{}'",
+                        filename, query_token
+                    );
+                }
+                break;
+            }
+        }
+
+        if matched {
+            matching_files.push(file_path.to_path_buf());
+        }
+    }
+
+    if debug_mode {
+        println!(
+            "DEBUG: Found {} files with matching filenames out of {} total files",
+            matching_files.len(),
+            total_files
+        );
+        for (i, file) in matching_files.iter().enumerate() {
+            println!("DEBUG: Filename match {}: {:?}", i + 1, file);
+        }
+    }
+
+    Ok(matching_files)
 }
 
 /// Compatibility function for the old get_filename_matched_queries signature

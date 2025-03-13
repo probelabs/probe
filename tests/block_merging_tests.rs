@@ -187,6 +187,7 @@ fn test_integration_with_search_flow() {
         no_merge: false,
         merge_threshold: Some(20), // Increase threshold to ensure non-adjacent blocks are merged
         dry_run: false,
+        session: None,
     };
 
     // Run a search that should produce multiple overlapping blocks
@@ -298,6 +299,7 @@ fn test_no_merge_flag() {
         no_merge: false,
         merge_threshold: Some(20), // Increase threshold to ensure non-adjacent blocks are merged
         dry_run: false,
+        session: None,
     };
 
     // Run a search that should produce merged blocks
@@ -321,6 +323,7 @@ fn test_no_merge_flag() {
         no_merge: true,
         merge_threshold: Some(20), // Increase threshold to ensure non-adjacent blocks are merged
         dry_run: false,
+        session: None,
     };
 
     // Run a search that should not merge blocks

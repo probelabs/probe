@@ -11,6 +11,7 @@ fn test_multi_keyword_pattern_generation() {
         field: None,
         required: false,
         excluded: false,
+        exact: false,
     };
 
     // Create a term indices map
@@ -68,6 +69,7 @@ fn test_excluded_term_pattern_generation() {
         field: None,
         required: false,
         excluded: true,
+        exact: false,
     };
 
     // Create a term indices map
@@ -104,12 +106,14 @@ fn test_and_expression_pattern_generation() {
             field: None,
             required: false,
             excluded: false,
+            exact: false,
         }),
         Box::new(Expr::Term {
             keywords: vec!["term2".to_string()],
             field: None,
             required: false,
             excluded: false,
+            exact: false,
         }),
     );
 
@@ -160,12 +164,14 @@ fn test_or_expression_pattern_generation() {
             field: None,
             required: false,
             excluded: false,
+            exact: false,
         }),
         Box::new(Expr::Term {
             keywords: vec!["term2".to_string()],
             field: None,
             required: false,
             excluded: false,
+            exact: false,
         }),
     );
 
@@ -226,6 +232,7 @@ fn test_complex_expression_pattern_generation() {
             field: None,
             required: false,
             excluded: false,
+            exact: false,
         }),
         Box::new(Expr::Or(
             Box::new(Expr::Term {
@@ -233,12 +240,14 @@ fn test_complex_expression_pattern_generation() {
                 field: None,
                 required: false,
                 excluded: false,
+                exact: false,
             }),
             Box::new(Expr::Term {
                 keywords: vec!["network".to_string()],
                 field: None,
                 required: false,
                 excluded: false,
+                exact: false,
             }),
         )),
     );
@@ -313,12 +322,14 @@ fn test_pattern_deduplication() {
             field: None,
             required: false,
             excluded: false,
+            exact: false,
         }),
         Box::new(Expr::Term {
             keywords: vec!["term".to_string()],
             field: None,
             required: false,
             excluded: false,
+            exact: false,
         }),
     );
 

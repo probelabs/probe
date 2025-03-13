@@ -30,6 +30,7 @@ fn test_ip_whitelist_stemming() {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Enable debug mode to see the actual terms
@@ -146,6 +147,7 @@ fn test_negative_terms_exclude_files() {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Enable debug mode to see the actual terms

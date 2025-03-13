@@ -523,6 +523,7 @@ impl Tool for ProbeSearch {
             no_merge: false,
             merge_threshold: None,
             dry_run: false, // Chat mode doesn't use dry-run
+            session: None,  // We'll handle the session ID in the search_runner.rs file
         };
 
         if debug_mode {

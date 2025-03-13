@@ -68,6 +68,10 @@ pub struct Args {
     #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "color"])]
     pub format: String,
 
+    /// Session ID for caching search results
+    #[arg(long = "session")]
+    pub session: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -139,6 +143,10 @@ pub enum Commands {
         /// Output format (default: color)
         #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "color"])]
         format: String,
+
+        /// Session ID for caching search results
+        #[arg(long = "session")]
+        session: Option<String>,
     },
 
     /// Extract code blocks from files

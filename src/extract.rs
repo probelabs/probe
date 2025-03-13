@@ -8,10 +8,468 @@ use crate::language::parser::parse_file_for_code_blocks;
 use crate::models::SearchResult;
 use crate::search::search_tokens::count_tokens;
 use anyhow::{Context, Result};
-use serde_json;
+use glob::glob;
+use regex::Regex;
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+
+/// Extract file paths from text (for stdin mode)
+///
+/// This function takes a string of text and extracts file paths with optional
+/// line numbers or ranges. It's used when the extract command receives input from stdin.
+///
+/// The function looks for patterns like:
+/// - File paths with extensions (e.g., file.rs, path/to/file.go)
+/// - Optional line numbers after a colon (e.g., file.rs:10)
+/// - Optional line ranges after a colon (e.g., file.rs:1-60)
+/// - File paths with line and column numbers (e.g., file.rs:10:42)
+pub fn extract_file_paths_from_text(text: &str) -> Vec<(PathBuf, Option<usize>, Option<usize>)> {
+    let mut results = Vec::new();
+    let mut processed_paths = HashSet::new();
+
+    // First, try to match file paths with line ranges (e.g., file.rs:1-60)
+    let file_range_regex =
+        Regex::new(r"(?:^|\s)([a-zA-Z0-9_\-./\*\{\}]+\.[a-zA-Z0-9]+):(\d+)-(\d+)").unwrap();
+
+    for cap in file_range_regex.captures_iter(text) {
+        let file_path = cap.get(1).unwrap().as_str();
+        let start_line = cap.get(2).and_then(|m| m.as_str().parse::<usize>().ok());
+        let end_line = cap.get(3).and_then(|m| m.as_str().parse::<usize>().ok());
+
+        if let (Some(start), Some(end)) = (start_line, end_line) {
+            // Handle glob pattern
+            if file_path.contains('*') || file_path.contains('{') {
+                if let Ok(paths) = glob(file_path) {
+                    for entry in paths.flatten() {
+                        processed_paths.insert(entry.to_string_lossy().to_string());
+                        results.push((entry, Some(start), Some(end)));
+                    }
+                }
+            } else {
+                processed_paths.insert(file_path.to_string());
+                results.push((PathBuf::from(file_path), Some(start), Some(end)));
+            }
+        }
+    }
+
+    // Then, try to match file paths with single line numbers (and optional column numbers)
+    let file_line_regex =
+        Regex::new(r"(?:^|\s)([a-zA-Z0-9_\-./\*\{\}]+\.[a-zA-Z0-9]+):(\d+)(?::\d+)?").unwrap();
+
+    for cap in file_line_regex.captures_iter(text) {
+        let file_path = cap.get(1).unwrap().as_str();
+
+        // Skip if we've already processed this path with a line range
+        if processed_paths.contains(file_path) {
+            continue;
+        }
+
+        let line_num = cap.get(2).and_then(|m| m.as_str().parse::<usize>().ok());
+
+        // Handle glob pattern
+        if file_path.contains('*') || file_path.contains('{') {
+            if let Ok(paths) = glob(file_path) {
+                for entry in paths.flatten() {
+                    let path_str = entry.to_string_lossy().to_string();
+                    if !processed_paths.contains(&path_str) {
+                        processed_paths.insert(path_str);
+                        results.push((entry, line_num, None));
+                    }
+                }
+            }
+        } else {
+            processed_paths.insert(file_path.to_string());
+            results.push((PathBuf::from(file_path), line_num, None));
+        }
+    }
+
+    // Finally, match file paths without line numbers
+    let simple_file_regex = Regex::new(r"(?:^|\s)([a-zA-Z0-9_\-./\*\{\}]+\.[a-zA-Z0-9]+)").unwrap();
+
+    for cap in simple_file_regex.captures_iter(text) {
+        let file_path = cap.get(1).unwrap().as_str();
+
+        // Skip if we've already processed this path with a line number or range
+        if !processed_paths.contains(file_path) {
+            // Handle glob pattern
+            if file_path.contains('*') || file_path.contains('{') {
+                if let Ok(paths) = glob(file_path) {
+                    for entry in paths.flatten() {
+                        let path_str = entry.to_string_lossy().to_string();
+                        if !processed_paths.contains(&path_str) {
+                            processed_paths.insert(path_str);
+                            results.push((entry, None, None));
+                        }
+                    }
+                }
+            } else {
+                results.push((PathBuf::from(file_path), None, None));
+                processed_paths.insert(file_path.to_string());
+            }
+        }
+    }
+
+    results
+}
+
+/// Parse a file path with optional line number or range (e.g., "file.rs:10" or "file.rs:1-60")
+pub fn parse_file_with_line(input: &str) -> Vec<(PathBuf, Option<usize>, Option<usize>)> {
+    let mut results = Vec::new();
+
+    if let Some((file_part, rest)) = input.split_once(':') {
+        // Extract the line specification from the rest (which might contain more colons)
+        let line_spec = rest.split(':').next().unwrap_or("");
+
+        // Check if it's a range (contains a hyphen)
+        if let Some((start_str, end_str)) = line_spec.split_once('-') {
+            let start_num = start_str.parse::<usize>().ok();
+            let end_num = end_str.parse::<usize>().ok();
+
+            if let (Some(start), Some(end)) = (start_num, end_num) {
+                // Handle glob pattern
+                if file_part.contains('*') || file_part.contains('{') {
+                    if let Ok(paths) = glob(file_part) {
+                        for entry in paths.flatten() {
+                            results.push((entry, Some(start), Some(end)));
+                        }
+                    }
+                } else {
+                    results.push((PathBuf::from(file_part), Some(start), Some(end)));
+                }
+            }
+        } else {
+            // Try to parse as a single line number
+            let line_num = line_spec.parse::<usize>().ok();
+
+            if let Some(num) = line_num {
+                // Handle glob pattern
+                if file_part.contains('*') || file_part.contains('{') {
+                    if let Ok(paths) = glob(file_part) {
+                        for entry in paths.flatten() {
+                            results.push((entry, Some(num), None));
+                        }
+                    }
+                } else {
+                    results.push((PathBuf::from(file_part), Some(num), None));
+                }
+            }
+        }
+    } else {
+        // Handle glob pattern for file without line numbers
+        if input.contains('*') || input.contains('{') {
+            if let Ok(paths) = glob(input) {
+                for entry in paths.flatten() {
+                    results.push((entry, None, None));
+                }
+            }
+        } else {
+            results.push((PathBuf::from(input), None, None));
+        }
+    }
+
+    results
+}
+
+// Internal module for formatting functions
+mod format {
+    use super::*;
+
+    pub(super) fn format_and_print_terminal_results(results: &[SearchResult]) {
+        use colored::*;
+
+        if results.is_empty() {
+            println!("{}", "No results found.".yellow().bold());
+            return;
+        }
+
+        for result in results {
+            // Get file extension
+            let file_path = Path::new(&result.file);
+            let extension = file_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("");
+
+            // Print file info
+            println!("File: {}", result.file.yellow());
+
+            // Print lines if not a full file
+            if result.node_type != "file" {
+                println!("Lines: {}-{}", result.lines.0, result.lines.1);
+            }
+
+            // Print node type if available and not "file" or "context"
+            if result.node_type != "file" && result.node_type != "context" {
+                println!("Type: {}", result.node_type.cyan());
+            }
+
+            // Determine the language for syntax highlighting
+            let language = get_language_from_extension(extension);
+
+            // Print the code with syntax highlighting
+            if !language.is_empty() {
+                println!("```{}", language);
+            } else {
+                println!("```");
+            }
+
+            println!("{}", result.code);
+            println!("```");
+            println!();
+        }
+    }
+
+    pub(super) fn format_and_print_markdown_results(results: &[SearchResult]) {
+        if results.is_empty() {
+            println!("No results found.");
+            return;
+        }
+
+        for result in results {
+            // Get file extension
+            let file_path = Path::new(&result.file);
+            let extension = file_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("");
+
+            // Print file info
+            println!("## File: {}", result.file);
+
+            // Print lines if not a full file
+            if result.node_type != "file" {
+                println!("Lines: {}-{}", result.lines.0, result.lines.1);
+            }
+
+            // Print node type if available and not "file" or "context"
+            if result.node_type != "file" && result.node_type != "context" {
+                println!("Type: {}", result.node_type);
+            }
+
+            // Determine the language for syntax highlighting
+            let language = get_language_from_extension(extension);
+
+            // Print the code with syntax highlighting
+            if !language.is_empty() {
+                println!("```{}", language);
+            } else {
+                println!("```");
+            }
+
+            println!("{}", result.code);
+            println!("```");
+            println!();
+        }
+    }
+
+    pub(super) fn format_and_print_plain_results(results: &[SearchResult]) {
+        if results.is_empty() {
+            println!("No results found.");
+            return;
+        }
+
+        for result in results {
+            // Print file info
+            println!("File: {}", result.file);
+
+            // Print lines if not a full file
+            if result.node_type != "file" {
+                println!("Lines: {}-{}", result.lines.0, result.lines.1);
+            }
+
+            // Print node type if available and not "file" or "context"
+            if result.node_type != "file" && result.node_type != "context" {
+                println!("Type: {}", result.node_type);
+            }
+
+            println!();
+            println!("{}", result.code);
+            println!();
+            println!("----------------------------------------");
+            println!();
+        }
+    }
+
+    pub(super) fn format_and_print_json_results(results: &[SearchResult]) -> Result<()> {
+        if results.is_empty() {
+            println!("[]");
+            return Ok(());
+        }
+
+        // Create a simplified version of the results for JSON output
+        #[derive(serde::Serialize)]
+        struct JsonResult<'a> {
+            file: &'a str,
+            lines: (usize, usize),
+            node_type: &'a str,
+            code: &'a str,
+        }
+
+        let json_results: Vec<JsonResult> = results
+            .iter()
+            .map(|r| JsonResult {
+                file: &r.file,
+                lines: r.lines,
+                node_type: &r.node_type,
+                code: &r.code,
+            })
+            .collect();
+
+        let json = serde_json::to_string_pretty(&json_results)
+            .context("Failed to serialize results to JSON")?;
+
+        println!("{}", json);
+
+        Ok(())
+    }
+
+    pub(super) fn format_and_print_color_results(results: &[SearchResult]) {
+        use colored::*;
+        use regex::Regex;
+        use std::collections::HashSet;
+
+        if results.is_empty() {
+            println!("No results found.");
+            return;
+        }
+
+        // Extract search terms from the results
+        // We'll use the unique terms from the results if available
+        let mut search_terms = HashSet::new();
+        for result in results {
+            if let Some(terms) = &result.file_unique_terms {
+                if *terms > 0 {
+                    // If we have unique terms data, we can try to extract terms from the code
+                    // This is a simple approach - in a real implementation, you might want to
+                    // get the actual search terms from the search query
+                    let words: Vec<&str> = result.code.split_whitespace().collect();
+                    for word in words {
+                        // Clean up the word (remove punctuation, etc.)
+                        let clean_word = word.trim_matches(|c: char| !c.is_alphanumeric());
+                        if !clean_word.is_empty() {
+                            search_terms.insert(clean_word.to_lowercase());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Use the search terms we extracted, or an empty list if none were found
+        // This removes the default highlighting of common programming terms
+        let default_terms: Vec<String> = search_terms.into_iter().collect();
+
+        // Create regex patterns for the terms
+        let mut patterns = Vec::new();
+        for term in &default_terms {
+            // Create a case-insensitive regex for the term
+            // We use word boundaries to match whole words
+            if let Ok(regex) = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(term))) {
+                patterns.push(regex);
+            }
+        }
+
+        for result in results {
+            // Get file extension
+            let file_path = Path::new(&result.file);
+            let extension = file_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("");
+
+            // Print file info
+            println!("## File: {}", result.file);
+
+            // Print lines if not a full file
+            if result.node_type != "file" {
+                println!("Lines: {}-{}", result.lines.0, result.lines.1);
+            }
+
+            // Print node type if available and not "file" or "context"
+            if result.node_type != "file" && result.node_type != "context" {
+                println!("Type: {}", result.node_type);
+            }
+
+            // Determine the language for syntax highlighting
+            let language = get_language_from_extension(extension);
+
+            // Print the code with syntax highlighting
+            if !language.is_empty() {
+                println!("```{}", language);
+            } else {
+                println!("```");
+            }
+
+            // Process the code line by line to highlight matching terms
+            for line in result.code.lines() {
+                let mut highlighted_line = line.to_string();
+
+                // Apply highlighting for each pattern
+                for pattern in &patterns {
+                    // Use a temporary string to build the highlighted line
+                    let mut temp_line = String::new();
+                    let mut last_end = 0;
+
+                    // Find all matches in the line
+                    for mat in pattern.find_iter(&highlighted_line) {
+                        // Add the text before the match
+                        temp_line.push_str(&highlighted_line[last_end..mat.start()]);
+
+                        // Add the highlighted match
+                        temp_line.push_str(&mat.as_str().yellow().bold().to_string());
+
+                        last_end = mat.end();
+                    }
+
+                    // Add the remaining text
+                    temp_line.push_str(&highlighted_line[last_end..]);
+
+                    highlighted_line = temp_line;
+                }
+
+                println!("{}", highlighted_line);
+            }
+
+            println!("```");
+            println!();
+        }
+    }
+
+    pub(super) fn get_language_from_extension(extension: &str) -> &'static str {
+        match extension {
+            "rs" => "rust",
+            "py" => "python",
+            "js" => "javascript",
+            "ts" => "typescript",
+            "go" => "go",
+            "c" | "h" => "c",
+            "cpp" | "cc" | "cxx" | "hpp" => "cpp",
+            "java" => "java",
+            "rb" => "ruby",
+            "php" => "php",
+            "sh" => "bash",
+            "md" => "markdown",
+            "json" => "json",
+            "yaml" | "yml" => "yaml",
+            "html" => "html",
+            "css" => "css",
+            "sql" => "sql",
+            "kt" | "kts" => "kotlin",
+            "swift" => "swift",
+            "scala" => "scala",
+            "dart" => "dart",
+            "ex" | "exs" => "elixir",
+            "hs" => "haskell",
+            "clj" => "clojure",
+            "lua" => "lua",
+            "r" => "r",
+            "pl" | "pm" => "perl",
+            "proto" => "protobuf",
+            _ => "",
+        }
+    }
+}
 
 /// Process a single file and extract the specified code block
 ///
@@ -229,11 +687,11 @@ pub fn process_file_for_extraction(
 /// * `format` - The output format (terminal, markdown, plain, json, or color)
 pub fn format_and_print_extraction_results(results: &[SearchResult], format: &str) -> Result<()> {
     match format {
-        "markdown" => format_and_print_markdown_results(results),
-        "plain" => format_and_print_plain_results(results),
-        "json" => format_and_print_json_results(results)?,
-        "color" => format_and_print_color_results(results),
-        _ => format_and_print_terminal_results(results),
+        "markdown" => format::format_and_print_markdown_results(results),
+        "plain" => format::format_and_print_plain_results(results),
+        "json" => format::format_and_print_json_results(results)?,
+        "color" => format::format_and_print_color_results(results),
+        _ => format::format_and_print_terminal_results(results),
     }
 
     // Print summary
@@ -266,302 +724,90 @@ pub fn format_and_print_extraction_results(results: &[SearchResult], format: &st
     Ok(())
 }
 
-/// Format and print results in terminal format (with colors)
-fn format_and_print_terminal_results(results: &[SearchResult]) {
+/// Handle the extract command
+pub fn handle_extract(
+    files: Vec<String>,
+    allow_tests: bool,
+    context_lines: usize,
+    format: String,
+) -> Result<()> {
     use colored::*;
 
-    if results.is_empty() {
-        println!("{}", "No results found.".yellow().bold());
-        return;
+    let mut file_paths: Vec<(PathBuf, Option<usize>, Option<usize>)> = Vec::new();
+
+    if files.is_empty() {
+        // Read from stdin
+        println!("{}", "Reading from stdin...".bold().blue());
+        let mut buffer = String::new();
+        io::stdin().read_to_string(&mut buffer)?;
+
+        file_paths = extract_file_paths_from_text(&buffer);
+
+        if file_paths.is_empty() {
+            println!("{}", "No file paths found in stdin.".yellow().bold());
+            return Ok(());
+        }
+    } else {
+        // Parse command-line arguments
+        for file in files {
+            let paths = parse_file_with_line(&file);
+            file_paths.extend(paths);
+        }
     }
 
-    for result in results {
-        // Get file extension
-        let file_path = Path::new(&result.file);
-        let extension = file_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
+    println!("{}", "Files to extract:".bold().green());
 
-        // Print file info
-        println!("File: {}", result.file.yellow());
-
-        // Print lines if not a full file
-        if result.node_type != "file" {
-            println!("Lines: {}-{}", result.lines.0, result.lines.1);
-        }
-
-        // Print node type if available and not "file" or "context"
-        if result.node_type != "file" && result.node_type != "context" {
-            println!("Type: {}", result.node_type.cyan());
-        }
-
-        // Determine the language for syntax highlighting
-        let language = get_language_from_extension(extension);
-
-        // Print the code with syntax highlighting
-        if !language.is_empty() {
-            println!("```{}", language);
+    for (path, start_line, end_line) in &file_paths {
+        if let (Some(start), Some(end)) = (start_line, end_line) {
+            println!("  {} (lines {}-{})", path.display(), start, end);
+        } else if let Some(line_num) = start_line {
+            println!("  {} (line {})", path.display(), line_num);
         } else {
-            println!("```");
+            println!("  {}", path.display());
         }
+    }
 
-        println!("{}", result.code);
-        println!("```");
+    if allow_tests {
+        println!("{}", "Including test files and blocks".yellow());
+    }
+
+    if context_lines > 0 {
+        println!("Context lines: {}", context_lines);
+    }
+
+    println!("Format: {}", format);
+    println!();
+
+    let mut results = Vec::new();
+    let mut errors = Vec::new();
+
+    // Process each file
+    for (path, start_line, end_line) in file_paths {
+        match process_file_for_extraction(&path, start_line, end_line, allow_tests, context_lines) {
+            Ok(result) => results.push(result),
+            Err(e) => {
+                let error_msg = format!("Error processing file {:?}: {}", path, e);
+                eprintln!("{}", error_msg.red());
+                errors.push(error_msg);
+            }
+        }
+    }
+
+    // Format and print the results
+    if let Err(e) = format_and_print_extraction_results(&results, &format) {
+        eprintln!("{}", format!("Error formatting results: {}", e).red());
+    }
+
+    // Print summary of errors if any
+    if !errors.is_empty() {
         println!();
+        println!(
+            "{} {} {}",
+            "Encountered".red().bold(),
+            errors.len(),
+            if errors.len() == 1 { "error" } else { "errors" }
+        );
     }
-}
-
-/// Format and print results in markdown format
-fn format_and_print_markdown_results(results: &[SearchResult]) {
-    if results.is_empty() {
-        println!("No results found.");
-        return;
-    }
-
-    for result in results {
-        // Get file extension
-        let file_path = Path::new(&result.file);
-        let extension = file_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
-
-        // Print file info
-        println!("## File: {}", result.file);
-
-        // Print lines if not a full file
-        if result.node_type != "file" {
-            println!("Lines: {}-{}", result.lines.0, result.lines.1);
-        }
-
-        // Print node type if available and not "file" or "context"
-        if result.node_type != "file" && result.node_type != "context" {
-            println!("Type: {}", result.node_type);
-        }
-
-        // Determine the language for syntax highlighting
-        let language = get_language_from_extension(extension);
-
-        // Print the code with syntax highlighting
-        if !language.is_empty() {
-            println!("```{}", language);
-        } else {
-            println!("```");
-        }
-
-        println!("{}", result.code);
-        println!("```");
-        println!();
-    }
-}
-
-/// Format and print results in plain text format (no colors or markdown)
-fn format_and_print_plain_results(results: &[SearchResult]) {
-    if results.is_empty() {
-        println!("No results found.");
-        return;
-    }
-
-    for result in results {
-        // Print file info
-        println!("File: {}", result.file);
-
-        // Print lines if not a full file
-        if result.node_type != "file" {
-            println!("Lines: {}-{}", result.lines.0, result.lines.1);
-        }
-
-        // Print node type if available and not "file" or "context"
-        if result.node_type != "file" && result.node_type != "context" {
-            println!("Type: {}", result.node_type);
-        }
-
-        println!();
-        println!("{}", result.code);
-        println!();
-        println!("----------------------------------------");
-        println!();
-    }
-}
-
-/// Format and print results in JSON format
-fn format_and_print_json_results(results: &[SearchResult]) -> Result<()> {
-    if results.is_empty() {
-        println!("[]");
-        return Ok(());
-    }
-
-    // Create a simplified version of the results for JSON output
-    #[derive(serde::Serialize)]
-    struct JsonResult<'a> {
-        file: &'a str,
-        lines: (usize, usize),
-        node_type: &'a str,
-        code: &'a str,
-    }
-
-    let json_results: Vec<JsonResult> = results
-        .iter()
-        .map(|r| JsonResult {
-            file: &r.file,
-            lines: r.lines,
-            node_type: &r.node_type,
-            code: &r.code,
-        })
-        .collect();
-
-    let json = serde_json::to_string_pretty(&json_results)
-        .context("Failed to serialize results to JSON")?;
-
-    println!("{}", json);
 
     Ok(())
-}
-
-/// Format and print results in color format (markdown with highlighted matching words)
-fn format_and_print_color_results(results: &[SearchResult]) {
-    use colored::*;
-    use regex::Regex;
-    use std::collections::HashSet;
-
-    if results.is_empty() {
-        println!("No results found.");
-        return;
-    }
-
-    // Extract search terms from the results
-    // We'll use the unique terms from the results if available
-    let mut search_terms = HashSet::new();
-    for result in results {
-        if let Some(terms) = &result.file_unique_terms {
-            if *terms > 0 {
-                // If we have unique terms data, we can try to extract terms from the code
-                // This is a simple approach - in a real implementation, you might want to
-                // get the actual search terms from the search query
-                let words: Vec<&str> = result.code.split_whitespace().collect();
-                for word in words {
-                    // Clean up the word (remove punctuation, etc.)
-                    let clean_word = word.trim_matches(|c: char| !c.is_alphanumeric());
-                    if !clean_word.is_empty() {
-                        search_terms.insert(clean_word.to_lowercase());
-                    }
-                }
-            }
-        }
-    }
-
-    // Use the search terms we extracted, or an empty list if none were found
-    // This removes the default highlighting of common programming terms
-    let default_terms: Vec<String> = search_terms.into_iter().collect();
-
-    // Create regex patterns for the terms
-    let mut patterns = Vec::new();
-    for term in &default_terms {
-        // Create a case-insensitive regex for the term
-        // We use word boundaries to match whole words
-        if let Ok(regex) = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(term))) {
-            patterns.push(regex);
-        }
-    }
-
-    for result in results {
-        // Get file extension
-        let file_path = Path::new(&result.file);
-        let extension = file_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
-
-        // Print file info
-        println!("## File: {}", result.file);
-
-        // Print lines if not a full file
-        if result.node_type != "file" {
-            println!("Lines: {}-{}", result.lines.0, result.lines.1);
-        }
-
-        // Print node type if available and not "file" or "context"
-        if result.node_type != "file" && result.node_type != "context" {
-            println!("Type: {}", result.node_type);
-        }
-
-        // Determine the language for syntax highlighting
-        let language = get_language_from_extension(extension);
-
-        // Print the code with syntax highlighting
-        if !language.is_empty() {
-            println!("```{}", language);
-        } else {
-            println!("```");
-        }
-
-        // Process the code line by line to highlight matching terms
-        for line in result.code.lines() {
-            let mut highlighted_line = line.to_string();
-
-            // Apply highlighting for each pattern
-            for pattern in &patterns {
-                // Use a temporary string to build the highlighted line
-                let mut temp_line = String::new();
-                let mut last_end = 0;
-
-                // Find all matches in the line
-                for mat in pattern.find_iter(&highlighted_line) {
-                    // Add the text before the match
-                    temp_line.push_str(&highlighted_line[last_end..mat.start()]);
-
-                    // Add the highlighted match
-                    temp_line.push_str(&mat.as_str().yellow().bold().to_string());
-
-                    last_end = mat.end();
-                }
-
-                // Add the remaining text
-                temp_line.push_str(&highlighted_line[last_end..]);
-
-                highlighted_line = temp_line;
-            }
-
-            println!("{}", highlighted_line);
-        }
-
-        println!("```");
-        println!();
-    }
-}
-
-/// Get the language name for syntax highlighting based on file extension
-fn get_language_from_extension(extension: &str) -> &'static str {
-    match extension {
-        "rs" => "rust",
-        "py" => "python",
-        "js" => "javascript",
-        "ts" => "typescript",
-        "go" => "go",
-        "c" | "h" => "c",
-        "cpp" | "cc" | "cxx" | "hpp" => "cpp",
-        "java" => "java",
-        "rb" => "ruby",
-        "php" => "php",
-        "sh" => "bash",
-        "md" => "markdown",
-        "json" => "json",
-        "yaml" | "yml" => "yaml",
-        "html" => "html",
-        "css" => "css",
-        "sql" => "sql",
-        "kt" | "kts" => "kotlin",
-        "swift" => "swift",
-        "scala" => "scala",
-        "dart" => "dart",
-        "ex" | "exs" => "elixir",
-        "hs" => "haskell",
-        "clj" => "clojure",
-        "lua" => "lua",
-        "r" => "r",
-        "pl" | "pm" => "perl",
-        "proto" => "protobuf",
-        _ => "",
-    }
 }

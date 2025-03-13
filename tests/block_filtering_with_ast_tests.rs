@@ -352,12 +352,14 @@ fn test_required_terms_query() {
                 field: None,
                 required: true,
                 excluded: false,
+                exact: false,
             }),
             Box::new(elastic_query::Expr::Term {
                 keywords: vec!["white".to_string(), "list".to_string()],
                 field: None,
                 required: true,
                 excluded: false,
+                exact: false,
             }),
         )),
         Box::new(elastic_query::Expr::Term {
@@ -365,6 +367,7 @@ fn test_required_terms_query() {
             field: None,
             required: true,
             excluded: false,
+            exact: false,
         }),
     );
     println!("Parsed AST: {:?}", ast);

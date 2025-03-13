@@ -124,6 +124,7 @@ fn test_required_term_query(temp_path: &Path) {
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
+        session: None,
     };
 
     // Print the temp_path for debugging
@@ -205,6 +206,7 @@ fn test_excluded_term_query(temp_path: &Path) {
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
+        session: None,
     };
 
     // Run the search
@@ -278,6 +280,7 @@ fn test_or_query(temp_path: &Path) {
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
+        session: None,
     };
 
     // Run the search
@@ -339,6 +342,7 @@ fn test_complex_query(temp_path: &Path) {
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
+        session: None,
     };
 
     // Run the search
@@ -400,6 +404,7 @@ fn test_complex_query(temp_path: &Path) {
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
+        session: None,
     };
 
     // Run the search
@@ -488,6 +493,7 @@ fn test_function() {
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
+        session: None,
     };
 
     // Run the search
@@ -543,12 +549,14 @@ fn test_filter_code_block_with_ast() {
             field: None,
             required: false,
             excluded: false,
+            exact: false,
         }),
         Box::new(Expr::Term {
             keywords: vec!["keyword2".to_string()],
             field: None,
             required: false,
             excluded: true,
+            exact: false,
         }),
     );
 

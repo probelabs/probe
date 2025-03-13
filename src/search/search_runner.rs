@@ -9,6 +9,7 @@ use rayon::prelude::*;
 
 use crate::models::{LimitedSearchResults, SearchResult};
 use crate::search::{
+    cache,
     elastic_query::Expr,
     file_processing::{process_file_by_filename, process_file_with_results, FileProcessingParams},
     file_search::{find_files_with_pattern, find_matching_filenames, search_file_for_pattern},
@@ -50,10 +51,80 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         no_merge,
         merge_threshold,
         dry_run: _, // We don't need this in perform_probe, but need to include it in the pattern
+        session,
     } = options;
 
     let include_filenames = !exclude_filenames;
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Handle session ID generation if session is provided but empty
+    let (effective_session, session_was_generated) = if let Some(s) = session {
+        if s.is_empty() {
+            // Check if we have a session ID in the environment variable
+            if let Ok(env_session_id) = std::env::var("PROBE_SESSION_ID") {
+                if !env_session_id.is_empty() {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Using session ID from environment: {}",
+                            env_session_id
+                        );
+                    }
+                    // Convert to a static string (this leaks memory, but it's a small amount and only happens once per session)
+                    let static_id: &'static str = Box::leak(env_session_id.into_boxed_str());
+                    (Some(static_id), false)
+                } else {
+                    // Generate a unique session ID
+                    match cache::generate_session_id() {
+                        Ok((new_id, _is_new)) => {
+                            if debug_mode {
+                                println!("DEBUG: Generated new session ID: {}", new_id);
+                            }
+                            (Some(new_id), true)
+                        }
+                        Err(e) => {
+                            eprintln!("Error generating session ID: {}", e);
+                            (None, false)
+                        }
+                    }
+                }
+            } else {
+                // Generate a unique session ID
+                match cache::generate_session_id() {
+                    Ok((new_id, _is_new)) => {
+                        if debug_mode {
+                            println!("DEBUG: Generated new session ID: {}", new_id);
+                        }
+                        (Some(new_id), true)
+                    }
+                    Err(e) => {
+                        eprintln!("Error generating session ID: {}", e);
+                        (None, false)
+                    }
+                }
+            }
+        } else {
+            (Some(*s), false)
+        }
+    } else {
+        // Check if we have a session ID in the environment variable
+        if let Ok(env_session_id) = std::env::var("PROBE_SESSION_ID") {
+            if !env_session_id.is_empty() {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Using session ID from environment: {}",
+                        env_session_id
+                    );
+                }
+                // Convert to a static string (this leaks memory, but it's a small amount and only happens once per session)
+                let static_id: &'static str = Box::leak(env_session_id.into_boxed_str());
+                (Some(static_id), false)
+            } else {
+                (None, false)
+            }
+        } else {
+            (None, false)
+        }
+    };
 
     let mut timings = SearchTimings {
         query_preprocessing: None,
@@ -82,6 +153,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             results: Vec::new(),
             skipped_files: Vec::new(),
             limits_applied: None,
+            cached_blocks_skipped: None,
         });
     }
 
@@ -89,7 +161,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let plan = parse_res.unwrap();
     let sp_start = Instant::now();
     let structured_patterns = create_structured_patterns(&plan);
-    let file_term_map = search_with_structured_patterns(
+    let mut file_term_map = search_with_structured_patterns(
         path,
         &plan,
         &structured_patterns,
@@ -138,7 +210,41 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 matched_keywords: None,
             });
         }
-        return Ok(apply_limits(res, *max_results, *max_bytes, *max_tokens));
+        let mut limited = apply_limits(res, *max_results, *max_bytes, *max_tokens);
+
+        // No caching for files-only mode
+        limited.cached_blocks_skipped = None;
+
+        return Ok(limited);
+    }
+
+    // Apply early caching if session is provided - AFTER getting ripgrep results but BEFORE processing
+    let mut early_skipped_count = 0;
+    if let Some(session_id) = effective_session {
+        if debug_mode {
+            println!("DEBUG: Applying early caching for session: {}", session_id);
+            // Print cache contents before filtering
+            if let Err(e) = cache::debug_print_cache(session_id) {
+                eprintln!("Error printing cache: {}", e);
+            }
+        }
+
+        // Filter matched lines using the cache
+        match cache::filter_matched_lines_with_cache(&mut file_term_map, session_id) {
+            Ok(skipped) => {
+                if debug_mode {
+                    println!("DEBUG: Early caching skipped {} matched lines", skipped);
+                }
+                early_skipped_count = skipped;
+            }
+            Err(e) => {
+                // Log the error but continue without early caching
+                eprintln!("Error applying early cache: {}", e);
+            }
+        }
+
+        // Update all_files based on the filtered file_term_map
+        all_files = file_term_map.keys().cloned().collect();
     }
 
     // Process the files for detailed results
@@ -147,7 +253,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     if debug_mode {
         println!(
-            "DEBUG: Processing {} files for detailed results",
+            "DEBUG: Processing {} files for detailed results after early caching",
             all_files.len()
         );
     }
@@ -170,8 +276,22 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 if debug_mode {
                     println!("DEBUG: File matched by filename only");
                 }
-                if let Ok(sr) = process_file_by_filename(pathbuf, &[], None) {
-                    final_results.push(sr);
+
+                // Create a list of term pairs for backward compatibility
+                let term_pairs: Vec<(String, String)> = plan
+                    .term_indices
+                    .keys()
+                    .map(|term| (term.clone(), term.clone()))
+                    .collect();
+
+                if let Ok(results) = process_file_by_filename(pathbuf, &[term_pairs], None) {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Got {} results from file matched by filename",
+                            results.len()
+                        );
+                    }
+                    final_results.extend(results);
                 }
                 continue;
             }
@@ -251,8 +371,22 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             if debug_mode {
                 println!("DEBUG: File matched by filename only");
             }
-            if let Ok(sr) = process_file_by_filename(pathbuf, &[], None) {
-                final_results.push(sr);
+
+            // Create a list of term pairs for backward compatibility
+            let term_pairs: Vec<(String, String)> = plan
+                .term_indices
+                .keys()
+                .map(|term| (term.clone(), term.clone()))
+                .collect();
+
+            if let Ok(results) = process_file_by_filename(pathbuf, &[term_pairs], None) {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Got {} results from file matched by filename",
+                        results.len()
+                    );
+                }
+                final_results.extend(results);
             }
         }
     }
@@ -283,9 +417,64 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
     }
 
+    // Apply caching if session is provided - BEFORE applying limits
+    let mut skipped_count = early_skipped_count;
+    let mut filtered_results = final_results;
+
+    if let Some(session_id) = effective_session {
+        if debug_mode {
+            println!("DEBUG: Applying final caching for session: {}", session_id);
+            println!(
+                "DEBUG: Already skipped {} lines in early caching",
+                early_skipped_count
+            );
+            // Print cache contents before filtering
+            if let Err(e) = cache::debug_print_cache(session_id) {
+                eprintln!("Error printing cache: {}", e);
+            }
+        }
+
+        // Filter results using the cache
+        match cache::filter_results_with_cache(&filtered_results, session_id) {
+            Ok((cache_filtered_results, cached_skipped)) => {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Final caching skipped {} cached blocks",
+                        cached_skipped
+                    );
+                    println!(
+                        "DEBUG: Total skipped (early + final): {}",
+                        early_skipped_count + cached_skipped
+                    );
+
+                    // Print some details about the filtered results
+                    if !cache_filtered_results.is_empty() {
+                        println!(
+                            "DEBUG: First filtered result: file={}, lines={:?}",
+                            cache_filtered_results[0].file, cache_filtered_results[0].lines
+                        );
+                    }
+                }
+
+                // Store the filtered results
+                filtered_results = cache_filtered_results;
+                skipped_count += cached_skipped; // Add to the early skipped count
+            }
+            Err(e) => {
+                // Log the error but continue without caching
+                eprintln!("Error applying cache: {}", e);
+            }
+        }
+    }
+
     // Apply limits
     let la_start = Instant::now();
-    let limited = apply_limits(final_results, *max_results, *max_bytes, *max_tokens);
+    let mut limited = apply_limits(filtered_results, *max_results, *max_bytes, *max_tokens);
+    limited.cached_blocks_skipped = if skipped_count > 0 {
+        Some(skipped_count)
+    } else {
+        None
+    };
     timings.limit_application = Some(la_start.elapsed());
 
     if debug_mode {
@@ -298,21 +487,69 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
     }
 
-    // Optional block merging
+    // Update the cache with the limited results (before merging)
+    if let Some(session_id) = effective_session {
+        if let Err(e) = cache::add_results_to_cache(&limited.results, session_id) {
+            eprintln!("Error adding results to cache: {}", e);
+        }
+
+        if debug_mode {
+            println!("DEBUG: Added limited results to cache before merging");
+            // Print cache contents after adding new results
+            if let Err(e) = cache::debug_print_cache(session_id) {
+                eprintln!("Error printing updated cache: {}", e);
+            }
+        }
+    }
+
+    // Optional block merging - AFTER initial caching
     let bm_start = Instant::now();
-    if !limited.results.is_empty() && !*no_merge {
+    let final_results = if !limited.results.is_empty() && !*no_merge {
         use crate::search::block_merging::merge_ranked_blocks;
-        let merged = merge_ranked_blocks(limited.results, *merge_threshold);
+        let merged = merge_ranked_blocks(limited.results.clone(), *merge_threshold);
         timings.block_merging = Some(bm_start.elapsed());
-        Ok(LimitedSearchResults {
-            results: merged,
+
+        // Create the merged results
+        let merged_results = LimitedSearchResults {
+            results: merged.clone(),
             skipped_files: limited.skipped_files,
             limits_applied: limited.limits_applied,
-        })
+            cached_blocks_skipped: limited.cached_blocks_skipped,
+        };
+
+        // Update the cache with the merged results (after merging)
+        if let Some(session_id) = effective_session {
+            if let Err(e) = cache::add_results_to_cache(&merged, session_id) {
+                eprintln!("Error adding merged results to cache: {}", e);
+            }
+
+            if debug_mode {
+                println!("DEBUG: Added merged results to cache after merging");
+                // Print cache contents after adding merged results
+                if let Err(e) = cache::debug_print_cache(session_id) {
+                    eprintln!("Error printing updated cache: {}", e);
+                }
+            }
+        }
+
+        merged_results
     } else {
         timings.block_merging = Some(bm_start.elapsed());
-        Ok(limited)
+        limited
+    };
+    // Print the session ID to the console if it was generated or provided
+    if let Some(session_id) = effective_session {
+        if session_was_generated {
+            println!(
+                "Session ID: {} (generated - used it in future sessions for caching)",
+                session_id
+            );
+        } else {
+            println!("Session ID: {}", session_id);
+        }
     }
+
+    Ok(final_results)
 }
 /// Helper function to search files using structured patterns from a QueryPlan.
 /// This function uses parallel processing to search for patterns and collects matches by term indices.

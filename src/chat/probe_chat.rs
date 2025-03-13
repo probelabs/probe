@@ -9,6 +9,7 @@ use super::history::{
     TOOL_OUTPUT_REGEX,
 };
 use super::models::ModelType;
+use crate::search::cache;
 
 pub struct ProbeChat {
     pub chat: ModelType,
@@ -17,6 +18,8 @@ pub struct ProbeChat {
     response_tokens: AtomicUsize,
     // Tokenizer for counting tokens
     tokenizer: tiktoken_rs::CoreBPE,
+    // Session ID for caching search results
+    session_id: String,
 }
 
 impl ProbeChat {
@@ -25,199 +28,48 @@ impl ProbeChat {
         // Initialize the tokenizer with cl100k_base encoding (works for both Claude and GPT models)
         let tokenizer = cl100k_base().unwrap();
 
+        // Generate a unique session ID for this chat instance
+        let (session_id, _) = cache::generate_session_id()?;
+        let session_id = session_id.to_string();
+
+        // Print the session ID for debugging
+        let debug_mode = std::env::var("DEBUG").unwrap_or_default() != "";
+        if debug_mode {
+            println!("[DEBUG] Generated session ID for chat: {}", session_id);
+        }
+
+        // Store the session ID in an environment variable for tools to access
+        std::env::set_var("PROBE_SESSION_ID", &session_id);
+
         // Common preamble for both models
-        let preamble = r#"You are a highly capable assistant designed to search code repositories and provide detailed, precise answers to user questions about code. You can use given tools to help user.
-
----
-
-## Overview of Tools
-
-You have three specialized tools to analyze codebases:
-
-1. `search`: Finds specific text, keywords, or patterns across the codebase.
-2. `query`: Identifies structural patterns (e.g., functions, classes) using ast-grep.
-3. `extract`: Retrieves full files or specific code blocks for detailed inspection.
-
-**Key Rule**: **Always start with the `search` tool** to locate relevant code, then use the `query` tool for structural analysis if needed, and the `extract` tool to retrieve precise code snippets.
-
----
-
-## How to Use Tools
-
-When you need to use a tool, format your response **exactly** like this:
-
-tool: <tool_name> {json_params}
-
-- Where:
-  - `<tool_name>` is the name of the tool (`search`, `query`, or `extract`).
-  - `{json_params}` is the JSON object with the parameters for that tool, enclosed in curly braces.
-
-- **Examples**:
-  - Search for a keyword: `tool: search {"query": "chat", "path": "."}`
-  - Query for a Rust function: `tool: query {"pattern": "fn $NAME($$$PARAMS) $$$BODY", "language": "rust", "path": "."}`
-  - Extract a code block: `tool: extract {"file_path": "src/main.rs", "line": 42}`
-
-- **Important**:
-  - Place the tool call on its own line.
-  - Ensure the JSON parameters are valid and contain no extra text on the same line.
-  - Do not include additional commentary in the tool call line itself; provide explanations separately if needed.
-
----
-
-## `search` Tool
-
-Use this tool to locate text, keywords, or patterns in the codebase. It's your first step for any query.
-It use Elastic Search query syntax.
-
-### Usage
-
-tool: search {"query": "keyword1 AND keywrod2", "path": "."}
-
----
-
-### Query Syntax
-
-- Basic terms: `config`, `search`
-- Required terms: `+required`
-- Excluded terms: `-excluded`
-- Logical operators: `term1 AND term2`, `term1 OR term2`
-- Grouping: `(term1 OR term2) AND term3`
-
-**Examples**:
-- `rpc`
-- `+parse -test`
-- `(chat OR message) AND handler`
-
-### Tips
-- Use simple, root keywords (e.g., `rpc` not `rpc layer`)—stemming is automatic.
-- Focus on code-specific terms likely to appear in the repository.
-- Make multiple calls to refine results, avoiding repeated queries.
-- If results are insufficient, ask: "Could you clarify your question or provide more context?"
-
----
-
-## `query` Tool
-
-Use this tool to find specific code structures (e.g., functions, classes) **after** narrowing down with search.
-It use tree_sitter query language.
-
-**Example**: Finding Rust functions:
-
-tool: query {"pattern": "fn $NAME($$$PARAMS) $$$BODY", "language": "rust", "path": "."}
-
----
-
-### Pattern Syntax
-
-- `$NAME`: Matches an identifier (e.g., function name).
-- `$$$PARAMS`: Matches parameter lists.
-- `$$$BODY`: Matches function bodies.
-- `$$$FIELDS`: Matches struct/class fields.
-- `$$$METHODS`: Matches class methods.
-
-**Examples**:
-- Python functions:
-
-tool: query {"pattern": "def $NAME($$$PARAMS): $$$BODY", "language": "python"}
-
-- Go structs:
-
-tool: query {"pattern": "type $NAME struct { $$$FIELDS }", "language": "go"}
-
-- C++ classes:
-
-tool: query {"pattern": "class $NAME { $$$METHODS };", "language": "cpp"}
-
-**Supported languages**: `rust, javascript, typescript, python, go, c, cpp, java, ruby, php, swift, csharp`
-
-### Tips
-- Match the language to the codebase.
-- Start with broad patterns, then refine (e.g., `fn $NAME` before adding `$$$PARAMS`).
-- Break complex structures into simpler patterns if needed.
-
----
-
-## `extract` Tool
-
-Use this tool to retrieve full files or specific code blocks **after** identifying them with Search or Query.
-
-### Usage
-
-**Example**: Read full file:
-
-tool: extract {"file_path": "src/main.rs"}
-
----
-
-### Features
-
-- **Entire file**:
-
-tool: extract {"file_path": "src/main.rs"}
-
-- **Specific block**:
-
-tool: extract {"file_path": "src/main.rs", "line": 42}
-
-- **Context control**:
-
-tool: extract {"file_path": "src/main.rs", "line": 42, "context_lines": 5}
-
-### Tips
-- Use after search/query to pinpoint exact code.
-- Specify line numbers for laser-focused extraction.
-- Adjust `context_lines` for more/less context.
-
----
-
-## Guidelines for Deep, Precise Answers
-
-1. **Step-by-Step Process**:
- 1. Start with the **Search Tool** to find relevant code.
- 2. Use the **Query Tool** if structural details are needed.
- 3. Use the **Extract Tool** for precise code snippets.
-
-2. **Depth**: Make multiple tool calls to explore thoroughly, refining searches as you go.
-
-3. **Precision**: Target exact keywords, patterns, or lines relevant to the query.
-
-4. **Knowledge Base**: Rely solely on tool results—don't guess or assume.
-
-5. **Clarification**: If stuck after several attempts, ask: "I couldn't find enough details. Could you provide more context or refine your question?"
-
-6. **Detail**: In answers, explain code functionality, structure, and context fully.
-
-7. **Visuals**: Use ASCII diagrams where helpful, e.g.:
-
-File: src/chat.rs
-Function: start_chat()
-Calls: init_session()
-
-Function: send_message()
-
-8. **Persistence**: Don't stop at the first result—dig deeper with additional calls if the answer isn't complete.
-
----
-
-## Example Workflow
-
-For the question: "How is chat implemented?":
-
-1. **Search**:
-
-tool: search {"query": "chat", "path": "."}
-
-2. **Query** (if needed):
-
-tool: query {"pattern": "fn $NAME($$$PARAMS) $$$BODY", "language": "rust", "path": "."}
-
-3. **Extract**:
-
-tool: extract {"file_path": "src/chat.rs", "line": 10}
-
-4. **Answer** with code explanation and diagram.
-
-This ensures your chat agent is thorough, precise, and user-friendly."#;
+        let preamble = r#"You are code intelligence assistant powered by the Probe. 
+        Always use the given tools for searching the code. 
+        Rather then guessing, start with using `search` tool, with exact keywords, and extend your search deeper. 
+        AVOID reading full files, unless absolutelly necessary. 
+        Use this tools as a scalpel, not a hammer. 
+        Use 'exact' parameter if you looking for something specific. 
+        Avoid searching with too common keywords, like 'if', 'for', 'while', etc. 
+        If you need to read a full file or extract a specific code block, use `extract` tool. 
+        If you need to find a specific code structure, use `query` tool. 
+        If you are unsure about the results, refine your query or ask for clarification.
+        
+        Leverage given tools effectively:
+            1. `search`:
+                - Use simple, unique keywords, avoid general terms (e.g., 'rpc' over 'rpc layer')\n
+                - Use ElasticSearch query language: ALWAYS use + for required terms, ".." for exact match, and omit for general and optional words, - for excluded terms, and AND/OR for logic. Prefer explicit searches, with this syntax.
+            2. `query` 
+                - Craft tree-sitter patterns (e.g., 'fn $NAME($$$PARAMS) $$$BODY') for specific structures
+                - Match patterns to the language (e.g., Rust, Python)
+                - Use sparingly for precise structural queries
+            3. `extract`
+                - Extract blocks by line number (e.g., '/file.rs:42') or full files for context
+                - Include `contextLines` only if AST parsing fails
+            
+        **Approach**:
+            - Start with a clear search strategy
+            - Interpret results concisely, tying them to the user’s question
+            - If unsure, refine queries or ask for clarification.
+        "#;
 
         // Create the model
         let model_type = super::models::create_model(preamble)?;
@@ -227,6 +79,7 @@ This ensures your chat agent is thorough, precise, and user-friendly."#;
             request_tokens: AtomicUsize::new(0),
             response_tokens: AtomicUsize::new(0),
             tokenizer,
+            session_id,
         })
     }
 
@@ -270,6 +123,11 @@ This ensures your chat agent is thorough, precise, and user-friendly."#;
             self.request_tokens.load(Ordering::SeqCst),
             self.response_tokens.load(Ordering::SeqCst),
         )
+    }
+
+    // Get the session ID for this chat instance
+    pub fn get_session_id(&self) -> &str {
+        &self.session_id
     }
 }
 

@@ -90,6 +90,7 @@ fn term(keyword: &str) -> Expr {
         field: None,
         required: false,
         excluded: false,
+        exact: false,
     }
 }
 
@@ -99,6 +100,7 @@ fn required_term(keyword: &str) -> Expr {
         field: None,
         required: true,
         excluded: false,
+        exact: false,
     }
 }
 
@@ -108,6 +110,18 @@ fn excluded_term(keyword: &str) -> Expr {
         field: None,
         required: false,
         excluded: true,
+        exact: false,
+    }
+}
+
+#[allow(dead_code)]
+fn exact_term(keyword: &str) -> Expr {
+    Expr::Term {
+        keywords: vec![keyword.to_string()],
+        field: None,
+        required: false,
+        excluded: false,
+        exact: true,
     }
 }
 

@@ -39,6 +39,14 @@ pub async fn handle_chat() -> Result<()> {
     );
     println!(
         "{}",
+        format!(
+            "Session ID: {} (used for caching search results)",
+            chat.get_session_id().bright_yellow()
+        )
+        .dimmed()
+    );
+    println!(
+        "{}",
         "Ask questions about your codebase or search for code patterns".dimmed()
     );
     println!(

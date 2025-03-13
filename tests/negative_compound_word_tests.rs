@@ -103,6 +103,7 @@ fn test_basic_negative_compound_word(temp_path: &Path) {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Run the search
@@ -166,6 +167,7 @@ fn test_complex_negative_compound_word(temp_path: &Path) {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Run the search

@@ -5,7 +5,7 @@ use std::path::Path;
 use tree_sitter;
 
 use crate::language::{is_test_file, parse_file_for_code_blocks};
-use crate::models::SearchResult;
+use crate::models::{CodeBlock, SearchResult};
 use crate::ranking;
 use crate::search::file_search::get_filename_matched_queries_compat;
 use crate::search::tokenization;
@@ -222,7 +222,7 @@ pub fn process_file_by_filename(
     path: &Path,
     queries_terms: &[Vec<(String, String)>],
     preprocessed_queries: Option<&[Vec<String>]>,
-) -> Result<SearchResult> {
+) -> Result<Vec<SearchResult>> {
     let content = fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
     let filename = path
         .file_name()
@@ -230,6 +230,7 @@ pub fn process_file_by_filename(
         .unwrap_or_default();
 
     let matched_terms = get_filename_matched_queries_compat(&filename, queries_terms);
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Convert matched_terms from indices to actual terms
     let matched_keywords = matched_terms
@@ -246,102 +247,267 @@ pub fn process_file_by_filename(
         })
         .collect::<Vec<String>>();
 
-    let mut search_result = SearchResult {
-        file: path.to_string_lossy().to_string(),
-        lines: (1, content.lines().count()),
-        node_type: "file".to_string(),
-        code: content.clone(),
-        matched_by_filename: Some(true),
-        rank: None,
-        score: None,
-        tfidf_score: None,
-        bm25_score: None,
-        tfidf_rank: None,
-        bm25_rank: None,
-        new_score: None,
-        hybrid2_rank: None,
-        combined_score_rank: None,
-        file_unique_terms: Some(matched_terms.len()),
-        file_total_matches: Some(0),
-        file_match_rank: None,
-        block_unique_terms: Some(matched_terms.len()),
-        block_total_matches: Some(0),
-        parent_file_id: None,
-        block_id: None,
-        matched_keywords: if matched_keywords.is_empty() {
-            None
-        } else {
-            Some(matched_keywords)
-        },
-    };
+    // Get the file extension
+    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
-    if let Some(preprocessed) = preprocessed_queries {
-        let query_terms: Vec<String> = preprocessed
-            .iter()
-            .flat_map(|terms| terms.iter().cloned())
-            .collect();
-        let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
-        let block_terms = ranking::preprocess_text_with_filename(&content, &filename, false);
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    // Extract all top-level blocks from the file
+    let code_blocks =
+        match crate::language::parser::extract_all_top_level_blocks(&content, extension, true) {
+            Ok(blocks) => blocks,
+            Err(e) => {
+                if debug_mode {
+                    println!("DEBUG: Error extracting top-level blocks: {}", e);
+                    println!("DEBUG: Falling back to whole file as a single block");
+                }
+                // Fallback to treating the whole file as a single block
+                vec![CodeBlock {
+                    start_row: 0,
+                    end_row: content.lines().count(),
+                    start_byte: 0,
+                    end_byte: content.len(),
+                    node_type: "file".to_string(),
+                    parent_node_type: None,
+                    parent_start_row: None,
+                    parent_end_row: None,
+                }]
+            }
+        };
 
-        let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
-            0
+    if debug_mode {
+        println!(
+            "DEBUG: Extracted {} top-level blocks from file",
+            code_blocks.len()
+        );
+    }
+
+    let mut results = Vec::new();
+    let file_id = format!("{}", path.to_string_lossy());
+
+    // Process each code block
+    for (block_idx, block) in code_blocks.iter().enumerate() {
+        let start_line = block.start_row + 1;
+        let end_line = block.end_row + 1;
+
+        // Extract the code for this block
+        let block_code = if start_line > 0 && end_line <= content.lines().count() {
+            content
+                .lines()
+                .skip(start_line - 1)
+                .take(end_line - start_line + 1)
+                .collect::<Vec<&str>>()
+                .join("\n")
         } else {
-            let direct_matches: HashSet<&String> = block_terms
+            "".to_string()
+        };
+
+        // Calculate block metrics
+        let (block_unique_terms, block_total_matches) = if let Some(preprocessed) =
+            preprocessed_queries
+        {
+            let query_terms: Vec<String> = preprocessed
                 .iter()
-                .filter(|t| unique_query_terms.contains(*t))
+                .flat_map(|terms| terms.iter().cloned())
                 .collect();
-            let mut compound_matches = HashSet::new();
-            for query_term in &unique_query_terms {
-                if block_terms.iter().any(|t| t == query_term) {
-                    continue;
-                }
-                let parts =
-                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
-                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                    compound_matches.insert(query_term);
-                }
-            }
-            direct_matches.len() + compound_matches.len()
-        };
+            let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
+            let block_terms = ranking::preprocess_text_with_filename(&block_code, &filename, false);
 
-        let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
-            0
+            if debug_mode {
+                println!("DEBUG: Block terms after stemming: {:?}", block_terms);
+                println!(
+                    "DEBUG: Query terms after stemming: {:?}",
+                    unique_query_terms
+                );
+            }
+
+            let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
+                0
+            } else {
+                let direct_matches: HashSet<&String> = block_terms
+                    .iter()
+                    .filter(|t| unique_query_terms.contains(*t))
+                    .collect();
+                let mut compound_matches = HashSet::new();
+                for query_term in &unique_query_terms {
+                    if block_terms.iter().any(|t| t == query_term) {
+                        continue;
+                    }
+                    let parts = tokenization::split_compound_word(
+                        query_term,
+                        tokenization::load_vocabulary(),
+                    );
+                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                        compound_matches.insert(query_term);
+                    }
+                }
+                direct_matches.len() + compound_matches.len()
+            };
+
+            let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
+                0
+            } else {
+                let direct_match_count = block_terms
+                    .iter()
+                    .filter(|t| unique_query_terms.contains(*t))
+                    .count();
+
+                let mut compound_match_count = 0;
+                for query_term in &unique_query_terms {
+                    if block_terms.iter().any(|t| t == query_term) {
+                        continue;
+                    }
+                    let parts = tokenization::split_compound_word(
+                        query_term,
+                        tokenization::load_vocabulary(),
+                    );
+                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                        compound_match_count += 1;
+                    }
+                }
+                direct_match_count + compound_match_count
+            };
+
+            (block_unique_terms, block_total_matches)
         } else {
-            let direct_match_count = block_terms
-                .iter()
-                .filter(|t| unique_query_terms.contains(*t))
-                .count();
-
-            let mut compound_match_count = 0;
-            for query_term in &unique_query_terms {
-                if block_terms.iter().any(|t| t == query_term) {
-                    continue;
-                }
-                let parts =
-                    tokenization::split_compound_word(query_term, tokenization::load_vocabulary());
-                if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                    compound_match_count += 1;
-                }
-            }
-            direct_match_count + compound_match_count
+            (matched_terms.len(), 0)
         };
-        search_result.file_unique_terms = Some(block_unique_terms);
-        search_result.file_total_matches = Some(block_total_matches);
+
+        // Create a search result for this block
+        results.push(SearchResult {
+            file: path.to_string_lossy().to_string(),
+            lines: (start_line, end_line),
+            node_type: block.node_type.clone(),
+            code: block_code,
+            matched_by_filename: Some(true),
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            bm25_score: None,
+            tfidf_rank: None,
+            bm25_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
+            file_unique_terms: Some(block_unique_terms),
+            file_total_matches: Some(block_total_matches),
+            file_match_rank: None,
+            block_unique_terms: Some(block_unique_terms),
+            block_total_matches: Some(block_total_matches),
+            parent_file_id: Some(file_id.clone()),
+            block_id: Some(block_idx),
+            matched_keywords: if matched_keywords.is_empty() {
+                None
+            } else {
+                Some(matched_keywords.clone())
+            },
+        });
+    }
+
+    if debug_mode {
+        println!(
+            "DEBUG: Created {} search results for file matched by filename",
+            results.len()
+        );
+    }
+
+    // If no blocks were found, return a single result for the whole file
+    if results.is_empty() {
+        let (file_unique_terms, file_total_matches) = if let Some(preprocessed) =
+            preprocessed_queries
+        {
+            let query_terms: Vec<String> = preprocessed
+                .iter()
+                .flat_map(|terms| terms.iter().cloned())
+                .collect();
+            let unique_query_terms: HashSet<String> = query_terms.into_iter().collect();
+            let block_terms = ranking::preprocess_text_with_filename(&content, &filename, false);
+
+            let block_unique_terms = if block_terms.is_empty() || unique_query_terms.is_empty() {
+                0
+            } else {
+                let direct_matches: HashSet<&String> = block_terms
+                    .iter()
+                    .filter(|t| unique_query_terms.contains(*t))
+                    .collect();
+                let mut compound_matches = HashSet::new();
+                for query_term in &unique_query_terms {
+                    if block_terms.iter().any(|t| t == query_term) {
+                        continue;
+                    }
+                    let parts = tokenization::split_compound_word(
+                        query_term,
+                        tokenization::load_vocabulary(),
+                    );
+                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                        compound_matches.insert(query_term);
+                    }
+                }
+                direct_matches.len() + compound_matches.len()
+            };
+
+            let block_total_matches = if block_terms.is_empty() || unique_query_terms.is_empty() {
+                0
+            } else {
+                let direct_match_count = block_terms
+                    .iter()
+                    .filter(|t| unique_query_terms.contains(*t))
+                    .count();
+
+                let mut compound_match_count = 0;
+                for query_term in &unique_query_terms {
+                    if block_terms.iter().any(|t| t == query_term) {
+                        continue;
+                    }
+                    let parts = tokenization::split_compound_word(
+                        query_term,
+                        tokenization::load_vocabulary(),
+                    );
+                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                        compound_match_count += 1;
+                    }
+                }
+                direct_match_count + compound_match_count
+            };
+
+            (block_unique_terms, block_total_matches)
+        } else {
+            (matched_terms.len(), 0)
+        };
+
+        results.push(SearchResult {
+            file: path.to_string_lossy().to_string(),
+            lines: (1, content.lines().count()),
+            node_type: "file".to_string(),
+            code: content,
+            matched_by_filename: Some(true),
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            bm25_score: None,
+            tfidf_rank: None,
+            bm25_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
+            file_unique_terms: Some(file_unique_terms),
+            file_total_matches: Some(file_total_matches),
+            file_match_rank: None,
+            block_unique_terms: Some(file_unique_terms),
+            block_total_matches: Some(file_total_matches),
+            parent_file_id: None,
+            block_id: None,
+            matched_keywords: if matched_keywords.is_empty() {
+                None
+            } else {
+                Some(matched_keywords)
+            },
+        });
 
         if debug_mode {
-            println!(
-                "DEBUG: File by filename terms after stemming: {:?}",
-                block_terms
-            );
-            println!(
-                "DEBUG: Query terms after stemming: {:?}",
-                unique_query_terms
-            );
+            println!("DEBUG: No blocks found, created a single result for the whole file");
         }
     }
 
-    Ok(search_result)
+    Ok(results)
 }
 
 /// Determines a better node type for fallback context by analyzing the line content

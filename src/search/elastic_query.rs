@@ -11,11 +11,13 @@ pub enum Expr {
     /// `field` => optional field specifier (e.g. Some("comment") for "comment:whitelisting")
     /// `required` => a leading `+`
     /// `excluded` => a leading `-`
+    /// `exact` => quoted string for exact matching without stemming
     Term {
         keywords: Vec<String>,
         field: Option<String>,
         required: bool,
         excluded: bool,
+        exact: bool,
     },
 
     /// Logical AND of two sub-expressions.
@@ -99,6 +101,7 @@ impl Expr {
                 field: _, // Field is handled during term matching, not evaluation
                 required,
                 excluded,
+                exact,
             } => {
                 // Edge case: If `keywords` is empty
                 if keywords.is_empty() {
@@ -118,9 +121,9 @@ impl Expr {
                         }
                     }
 
-                    // For excluded terms, we should be more strict and not use stemming
+                    // For excluded or exact terms, we should be more strict and not use stemming
                     // This prevents false positives when checking for excluded terms
-                    if !*excluded {
+                    if !*excluded && !*exact {
                         // Try to find a stemmed version of the keyword
                         // This handles cases where we're looking for a term but only have its stemmed version in the matched terms
                         for (term, &idx) in term_indices {
@@ -210,6 +213,7 @@ impl std::fmt::Display for Expr {
                 field,
                 required,
                 excluded,
+                exact,
             } => {
                 let prefix = if *required {
                     "+"
@@ -228,7 +232,11 @@ impl std::fmt::Display for Expr {
 
                 // Join multiple keywords with spaces
                 let keyword_str = if keywords.len() == 1 {
-                    keywords[0].clone()
+                    if *exact {
+                        format!("\"{}\"", keywords[0])
+                    } else {
+                        keywords[0].clone()
+                    }
                 } else {
                     format!("\"{}\"", keywords.join(" "))
                 };
@@ -244,13 +252,14 @@ impl std::fmt::Display for Expr {
 /// Our possible tokens.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Plus,          // '+'
-    Minus,         // '-'
-    And,           // 'AND'
-    Or,            // 'OR'
-    LParen,        // '('
-    RParen,        // ')'
-    Ident(String), // e.g. 'foo', 'bar123'
+    Plus,                 // '+'
+    Minus,                // '-'
+    And,                  // 'AND'
+    Or,                   // 'OR'
+    LParen,               // '('
+    RParen,               // ')'
+    Ident(String),        // e.g. 'foo', 'bar123'
+    QuotedString(String), // e.g. "hello world"
 }
 
 /// A simple error type for parsing/tokenizing.
@@ -306,6 +315,13 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
                 chars.next();
             }
 
+            // Add a new case for quoted strings
+            '"' => {
+                chars.next(); // consume the opening quote
+                let quoted_string = lex_quoted_string(&mut chars)?;
+                tokens.push(Token::QuotedString(quoted_string));
+            }
+
             // Possible AND/OR keywords or just an identifier
             _ => {
                 // If it starts with a letter, number, underscore, or dot, treat it as an identifier
@@ -338,6 +354,32 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
     }
 
     Ok(tokens)
+}
+
+// New helper function to lex a quoted string
+fn lex_quoted_string(chars: &mut Peekable<Chars>) -> Result<String, ParseError> {
+    let mut buf = String::new();
+    let mut escaped = false;
+
+    while let Some(&ch) = chars.peek() {
+        if escaped {
+            buf.push(ch);
+            escaped = false;
+            chars.next();
+        } else if ch == '\\' {
+            escaped = true;
+            chars.next();
+        } else if ch == '"' {
+            chars.next(); // consume the closing quote
+            return Ok(buf);
+        } else {
+            buf.push(ch);
+            chars.next();
+        }
+    }
+
+    // If we get here, we ran out of characters before finding a closing quote
+    Err(ParseError::UnexpectedEndOfInput)
 }
 
 fn lex_identifier(chars: &mut Peekable<Chars>) -> String {
@@ -414,7 +456,11 @@ impl Parser {
                     let right = self.parse_factor()?;
                     left = Expr::And(Box::new(left), Box::new(right));
                 }
-                Token::Plus | Token::Minus | Token::LParen | Token::Ident(_) => {
+                Token::Plus
+                | Token::Minus
+                | Token::LParen
+                | Token::Ident(_)
+                | Token::QuotedString(_) => {
                     let right = self.parse_factor()?;
                     // Use OR for implicit combinations (space-separated terms) in any_term mode
                     // Use AND for implicit combinations in all_terms mode
@@ -462,7 +508,10 @@ impl Parser {
         let primary_expr = self.parse_primary()?;
 
         if let Expr::Term {
-            keywords, field, ..
+            keywords,
+            field,
+            exact,
+            ..
         } = primary_expr
         {
             Ok(Expr::Term {
@@ -470,6 +519,7 @@ impl Parser {
                 field,
                 required,
                 excluded,
+                exact,
             })
         } else {
             Ok(primary_expr)
@@ -505,10 +555,22 @@ impl Parser {
                         field,
                         required: false,
                         excluded: false,
+                        exact: false,
                     })
                 } else {
                     unreachable!();
                 }
+            }
+            Some(Token::QuotedString(s)) => {
+                let string_value = s.clone();
+                self.next();
+                Ok(Expr::Term {
+                    keywords: vec![string_value],
+                    field: None,
+                    required: false,
+                    excluded: false,
+                    exact: true, // Mark as exact match
+                })
             }
             Some(Token::LParen) => {
                 self.next();
@@ -532,18 +594,20 @@ fn process_ast_terms(expr: Expr) -> Expr {
             field,
             required,
             excluded,
+            exact,
         } => {
-            // For excluded terms, don't apply tokenization
-            if excluded {
+            // For excluded or exact terms, don't apply tokenization
+            if excluded || exact {
                 return Expr::Term {
                     keywords,
                     field,
                     required,
                     excluded,
+                    exact,
                 };
             }
 
-            // Apply tokenization to the keywords for non-excluded terms
+            // Apply tokenization to the keywords for non-excluded, non-exact terms
             let processed_keywords = keywords
                 .iter()
                 .flat_map(|keyword| {
@@ -558,6 +622,7 @@ fn process_ast_terms(expr: Expr) -> Expr {
                 field,
                 required,
                 excluded,
+                exact,
             }
         }
         Expr::And(left, right) => Expr::And(
@@ -615,6 +680,7 @@ pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
             field: None,
             required: false,
             excluded: false,
+            exact: false,
         });
     }
 
@@ -651,12 +717,12 @@ pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
                 "No valid identifiers found in tokens".to_string(),
             ));
         }
-
         return Ok(Expr::Term {
             keywords: idents,
             field: None,
             required: false,
             excluded: false,
+            exact: false,
         });
     }
 

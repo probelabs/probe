@@ -13,6 +13,7 @@ pub fn apply_limits(
             results,
             skipped_files: Vec::new(),
             limits_applied: None,
+            cached_blocks_skipped: None,
         };
     }
 
@@ -61,5 +62,6 @@ pub fn apply_limits(
             total_bytes,
             total_tokens,
         }),
+        cached_blocks_skipped: None,
     }
 }

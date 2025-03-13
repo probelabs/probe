@@ -16,7 +16,9 @@ pub mod search;
 
 // Re-export commonly used types for convenience
 pub use chat::handle_chat;
-pub use extract::{format_and_print_extraction_results, process_file_for_extraction};
+pub use extract::{
+    format_and_print_extraction_results, handle_extract, process_file_for_extraction,
+};
 pub use models::{CodeBlock, LimitedSearchResults, SearchLimits, SearchResult};
 pub use query::{format_and_print_query_results, perform_query, AstMatch, QueryOptions};
 pub use search::perform_probe;

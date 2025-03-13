@@ -150,6 +150,7 @@ fn test_search_single_term() {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Search for a single term
@@ -212,6 +213,7 @@ fn test_search_multiple_terms() {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Search for multiple terms
@@ -256,6 +258,7 @@ fn test_search_files_only() {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Search for files only
@@ -329,6 +332,7 @@ fn test_search_include_filenames() {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Search with filename matching enabled
@@ -383,6 +387,7 @@ fn test_search_with_limits() {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Search with limits
@@ -431,6 +436,7 @@ fn test_frequency_search() {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Search using frequency-based search
@@ -486,6 +492,7 @@ func main() {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Search for both terms in "all terms" mode
@@ -525,6 +532,7 @@ fn test_search_with_custom_ignores() {
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
+        session: None,
     };
 
     // Search with custom ignore patterns
@@ -640,6 +648,7 @@ fn calculate_product(a: i32, b: i32) -> i32 {
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
+        session: None,
     };
 
     // Perform search

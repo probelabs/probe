@@ -96,6 +96,7 @@ interface SearchCodeArgs {
   anyTerm?: boolean;
   noMerge?: boolean;
   mergeThreshold?: number;
+  session?: string;
 }
 
 interface QueryCodeArgs {
@@ -146,7 +147,7 @@ class ProbeServer {
       tools: [
         {
           name: 'search_code',
-          description: 'Search code in a specified directory using Elasticsearch-like query syntax. \n\nThe search tool supports Elasticsearch-like query syntax with the following features:\n- Basic term searching: "config" or "search"\n- Field-specific searching: "field:value" (e.g., "function:parse")\n- Required terms with + prefix: "+required"\n- Excluded terms with - prefix: "-excluded"\n- Logical operators: "term1 AND term2", "term1 OR term2"\n- Grouping with parentheses: "(term1 OR term2) AND term3"\n\nExamples:\n- Simple search: "config"\n- Required and excluded terms: "+parse -test"\n- Field-specific: "function:evaluate"\n- Complex query: "(parse OR tokenize) AND query"\n\nWhen using search tool:\n- Try simpler queries (e.g. use \'rpc\' instead of \'rpc layer implementation\')\n- This tool knows how to do the stemming by itself, put only unique keywords to query\n- Focus on keywords that would appear in code\n- Split distinct terms into separate searches, unless they should be search together, e.g. how they connect\n- Use multiple probe tool calls if needed\n- If you can\'t find what you want after multiple attempts, ask the user for more context\n- While doing multiple calls, do not repeat the same queries\n\nElasticsearch-like Query Syntax Details:\n- Terms are case-insensitive and automatically stemmed (e.g., "parsing" matches "parse")\n- Use quotes for exact phrases: "white list" (matches the exact phrase)\n- Use + for required terms: +config (must be present)\n- Use - for excluded terms: -test (must not be present)\n- Use field specifiers: function:parse (search in specific code elements)\n- Combine with AND/OR: config AND (parse OR tokenize)\n- Group with parentheses for complex expressions\n\nQueries can be any text (including multi-word phrases like "IP whitelist"), but simple, focused queries typically yield better results. Use the maxResults parameter to limit the number of results when needed. For multi-term queries, all terms must be present in a file by default, but you can use anyTerm=true to match files containing any of the terms.',
+          description: 'Search code in a specified directory using Elasticsearch-like query syntax with session-based caching. \n\nThe search tool supports Elasticsearch-like query syntax with the following features:\n- Basic term searching: "config" or "search"\n- Field-specific searching: "field:value" (e.g., "function:parse")\n- Required terms with + prefix: "+required"\n- Excluded terms with - prefix: "-excluded"\n- Logical operators: "term1 AND term2", "term1 OR term2"\n- Grouping with parentheses: "(term1 OR term2) AND term3"\n\nExamples:\n- Simple search: "config"\n- Required and excluded terms: "+parse -test"\n- Field-specific: "function:evaluate"\n- Complex query: "(parse OR tokenize) AND query"\n\nWhen using search tool:\n- Try simpler queries (e.g. use \'rpc\' instead of \'rpc layer implementation\')\n- This tool knows how to do the stemming by itself, put only unique keywords to query\n- Focus on keywords that would appear in code\n- Split distinct terms into separate searches, unless they should be search together, e.g. how they connect\n- Use multiple probe tool calls if needed\n- If you can\'t find what you want after multiple attempts, ask the user for more context\n- While doing multiple calls, do not repeat the same queries\n\nSession-Based Caching:\n- The tool uses a caching system to avoid showing the same code blocks multiple times in a session\n- Cache keys are in the format "file.rs:23-45" (file path with start-end line numbers)\n- When an empty session parameter is provided, the system generates a unique 4-character alphanumeric session ID\n- The generated session ID is printed to the console and can be reused for subsequent searches\n\nElasticsearch-like Query Syntax Details:\n- Terms are case-insensitive and automatically stemmed (e.g., "parsing" matches "parse")\n- Use quotes for exact phrases: "white list" (matches the exact phrase)\n- Use + for required terms: +config (must be present)\n- Use - for excluded terms: -test (must not be present)\n- Use field specifiers: function:parse (search in specific code elements)\n- Combine with AND/OR: config AND (parse OR tokenize)\n- Group with parentheses for complex expressions\n\nQueries can be any text (including multi-word phrases like "IP whitelist"), but simple, focused queries typically yield better results. Use the maxResults parameter to limit the number of results when needed. For multi-term queries, all terms must be present in a file by default, but you can use anyTerm=true to match files containing any of the terms.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -215,6 +216,10 @@ class ProbeServer {
               mergeThreshold: {
                 type: 'number',
                 description: 'Maximum number of lines between code blocks to consider them adjacent for merging (default: 5)',
+              },
+              session: {
+                type: 'string',
+                description: 'Session identifier for caching. If provided but empty, a unique 4-character alphanumeric session ID will be generated. Reuse the same session ID to avoid seeing the same code blocks multiple times.',
               },
             },
             required: ['path', 'query'],
@@ -399,6 +404,11 @@ class ProbeServer {
     
     if (args.mergeThreshold !== undefined) {
       cliArgs.push('--merge-threshold', args.mergeThreshold.toString());
+    }
+    
+    // Add session parameter if provided
+    if (args.session !== undefined) {
+      cliArgs.push('--session', args.session);
     }
     
    // Add query as the first positional argument (can be string or array)
