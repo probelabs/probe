@@ -63,6 +63,18 @@
   /* border: 1px solid var(--home-border-color); */
 }
 
+@media (max-width: 768px) {
+  .main-content {
+    padding: 1rem 0.5rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .main-content {
+    padding: 0.75rem 0.25rem;
+  }
+}
+
 .VPFeatures {
   margin-bottom: 4rem !important;
 }
@@ -96,4 +108,4 @@
   .FeatureSection {
     grid-template-columns: 1fr;
   }
-} 
+}

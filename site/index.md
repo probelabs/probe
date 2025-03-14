@@ -77,14 +77,18 @@ hero:
   display: flex;
   justify-content: center;
   margin: 0.5rem 0;
+  width: 100%;
+  overflow-x: auto;
 }
 
 .pre-wrapper pre {
-  width: fit-content;
-  padding: 0.75rem 1.25rem;
+  width: 100%;
+  padding: 0.75rem 0.75rem;
   border-radius: 6px;
   box-shadow: 0 2px 4px rgba(0,0,0,0.05);
   transition: box-shadow 0.2s ease;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .pre-wrapper pre:hover {
@@ -99,7 +103,7 @@ hero:
 
 .container {
   margin: 0 auto;
-  padding: 0 1.5rem;
+  padding: 0 0.5rem;
   max-width: 1200px;
 }
 
@@ -124,6 +128,28 @@ h2 {
   .quick-start-grid {
     grid-template-columns: 1fr;
     gap: 1rem;
+  }
+  
+  .quick-start-option {
+    width: 100%;
+  }
+  
+  .container {
+    padding: 0 0.25rem;
+  }
+  
+  .pre-wrapper {
+    padding: 0;
+  }
+  
+  .pre-wrapper pre {
+    padding: 0.5rem 0.25rem;
+    font-size: 0.9rem;
+    width: 100%;
+  }
+  
+  .quick-start-section {
+    padding: 0.5rem 0;
   }
 }
 </style>

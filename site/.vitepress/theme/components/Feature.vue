@@ -41,6 +41,18 @@ defineProps({
   flex-direction: column;
 }
 
+@media (max-width: 640px) {
+  .vp-feature {
+    padding: 16px 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .vp-feature {
+    padding: 12px 8px;
+  }
+}
+
 .vp-feature:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   transform: translateY(-2px);

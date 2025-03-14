@@ -25,6 +25,18 @@ const features = frontmatter.value.features || []
   padding: 48px 24px;
 }
 
+@media (max-width: 640px) {
+  .vp-features {
+    padding: 32px 8px;
+  }
+}
+
+@media (max-width: 480px) {
+  .vp-features {
+    padding: 24px 4px;
+  }
+}
+
 .container {
   margin: 0 auto;
   max-width: 1152px;

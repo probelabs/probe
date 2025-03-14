@@ -32,10 +32,31 @@
   .feature-section {
     grid-template-columns: 1fr;
     gap: 1rem;
+    padding: 1.5rem 0;
   }
 
   .feature-content {
     padding-right: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .feature-section {
+    padding: 1rem 0;
+  }
+  
+  .feature-code {
+    padding: 0.75rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .feature-section {
+    padding: 0.75rem 0;
+  }
+  
+  .feature-code {
+    padding: 0.5rem;
   }
 }
 </style> 

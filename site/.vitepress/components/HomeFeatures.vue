@@ -351,11 +351,24 @@ export default {
   margin-right: auto;
 }
 
+@media (max-width: 640px) {
+  .audience-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+}
+
 .audience-card {
   background-color: var(--vp-c-bg-soft);
   border-radius: 8px;
   padding: 1.5rem;
   transition: transform 0.2s, box-shadow 0.2s;
+}
+
+@media (max-width: 640px) {
+  .audience-card {
+    padding: 1rem 0.75rem;
+  }
 }
 
 .audience-card:hover {
