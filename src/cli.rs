@@ -72,6 +72,7 @@ pub struct Args {
     pub dry_run: bool,
 
     /// Output format (default: color)
+    /// Use 'json' or 'xml' for machine-readable output
     #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color"])]
     pub format: String,
 
@@ -153,6 +154,7 @@ pub enum Commands {
         dry_run: bool,
 
         /// Output format (default: color)
+        /// Use 'json' or 'xml' for machine-readable output with structured data
         #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color"])]
         format: String,
 
@@ -177,11 +179,16 @@ pub enum Commands {
         #[arg(long = "allow-tests")]
         allow_tests: bool,
 
+        /// Custom patterns to ignore (in addition to .gitignore and common patterns)
+        #[arg(short, long)]
+        ignore: Vec<String>,
+
         /// Number of context lines to include before and after the extracted block
         #[arg(short = 'c', long = "context", default_value = "0")]
         context_lines: usize,
 
         /// Output format (default: color)
+        /// Use 'json' or 'xml' for machine-readable output with structured data
         #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color"])]
         format: String,
 
@@ -192,6 +199,10 @@ pub enum Commands {
         /// Write output to clipboard
         #[arg(short = 't', long = "to-clipboard")]
         to_clipboard: bool,
+
+        /// Output only file names and line numbers without full content
+        #[arg(long = "dry-run")]
+        dry_run: bool,
     },
 
     /// Search code using AST patterns for precise structural matching
@@ -230,6 +241,7 @@ pub enum Commands {
         max_results: Option<usize>,
 
         /// Output format (default: color)
+        /// Use 'json' or 'xml' for machine-readable output with structured data
         #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color"])]
         format: String,
     },

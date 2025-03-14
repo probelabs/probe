@@ -2,33 +2,54 @@
 
 Probe's AI Chat mode provides an interactive CLI interface where you can ask questions about your codebase and get AI-powered responses. This mode combines Probe's powerful code search capabilities with large language models to help you understand and navigate your codebase more effectively.
 
+> **Note**: For comprehensive documentation on all AI integration features, including the AI chat mode, MCP server integration, and Node.js SDK, see the [AI Integration](./ai-integration.md) page.
+
 ## Getting Started
 
-To use the AI Chat mode, you'll need an API key for either Anthropic's Claude or OpenAI's GPT models.
+The AI chat functionality is available as a standalone npm package that can be run directly with npx.
 
-### Setting Up API Keys
-
-For Claude models (recommended):
+### Using npx (Recommended)
 
 ```bash
+# Run directly with npx (no installation needed)
+npx -y @buger/probe-chat
+
+# Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
+# Or for OpenAI
+# export OPENAI_API_KEY=your_api_key
+
+# Or specify a directory to search
+npx -y @buger/probe-chat /path/to/your/project
 ```
 
-For OpenAI models:
+### Using the npm package
 
 ```bash
-export OPENAI_API_KEY=your_api_key
+# Install globally
+npm install -g @buger/probe-chat
+
+# Start the chat interface
+probe-chat
 ```
 
-### Starting the Chat
-
-Once you've set up your API key, you can start the chat:
+### Using the example code
 
 ```bash
-probe chat
-```
+# Navigate to the examples directory
+cd examples/chat
 
-This will launch an interactive CLI interface where you can ask questions about your codebase.
+# Install dependencies
+npm install
+
+# Set your API key
+export ANTHROPIC_API_KEY=your_api_key
+# Or for OpenAI
+# export OPENAI_API_KEY=your_api_key
+
+# Start the chat interface
+node index.js
+```
 
 ## Features
 
@@ -94,6 +115,7 @@ probe chat
 # Enable debug mode for detailed logging
 export DEBUG=1 probe chat
 ```
+
 
 ## Example Usage
 

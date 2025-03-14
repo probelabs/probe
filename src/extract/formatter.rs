@@ -8,6 +8,126 @@ use crate::search::search_tokens::count_tokens;
 use anyhow::Result;
 use std::path::Path;
 
+/// Format the extraction results for dry-run mode (only file names and line numbers)
+///
+/// # Arguments
+///
+/// * `results` - The search results to format
+/// * `format` - The output format (terminal, markdown, plain, json, or color)
+pub fn format_extraction_dry_run(results: &[SearchResult], format: &str) -> Result<String> {
+    use std::fmt::Write;
+    let mut output = String::new();
+
+    match format {
+        "json" => {
+            // Create a simplified version of the results for JSON output
+            #[derive(serde::Serialize)]
+            struct JsonDryRunResult<'a> {
+                file: &'a str,
+                lines: (usize, usize),
+                node_type: &'a str,
+            }
+
+            let json_results: Vec<JsonDryRunResult> = results
+                .iter()
+                .map(|r| JsonDryRunResult {
+                    file: &r.file,
+                    lines: r.lines,
+                    node_type: &r.node_type,
+                })
+                .collect();
+
+            // Create a wrapper object with results and summary
+            let wrapper = serde_json::json!({
+                "results": json_results,
+                "summary": {
+                    "count": results.len(),
+                }
+            });
+
+            write!(output, "{}", serde_json::to_string_pretty(&wrapper)?)?;
+        }
+        "xml" => {
+            writeln!(output, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").unwrap();
+            writeln!(output, "<probe_results>").unwrap();
+
+            for result in results {
+                writeln!(output, "  <result>").unwrap();
+                writeln!(output, "    <file>{}</file>", escape_xml(&result.file)).unwrap();
+
+                if result.node_type != "file" {
+                    writeln!(
+                        output,
+                        "    <lines>{}-{}</lines>",
+                        result.lines.0, result.lines.1
+                    )
+                    .unwrap();
+                }
+
+                if result.node_type != "file" && result.node_type != "context" {
+                    writeln!(
+                        output,
+                        "    <node_type>{}</node_type>",
+                        escape_xml(&result.node_type)
+                    )
+                    .unwrap();
+                }
+
+                writeln!(output, "  </result>").unwrap();
+            }
+
+            // Add summary section
+            writeln!(output, "  <summary>").unwrap();
+            writeln!(output, "    <count>{}</count>", results.len()).unwrap();
+            writeln!(output, "  </summary>").unwrap();
+
+            writeln!(output, "</probe_results>").unwrap();
+        }
+        _ => {
+            // For all other formats (terminal, markdown, plain, color)
+            use colored::*;
+
+            if results.is_empty() {
+                writeln!(output, "{}", "No results found.".yellow().bold()).unwrap();
+                return Ok(output);
+            }
+
+            for result in results {
+                // Write file info
+                writeln!(output, "File: {}", result.file.yellow()).unwrap();
+
+                // Write lines if not a full file
+                if result.node_type != "file" {
+                    writeln!(output, "Lines: {}-{}", result.lines.0, result.lines.1).unwrap();
+                }
+
+                // Write node type if available and not "file" or "context"
+                if result.node_type != "file" && result.node_type != "context" {
+                    writeln!(output, "Type: {}", result.node_type.cyan()).unwrap();
+                }
+
+                writeln!(output).unwrap();
+            }
+
+            // Add summary
+            writeln!(
+                output,
+                "{} {} {}",
+                "Would extract".green().bold(),
+                results.len(),
+                if results.len() == 1 {
+                    "result"
+                } else {
+                    "results"
+                }
+            )
+            .unwrap();
+        }
+    }
+
+    Ok(output)
+}
+
 /// Format the extraction results in the specified format and return as a string
 ///
 /// # Arguments
@@ -231,7 +351,7 @@ pub fn format_xml_results(output: &mut String, results: &[SearchResult]) -> Resu
     use std::fmt::Write;
 
     writeln!(output, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").unwrap();
-    writeln!(output, "<extraction_results>").unwrap();
+    writeln!(output, "<probe_results>").unwrap();
 
     for result in results {
         writeln!(output, "  <result>").unwrap();
@@ -276,7 +396,7 @@ pub fn format_xml_results(output: &mut String, results: &[SearchResult]) -> Resu
     .unwrap();
     writeln!(output, "  </summary>").unwrap();
 
-    writeln!(output, "</extraction_results>").unwrap();
+    writeln!(output, "</probe_results>").unwrap();
     Ok(())
 }
 

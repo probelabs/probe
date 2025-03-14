@@ -2,6 +2,8 @@
 
 The Model Context Protocol (MCP) server mode allows Probe to integrate seamlessly with AI editors and assistants. This mode exposes Probe's powerful search capabilities through a standardized interface that AI tools can use to search and understand your codebase.
 
+> **Note**: For comprehensive documentation on the MCP server integration, including advanced configuration, implementation details, and security considerations, see the [MCP Integration](./mcp-integration.md) page. For information on all AI integration features, see the [AI Integration](./ai-integration.md) page.
+
 ## What is MCP?
 
 MCP (Model Context Protocol) is a protocol that enables AI assistants to access external tools and resources. By running Probe as an MCP server, AI assistants can use Probe's search capabilities to find and understand code in your projects.
@@ -50,6 +52,60 @@ If you prefer to install the MCP server manually:
      }
    }
    ```
+
+## Available Tools
+
+The Probe MCP server provides the following tools:
+
+### search_code
+
+Search code in a specified directory using Elasticsearch-like query syntax with session-based caching.
+
+```json
+{
+  "path": "/path/to/your/project",
+  "query": "authentication flow",
+  "maxTokens": 20000
+}
+```
+
+The search tool supports Elasticsearch-like query syntax with the following features:
+- Basic term searching: "config" or "search"
+- Field-specific searching: "field:value" (e.g., "function:parse")
+- Required terms with + prefix: "+required"
+- Excluded terms with - prefix: "-excluded"
+- Logical operators: "term1 AND term2", "term1 OR term2"
+- Grouping with parentheses: "(term1 OR term2) AND term3"
+
+### query_code
+
+Find specific code structures (functions, classes, etc.) using tree-sitter patterns.
+
+```json
+{
+  "path": "/path/to/your/project",
+  "pattern": "fn $NAME($$$PARAMS) $$$BODY",
+  "language": "rust"
+}
+```
+
+Pattern syntax:
+- `$NAME`: Matches an identifier (e.g., function name)
+- `$$$PARAMS`: Matches parameter lists
+- `$$$BODY`: Matches function bodies
+- `$$$FIELDS`: Matches struct/class fields
+- `$$$METHODS`: Matches class methods
+
+### extract_code
+
+Extract code blocks from files based on file paths and optional line numbers.
+
+```json
+{
+  "path": "/path/to/your/project",
+  "files": ["/path/to/your/project/src/main.rs:42"]
+}
+```
 
 ## Using Probe with AI Assistants
 
@@ -118,6 +174,27 @@ You can set default limits for search results:
 }
 ```
 
+### Custom Binary Path
+
+If you have a custom build of the Probe binary, you can specify its path:
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@buger/probe-mcp"
+      ],
+      "env": {
+        "PROBE_PATH": "/path/to/custom/probe"
+      }
+    }
+  }
+}
+```
+
 ## Troubleshooting
 
 If you encounter issues with the MCP server:
@@ -136,3 +213,4 @@ If you encounter issues with the MCP server:
 3. **Mention Directories**: If you know which directory contains the code, include it in your query
 4. **Use Multiple Queries**: If you don't find what you're looking for, try reformulating your query
 5. **Combine with Other Tools**: Use Probe alongside other tools for a more comprehensive understanding of your codebase
+6. **Use Session IDs**: For related searches, use the same session ID to avoid seeing duplicate code blocks

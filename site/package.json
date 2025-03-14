@@ -11,9 +11,11 @@
     "preview": "vitepress preview"
   },
   "dependencies": {
-    "vitepress": "^1.0.0-rc.40"
+    "highlight.js": "^11.11.1",
+    "vitepress": "^1.6.3"
   },
   "devDependencies": {
-    "markdown-it": "^14.0.0"
+    "@vuepress/plugin-shiki": "^2.0.0-rc.83",
+    "markdown-it": "^14.1.0"
   }
 }

@@ -1,0 +1,133 @@
+---
+# https://vitepress.dev/reference/default-theme-home-page
+layout: home
+
+hero:
+  name: "Probe"
+  text: "Local, AI-Ready\nCode Intelligence"
+  tagline: Make AI work with large codebases, and natively understand it.
+  image:
+    src: /logo.png
+    alt: Probe Logo
+  actions:
+    - theme: brand
+      text: Get Started →
+      link: /quick-start
+    - theme: alt
+      text: GitHub Repo
+      link: https://github.com/buger/probe
+
+features:
+  - icon: 🔬
+    title: Deep Code Understanding
+    details: Extract complete functions, classes and structures. Not just lines of code - full context every time.
+  
+  - icon: ⚡
+    title: Built for Speed
+    details: Search massive codebases instantly. Powered by ripgrep and tree-sitter for performance that scales with your projects.
+  
+  - icon: 🛡️
+    title: Totally Local
+    details: Your code never leaves your machine. Full privacy with zero data collection or cloud dependencies.
+  
+  - icon: 🧮
+    title: Smarter Results
+    details: BM25 & TF-IDF algorithms deliver the most relevant code first. Find what you need without the noise.
+  
+  - icon: 🌍
+    title: Multi-Language
+    details: Works with Rust, JavaScript, Python, Go, Java, C++, Swift, Ruby and more. One tool for all your code.
+  
+  - icon: 🤖
+    title: AI-Ready
+    details: Built for modern workflows with integrated AI chat and MCP server for seamless assistant integration.
+---
+
+<StarsBackground />
+
+<div class="main-content">
+
+<FeatureSection>
+  <template #content>
+    <h2>Semantic Code Search</h2>
+
+    <p>Find code patterns with precision using AST-based search. No more regex headaches or partial matches.</p>
+    
+    <p>Search for optional chaining patterns:</p>
+    
+    <div class="language-bash"><pre><code>ast-grep -p '$A?.$B' src/</code></pre></div>
+  </template>
+  <template #code>
+    <div class="language-typescript"><pre><code>function processUser(user: User) {
+  if (!user?.isActive) {
+    return;
+  }
+  
+  // Process active user
+  user.lastSeen = new Date();
+  notifyUserActivity(user);
+}</code></pre></div>
+  </template>
+</FeatureSection>
+
+<FeatureSection>
+  <template #content>
+    <h2>Quick Start</h2>
+
+    <p>Get started with a single command:</p>
+    
+    <div class="language-bash"><pre><code>curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash</code></pre></div>
+    
+    <p>Then start exploring your code:</p>
+    
+    <div class="language-bash"><pre><code>probe search "user authentication" ./src</code></pre></div>
+  </template>
+  <template #code>
+    <div class="language-typescript"><pre><code>// Example of using Probe's Node.js SDK
+import { search } from '@buger/probe';
+
+const results = await search({
+  query: "user authentication",
+  path: "./src",
+  options: {
+    contextLines: 3
+  }
+});
+
+console.log(`Found ${results.length} matches`);</code></pre></div>
+  </template>
+</FeatureSection>
+
+<FeatureSection>
+  <template #content>
+    <h2>AI Integration</h2>
+
+    <p>Probe offers powerful AI integration capabilities that allow you to leverage large language models to understand and navigate your codebase more effectively:</p>
+    
+    <ul>
+      <li><strong>AI Chat Mode</strong>: Interactive CLI interface</li>
+      <li><strong>MCP Server Integration</strong>: Seamless AI editor integration</li>
+      <li><strong>Node.js SDK</strong>: Programmatic access to search</li>
+    </ul>
+  </template>
+  <template #code>
+    <div class="language-typescript"><pre><code>import { search } from '@buger/probe';
+import { ChatOpenAI } from '@langchain/openai';
+import { tools } from '@buger/probe';
+
+// Create AI assistant with code search
+const searchTool = tools.createSearchTool();
+const model = new ChatOpenAI()
+  .withTools([searchTool]);
+
+// Ask questions about your code
+const result = await model.invoke([
+  { role: "system", 
+    content: "You are a code assistant." },
+  { role: "user", 
+    content: "How is auth implemented?" }
+]);</code></pre></div>
+  </template>
+</FeatureSection>
+
+</div>

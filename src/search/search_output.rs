@@ -521,7 +521,7 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
 /// Format and print search results in XML format
 fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
     println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-    println!("<search_results>");
+    println!("<probe_results>");
 
     for result in results {
         println!("  <result>");
@@ -597,6 +597,6 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
     );
     println!("  </summary>");
 
-    println!("</search_results>");
+    println!("</probe_results>");
     Ok(())
 }

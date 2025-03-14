@@ -278,18 +278,22 @@ async fn main() -> Result<()> {
         Some(Commands::Extract {
             files,
             allow_tests,
+            ignore,
             context_lines,
             format,
             from_clipboard,
             to_clipboard,
-        }) => extract::handle_extract(
+            dry_run,
+        }) => extract::handle_extract(extract::ExtractOptions {
             files,
             allow_tests,
+            custom_ignores: ignore,
             context_lines,
             format,
             from_clipboard,
             to_clipboard,
-        )?,
+            dry_run,
+        })?,
         Some(Commands::Query {
             pattern,
             path,

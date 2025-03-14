@@ -329,21 +329,6 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             }
         }
         "json" => {
-            // First collect the results into a Vec
-            let json_matches: Vec<_> = matches
-                .iter()
-                .map(|m| {
-                    serde_json::json!({
-                        "file": m.file_path.to_string_lossy(),
-                        "line_start": m.line_start,
-                        "line_end": m.line_end,
-                        "column_start": m.column_start,
-                        "column_end": m.column_end,
-                        "text": m.matched_text
-                    })
-                })
-                .collect();
-
             // Import the count_tokens function locally
             use crate::search::search_tokens::count_tokens;
             let total_tokens = matches
@@ -351,9 +336,24 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
                 .map(|m| count_tokens(&m.matched_text))
                 .sum::<usize>();
 
+            // Create standardized results
+            let json_matches_standardized: Vec<_> = matches
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "file": m.file_path.to_string_lossy(),
+                        "lines": [m.line_start, m.line_end],
+                        "node_type": "match",
+                        "code": m.matched_text,
+                        "column_start": m.column_start,
+                        "column_end": m.column_end
+                    })
+                })
+                .collect();
+
             // Create the wrapper object
             let wrapper = serde_json::json!({
-                "results": json_matches,
+                "results": json_matches_standardized,
                 "summary": {
                     "count": matches.len(),
                     "total_bytes": matches.iter().map(|m| m.matched_text.len()).sum::<usize>(),
@@ -365,20 +365,20 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
         }
         "xml" => {
             println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-            println!("<query_results>");
+            println!("<probe_results>");
 
             for m in matches {
-                println!("  <match>");
+                println!("  <result>");
                 println!(
                     "    <file>{}</file>",
                     escape_xml(&m.file_path.to_string_lossy())
                 );
-                println!("    <line_start>{}</line_start>", m.line_start);
-                println!("    <line_end>{}</line_end>", m.line_end);
+                println!("    <lines>{}-{}</lines>", m.line_start, m.line_end);
+                println!("    <node_type>match</node_type>");
                 println!("    <column_start>{}</column_start>", m.column_start);
                 println!("    <column_end>{}</column_end>", m.column_end);
-                println!("    <text><![CDATA[{}]]></text>", m.matched_text.trim());
-                println!("  </match>");
+                println!("    <code><![CDATA[{}]]></code>", m.matched_text.trim());
+                println!("  </result>");
             }
 
             // Add summary section
@@ -400,7 +400,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             );
             println!("  </summary>");
 
-            println!("</query_results>");
+            println!("</probe_results>");
         }
         _ => {
             // Default to color format

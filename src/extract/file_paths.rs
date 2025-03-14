@@ -4,6 +4,7 @@
 //! line ranges, or symbol references from text input.
 
 use glob::glob;
+use ignore::WalkBuilder;
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -31,6 +32,9 @@ pub fn extract_file_paths_from_text(text: &str) -> Vec<FilePathInfo> {
     let mut results = Vec::new();
     let mut processed_paths = HashSet::new();
 
+    // Check if debug mode is enabled
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
     // First, try to match file paths with symbol references (e.g., file.rs#function_name)
     let file_symbol_regex =
         Regex::new(r"(?:^|\s)([a-zA-Z0-9_\-./\*\{\}]+\.[a-zA-Z0-9]+)#([a-zA-Z0-9_]+)").unwrap();
@@ -48,21 +52,27 @@ pub fn extract_file_paths_from_text(text: &str) -> Vec<FilePathInfo> {
         if file_path.contains('*') || file_path.contains('{') {
             if let Ok(paths) = glob(file_path) {
                 for entry in paths.flatten() {
-                    let path_str = entry.to_string_lossy().to_string();
-                    processed_paths.insert(path_str.clone());
-                    // Pass the symbol name directly instead of using environment variables
-                    results.push((entry, None, None, Some(symbol.to_string())));
+                    // Check if the file should be ignored
+                    let should_include = !is_ignored_by_gitignore(&entry);
+                    if should_include {
+                        let path_str = entry.to_string_lossy().to_string();
+                        processed_paths.insert(path_str.clone());
+                        // Pass the symbol name directly instead of using environment variables
+                        results.push((entry, None, None, Some(symbol.to_string())));
+                    } else if debug_mode {
+                        println!("DEBUG: Skipping ignored file: {:?}", entry);
+                    }
                 }
             }
         } else {
-            processed_paths.insert(file_path.to_string());
-            // Pass the symbol name directly instead of using environment variables
-            results.push((
-                PathBuf::from(file_path),
-                None,
-                None,
-                Some(symbol.to_string()),
-            ));
+            let path = PathBuf::from(file_path);
+            if !is_ignored_by_gitignore(&path) {
+                processed_paths.insert(file_path.to_string());
+                // Pass the symbol name directly instead of using environment variables
+                results.push((path, None, None, Some(symbol.to_string())));
+            } else if debug_mode {
+                println!("DEBUG: Skipping ignored file: {:?}", file_path);
+            }
         }
     }
 
@@ -86,13 +96,24 @@ pub fn extract_file_paths_from_text(text: &str) -> Vec<FilePathInfo> {
             if file_path.contains('*') || file_path.contains('{') {
                 if let Ok(paths) = glob(file_path) {
                     for entry in paths.flatten() {
-                        processed_paths.insert(entry.to_string_lossy().to_string());
-                        results.push((entry, Some(start), Some(end), None));
+                        // Check if the file should be ignored
+                        let should_include = !is_ignored_by_gitignore(&entry);
+                        if should_include {
+                            processed_paths.insert(entry.to_string_lossy().to_string());
+                            results.push((entry, Some(start), Some(end), None));
+                        } else if debug_mode {
+                            println!("DEBUG: Skipping ignored file: {:?}", entry);
+                        }
                     }
                 }
             } else {
-                processed_paths.insert(file_path.to_string());
-                results.push((PathBuf::from(file_path), Some(start), Some(end), None));
+                let path = PathBuf::from(file_path);
+                if !is_ignored_by_gitignore(&path) {
+                    processed_paths.insert(file_path.to_string());
+                    results.push((path, Some(start), Some(end), None));
+                } else if debug_mode {
+                    println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                }
             }
         }
     }
@@ -117,14 +138,25 @@ pub fn extract_file_paths_from_text(text: &str) -> Vec<FilePathInfo> {
                 for entry in paths.flatten() {
                     let path_str = entry.to_string_lossy().to_string();
                     if !processed_paths.contains(&path_str) {
-                        processed_paths.insert(path_str);
-                        results.push((entry, line_num, None, None));
+                        // Check if the file should be ignored
+                        let should_include = !is_ignored_by_gitignore(&entry);
+                        if should_include {
+                            processed_paths.insert(path_str);
+                            results.push((entry, line_num, None, None));
+                        } else if debug_mode {
+                            println!("DEBUG: Skipping ignored file: {:?}", entry);
+                        }
                     }
                 }
             }
         } else {
-            processed_paths.insert(file_path.to_string());
-            results.push((PathBuf::from(file_path), line_num, None, None));
+            let path = PathBuf::from(file_path);
+            if !is_ignored_by_gitignore(&path) {
+                processed_paths.insert(file_path.to_string());
+                results.push((path, line_num, None, None));
+            } else if debug_mode {
+                println!("DEBUG: Skipping ignored file: {:?}", file_path);
+            }
         }
     }
 
@@ -143,14 +175,25 @@ pub fn extract_file_paths_from_text(text: &str) -> Vec<FilePathInfo> {
                     for entry in paths.flatten() {
                         let path_str = entry.to_string_lossy().to_string();
                         if !processed_paths.contains(&path_str) {
-                            processed_paths.insert(path_str);
-                            results.push((entry, None, None, None));
+                            // Check if the file should be ignored
+                            let should_include = !is_ignored_by_gitignore(&entry);
+                            if should_include {
+                                processed_paths.insert(path_str);
+                                results.push((entry, None, None, None));
+                            } else if debug_mode {
+                                println!("DEBUG: Skipping ignored file: {:?}", entry);
+                            }
                         }
                     }
                 }
             } else {
-                results.push((PathBuf::from(file_path), None, None, None));
-                processed_paths.insert(file_path.to_string());
+                let path = PathBuf::from(file_path);
+                if !is_ignored_by_gitignore(&path) {
+                    results.push((path, None, None, None));
+                    processed_paths.insert(file_path.to_string());
+                } else if debug_mode {
+                    println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                }
             }
         }
     }
@@ -185,13 +228,28 @@ pub fn parse_file_with_line(input: &str) -> Vec<FilePathInfo> {
             if let (Some(start), Some(end)) = (start_num, end_num) {
                 // Handle glob pattern
                 if file_part.contains('*') || file_part.contains('{') {
+                    // Use WalkBuilder to respect .gitignore
+                    let base_dir = std::path::Path::new(".");
+                    let mut builder = WalkBuilder::new(base_dir);
+                    builder.git_ignore(true);
+                    builder.git_global(true);
+                    builder.git_exclude(true);
+
+                    // Also try glob for backward compatibility
                     if let Ok(paths) = glob(file_part) {
                         for entry in paths.flatten() {
-                            results.push((entry, Some(start), Some(end), None));
+                            // Check if the file should be ignored
+                            let should_include = !is_ignored_by_gitignore(&entry);
+                            if should_include {
+                                results.push((entry, Some(start), Some(end), None));
+                            }
                         }
                     }
                 } else {
-                    results.push((PathBuf::from(file_part), Some(start), Some(end), None));
+                    let path = PathBuf::from(file_part);
+                    if !is_ignored_by_gitignore(&path) {
+                        results.push((path, Some(start), Some(end), None));
+                    }
                 }
             }
         } else {
@@ -201,13 +259,21 @@ pub fn parse_file_with_line(input: &str) -> Vec<FilePathInfo> {
             if let Some(num) = line_num {
                 // Handle glob pattern
                 if file_part.contains('*') || file_part.contains('{') {
+                    // Use WalkBuilder to respect .gitignore
                     if let Ok(paths) = glob(file_part) {
                         for entry in paths.flatten() {
-                            results.push((entry, Some(num), None, None));
+                            // Check if the file should be ignored
+                            let should_include = !is_ignored_by_gitignore(&entry);
+                            if should_include {
+                                results.push((entry, Some(num), None, None));
+                            }
                         }
                     }
                 } else {
-                    results.push((PathBuf::from(file_part), Some(num), None, None));
+                    let path = PathBuf::from(file_part);
+                    if !is_ignored_by_gitignore(&path) {
+                        results.push((path, Some(num), None, None));
+                    }
                 }
             }
         }
@@ -217,13 +283,93 @@ pub fn parse_file_with_line(input: &str) -> Vec<FilePathInfo> {
         if input.contains('*') || input.contains('{') {
             if let Ok(paths) = glob(input) {
                 for entry in paths.flatten() {
-                    results.push((entry, None, None, None));
+                    // Check if the file should be ignored
+                    let should_include = !is_ignored_by_gitignore(&entry);
+                    if should_include {
+                        results.push((entry, None, None, None));
+                    }
                 }
             }
         } else {
-            results.push((PathBuf::from(input), None, None, None));
+            let path = PathBuf::from(input);
+            if !is_ignored_by_gitignore(&path) {
+                results.push((path, None, None, None));
+            }
         }
     }
 
     results
+}
+
+// Thread-local storage for the custom ignore patterns
+thread_local! {
+    static CUSTOM_IGNORES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Set custom ignore patterns for the current thread
+pub fn set_custom_ignores(patterns: &[String]) {
+    CUSTOM_IGNORES.with(|cell| {
+        let mut ignores = cell.borrow_mut();
+        ignores.clear();
+        ignores.extend(patterns.iter().cloned());
+    });
+}
+
+/// Check if a file should be ignored according to .gitignore rules
+fn is_ignored_by_gitignore(path: &PathBuf) -> bool {
+    // Check if debug mode is enabled
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Simple check for common ignore patterns in the path
+    let path_str = path.to_string_lossy().to_lowercase();
+
+    // Check for common ignore patterns directly in the path
+    let common_ignore_patterns = [
+        "node_modules",
+        "vendor",
+        "target",
+        "dist",
+        "build",
+        ".git",
+        ".svn",
+        ".hg",
+        ".idea",
+        ".vscode",
+        "__pycache__",
+    ];
+
+    // Get custom ignore patterns
+    let mut custom_patterns = Vec::new();
+    CUSTOM_IGNORES.with(|cell| {
+        let ignores = cell.borrow();
+        custom_patterns.extend(ignores.iter().cloned());
+    });
+
+    // Check if the path contains any of the common ignore patterns
+    for pattern in &common_ignore_patterns {
+        if path_str.contains(pattern) {
+            if debug_mode {
+                println!(
+                    "DEBUG: File {:?} is ignored (contains pattern '{}')",
+                    path, pattern
+                );
+            }
+            return true;
+        }
+    }
+
+    // Check if the path contains any of the custom ignore patterns
+    for pattern in &custom_patterns {
+        if path_str.contains(pattern) {
+            if debug_mode {
+                println!(
+                    "DEBUG: File {:?} is ignored (contains custom pattern '{}')",
+                    path, pattern
+                );
+            }
+            return true;
+        }
+    }
+
+    false
 }

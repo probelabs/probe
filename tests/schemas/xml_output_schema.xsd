@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="probe_results">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="result" minOccurs="0" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="file" type="xs:string"/>
+              <xs:element name="lines" type="xs:string"/>
+              <xs:element name="node_type" type="xs:string"/>
+              <xs:element name="column_start" type="xs:integer" minOccurs="0"/>
+              <xs:element name="column_end" type="xs:integer" minOccurs="0"/>
+              <xs:element name="code" type="xs:string"/>
+              <xs:element name="matched_keywords" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="keyword" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="score" type="xs:decimal" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="summary">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="count" type="xs:nonNegativeInteger"/>
+              <xs:element name="total_bytes" type="xs:nonNegativeInteger"/>
+              <xs:element name="total_tokens" type="xs:nonNegativeInteger"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

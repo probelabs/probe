@@ -1,75 +1,124 @@
-# CORE FEATURES
+# What is Probe?
 
-Probe delivers powerful code search capabilities designed for modern development workflows.
+Probe is an AI-friendly, fully local, semantic code search tool designed to power the next generation of AI coding assistants. It combines the speed of ripgrep with the understanding of tree-sitter to provide intelligent code search and extraction capabilities.
 
-## CODE UNDERSTANDING
+## Why Probe?
 
-Probe doesn't just search text—it understands code:
+Most AI-assisted editors treat your code like plain text, splitting it into chunks that may or may not cover the full context—especially in large projects. **Probe** tackles this by combining ripgrep's speed with tree-sitter's AST parsing to return only the relevant blocks. No forced cloud indexing, no partial context.
 
-- **FULL CODE BLOCKS**: Gets entire functions, classes, or structs—not just lines
-- **AST PARSING**: Uses Abstract Syntax Trees to understand code structure
-- **SEMANTIC SEARCH**: Finds code by concept, not just exact text matching
-- **LANGUAGE AWARENESS**: Recognizes code patterns specific to each language
+This means:
 
-## RAW PERFORMANCE
+- **Complete Context**: Get entire functions, classes, and code blocks—not just fragments.
+- **Local Processing**: Probe runs entirely locally without requiring embedding generation. Your code stays on your machine during search operations.
+- **AST Understanding**: Search based on code structure, not just text patterns.
+- **Customizable Ranking**: Fine-tune how results are sorted using BM25, TF-IDF, or hybrid approaches.
 
-Built for serious speed with large codebases:
+## Core Capabilities
 
-- **RIPGREP ENGINE**: Lightning-fast initial text scanning
-- **OPTIMIZED PARSING**: Efficient tree-sitter integration
-- **SMART CACHING**: Remembers parsed structures between searches
-- **MULTI-CORE**: Utilizes all available processing power
+### Code Understanding
 
-## RANKING THAT WORKS
+- **Complete Code Blocks**: Extracts entire functions, classes, or structs
+- **AST Parsing**: Understands code structure using Abstract Syntax Trees
+- **Semantic Search**: Finds code by concept and meaning
+- **Language Awareness**: Recognizes language-specific patterns
+- **Symbol Extraction**: Extracts code by function/class name
 
-Sophisticated algorithms that put the right code on top:
+### Performance
+
+- **Ripgrep Engine**: Fast initial text scanning
+- **Optimized Parsing**: Efficient AST generation
+- **Multi-Core Processing**: Parallel search operations
+- **Session-Based Caching**: Avoids duplicate results
+
+### Intelligent Ranking
 
 - **TF-IDF**: Weighs terms based on frequency and importance
 - **BM25**: Better relevance with document length normalization
-- **HYBRID RANKING**: Multiple signals combined for superior results
-- **PRECISION SCORING**: Considers term position and importance
+- **Hybrid Ranking**: Multiple signals combined for superior ordering
+- **Position Weighting**: Considers term position within code blocks
 
-## DEVELOPER-CENTRIC DESIGN
+### Query Capabilities
 
-Built by developers, for developers:
+- **Boolean Operators**: AND, OR, NOT for complex queries
+- **Grouping**: Parentheses for logical term grouping
+- **Term Modifiers**: +/- prefixes for required/excluded terms
+- **Field Specifiers**: Target specific code elements
+- **Smart Token Matching**: Stemming and compound word handling
 
-- **COMMAND LINE FIRST**: Powerful CLI that's easy to integrate
-- **PIPE SUPPORT**: Works with stdin/stdout for seamless chaining
-- **ERROR EXTRACTION**: Pull code directly from compiler errors
-- **ZERO CONFIG**: Works out-of-the-box with sensible defaults
+### Privacy
 
-## PRIVACY BUILT-IN
+- **Local Search Engine**: All search processing happens on your machine without requiring embedding generation
+- **No Telemetry**: Zero data collection
+- **Open Source**: Transparent codebase
+- **AI Integration Note**: When using Probe with external AI services (Anthropic, OpenAI, etc.), code snippets are sent to those services as part of the AI interaction
 
-Your code stays on your machine:
+### Language Support
 
-- **100% LOCAL**: All processing happens offline
-- **NO TELEMETRY**: Zero data collection or analytics
-- **OPEN SOURCE**: Fully transparent codebase
-- **YOUR CONTROL**: Only connects to AI if you choose
+- **Modern Languages**: Rust, Go, Python, JavaScript/TypeScript
+- **Mainstream Languages**: Java, C++, C#, PHP
+- **Documentation**: Markdown and other text formats
+- **Language-Specific Parsing**: Tailored to each language's structure
 
-## MULTI-LANGUAGE SUPPORT
+## AI Integration
 
-One tool for all your code:
+Probe offers powerful AI integration capabilities that allow you to leverage large language models to understand and navigate your codebase more effectively:
 
-- **RUST, GO, PYTHON**: First-class support for modern languages
-- **JS/TS, JAVA, C++**: Comprehensive coverage of mainstream languages
-- **RUBY, PHP, SWIFT, C#**: Wide language compatibility
-- **MARKDOWN**: Even handles documentation
+- **[AI Chat Mode](./ai-chat.md)**: Interactive CLI interface for asking questions about your codebase
+- **[MCP Server Integration](./mcp-integration.md)**: Seamless integration with AI editors and assistants
+- **[Node.js SDK](./nodejs-sdk.md)**: Programmatic access to Probe's code search capabilities
 
-## FLEXIBLE MODES
+### AI-Specific Features
 
-Multiple ways to integrate with your workflow:
+- **Token-Aware**: Limits results to fit AI context windows
+- **Structured Output**: AI-friendly formats (JSON, XML)
+- **Multi-Model Support**: Works with various LLM models
+- **Streaming Responses**: Real-time AI interaction
 
-- **CLI MODE**: Direct command-line for search and extraction
-- **MCP SERVER**: Seamless integration with AI editors
-- **AI CHAT**: Talk to your codebase with built-in AI assistant
-- **WEB INTERFACE**: Browser-based exploration when you need it
+## Usage Modes
 
-## AI INTEGRATION
+Probe can be used in multiple ways, depending on your workflow:
 
-Built for the age of AI assistants:
+- **[CLI Mode](./cli-mode.md)**: Direct command-line interface
+- **[MCP Server](./mcp-server.md)**: Integration with AI tools
+- **[AI Chat](./ai-chat.md)**: Interactive AI assistant
+- **[Web Interface](./web-interface.md)**: Browser-based exploration
+- **[Node.js SDK](./nodejs-sdk.md)**: Programmatic access
 
-- **TOKEN-AWARE**: Limits results to fit AI context windows
-- **STRUCTURED OUTPUT**: Returns results in AI-friendly formats
-- **MCP PROTOCOL**: Standard interface for AI tool integration
-- **MULTI-MODEL**: Works with Claude and GPT models
+## Advanced Features
+
+### Pattern Matching
+
+- **AST-Grep Patterns**: Search for specific code patterns using structural queries
+- **Tree-Sitter Queries**: Language-aware structural search
+- **Placeholder Variables**: Match function names, parameters, and bodies with variables
+- **Structure-Aware Matching**: Finds code based on its structure, not just text content
+
+### NPM Integration
+
+- **Global Installation**: Simple `npm install -g @buger/probe` for system-wide access
+- **NPX Execution**: Run without installation via `npx -y @buger/probe-chat`
+- **Node.js API**: Programmatic access via JavaScript
+- **Vercel AI SDK**: Streaming AI responses in web applications
+
+## Getting Started
+
+Ready to try Probe? Check out these resources:
+
+- [Installation](./installation.md): Get Probe set up on your system
+- [Quick Start](./quick-start.md): Learn the basics in minutes
+- [How It Works](./how-it-works.md): Understand the technology behind Probe
+
+## Use Cases
+
+Probe is designed for a variety of workflows:
+
+- **AI-Assisted Coding**: Provide your AI assistant with accurate code context
+- **Code Exploration**: Quickly find and understand code in large repositories
+- **Documentation Generation**: Extract code examples for documentation
+- **Code Review**: Find patterns and anti-patterns across your codebase
+- **Refactoring**: Identify all instances of a pattern that needs to be changed
+
+For more detailed information on specific features, see:
+- [How Probe Works](how-it-works.md)
+- [Search Functionality](search-functionality.md)
+- [Code Extraction](code-extraction.md)

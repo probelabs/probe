@@ -1,63 +1,129 @@
 ---
-# https://vitepress.dev/reference/default-theme-home-page
 layout: home
-
+title: Probe - Local, AI-Ready Code Intelligence
 hero:
-  name: "PROBE"
-  text: "CODE SEARCH REINVENTED"
-  tagline: Find precise code blocks with full context in seconds. Built for developers who need answers fast.
+  name: Probe
+  text: "Local, AI-Ready\nCode Intelligence"
+  tagline: Make AI work with large codebases, and natively understand it.
   image:
     src: /logo.png
     alt: Probe Logo
   actions:
     - theme: brand
-      text: GET STARTED →
+      text: Get Started →
       link: /quick-start
     - theme: alt
-      text: GITHUB REPO
+      text: GitHub Repo
       link: https://github.com/buger/probe
-
-features:
-  - icon: 🔬
-    title: DEEP CODE UNDERSTANDING
-    details: Extract complete functions, classes and structures. Not just lines of code - full context every time.
-  
-  - icon: ⚡
-    title: BUILT FOR SPEED
-    details: Search massive codebases instantly. Powered by ripgrep and tree-sitter for performance that scales with your projects.
-  
-  - icon: 🛡️
-    title: TOTALLY LOCAL
-    details: Your code never leaves your machine. Full privacy with zero data collection or cloud dependencies.
-  
-  - icon: 🧮
-    title: SMARTER RESULTS
-    details: BM25 & TF-IDF algorithms deliver the most relevant code first. Find what you need without the noise.
-  
-  - icon: 🌍
-    title: MULTI-LANGUAGE
-    details: Works with Rust, JavaScript, Python, Go, Java, C++, Swift, Ruby and more. One tool for all your code.
-  
-  - icon: 🤖
-    title: AI-READY
-    details: Built for modern workflows with integrated AI chat and MCP server for seamless assistant integration.
 ---
 
-## RAW POWER AT YOUR FINGERTIPS
+<div class="quick-start-section">
+  <div class="container">
+    <div class="quick-start-grid">
+      <div class="quick-start-option">
+              <h3>Core Search</h3>
+              <div class="pre-wrapper">
+                <div class="language-bash"><pre><code>npx -y @buger/probe "+stemming -lexer"</code></pre></div>
+              </div>
+              <p class="option-description">Fast semantic code search with elastic search syntax</p>
+            </div>
+            <div class="quick-start-option">
+              <h3>AI Chat</h3>
+              <div class="pre-wrapper">
+                <div class="language-bash"><pre><code>npx -y @buger/probe-chat</code></pre></div>
+              </div>
+              <p class="option-description">Built-in AI agent. <small>OpenAI or Anthropic (API key required)</small></p>
+            </div>
+    </div>
+  </div>
+</div>
 
-```bash
-# ONE-LINE INSTALL
-curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
+<StarsBackground />
 
-# FIND CODE THAT MATTERS
-probe search "authentication flow" ./
+<div class="main-content">
+  <HomeFeatures />
+</div>
 
-# EXTRACT COMPLETE FUNCTIONS
-probe extract src/main.rs:42
+<style>
+.quick-start-section,
+.vision-section {
+  padding: 1rem 0;
+}
 
-# TALK TO YOUR CODEBASE
-export ANTHROPIC_API_KEY=your_api_key
-probe chat
-```
+.quick-start-section {
+  text-align: center;
+  margin-top: -1rem;
+}
 
-[EXPLORE ALL COMMANDS →](/installation)
+.quick-start-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.quick-start-option {
+  text-align: center;
+}
+
+.quick-start-option h3 {
+  margin-bottom: 0.5rem;
+  color: var(--vp-c-text-1);
+  margin-top: 0px;
+}
+
+.pre-wrapper {
+  display: flex;
+  justify-content: center;
+  margin: 0.5rem 0;
+}
+
+.pre-wrapper pre {
+  width: fit-content;
+  padding: 0.75rem 1.25rem;
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  transition: box-shadow 0.2s ease;
+}
+
+.pre-wrapper pre:hover {
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.option-description {
+  font-size: 0.9rem;
+  color: var(--vp-c-text-2);
+  margin-top: 0.5rem;
+}
+
+.container {
+  margin: 0 auto;
+  padding: 0 1.5rem;
+  max-width: 1200px;
+}
+
+.vision-section p {
+  font-size: 1rem;
+  line-height: 1.6;
+  margin: 0.75rem 0;
+  color: var(--vp-c-text-2);
+}
+
+.vision-section h2 {
+  margin-top: 1.5rem;
+}
+
+h2 {
+  font-size: 1.5rem;
+  margin-bottom: 0.75rem;
+  color: var(--vp-c-text-1);
+}
+
+@media (max-width: 640px) {
+  .quick-start-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+}
+</style>

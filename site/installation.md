@@ -4,13 +4,21 @@ Probe can be installed in several ways, depending on your preferences and system
 
 ## Quick Installation
 
-You can install Probe with a single command:
+You can install Probe with a single command using either npm or curl:
+
+### Using npm (Recommended for Node.js users)
+
+```bash
+npm install -g @buger/probe
+```
+
+### Using curl (For any platform)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
 ```
 
-**What this script does**:
+**What the curl script does**:
 
 1. Detects your operating system and architecture
 2. Fetches the latest release from GitHub
@@ -99,4 +107,8 @@ This should display the version number of the installed Probe binary.
 To uninstall Probe:
 
 ```bash
+# If installed via npm
+npm uninstall -g @buger/probe
+
+# If installed via curl script or manually
 sudo rm /usr/local/bin/probe

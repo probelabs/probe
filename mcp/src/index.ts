@@ -112,6 +112,7 @@ interface QueryCodeArgs {
 }
 
 interface ExtractCodeArgs {
+  path: string;
   files: string[];
   allowTests?: boolean;
   contextLines?: number;
@@ -274,6 +275,10 @@ class ProbeServer {
           inputSchema: {
             type: 'object',
             properties: {
+              path: {
+                type: 'string',
+                description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject"). Using absolute paths ensures reliable search results regardless of the current working directory.',
+              },
               files: {
                 type: 'array',
                 items: { type: 'string' },
@@ -295,7 +300,7 @@ class ProbeServer {
                 default: 'markdown'
               },
             },
-            required: ['files'],
+            required: ['path', 'files'],
           },
         },
       ],
@@ -410,6 +415,7 @@ class ProbeServer {
     try {
       // Use the probe package's extract function instead of executing the binary directly
       const extractOptions = {
+        path: args.path,
         allowTests: args.allowTests,
         contextLines: args.contextLines,
         format: args.format

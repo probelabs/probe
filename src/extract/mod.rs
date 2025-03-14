@@ -13,23 +13,38 @@ mod symbol_finder;
 #[allow(unused_imports)]
 pub use formatter::format_and_print_extraction_results;
 #[allow(unused_imports)]
+pub use formatter::format_extraction_dry_run;
+#[allow(unused_imports)]
 pub use processor::process_file_for_extraction;
 
-use crate::extract::file_paths::FilePathInfo;
+use crate::extract::file_paths::{set_custom_ignores, FilePathInfo};
 use anyhow::Result;
 use std::io::Read;
 #[allow(unused_imports)]
 use std::path::PathBuf;
 
+/// Options for the extract command
+pub struct ExtractOptions {
+    /// Files to extract from
+    pub files: Vec<String>,
+    /// Whether to allow test files and blocks
+    pub allow_tests: bool,
+    /// Custom patterns to ignore
+    pub custom_ignores: Vec<String>,
+    /// Number of context lines to include
+    pub context_lines: usize,
+    /// Output format
+    pub format: String,
+    /// Whether to read from clipboard
+    pub from_clipboard: bool,
+    /// Whether to write to clipboard
+    pub to_clipboard: bool,
+    /// Whether to perform a dry run
+    pub dry_run: bool,
+}
+
 /// Handle the extract command
-pub fn handle_extract(
-    files: Vec<String>,
-    allow_tests: bool,
-    context_lines: usize,
-    format: String,
-    from_clipboard: bool,
-    to_clipboard: bool,
-) -> Result<()> {
+pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     use arboard::Clipboard;
     use colored::*;
 
@@ -38,17 +53,22 @@ pub fn handle_extract(
 
     if debug_mode {
         println!("\n[DEBUG] ===== Extract Command Started =====");
-        println!("[DEBUG] Files to process: {:?}", files);
-        println!("[DEBUG] Allow tests: {}", allow_tests);
-        println!("[DEBUG] Context lines: {}", context_lines);
-        println!("[DEBUG] Output format: {}", format);
-        println!("[DEBUG] Read from clipboard: {}", from_clipboard);
-        println!("[DEBUG] Write to clipboard: {}", to_clipboard);
+        println!("[DEBUG] Files to process: {:?}", options.files);
+        println!("[DEBUG] Allow tests: {}", options.allow_tests);
+        println!("[DEBUG] Custom ignores: {:?}", options.custom_ignores);
+        println!("[DEBUG] Context lines: {}", options.context_lines);
+        println!("[DEBUG] Output format: {}", options.format);
+        println!("[DEBUG] Read from clipboard: {}", options.from_clipboard);
+        println!("[DEBUG] Write to clipboard: {}", options.to_clipboard);
+        println!("[DEBUG] Dry run: {}", options.dry_run);
     }
+
+    // Set custom ignore patterns
+    set_custom_ignores(&options.custom_ignores);
 
     let mut file_paths: Vec<FilePathInfo> = Vec::new();
 
-    if from_clipboard {
+    if options.from_clipboard {
         // Read from clipboard
         println!("{}", "Reading from clipboard...".bold().blue());
         let mut clipboard = Clipboard::new()?;
@@ -80,7 +100,7 @@ pub fn handle_extract(
             println!("{}", "No file paths found in clipboard.".yellow().bold());
             return Ok(());
         }
-    } else if files.is_empty() {
+    } else if options.files.is_empty() {
         // Read from stdin
         println!("{}", "Reading from stdin...".bold().blue());
         let mut buffer = String::new();
@@ -118,7 +138,7 @@ pub fn handle_extract(
             println!("[DEBUG] Parsing command-line arguments");
         }
 
-        for file in &files {
+        for file in &options.files {
             if debug_mode {
                 println!("[DEBUG] Parsing file argument: {}", file);
             }
@@ -144,7 +164,7 @@ pub fn handle_extract(
     }
 
     // Only print file information for non-JSON/XML formats
-    if format != "json" && format != "xml" {
+    if options.format != "json" && options.format != "xml" {
         println!("{}", "Files to extract:".bold().green());
 
         for (path, start_line, end_line, symbol) in &file_paths {
@@ -159,15 +179,19 @@ pub fn handle_extract(
             }
         }
 
-        if allow_tests {
+        if options.allow_tests {
             println!("{}", "Including test files and blocks".yellow());
         }
 
-        if context_lines > 0 {
-            println!("Context lines: {}", context_lines);
+        if options.context_lines > 0 {
+            println!("Context lines: {}", options.context_lines);
         }
 
-        println!("Format: {}", format);
+        if options.dry_run {
+            println!("{}", "Dry run (file names and lines only)".yellow());
+        }
+
+        println!("Format: {}", options.format);
         println!();
     }
 
@@ -211,8 +235,8 @@ pub fn handle_extract(
             start_line,
             end_line,
             symbol.as_deref(),
-            allow_tests,
-            context_lines,
+            options.allow_tests,
+            options.context_lines,
         ) {
             Ok(result) => {
                 if debug_mode {
@@ -233,7 +257,7 @@ pub fn handle_extract(
                     println!("[DEBUG] Error: {}", error_msg);
                 }
                 // Only print error messages for non-JSON/XML formats
-                if format != "json" && format != "xml" {
+                if options.format != "json" && options.format != "xml" {
                     eprintln!("{}", error_msg.red());
                 }
                 errors.push(error_msg);
@@ -245,13 +269,14 @@ pub fn handle_extract(
         println!("\n[DEBUG] ===== Extraction Summary =====");
         println!("[DEBUG] Total results: {}", results.len());
         println!("[DEBUG] Total errors: {}", errors.len());
-        println!("[DEBUG] Output format: {}", format);
+        println!("[DEBUG] Output format: {}", options.format);
+        println!("[DEBUG] Dry run: {}", options.dry_run);
     }
 
     // Format the results
     let res = {
         // Temporarily disable colors if writing to clipboard
-        let colors_enabled = if to_clipboard {
+        let colors_enabled = if options.to_clipboard {
             let was_enabled = colored::control::SHOULD_COLORIZE.should_colorize();
             colored::control::set_override(false);
             was_enabled
@@ -260,10 +285,14 @@ pub fn handle_extract(
         };
 
         // Format the results
-        let result = formatter::format_extraction_results(&results, &format);
+        let result = if options.dry_run {
+            formatter::format_extraction_dry_run(&results, &options.format)
+        } else {
+            formatter::format_extraction_results(&results, &options.format)
+        };
 
         // Restore color settings if they were changed
-        if to_clipboard && colors_enabled {
+        if options.to_clipboard && colors_enabled {
             colored::control::set_override(true);
         }
 
@@ -271,7 +300,7 @@ pub fn handle_extract(
     };
     match res {
         Ok(formatted_output) => {
-            if to_clipboard {
+            if options.to_clipboard {
                 // Write to clipboard
                 let mut clipboard = Clipboard::new()?;
                 clipboard.set_text(&formatted_output)?;
@@ -290,7 +319,7 @@ pub fn handle_extract(
         }
         Err(e) => {
             // Only print error messages for non-JSON/XML formats
-            if format != "json" && format != "xml" {
+            if options.format != "json" && options.format != "xml" {
                 eprintln!("{}", format!("Error formatting results: {}", e).red());
             }
             if debug_mode {
@@ -300,7 +329,7 @@ pub fn handle_extract(
     }
 
     // Print summary of errors if any (only for non-JSON/XML formats)
-    if !errors.is_empty() && format != "json" && format != "xml" {
+    if !errors.is_empty() && options.format != "json" && options.format != "xml" {
         println!();
         println!(
             "{} {} {}",

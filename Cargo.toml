@@ -50,6 +50,8 @@ tempfile = "3.10.1"
 proptest = "1.2"
 criterion = "0.5"
 roxmltree = "0.18.0"
+jsonschema = "0.17.1"
+xml-schema = "0.2.0"
 
 [lib]
 name = "probe"

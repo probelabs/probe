@@ -1,124 +1,118 @@
-# THE TECH BEHIND PROBE
+# How Probe Works
 
-Probe combines raw speed with code intelligence to find what matters. Here's how.
+Probe combines efficient text search with code intelligence to find relevant code in your codebase.
 
-## SYSTEM ARCHITECTURE
+## System Architecture
 
-Probe's core technology stack operates in six stages:
+Probe operates in six stages:
 
-1. **SCAN**: Lightning-fast file identification with ripgrep
-2. **PARSE**: Code structure understanding via Abstract Syntax Trees
-3. **PROCESS**: Query enhancement with NLP techniques
-4. **RANK**: Intelligent result prioritization
-5. **EXTRACT**: Complete code block isolation
-6. **FORMAT**: Clean, usable output generation
+1. **Scan**: File identification using ripgrep
+2. **Parse**: Code structure analysis via Abstract Syntax Trees
+3. **Process**: Query enhancement with NLP techniques
+4. **Rank**: Result prioritization
+5. **Extract**: Code block isolation
+6. **Format**: Output generation
 
-## RAPID SCANNING
-
-The foundation of Probe's speed:
-
-- **RIPGREP ENGINE**: Blazing-fast line scanning at core
-- **PARALLEL PROCESSING**: Utilizes all CPU cores
-- **SMART FILTERING**: Respects .gitignore patterns
-- **STREAM PROCESSING**: Minimal memory footprint
-
-## CODE STRUCTURE PARSING
-
-Where Probe becomes more than just text search:
-
-- **TREE-SITTER**: Industry-standard parsing tech
-- **AST GENERATION**: Builds complete code structure map
-- **LANGUAGE-SPECIFIC**: Understands each language's unique patterns
-- **ROBUST HANDLING**: Works with partial or imperfect code
-
-## QUERY INTELLIGENCE
-
-Transforming basic searches into powerful queries:
-
-### Tokenization
-
-```
-findUserByEmail → [find, user, by, email]
-```
-
-### Stemming
-
-```
-implementing, implementation → implement
-```
-
-### Smart Pattern Generation
-
-- **TERM BOUNDARIES**: Understands where code tokens start/end
-- **CASE HANDLING**: Works with camelCase, snake_case, etc.
-- **COMPOUND HANDLING**: Breaks down compound terms intelligently
-
-## ADVANCED RANKING
-
-The algorithms that put the right code on top:
-
-### TF-IDF Ranking
-
-- **TERM FREQUENCY**: How often terms appear in a block
-- **DOCUMENT FREQUENCY**: How common terms are across codebase
-- **BALANCING**: Rewards rare, important terms
-
-### BM25 Ranking
-
-- **LENGTH NORMALIZATION**: Adjusts for code block size
-- **SATURATION CONTROL**: Diminishing value for repeated terms
-- **TUNABLE PARAMETERS**: k1 and b control ranking behavior
-
-### Hybrid Approach
-
-- **MULTI-SIGNAL**: Combines ranking algorithms
-- **POSITION WEIGHTS**: Values terms in function names higher
-- **NORMALIZED SCORING**: Fair comparison between methods
-
-## BLOCK EXTRACTION
-
-Isolating exactly the code you need:
-
-- **NODE TARGETING**: Finds smallest complete code unit
-- **FUNCTION DETECTION**: Extracts entire methods/functions
-- **CLASS RECOGNITION**: Pulls complete class definitions
-- **CONTEXT PRESERVATION**: Ensures code makes sense in isolation
-
-## OUTPUT STRATEGIES
-
-Delivering results in the most useful format:
-
-- **MARKDOWN/SYNTAX**: Rich, readable code presentation
-- **JSON**: Structured for programmatic use
-- **TOKEN LIMITING**: Fits within AI context windows
-- **PRIORITY HANDLING**: Most relevant results survive limits
-
-## SEARCH FLOW EXAMPLE
+## Search Workflow
 
 Here's how a search for "error handling" works:
 
-1. **QUERY ENHANCEMENT**:
+1. **Query Processing**:
    - Tokenize → [error, handling]
    - Stem → [error, handl]
    - Generate patterns → `\berror\b`, `\bhandl\w*\b`
+   - Parse query syntax → AND(error, handling)
 
-2. **FILE SCAN**:
-   - Ripgrep finds all potential matches
-   - Builds initial candidate list
+2. **File Scanning**:
+   - Identify potential matches using ripgrep
+   - Filter based on .gitignore and custom patterns
+   - Exclude test files (unless specified otherwise)
 
-3. **STRUCTURAL ANALYSIS**:
+3. **Code Analysis**:
    - Parse matching files into ASTs
    - Identify complete code blocks containing matches
+   - Extract metadata (function names, parameters, etc.)
 
-4. **RESULT RANKING**:
-   - Calculate relevance scores via TF-IDF/BM25
+4. **Result Ranking**:
+   - Calculate relevance scores
+   - Apply position weights for terms in identifiers
    - Sort by combined relevance metrics
+   - Filter based on session cache (if enabled)
 
-5. **BLOCK EXTRACTION**:
-   - Pull complete functions/methods with matches
-   - Merge closely related code blocks
+5. **Block Extraction**:
+   - Extract complete functions/methods with matches
+   - Merge related code blocks when appropriate
+   - Apply context lines if requested
 
-6. **RESULT DELIVERY**:
+6. **Result Delivery**:
    - Format with syntax highlighting
-   - Apply any token/size constraints
-   - Deliver precisely what you need
+   - Apply token/size constraints
+   - Generate structured output
+
+## Rapid Scanning
+
+The foundation of Probe's speed:
+
+- **Ripgrep Engine**: Fast line scanning at core
+- **Parallel Processing**: Utilizes all CPU cores
+- **Smart Filtering**: Respects .gitignore patterns
+- **Stream Processing**: Minimal memory footprint
+- **Incremental Matching**: Stops scanning when limits are reached
+
+## Code Structure Parsing
+
+Where Probe becomes more than just text search:
+
+- **Tree-sitter**: Industry-standard parsing technology
+- **AST Generation**: Builds complete code structure map
+- **Language-specific**: Understands each language's unique patterns
+- **Robust Handling**: Works with partial or imperfect code
+- **Symbol Resolution**: Maps identifiers to declarations
+
+## Session-based Caching
+
+Avoiding duplicate results across multiple searches:
+
+- **Unique Identifiers**: Cache keys based on file path and line numbers
+- **Result Tracking**: Remembers which blocks have been shown
+- **Session Management**: Generates and maintains session IDs
+- **Cache Invalidation**: Clears cache when appropriate
+
+## Output Strategies
+
+Delivering results in the most useful format:
+
+- **Markdown/Syntax**: Rich, readable code presentation
+- **JSON**: Structured for programmatic use
+- **Token Limiting**: Fits within AI context windows
+- **Priority Handling**: Most relevant results survive limits
+- **Streaming**: Real-time output for interactive use
+
+## Integration Architecture
+
+How Probe connects with other tools:
+
+### MCP Server
+
+- **STDIO Transport**: Communicates via standard input/output
+- **JSON Protocol**: Structured message format
+- **Tool Definitions**: Exposes search, query, and extract capabilities
+
+### Node.js SDK
+
+- **JS Bindings**: JavaScript interface to core functionality
+- **Vercel AI SDK**: Integration for streaming AI responses
+- **Promise-based**: Async/await compatible API
+- **Type Definitions**: TypeScript support
+
+### Web Interface
+
+- **Express Backend**: Node.js server for API endpoints
+- **Vanilla JS Frontend**: No framework dependencies
+- **Streaming Responses**: Real-time AI output
+- **Markdown Rendering**: Rich text and code formatting
+
+For detailed information on specific features, see:
+- [Search Functionality](search-functionality.md)
+- [Code Extraction](code-extraction.md)
+- [Feature Overview](features.md)
