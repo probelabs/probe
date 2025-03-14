@@ -394,19 +394,33 @@ console.log(`Reviewed ${reviews.length} files. Results saved to code-review.json
 
 ```javascript
 import { generateText } from 'ai';
-import { tools } from '@buger/probe';
+import { searchTool, queryTool, extractTool } from '@buger/probe';
+import { randomUUID } from 'crypto';
 
-// Use the pre-built tools with Vercel AI SDK
+// Generate a session ID for tool isolation
+const sessionId = randomUUID();
+
+// Configure tools with options
+const configOptions = {
+  sessionId,
+  debug: process.env.DEBUG === 'true',
+  maxTokens: 30000 // Optional: override default max tokens
+};
+
+// Create configured tool instances
+const configuredTools = {
+  search: searchTool(configOptions),
+  query: queryTool(configOptions),
+  extract: extractTool(configOptions)
+};
+
+// Use the configured tools with Vercel AI SDK
 async function chatWithAI(userMessage) {
   const result = await generateText({
     model: provider(modelName),
     messages: [{ role: 'user', content: userMessage }],
     system: "You are a code intelligence assistant. Use the provided tools to search and analyze code.",
-    tools: {
-      search: tools.searchTool,
-      query: tools.queryTool,
-      extract: tools.extractTool
-    },
+    tools: configuredTools,
     maxSteps: 15,
     temperature: 0.7
   });

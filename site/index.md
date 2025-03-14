@@ -76,18 +76,18 @@ hero:
 .pre-wrapper {
   display: flex;
   justify-content: center;
-  margin: 0.5rem 0;
-  width: 100%;
+  margin: 0.5rem auto;
+  width: auto;
   overflow-x: auto;
 }
 
 .pre-wrapper pre {
-  width: 100%;
+  width: auto;
   padding: 0.75rem 0.75rem;
   border-radius: 6px;
   box-shadow: 0 2px 4px rgba(0,0,0,0.05);
   transition: box-shadow 0.2s ease;
-  max-width: 100%;
+  display: inline-block;
   overflow-x: auto;
 }
 

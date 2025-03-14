@@ -140,13 +140,17 @@ a:hover {
   margin: var(--space-md) 0;
   /* padding: var(--space-xs) !important; */
   /* border: 1px solid var(--border-color); */
-  width: 100%;
+  /* width: 100%; */
   overflow-x: auto;
 }
 
 .vp-doc div[class*='language-'] pre {
   padding: var(--space-xs) !important;
-  width: 100%;
+  /* width: 100%; */
+}
+
+.quick-start-option .vp-doc div[class*='language-'] {
+  background: none !important;
 }
 
 @media (max-width: 768px) {

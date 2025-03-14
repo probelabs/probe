@@ -28,7 +28,8 @@ export function createSearchTool() {
 
 				return results;
 			} catch (error) {
-				return `Error: ${error.message}`;
+				console.error('Error executing search command:', error);
+				return `Error executing search command: ${error.message}`;
 			}
 		}
 	};
@@ -52,7 +53,8 @@ export function createQueryTool() {
 
 				return results;
 			} catch (error) {
-				return `Error: ${error.message}`;
+				console.error('Error executing query command:', error);
+				return `Error executing query command: ${error.message}`;
 			}
 		}
 	};
@@ -77,7 +79,8 @@ export function createExtractTool() {
 
 				return results;
 			} catch (error) {
-				return `Error: ${error.message}`;
+				console.error('Error executing extract command:', error);
+				return `Error executing extract command: ${error.message}`;
 			}
 		}
 	};

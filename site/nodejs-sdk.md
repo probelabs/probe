@@ -222,25 +222,38 @@ setBinaryPath('/path/to/probe/binary');
 
 ## AI Tools Integration
 
-The SDK provides built-in tools for integrating with AI frameworks:
+The SDK provides built-in tools for integrating with AI frameworks. The latest version introduces tool generators that allow for better configuration and session isolation:
 
 ### Vercel AI SDK Integration
 
 ```javascript
 import { generateText } from 'ai';
-import { tools } from '@buger/probe';
+import { searchTool, queryTool, extractTool } from '@buger/probe';
+import { randomUUID } from 'crypto';
 
-// Use the pre-built tools with Vercel AI SDK
+// Generate a session ID
+const sessionId = randomUUID();
+
+// Create configured tools with the session ID
+const configOptions = {
+  sessionId,
+  debug: process.env.DEBUG === 'true'
+};
+
+// Create configured tool instances
+const configuredTools = {
+  search: searchTool(configOptions),
+  query: queryTool(configOptions),
+  extract: extractTool(configOptions)
+};
+
+// Use the configured tools with Vercel AI SDK
 async function chatWithAI(userMessage) {
   const result = await generateText({
     model: provider(modelName),
     messages: [{ role: 'user', content: userMessage }],
     system: "You are a code intelligence assistant. Use the provided tools to search and analyze code.",
-    tools: {
-      search: tools.searchTool,
-      query: tools.queryTool,
-      extract: tools.extractTool
-    },
+    tools: configuredTools,
     maxSteps: 15,
     temperature: 0.7
   });
@@ -249,16 +262,66 @@ async function chatWithAI(userMessage) {
 }
 ```
 
+### Tool Generators and Configuration
+
+The SDK provides tool generators that allow you to create configured instances of tools with specific options:
+
+```javascript
+import { searchTool, queryTool, extractTool } from '@buger/probe';
+import { randomUUID } from 'crypto';
+
+// Generate a session ID
+const sessionId = randomUUID();
+
+// Configure tools with options
+const configOptions = {
+  sessionId,                        // Session ID for caching search results
+  debug: process.env.DEBUG === '1', // Enable debug logging
+  maxTokens: 30000                  // Override default max tokens (search tool only)
+};
+
+// Create configured tool instances
+const search = searchTool(configOptions);
+const query = queryTool({ debug: true });  // Each tool can have different options
+const extract = extractTool({ debug: true });
+```
+
+#### Configuration Options
+
+| Option | Type | Description | Applicable Tools |
+|--------|------|-------------|-----------------|
+| `sessionId` | string | Session ID for caching search results | searchTool |
+| `debug` | boolean | Enable debug logging | All tools |
+| `maxTokens` | number | Override default max tokens | searchTool |
+
+#### Backward Compatibility
+
+For backward compatibility, the package still exports pre-configured tools:
+
+```javascript
+import { tools } from '@buger/probe';
+
+// Use pre-configured tools
+const { searchTool, queryTool, extractTool } = tools;
+```
+
 ### LangChain Integration
 
 ```javascript
 import { ChatOpenAI } from '@langchain/openai';
-import { tools } from '@buger/probe';
+import { tools, createSearchTool, createQueryTool, createExtractTool } from '@buger/probe';
+import { randomUUID } from 'crypto';
 
-// Create the LangChain tools
-const searchTool = tools.createSearchTool();
-const queryTool = tools.createQueryTool();
-const extractTool = tools.createExtractTool();
+// Generate a session ID
+const sessionId = randomUUID();
+
+// Create the LangChain tools with configuration
+const searchTool = tools.createSearchTool({
+  sessionId,
+  debug: process.env.DEBUG === 'true'
+});
+const queryTool = tools.createQueryTool({ debug: true });
+const extractTool = tools.createExtractTool({ debug: true });
 
 // Create a ChatOpenAI instance with tools
 const model = new ChatOpenAI({
@@ -282,20 +345,26 @@ async function chatWithAI(userMessage) {
 The package provides a default system message that you can use with your AI assistants:
 
 ```javascript
-import { tools } from '@buger/probe';
+import { DEFAULT_SYSTEM_MESSAGE, searchTool, queryTool, extractTool } from '@buger/probe';
 
 // Use the default system message in your AI application
-const systemMessage = tools.DEFAULT_SYSTEM_MESSAGE;
+const systemMessage = DEFAULT_SYSTEM_MESSAGE;
+
+// Generate a session ID
+const sessionId = randomUUID();
+
+// Create configured tools with the session ID
+const configOptions = { sessionId };
 
 // Example with Vercel AI SDK
 const result = await generateText({
   model: provider(modelName),
   messages: [{ role: 'user', content: userMessage }],
-  system: tools.DEFAULT_SYSTEM_MESSAGE,
+  system: DEFAULT_SYSTEM_MESSAGE,
   tools: {
-    search: tools.searchTool,
-    query: tools.queryTool,
-    extract: tools.extractTool
+    search: searchTool(configOptions),
+    query: queryTool(configOptions),
+    extract: extractTool(configOptions)
   }
 });
 ```
@@ -654,8 +723,14 @@ const { stdout } = await execAsync(`${binaryPath} search "query" /path/to/projec
 6. **Combine with Other Tools**: Use Probe alongside other tools for a more comprehensive understanding of your codebase
 7. **Optimize for Performance**: Use `filesOnly` for initial broad searches, then refine with more specific queries
 8. **Use Session IDs**: For related searches, use the same session ID to avoid seeing duplicate code blocks
+9. **Use Tool Generators**: Create configured tool instances with session IDs for better isolation in concurrent environments
+10. **Enable Debug Logging**: Set the debug option to true when troubleshooting tool execution
 
 ### Session-Based Caching Example
+
+There are two ways to use session-based caching:
+
+#### 1. Using the search function directly
 
 ```javascript
 import { search } from '@buger/probe';
@@ -682,11 +757,41 @@ const results2 = await search({
 console.log(`Found ${results2.matches.length} new matches`);
 ```
 
-This approach is particularly useful when:
+#### 2. Using the tool generators with Vercel AI SDK
+
+```javascript
+import { searchTool } from '@buger/probe';
+import { randomUUID } from 'crypto';
+
+// Generate a session ID
+const sessionId = randomUUID();
+console.log(`Session ID: ${sessionId}`);
+
+// Create a configured search tool with the session ID
+const configuredSearchTool = searchTool({
+  sessionId,
+  debug: true // Enable debug logging
+});
+
+// Use the configured tool with Vercel AI SDK
+// All searches performed with this tool will use the same session ID
+const result = await generateText({
+  model: provider(modelName),
+  messages: [{ role: 'user', content: userMessage }],
+  system: "You are a code intelligence assistant. Use the provided tools to search and analyze code.",
+  tools: {
+    search: configuredSearchTool
+  },
+  maxSteps: 15
+});
+```
+
+Session-based caching is particularly useful when:
 - Building interactive search interfaces
 - Conducting progressive searches that refine or expand on previous queries
 - Creating AI assistants that need to avoid repeating the same code blocks
 - Implementing search workflows that build on previous results
+- Handling concurrent searches in multi-user environments
 
 ## Related Resources
 

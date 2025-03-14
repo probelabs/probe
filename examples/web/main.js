@@ -5,8 +5,9 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { streamText, generateText } from 'ai';
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
-import { probeTool, searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE } from './probeTool.js';
+import { probeTool, searchToolInstance, queryToolInstance, extractToolInstance, DEFAULT_SYSTEM_MESSAGE } from './probeTool.js';
 import { withAuth } from './auth.js';
+import { listFilesByLevel } from '@buger/probe';
 
 // Check for debug mode
 const DEBUG = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
@@ -25,6 +26,8 @@ if (AUTH_ENABLED) {
 } else {
 	console.log('Authentication disabled');
 }
+
+// Note: Session ID is now managed in probeTool.js
 
 // Get custom API URLs if provided
 const ANTHROPIC_API_URL = process.env.ANTHROPIC_API_URL || 'https://api.anthropic.com/v1';
@@ -99,7 +102,7 @@ function countTokens(text) {
 }
 
 // Define the tools available to the AI
-const tools = [probeTool, searchTool, queryTool, extractTool];
+const tools = [probeTool, searchToolInstance, queryToolInstance, extractToolInstance];
 
 /**
  * Handle non-streaming chat request (returns complete response as JSON)
@@ -107,7 +110,7 @@ const tools = [probeTool, searchTool, queryTool, extractTool];
 async function handleNonStreamingChatRequest(req, res, message) {
 	try {
 		// Prepare system message with folder context
-		let systemMessage = getSystemMessage();
+		let systemMessage = await getSystemMessage();
 
 		// Create messages array with user's message
 		const messages = [
@@ -213,7 +216,7 @@ async function handleNonStreamingChatRequest(req, res, message) {
 async function handleStreamingChatRequest(req, res, message) {
 	try {
 		// Prepare system message with folder context
-		let systemMessage = getSystemMessage();
+		let systemMessage = await getSystemMessage();
 
 		// Create messages array with user's message
 		const messages = [
@@ -318,9 +321,9 @@ async function handleStreamingChatRequest(req, res, message) {
 }
 
 /**
- * Get system message with folder context
+ * Get system message with folder context and file list
  */
-function getSystemMessage() {
+async function getSystemMessage() {
 	// Start with the default system message from the probe package
 	let systemMessage = DEFAULT_SYSTEM_MESSAGE || `You are a helpful AI assistant that can search and analyze code repositories using the Probe tool.
 You have access to a code search tool that can help you find relevant code snippets.
@@ -328,9 +331,31 @@ Always use the search tool first before attempting to answer questions about the
 When responding to questions about code, make sure to include relevant code snippets and explain them clearly.
 If you don't know the answer or can't find relevant information, be honest about it.`;
 
+	// Add folder information
 	if (allowedFolders.length > 0) {
 		const folderList = allowedFolders.map(f => `"${f}"`).join(', ');
 		systemMessage += ` The following folders are configured for code search: ${folderList}. When using searchCode, specify one of these folders in the folder argument.`;
+	}
+
+	// Add file list information
+	try {
+		const searchDirectory = allowedFolders.length > 0 ? allowedFolders[0] : '.';
+		console.log(`Generating file list for ${searchDirectory}...`);
+
+		const files = await listFilesByLevel({
+			directory: searchDirectory,
+			maxFiles: 100,
+			respectGitignore: true
+		});
+
+		if (files.length > 0) {
+			systemMessage += `\n\nHere is a list of up to 100 files in the codebase (organized by directory depth):\n\n`;
+			systemMessage += files.map(file => `- ${file}`).join('\n');
+		}
+
+		console.log(`Added ${files.length} files to system message`);
+	} catch (error) {
+		console.warn(`Warning: Could not generate file list: ${error.message}`);
 	}
 
 	return systemMessage;
@@ -616,7 +641,7 @@ const server = createServer(async (req, res) => {
 					}
 
 					// Use the shared system message
-					let systemMessage = getSystemMessage();
+					let systemMessage = await getSystemMessage();
 
 					// Create messages array with user's message
 					const messages = [

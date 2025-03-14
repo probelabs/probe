@@ -179,23 +179,38 @@ console.log(explanation);
 
 ## Examples with Vercel AI SDK
 
-The Vercel AI SDK is another popular framework for building AI applications:
+The Vercel AI SDK is another popular framework for building AI applications. The latest version of Probe provides tool generators that allow for better configuration and session isolation:
 
 ```javascript
 import { generateText } from 'ai';
-import { tools } from '@buger/probe';
+import { searchTool, queryTool, extractTool } from '@buger/probe';
+import { randomUUID } from 'crypto';
 
-// Use the pre-built tools with Vercel AI SDK
+// Generate a session ID for tool isolation
+const sessionId = randomUUID();
+console.log(`Generated session ID: ${sessionId}`);
+
+// Configure tools with options
+const configOptions = {
+  sessionId,
+  debug: process.env.DEBUG === 'true',
+  maxTokens: 30000 // Optional: override default max tokens
+};
+
+// Create configured tool instances
+const configuredTools = {
+  search: searchTool(configOptions),
+  query: queryTool(configOptions),
+  extract: extractTool(configOptions)
+};
+
+// Use the configured tools with Vercel AI SDK
 async function chatWithAI(userMessage) {
   const result = await generateText({
     model: provider(modelName),
     messages: [{ role: 'user', content: userMessage }],
     system: "You are a code intelligence assistant. Use the provided tools to search and analyze code.",
-    tools: {
-      search: tools.searchTool,
-      query: tools.queryTool,
-      extract: tools.extractTool
-    },
+    tools: configuredTools,
     maxSteps: 15,
     temperature: 0.7
   });
@@ -206,6 +221,35 @@ async function chatWithAI(userMessage) {
 // Example usage
 const response = await chatWithAI("Find all API endpoints in this project");
 console.log(response);
+```
+
+### Benefits of Tool Generators
+
+The new tool generator approach provides several advantages:
+
+1. **Session Isolation**: Each tool instance can have its own session ID, which is crucial in concurrent environments like web applications
+2. **Configurable Options**: You can customize tools with options like debug logging and token limits
+3. **Better Debugging**: Enable debug mode to see detailed logs of tool execution
+4. **Backward Compatibility**: The package still exports pre-configured tools for backward compatibility
+
+### Backward Compatibility
+
+If you prefer the previous approach, you can still use the pre-configured tools:
+
+```javascript
+import { tools } from '@buger/probe';
+
+// Use the pre-configured tools
+const result = await generateText({
+  model: provider(modelName),
+  messages: [{ role: 'user', content: userMessage }],
+  system: "You are a code intelligence assistant.",
+  tools: {
+    search: tools.searchTool,
+    query: tools.queryTool,
+    extract: tools.extractTool
+  }
+});
 ```
 
 ## Building a Custom Code Search API

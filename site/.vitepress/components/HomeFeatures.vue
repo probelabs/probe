@@ -24,7 +24,7 @@
               <span class="feature-icon">🖥️</span>
               <h3>For AI Code Editor Users</h3>
             </div>
-            <p>Integrate with Cline, GitHub Copilot, or any MCP-compatible AI assistant. <br/><br/><a href="/use-cases/ai-code-editors">Setup Guide →</a></p>
+            <p>Integrate with Cline, Roo, Cursor, Windsurf, or any MCP-compatible AI assistant. <br/><br/><a href="/use-cases/ai-code-editors">Setup Guide →</a></p>
           </div>
 
           <div class="feature-card">

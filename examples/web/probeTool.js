@@ -1,17 +1,33 @@
-// Import tools from @buger/probe package
-import { tools } from '@buger/probe';
+// Import tool generators from @buger/probe package
+import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE } from '@buger/probe';
+import { randomUUID } from 'crypto';
 
-// Export the tools for use in the application
-export const { searchTool, queryTool, extractTool } = tools;
+// Generate a session ID
+const sessionId = randomUUID();
+console.log(`Generated session ID for search caching: ${sessionId}`);
 
-// Export the default system message
-export const DEFAULT_SYSTEM_MESSAGE = tools.DEFAULT_SYSTEM_MESSAGE;
+// Create configured tools with the session ID
+const configOptions = {
+	sessionId,
+	debug: process.env.DEBUG === 'true' || process.env.DEBUG === '1'
+};
+
+// Export the configured tools
+export const tools = {
+	searchTool: searchTool(configOptions),
+	queryTool: queryTool(configOptions),
+	extractTool: extractTool(configOptions)
+};
+
+// Export individual tools for direct use
+export { DEFAULT_SYSTEM_MESSAGE };
+export const { searchTool: searchToolInstance, queryTool: queryToolInstance, extractTool: extractToolInstance } = tools;
 
 // For backward compatibility, export the probeTool that maps to searchTool
 export const probeTool = {
-	...searchTool,
+	...searchToolInstance,
 	parameters: {
-		...searchTool.parameters,
+		...searchToolInstance.parameters,
 		// Map the old parameter names to the new ones
 		parse: (params) => {
 			const { keywords, folder, ...rest } = params;
@@ -25,12 +41,12 @@ export const probeTool = {
 	execute: async (params) => {
 		// Map the old parameter names to the new ones
 		const { keywords, folder, ...rest } = params;
-		const result = await searchTool.execute({
+		const result = await searchToolInstance.execute({
 			query: keywords,
 			path: folder,
 			...rest
 		});
-		
+
 		// Format the result to match the old format
 		return {
 			results: result,

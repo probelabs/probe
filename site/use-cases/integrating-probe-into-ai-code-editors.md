@@ -55,6 +55,21 @@ This command will:
 
 4. Start Cline in your project directory and begin asking questions about your code.
 
+#### For Roo Code
+
+[Roo Code](https://github.com/RooVetGit/Roo-Code) can be configured the same way as other editors via MCP:
+
+1. Follow the installation instructions from the Roo Code GitHub repository
+2. Configure Roo to use Probe via MCP using the same configuration pattern
+3. Start using Roo with Probe integration
+
+#### For Cursor and Windsurf
+
+1. Install Cursor or Windsurf
+2. Configure the editor to use MCP
+3. Add the Probe MCP server configuration
+4. Restart the editor to apply changes
+
 #### For Other AI Assistants
 
 Check your AI editor's documentation for MCP configuration. The general pattern is similar:

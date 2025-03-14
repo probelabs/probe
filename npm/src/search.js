@@ -26,7 +26,8 @@ const SEARCH_FLAG_MAP = {
 	allowTests: '--allow-tests',
 	anyTerm: '--any-term',
 	noMerge: '--no-merge',
-	mergeThreshold: '--merge-threshold'
+	mergeThreshold: '--merge-threshold',
+	session: '--session'
 };
 
 /**
@@ -48,6 +49,7 @@ const SEARCH_FLAG_MAP = {
  * @param {boolean} [options.anyTerm] - Match any term
  * @param {boolean} [options.noMerge] - Don't merge adjacent blocks
  * @param {number} [options.mergeThreshold] - Merge threshold
+ * @param {string} [options.session] - Session ID for caching results
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists
  * @param {string} [options.binaryOptions.version] - Specific version to download
@@ -81,6 +83,11 @@ export async function search(options) {
 		cliArgs.push('--max-tokens', '40000');
 	}
 
+	// Add session ID from environment variable if not provided in options
+	if (!options.session && process.env.PROBE_SESSION_ID) {
+		options.session = process.env.PROBE_SESSION_ID;
+	}
+
 	// Add query and path as positional arguments
 	const queries = Array.isArray(options.query) ? options.query : [options.query];
 
@@ -90,6 +97,7 @@ export async function search(options) {
 	logMessage += ` maxTokens=${options.maxTokens}`;
 	if (options.exact) logMessage += " exact=true";
 	if (options.allowTests) logMessage += " allowTests=true";
+	if (options.session) logMessage += ` session=${options.session}`;
 	console.log(logMessage);
 
 	if (queries.length > 0) {

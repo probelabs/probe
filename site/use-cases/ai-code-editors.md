@@ -39,7 +39,7 @@ The Model Context Protocol (MCP) server integration is the most powerful way to 
    }
    ```
 
-   For other editors, check your editor's documentation for MCP configuration.
+   For Roo, Cursor, Windsurf, and other editors, the MCP configuration follows a similar pattern. Check your editor's documentation for specific details.
 
 2. **Start your AI editor** and begin asking questions about your codebase.
 
@@ -95,16 +95,16 @@ When troubleshooting problems:
 2. Start Cline in your project directory
 3. Ask questions about your codebase
 
-### VSCode with GitHub Copilot
+### Roo Code
 
-1. Install the GitHub Copilot extension
-2. Configure Copilot to use external tools (if supported)
-3. Add the Probe MCP configuration to your settings
+1. Visit [Roo Code on GitHub](https://github.com/RooVetGit/Roo-Code) for installation instructions
+2. Configure Roo to use Probe via MCP
+3. Roo can be configured the same way as other editors via MCP
 
-### JetBrains IDEs with AI Assistant
+### VSCode with Cursor or Windsurf
 
-1. Install the AI Assistant plugin
-2. Configure the plugin to use external tools
+1. Install the Cursor or Windsurf extension
+2. Configure the extension to use external tools
 3. Add the Probe MCP configuration to your settings
 
 ## Advanced Configuration
@@ -150,6 +150,34 @@ For large codebases, you can limit the amount of code returned:
   }
 }
 ```
+
+## Optimizing Probe Usage in AI Editors
+
+To get the most out of Probe in your AI code editor, you can provide custom instructions to guide how the AI uses Probe's tools. Below is an example from a `.roomodes` configuration file that optimizes Probe usage:
+
+```json
+{
+  "customModes": [
+    {
+      "slug": "ask-probe",
+      "name": "Ask Probe",
+      "roleDefinition": "You are Roo, a code intelligence assistant powered by the Probe MCP tools. Always prefer Probe MCP tools for searching the code. Rather then guessing, start with using `search_code` tool, with exact keywords, and extend your search deeper. AVOID reading full files, unless absolutelly necessary. Use this tools as a scalpel, not a hammer. Use 'exact' parameter if you looking for something specific. Avoid searching with too common keywords, like 'if', 'for', 'while', etc. If you need to extract a specific code block, use `extract_code` tool. If you need to find a specific code structure, use `query_code` tool. If you are unsure about the results, refine your query or ask for clarification.",
+      "groups": [
+        "read",
+        "mcp"
+      ],
+      "customInstructions": "Leverage Probe MCP tools effectively:\n\n1. **search_code**:\n   - Use simple, unique keywords (e.g., 'rpc' over 'rpc layer')\n   - Use ElasticSearch query language: ALWAYS use + for required terms, and omit for general and optional, - for excluded terms, and AND/OR for logic. Prefer explicit searches, with this syntax.\n\n2. **query_code**:\n   - Craft tree-sitter patterns (e.g., 'fn $NAME($$$PARAMS) $$$BODY') for specific structures\n   - Match patterns to the language (e.g., Rust, Python)\n   - Use sparingly for precise structural queries\n\n3. **extract_code**:\n   - Extract blocks by line number (e.g., '/file.rs:42') or full files for context\n   - Include `contextLines` only if AST parsing fails\n\n**Approach**:\n- Start with a clear search strategy\n- Interpret results concisely, tying them to the user's question\n- If unsure, refine queries or ask for clarification"
+    }
+  ]
+}
+```
+
+This configuration instructs the AI to:
+- Use Probe MCP tools as the primary method for code search
+- Start with specific keywords rather than guessing
+- Use the appropriate tool for each task (search_code, query_code, extract_code)
+- Follow best practices for each tool, such as using ElasticSearch query syntax
+- Avoid common pitfalls like searching with overly generic terms
 
 ## Best Practices
 

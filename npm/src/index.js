@@ -12,6 +12,9 @@ import { query } from './query.js';
 import { extract } from './extract.js';
 import { getBinaryPath, setBinaryPath } from './utils.js';
 import * as tools from './tools/index.js';
+import { listFilesByLevel } from './utils/file-lister.js';
+import { DEFAULT_SYSTEM_MESSAGE } from './tools/system-message.js';
+import { searchTool, queryTool, extractTool } from './tools/vercel.js';
 
 export {
 	search,
@@ -19,5 +22,11 @@ export {
 	extract,
 	getBinaryPath,
 	setBinaryPath,
-	tools
+	listFilesByLevel,
+	tools,
+	DEFAULT_SYSTEM_MESSAGE,
+	// Export tool generators directly
+	searchTool,
+	queryTool,
+	extractTool
 };

@@ -10,8 +10,8 @@ import { randomUUID } from 'crypto';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
-// Import tools and system message from @buger/probe
-import { tools } from '@buger/probe';
+// Import tool generators and utilities from @buger/probe
+import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE, listFilesByLevel } from '@buger/probe';
 
 // Parse and validate allowed folders from environment variable
 const allowedFolders = process.env.ALLOWED_FOLDERS
@@ -66,12 +66,12 @@ if (options.model) {
 // Set ALLOWED_FOLDERS if path is provided
 if (pathArg) {
   const resolvedPath = resolve(pathArg);
-  
+
   // Check if the path exists
   if (existsSync(resolvedPath)) {
     // Get the real path (resolves symlinks)
     const realPath = realpathSync(resolvedPath);
-    
+
     // Set the ALLOWED_FOLDERS environment variable
     process.env.ALLOWED_FOLDERS = realPath;
     console.log(chalk.blue(`Using codebase path: ${realPath}`));
@@ -95,15 +95,26 @@ let apiProvider;
 let defaultModel;
 let apiType;
 let sessionId;
+let configuredTools;
 
 try {
   // Generate a unique session ID
   sessionId = randomUUID();
   console.log(chalk.blue(`Session ID: ${sessionId}`));
-  
-  // Store the session ID in an environment variable for tools to access
-  process.env.PROBE_SESSION_ID = sessionId;
-  
+
+  // Configure tools with the session ID
+  const configOptions = {
+    sessionId,
+    debug: process.env.DEBUG === 'true' || process.env.DEBUG === '1'
+  };
+
+  // Create configured tool instances
+  configuredTools = {
+    search: searchTool(configOptions),
+    query: queryTool(configOptions),
+    extract: extractTool(configOptions)
+  };
+
   if (anthropicApiKey) {
     // Initialize Anthropic provider with API key and custom URL if provided
     const anthropicApiUrl = process.env.ANTHROPIC_API_URL || 'https://api.anthropic.com/v1';
@@ -113,7 +124,7 @@ try {
     });
     defaultModel = process.env.MODEL_NAME || 'claude-3-7-sonnet-latest';
     apiType = 'anthropic';
-    
+
     console.log(chalk.green(`Using Anthropic API with model: ${defaultModel}`));
   } else if (openaiApiKey) {
     // Initialize OpenAI provider with API key and custom URL if provided
@@ -124,10 +135,10 @@ try {
     });
     defaultModel = process.env.MODEL_NAME || 'gpt-4o-2024-05-13';
     apiType = 'openai';
-    
+
     console.log(chalk.green(`Using OpenAI API with model: ${defaultModel}`));
   }
-  
+
   console.log(chalk.cyan('Type "exit" or "quit" to end the chat'));
   console.log(chalk.cyan('Type "usage" to see token usage statistics'));
   console.log(chalk.cyan('Type "clear" to clear the chat history'));
@@ -173,7 +184,7 @@ async function startChat() {
         prefix: '',
       },
     ]);
-    
+
     // Handle special commands
     if (message.toLowerCase() === 'exit' || message.toLowerCase() === 'quit') {
       console.log(chalk.yellow('Goodbye!'));
@@ -187,46 +198,55 @@ async function startChat() {
     } else if (message.toLowerCase() === 'clear') {
       history = [];
       sessionId = randomUUID();
-      process.env.PROBE_SESSION_ID = sessionId;
       console.log(chalk.yellow('Chat history cleared'));
       console.log(chalk.blue(`New session ID: ${sessionId}`));
+
+      // Reconfigure tools with the new session ID
+      const configOptions = {
+        sessionId,
+        debug: process.env.DEBUG === 'true' || process.env.DEBUG === '1'
+      };
+
+      // Create new configured tool instances
+      configuredTools = {
+        search: searchTool(configOptions),
+        query: queryTool(configOptions),
+        extract: extractTool(configOptions)
+      };
+
       continue;
     }
-    
+
     // Show a spinner while waiting for the response
     const spinner = ora('Thinking...').start();
-    
+
     try {
       // Count tokens in the user message
       const messageTokens = countTokens(message);
       totalRequestTokens += messageTokens;
-      
+
       // Limit history to prevent token overflow
       if (history.length > MAX_HISTORY_MESSAGES) {
         const historyStart = history.length - MAX_HISTORY_MESSAGES;
         history = history.slice(historyStart);
       }
-      
+
       // Prepare messages array
       const messages = [
         ...history,
         { role: 'user', content: message }
       ];
-      
+
       // Configure generateText options
       const generateOptions = {
         model: apiProvider(defaultModel),
         messages: messages,
-        system: customizeSystemMessage(tools.DEFAULT_SYSTEM_MESSAGE), // Customize the system message
-        tools: {
-          search: tools.searchTool,
-          query: tools.queryTool,
-          extract: tools.extractTool
-        },
+        system: await customizeSystemMessage(DEFAULT_SYSTEM_MESSAGE), // Customize the system message
+        tools: configuredTools,
         maxSteps: 15,
         temperature: 0.7
       };
-      
+
       // Add API-specific options
       if (apiType === 'anthropic' && defaultModel.includes('3-7')) {
         generateOptions.experimental_thinking = {
@@ -234,18 +254,18 @@ async function startChat() {
           budget: 8000
         };
       }
-      
+
       // Generate response
       const result = await generateText(generateOptions);
-      
+
       // Add the response to history
       history.push({ role: 'user', content: message });
       history.push({ role: 'assistant', content: result.text });
-      
+
       // Count tokens in the response
       const responseTokens = countTokens(result.text);
       totalResponseTokens += responseTokens;
-      
+
       // Log tool usage
       if (result.toolCalls && result.toolCalls.length > 0) {
         console.log('Tool was used:', result.toolCalls.length, 'times');
@@ -253,10 +273,10 @@ async function startChat() {
           console.log(`Tool call ${index + 1}:`, call.name);
         });
       }
-      
+
       // Stop the spinner
       spinner.stop();
-      
+
       // Print the formatted response
       console.log(chalk.green('Assistant:'));
       console.log(formatResponse(result.text));
@@ -269,18 +289,44 @@ async function startChat() {
   }
 }
 
-// Function to customize the system message with allowed folders information
-function customizeSystemMessage(systemMessage) {
+// Function to customize the system message with allowed folders information and file list
+async function customizeSystemMessage(systemMessage) {
+  let customizedMessage = systemMessage || DEFAULT_SYSTEM_MESSAGE;
+
+  // Add folder information
   if (allowedFolders.length > 0) {
     const folderList = allowedFolders.map(f => `"${f}"`).join(', ');
-    return systemMessage + `\n\nThe following folders are configured for code search: ${folderList}. When using search, specify one of these folders in the path argument.`;
+    customizedMessage += `\n\nThe following folders are configured for code search: ${folderList}. When using search, specify one of these folders in the path argument.`;
   } else {
-    return systemMessage + `\n\nNo specific folders are configured for code search, so the current directory will be used by default. You can omit the path parameter in your search calls, or use '.' to explicitly search in the current directory.`;
+    customizedMessage += `\n\nNo specific folders are configured for code search, so the current directory will be used by default. You can omit the path parameter in your search calls, or use '.' to explicitly search in the current directory.`;
   }
+
+  // Add file list information
+  try {
+    const searchDirectory = allowedFolders.length > 0 ? allowedFolders[0] : '.';
+    console.log(`Generating file list for ${searchDirectory}...`);
+
+    const files = await listFilesByLevel({
+      directory: searchDirectory,
+      maxFiles: 100,
+      respectGitignore: true
+    });
+
+    if (files.length > 0) {
+      customizedMessage += `\n\nHere is a list of up to 100 files in the codebase (organized by directory depth):\n\n`;
+      customizedMessage += files.map(file => `- ${file}`).join('\n');
+    }
+
+    console.log(`Added ${files.length} files to system message`);
+  } catch (error) {
+    console.warn(`Warning: Could not generate file list: ${error.message}`);
+  }
+
+  return customizedMessage;
 }
 
 // Start the chat
 startChat().catch((error) => {
   console.error(chalk.red(`Fatal error: ${error.message}`));
   process.exit(1);
-}); 
+});

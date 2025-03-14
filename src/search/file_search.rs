@@ -545,13 +545,6 @@ pub fn find_matching_filenames(
             .map(|s| s.to_lowercase())
             .collect();
 
-        if debug_mode {
-            println!(
-                "DEBUG: Checking filename: {} with tokens: {:?}",
-                filename, filename_tokens
-            );
-        }
-
         // Check if any query token matches any filename token
         let mut matched = false;
         for query_token in &query_tokens {
