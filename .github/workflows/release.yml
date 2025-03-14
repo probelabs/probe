@@ -170,12 +170,14 @@ jobs:
       - name: Install dependencies
         run: cd mcp && npm install
 
-      - name: Update package version
+      - name: Update package version and dependencies
         run: |
           cd mcp
           # Update version in package.json without git operations
           npm version $VERSION --no-git-tag-version
-          echo "Updated MCP package.json to version $VERSION"
+          # Update dependency on @buger/probe to use the specific version
+          npm pkg set dependencies."@buger/probe"="^$VERSION"
+          echo "Updated MCP package.json to version $VERSION with @buger/probe dependency set to ^$VERSION"
 
       - name: Build
         run: cd mcp && npm run build
@@ -251,12 +253,14 @@ jobs:
       - name: Install dependencies
         run: cd examples/chat/npm && npm install
 
-      - name: Update package version
+      - name: Update package version and dependencies
         run: |
           cd examples/chat/npm
           # Update version in package.json without git operations
           npm version $VERSION --no-git-tag-version
-          echo "Updated probe-chat package.json to version $VERSION"
+          # Update dependency on @buger/probe to use the specific version
+          npm pkg set dependencies."@buger/probe"="^$VERSION"
+          echo "Updated probe-chat package.json to version $VERSION with @buger/probe dependency set to ^$VERSION"
 
       - name: Publish to npm
         run: cd examples/chat/npm && npm publish --access public
@@ -290,12 +294,14 @@ jobs:
       - name: Install dependencies
         run: cd examples/web && npm install
 
-      - name: Update package version
+      - name: Update package version and dependencies
         run: |
           cd examples/web
           # Update version in package.json without git operations
           npm version $VERSION --no-git-tag-version
-          echo "Updated probe-web package.json to version $VERSION"
+          # Update dependency on @buger/probe to use the specific version
+          npm pkg set dependencies."@buger/probe"="^$VERSION"
+          echo "Updated probe-web package.json to version $VERSION with @buger/probe dependency set to ^$VERSION"
 
       - name: Publish to npm
         run: cd examples/web && npm publish --access public
