@@ -7,9 +7,7 @@
     "probe-mcp": "build/index.js"
   },
   "files": [
-    "build/**/*",
-    "bin/.gitkeep",
-    "scripts/postinstall.js"
+    "build/**/*"
   ],
   "publishConfig": {
     "access": "public"
@@ -21,8 +19,7 @@
   "scripts": {
     "build": "tsc && chmod +x build/index.js",
     "start": "node build/index.js",
-    "dev": "ts-node src/index.ts",
-    "postinstall": "node scripts/postinstall.js"
+    "dev": "ts-node src/index.ts"
   },
   "keywords": [
     "mcp",

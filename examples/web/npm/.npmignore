@@ -1,0 +1,36 @@
+# Development files
+node_modules/
+.env
+.DS_Store
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test files
+__tests__/
+test/
+tests/
+*.test.js
+*.spec.js
+
+# Build artifacts
+.github/
+.git/
+.gitignore
+.travis.yml
+.gitlab-ci.yml
+.circleci/
+
+# Editor files
+.vscode/
+.idea/
+*.sublime-*
+*.swp
+*.swo
+
+# Other
+.npmrc
+.yarnrc
+.yarn/
+.pnp.*

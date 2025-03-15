@@ -66,21 +66,8 @@ import { existsSync } from 'fs';
 const binDir = path.resolve(__dirname, '..', 'bin');
 console.log(`Bin directory: ${binDir}`);
 
-// Path to the probe binary (will be set after download)
-let PROBE_PATH = process.env.PROBE_PATH || '';
-
-// Check if the binary exists at the environment variable path
-if (PROBE_PATH && !existsSync(PROBE_PATH)) {
-  console.warn(`Warning: PROBE_PATH environment variable set to ${PROBE_PATH}, but no binary found at that location.`);
-  PROBE_PATH = '';
-}
-
-// Ensure the bin directory exists
-try {
-  fs.ensureDirSync(binDir);
-} catch (error) {
-  console.error(`Error creating bin directory: ${error}`);
-}
+// The @buger/probe package now handles binary path management internally
+// We don't need to manage the binary path in the MCP server anymore
 
 interface SearchCodeArgs {
   path: string;
@@ -444,98 +431,10 @@ class ProbeServer {
   }
 
   async run() {
-    // Check for the probe binary (should have been downloaded during installation)
-    if (!PROBE_PATH) {
-      // Look for binary in the bin directory
-      const isWindows = process.platform === 'win32';
-      const binaryName = isWindows ? 'probe.exe' : 'probe';
-      const localBinaryPath = path.join(binDir, binaryName);
-      
-      if (fs.existsSync(localBinaryPath)) {
-        console.log(`Found binary in bin directory: ${localBinaryPath}`);
-        PROBE_PATH = localBinaryPath;
-      }
-      // Check if PROBE_PATH environment variable is set as a fallback
-      else if (process.env.PROBE_PATH) {
-        console.log(`Using binary from environment variable PROBE_PATH: ${process.env.PROBE_PATH}`);
-        PROBE_PATH = process.env.PROBE_PATH;
-        
-        // Verify the binary exists
-        if (!fs.existsSync(PROBE_PATH)) {
-          console.error(`Error: Binary not found at ${PROBE_PATH}`);
-          process.exit(1);
-        }
-      } else {
-        // If binary not found, try to download it as a fallback
-        try {
-          console.log(`Binary not found. Using probe package to get binary...`);
-          
-          // Get the binary path from the probe package
-          const binaryPath = getBinaryPath();
-          PROBE_PATH = binaryPath;
-          console.log(`Using probe binary from @buger/probe package: ${PROBE_PATH}`);
-        } catch (error) {
-          console.error('Error getting probe binary:', error);
-          
-          // Provide more detailed error information and suggestions
-          if (error instanceof Error) {
-            if (error.message.includes('404')) {
-              console.error(`Version "${packageVersion}" not found in the repository.`);
-              console.error('Expected version format: x.y.z (e.g., 1.2.3)');
-              console.error('Suggestions:');
-              console.error('1. Check if the version in package.json is correct');
-              console.error(`2. Verify that a release with tag v${packageVersion} exists in the repository`);
-            } else if (error.message.includes('network')) {
-              console.error('Network error occurred while downloading the binary.');
-              console.error('Suggestions:');
-              console.error('1. Check your internet connection');
-              console.error('2. Verify that GitHub API is accessible from your network');
-            } else if (error.message.includes('permission') || error.message.includes('EACCES')) {
-              console.error('Permission error occurred while downloading or extracting the binary.');
-              console.error('Suggestions:');
-              console.error('1. Check if you have write permissions to the bin directory');
-              console.error('2. Try running the command with elevated privileges');
-            } else if (error.message.includes('not found in the archive')) {
-              console.error('Binary extraction failed - could not find the binary in the downloaded archive.');
-              console.error('Suggestions:');
-              console.error('1. Check if the release archive contains the binary in the expected format');
-              console.error('2. Try downloading a different version');
-            } else {
-              console.error(`Error details: ${error.message}`);
-            }
-          }
-          
-          console.error('No probe binary available. Please set PROBE_PATH environment variable or manually download the binary.');
-          console.error('You can download it from: https://github.com/buger/probe/releases');
-          console.error('and place it in the bin directory with the name "probe" (or "probe.exe" on Windows).');
-          process.exit(1);
-        }
-      }
-    } else {
-      console.log(`Using probe binary from environment variable: ${PROBE_PATH}`);
-    }
+    // The @buger/probe package now handles binary path management internally
+    // We don't need to verify or download the binary in the MCP server anymore
     
-    // Verify the binary is executable
-    try {
-      // Make sure the binary is executable (on non-Windows platforms)
-      if (process.platform !== 'win32') {
-        try {
-          await fs.chmod(PROBE_PATH, 0o755);
-          console.log(`Made binary executable: ${PROBE_PATH}`);
-        } catch (err) {
-          console.warn(`Warning: Could not set executable permissions on binary: ${err}`);
-        }
-      }
-      
-      // Test the binary
-      const { stdout } = await execAsync(`${PROBE_PATH} --version`);
-      console.log(`Probe binary version: ${stdout.trim()}`);
-    } catch (error) {
-      console.error(`Error executing probe binary: ${error instanceof Error ? error.message : String(error)}`);
-      console.error('Please ensure the binary is executable and valid.');
-      process.exit(1);
-    }
-    
+    // Just connect the server to the transport
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     console.error('Probe MCP server running on stdio');
