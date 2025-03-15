@@ -4,10 +4,24 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { streamText, generateText } from 'ai';
 import { readFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { probeTool, searchToolInstance, queryToolInstance, extractToolInstance, DEFAULT_SYSTEM_MESSAGE } from './probeTool.js';
 import { withAuth } from './auth.js';
 import { listFilesByLevel } from '@buger/probe';
+
+// Get the directory name of the current module
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const packageJsonPath = join(__dirname, 'package.json');
+
+// Read package.json to get the version
+let version = '1.0.0'; // Default fallback version
+try {
+	const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+	version = packageJson.version || version;
+} catch (error) {
+	console.warn(`Warning: Could not read version from package.json: ${error.message}`);
+}
 
 // Check for debug mode
 const DEBUG = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
@@ -808,6 +822,7 @@ const server = createServer(async (req, res) => {
 // Start the server
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
+	console.log(`Probe Web Interface v${version}`);
 	console.log(`Server running on http://localhost:${PORT}`);
 	console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 	console.log('Probe tool is available for AI to use');

@@ -4,14 +4,28 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import ora from 'ora';
 import { Command } from 'commander';
-import { existsSync, realpathSync } from 'fs';
-import { resolve } from 'path';
+import { existsSync, realpathSync, readFileSync } from 'fs';
+import { resolve, dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 // Import tool generators and utilities from @buger/probe
 import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE, listFilesByLevel } from '@buger/probe';
+
+// Get the directory name of the current module
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const packageJsonPath = join(__dirname, 'package.json');
+
+// Read package.json to get the version
+let version = '1.0.0'; // Default fallback version
+try {
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  version = packageJson.version || version;
+} catch (error) {
+  console.warn(`Warning: Could not read version from package.json: ${error.message}`);
+}
 
 // Parse and validate allowed folders from environment variable
 const allowedFolders = process.env.ALLOWED_FOLDERS
@@ -39,7 +53,7 @@ const program = new Command();
 program
   .name('probe-chat')
   .description('CLI chat interface for Probe code search')
-  .version('1.0.0')
+  .version(version)
   .option('-d, --debug', 'Enable debug mode')
   .option('-m, --model <model>', 'Specify the model to use')
   .argument('[path]', 'Path to the codebase to search (overrides ALLOWED_FOLDERS)')
