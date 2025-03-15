@@ -256,7 +256,7 @@ async function startChat() {
         model: apiProvider(defaultModel),
         messages: messages,
         system: await customizeSystemMessage(DEFAULT_SYSTEM_MESSAGE), // Customize the system message
-        tools: configuredTools,
+        tools: [configuredTools.search, configuredTools.query, configuredTools.extract],
         maxSteps: 15,
         temperature: 0.7
       };
