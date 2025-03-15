@@ -1,24 +1,30 @@
 {
-  "name": "probe-chat-cli",
+  "name": "@buger/probe-chat",
   "version": "1.0.0",
-  "description": "A CLI chat application using Vercel AI SDK with Probe tools",
+  "description": "CLI chat interface for Probe code search",
   "main": "index.js",
   "type": "module",
+  "bin": {
+    "probe-chat": "./bin/probe-chat.js"
+  },
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepublishOnly": "chmod +x ./bin/probe-chat.js"
   },
   "keywords": [
     "probe",
+    "code-search",
     "chat",
     "ai",
     "cli"
   ],
-  "author": "",
+  "author": "Leonid Bugaev",
   "license": "Apache-2.0",
   "dependencies": {
     "@ai-sdk/anthropic": "^1.1.15",
     "@ai-sdk/openai": "^1.1.15",
+    "@buger/probe": "*",
     "ai": "^4.1.54",
     "chalk": "^5.3.0",
     "commander": "^11.1.0",
@@ -27,5 +33,28 @@
     "ora": "^7.0.1",
     "tiktoken": "^1.0.20",
     "zod": "^3.24.2"
-  }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/buger/probe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/buger/probe/issues"
+  },
+  "homepage": "https://github.com/buger/probe#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "bin/",
+    "index.js",
+    "probeChat.js",
+    "tokenCounter.js",
+    "tools.js",
+    "README.md",
+    "LICENSE"
+  ]
 }

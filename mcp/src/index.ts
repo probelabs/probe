@@ -305,9 +305,27 @@ class ProbeServer {
       try {
         let result: string;
         
+        // Log the incoming request for debugging
+        console.error(`Received request for tool: ${request.params.name}`);
+        console.error(`Request arguments: ${JSON.stringify(request.params.arguments)}`);
+        
         // Handle both new tool names and legacy tool names
         if (request.params.name === 'search_code' || request.params.name === 'probe') {
+          // Ensure arguments is an object
+          if (!request.params.arguments || typeof request.params.arguments !== 'object') {
+            throw new Error("Arguments must be an object");
+          }
+          
           const args = request.params.arguments as unknown as SearchCodeArgs;
+          
+          // Validate required fields
+          if (!args.path) {
+            throw new Error("Path is required in arguments");
+          }
+          if (!args.query) {
+            throw new Error("Query is required in arguments");
+          }
+          
           result = await this.executeCodeSearch(args);
         } else if (request.params.name === 'query_code' || request.params.name === 'query') {
           const args = request.params.arguments as unknown as QueryCodeArgs;
@@ -342,30 +360,57 @@ class ProbeServer {
 
   private async executeCodeSearch(args: SearchCodeArgs): Promise<string> {
     try {
-      // Use the probe package's search function instead of executing the binary directly
-      const searchOptions = {
-        path: args.path,
-        filesOnly: args.filesOnly,
-        ignore: args.ignore,
-        excludeFilenames: args.excludeFilenames,
-        reranker: args.reranker,
-        frequencySearch: args.frequencySearch,
-        exact: args.exact,
-        maxResults: args.maxResults,
-        maxBytes: args.maxBytes,
-        maxTokens: args.maxTokens,
-        allowTests: args.allowTests,
-        anyTerm: args.anyTerm,
-        noMerge: args.noMerge,
-        mergeThreshold: args.mergeThreshold,
-        session: args.session
-      };
+      // Ensure path is included in the options and is a non-empty string
+      if (!args.path || typeof args.path !== 'string' || args.path.trim() === '') {
+        throw new Error("Path is required and must be a non-empty string");
+      }
 
-      // Handle both string and array queries
-      const queryValue = Array.isArray(args.query) ? args.query.join(' ') : args.query;
+      // Ensure query is included in the options
+      if (!args.query) {
+        throw new Error("Query is required");
+      }
+
+      // Log the arguments we received for debugging
+      console.error(`Received search arguments: path=${args.path}, query=${JSON.stringify(args.query)}`);
+
+      // Create a clean options object with only the essential properties first
+      const options: any = {
+        path: args.path.trim(),  // Ensure path is trimmed
+        query: args.query
+      };
       
-      const result = await search(queryValue, searchOptions);
-      return result;
+      // Add optional parameters only if they exist
+      if (args.filesOnly !== undefined) options.filesOnly = args.filesOnly;
+      if (args.ignore !== undefined) options.ignore = args.ignore;
+      if (args.excludeFilenames !== undefined) options.excludeFilenames = args.excludeFilenames;
+      if (args.reranker !== undefined) options.reranker = args.reranker;
+      if (args.frequencySearch !== undefined) options.frequencySearch = args.frequencySearch;
+      if (args.exact !== undefined) options.exact = args.exact;
+      if (args.maxResults !== undefined) options.maxResults = args.maxResults;
+      if (args.maxBytes !== undefined) options.maxBytes = args.maxBytes;
+      if (args.maxTokens !== undefined) options.maxTokens = args.maxTokens;
+      if (args.allowTests !== undefined) options.allowTests = args.allowTests;
+      if (args.anyTerm !== undefined) options.anyTerm = args.anyTerm;
+      if (args.noMerge !== undefined) options.noMerge = args.noMerge;
+      if (args.mergeThreshold !== undefined) options.mergeThreshold = args.mergeThreshold;
+      if (args.session !== undefined) options.session = args.session;
+      
+      console.error("Executing search with options:", JSON.stringify(options, null, 2));
+      
+      // Double-check that path is still in the options object
+      if (!options.path) {
+        console.error("Path is missing from options object after construction");
+        throw new Error("Path is missing from options object");
+      }
+      
+      try {
+        // Call search with the options object
+        const result = await search(options);
+        return result;
+      } catch (searchError: any) {
+        console.error("Search function error:", searchError);
+        throw new Error(`Search function error: ${searchError.message || String(searchError)}`);
+      }
     } catch (error: any) {
       console.error('Error executing code search:', error);
       throw new McpError(
@@ -377,9 +422,18 @@ class ProbeServer {
 
   private async executeCodeQuery(args: QueryCodeArgs): Promise<string> {
     try {
-      // Use the probe package's query function instead of executing the binary directly
-      const queryOptions = {
+      // Validate required parameters
+      if (!args.path) {
+        throw new Error("Path is required");
+      }
+      if (!args.pattern) {
+        throw new Error("Pattern is required");
+      }
+
+      // Create a single options object with both pattern and path
+      const options = {
         path: args.path,
+        pattern: args.pattern,
         language: args.language,
         ignore: args.ignore,
         allowTests: args.allowTests,
@@ -387,7 +441,12 @@ class ProbeServer {
         format: args.format
       };
       
-      const result = await query(args.pattern, queryOptions);
+      console.log("Executing query with options:", JSON.stringify({
+        path: options.path,
+        pattern: options.pattern
+      }));
+      
+      const result = await query(options);
       return result;
     } catch (error: any) {
       console.error('Error executing code query:', error);
@@ -400,27 +459,36 @@ class ProbeServer {
 
   private async executeCodeExtract(args: ExtractCodeArgs): Promise<string> {
     try {
-      // Use the probe package's extract function instead of executing the binary directly
-      const extractOptions = {
+      // Validate required parameters
+      if (!args.path) {
+        throw new Error("Path is required");
+      }
+      if (!args.files || !Array.isArray(args.files) || args.files.length === 0) {
+        throw new Error("Files array is required and must not be empty");
+      }
+
+      // Create a single options object with files and other parameters
+      const options = {
+        files: args.files,
         path: args.path,
         allowTests: args.allowTests,
         contextLines: args.contextLines,
         format: args.format
       };
       
-      // Extract can handle multiple files, but we need to call it for each file and combine the results
-      const results = await Promise.all(
-        args.files.map(async (file) => {
-          try {
-            return await extract(file, extractOptions);
-          } catch (error: any) {
-            console.error(`Error extracting from ${file}:`, error);
-            return `Error extracting from ${file}: ${error.message || String(error)}`;
-          }
-        })
-      );
+      console.log("Executing extract with options:", JSON.stringify({
+        path: options.path,
+        files: options.files
+      }));
       
-      return results.join('\n\n');
+      // Call extract with the complete options object
+      try {
+        const result = await extract(options);
+        return result;
+      } catch (error: any) {
+        console.error(`Error extracting:`, error);
+        return `Error extracting: ${error.message || String(error)}`;
+      }
     } catch (error: any) {
       console.error('Error executing code extract:', error);
       throw new McpError(

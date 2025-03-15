@@ -251,11 +251,11 @@ jobs:
           token: ${{ secrets.NPM_TOKEN }}
 
       - name: Install dependencies
-        run: cd examples/chat/npm && npm install
+        run: cd examples/chat && npm install
 
       - name: Update package version and dependencies
         run: |
-          cd examples/chat/npm
+          cd examples/chat
           # Update version in package.json without git operations
           npm version $VERSION --no-git-tag-version
           # Update dependency on @buger/probe to use the specific version
@@ -263,7 +263,7 @@ jobs:
           echo "Updated probe-chat package.json to version $VERSION with @buger/probe dependency set to ^$VERSION"
 
       - name: Publish to npm
-        run: cd examples/chat/npm && npm publish --access public
+        run: cd examples/chat && npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -292,11 +292,11 @@ jobs:
           token: ${{ secrets.NPM_TOKEN }}
 
       - name: Install dependencies
-        run: cd examples/web/npm && npm install
+        run: cd examples/web && npm install
 
       - name: Update package version and dependencies
         run: |
-          cd examples/web/npm
+          cd examples/web
           # Update version in package.json without git operations
           npm version $VERSION --no-git-tag-version
           # Update dependency on @buger/probe to use the specific version
@@ -304,6 +304,6 @@ jobs:
           echo "Updated probe-web package.json to version $VERSION with @buger/probe dependency set to ^$VERSION"
 
       - name: Publish to npm
-        run: cd examples/web/npm && npm publish --access public
+        run: cd examples/web && npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

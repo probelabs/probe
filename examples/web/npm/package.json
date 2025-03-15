@@ -46,6 +46,7 @@
     "bin/",
     "index.js",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "web/"
   ]
 }
