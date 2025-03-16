@@ -16,6 +16,8 @@ pub use formatter::format_and_print_extraction_results;
 pub use formatter::format_extraction_dry_run;
 #[allow(unused_imports)]
 pub use processor::process_file_for_extraction;
+#[allow(unused_imports)]
+pub use file_paths::{extract_file_paths_from_git_diff, extract_file_paths_from_text, is_git_diff_format, parse_file_with_line};
 
 use crate::extract::file_paths::{set_custom_ignores, FilePathInfo};
 use anyhow::Result;
@@ -27,8 +29,6 @@ use std::path::PathBuf;
 pub struct ExtractOptions {
     /// Files to extract from
     pub files: Vec<String>,
-    /// Whether to allow test files and blocks
-    pub allow_tests: bool,
     /// Custom patterns to ignore
     pub custom_ignores: Vec<String>,
     /// Number of context lines to include
@@ -41,6 +41,10 @@ pub struct ExtractOptions {
     pub to_clipboard: bool,
     /// Whether to perform a dry run
     pub dry_run: bool,
+    /// Whether to parse input as git diff format
+    pub diff: bool,
+    /// Whether to allow test files and test code blocks
+    pub allow_tests: bool,
 }
 
 /// Handle the extract command
@@ -54,13 +58,14 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     if debug_mode {
         println!("\n[DEBUG] ===== Extract Command Started =====");
         println!("[DEBUG] Files to process: {:?}", options.files);
-        println!("[DEBUG] Allow tests: {}", options.allow_tests);
         println!("[DEBUG] Custom ignores: {:?}", options.custom_ignores);
         println!("[DEBUG] Context lines: {}", options.context_lines);
         println!("[DEBUG] Output format: {}", options.format);
         println!("[DEBUG] Read from clipboard: {}", options.from_clipboard);
         println!("[DEBUG] Write to clipboard: {}", options.to_clipboard);
         println!("[DEBUG] Dry run: {}", options.dry_run);
+        println!("[DEBUG] Parse as git diff: {}", options.diff);
+        println!("[DEBUG] Allow tests: {}", options.allow_tests);
     }
 
     // Set custom ignore patterns
@@ -81,17 +86,29 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             );
         }
 
-        file_paths = file_paths::extract_file_paths_from_text(&buffer);
+        // Auto-detect git diff format or use explicit flag
+        let is_diff_format = options.diff || is_git_diff_format(&buffer);
+        
+        if is_diff_format {
+            // Parse as git diff format
+            if debug_mode {
+                println!("[DEBUG] Parsing clipboard content as git diff format");
+            }
+            file_paths = extract_file_paths_from_git_diff(&buffer, options.allow_tests);
+        } else {
+            // Parse as regular text
+            file_paths = file_paths::extract_file_paths_from_text(&buffer, options.allow_tests);
+        }
 
         if debug_mode {
             println!(
                 "[DEBUG] Extracted {} file paths from clipboard",
                 file_paths.len()
             );
-            for (path, start, end, symbol) in &file_paths {
+            for (path, start, end, symbol, lines) in &file_paths {
                 println!(
-                    "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?})",
-                    path, start, end, symbol
+                    "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?}, specific lines: {:?})",
+                    path, start, end, symbol, lines.as_ref().map(|l| l.len())
                 );
             }
         }
@@ -101,29 +118,51 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             return Ok(());
         }
     } else if options.files.is_empty() {
-        // Read from stdin
-        println!("{}", "Reading from stdin...".bold().blue());
-        let mut buffer = String::new();
-        std::io::stdin().read_to_string(&mut buffer)?;
+        // Check if stdin is available (not a terminal)
+        let is_stdin_available = !atty::is(atty::Stream::Stdin);
+        
+        if is_stdin_available {
+            // Read from stdin
+            println!("{}", "Reading from stdin...".bold().blue());
+            let mut buffer = String::new();
+            std::io::stdin().read_to_string(&mut buffer)?;
 
-        if debug_mode {
-            println!(
-                "[DEBUG] Reading from stdin, content length: {} bytes",
-                buffer.len()
-            );
+            if debug_mode {
+                println!(
+                    "[DEBUG] Reading from stdin, content length: {} bytes",
+                    buffer.len()
+                );
+            }
+
+            // Auto-detect git diff format or use explicit flag
+            let is_diff_format = options.diff || is_git_diff_format(&buffer);
+            
+            if is_diff_format {
+                // Parse as git diff format
+                if debug_mode {
+                    println!("[DEBUG] Parsing stdin content as git diff format");
+                }
+                file_paths = extract_file_paths_from_git_diff(&buffer, options.allow_tests);
+            } else {
+                // Parse as regular text
+                file_paths = file_paths::extract_file_paths_from_text(&buffer, options.allow_tests);
+            }
+        } else {
+            // No arguments and no stdin, show help
+            println!("{}", "No files specified and no stdin input detected.".yellow().bold());
+            println!("{}", "Use --help for usage information.".blue());
+            return Ok(());
         }
-
-        file_paths = file_paths::extract_file_paths_from_text(&buffer);
 
         if debug_mode {
             println!(
                 "[DEBUG] Extracted {} file paths from stdin",
                 file_paths.len()
             );
-            for (path, start, end, symbol) in &file_paths {
+            for (path, start, end, symbol, lines) in &file_paths {
                 println!(
-                    "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?})",
-                    path, start, end, symbol
+                    "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?}, specific lines: {:?})",
+                    path, start, end, symbol, lines.as_ref().map(|l| l.len())
                 );
             }
         }
@@ -143,7 +182,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 println!("[DEBUG] Parsing file argument: {}", file);
             }
 
-            let paths = file_paths::parse_file_with_line(file);
+            let paths = file_paths::parse_file_with_line(file, options.allow_tests);
 
             if debug_mode {
                 println!(
@@ -151,10 +190,10 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                     paths.len(),
                     file
                 );
-                for (path, start, end, symbol) in &paths {
+                for (path, start, end, symbol, lines) in &paths {
                     println!(
-                        "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?})",
-                        path, start, end, symbol
+                        "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?}, specific lines: {:?})",
+                        path, start, end, symbol, lines.as_ref().map(|l| l.len())
                     );
                 }
             }
@@ -167,20 +206,18 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     if options.format != "json" && options.format != "xml" {
         println!("{}", "Files to extract:".bold().green());
 
-        for (path, start_line, end_line, symbol) in &file_paths {
+        for (path, start_line, end_line, symbol, lines) in &file_paths {
             if let (Some(start), Some(end)) = (start_line, end_line) {
                 println!("  {} (lines {}-{})", path.display(), start, end);
             } else if let Some(line_num) = start_line {
                 println!("  {} (line {})", path.display(), line_num);
             } else if let Some(sym) = symbol {
                 println!("  {} (symbol: {})", path.display(), sym);
+            } else if let Some(lines_set) = lines {
+                println!("  {} (specific lines: {} lines)", path.display(), lines_set.len());
             } else {
                 println!("  {}", path.display());
             }
-        }
-
-        if options.allow_tests {
-            println!("{}", "Including test files and blocks".yellow());
         }
 
         if options.context_lines > 0 {
@@ -199,12 +236,13 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     let mut errors = Vec::new();
 
     // Process each file
-    for (path, start_line, end_line, symbol) in file_paths {
+    for (path, start_line, end_line, symbol, specific_lines) in file_paths {
         if debug_mode {
             println!("\n[DEBUG] Processing file: {:?}", path);
             println!("[DEBUG] Start line: {:?}", start_line);
             println!("[DEBUG] End line: {:?}", end_line);
             println!("[DEBUG] Symbol: {:?}", symbol);
+            println!("[DEBUG] Specific lines: {:?}", specific_lines.as_ref().map(|l| l.len()));
 
             // Check if file exists
             if path.exists() {
@@ -230,6 +268,12 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             }
         }
 
+        // The allow_tests check is now handled in the file path extraction functions
+        // We only need to check if this is a test file for debugging purposes
+        if debug_mode && crate::language::is_test_file(&path) && !options.allow_tests {
+            println!("[DEBUG] Test file detected: {:?}", path);
+        }
+        
         match processor::process_file_for_extraction(
             &path,
             start_line,
@@ -237,6 +281,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             symbol.as_deref(),
             options.allow_tests,
             options.context_lines,
+            specific_lines.as_ref(),
         ) {
             Ok(result) => {
                 if debug_mode {

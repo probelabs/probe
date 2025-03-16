@@ -24,8 +24,21 @@ pub fn format_extraction_dry_run(results: &[SearchResult], format: &str) -> Resu
             #[derive(serde::Serialize)]
             struct JsonDryRunResult<'a> {
                 file: &'a str,
+                #[serde(serialize_with = "serialize_lines_as_array")]
                 lines: (usize, usize),
                 node_type: &'a str,
+            }
+
+            // Helper function to serialize lines as an array
+            fn serialize_lines_as_array<S>(lines: &(usize, usize), serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                use serde::ser::SerializeSeq;
+                let mut seq = serializer.serialize_seq(Some(2))?;
+                seq.serialize_element(&lines.0)?;
+                seq.serialize_element(&lines.1)?;
+                seq.end()
             }
 
             let json_results: Vec<JsonDryRunResult> = results
@@ -56,12 +69,10 @@ pub fn format_extraction_dry_run(results: &[SearchResult], format: &str) -> Resu
                 writeln!(output, "    <file>{}</file>", escape_xml(&result.file)).unwrap();
 
                 if result.node_type != "file" {
-                    writeln!(
-                        output,
-                        "    <lines>{}-{}</lines>",
-                        result.lines.0, result.lines.1
-                    )
-                    .unwrap();
+                    writeln!(output, "    <lines>").unwrap();
+                    writeln!(output, "      <start>{}</start>", result.lines.0).unwrap();
+                    writeln!(output, "      <end>{}</end>", result.lines.1).unwrap();
+                    writeln!(output, "    </lines>").unwrap();
                 }
 
                 if result.node_type != "file" && result.node_type != "context" {
@@ -216,7 +227,7 @@ pub fn format_terminal_results(output: &mut String, results: &[SearchResult]) {
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
 
-        // Write file info
+        // Write file info with more descriptive header
         writeln!(output, "File: {}", result.file.yellow()).unwrap();
 
         // Write lines if not a full file
@@ -227,6 +238,11 @@ pub fn format_terminal_results(output: &mut String, results: &[SearchResult]) {
         // Write node type if available and not "file" or "context"
         if result.node_type != "file" && result.node_type != "context" {
             writeln!(output, "Type: {}", result.node_type.cyan()).unwrap();
+        }
+
+        // Add a note about string literals if this is from a git diff
+        if result.code.contains("diff --git") || result.code.contains("@@ -") {
+            writeln!(output, "{}", "Note: The code below contains string literals that look like git diff content. These are part of the extracted code, not the diff format.".yellow()).unwrap();
         }
 
         // Determine the language for syntax highlighting
@@ -270,7 +286,7 @@ pub fn format_markdown_results(output: &mut String, results: &[SearchResult]) {
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
 
-        // Write file info
+        // Write file info with more descriptive header
         writeln!(output, "## File: {}", result.file).unwrap();
 
         // Write lines if not a full file
@@ -281,6 +297,11 @@ pub fn format_markdown_results(output: &mut String, results: &[SearchResult]) {
         // Write node type if available and not "file" or "context"
         if result.node_type != "file" && result.node_type != "context" {
             writeln!(output, "Type: {}", result.node_type).unwrap();
+        }
+
+        // Add a note about string literals if this is from a git diff
+        if result.code.contains("diff --git") || result.code.contains("@@ -") {
+            writeln!(output, "**Note**: The code below contains string literals that look like git diff content. These are part of the extracted code, not the diff format.").unwrap();
         }
 
         // Determine the language for syntax highlighting
@@ -317,7 +338,7 @@ pub fn format_plain_results(output: &mut String, results: &[SearchResult]) {
     }
 
     for result in results {
-        // Write file info
+        // Write file info with more descriptive header
         writeln!(output, "File: {}", result.file).unwrap();
 
         // Write lines if not a full file
@@ -328,6 +349,11 @@ pub fn format_plain_results(output: &mut String, results: &[SearchResult]) {
         // Write node type if available and not "file" or "context"
         if result.node_type != "file" && result.node_type != "context" {
             writeln!(output, "Type: {}", result.node_type).unwrap();
+        }
+
+        // Add a note about string literals if this is from a git diff
+        if result.code.contains("diff --git") || result.code.contains("@@ -") {
+            writeln!(output, "Note: The code below contains string literals that look like git diff content. These are part of the extracted code, not the diff format.").unwrap();
         }
 
         writeln!(output).unwrap();
@@ -358,12 +384,10 @@ pub fn format_xml_results(output: &mut String, results: &[SearchResult]) -> Resu
         writeln!(output, "    <file>{}</file>", escape_xml(&result.file)).unwrap();
 
         if result.node_type != "file" {
-            writeln!(
-                output,
-                "    <lines>{}-{}</lines>",
-                result.lines.0, result.lines.1
-            )
-            .unwrap();
+            writeln!(output, "    <lines>").unwrap();
+            writeln!(output, "      <start>{}</start>", result.lines.0).unwrap();
+            writeln!(output, "      <end>{}</end>", result.lines.1).unwrap();
+            writeln!(output, "    </lines>").unwrap();
         }
 
         if result.node_type != "file" && result.node_type != "context" {
@@ -417,9 +441,22 @@ pub fn format_json_results(output: &mut String, results: &[SearchResult]) -> Res
     #[derive(serde::Serialize)]
     struct JsonResult<'a> {
         file: &'a str,
+        #[serde(serialize_with = "serialize_lines_as_array")]
         lines: (usize, usize),
         node_type: &'a str,
         code: &'a str,
+    }
+
+    // Helper function to serialize lines as an array
+    fn serialize_lines_as_array<S>(lines: &(usize, usize), serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(2))?;
+        seq.serialize_element(&lines.0)?;
+        seq.serialize_element(&lines.1)?;
+        seq.end()
     }
 
     let json_results: Vec<JsonResult> = results
@@ -510,7 +547,7 @@ pub fn format_color_results(output: &mut String, results: &[SearchResult]) {
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
 
-        // Write file info
+        // Write file info with more descriptive header
         writeln!(output, "## File: {}", result.file).unwrap();
 
         // Write lines if not a full file
@@ -521,6 +558,11 @@ pub fn format_color_results(output: &mut String, results: &[SearchResult]) {
         // Write node type if available and not "file" or "context"
         if result.node_type != "file" && result.node_type != "context" {
             writeln!(output, "Type: {}", result.node_type).unwrap();
+        }
+
+        // Add a note about string literals if this is from a git diff
+        if result.code.contains("diff --git") || result.code.contains("@@ -") {
+            writeln!(output, "{}", "Note: The code below contains string literals that look like git diff content. These are part of the extracted code, not the diff format.".yellow()).unwrap();
         }
 
         // Determine the language for syntax highlighting

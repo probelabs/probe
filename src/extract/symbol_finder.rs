@@ -28,7 +28,7 @@ pub fn find_symbol_in_file(
     path: &Path,
     symbol: &str,
     content: &str,
-    _allow_tests: bool,
+    allow_tests: bool,
     context_lines: usize,
 ) -> Result<SearchResult> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";

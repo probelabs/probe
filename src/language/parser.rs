@@ -149,9 +149,52 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
     }
 
     if debug_mode {
-        println!("DEBUG: No acceptable parent found for line {}", line);
+        println!("DEBUG: No acceptable parent found for line {}, trying additional strategies", line);
+        println!("DEBUG: Target node type: {}", target_node.kind());
     }
-    None // Fallback to line-based context if no parent found
+    
+    // Additional strategy: If the target node is a doc_comment, try to find the next sibling
+    // which might be the struct_item or function_item we're looking for
+    if target_node.kind() == "doc_comment" || target_node.kind() == "line_comment" {
+        if let Some(next_sibling) = target_node.next_sibling() {
+            if debug_mode {
+                println!(
+                    "DEBUG: Found next sibling after comment: type='{}', lines={}-{}",
+                    next_sibling.kind(),
+                    next_sibling.start_position().row + 1,
+                    next_sibling.end_position().row + 1
+                );
+            }
+            
+            // Check if the next sibling is an acceptable parent
+            if language_impl.is_acceptable_parent(&next_sibling) {
+                if debug_mode {
+                    println!("DEBUG: Next sibling is an acceptable parent, using it");
+                }
+                return Some(next_sibling);
+            }
+            
+            // If not, try to find an acceptable parent in the next sibling's children
+            if let Some(child) = find_acceptable_child(next_sibling, language_impl.as_ref()) {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Found acceptable child in next sibling: type='{}', lines={}-{}",
+                        child.kind(),
+                        child.start_position().row + 1,
+                        child.end_position().row + 1
+                    );
+                }
+                return Some(child);
+            }
+        }
+    }
+    
+    // FINAL FALLBACK: If we never found an "acceptable parent,"
+    // just return the original node anyway instead of returning None
+    if debug_mode {
+        println!("DEBUG: All strategies failed, falling back to target node");
+    }
+    Some(target_node)
 }
 
 /// Gets the context for a comment node, which can be either:
@@ -688,7 +731,78 @@ pub fn parse_file_for_code_blocks(
             continue;
         }
 
-        // Standard approach for finding code blocks
+        // Special case for line-based extraction: If we're looking for a specific line
+        // that might be a struct or function definition, search the entire AST for nodes
+        // that start exactly at this line
+        let mut exact_line_match = None;
+        
+        // Helper function to find nodes that start exactly at the target line
+        fn find_node_at_exact_line<'a>(node: Node<'a>, line: usize, debug_mode: bool, language_impl: &dyn LanguageImpl) -> Option<Node<'a>> {
+            let start_line = node.start_position().row + 1;
+            
+            // Check if this node starts exactly at the target line
+            if start_line == line && language_impl.is_acceptable_parent(&node) {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Found node that starts exactly at line {}: type='{}', lines={}-{}",
+                        line,
+                        node.kind(),
+                        start_line,
+                        node.end_position().row + 1
+                    );
+                }
+                return Some(node);
+            }
+            
+            // Recursively check children
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if let Some(found) = find_node_at_exact_line(child, line, debug_mode, language_impl) {
+                    return Some(found);
+                }
+            }
+            
+            None
+        }
+        
+        // Try to find a node that starts exactly at the target line
+        exact_line_match = find_node_at_exact_line(root_node, line, debug_mode, language_impl.as_ref());
+        
+        // If we found an exact match, use it
+        if let Some(exact_match) = exact_line_match {
+            let start_pos = exact_match.start_position();
+            let end_pos = exact_match.end_position();
+            let node_key = (start_pos.row, end_pos.row);
+            
+            if !seen_nodes.contains(&node_key) {
+                seen_nodes.insert(node_key);
+                
+                if debug_mode {
+                    println!(
+                        "DEBUG: Using exact line match at line {}: type='{}', lines={}-{}",
+                        line,
+                        exact_match.kind(),
+                        start_pos.row + 1,
+                        end_pos.row + 1
+                    );
+                }
+                
+                code_blocks.push(CodeBlock {
+                    start_row: start_pos.row,
+                    end_row: end_pos.row,
+                    start_byte: exact_match.start_byte(),
+                    end_byte: exact_match.end_byte(),
+                    node_type: exact_match.kind().to_string(),
+                    parent_node_type: None,
+                    parent_start_row: None,
+                    parent_end_row: None,
+                });
+                
+                continue;
+            }
+        }
+        
+        // If no exact match found, fall back to the standard approach
         if let Some(node) = find_code_structure(root_node, line, extension) {
             let start_pos = node.start_position();
             let end_pos = node.end_position();
