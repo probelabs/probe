@@ -229,6 +229,7 @@ pub fn extract_file_paths_from_git_diff(text: &str, allow_tests: bool) -> Vec<Fi
 /// - File paths with line and column numbers (e.g., file.rs:10:42)
 /// - File paths with symbol references (e.g., file.rs#function_name)
 /// - File paths with symbol references (e.g., file.rs#function_name)
+/// - Paths can be wrapped in backticks, single quotes, or double quotes
 ///
 /// If allow_tests is false, test files will be filtered out.
 pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePathInfo> {
@@ -237,6 +238,32 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
 
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Preprocess the text to handle paths wrapped in backticks or quotes
+    // This replaces backticks, single quotes, and double quotes with spaces
+    // around the path, making it easier to match with our regex patterns
+    let mut preprocessed_text = String::with_capacity(text.len());
+    let mut in_quote = false;
+    let mut quote_char = ' ';
+
+    for c in text.chars() {
+        if !in_quote && (c == '`' || c == '\'' || c == '"') {
+            // Start of a quoted section
+            in_quote = true;
+            quote_char = c;
+            preprocessed_text.push(' '); // Add space before the quoted content
+        } else if in_quote && c == quote_char {
+            // End of a quoted section
+            in_quote = false;
+            preprocessed_text.push(' '); // Add space after the quoted content
+        } else {
+            // Regular character
+            preprocessed_text.push(c);
+        }
+    }
+
+    // Use the preprocessed text for regex matching
+    let text = &preprocessed_text;
 
     // First, try to match file paths with symbol references (e.g., file.rs#function_name)
     let file_symbol_regex =
@@ -455,8 +482,11 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
 pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo> {
     let mut results = Vec::new();
 
+    // Remove any surrounding backticks or quotes
+    let cleaned_input = input.trim_matches(|c| c == '`' || c == '\'' || c == '"');
+
     // Check if the input contains a symbol reference (file#symbol)
-    if let Some((file_part, symbol)) = input.split_once('#') {
+    if let Some((file_part, symbol)) = cleaned_input.split_once('#') {
         // For symbol references, we don't have line numbers yet
         // We'll need to find the symbol in the file later
         let path = PathBuf::from(file_part);
@@ -465,7 +495,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
             results.push((path, None, None, Some(symbol.to_string()), None));
         }
         return results;
-    } else if let Some((file_part, rest)) = input.split_once(':') {
+    } else if let Some((file_part, rest)) = cleaned_input.split_once(':') {
         // Extract the line specification from the rest (which might contain more colons)
         let line_spec = rest.split(':').next().unwrap_or("");
 
@@ -541,8 +571,8 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
     } else {
         // No line number or symbol specified, just a file path
         // Handle glob pattern
-        if input.contains('*') || input.contains('{') {
-            if let Ok(paths) = glob(input) {
+        if cleaned_input.contains('*') || cleaned_input.contains('{') {
+            if let Ok(paths) = glob(cleaned_input) {
                 for entry in paths.flatten() {
                     // Check if the file should be ignored or is a test file
                     let is_test = is_test_file(&entry);
@@ -554,7 +584,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                 }
             }
         } else {
-            let path = PathBuf::from(input);
+            let path = PathBuf::from(cleaned_input);
             let is_test = is_test_file(&path);
             if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
                 results.push((path, None, None, None, None));
