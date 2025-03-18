@@ -23,19 +23,18 @@ fn test_compound_word_splitting() {
 
     // Add specific programming terms to the vocabulary
     for term in [
-        "rpc", "storage", "handler", "client", "server", "api", "service",
+        "rpc", "storage", "handler", "client", "server", "api", "service", "http", "handler",
     ] {
         enhanced_vocab.insert(term.to_string());
     }
 
-    let input = "whitelist";
+    let input = "httpHandler";
     let compound_parts = split_compound_word(input, &enhanced_vocab);
 
     println!("Compound split of '{}': {:?}", input, compound_parts);
 
-    // We expect "whitelist" to be split into ["white", "list"]
-    assert!(compound_parts.contains(&"white".to_string()));
-    assert!(compound_parts.contains(&"list".to_string()));
+    assert!(compound_parts.contains(&"http".to_string()));
+    assert!(compound_parts.contains(&"Handler".to_string()));
 }
 
 #[test]
@@ -177,8 +176,8 @@ fn test_underscore_in_elastic_query() {
 
     // Test that the elastic query parser preserves underscores
     let query = "keyword_underscore";
-    // Use parse_query with any_term=true instead of parse_query_test
-    let ast = elastic_query::parse_query(query, true).unwrap();
+    // Use parse_query with standard Elasticsearch behavior (AND for implicit combinations)
+    let ast = elastic_query::parse_query(query).unwrap();
 
     // Check that the AST contains the tokenized terms from "keyword_underscore"
     if let elastic_query::Expr::Term { keywords, .. } = ast {

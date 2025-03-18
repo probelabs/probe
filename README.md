@@ -230,6 +230,38 @@ iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -
 iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -args "--help"
 ~~~
 
+**Using PowerShell (For Windows)**
+~~~powershell
+iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex
+~~~
+
+**What the PowerShell script does**:
+
+1. Detects your system architecture (x86_64 or ARM64)
+2. Fetches the latest release from GitHub
+3. Downloads the appropriate Windows binary
+4. Verifies the checksum for security
+5. Installs the binary to your user directory (`%LOCALAPPDATA%\Probe`) by default
+6. Provides instructions to add the binary to your PATH if needed
+
+**Installation options**:
+
+The PowerShell script supports several options:
+
+~~~powershell
+# Install for current user (default)
+iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex
+
+# Install system-wide (requires admin privileges)
+iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -args "--system"
+
+# Install to a custom directory
+iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -args "--dir", "C:\Tools\Probe"
+
+# Show help
+iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -args "--help"
+~~~
+
 ### Requirements
 
 <<<<<<< HEAD
@@ -253,6 +285,8 @@ iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -
    - `probe-x86_64-linux.tar.gz` for Linux (x86_64)
    - `probe-x86_64-darwin.tar.gz` for macOS (Intel)
    - `probe-aarch64-darwin.tar.gz` for macOS (Apple Silicon)
+   - `probe-x86_64-windows.zip` for Windows (x86_64)
+   - `probe-aarch64-windows.zip` for Windows (ARM64)
    - `probe-x86_64-windows.zip` for Windows (x86_64)
    - `probe-aarch64-windows.zip` for Windows (ARM64)
 2. Extract the archive:
@@ -283,6 +317,8 @@ iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -
 ### Building from Source
 
 1. Install Rust and Cargo (if not already installed):
+   
+   For macOS/Linux:
    
    For macOS/Linux:
    ~~~bash
@@ -356,6 +392,10 @@ iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -
    This will install the binary to your Cargo bin directory, which is typically:
    - `$HOME/.cargo/bin` on macOS/Linux
    - `%USERPROFILE%\.cargo\bin` on Windows
+   
+   This will install the binary to your Cargo bin directory, which is typically:
+   - `$HOME/.cargo/bin` on macOS/Linux
+   - `%USERPROFILE%\.cargo\bin` on Windows
 
 ### Verifying the Installation
 
@@ -400,6 +440,7 @@ If you get a "command not found" error on Windows, make sure the installation di
 
 ### Uninstalling
 
+For macOS/Linux:
 For macOS/Linux:
 ~~~bash
 # If installed via npm

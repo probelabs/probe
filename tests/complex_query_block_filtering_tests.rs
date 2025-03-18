@@ -105,11 +105,8 @@ fn test_complex_query_filtering(_temp_path: &Path) {
     // Create a complex query: (ip OR port) AND (whitelist OR allowlist) AND -denylist
     let query = "(ip OR port) AND (whitelist OR allowlist) AND -denylist";
 
-    // Set the ANY_TERM environment variable to 1 for this test
-    std::env::set_var("ANY_TERM", "1");
-
-    // Parse the query into an AST with any_term=true
-    let ast = parse_query(query, true).unwrap();
+    // Parse the query into an AST using standard Elasticsearch behavior (AND for implicit combinations)
+    let ast = parse_query(query).unwrap();
     println!("Parsed AST: {:?}", ast);
 
     // Create a QueryPlan
@@ -127,15 +124,27 @@ fn test_complex_query_filtering(_temp_path: &Path) {
         ip_lines.insert(3); // Line with "ip"
         term_matches.insert(*term_indices.get("ip").unwrap(), ip_lines);
 
-        // Add "whitelist" matches
+        // Add "whitelist" matches directly (tokenization behavior has changed)
         let mut whitelist_lines = HashSet::new();
         whitelist_lines.insert(4); // Line with "whitelist"
-        term_matches.insert(*term_indices.get("white").unwrap(), whitelist_lines);
 
-        // Add "list" matches (from tokenization of "whitelist")
-        let mut list_lines = HashSet::new();
-        list_lines.insert(4); // Line with "list"
-        term_matches.insert(*term_indices.get("list").unwrap(), list_lines);
+        // Check if "whitelist" is in the term_indices, or if it's split into "white" and "list"
+        if let Some(&idx) = term_indices.get("whitelist") {
+            term_matches.insert(idx, whitelist_lines);
+        } else {
+            // If "whitelist" is not in the term_indices, try "white" and "list"
+            if let Some(&idx) = term_indices.get("white") {
+                let mut white_lines = HashSet::new();
+                white_lines.insert(4);
+                term_matches.insert(idx, white_lines);
+            }
+
+            if let Some(&idx) = term_indices.get("list") {
+                let mut list_lines = HashSet::new();
+                list_lines.insert(4);
+                term_matches.insert(idx, list_lines);
+            }
+        }
 
         // Block lines
         let block_lines = (1, 10);
@@ -182,15 +191,27 @@ fn test_complex_query_filtering(_temp_path: &Path) {
         ip_lines.insert(3); // Line with "ip"
         term_matches.insert(*term_indices.get("ip").unwrap(), ip_lines);
 
-        // Add "whitelist" matches
+        // Add "whitelist" matches directly (tokenization behavior has changed)
         let mut whitelist_lines = HashSet::new();
         whitelist_lines.insert(5); // Line with "whitelist"
-        term_matches.insert(*term_indices.get("white").unwrap(), whitelist_lines);
 
-        // Add "list" matches (from tokenization of "whitelist")
-        let mut list_lines = HashSet::new();
-        list_lines.insert(5); // Line with "list"
-        term_matches.insert(*term_indices.get("list").unwrap(), list_lines);
+        // Check if "whitelist" is in the term_indices, or if it's split into "white" and "list"
+        if let Some(&idx) = term_indices.get("whitelist") {
+            term_matches.insert(idx, whitelist_lines);
+        } else {
+            // If "whitelist" is not in the term_indices, try "white" and "list"
+            if let Some(&idx) = term_indices.get("white") {
+                let mut white_lines = HashSet::new();
+                white_lines.insert(5);
+                term_matches.insert(idx, white_lines);
+            }
+
+            if let Some(&idx) = term_indices.get("list") {
+                let mut list_lines = HashSet::new();
+                list_lines.insert(5);
+                term_matches.insert(idx, list_lines);
+            }
+        }
 
         // Add "denylist" matches
         let mut denylist_lines = HashSet::new();

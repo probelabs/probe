@@ -1,11 +1,11 @@
 pub mod file_processing;
-pub mod file_search;
 pub mod query;
 mod result_ranking;
 // Replace the old search_execution with new modules
 pub mod block_merging;
 pub mod cache; // New module for caching search results
 pub mod elastic_query;
+pub mod file_list_cache; // New module for caching file lists
 mod search_limiter;
 mod search_options;
 mod search_output;

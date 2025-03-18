@@ -1,8 +1,28 @@
 use crate::ranking::{
     tokenize, get_stemmer, compute_tf_df,
-    compute_avgdl, rank_documents
+    compute_avgdl, rank_documents, RankingParams
 };
 use crate::search::tokenization::is_stop_word;
+
+// Helper function to adapt the old interface to the new one
+fn rank_documents(documents: &[&str], query: &str) -> Vec<(usize, f64, f64, f64, f64)> {
+    let params = RankingParams {
+        documents,
+        query,
+        file_unique_terms: None,
+        file_total_matches: None,
+        file_match_rank: None,
+        block_unique_terms: None,
+        block_total_matches: None,
+        node_type: None,
+    };
+    
+    // Convert the new return type (usize, f64) to the old one (usize, f64, f64, f64, f64)
+    let results = crate::ranking::rank_documents(&params);
+    results.into_iter()
+        .map(|(idx, bm25_score)| (idx, bm25_score, 0.0, bm25_score, bm25_score))
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -158,7 +178,7 @@ mod tests {
         assert_eq!(ranked_docs[0].0, 3);
         
         // docs 0 and 2 should be included (they contain "fox")
-        let doc_indices: Vec<usize> = ranked_docs.iter().map(|(idx, _, _, _)| *idx).collect();
+        let doc_indices: Vec<usize> = ranked_docs.iter().map(|(idx, _, _, _, _)| *idx).collect();
         assert!(doc_indices.contains(&0));
         assert!(doc_indices.contains(&2));
         
@@ -182,7 +202,7 @@ mod tests {
         assert_eq!(ranked_docs[0].0, 0);
         
         // docs 1 and 2 should be included (they contain one of the terms)
-        let doc_indices: Vec<usize> = ranked_docs.iter().map(|(idx, _, _, _)| *idx).collect();
+        let doc_indices: Vec<usize> = ranked_docs.iter().map(|(idx, _, _, _, _)| *idx).collect();
         assert!(doc_indices.contains(&1));
         assert!(doc_indices.contains(&2));
         
@@ -204,7 +224,7 @@ mod tests {
         // Both doc 0 and doc 2 contain stemmed versions of the query terms
         let top_docs: Vec<usize> = ranked_docs.iter()
             .take(2)
-            .map(|(idx, _, _, _)| *idx)
+            .map(|(idx, _, _, _, _)| *idx)
             .collect();
         
         assert!(top_docs.contains(&0)); // "searching" -> "search", "functions" -> "function"

@@ -34,6 +34,7 @@ fn test_merge_ranked_blocks() {
         parent_file_id: None,
         block_id: None,
         matched_keywords: None,
+        tokenized_content: None,
     };
     let block2 = SearchResult {
     file: "test_file.rs".to_string(),
@@ -58,7 +59,8 @@ fn test_merge_ranked_blocks() {
     parent_file_id: None,
     block_id: None,
     matched_keywords: None,
-    };
+    tokenized_content: None,
+};
 
     // Create block from a different file that should not be merged
     let block3 = SearchResult {
@@ -84,6 +86,7 @@ fn test_merge_ranked_blocks() {
         parent_file_id: None,
         block_id: None,
         matched_keywords: None,
+        tokenized_content: None,
     };
 
     // Create a vector with all blocks

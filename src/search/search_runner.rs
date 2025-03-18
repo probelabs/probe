@@ -1,40 +1,116 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use crate::search::file_list_cache;
 // No need for term_exceptions import
-
-use rayon::prelude::*;
 
 use crate::models::{LimitedSearchResults, SearchResult};
 use crate::search::{
     cache,
-    elastic_query::Expr,
-    file_processing::{process_file_by_filename, process_file_with_results, FileProcessingParams},
-    file_search::{find_files_with_pattern, find_matching_filenames, search_file_for_pattern},
+    // file_list_cache, // Add the new file_list_cache module (unused)
+    file_processing::{process_file_with_results, FileProcessingParams},
     query::{create_query_plan, create_structured_patterns, QueryPlan},
     result_ranking::rank_search_results,
     search_limiter::apply_limits,
     search_options::SearchOptions,
-    tokenization,
 };
 
 /// Struct to hold timing information for different stages of the search process
 pub struct SearchTimings {
     pub query_preprocessing: Option<Duration>,
+    pub pattern_generation: Option<Duration>,
     pub file_searching: Option<Duration>,
+    pub filename_matching: Option<Duration>,
+    pub early_filtering: Option<Duration>,
+    pub early_caching: Option<Duration>,
     pub result_processing: Option<Duration>,
     pub result_ranking: Option<Duration>,
     pub limit_application: Option<Duration>,
     pub block_merging: Option<Duration>,
+    pub final_caching: Option<Duration>,
+    pub total_search_time: Option<Duration>,
 }
+
+/// Helper function to format duration in a human-readable way
+pub fn format_duration(duration: Duration) -> String {
+    if duration.as_millis() < 1000 {
+        format!("{}ms", duration.as_millis())
+    } else {
+        format!("{:.2}s", duration.as_secs_f64())
+    }
+}
+
+/// Helper function to print timing information in debug mode
+pub fn print_timings(timings: &SearchTimings) {
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    if !debug_mode {
+        return;
+    }
+
+    println!("\n=== SEARCH TIMING INFORMATION ===");
+
+    if let Some(duration) = timings.query_preprocessing {
+        println!("Query preprocessing:   {}", format_duration(duration));
+    }
+
+    if let Some(duration) = timings.pattern_generation {
+        println!("Pattern generation:    {}", format_duration(duration));
+    }
+
+    if let Some(duration) = timings.file_searching {
+        println!("File searching:        {}", format_duration(duration));
+    }
+
+    if let Some(duration) = timings.filename_matching {
+        println!("Filename matching:     {}", format_duration(duration));
+    }
+
+    if let Some(duration) = timings.early_filtering {
+        println!("Early AST filtering:   {}", format_duration(duration));
+    }
+
+    if let Some(duration) = timings.early_caching {
+        println!("Early caching:         {}", format_duration(duration));
+    }
+
+    if let Some(duration) = timings.result_processing {
+        println!("Result processing:     {}", format_duration(duration));
+    }
+
+    if let Some(duration) = timings.result_ranking {
+        println!("Result ranking:        {}", format_duration(duration));
+    }
+
+    if let Some(duration) = timings.limit_application {
+        println!("Limit application:     {}", format_duration(duration));
+    }
+
+    if let Some(duration) = timings.block_merging {
+        println!("Block merging:         {}", format_duration(duration));
+    }
+
+    if let Some(duration) = timings.final_caching {
+        println!("Final caching:         {}", format_duration(duration));
+    }
+
+    if let Some(duration) = timings.total_search_time {
+        println!("Total search time:     {}", format_duration(duration));
+    }
+
+    println!("===================================\n");
+}
+
+// Removed evaluate_ignoring_negatives helper function in favor of direct usage
 
 /// Our main "perform_probe" function remains largely the same. Below we show how you might
 /// incorporate "search_with_structured_patterns" to handle the AST logic in a specialized path.
 /// For simplicity, we won't fully replace the existing logic. Instead, we'll demonstrate
 /// how you'd do it if you wanted to leverage the new approach.
 pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
+    // Start timing the entire search process
+    let total_start = Instant::now();
+
     let SearchOptions {
         path,
         queries,
@@ -58,6 +134,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Handle session ID generation if session is provided but empty
+    // For test runs, force session to None to disable caching
     let (effective_session, session_was_generated) = if let Some(s) = session {
         if s.is_empty() {
             // Check if we have a session ID in the environment variable
@@ -128,15 +205,25 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     let mut timings = SearchTimings {
         query_preprocessing: None,
+        pattern_generation: None,
         file_searching: None,
+        filename_matching: None,
+        early_filtering: None,
+        early_caching: None,
         result_processing: None,
         result_ranking: None,
         limit_application: None,
         block_merging: None,
+        final_caching: None,
+        total_search_time: None,
     };
 
     // Combine multiple queries with AND or just parse single query
     let qp_start = Instant::now();
+    if debug_mode {
+        println!("DEBUG: Starting query preprocessing...");
+    }
+
     let parse_res = if queries.len() > 1 {
         // Join multiple queries with AND
         let combined_query = queries.join(" AND ");
@@ -144,7 +231,16 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     } else {
         create_query_plan(&queries[0], *exact)
     };
-    timings.query_preprocessing = Some(qp_start.elapsed());
+
+    let qp_duration = qp_start.elapsed();
+    timings.query_preprocessing = Some(qp_duration);
+
+    if debug_mode {
+        println!(
+            "DEBUG: Query preprocessing completed in {}",
+            format_duration(qp_duration)
+        );
+    }
 
     // If the query fails to parse, return empty results
     if parse_res.is_err() {
@@ -159,8 +255,37 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     // All queries go through the AST path
     let plan = parse_res.unwrap();
-    let sp_start = Instant::now();
+
+    // Pattern generation timing
+    let pg_start = Instant::now();
+    if debug_mode {
+        println!("DEBUG: Starting pattern generation...");
+        println!("DEBUG: Using combined pattern approach for more efficient searching");
+    }
+
+    // Use combined pattern approach for more efficient searching
     let structured_patterns = create_structured_patterns(&plan);
+
+    let pg_duration = pg_start.elapsed();
+    timings.pattern_generation = Some(pg_duration);
+
+    if debug_mode {
+        println!(
+            "DEBUG: Pattern generation completed in {}",
+            format_duration(pg_duration)
+        );
+        println!("DEBUG: Generated {} patterns", structured_patterns.len());
+        if structured_patterns.len() == 1 {
+            println!("DEBUG: Successfully created a single combined pattern for all terms");
+        }
+    }
+
+    // File searching timing
+    let fs_start = Instant::now();
+    if debug_mode {
+        println!("DEBUG: Starting file searching...");
+    }
+
     let mut file_term_map = search_with_structured_patterns(
         path,
         &plan,
@@ -168,18 +293,197 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         custom_ignores,
         *allow_tests,
     )?;
-    timings.file_searching = Some(sp_start.elapsed());
+
+    let fs_duration = fs_start.elapsed();
+    timings.file_searching = Some(fs_duration);
+
+    // Print debug information about search results
+    if debug_mode {
+        // Calculate total matches across all files
+        let total_matches: usize = file_term_map
+            .values()
+            .map(|term_map| term_map.values().map(|lines| lines.len()).sum::<usize>())
+            .sum();
+
+        // Get number of unique files
+        let unique_files = file_term_map.keys().len();
+
+        println!(
+            "DEBUG: File searching completed in {} - Found {} matches in {} unique files",
+            format_duration(fs_duration),
+            total_matches,
+            unique_files
+        );
+    }
 
     // Build final results
     let mut all_files = file_term_map.keys().cloned().collect::<HashSet<_>>();
 
     // Add filename matches if enabled
-    let filename_matching_files = if include_filenames {
-        find_matching_filenames(path, queries, &all_files, custom_ignores, *allow_tests)?
-    } else {
-        Vec::new()
-    };
-    all_files.extend(filename_matching_files.iter().cloned());
+    let fm_start = Instant::now();
+    if include_filenames {
+        if debug_mode {
+            println!("DEBUG: Starting filename matching...");
+        }
+        // Find all files that match our patterns by filename, along with the terms that matched
+        let filename_matches: HashMap<PathBuf, HashSet<usize>> = file_list_cache::find_matching_filenames(
+            path,
+            queries,
+            &all_files,
+            custom_ignores,
+            *allow_tests,
+            &plan.term_indices,
+        )?;
+
+        if debug_mode {
+            println!(
+                "DEBUG: Found {} files matching by filename",
+                filename_matches.len()
+            );
+        }
+
+        // Process files that matched by filename
+        for (pathbuf, matched_terms) in &filename_matches {
+            // Read the file content to get the total number of lines
+            let file_content = match std::fs::read_to_string(pathbuf.as_path()) {
+                Ok(content) => content,
+                Err(e) => {
+                    if debug_mode {
+                        println!("DEBUG: Error reading file {:?}: {:?}", pathbuf, e);
+                    }
+                    continue;
+                }
+            };
+
+            // Count the number of lines in the file
+            let line_count = file_content.lines().count();
+            if line_count == 0 {
+                if debug_mode {
+                    println!("DEBUG: File {:?} is empty, skipping", pathbuf);
+                }
+                continue;
+            }
+
+            // Create a set of all line numbers in the file (1-based indexing)
+            let all_line_numbers: HashSet<usize> = (1..=line_count).collect();
+
+            // Check if this file already has term matches from content search
+            let mut term_map = if let Some(existing_map) = file_term_map.get(pathbuf) {
+                if debug_mode {
+                    println!(
+                        "DEBUG: File {:?} already has term matches from content search, extending",
+                        pathbuf
+                    );
+                }
+                existing_map.clone()
+            } else {
+                if debug_mode {
+                    println!("DEBUG: Creating new term map for file {:?}", pathbuf);
+                }
+                HashMap::new()
+            };
+
+            // Add the matched terms to the term map with all lines
+            for &term_idx in matched_terms {
+                term_map
+                    .entry(term_idx)
+                    .or_insert_with(HashSet::new)
+                    .extend(&all_line_numbers);
+
+                if debug_mode {
+                    println!(
+                        "DEBUG: Added term index {} to file {:?} with all lines",
+                        term_idx, pathbuf
+                    );
+                }
+            }
+
+            // Update the file_term_map with the new or extended term map
+            file_term_map.insert(pathbuf.clone(), term_map);
+            all_files.insert(pathbuf.clone());
+
+            if debug_mode {
+                println!(
+                    "DEBUG: Added file {:?} with matching terms to file_term_map",
+                    pathbuf
+                );
+            }
+        }
+    }
+
+    if debug_mode {
+        println!("DEBUG: all_files after filename matches: {:?}", all_files);
+    }
+
+    // Early filtering step - filter both all_files and file_term_map using full AST evaluation (including excluded terms)
+    let early_filter_start = Instant::now();
+    if debug_mode {
+        println!("DEBUG: Starting early AST filtering...");
+        println!("DEBUG: Before filtering: {} files", all_files.len());
+    }
+
+    // Create a new filtered file_term_map
+    let mut filtered_file_term_map = HashMap::new();
+    let mut filtered_all_files = HashSet::new();
+
+    for pathbuf in &all_files {
+        if let Some(term_map) = file_term_map.get(pathbuf) {
+            // Extract unique terms found in the file
+            let matched_terms: HashSet<usize> = term_map.keys().copied().collect();
+
+            // Evaluate the file against the AST, including negative terms
+            // Debug log of path, matched terms and term indices
+            if debug_mode {
+                println!("DEBUG: Evaluating file {:?} with AST", pathbuf);
+                println!("DEBUG: Matched terms: {:?}", matched_terms);
+                println!("DEBUG: Term indices: {:?}", plan.term_indices);
+            }
+
+            if plan.ast.evaluate(&matched_terms, &plan.term_indices, true) {
+                filtered_file_term_map.insert(pathbuf.clone(), term_map.clone());
+                filtered_all_files.insert(pathbuf.clone());
+            } else if debug_mode {
+                println!("DEBUG: Early filtering removed file: {:?}", pathbuf);
+            }
+        } else if debug_mode {
+            println!(
+                "DEBUG: File {:?} not found in file_term_map during early filtering",
+                pathbuf
+            );
+        }
+    }
+
+    // Replace the original maps with the filtered ones
+    file_term_map = filtered_file_term_map;
+    all_files = filtered_all_files;
+
+    if debug_mode {
+        println!(
+            "DEBUG: After early filtering: {} files remain",
+            all_files.len()
+        );
+        println!("DEBUG: all_files after early filtering: {:?}", all_files);
+    }
+
+    let early_filter_duration = early_filter_start.elapsed();
+    timings.early_filtering = Some(early_filter_duration);
+
+    if debug_mode {
+        println!(
+            "DEBUG: Early AST filtering completed in {}",
+            format_duration(early_filter_duration)
+        );
+    }
+
+    let fm_duration = fm_start.elapsed();
+    timings.filename_matching = Some(fm_duration);
+
+    if debug_mode && include_filenames {
+        println!(
+            "DEBUG: Filename matching completed in {}",
+            format_duration(fm_duration)
+        );
+    }
 
     // Handle files-only mode
     if *files_only {
@@ -208,6 +512,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 parent_file_id: None,
                 block_id: None,
                 matched_keywords: None,
+                tokenized_content: None,
             });
         }
         let mut limited = apply_limits(res, *max_results, *max_bytes, *max_tokens);
@@ -215,14 +520,21 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         // No caching for files-only mode
         limited.cached_blocks_skipped = None;
 
+        // Set total search time
+        timings.total_search_time = Some(total_start.elapsed());
+
+        // Print timing information
+        print_timings(&timings);
+
         return Ok(limited);
     }
 
     // Apply early caching if session is provided - AFTER getting ripgrep results but BEFORE processing
+    let ec_start = Instant::now();
     let mut early_skipped_count = 0;
     if let Some(session_id) = effective_session {
         if debug_mode {
-            println!("DEBUG: Applying early caching for session: {}", session_id);
+            println!("DEBUG: Starting early caching for session: {}", session_id);
             // Print cache contents before filtering
             if let Err(e) = cache::debug_print_cache(session_id) {
                 eprintln!("Error printing cache: {}", e);
@@ -244,56 +556,45 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
 
         // Update all_files based on the filtered file_term_map
-        all_files = file_term_map.keys().cloned().collect();
+        // Intersect with existing all_files to preserve filtering
+        let cached_files = file_term_map.keys().cloned().collect::<HashSet<_>>();
+        all_files = all_files.intersection(&cached_files).cloned().collect();
+
+        if debug_mode {
+            println!("DEBUG: all_files after caching: {:?}", all_files);
+        }
+    }
+
+    let ec_duration = ec_start.elapsed();
+    timings.early_caching = Some(ec_duration);
+
+    if debug_mode && effective_session.is_some() {
+        println!(
+            "DEBUG: Early caching completed in {}",
+            format_duration(ec_duration)
+        );
     }
 
     // Process the files for detailed results
     let rp_start = Instant::now();
-    let mut final_results = Vec::new();
-
     if debug_mode {
         println!(
-            "DEBUG: Processing {} files for detailed results after early caching",
+            "DEBUG: Starting result processing for {} files after early caching...",
             all_files.len()
         );
     }
+
+    let mut final_results = Vec::new();
+
     for pathbuf in &all_files {
         if debug_mode {
             println!("DEBUG: Processing file: {:?}", pathbuf);
         }
 
-        // We'll handle excluded terms at the block level in filter_code_block_with_ast
-        // This allows for more precise filtering based on the AST
-
-        // Check if the file has term matches
+        // Get the term map for this file
         if let Some(term_map) = file_term_map.get(pathbuf) {
             if debug_mode {
                 println!("DEBUG: Term map for file: {:?}", term_map);
-            }
-
-            if term_map.is_empty() {
-                // File matched by filename only
-                if debug_mode {
-                    println!("DEBUG: File matched by filename only");
-                }
-
-                // Create a list of term pairs for backward compatibility
-                let term_pairs: Vec<(String, String)> = plan
-                    .term_indices
-                    .keys()
-                    .map(|term| (term.clone(), term.clone()))
-                    .collect();
-
-                if let Ok(results) = process_file_by_filename(pathbuf, &[term_pairs], None) {
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Got {} results from file matched by filename",
-                            results.len()
-                        );
-                    }
-                    final_results.extend(results);
-                }
-                continue;
             }
 
             // Gather matched lines
@@ -307,26 +608,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             }
 
             // Process file with matched lines
-            let mut filename_matched_queries = HashSet::new();
-
-            // For compound words like "networkfirewall", we need to ensure that
-            // the individual terms "network" and "firewall" are counted as matches
-            if queries.len() == 1 {
-                let query = &queries[0];
-
-                // Check if this is a compound word query
-                let parts: Vec<&str> = query.split_whitespace().collect();
-                if parts.len() == 1 {
-                    // This is a single word query, check if it's a compound word
-                    let compound_parts = tokenization::split_camel_case(query);
-                    if compound_parts.len() > 1 {
-                        // This is a compound word, add all term indices to filename_matched_queries
-                        for idx in 0..plan.term_indices.len() {
-                            filename_matched_queries.insert(idx);
-                        }
-                    }
-                }
-            }
+            let filename_matched_queries = HashSet::new();
 
             // Create a list of term pairs for backward compatibility
             let term_pairs: Vec<(String, String)> = plan
@@ -366,64 +648,53 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 }
             }
         } else {
-            // File not found in file_term_map, but it was in all_files
-            // This means it was matched by filename only
+            // This should never happen, but keep for safety
             if debug_mode {
-                println!("DEBUG: File matched by filename only");
-            }
-
-            // Create a list of term pairs for backward compatibility
-            let term_pairs: Vec<(String, String)> = plan
-                .term_indices
-                .keys()
-                .map(|term| (term.clone(), term.clone()))
-                .collect();
-
-            if let Ok(results) = process_file_by_filename(pathbuf, &[term_pairs], None) {
-                if debug_mode {
-                    println!(
-                        "DEBUG: Got {} results from file matched by filename",
-                        results.len()
-                    );
-                }
-                final_results.extend(results);
+                println!(
+                    "DEBUG: ERROR - File {:?} not found in file_term_map but was in all_files",
+                    pathbuf
+                );
             }
         }
     }
+
+    let rp_duration = rp_start.elapsed();
+    timings.result_processing = Some(rp_duration);
+
     if debug_mode {
         println!(
-            "DEBUG: Final results before ranking: {}",
+            "DEBUG: Result processing completed in {} - Generated {} results",
+            format_duration(rp_duration),
             final_results.len()
         );
-        for (i, res) in final_results.iter().enumerate() {
-            println!("DEBUG: Result {}: file={}", i, res.file);
-        }
     }
-
-    timings.result_processing = Some(rp_start.elapsed());
 
     // Rank results
     let rr_start = Instant::now();
+    if debug_mode {
+        println!("DEBUG: Starting result ranking...");
+    }
+
     rank_search_results(&mut final_results, queries, reranker);
-    timings.result_ranking = Some(rr_start.elapsed());
+
+    let rr_duration = rr_start.elapsed();
+    timings.result_ranking = Some(rr_duration);
 
     if debug_mode {
         println!(
-            "DEBUG: Final results after ranking: {}",
-            final_results.len()
+            "DEBUG: Result ranking completed in {}",
+            format_duration(rr_duration)
         );
-        for (i, res) in final_results.iter().enumerate() {
-            println!("DEBUG: Result {}: file={}", i, res.file);
-        }
     }
 
     // Apply caching if session is provided - BEFORE applying limits
+    let fc_start = Instant::now();
     let mut skipped_count = early_skipped_count;
     let mut filtered_results = final_results;
 
     if let Some(session_id) = effective_session {
         if debug_mode {
-            println!("DEBUG: Applying final caching for session: {}", session_id);
+            println!("DEBUG: Starting final caching for session: {}", session_id);
             println!(
                 "DEBUG: Already skipped {} lines in early caching",
                 early_skipped_count
@@ -467,24 +738,38 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
     }
 
+    let fc_duration = fc_start.elapsed();
+    timings.final_caching = Some(fc_duration);
+
+    if debug_mode && effective_session.is_some() {
+        println!(
+            "DEBUG: Final caching completed in {}",
+            format_duration(fc_duration)
+        );
+    }
+
     // Apply limits
     let la_start = Instant::now();
+    if debug_mode {
+        println!("DEBUG: Starting limit application...");
+    }
+
     let mut limited = apply_limits(filtered_results, *max_results, *max_bytes, *max_tokens);
     limited.cached_blocks_skipped = if skipped_count > 0 {
         Some(skipped_count)
     } else {
         None
     };
-    timings.limit_application = Some(la_start.elapsed());
+
+    let la_duration = la_start.elapsed();
+    timings.limit_application = Some(la_duration);
 
     if debug_mode {
         println!(
-            "DEBUG: Final results after limits: {}",
+            "DEBUG: Limit application completed in {} - Final result count: {}",
+            format_duration(la_duration),
             limited.results.len()
         );
-        for (i, res) in limited.results.iter().enumerate() {
-            println!("DEBUG: Result {}: file={}", i, res.file);
-        }
     }
 
     // Update the cache with the limited results (before merging)
@@ -504,10 +789,24 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     // Optional block merging - AFTER initial caching
     let bm_start = Instant::now();
+    if debug_mode && !limited.results.is_empty() && !*no_merge {
+        println!("DEBUG: Starting block merging...");
+    }
+
     let final_results = if !limited.results.is_empty() && !*no_merge {
         use crate::search::block_merging::merge_ranked_blocks;
         let merged = merge_ranked_blocks(limited.results.clone(), *merge_threshold);
-        timings.block_merging = Some(bm_start.elapsed());
+
+        let bm_duration = bm_start.elapsed();
+        timings.block_merging = Some(bm_duration);
+
+        if debug_mode {
+            println!(
+                "DEBUG: Block merging completed in {} - Merged result count: {}",
+                format_duration(bm_duration),
+                merged.len()
+            );
+        }
 
         // Create the merged results
         let merged_results = LimitedSearchResults {
@@ -534,9 +833,19 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
         merged_results
     } else {
-        timings.block_merging = Some(bm_start.elapsed());
+        let bm_duration = bm_start.elapsed();
+        timings.block_merging = Some(bm_duration);
+
+        if debug_mode && !*no_merge {
+            println!(
+                "DEBUG: Block merging skipped (no results or disabled) - {}",
+                format_duration(bm_duration)
+            );
+        }
+
         limited
     };
+
     // Print the session ID to the console if it was generated or provided
     if let Some(session_id) = effective_session {
         if session_was_generated {
@@ -549,10 +858,18 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
     }
 
+    // Set total search time
+    timings.total_search_time = Some(total_start.elapsed());
+
+    // Print timing information
+    print_timings(&timings);
+
     Ok(final_results)
 }
 /// Helper function to search files using structured patterns from a QueryPlan.
-/// This function uses parallel processing to search for patterns and collects matches by term indices.
+/// This function uses a single-pass approach with processing to search for patterns
+/// and collects matches by term indices. It uses the file_list_cache to get a filtered
+/// list of files respecting ignore patterns.
 ///
 /// # Arguments
 /// * `root_path` - The base path to search in
@@ -562,459 +879,159 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 /// * `allow_tests` - Whether to include test files
 pub fn search_with_structured_patterns(
     root_path: &Path,
-    plan: &QueryPlan,
+    _plan: &QueryPlan,
     patterns: &[(String, HashSet<usize>)],
     custom_ignores: &[String],
     allow_tests: bool,
 ) -> Result<HashMap<PathBuf, HashMap<usize, HashSet<usize>>>> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    // Define a type alias for the complex nested type
-    type FileMatchMap = HashMap<PathBuf, HashMap<usize, HashSet<usize>>>;
-    let matches_by_file: Arc<Mutex<FileMatchMap>> = Arc::new(Mutex::new(HashMap::new()));
+    let search_start = Instant::now();
 
-    // Extract required terms from AST
-    fn extract_required_terms(expr: &Expr) -> Vec<String> {
-        match expr {
-            Expr::Term {
-                keywords, required, ..
-            } if *required => keywords.clone(),
-            Expr::And(left, right) => {
-                let mut terms = extract_required_terms(left);
-                terms.extend(extract_required_terms(right));
-                terms
-            }
-            Expr::Or(left, right) => {
-                // For OR, a term is required if it's required in either branch
-                let mut terms = extract_required_terms(left);
-                terms.extend(extract_required_terms(right));
-                terms
-            }
-            _ => vec![],
-        }
-    }
-
-    // Get all required terms from the AST
-    let required_term_list = extract_required_terms(&plan.ast);
-    let required_term_set: HashSet<_> = required_term_list.iter().map(|s| s.as_str()).collect();
-
-    // Debug output
+    // Step 1: Create combined regex
     if debug_mode {
-        println!("DEBUG: All patterns: {:?}", patterns);
-        println!("DEBUG: Required terms: {:?}", required_term_list);
+        println!("DEBUG: Starting single-pass structured pattern search...");
+        println!(
+            "DEBUG: Creating combined regex from {} patterns",
+            patterns.len()
+        );
     }
 
-    // Filter patterns for required terms
-    let required_terms: Vec<_> = patterns
+    let combined_pattern = patterns
         .iter()
-        .filter(|(_, _term_idx_set)| {
-            _term_idx_set.iter().any(|&idx| {
-                // Find the term corresponding to this index
-                plan.term_indices
-                    .iter()
-                    .find(|(_, &term_idx)| term_idx == idx)
-                    .map(|(term, _)| required_term_set.contains(term.as_str()))
-                    .unwrap_or(false)
-            })
-        })
-        .collect();
+        .map(|(p, _)| format!("({})", p))
+        .collect::<Vec<_>>()
+        .join("|");
 
-    // Special handling for excluded terms in OR queries
-    // If we have a query like "(key OR word OR 1) -keyword3", we need to make sure
-    // we find files that match the OR part but don't contain the excluded term
-    let has_excluded_terms = !plan.excluded_terms.is_empty();
-    let has_or_expr = match &plan.ast {
-        Expr::Or(_, _) => true,
-        Expr::And(left, right) => {
-            matches!(**left, Expr::Or(_, _)) || matches!(**right, Expr::Or(_, _))
+    let combined_regex = regex::Regex::new(&format!("(?i){}", combined_pattern))?;
+    let pattern_to_terms: Vec<HashSet<usize>> =
+        patterns.iter().map(|(_, terms)| terms.clone()).collect();
+
+    if debug_mode {
+        println!("DEBUG: Combined regex created successfully");
+    }
+
+    // Step 2: Get filtered file list from cache
+    if debug_mode {
+        println!("DEBUG: Getting filtered file list from cache");
+        println!("DEBUG: Custom ignore patterns: {:?}", custom_ignores);
+    }
+
+    // Use file_list_cache to get a filtered list of files
+    let file_list =
+        crate::search::file_list_cache::get_file_list(root_path, allow_tests, custom_ignores)?;
+
+    if debug_mode {
+        println!("DEBUG: Got {} files from cache", file_list.files.len());
+    }
+
+    // Step 3: Process files
+    let mut file_term_maps = HashMap::new();
+
+    if debug_mode {
+        println!("DEBUG: Starting file processing with combined regex");
+    }
+
+    for file_path in &file_list.files {
+        // Search file with combined pattern
+        match search_file_with_combined_pattern(file_path, &combined_regex, &pattern_to_terms) {
+            Ok(term_map) => {
+                if !term_map.is_empty() {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: File {:?} matched combined pattern with {} term indices",
+                            file_path,
+                            term_map.len()
+                        );
+                    }
+
+                    // Add to results
+                    file_term_maps.insert(file_path.clone(), term_map);
+                }
+            }
+            Err(e) => {
+                if debug_mode {
+                    println!("DEBUG: Error searching file {:?}: {:?}", file_path, e);
+                }
+            }
         }
-        _ => false,
+    }
+
+    let total_duration = search_start.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Single-pass search completed in {} - Found matches in {} files",
+            format_duration(total_duration),
+            file_term_maps.len()
+        );
+    }
+
+    Ok(file_term_maps)
+}
+
+/// Helper function to search a file with a combined regex pattern
+/// This function searches a file for matches against a combined regex pattern
+/// and maps the matches to their corresponding term indices.
+///
+/// It processes all matching capture groups in each regex match, ensuring that
+/// if multiple patterns match in a single capture, all of them are properly recorded.
+/// This is important for complex regex patterns where multiple groups might match
+/// simultaneously, ensuring search stability and consistent results.
+fn search_file_with_combined_pattern(
+    file_path: &Path,
+    combined_regex: &regex::Regex,
+    pattern_to_terms: &[HashSet<usize>],
+) -> Result<HashMap<usize, HashSet<usize>>> {
+    let mut term_map = HashMap::new();
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Read the file content
+    let content = match std::fs::read_to_string(file_path) {
+        Ok(content) => content,
+        Err(e) => {
+            if debug_mode {
+                println!("DEBUG: Error reading file {:?}: {:?}", file_path, e);
+            }
+            return Err(anyhow::anyhow!("Failed to read file: {}", e));
+        }
     };
 
-    // Debug output
-    if debug_mode {
-        println!("DEBUG: Required patterns: {:?}", required_terms);
-    }
-
-    // If we have required terms, search them first
-    if !required_terms.is_empty() || (has_excluded_terms && has_or_expr) {
-        let required_files: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
-
-        // Use all patterns if we have excluded terms with OR expressions
-        if has_excluded_terms && has_or_expr {
-            patterns.par_iter().for_each(|(pat, _term_idx_set)| {
-                if debug_mode {
-                    println!("DEBUG: Searching for pattern: {}", pat);
-                }
-                if let Ok(files) =
-                    find_files_with_pattern(root_path, pat, custom_ignores, allow_tests)
-                {
-                    if debug_mode {
-                        println!("DEBUG: Found {} files matching pattern", files.len());
-                    }
-                    for f in files {
-                        if debug_mode {
-                            println!("DEBUG: Checking file: {:?}", f);
-                        }
-                        if let Ok((matched, _)) = search_file_for_pattern(&f, pat, true) {
-                            if debug_mode {
-                                println!("DEBUG: File {:?} matched: {}", f, matched);
-                            }
-                            if matched {
-                                required_files.lock().unwrap().insert(f);
-                            }
-                        }
-                    }
-                }
-            });
-        } else {
-            // Otherwise just use required terms
-            required_terms.par_iter().for_each(|(pat, _term_idx_set)| {
-                if debug_mode {
-                    println!("DEBUG: Searching for pattern: {}", pat);
-                }
-                if let Ok(files) =
-                    find_files_with_pattern(root_path, pat, custom_ignores, allow_tests)
-                {
-                    if debug_mode {
-                        println!("DEBUG: Found {} files matching pattern", files.len());
-                    }
-                    for f in files {
-                        if debug_mode {
-                            println!("DEBUG: Checking file: {:?}", f);
-                        }
-                        if let Ok((matched, _)) = search_file_for_pattern(&f, pat, true) {
-                            if debug_mode {
-                                println!("DEBUG: File {:?} matched: {}", f, matched);
-                            }
-                            if matched {
-                                required_files.lock().unwrap().insert(f);
-                            }
-                        }
-                    }
-                }
-            });
-        }
-
-        let required_files = required_files.lock().unwrap().clone();
-
-        // Filter patterns for non-excluded terms
-        let non_excluded_patterns: Vec<_> = patterns
-            .iter()
-            .filter(|(_, term_idx_set)| {
-                term_idx_set.iter().all(|&idx| {
-                    // Find the term corresponding to this index
-                    plan.term_indices
-                        .iter()
-                        .find(|(_, &term_idx)| term_idx == idx)
-                        .map(|(term, _)| !plan.excluded_terms.contains(term))
-                        .unwrap_or(true)
-                })
-            })
-            .collect();
-
-        // Now search non-excluded patterns but only in files that matched required terms
-        non_excluded_patterns
-            .par_iter()
-            .for_each(|(pat, term_idx_set)| {
-                for f in &required_files {
-                    if let Ok((matched, lines)) = search_file_for_pattern(f, pat, true) {
-                        if matched {
-                            let mut guard = matches_by_file.lock().unwrap();
-                            let entry = guard.entry(f.clone()).or_default();
-                            for &ti in term_idx_set {
-                                entry.entry(ti).or_default().extend(lines.iter());
-                            }
-                        }
-                    }
-                }
-            });
-
-        // Filter out files containing excluded terms
-        let files_to_exclude: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
-
-        // Check each file in our results for excluded terms
-        let all_files = matches_by_file
-            .lock()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-
-        all_files.par_iter().for_each(|file_path| {
-            // Check if this file contains any excluded terms
-            for excluded_term in &plan.excluded_terms {
-                let mut should_exclude = false;
-                // First, check if the file contains the exact excluded term
-                // Create a pattern for the excluded term with word boundaries
-                let base_pattern = crate::search::query::regex_escape(excluded_term);
-
-                // Use word boundaries to ensure we match the exact term
-                // This prevents matching parts of compound words
-                let word_boundary_pattern = format!("\\b{}\\b", base_pattern);
-
-                // Check if the file contains this exact excluded term
-                if let Ok((matched, _)) = search_file_for_pattern(file_path, &word_boundary_pattern, true) {
-                    if matched {
-                        if debug_mode {
-                            println!("DEBUG: File {:?} contains exact excluded term '{}', excluding from results",
-                                    file_path, excluded_term);
-                        }
-                        should_exclude = true;
-                    }
-                }
-
-                // Also check for the exact term in camelCase or PascalCase
-                if !should_exclude {
-                    // This handles cases like "NetworkFirewall" when the excluded term is "networkfirewall"
-                    let camel_case_pattern = format!("(?i)\\b{}\\b", base_pattern);
-                    if let Ok((matched, _)) = search_file_for_pattern(file_path, &camel_case_pattern, true) {
-                        if matched {
-                            if debug_mode {
-                                println!("DEBUG: File {:?} contains excluded term '{}' (case-insensitive), excluding from results",
-                                        file_path, excluded_term);
-                            }
-                            should_exclude = true;
-                        }
-                    }
-                }
-
-                // For compound words, also check if the file contains all components separately
-                if !should_exclude {
-                    // Split the excluded term into components
-                    let components = tokenization::split_camel_case(excluded_term);
-
-                    // Only proceed if it's actually a compound word (has multiple components)
-                    if components.len() > 1 {
-                        // Check if all components are present in the file
-                        let mut all_components_present = true;
-
-                        for component in &components {
-                            // Skip very short components (less than 3 chars)
-                            if component.len() < 3 {
-                                continue;
-                            }
-
-                            let component_pattern = format!("\\b{}\\b", crate::search::query::regex_escape(component));
-
-                            if let Ok((matched, _)) = search_file_for_pattern(file_path, &component_pattern, true) {
-                                if !matched {
-                                    // If any component is not present, the file doesn't contain all components
-                                    all_components_present = false;
-                                    break;
-                                }
-                            } else {
-                                // If there's an error searching for the component, assume it's not present
-                                all_components_present = false;
-                                break;
-                            }
-                        }
-
-                        if all_components_present {
-                            if debug_mode {
-                                println!("DEBUG: File {:?} contains all components of excluded compound word '{}', excluding from results",
-                                        file_path, excluded_term);
-                            }
-                            should_exclude = true;
-                        }
-                    }
-                }
-
-                if should_exclude {
-                    files_to_exclude.lock().unwrap().insert(file_path.clone());
-                    break;
-                }
-            }
-        });
-
-        // Remove excluded files from the results
-        let excluded_files = files_to_exclude.lock().unwrap();
-        if !excluded_files.is_empty() {
+    // Process each line
+    for (line_number, line) in content.lines().enumerate() {
+        // Skip lines that are too long
+        if line.len() > 2000 {
             if debug_mode {
                 println!(
-                    "DEBUG: Removing {} files that match excluded patterns",
-                    excluded_files.len()
+                    "DEBUG: Skipping line {} in file {:?} - line too long ({} characters)",
+                    line_number + 1,
+                    file_path,
+                    line.len()
                 );
             }
-            let mut guard = matches_by_file.lock().unwrap();
-            for file in excluded_files.iter() {
-                guard.remove(file);
-            }
-        }
-    } else {
-        // No required terms - search all patterns in all files
-        if debug_mode {
-            println!("DEBUG: No required terms, searching all patterns");
+            continue;
         }
 
-        // First, filter out patterns for excluded terms
-        let non_excluded_patterns: Vec<_> = patterns
-            .iter()
-            .filter(|(_, term_idx_set)| {
-                term_idx_set.iter().all(|&idx| {
-                    // Find the term corresponding to this index
-                    plan.term_indices
-                        .iter()
-                        .find(|(_, &term_idx)| term_idx == idx)
-                        .map(|(term, _)| !plan.excluded_terms.contains(term))
-                        .unwrap_or(true)
-                })
-            })
-            .collect();
+        // Find all matches in the line
+        for cap in combined_regex.captures_iter(line) {
+            // Check all possible pattern groups in this capture
+            for i in 1..=pattern_to_terms.len() {
+                if cap.get(i).is_some() {
+                    let pattern_idx = i - 1;
 
-        // Search for non-excluded patterns
-        non_excluded_patterns
-            .par_iter()
-            .for_each(|(pat, term_idx_set)| {
-                if debug_mode {
-                    println!("DEBUG: Searching for pattern: {}", pat);
-                }
-                if let Ok(files) =
-                    find_files_with_pattern(root_path, pat, custom_ignores, allow_tests)
-                {
-                    if debug_mode {
-                        println!("DEBUG: Found {} files matching pattern", files.len());
+                    // Add matches for all terms associated with this pattern
+                    for &term_idx in &pattern_to_terms[pattern_idx] {
+                        term_map
+                            .entry(term_idx)
+                            .or_insert_with(HashSet::new)
+                            .insert(line_number + 1); // Convert to 1-based line numbers
                     }
-                    for f in files {
-                        if debug_mode {
-                            println!("DEBUG: Checking file: {:?}", f);
-                        }
-                        if let Ok((matched, lines)) = search_file_for_pattern(&f, pat, true) {
-                            if debug_mode {
-                                println!("DEBUG: File {:?} matched: {}", f, matched);
-                            }
-                            if matched {
-                                let mut guard = matches_by_file.lock().unwrap();
-                                let entry = guard.entry(f.clone()).or_default();
-                                for &ti in term_idx_set {
-                                    entry.entry(ti).or_default().extend(lines.iter());
-                                }
-                            }
-                        }
-                    }
+                    
+                    // Note: We removed the break statement here to process all matching groups
+                    // in a capture, not just the first one. This fixes the search instability issue.
                 }
-            });
-
-        // Filter out files containing excluded terms
-        let files_to_exclude: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
-
-        // Check each file in our results for excluded terms
-        let all_files = matches_by_file
-            .lock()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-
-        all_files.par_iter().for_each(|file_path| {
-            // Check if this file contains any excluded terms
-            for excluded_term in &plan.excluded_terms {
-                let mut should_exclude = false;
-
-                // First, check if the file contains the exact excluded term
-                // Create a pattern for the excluded term with word boundaries
-                let base_pattern = crate::search::query::regex_escape(excluded_term);
-
-                // Use word boundaries to ensure we match the exact term
-                // This prevents matching parts of compound words
-                let word_boundary_pattern = format!("\\b{}\\b", base_pattern);
-
-                // Check if the file contains this exact excluded term
-                if let Ok((matched, _)) = search_file_for_pattern(file_path, &word_boundary_pattern, true) {
-                    if matched {
-                        if debug_mode {
-                            println!("DEBUG: File {:?} contains exact excluded term '{}', excluding from results",
-                                    file_path, excluded_term);
-                        }
-                        should_exclude = true;
-                    }
-                }
-
-                // Also check for the exact term in camelCase or PascalCase
-                if !should_exclude {
-                    // This handles cases like "NetworkFirewall" when the excluded term is "networkfirewall"
-                    let camel_case_pattern = format!("(?i)\\b{}\\b", base_pattern);
-                    if let Ok((matched, _)) = search_file_for_pattern(file_path, &camel_case_pattern, true) {
-                        if matched {
-                            if debug_mode {
-                                println!("DEBUG: File {:?} contains excluded term '{}' (case-insensitive), excluding from results",
-                                        file_path, excluded_term);
-                            }
-                            should_exclude = true;
-                        }
-                    }
-                }
-
-                // For compound words, also check if the file contains all components separately
-                if !should_exclude {
-                    // Split the excluded term into components
-                    let components = tokenization::split_camel_case(excluded_term);
-
-                    // Only proceed if it's actually a compound word (has multiple components)
-                    if components.len() > 1 {
-                        // Check if all components are present in the file
-                        let mut all_components_present = true;
-
-                        for component in &components {
-                            // Skip very short components (less than 3 chars)
-                            if component.len() < 3 {
-                                continue;
-                            }
-
-                            let component_pattern = format!("\\b{}\\b", crate::search::query::regex_escape(component));
-
-                            if let Ok((matched, _)) = search_file_for_pattern(file_path, &component_pattern, true) {
-                                if !matched {
-                                    // If any component is not present, the file doesn't contain all components
-                                    all_components_present = false;
-                                    break;
-                                }
-                            } else {
-                                // If there's an error searching for the component, assume it's not present
-                                all_components_present = false;
-                                break;
-                            }
-                        }
-
-                        if all_components_present {
-                            if debug_mode {
-                                println!("DEBUG: File {:?} contains all components of excluded compound word '{}', excluding from results",
-                                        file_path, excluded_term);
-                            }
-                            should_exclude = true;
-                        }
-                    }
-                }
-
-                if should_exclude {
-                    files_to_exclude.lock().unwrap().insert(file_path.clone());
-                    break;
-                }
-            }
-        });
-
-        // Remove excluded files from the results
-        let excluded_files = files_to_exclude.lock().unwrap();
-        if !excluded_files.is_empty() {
-            if debug_mode {
-                println!(
-                    "DEBUG: Removing {} files that match excluded patterns",
-                    excluded_files.len()
-                );
-            }
-            let mut guard = matches_by_file.lock().unwrap();
-            for file in excluded_files.iter() {
-                guard.remove(file);
             }
         }
     }
 
-    let final_map = Arc::try_unwrap(matches_by_file)
-        .unwrap()
-        .into_inner()
-        .unwrap();
-
-    // Optionally, we could filter each file with the AST:
-    // But we rely on block-level filtering or a final pass. For demonstration, we skip it here.
-
-    Ok(final_map)
+    Ok(term_map)
 }

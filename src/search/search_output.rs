@@ -287,7 +287,7 @@ fn format_and_print_color_results(
         if let Some(keywords) = &result.matched_keywords {
             for keyword in keywords {
                 // Create a case-insensitive regex for the keyword with word boundaries
-                if let Ok(regex) = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(keyword))) {
+                if let Ok(regex) = Regex::new(&format!(r"(?i){}", regex::escape(keyword))) {
                     patterns.push(regex);
                 }
 
@@ -472,7 +472,7 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
     #[derive(serde::Serialize)]
     struct JsonResult<'a> {
         file: &'a str,
-        lines: (usize, usize),
+        lines: [usize; 2],
         node_type: &'a str,
         code: &'a str,
         // Include other relevant fields
@@ -490,7 +490,7 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
         .iter()
         .map(|r| JsonResult {
             file: &r.file,
-            lines: r.lines,
+            lines: [r.lines.0, r.lines.1],
             node_type: &r.node_type,
             code: &r.code,
             matched_keywords: r.matched_keywords.as_ref(),

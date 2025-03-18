@@ -7,11 +7,11 @@ use std::str::Chars;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     /// A search term, which can represent multiple keywords.
-    /// `keywords` => a list of keywords (e.g. ["white", "list"] for "whitelisting")
-    /// `field` => optional field specifier (e.g. Some("comment") for "comment:whitelisting")
+    /// `keywords` => a list of keywords (possibly tokenized/split)
+    /// `field` => optional field specifier (e.g. `Some("title")` for `title:foo`)
     /// `required` => a leading `+`
     /// `excluded` => a leading `-`
-    /// `exact` => quoted string for exact matching without stemming
+    /// `exact` => if originally quoted, meaning "no tokenization/splitting"
     Term {
         keywords: Vec<String>,
         field: Option<String>,
@@ -67,141 +67,211 @@ impl Expr {
         }
     }
 
-    /// Evaluate whether a set of matched term indices satisfies this logical expression.
-    ///
-    /// This is a simplified evaluation function that handles the following cases:
-    /// - Term evaluation (checking if all keywords in a term are present)
-    /// - AND expressions (both sides must evaluate to true)
-    /// - OR expressions (at least one side must evaluate to true)
-    /// - Required terms (must be present)
-    /// - Excluded terms (must not be present)
-    /// - Optional terms (contribute to matching if present)
-    ///
-    /// Parameters:
-    /// - `matched_terms`: the set of term indices that are matched in the block/file.
-    /// - `term_indices`: a mapping from a *string term* (e.g., "foo") to a unique index (e.g., 0).
-    ///
-    /// Returns `true` if the logical expression is satisfied, `false` otherwise.
-    pub fn evaluate(
+    /// Returns `true` if this expression contains at least one `required=true` term.
+    fn has_required_term(&self) -> bool {
+        match self {
+            Expr::Term { required, .. } => *required,
+            Expr::And(left, right) | Expr::Or(left, right) => {
+                left.has_required_term() || right.has_required_term()
+            }
+        }
+    }
+
+    /// A helper to evaluate the expression when the caller already knows if
+    /// there are any required terms in the *entire* query (not just in this subtree).
+    fn evaluate_with_has_required(
         &self,
         matched_terms: &HashSet<usize>,
         term_indices: &HashMap<String, usize>,
+        ignore_negatives: bool,
+        has_required_anywhere: bool,
     ) -> bool {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-        if debug_mode {
-            println!("DEBUG: Evaluating expression: {:?}", self);
-            println!("DEBUG: Matched terms: {:?}", matched_terms);
-            println!("DEBUG: Term indices: {:?}", term_indices);
-        }
 
         match self {
             Expr::Term {
                 keywords,
-                field: _, // Field is handled during term matching, not evaluation
                 required,
                 excluded,
-                exact,
+                ..
             } => {
-                // Edge case: If `keywords` is empty
                 if keywords.is_empty() {
-                    return !excluded; // Empty excluded term is true, otherwise false
+                    // Empty term => if excluded, trivially true, otherwise false
+                    return *excluded;
                 }
-
-                // Check if *all* of these keywords are present in the matched terms
+                // Are all keywords present?
                 let all_present = keywords.iter().all(|kw| {
-                    // First try the exact keyword
-                    if let Some(&idx) = term_indices.get(kw) {
-                        let result = matched_terms.contains(&idx);
-                        if debug_mode {
-                            println!("DEBUG: Keyword '{}' (idx: {}) is present: {}", kw, idx, result);
-                        }
-                        if result {
-                            return true;
-                        }
-                    }
-
-                    // For excluded or exact terms, we should be more strict and not use stemming
-                    // This prevents false positives when checking for excluded terms
-                    if !*excluded && !*exact {
-                        // Try to find a stemmed version of the keyword
-                        // This handles cases where we're looking for a term but only have its stemmed version in the matched terms
-                        for (term, &idx) in term_indices {
-                            // Check if this term could be a stemmed version of our keyword
-                            // Simple heuristic: the term is shorter and the keyword starts with it
-                            if term.len() < kw.len() && kw.starts_with(term) {
-                                let result = matched_terms.contains(&idx);
-                                if result {
-                                    if debug_mode {
-                                        println!("DEBUG: Possible stemmed keyword '{}' for '{}' (idx: {}) is present: {}",
-                                                term, kw, idx, result);
-                                    }
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-
-                    if debug_mode {
-                        println!("DEBUG: Keyword '{}' not found in term_indices", kw);
-                    }
-                    false
+                    term_indices
+                        .get(kw)
+                        .map(|idx| matched_terms.contains(idx))
+                        .unwrap_or(false)
                 });
 
                 if *excluded {
-                    // Excluded => the block must NOT contain all of them
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Excluded term, all_present={}, returning={}",
-                            all_present, !all_present
-                        );
+                    if ignore_negatives {
+                        // Negative ignored => always true
+                        true
+                    } else {
+                        // Excluded => none should be present
+                        !keywords.iter().any(|kw| {
+                            term_indices
+                                .get(kw)
+                                .map(|idx| matched_terms.contains(idx))
+                                .unwrap_or(false)
+                        })
                     }
-                    !all_present
+                } else if *required && ignore_negatives {
+                    // If ignoring negatives, we've already enforced required terms up front.
+                    true
                 } else if *required {
-                    // Required => the block *must* contain them all
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Required term, all_present={}, returning={}",
-                            all_present, all_present
-                        );
-                    }
+                    // Required => must all be present
                     all_present
                 } else {
-                    // Optional => if they're all present, this term is "true"; else false
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Optional term, all_present={}, returning={}",
-                            all_present, all_present
-                        );
+                    // Optional => if there's at least one required term anywhere in the entire query,
+                    // then we do NOT fail if this optional is absent. Otherwise, we do need to match.
+                    if has_required_anywhere {
+                        true
+                    } else {
+                        all_present
                     }
-                    all_present
                 }
             }
             Expr::And(left, right) => {
-                let left_result = left.evaluate(matched_terms, term_indices);
-                let right_result = right.evaluate(matched_terms, term_indices);
-                let result = left_result && right_result;
+                let lval = left.evaluate_with_has_required(
+                    matched_terms,
+                    term_indices,
+                    ignore_negatives,
+                    has_required_anywhere,
+                );
+                let rval = right.evaluate_with_has_required(
+                    matched_terms,
+                    term_indices,
+                    ignore_negatives,
+                    has_required_anywhere,
+                );
                 if debug_mode {
                     println!(
-                        "DEBUG: AND expression: left={}, right={}, result={}",
-                        left_result, right_result, result
+                        "DEBUG: AND => left={}, right={}, result={}",
+                        lval,
+                        rval,
+                        lval && rval
                     );
                 }
-                result
+                lval && rval
             }
             Expr::Or(left, right) => {
-                let left_result = left.evaluate(matched_terms, term_indices);
-                let right_result = right.evaluate(matched_terms, term_indices);
-                let result = left_result || right_result;
+                let lval = left.evaluate_with_has_required(
+                    matched_terms,
+                    term_indices,
+                    ignore_negatives,
+                    has_required_anywhere,
+                );
+                let rval = right.evaluate_with_has_required(
+                    matched_terms,
+                    term_indices,
+                    ignore_negatives,
+                    has_required_anywhere,
+                );
                 if debug_mode {
                     println!(
-                        "DEBUG: OR expression: left={}, right={}, result={}",
-                        left_result, right_result, result
+                        "DEBUG: OR => left={}, right={}, result={}",
+                        lval,
+                        rval,
+                        lval || rval
                     );
                 }
-                result
+                lval || rval
             }
         }
+    }
+
+    /// Evaluate whether a set of matched term indices satisfies this logical expression.
+    ///
+    /// - Term: check if **all** of its keywords are present (optional/required), or
+    ///   if **none** are present (excluded).
+    /// - AND => both sides must match.
+    /// - OR => at least one side must match.
+    /// - `ignore_negatives` => if true, excluded terms are basically ignored (they don’t exclude).
+    /// - Field is **ignored** in evaluation, per request.
+    pub fn evaluate(
+        &self,
+        matched_terms: &HashSet<usize>,
+        term_indices: &HashMap<String, usize>,
+        ignore_negatives: bool,
+    ) -> bool {
+        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+        // If ignoring negatives, let's ensure that all required terms are present up front.
+        // (We skip enforcing them again for each subtree.)
+        if ignore_negatives {
+            fn collect_required(expr: &Expr) -> Vec<String> {
+                match expr {
+                    Expr::Term {
+                        keywords,
+                        required,
+                        excluded,
+                        ..
+                    } => {
+                        if *required && !*excluded {
+                            keywords.clone()
+                        } else {
+                            vec![]
+                        }
+                    }
+                    Expr::And(left, right) => {
+                        let mut out = collect_required(left);
+                        out.extend(collect_required(right));
+                        out
+                    }
+                    Expr::Or(left, right) => {
+                        let mut out = collect_required(left);
+                        out.extend(collect_required(right));
+                        out
+                    }
+                }
+            }
+            let required_terms = collect_required(self);
+            if debug_mode && !required_terms.is_empty() {
+                println!(
+                    "DEBUG: Required terms (ignoring negatives): {:?}",
+                    required_terms
+                );
+            }
+            for term in &required_terms {
+                if let Some(&idx) = term_indices.get(term) {
+                    if !matched_terms.contains(&idx) {
+                        if debug_mode {
+                            println!("DEBUG: Missing required term '{}' (idx={})", term, idx);
+                        }
+                        return false;
+                    }
+                } else {
+                    // If we can't find that required term at all, fail immediately
+                    return false;
+                }
+            }
+        }
+
+        // Compute once for the entire query whether any term is required
+        let has_required_anywhere = self.has_required_term();
+
+        if debug_mode {
+            println!("DEBUG: Evaluating => {:?}", self);
+            println!("DEBUG: matched_terms => {:?}", matched_terms);
+            println!("DEBUG: term_indices => {:?}", term_indices);
+            println!(
+                "DEBUG: Expression has_required_anywhere? {}",
+                has_required_anywhere
+            );
+        }
+
+        // Delegate final checks to our helper, which references has_required_anywhere
+        self.evaluate_with_has_required(
+            matched_terms,
+            term_indices,
+            ignore_negatives,
+            has_required_anywhere,
+        )
     }
 }
 
@@ -222,26 +292,20 @@ impl std::fmt::Display for Expr {
                 } else {
                     ""
                 };
-
-                // Add field prefix if present
-                let field_prefix = if let Some(field_name) = field {
+                let field_prefix = if let Some(ref field_name) = field {
                     format!("{}:", field_name)
                 } else {
                     String::new()
                 };
-
-                // Join multiple keywords with spaces
-                let keyword_str = if keywords.len() == 1 {
-                    if *exact {
-                        format!("\"{}\"", keywords[0])
-                    } else {
-                        keywords[0].clone()
-                    }
+                // If there's exactly one keyword and it's exact => show it quoted
+                // If multiple or not exact => "quoted" with joined keywords
+                if keywords.len() == 1 && *exact {
+                    write!(f, "{}{}\"{}\"", prefix, field_prefix, keywords[0])
+                } else if keywords.len() == 1 {
+                    write!(f, "{}{}{}", prefix, field_prefix, keywords[0])
                 } else {
-                    format!("\"{}\"", keywords.join(" "))
-                };
-
-                write!(f, "{}{}{}", prefix, field_prefix, keyword_str)
+                    write!(f, "{}{}\"{}\"", prefix, field_prefix, keywords.join(" "))
+                }
             }
             Expr::And(left, right) => write!(f, "({} AND {})", left, right),
             Expr::Or(left, right) => write!(f, "({} OR {})", left, right),
@@ -249,7 +313,6 @@ impl std::fmt::Display for Expr {
     }
 }
 
-/// Our possible tokens.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Plus,                 // '+'
@@ -258,8 +321,9 @@ pub enum Token {
     Or,                   // 'OR'
     LParen,               // '('
     RParen,               // ')'
-    Ident(String),        // e.g. 'foo', 'bar123'
-    QuotedString(String), // e.g. "hello world"
+    Colon,                // ':'
+    Ident(String),        // alphanumeric / underscore / dot
+    QuotedString(String), // raw string inside quotes
 }
 
 /// A simple error type for parsing/tokenizing.
@@ -292,12 +356,9 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
 
     while let Some(&ch) = chars.peek() {
         match ch {
-            // Skip whitespace
             c if c.is_whitespace() => {
                 chars.next();
             }
-
-            // Single-character tokens
             '+' => {
                 tokens.push(Token::Plus);
                 chars.next();
@@ -314,17 +375,17 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
                 tokens.push(Token::RParen);
                 chars.next();
             }
-
-            // Add a new case for quoted strings
+            ':' => {
+                tokens.push(Token::Colon);
+                chars.next();
+            }
             '"' => {
                 chars.next(); // consume the opening quote
                 let quoted_string = lex_quoted_string(&mut chars)?;
                 tokens.push(Token::QuotedString(quoted_string));
             }
-
-            // Possible AND/OR keywords or just an identifier
             _ => {
-                // If it starts with a letter, number, underscore, or dot, treat it as an identifier
+                // If it starts with alphanumeric, underscore, or dot => parse identifier
                 if ch.is_alphanumeric() || ch == '_' || ch == '.' {
                     let ident = lex_identifier(&mut chars);
                     let ident_upper = ident.to_ascii_uppercase();
@@ -336,9 +397,9 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
                         tokens.push(Token::Ident(ident));
                     }
                 } else {
-                    // Skip unknown characters instead of returning an error
+                    // Skip unknown characters
                     if debug_mode {
-                        println!("DEBUG: Skipping unknown character: '{}'", ch);
+                        println!("DEBUG: Skipping unknown character '{}'", ch);
                     }
                     chars.next();
                 }
@@ -346,17 +407,15 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
         }
     }
 
-    // If we have no tokens, return an error
     if tokens.is_empty() {
         return Err(ParseError::Generic(
             "No valid tokens found in input".to_string(),
         ));
     }
-
     Ok(tokens)
 }
 
-// New helper function to lex a quoted string
+/// Lex a quoted string, allowing `\"` to escape quotes
 fn lex_quoted_string(chars: &mut Peekable<Chars>) -> Result<String, ParseError> {
     let mut buf = String::new();
     let mut escaped = false;
@@ -377,7 +436,6 @@ fn lex_quoted_string(chars: &mut Peekable<Chars>) -> Result<String, ParseError> 
             chars.next();
         }
     }
-
     // If we get here, we ran out of characters before finding a closing quote
     Err(ParseError::UnexpectedEndOfInput)
 }
@@ -395,18 +453,19 @@ fn lex_identifier(chars: &mut Peekable<Chars>) -> String {
     buf
 }
 
+// Adjust paths to match your project structure
+use crate::search::tokenization::{add_special_term, tokenize as custom_tokenize};
+
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
-    any_term: bool,
 }
 
 impl Parser {
-    fn new(tokens: Vec<Token>, any_term: bool) -> Self {
+    fn new(tokens: Vec<Token>) -> Self {
         Parser {
             tokens,
             pos: 0,
-            any_term,
         }
     }
 
@@ -429,58 +488,80 @@ impl Parser {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        self.parse_or_expr()
+        let expr = self.parse_or_expr()?;
+        // If leftover tokens remain, we ignore them for now
+        Ok(expr)
     }
 
-    /// Parses an OR expression, which has the lowest precedence.
     fn parse_or_expr(&mut self) -> Result<Expr, ParseError> {
+        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        if debug_mode {
+            println!("DEBUG: parse_or_expr => pos={}", self.pos);
+        }
+
         let mut left = self.parse_and_expr()?;
 
         while let Some(Token::Or) = self.peek() {
-            self.next(); // consume OR
+            self.next(); // consume 'OR'
             let right = self.parse_and_expr()?;
             left = Expr::Or(Box::new(left), Box::new(right));
+            if debug_mode {
+                println!("DEBUG: OR => {:?}", left);
+            }
         }
-
         Ok(left)
     }
 
-    /// Parses an AND expression, which binds tighter than OR.
     fn parse_and_expr(&mut self) -> Result<Expr, ParseError> {
+        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        if debug_mode {
+            println!("DEBUG: parse_and_expr => pos={}", self.pos);
+        }
+
         let mut left = self.parse_factor()?;
 
         while let Some(token) = self.peek() {
             match token {
+                // Explicit "AND"
                 Token::And => {
-                    self.next(); // consume AND
+                    self.next(); // consume 'AND'
                     let right = self.parse_factor()?;
                     left = Expr::And(Box::new(left), Box::new(right));
+                    if debug_mode {
+                        println!("DEBUG: AND => {:?}", left);
+                    }
                 }
-                Token::Plus
-                | Token::Minus
-                | Token::LParen
-                | Token::Ident(_)
-                | Token::QuotedString(_) => {
+                // If we see "OR", break so parse_or_expr can handle it
+                Token::Or => {
+                    break;
+                }
+                // If next token is a plus or minus, interpret as an AND
+                Token::Plus | Token::Minus => {
                     let right = self.parse_factor()?;
-                    // Use OR for implicit combinations (space-separated terms) in any_term mode
-                    // Use AND for implicit combinations in all_terms mode
-                    if self.any_term {
-                        left = Expr::Or(Box::new(left), Box::new(right));
-                    } else {
-                        left = Expr::And(Box::new(left), Box::new(right));
+                    left = Expr::And(Box::new(left), Box::new(right));
+                    if debug_mode {
+                        println!("DEBUG: forced AND => {:?}", left);
+                    }
+                }
+                // Otherwise (Ident, QuotedString, LParen) => implicit combos
+                Token::Ident(_) | Token::QuotedString(_) | Token::LParen => {
+                    let right = self.parse_factor()?;
+                    // Always use AND for implicit combinations (standard Elasticsearch behavior)
+                    left = Expr::And(Box::new(left), Box::new(right));
+                    if debug_mode {
+                        println!("DEBUG: implicit AND => {:?}", left);
                     }
                 }
                 _ => break,
             }
         }
-
         Ok(left)
     }
 
     fn parse_factor(&mut self) -> Result<Expr, ParseError> {
         match self.peek() {
             Some(Token::LParen) => {
-                self.next();
+                self.next(); // consume '('
                 let expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
                 Ok(expr)
@@ -492,6 +573,7 @@ impl Parser {
     fn parse_prefixed_term(&mut self) -> Result<Expr, ParseError> {
         let mut required = false;
         let mut excluded = false;
+        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
         match self.peek() {
             Some(Token::Plus) => {
@@ -506,77 +588,125 @@ impl Parser {
         }
 
         let primary_expr = self.parse_primary()?;
-
+        // If it's a Term => update its required/excluded
         if let Expr::Term {
             keywords,
             field,
+            required: _,
+            excluded: _,
             exact,
-            ..
         } = primary_expr
         {
+            // If exact or excluded => skip further tokenization
+            let final_keywords = if exact || excluded {
+                // Mark them special (no splitting)
+                for kw in &keywords {
+                    add_special_term(kw);
+                }
+                keywords
+            } else {
+                // Apply your custom tokenization
+                let mut expanded = Vec::new();
+                for kw in &keywords {
+                    let splitted = custom_tokenize(kw);
+                    expanded.extend(splitted);
+                }
+                expanded
+            };
+
+            if debug_mode {
+                println!(
+                    "DEBUG: parse_prefixed_term => required={}, excluded={}, final_keywords={:?}",
+                    required, excluded, final_keywords
+                );
+            }
+
             Ok(Expr::Term {
-                keywords,
+                keywords: final_keywords,
                 field,
                 required,
                 excluded,
                 exact,
             })
         } else {
+            // If it's a sub-expression in parentheses or something else, just return it
             Ok(primary_expr)
         }
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
+        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
         match self.peek() {
+            // Quoted => exact
+            Some(Token::QuotedString(s)) => {
+                let val = s.clone();
+                self.next();
+                if debug_mode {
+                    println!("DEBUG: QuotedString => {}", val);
+                }
+                Ok(Expr::Term {
+                    keywords: vec![val],
+                    field: None,
+                    required: false,
+                    excluded: false,
+                    exact: true,
+                })
+            }
+            // Possibly field:term
             Some(Token::Ident(_)) => {
-                if let Some(Token::Ident(kw)) = self.next() {
-                    // Check if this is a field specifier (e.g., "field:term")
-                    let mut field = None;
-                    let mut keywords = Vec::new();
-
-                    if kw.contains(':') {
-                        let parts: Vec<&str> = kw.splitn(2, ':').collect();
-                        if parts.len() == 2 {
-                            field = Some(parts[0].to_string());
-                            // For now, treat the term as a single keyword
-                            // In Milestone 2, we'll apply tokenization and stemming here
-                            keywords.push(parts[1].to_string());
-                        } else {
-                            // Invalid format, treat as a regular term
-                            keywords.push(kw);
+                let Token::Ident(first) = self.next().unwrap() else {
+                    unreachable!()
+                };
+                if debug_mode {
+                    println!("DEBUG: Ident => {}", first);
+                }
+                if let Some(Token::Colon) = self.peek() {
+                    // We have "field:"
+                    self.next(); // consume colon
+                                 // Next could be ident or quoted
+                    match self.peek() {
+                        Some(Token::Ident(ident2)) => {
+                            let val2 = ident2.clone();
+                            self.next();
+                            Ok(Expr::Term {
+                                keywords: vec![val2],
+                                field: Some(first),
+                                required: false,
+                                excluded: false,
+                                exact: false,
+                            })
                         }
-                    } else {
-                        // Regular term, no field specifier
-                        keywords.push(kw);
+                        Some(Token::QuotedString(qs)) => {
+                            let qval = qs.clone();
+                            self.next();
+                            Ok(Expr::Term {
+                                keywords: vec![qval],
+                                field: Some(first),
+                                required: false,
+                                excluded: false,
+                                exact: true,
+                            })
+                        }
+                        // If nothing or other token => empty term
+                        _ => Ok(Expr::Term {
+                            keywords: vec![],
+                            field: Some(first),
+                            required: false,
+                            excluded: false,
+                            exact: false,
+                        }),
                     }
-
+                } else {
+                    // Just a plain ident
                     Ok(Expr::Term {
-                        keywords,
-                        field,
+                        keywords: vec![first],
+                        field: None,
                         required: false,
                         excluded: false,
                         exact: false,
                     })
-                } else {
-                    unreachable!();
                 }
-            }
-            Some(Token::QuotedString(s)) => {
-                let string_value = s.clone();
-                self.next();
-                Ok(Expr::Term {
-                    keywords: vec![string_value],
-                    field: None,
-                    required: false,
-                    excluded: false,
-                    exact: true, // Mark as exact match
-                })
-            }
-            Some(Token::LParen) => {
-                self.next();
-                let expr = self.parse_expr()?;
-                self.expect(&Token::RParen)?;
-                Ok(expr)
             }
             Some(t) => Err(ParseError::UnexpectedToken(t.clone())),
             None => Err(ParseError::UnexpectedEndOfInput),
@@ -584,121 +714,51 @@ impl Parser {
     }
 }
 
-/// Process the AST terms by applying tokenization and stemming
-fn process_ast_terms(expr: Expr) -> Expr {
-    use crate::search::tokenization::tokenize;
-
-    match expr {
-        Expr::Term {
-            keywords,
-            field,
-            required,
-            excluded,
-            exact,
-        } => {
-            // For excluded or exact terms, don't apply tokenization
-            if excluded || exact {
-                return Expr::Term {
-                    keywords,
-                    field,
-                    required,
-                    excluded,
-                    exact,
-                };
-            }
-
-            // Apply tokenization to the keywords for non-excluded, non-exact terms
-            let processed_keywords = keywords
-                .iter()
-                .flat_map(|keyword| {
-                    // For terms with underscores, we need to tokenize them properly
-                    // This will split "keyword_underscore" into ["key", "word", "under", "score"]
-                    tokenize(keyword)
-                })
-                .collect();
-
-            Expr::Term {
-                keywords: processed_keywords,
-                field,
-                required,
-                excluded,
-                exact,
-            }
-        }
-        Expr::And(left, right) => Expr::And(
-            Box::new(process_ast_terms(*left)),
-            Box::new(process_ast_terms(*right)),
-        ),
-        Expr::Or(left, right) => Expr::Or(
-            Box::new(process_ast_terms(*left)),
-            Box::new(process_ast_terms(*right)),
-        ),
-    }
-}
-
 /// Parse the query string into an AST
-pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
+pub fn parse_query(input: &str) -> Result<Expr, ParseError> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
-    // Try to tokenize the input
-    let tokens_result = tokenize(input);
-
-    if let Err(e) = &tokens_result {
-        if debug_mode {
-            println!("DEBUG: Tokenization failed: {:?}", e);
-        }
-
-        // If tokenization fails, extract any valid identifiers from the input
-        // and create a simple Term expression with them
-        let cleaned_input = input
-            .chars()
-            .filter(|&c| c.is_alphanumeric() || c.is_whitespace() || c == '_' || c == '.')
-            .collect::<String>();
-
-        if debug_mode {
-            println!("DEBUG: Cleaned input: '{}'", cleaned_input);
-        }
-
-        if cleaned_input.trim().is_empty() {
-            return Err(ParseError::Generic(
-                "No valid tokens found in input".to_string(),
-            ));
-        }
-
-        // Create a simple Term expression with the cleaned input
-        let keywords = cleaned_input
-            .split_whitespace()
-            .map(|s| s.to_lowercase())
-            .collect::<Vec<String>>();
-
-        if debug_mode {
-            println!("DEBUG: Created fallback keywords: {:?}", keywords);
-        }
-
-        return Ok(Expr::Term {
-            keywords,
-            field: None,
-            required: false,
-            excluded: false,
-            exact: false,
-        });
+    if debug_mode {
+        println!("DEBUG: parse_query('{}')", input);
     }
 
-    let tokens = tokens_result.unwrap();
+    // Tokenize
+    let tokens_result = tokenize(input);
+    if debug_mode {
+        println!("DEBUG: Tokens => {:?}", tokens_result);
+    }
 
-    // Pass any_term to the parser to control how implicit combinations are handled
-    let mut parser = Parser::new(tokens, any_term);
-
-    // Try to parse the tokens into an AST
-    let raw_ast_result = parser.parse_expr();
-
-    if let Err(e) = &raw_ast_result {
-        if debug_mode {
-            println!("DEBUG: AST parsing failed: {:?}", e);
+    // If tokenization fails => fallback
+    let tokens = match tokens_result {
+        Ok(ts) => ts,
+        Err(_) => {
+            let cleaned_input = input
+                .chars()
+                .filter(|&c| c.is_alphanumeric() || c.is_whitespace() || c == '_' || c == '.')
+                .collect::<String>();
+            if cleaned_input.trim().is_empty() {
+                return Err(ParseError::Generic("No valid tokens found".to_string()));
+            }
+            let keywords = cleaned_input
+                .split_whitespace()
+                .map(|s| s.to_lowercase())
+                .collect::<Vec<String>>();
+            return Ok(Expr::Term {
+                keywords,
+                field: None,
+                required: false,
+                excluded: false,
+                exact: false,
+            });
         }
+    };
 
-        // If parsing fails, extract any identifiers from the tokens
-        // and create a simple Term expression with them
+    // Parse into AST
+    let mut parser = Parser::new(tokens);
+    let parsed = parser.parse_expr();
+
+    if parsed.is_err() {
+        // If parse fails => fallback to any Ident tokens
         let idents = parser
             .tokens
             .iter()
@@ -706,15 +766,10 @@ pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
                 Token::Ident(s) => Some(s.clone()),
                 _ => None,
             })
-            .collect::<Vec<String>>();
-
-        if debug_mode {
-            println!("DEBUG: Extracted identifiers from tokens: {:?}", idents);
-        }
-
+            .collect::<Vec<_>>();
         if idents.is_empty() {
             return Err(ParseError::Generic(
-                "No valid identifiers found in tokens".to_string(),
+                "No valid identifiers found".to_string(),
             ));
         }
         return Ok(Expr::Term {
@@ -726,30 +781,19 @@ pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
         });
     }
 
-    let raw_ast = raw_ast_result.unwrap();
-
-    // Check if we consumed all tokens
-    if parser.pos < parser.tokens.len() && debug_mode {
-        println!("DEBUG: Extra tokens after complete parse, using partial AST");
-    }
-
-    // Apply tokenization and stemming to the AST
-    let processed_ast = process_ast_terms(raw_ast);
-
-    Ok(processed_ast)
+    // Otherwise success
+    Ok(parsed.unwrap())
 }
 
 /// Backward compatibility wrapper for parse_query
 #[allow(dead_code)]
 pub fn parse_query_compat(input: &str) -> Result<Expr, ParseError> {
-    // Default to any_term = true for backward compatibility
-    parse_query(input, true)
+    parse_query(input)
 }
 
-// For tests only - this allows tests to call parse_query without the any_term parameter
 #[cfg(test)]
 pub fn parse_query_test(input: &str) -> Result<Expr, ParseError> {
-    parse_query(input, true)
+    parse_query(input)
 }
 
 #[cfg(test)]

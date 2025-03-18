@@ -24,7 +24,6 @@ const SEARCH_FLAG_MAP = {
 	maxBytes: '--max-bytes',
 	maxTokens: '--max-tokens',
 	allowTests: '--allow-tests',
-	anyTerm: '--any-term',
 	noMerge: '--no-merge',
 	mergeThreshold: '--merge-threshold',
 	session: '--session'
@@ -46,7 +45,6 @@ const SEARCH_FLAG_MAP = {
  * @param {number} [options.maxBytes] - Maximum bytes to return
  * @param {number} [options.maxTokens] - Maximum tokens to return
  * @param {boolean} [options.allowTests] - Include test files
- * @param {boolean} [options.anyTerm] - Match any term
  * @param {boolean} [options.noMerge] - Don't merge adjacent blocks
  * @param {number} [options.mergeThreshold] - Merge threshold
  * @param {string} [options.session] - Session ID for caching results

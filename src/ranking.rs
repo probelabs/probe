@@ -1,7 +1,12 @@
+use crate::search::elastic_query::Expr;
 use crate::search::tokenization;
 use rust_stemmers::{Algorithm, Stemmer};
-use std::collections::HashMap;
+use ahash::{AHashMap, AHashSet};
 use std::sync::OnceLock;
+
+// Replace standard collections with ahash versions for better performance
+type HashMap<K, V> = AHashMap<K, V>;
+type HashSet<T> = AHashSet<T>;
 
 /// Represents the result of term frequency and document frequency computation
 pub struct TfDfResult {
@@ -13,44 +18,14 @@ pub struct TfDfResult {
     pub document_lengths: Vec<usize>,
 }
 
-/// Parameters for BM25 scoring algorithm
-pub struct Bm25Params {
-    /// Document term frequencies
-    pub tf_d: HashMap<String, usize>,
-    /// Query term frequencies
-    pub query_tf: HashMap<String, usize>,
-    /// Document frequencies for each term
-    pub dfs: HashMap<String, usize>,
-    /// Total number of documents
-    pub n: usize,
-    /// Length of the current document
-    pub doc_len: usize,
-    /// Average document length
-    pub avgdl: f64,
-    /// Term frequency saturation parameter
-    pub k1: f64,
-    /// Length normalization parameter
-    pub b: f64,
-}
-
 /// Parameters for document ranking
 pub struct RankingParams<'a> {
     /// Documents to rank
     pub documents: &'a [&'a str],
     /// Query string
     pub query: &'a str,
-    /// Number of unique terms in the file
-    pub file_unique_terms: Option<usize>,
-    /// Total number of matches in the file
-    pub file_total_matches: Option<usize>,
-    /// Rank of the file in the match list
-    pub file_match_rank: Option<usize>,
-    /// Number of unique terms in the block
-    pub block_unique_terms: Option<usize>,
-    /// Total number of matches in the block
-    pub block_total_matches: Option<usize>,
-    /// Type of the node (e.g., "method_declaration")
-    pub node_type: Option<&'a str>,
+    /// Pre-tokenized content (optional)
+    pub pre_tokenized: Option<&'a [Vec<String>]>,
 }
 
 /// Returns a reference to the global stemmer instance
@@ -64,68 +39,87 @@ pub fn get_stemmer() -> &'static Stemmer {
 pub fn tokenize(text: &str) -> Vec<String> {
     tokenization::tokenize(text)
 }
-/// Preprocesses text for search by tokenizing and removing duplicates
-pub fn preprocess_text(text: &str, exact: bool) -> Vec<String> {
-    if exact {
-        text.to_lowercase()
-            .split_whitespace()
-            .map(String::from)
-            .collect()
-    } else {
-        tokenize(text)
-    }
-}
 
 /// Preprocesses text with filename for search by tokenizing and removing duplicates
 /// This is used for filename matching - it adds the filename to the tokens
-pub fn preprocess_text_with_filename(text: &str, filename: &str, exact: bool) -> Vec<String> {
-    if exact {
-        let mut tokens: Vec<String> = text
-            .to_lowercase()
-            .split_whitespace()
-            .map(String::from)
-            .collect();
-
-        // Add filename tokens
-        let filename_tokens: Vec<String> = filename
-            .to_lowercase()
-            .split_whitespace()
-            .map(String::from)
-            .collect();
-
-        tokens.extend(filename_tokens);
-        tokens
-    } else {
-        let mut tokens = tokenize(text);
-
-        // Add filename tokens
-        let filename_tokens = tokenize(filename);
-
-        tokens.extend(filename_tokens);
-        tokens
-    }
+pub fn preprocess_text_with_filename(text: &str, filename: &str) -> Vec<String> {
+    let mut tokens = tokenize(text);
+    let filename_tokens = tokenize(filename);
+    tokens.extend(filename_tokens);
+    tokens
 }
 
 /// Computes term frequencies (TF) for each document, document frequencies (DF) for each term,
 /// and document lengths.
 pub fn compute_tf_df(documents: &[&str]) -> TfDfResult {
+    use rayon::prelude::*;
+    
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    
+    if debug_mode {
+        println!("DEBUG: Starting parallel TF-DF computation for {} documents", documents.len());
+    }
+    
+    // Process documents in parallel to compute term frequencies and document lengths
+    let doc_results: Vec<(HashMap<String, usize>, usize, HashSet<String>)> = documents
+        .par_iter()
+        .map(|doc| {
+            let tokens = tokenize(doc);
+            let mut tf = HashMap::new();
+            
+            // Compute term frequency for the current document
+            for token in tokens.iter() {
+                *tf.entry(token.clone()).or_insert(0) += 1;
+            }
+            
+            // Collect unique terms for document frequency calculation
+            let unique_terms: HashSet<String> = tf.keys().cloned().collect();
+            
+            (tf, tokens.len(), unique_terms)
+        })
+        .collect();
+    
+    // Extract term frequencies and document lengths
     let mut term_frequencies = Vec::with_capacity(documents.len());
-    let mut document_frequencies = HashMap::new();
     let mut document_lengths = Vec::with_capacity(documents.len());
-
-    for doc in documents {
-        let tokens = tokenize(doc);
-        let mut tf = HashMap::new();
-        // Compute term frequency for the current document
-        for token in tokens.iter() {
-            *tf.entry(token.clone()).or_insert(0) += 1;
-        }
-        // Update document frequency based on unique terms in this document
-        for term in tf.keys() {
-            *document_frequencies.entry(term.clone()).or_insert(0) += 1;
-        }
+    
+    // Compute document frequencies in parallel using adaptive chunking
+    // This balances parallelism with reduced contention
+    let min_chunk_size = (documents.len() / rayon::current_num_threads()).max(1);
+    let document_frequencies = doc_results
+        .par_iter()
+        .with_min_len(min_chunk_size)  // Adaptive chunking based on document count
+        .map(|(_, _, unique_terms)| {
+            // Create a local document frequency map for this chunk
+            let mut local_df = HashMap::new();
+            for term in unique_terms {
+                *local_df.entry(term.clone()).or_insert(0) += 1;
+            }
+            local_df
+        })
+        .reduce(
+            || HashMap::new(),
+            |mut acc, local_df| {
+                // Merge local document frequency maps
+                for (term, count) in local_df {
+                    *acc.entry(term).or_insert(0) += count;
+                }
+                acc
+            }
+        );
+    
+    if debug_mode {
+        println!("DEBUG: Parallel DF computation completed with {} unique terms", document_frequencies.len());
+    }
+    
+    // Collect results in a deterministic order
+    for (tf, doc_len, _) in doc_results {
         term_frequencies.push(tf);
-        document_lengths.push(tokens.len());
+        document_lengths.push(doc_len);
+    }
+    
+    if debug_mode {
+        println!("DEBUG: Parallel TF-DF computation completed");
     }
 
     TfDfResult {
@@ -133,121 +127,6 @@ pub fn compute_tf_df(documents: &[&str]) -> TfDfResult {
         document_frequencies,
         document_lengths,
     }
-}
-
-/// Computes the TF-IDF IDF value for a term.
-fn idf_tf(df: usize, n: usize) -> f64 {
-    if df == 0 {
-        0.0 // Avoid division by zero for terms not in any document
-    } else if df == n {
-        // When a term appears in all documents, use a small positive value instead of 0
-        0.1
-    } else {
-        (n as f64 / df as f64).ln()
-    }
-}
-
-/// Computes the BM25 IDF value for a term.
-fn idf_bm25(df: usize, n: usize) -> f64 {
-    let num = (n - df) as f64 + 0.5;
-    let den = df as f64 + 0.5;
-    let idf = (num / den).ln();
-
-    // Ensure IDF is not negative
-    if idf < 0.0 {
-        0.1 // Use a small positive value instead
-    } else {
-        idf
-    }
-}
-
-/// Computes the TF-IDF score for a document given a query.
-fn tfidf_score(
-    tf_d: &HashMap<String, usize>,
-    query_tf: &HashMap<String, usize>,
-    dfs: &HashMap<String, usize>,
-    n: usize,
-) -> f64 {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    let mut score = 0.0;
-
-    if debug_mode {
-        // println!("DEBUG: TF-IDF calculation - Document frequencies: {:?}, Total documents: {}", dfs, n);
-    }
-
-    for (term, &qf) in query_tf {
-        if let Some(&tf) = tf_d.get(term) {
-            let df = *dfs.get(term).unwrap_or(&0);
-            let idf = idf_tf(df, n);
-
-            // if debug_mode {
-            //     println!(
-            //         "DEBUG: TF-IDF term '{}': TF={}, DF={}, IDF={}",
-            //         term, tf, df, idf
-            //     );
-            // }
-
-            // TF-IDF contribution: TF(Q) * TF(D) * IDF^2
-            let contribution = (qf as f64) * (tf as f64) * idf * idf;
-            score += contribution;
-
-            // if debug_mode {
-            //     println!(
-            //         "DEBUG: TF-IDF contribution for '{}': {}",
-            //         term, contribution
-            //     );
-            // }
-        }
-    }
-
-    // if debug_mode {
-    //     println!("DEBUG: Final TF-IDF score: {}", score);
-    // }
-
-    score
-}
-
-/// Computes the BM25 score for a document given a query.
-fn bm25_score(params: &Bm25Params) -> f64 {
-    let _debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    let mut score = 0.0;
-
-    // if debug_mode {
-    //     // println!("DEBUG: BM25 calculation - Document frequencies: {:?}, Total documents: {}", params.dfs, params.n);
-    //     // println!("DEBUG: BM25 parameters - k1: {}, b: {}, avgdl: {}, doc_len: {}", params.k1, params.b, params.avgdl, params.doc_len);
-    // }
-
-    for (term, &qf) in &params.query_tf {
-        if let Some(&tf) = params.tf_d.get(term) {
-            let df = *params.dfs.get(term).unwrap_or(&0);
-            let idf = idf_bm25(df, params.n);
-            let tf_part = (tf as f64 * (params.k1 + 1.0))
-                / (tf as f64
-                    + params.k1
-                        * (1.0 - params.b + params.b * (params.doc_len as f64 / params.avgdl)));
-
-            // if debug_mode {
-            //     println!(
-            //         "DEBUG: BM25 term '{}': TF={}, DF={}, IDF={}, TF_part={}",
-            //         term, tf, df, idf, tf_part
-            //     );
-            // }
-
-            // BM25 contribution: TF(Q) * IDF * TF_part
-            let contribution = (qf as f64) * idf * tf_part;
-            score += contribution;
-
-            // if debug_mode {
-            //     println!("DEBUG: BM25 contribution for '{}': {}", term, contribution);
-            // }
-        }
-    }
-
-    // if debug_mode {
-    //     println!("DEBUG: Final BM25 score: {}", score);
-    // }
-
-    score
 }
 
 /// Computes the average document length.
@@ -259,312 +138,425 @@ pub fn compute_avgdl(lengths: &[usize]) -> f64 {
     sum as f64 / lengths.len() as f64
 }
 
-/// Ranks documents based on a query using a hybrid scoring approach.
-// Helper function to calculate mean
-fn calculate_mean(values: &[f64]) -> f64 {
-    if values.is_empty() {
+// -------------------------------------------------------------------------
+// BM25 EXACT (like Elasticsearch) with "bool" logic for must/should/must_not
+// -------------------------------------------------------------------------
+
+/// Parameters for BM25 calculation with precomputed IDF values
+pub struct PrecomputedBm25Params<'a> {
+    /// Document term frequencies
+    pub doc_tf: &'a HashMap<String, usize>,
+    /// Document length
+    pub doc_len: usize,
+    /// Average document length
+    pub avgdl: f64,
+    /// Precomputed IDF values for query terms
+    pub idfs: &'a HashMap<String, f64>,
+    /// BM25 k1 parameter
+    pub k1: f64,
+    /// BM25 b parameter
+    pub b: f64,
+}
+
+/// Extracts unique terms from a query expression
+pub fn extract_query_terms(expr: &Expr) -> HashSet<String> {
+    use Expr::*;
+    let mut terms = HashSet::new();
+    
+    match expr {
+        Term { keywords, .. } => {
+            terms.extend(keywords.iter().cloned());
+        }
+        And(left, right) | Or(left, right) => {
+            terms.extend(extract_query_terms(left));
+            terms.extend(extract_query_terms(right));
+        }
+    }
+    
+    terms
+}
+
+/// Precomputes IDF values for a set of terms
+pub fn precompute_idfs(terms: &HashSet<String>, dfs: &HashMap<String, usize>, n_docs: usize) -> HashMap<String, f64> {
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    
+    if debug_mode {
+        println!("DEBUG: Precomputing IDF values for {} terms", terms.len());
+    }
+    
+    terms.iter()
+        .filter_map(|term| {
+            let df = *dfs.get(term).unwrap_or(&0);
+            if df > 0 {
+                let numerator = (n_docs as f64 - df as f64) + 0.5;
+                let denominator = df as f64 + 0.5;
+                let idf = (1.0 + (numerator / denominator)).ln();
+                Some((term.clone(), idf))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Optimized BM25 single-token function using precomputed IDF values:
+/// tf_part = freq * (k1+1) / (freq + k1*(1 - b + b*(docLen/avgdl)))
+fn bm25_single_token_optimized(token: &str, params: &PrecomputedBm25Params) -> f64 {
+    let freq_in_doc = *params.doc_tf.get(token).unwrap_or(&0) as f64;
+    if freq_in_doc <= 0.0 {
         return 0.0;
     }
-    values.iter().sum::<f64>() / values.len() as f64
+
+    // Use precomputed IDF value
+    let idf = *params.idfs.get(token).unwrap_or(&0.0);
+    
+    let tf_part = (freq_in_doc * (params.k1 + 1.0))
+        / (freq_in_doc
+            + params.k1 * (1.0 - params.b + params.b * (params.doc_len as f64 / params.avgdl)));
+
+    idf * tf_part
 }
 
-// Helper function to calculate standard deviation
-fn calculate_std_dev(values: &[f64], mean: f64) -> f64 {
-    if values.len() <= 1 {
-        return 0.0;
+/// Sum BM25 for all keywords in a single "Term" node using precomputed IDF values
+fn score_term_bm25_optimized(keywords: &[String], params: &PrecomputedBm25Params) -> f64 {
+    let mut total = 0.0;
+    for kw in keywords {
+        total += bm25_single_token_optimized(kw, params);
     }
-    let variance =
-        values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64;
-    variance.sqrt()
+    total
 }
 
-// Helper function to calculate z-score
-fn zscore(value: f64, mean: f64, std_dev: f64) -> f64 {
-    if std_dev == 0.0 {
-        0.0
-    } else {
-        (value - mean) / std_dev
+/// Recursively compute a doc's "ES-like BM25 bool query" score from the AST using precomputed IDF values:
+/// - If it fails a must or matches a must_not => return None (exclude doc)
+/// - Otherwise sum up matched subclause scores
+/// - For "OR," doc must match at least one side
+/// - For "AND," doc must match both sides
+/// - For a "should" term, we add the BM25 if it matches; if the entire query has no must, then
+///   at least one "should" must match in order to include the doc.
+pub fn score_expr_bm25_optimized(expr: &Expr, params: &PrecomputedBm25Params) -> Option<f64> {
+    use Expr::*;
+    match expr {
+        Term {
+            keywords,
+            required,
+            excluded,
+            ..
+        } => {
+            let score = score_term_bm25_optimized(keywords, params);
+
+            if *excluded {
+                // must_not => doc out if doc_score > 0
+                if score > 0.0 {
+                    None
+                } else {
+                    Some(0.0)
+                }
+            } else if *required {
+                // must => doc out if doc_score=0
+                if score > 0.0 {
+                    Some(score)
+                } else {
+                    None
+                }
+            } else {
+                // "should" => we don't exclude doc if score=0 here, because maybe it matches
+                // something else in an OR. Return Some(0.0 or some positive).
+                // The top-level logic ensures if no must in the entire query, we need at least one should>0.
+                Some(score)
+            }
+        }
+        And(left, right) => {
+            let lscore = score_expr_bm25_optimized(left, params)?;
+            let rscore = score_expr_bm25_optimized(right, params)?;
+            Some(lscore + rscore)
+        }
+        Or(left, right) => {
+            let l = score_expr_bm25_optimized(left, params);
+            let r = score_expr_bm25_optimized(right, params);
+            match (l, r) {
+                (None, None) => None,
+                (None, Some(rs)) => Some(rs),
+                (Some(ls), None) => Some(ls),
+                (Some(ls), Some(rs)) => Some(ls + rs),
+            }
+        }
     }
 }
 
-// Helper function to invert rank (higher score for lower rank)
-fn invert_rank(rank: usize, total: usize) -> f64 {
-    if total <= 1 {
-        1.0
-    } else {
-        1.0 - (rank - 1) as f64 / (total - 1) as f64
-    }
-}
-
-/// Returns a vector of tuples containing:
-/// - document index
-/// - combined score
-/// - TF-IDF score
-/// - BM25 score
-/// - new score (incorporating file and block metrics)
-pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64, f64, f64, f64)> {
-    // Check if debug mode is enabled
+// -------------------------------------------------------------------------
+// This is your main entry point for ranking. It now does "pure BM25 like ES."
+// -------------------------------------------------------------------------
+pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
+    use rayon::prelude::*;
+    use std::cmp::Ordering;
+    
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
-    // Preprocess documents
-    let tf_df_result = compute_tf_df(params.documents);
-    let n = params.documents.len();
+    // 1) Parse the user query into an AST (Expr)
+    //    If your code uses parse_query(...) from `elastic_query.rs`, do:
+    let parsed_expr = match crate::search::elastic_query::parse_query(params.query) {
+        Ok(expr) => expr,
+        Err(e) => {
+            if debug_mode {
+                eprintln!("DEBUG: parse_query failed: {:?}", e);
+            }
+            // Return empty if parse fails, or handle how you want
+            return vec![];
+        }
+    };
+
+    // 2) Precompute TF/DF for docs
+    let tf_df_result = if let Some(pre_tokenized) = &params.pre_tokenized {
+        // Use pre-tokenized content if available
+        if debug_mode {
+            println!("DEBUG: Using pre-tokenized content for ranking");
+        }
+        compute_tf_df_from_tokenized(pre_tokenized)
+    } else {
+        // Fallback to tokenizing the documents
+        if debug_mode {
+            println!("DEBUG: Tokenizing documents for ranking");
+        }
+        compute_tf_df(params.documents)
+    };
+
+    let n_docs = params.documents.len();
     let avgdl = compute_avgdl(&tf_df_result.document_lengths);
 
-    // Preprocess query
-    let query_tokens = preprocess_text(params.query, false);
-    let mut query_tf = HashMap::new();
-    for token in query_tokens.iter() {
-        *query_tf.entry(token.clone()).or_insert(0) += 1;
-    }
-
-    // Debug output for query tokens
+    // 3) Extract query terms and precompute IDF values
+    let query_terms = extract_query_terms(&parsed_expr);
+    let precomputed_idfs = precompute_idfs(&query_terms, &tf_df_result.document_frequencies, n_docs);
+    
     if debug_mode {
-        println!("DEBUG: Query tokens for ranking: {:?}", query_tokens);
-        println!("DEBUG: Query term frequencies: {:?}", query_tf);
+        println!("DEBUG: Precomputed IDF values for {} unique query terms", precomputed_idfs.len());
     }
 
-    // Parameters
-    let k1 = 1.2; // BM25 parameter for term frequency saturation
-    let b = 0.75; // BM25 parameter for length normalization
-    let alpha = 0.5; // Weight for TF-IDF in hybrid score (1-alpha for BM25)
+    // 4) BM25 parameters
+    let k1 = 1.2;
+    let b = 0.75;
 
-    // Compute scores for each document
-    let mut scores = Vec::new();
-    for (i, tf_d) in tf_df_result.term_frequencies.iter().enumerate() {
-        // Debug output for document tokens
-        if debug_mode && i < params.documents.len() {
-            // println!(
-            //     "DEBUG: Document {} tokens: {:?}",
-            //     i, tf_df_result.document_lengths[i]
-            // );
-            // println!("DEBUG: Document {} term frequencies: {:?}", i, tf_d);
-        }
-
-        let tfidf = tfidf_score(tf_d, &query_tf, &tf_df_result.document_frequencies, n);
-        let bm25_params = Bm25Params {
-            tf_d: tf_d.clone(),
-            query_tf: query_tf.clone(),
-            dfs: tf_df_result.document_frequencies.clone(),
-            n,
-            doc_len: tf_df_result.document_lengths[i],
-            avgdl,
-            k1,
-            b,
-        };
-        let bm25 = bm25_score(&bm25_params);
-        let combined = alpha * tfidf + (1.0 - alpha) * bm25;
-
-        if debug_mode {
-            println!(
-                "DEBUG: Document {} scores - TF-IDF: {}, BM25: {}, Combined: {}",
-                i, tfidf, bm25, combined
-            );
-        }
-
-        scores.push((i, combined, tfidf, bm25));
+    if debug_mode {
+        println!("DEBUG: Starting parallel document scoring for {} documents", n_docs);
     }
 
-    // Extract all scores for normalization
-    let combined_scores: Vec<f64> = scores.iter().map(|(_, c, _, _)| *c).collect();
-    let tfidf_scores: Vec<f64> = scores.iter().map(|(_, _, t, _)| *t).collect();
-    let bm25_scores: Vec<f64> = scores.iter().map(|(_, _, _, b)| *b).collect();
-    let n = scores.len();
+    // 5) Compute BM25 bool logic score for each doc in parallel
+    // Use a stable collection method to ensure deterministic ordering
+    let scored_docs: Vec<(usize, Option<f64>)> = (0..tf_df_result.term_frequencies.len())
+        .collect::<Vec<_>>() // Collect indices first to ensure stable ordering
+        .par_iter() // Then parallelize
+        .map(|&i| {
+            let doc_tf = &tf_df_result.term_frequencies[i];
+            let doc_len = tf_df_result.document_lengths[i];
 
-    // Calculate means and standard deviations
-    let mean_cs = calculate_mean(&combined_scores);
-    let std_cs = calculate_std_dev(&combined_scores, mean_cs);
-    let mean_tf = calculate_mean(&tfidf_scores);
-    let std_tf = calculate_std_dev(&tfidf_scores, mean_tf);
-    let mean_bm = calculate_mean(&bm25_scores);
-    let std_bm = calculate_std_dev(&bm25_scores, mean_bm);
+            // Create optimized BM25 parameters with precomputed IDF values
+            let precomputed_bm25_params = PrecomputedBm25Params {
+                doc_tf,
+                doc_len,
+                avgdl,
+                idfs: &precomputed_idfs,
+                k1,
+                b,
+            };
 
-    // Create rankings for TF-IDF and BM25
-    let mut tfidf_ranks: Vec<(usize, f64)> = scores
-        .iter()
-        .enumerate()
-        .map(|(i, (_, _, t, _))| (i, *t))
-        .collect();
-    let mut bm25_ranks: Vec<(usize, f64)> = scores
-        .iter()
-        .enumerate()
-        .map(|(i, (_, _, _, b))| (i, *b))
+            // Evaluate doc's BM25 sum or None if excluded using optimized function
+            let bm25_score_opt = score_expr_bm25_optimized(&parsed_expr, &precomputed_bm25_params);
+            
+            (i, bm25_score_opt)
+        })
         .collect();
 
-    // Sort to determine ranks
-    tfidf_ranks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    bm25_ranks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Create rank lookup maps
-    let mut tfidf_rank_map = HashMap::new();
-    let mut bm25_rank_map = HashMap::new();
-    for (rank, (idx, _)) in tfidf_ranks.iter().enumerate() {
-        tfidf_rank_map.insert(*idx, rank + 1);
-    }
-    for (rank, (idx, _)) in bm25_ranks.iter().enumerate() {
-        bm25_rank_map.insert(*idx, rank + 1);
+    if debug_mode {
+        println!("DEBUG: Parallel document scoring completed");
     }
 
-    // Calculate new scores
-    let mut new_scores = Vec::new();
-    for (i, (_, combined, tfidf, bm25)) in scores.iter().enumerate() {
-        // Normalize scores
-        let cs_norm = zscore(*combined, mean_cs, std_cs);
-        let tf_norm = zscore(*tfidf, mean_tf, std_tf);
-        let bm_norm = zscore(*bm25, mean_bm, std_bm);
+    // Filter out documents that didn't match and collect scores
+    let mut filtered_docs: Vec<(usize, f64)> = scored_docs
+        .into_iter()
+        .filter_map(|(i, score_opt)| score_opt.map(|score| (i, score)))
+        .collect();
 
-        // Get ranks and invert them
-        let tr_score = invert_rank(*tfidf_rank_map.get(&i).unwrap_or(&n), n);
-        let br_score = invert_rank(*bm25_rank_map.get(&i).unwrap_or(&n), n);
-        let fmr_score = invert_rank(params.file_match_rank.unwrap_or(n), n);
-
-        // Convert metrics to f64 and collect for normalization
-        let fut = params.file_unique_terms.map(|x| x as f64).unwrap_or(0.0);
-        let ftm = params.file_total_matches.map(|x| x as f64).unwrap_or(0.0);
-        let but = params.block_unique_terms.map(|x| x as f64).unwrap_or(0.0);
-        let btm = params.block_total_matches.map(|x| x as f64).unwrap_or(0.0);
-
-        // Calculate means and standard deviations for metrics
-        let mean_fut = calculate_mean(&[fut]);
-        let std_fut = calculate_std_dev(&[fut], mean_fut);
-        let mean_ftm = calculate_mean(&[ftm]);
-        let std_ftm = calculate_std_dev(&[ftm], mean_ftm);
-        let mean_but = calculate_mean(&[but]);
-        let std_but = calculate_std_dev(&[but], mean_but);
-        let mean_btm = calculate_mean(&[btm]);
-        let std_btm = calculate_std_dev(&[btm], mean_btm);
-
-        // Normalize metrics using z-scores
-        let fut_norm = zscore(fut, mean_fut, std_fut);
-        let ftm_norm = zscore(ftm, mean_ftm, std_ftm);
-        let but_norm = zscore(but, mean_but, std_but);
-        let btm_norm = zscore(btm, mean_btm, std_btm);
-
-        // Type bonus
-        let type_bonus = match params.node_type {
-            Some("method_declaration") => 0.05,
-            Some("function_declaration") => 0.03,
-            _ => 0.0,
-        };
-
-        // Calculate final score with weights
-        let new_score = 0.20 * cs_norm
-            + 0.10 * tf_norm
-            + 0.10 * bm_norm
-            + 0.05 * fut_norm
-            + 0.05 * ftm_norm
-            + 0.20 * but_norm
-            + 0.15 * btm_norm
-            + 0.05 * tr_score
-            + 0.05 * br_score
-            + 0.05 * fmr_score
-            + type_bonus;
-
-        if debug_mode {
-            println!(
-                "Score components for doc {}: cs_norm={:.3}, tf_norm={:.3}, bm_norm={:.3}, fut_norm={:.3}, ftm_norm={:.3}, but_norm={:.3}, btm_norm={:.3}, tr_score={:.3}, br_score={:.3}, fmr_score={:.3}, type_bonus={:.3} => new_score={:.3}",
-                i, cs_norm, tf_norm, bm_norm, fut_norm, ftm_norm, but_norm, btm_norm, tr_score, br_score, fmr_score, type_bonus, new_score
-            );
+    // 6) Sort in descending order by BM25 score, with a stable secondary sort by document index
+    filtered_docs.sort_by(|a, b| {
+        // First compare by score (descending)
+        match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
+            Ordering::Equal => {
+                // If scores are equal, sort by document index (ascending) for stability
+                a.0.cmp(&b.0)
+            }
+            other => other,
         }
+    });
 
-        new_scores.push((i, *combined, *tfidf, *bm25, new_score));
+    if debug_mode {
+        println!("DEBUG: Sorted {} matching documents by score", filtered_docs.len());
     }
 
-    // Sort by new score in descending order
-    new_scores.sort_by(|a, b| b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal));
-
-    new_scores
+    filtered_docs
 }
 
+/// Computes term frequencies (TF) for each document, document frequencies (DF) for each term,
+/// and document lengths from pre-tokenized content.
+pub fn compute_tf_df_from_tokenized(tokenized_docs: &[Vec<String>]) -> TfDfResult {
+    use rayon::prelude::*;
+    
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    
+    if debug_mode {
+        println!("DEBUG: Starting parallel TF-DF computation from pre-tokenized content for {} documents", tokenized_docs.len());
+    }
+    
+    // Process documents in parallel to compute term frequencies and document lengths
+    let doc_results: Vec<(HashMap<String, usize>, usize, HashSet<String>)> = tokenized_docs
+        .par_iter()
+        .map(|tokens| {
+            let mut tf = HashMap::new();
+            
+            // Compute term frequency for the current document
+            for token in tokens.iter() {
+                *tf.entry(token.clone()).or_insert(0) += 1;
+            }
+            
+            // Collect unique terms for document frequency calculation
+            let unique_terms: HashSet<String> = tf.keys().cloned().collect();
+            
+            (tf, tokens.len(), unique_terms)
+        })
+        .collect();
+    
+    // Extract term frequencies and document lengths
+    let mut term_frequencies = Vec::with_capacity(tokenized_docs.len());
+    let mut document_lengths = Vec::with_capacity(tokenized_docs.len());
+    
+    // Compute document frequencies in parallel using adaptive chunking
+    // This balances parallelism with reduced contention
+    let min_chunk_size = (tokenized_docs.len() / rayon::current_num_threads()).max(1);
+    let document_frequencies = doc_results
+        .par_iter()
+        .with_min_len(min_chunk_size)  // Adaptive chunking based on document count
+        .map(|(_, _, unique_terms)| {
+            // Create a local document frequency map for this chunk
+            let mut local_df = HashMap::new();
+            for term in unique_terms {
+                *local_df.entry(term.clone()).or_insert(0) += 1;
+            }
+            local_df
+        })
+        .reduce(
+            || HashMap::new(),
+            |mut acc, local_df| {
+                // Merge local document frequency maps
+                for (term, count) in local_df {
+                    *acc.entry(term).or_insert(0) += count;
+                }
+                acc
+            }
+        );
+    
+    if debug_mode {
+        println!("DEBUG: Parallel DF computation completed with {} unique terms", document_frequencies.len());
+    }
+    
+    // Collect results in a deterministic order
+    for (tf, doc_len, _) in doc_results {
+        term_frequencies.push(tf);
+        document_lengths.push(doc_len);
+    }
+    
+    if debug_mode {
+        println!("DEBUG: Parallel TF-DF computation from pre-tokenized content completed");
+    }
+
+    TfDfResult {
+        term_frequencies,
+        document_frequencies,
+        document_lengths,
+    }
+}
+
+// -------------------------------------------------------------------------
+// Unit tests (optional). Adapt or remove as you wish.
+// -------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_stop_word_removal() {
-        let text = "The quick brown fox jumps over the lazy dog";
-        let tokens = tokenize(text);
+    fn test_basic_bm25_scoring() {
+        // A trivial test: 2 docs, 1 query
+        let docs = vec!["api process load", "another random text with process"];
+        let query = "+api +process +load"; // must have "api", must have "process", must have "load"
 
-        // Stop words should be removed
-        assert!(!tokens.contains(&"the".to_string()));
-        assert!(!tokens.contains(&"over".to_string()));
+        let params = RankingParams {
+            documents: &docs,
+            query,
+            pre_tokenized: None,
+        };
 
-        // Regular words should be stemmed
-        assert!(tokens.contains(&"quick".to_string()));
-        assert!(tokens.contains(&"brown".to_string()));
-        assert!(tokens.contains(&"fox".to_string()));
-        assert!(tokens.contains(&"jump".to_string())); // "jumps" stemmed to "jump"
-        assert!(tokens.contains(&"lazi".to_string())); // "lazy" stemmed to "lazi"
-        assert!(tokens.contains(&"dog".to_string()));
+        let results = rank_documents(&params);
+        // Only the first doc should match, because it has all 3 required words
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 0); // doc index 0
+                                     // BM25 score is some positive float
+        assert!(results[0].1 > 0.0);
     }
 
     #[test]
-    fn test_programming_stop_words() {
-        let code = "function calculateTotal(items) { return items.reduce((sum, item) => sum + item.price, 0); }";
-        let tokens = tokenize(code);
+    fn test_bm25_scoring_with_pre_tokenized() {
+        // A trivial test: 2 docs, 1 query, with pre-tokenized content
+        let docs = vec!["api process load", "another random text with process"];
+        let query = "+api +process +load"; // must have "api", must have "process", must have "load"
 
-        println!("Tokens for programming code: {:?}", tokens);
+        // Pre-tokenized content
+        let pre_tokenized = vec![
+            vec!["api".to_string(), "process".to_string(), "load".to_string()],
+            vec![
+                "another".to_string(),
+                "random".to_string(),
+                "text".to_string(),
+                "with".to_string(),
+                "process".to_string(),
+            ],
+        ];
 
-        // Programming keywords should be removed
-        assert!(!tokens.contains(&"function".to_string()));
-        assert!(!tokens.contains(&"return".to_string()));
+        let params = RankingParams {
+            documents: &docs,
+            query,
+            pre_tokenized: Some(&pre_tokenized),
+        };
 
-        // These words should remain (in stemmed form)
-        assert!(tokens.contains(&"calcul".to_string())); // "calculateTotal" should be stemmed
-        assert!(tokens.contains(&"total".to_string())); // "calculateTotal" split and stemmed
-        assert!(tokens.contains(&"item".to_string()));
-        assert!(tokens.contains(&"reduc".to_string())); // "reduce" should be stemmed
-        assert!(tokens.contains(&"sum".to_string()));
-        assert!(tokens.contains(&"price".to_string()));
+        let results = rank_documents(&params);
+        // Only the first doc should match, because it has all 3 required words
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 0); // doc index 0
+                                     // BM25 score is some positive float
+        assert!(results[0].1 > 0.0);
     }
-
+    
     #[test]
-    fn test_stemming() {
-        let stemmer = get_stemmer();
-
-        // Test stemming of various words
-        assert_eq!(stemmer.stem("running").to_string(), "run");
-        assert_eq!(stemmer.stem("jumps").to_string(), "jump");
-        assert_eq!(stemmer.stem("jumped").to_string(), "jump");
-        assert_eq!(stemmer.stem("jumping").to_string(), "jump");
-
-        assert_eq!(stemmer.stem("functions").to_string(), "function");
-        assert_eq!(stemmer.stem("functional").to_string(), "function");
-
-        assert_eq!(stemmer.stem("searching").to_string(), "search");
-        assert_eq!(stemmer.stem("searched").to_string(), "search");
-    }
-
-    #[test]
-    fn test_camel_case_splitting() {
-        // Test camel case
-        let tokens = tokenize("enableIpWhiteListing");
-        println!("Tokens for 'enableIpWhiteListing': {:?}", tokens);
-
-        assert!(tokens.contains(&"enabl".to_string()));
-        assert!(tokens.contains(&"ip".to_string()));
-        assert!(tokens.contains(&"white".to_string()));
-        assert!(tokens.contains(&"list".to_string()));
-
-        // Test pascal case
-        let tokens = tokenize("EnableIpWhiteListing");
-        println!("Tokens for 'EnableIpWhiteListing': {:?}", tokens);
-
-        assert!(tokens.contains(&"enabl".to_string()));
-        assert!(tokens.contains(&"ip".to_string()));
-        assert!(tokens.contains(&"white".to_string()));
-        assert!(tokens.contains(&"list".to_string()));
-
-        // Test with numbers
-        let tokens = tokenize("IPv4Address");
-        println!("Tokens for 'IPv4Address': {:?}", tokens);
-
-        // Check if the tokens contain either "ipv4" or both "ipv" and "4"
-        // This handles both possible tokenization behaviors
-        assert!(
-            tokens.contains(&"ipv4".to_string())
-                || (tokens.contains(&"ipv".to_string()) && tokens.contains(&"4".to_string()))
-        );
-        assert!(tokens.contains(&"address".to_string()));
+    fn test_precomputed_idf_values() {
+        // Test that precomputed IDF values match manually calculated ones
+        let docs = vec!["api process load", "another random text with process"];
+        let n_docs = docs.len();
+        
+        // Tokenize and compute TF/DF
+        let tf_df_result = compute_tf_df(&docs);
+        
+        // Create a query expression
+        let query = "+api +process";
+        let parsed_expr = crate::search::elastic_query::parse_query(query).unwrap();
+        
+        // Extract query terms and precompute IDF values
+        let query_terms = extract_query_terms(&parsed_expr);
+        let precomputed_idfs = precompute_idfs(&query_terms, &tf_df_result.document_frequencies, n_docs);
+        
+        // Manually calculate IDF for "api" (appears in 1 doc)
+        let api_df = *tf_df_result.document_frequencies.get("api").unwrap_or(&0) as f64;
+        let api_numerator = (n_docs as f64 - api_df) + 0.5;
+        let api_denominator = api_df + 0.5;
+        let expected_api_idf = (1.0 + (api_numerator / api_denominator)).ln();
+        
+        // Compare with precomputed value
+        let precomputed_api_idf = *precomputed_idfs.get("api").unwrap_or(&0.0);
+        assert!((expected_api_idf - precomputed_api_idf).abs() < 1e-10);
     }
 }

@@ -256,9 +256,8 @@ fn test_stemming_with_complex_query(_temp_path: &Path) {
     let query = "(ips OR ports) AND (whitelisting OR security) AND -blocking";
 
     // Parse the query into an AST
-    // Check if ANY_TERM environment variable is set
-    let any_term = std::env::var("ANY_TERM").unwrap_or_default() == "1";
-    let ast = parse_query(query, any_term).unwrap();
+    // Using standard Elasticsearch behavior (AND for implicit combinations)
+    let ast = parse_query(query).unwrap();
     println!("Parsed AST: {:?}", ast);
 
     // Create a QueryPlan

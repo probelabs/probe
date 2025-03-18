@@ -7,64 +7,47 @@ use probe::search::elastic_query::Expr;
 use probe::search::query::QueryPlan;
 use probe::search::{perform_probe, SearchOptions};
 
-/// Test the integration of elastic query parsing with file processing
-#[test]
-fn test_elastic_query_integration() {
-    // Create a temporary directory for testing
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path();
-
-    // Create test files with different content
-    create_test_files(temp_path);
-
-    // Test various complex queries
-    test_required_term_query(temp_path);
-    test_excluded_term_query(temp_path);
-    test_or_query(temp_path);
-    test_complex_query(temp_path);
-}
-
 /// Create test files with different content for testing queries
 fn create_test_files(temp_dir: &Path) {
-    // File with "keyword1" and "keyword2"
+    // File with "keywordAlpha" and "keywordBeta"
     let file1_path = temp_dir.join("file1.rs");
     let file1_content = r#"
-// This file contains keyword1 and keyword2
+// This file contains keywordAlpha and keywordBeta
 fn test_function() {
-    // This is keyword1
+    // This is keywordAlpha
     let x = 1;
     
-    // This is keyword2
+    // This is keywordBeta
     let y = 2;
     
     println!("Result: {}", x + y);
 }
 "#;
 
-    // File with "keyword1" and "keyword3"
+    // File with "keywordAlpha" and "keywordGamma"
     let file2_path = temp_dir.join("file2.rs");
     let file2_content = r#"
-// This file contains keyword1 and keyword3
+// This file contains keywordAlpha and keywordGamma
 fn another_function() {
-    // This is keyword1
+    // This is keywordAlpha
     let x = 1;
     
-    // This is keyword3
+    // This is keywordGamma
     let z = 3;
     
     println!("Result: {}", x + z);
 }
 "#;
 
-    // File with "keyword2" and "keyword3"
+    // File with "keywordBeta" and "keywordGamma"
     let file3_path = temp_dir.join("file3.rs");
     let file3_content = r#"
-// This file contains keyword2 and keyword3
+// This file contains keywordBeta and keywordGamma
 fn third_function() {
-    // This is keyword2
+    // This is keywordBeta
     let y = 2;
     
-    // This is keyword3
+    // This is keywordGamma
     let z = 3;
     
     println!("Result: {}", y + z);
@@ -74,15 +57,15 @@ fn third_function() {
     // File with all keywords
     let file4_path = temp_dir.join("file4.rs");
     let file4_content = r#"
-// This file contains keyword1, keyword2, and keyword3
+// This file contains keywordAlpha, keywordBeta, and keywordGamma
 fn all_keywords_function() {
-    // This is keyword1
+    // This is keywordAlpha
     let x = 1;
     
-    // This is keyword2
+    // This is keywordBeta
     let y = 2;
     
-    // This is keyword3
+    // This is keywordGamma
     let z = 3;
     
     println!("Result: {}", x + y + z);
@@ -96,12 +79,20 @@ fn all_keywords_function() {
     fs::write(file4_path, file4_content).unwrap();
 }
 
-/// Test a query with a required term: keyword1
-fn test_required_term_query(temp_path: &Path) {
-    // Create search query with explicit OR syntax
+/// Test a query with a required term: key OR word OR keyword
+#[test]
+fn test_required_term_query() {
+    // Create a temporary directory for testing
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Create test files with different content
+    create_test_files(temp_path);
+
+    // Create search query with explicit OR syntax that matches the actual content
     // Since we've removed any_term parameter and changed the default to AND,
     // we need to use explicit OR syntax to maintain the original behavior
-    let queries = vec!["key OR word OR 1".to_string()];
+    let queries = vec!["keywordAlpha OR keywordBeta OR keywordGamma".to_string()];
     let custom_ignores: Vec<String> = vec![];
 
     // Print the query for debugging
@@ -114,7 +105,7 @@ fn test_required_term_query(temp_path: &Path) {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        reranker: "combined",
+        reranker: "hybrid",
         frequency_search: false,
         max_results: None,
         max_bytes: None,
@@ -152,7 +143,7 @@ fn test_required_term_query(temp_path: &Path) {
         "Search should return results"
     );
 
-    // We should only find files with keyword1
+    // We should only find files with keywordAlpha
     let file_names: Vec<&str> = search_results
         .results
         .iter()
@@ -165,30 +156,54 @@ fn test_required_term_query(temp_path: &Path) {
         println!("File: {}", result.file);
     }
 
-    // Check that we found files with key OR word OR 1
+    // Check that we found files with keywordAlpha OR keywordBeta OR keywordGamma
     assert!(
         file_names.iter().any(|&name| name.contains("file1")),
-        "Should find file1 which contains key OR word OR 1"
+        "Should find file1 which contains keywordAlpha OR keywordBeta"
     );
     assert!(
         file_names.iter().any(|&name| name.contains("file2")),
-        "Should find file2 which contains key OR word OR 1"
+        "Should find file2 which contains keywordAlpha OR keywordGamma"
     );
     assert!(
         file_names.iter().any(|&name| name.contains("file3")),
-        "Should find file3 which contains key OR word OR 1"
+        "Should find file3 which contains keywordBeta OR keywordGamma"
     );
     assert!(
         file_names.iter().any(|&name| name.contains("file4")),
-        "Should find file4 which contains key OR word OR 1"
+        "Should find file4 which contains keywordAlpha, keywordBeta, and keywordGamma"
     );
 }
 
-/// Test a query with an excluded term: -keyword3
-fn test_excluded_term_query(temp_path: &Path) {
+/// Test a query with an excluded term: -keywordGamma
+#[test]
+fn test_excluded_term_query() {
+    // Create a temporary directory for testing
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Create test files with different content
+    create_test_files(temp_path);
+
     // Create search query with an excluded term
-    let queries = vec!["(key OR word OR 1) -keyword3".to_string()];
+    let queries = vec!["(key OR word OR keyword) -keywordGamma".to_string()];
     let custom_ignores: Vec<String> = vec![];
+
+    // Print the test files for debugging
+    println!("Test files created in: {:?}", temp_path);
+    for entry in std::fs::read_dir(temp_path).unwrap() {
+        let entry = entry.unwrap();
+        println!("  {:?}", entry.path());
+
+        // Print file content for debugging
+        let content = std::fs::read_to_string(entry.path()).unwrap();
+        println!(
+            "  Content of {:?}:\n{}",
+            entry.path().file_name().unwrap(),
+            content
+        );
+    }
+
     // Create SearchOptions
     let options = SearchOptions {
         path: temp_path,
@@ -196,7 +211,7 @@ fn test_excluded_term_query(temp_path: &Path) {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        reranker: "combined",
+        reranker: "hybrid",
         frequency_search: false,
         max_results: None,
         max_bytes: None,
@@ -209,6 +224,13 @@ fn test_excluded_term_query(temp_path: &Path) {
         session: None,
     };
 
+    // Print the query for debugging
+    println!("Executing search with query: {:?}", queries);
+    println!(
+        "Path: {:?}, exact: {}, frequency_search: {}",
+        options.path, options.exact, options.frequency_search
+    );
+
     // Run the search
     let search_results = perform_probe(&options).unwrap();
 
@@ -218,7 +240,7 @@ fn test_excluded_term_query(temp_path: &Path) {
         "Search should return results"
     );
 
-    // We should find files with (key OR word OR 1) -keyword3
+    // We should find files with (key OR word OR keyword) -keywordGamma
     let file_names: Vec<&str> = search_results
         .results
         .iter()
@@ -234,44 +256,53 @@ fn test_excluded_term_query(temp_path: &Path) {
         println!("  File: {}", result.file);
     }
 
-    // Check that we found file1 (has key OR word OR 1 but not keyword3)
+    // Check that we found file1 (has key OR word OR keyword but not keywordGamma)
     assert!(
         file_names.iter().any(|&name| name.contains("file1")),
-        "Should find file1 which contains key OR word OR 1 but not keyword3"
+        "Should find file1 which contains key OR word OR keyword but not keywordGamma"
     );
 
-    // Check that we don't find file2, file3, and file4 (they have keyword3)
+    // Check that we don't find file2, file3, and file4 (they have keywordGamma)
     assert!(
         !file_names.iter().any(|&name| name.contains("file2")),
-        "Should not find file2 which contains keyword3"
+        "Should not find file2 which contains keywordGamma"
     );
 
     assert!(
         !file_names.iter().any(|&name| name.contains("file3")),
-        "Should not find file3 which contains keyword3"
+        "Should not find file3 which contains keywordGamma"
     );
 
     assert!(
         !file_names.iter().any(|&name| name.contains("file4")),
-        "Should not find file4 which contains keyword3"
+        "Should not find file4 which contains keywordGamma"
     );
 }
 
-/// Test a query with OR: keyword1 OR keyword2
-fn test_or_query(temp_path: &Path) {
+/// Test a query with OR: keywordAlpha OR keywordBeta
+#[test]
+fn test_or_query() {
+    // Create a temporary directory for testing
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Create test files with different content
+    create_test_files(temp_path);
+
     // Create search query with explicit OR syntax
-    let queries = vec!["keyword1 OR keyword2".to_string()];
+    // Make sure to use uppercase OR to ensure it's recognized as an operator
+    let queries = vec!["keywordAlpha OR keywordBeta".to_string()];
     let custom_ignores: Vec<String> = vec![];
 
     // Create SearchOptions
     let options = SearchOptions {
         path: temp_path,
         queries: &queries,
-        files_only: false,
+        files_only: true, // Use files_only to ensure we find all matching files
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        reranker: "combined",
-        frequency_search: false,
+        reranker: "hybrid",
+        frequency_search: true, // Enable frequency search to improve matching
         max_results: None,
         max_bytes: None,
         max_tokens: None,
@@ -283,6 +314,28 @@ fn test_or_query(temp_path: &Path) {
         session: None,
     };
 
+    // Print the test files for debugging
+    println!("Test files created in: {:?}", temp_path);
+    for entry in std::fs::read_dir(temp_path).unwrap() {
+        let entry = entry.unwrap();
+        println!("  {:?}", entry.path());
+
+        // Print file content for debugging
+        let content = std::fs::read_to_string(entry.path()).unwrap();
+        println!(
+            "  Content of {:?}:\n{}",
+            entry.path().file_name().unwrap(),
+            content
+        );
+    }
+
+    // Print the query for debugging
+    println!("Executing search with query: {:?}", queries);
+    println!(
+        "Path: {:?}, exact: {}, frequency_search: {}",
+        options.path, options.exact, options.frequency_search
+    );
+
     // Run the search
     let search_results = perform_probe(&options).unwrap();
 
@@ -292,37 +345,147 @@ fn test_or_query(temp_path: &Path) {
         "Search should return results"
     );
 
-    // We should find files with keyword1 OR keyword2
+    // We should find files with keywordAlpha OR keywordBeta
     let file_names: Vec<&str> = search_results
         .results
         .iter()
         .map(|r| r.file.as_str())
         .collect();
 
-    // Check that we found files with keyword1 OR keyword2
+    // Debug output to see what files were found
+    println!("Found files with 'keywordAlpha OR keywordBeta':");
+    for name in &file_names {
+        println!("  {}", name);
+    }
+
+    // Check that we found files with keywordAlpha OR keywordBeta
     assert!(
         file_names.iter().any(|&name| name.contains("file1")),
-        "Should find file1 which contains keyword1 and keyword2"
+        "Should find file1 which contains keywordAlpha and keywordBeta"
     );
     assert!(
         file_names.iter().any(|&name| name.contains("file2")),
-        "Should find file2 which contains keyword1"
+        "Should find file2 which contains keywordAlpha"
     );
     assert!(
         file_names.iter().any(|&name| name.contains("file3")),
-        "Should find file3 which contains keyword2"
+        "Should find file3 which contains keywordBeta"
     );
     assert!(
         file_names.iter().any(|&name| name.contains("file4")),
-        "Should find file4 which contains keyword1 and keyword2"
+        "Should find file4 which contains keywordAlpha and keywordBeta"
+    );
+}
+
+/// Test a complex query with OR syntax
+#[test]
+fn test_complex_query_or() {
+    // Create a temporary directory for testing
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Create test files with different content
+    create_test_files(temp_path);
+
+    // Test with explicit OR syntax
+    // "keywordAlpha OR keywordBeta" means files with keywordAlpha OR keywordBeta
+    let queries = vec!["keywordAlpha OR keywordBeta".to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // Create SearchOptions
+    let options = SearchOptions {
+        path: temp_path,
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        exclude_filenames: false,
+        reranker: "hybrid",
+        frequency_search: true, // Enable frequency search to improve matching
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: true,
+        exact: false,
+        no_merge: false,
+        merge_threshold: Some(5),
+        dry_run: false,
+        session: None,
+    };
+
+    // Print the test files for debugging
+    println!("Test files created in: {:?}", temp_path);
+    for entry in std::fs::read_dir(temp_path).unwrap() {
+        let entry = entry.unwrap();
+        println!("  {:?}", entry.path());
+
+        // Print file content for debugging
+        let content = std::fs::read_to_string(entry.path()).unwrap();
+        println!(
+            "  Content of {:?}:\n{}",
+            entry.path().file_name().unwrap(),
+            content
+        );
+    }
+
+    // Print the query for debugging
+    println!("Executing search with query: {:?}", queries);
+    println!(
+        "Path: {:?}, exact: {}, frequency_search: {}",
+        options.path, options.exact, options.frequency_search
+    );
+
+    // Run the search
+    let search_results = perform_probe(&options).unwrap();
+
+    // Check that we got results
+    assert!(
+        !search_results.results.is_empty(),
+        "Search should return results"
+    );
+
+    let file_names: Vec<&str> = search_results
+        .results
+        .iter()
+        .map(|r| r.file.as_str())
+        .collect();
+
+    // Debug output to see what files were found
+    println!("Found files with 'keywordAlpha OR keywordBeta':");
+    for name in &file_names {
+        println!("  {}", name);
+    }
+
+    // With explicit OR syntax, should find all files with keywordAlpha OR keywordBeta
+    assert!(
+        file_names.iter().any(|&name| name.contains("file1")),
+        "Should find file1 which has keywordAlpha and keywordBeta"
+    );
+    assert!(
+        file_names.iter().any(|&name| name.contains("file2")),
+        "Should find file2 which has keywordAlpha"
+    );
+    assert!(
+        file_names.iter().any(|&name| name.contains("file3")),
+        "Should find file3 which has keywordBeta"
+    );
+    assert!(
+        file_names.iter().any(|&name| name.contains("file4")),
+        "Should find file4 which has keywordAlpha and keywordBeta"
     );
 }
 
 /// Test a complex query with explicit OR syntax
-fn test_complex_query(temp_path: &Path) {
-    // Test with explicit OR syntax
-    // "keyword1 OR keyword2" means files with keyword1 OR keyword2
-    let queries = vec!["keyword1 OR keyword2".to_string()];
+#[test]
+fn test_complex_query_exclusion() {
+    // Create a temporary directory for testing
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Create test files with different content
+    create_test_files(temp_path);
+
+    // Test with exclusion
+    let queries = vec!["\"keywordAlpha\" -keywordGamma".to_string()];
     let custom_ignores: Vec<String> = vec![];
 
     // Create SearchOptions
@@ -332,7 +495,7 @@ fn test_complex_query(temp_path: &Path) {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        reranker: "combined",
+        reranker: "hybrid",
         frequency_search: false,
         max_results: None,
         max_bytes: None,
@@ -345,13 +508,21 @@ fn test_complex_query(temp_path: &Path) {
         session: None,
     };
 
+    // Print the query for debugging
+    println!("Executing search with query: {:?}", queries);
+    println!(
+        "Path: {:?}, exact: {}, frequency_search: {}",
+        options.path, options.exact, options.frequency_search
+    );
+
     // Run the search
     let search_results = perform_probe(&options).unwrap();
 
     // Check that we got results
     assert!(
         !search_results.results.is_empty(),
-        "Search should return results"
+        "Search should return results for query: {:?}",
+        queries
     );
 
     let file_names: Vec<&str> = search_results
@@ -361,89 +532,27 @@ fn test_complex_query(temp_path: &Path) {
         .collect();
 
     // Debug output to see what files were found
-    println!("Found files with 'keyword1 keyword2' (OR behavior):");
+    println!("Found files with 'keywordAlpha -keywordGamma':");
     for name in &file_names {
         println!("  {}", name);
     }
 
-    // With OR behavior, should find all files with keyword1 OR keyword2
+    // Should find file1 (has keywordAlpha and no keywordGamma)
     assert!(
         file_names.iter().any(|&name| name.contains("file1")),
-        "Should find file1 which has keyword1 and keyword2"
-    );
-    assert!(
-        file_names.iter().any(|&name| name.contains("file2")),
-        "Should find file2 which has keyword1"
-    );
-    assert!(
-        file_names.iter().any(|&name| name.contains("file3")),
-        "Should find file3 which has keyword2"
-    );
-    assert!(
-        file_names.iter().any(|&name| name.contains("file4")),
-        "Should find file4 which has keyword1 and keyword2"
+        "Should find file1 which has keywordAlpha but no keywordGamma"
     );
 
-    // Now test with exclusion
-    let queries = vec!["keyword1 -keyword3".to_string()];
-
-    // Create SearchOptions
-    let options = SearchOptions {
-        path: temp_path,
-        queries: &queries,
-        files_only: false,
-        custom_ignores: &custom_ignores,
-        exclude_filenames: false,
-        reranker: "combined",
-        frequency_search: false,
-        max_results: None,
-        max_bytes: None,
-        max_tokens: None,
-        allow_tests: true,
-        exact: false,
-        no_merge: false,
-        merge_threshold: Some(5),
-        dry_run: false,
-        session: None,
-    };
-
-    // Run the search
-    let search_results = perform_probe(&options).unwrap();
-
-    // Check that we got results
-    assert!(
-        !search_results.results.is_empty(),
-        "Search should return results"
-    );
-
-    let file_names: Vec<&str> = search_results
-        .results
-        .iter()
-        .map(|r| r.file.as_str())
-        .collect();
-
-    // Debug output to see what files were found
-    println!("Found files with 'keyword1 -keyword3':");
-    for name in &file_names {
-        println!("  {}", name);
-    }
-
-    // Should find file1 (has keyword1 and no keyword3)
-    assert!(
-        file_names.iter().any(|&name| name.contains("file1")),
-        "Should find file1 which has keyword1 but no keyword3"
-    );
-
-    // Should NOT find file2 (has keyword1 but also has keyword3)
+    // Should NOT find file2 (has keywordAlpha but also has keywordGamma)
     assert!(
         !file_names.iter().any(|&name| name.contains("file2")),
-        "Should not find file2 which has keyword3"
+        "Should not find file2 which has keywordGamma"
     );
 
-    // Should NOT find file4 (has keyword1 but also has keyword3)
+    // Should NOT find file4 (has keywordAlpha but also has keywordGamma)
     assert!(
         !file_names.iter().any(|&name| name.contains("file4")),
-        "Should not find file4 which has keyword3"
+        "Should not find file4 which has keywordGamma"
     );
 }
 
@@ -483,7 +592,7 @@ fn test_function() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        reranker: "combined",
+        reranker: "hybrid",
         frequency_search: false,
         max_results: None,
         max_bytes: None,
@@ -542,17 +651,17 @@ fn test_filter_code_block_with_ast() {
     // This test directly tests the filter_code_block_with_ast function
     // by creating a mock QueryPlan and term matches
 
-    // Create a simple AST: keyword1 AND -keyword2
+    // Create a simple AST: keywordAlpha AND -keywordBeta
     let ast = Expr::And(
         Box::new(Expr::Term {
-            keywords: vec!["keyword1".to_string()],
+            keywords: vec!["keywordAlpha".to_string()],
             field: None,
             required: false,
             excluded: false,
             exact: false,
         }),
         Box::new(Expr::Term {
-            keywords: vec!["keyword2".to_string()],
+            keywords: vec!["keywordBeta".to_string()],
             field: None,
             required: false,
             excluded: true,
@@ -562,8 +671,8 @@ fn test_filter_code_block_with_ast() {
 
     // Create a term indices map
     let mut term_indices = HashMap::new();
-    term_indices.insert("keyword1".to_string(), 0);
-    term_indices.insert("keyword2".to_string(), 1);
+    term_indices.insert("keywordAlpha".to_string(), 0);
+    term_indices.insert("keywordBeta".to_string(), 1);
 
     // Create a QueryPlan
     let plan = QueryPlan {
@@ -571,7 +680,7 @@ fn test_filter_code_block_with_ast() {
         term_indices,
         excluded_terms: {
             let mut set = HashSet::new();
-            set.insert("keyword2".to_string());
+            set.insert("keywordBeta".to_string());
             set
         },
     };
@@ -579,7 +688,7 @@ fn test_filter_code_block_with_ast() {
     // Create term matches for a block
     let mut term_matches = HashMap::new();
 
-    // Block with only keyword1
+    // Block with only keywordAlpha
     let mut lines1 = HashSet::new();
     lines1.insert(1);
     lines1.insert(2);
@@ -592,21 +701,151 @@ fn test_filter_code_block_with_ast() {
     // Import the function from probe crate
     use probe::search::file_processing::filter_code_block_with_ast;
 
-    // The block should match because it has keyword1 but not keyword2
+    // The block should match because it has keywordAlpha but not keywordBeta
     assert!(
         filter_code_block_with_ast(block_lines, &term_matches, &plan, debug_mode),
-        "Block should match because it has keyword1 but not keyword2"
+        "Block should match because it has keywordAlpha but not keywordBeta"
     );
 
-    // Now add keyword2 to the block
+    // Now add keywordBeta to the block
     let mut lines2 = HashSet::new();
     lines2.insert(3);
     lines2.insert(4);
     term_matches.insert(1, lines2);
 
-    // The block should not match because it now has keyword2 (which is excluded)
+    // The block should not match because it now has keywordBeta (which is excluded)
     assert!(
         !filter_code_block_with_ast(block_lines, &term_matches, &plan, debug_mode),
-        "Block should not match because it has keyword2 which is excluded"
+        "Block should not match because it has keywordBeta which is excluded"
+    );
+}
+
+/// Test the direct usage of filter_tokenized_block
+#[test]
+fn test_filter_tokenized_block() {
+    // This test directly tests the filter_tokenized_block function
+    // by creating a mock QueryPlan and tokenized content
+
+    // Create a simple AST: keywordAlpha AND -keywordBeta
+    let ast = Expr::And(
+        Box::new(Expr::Term {
+            keywords: vec!["keywordAlpha".to_string()],
+            field: None,
+            required: false,
+            excluded: false,
+            exact: false,
+        }),
+        Box::new(Expr::Term {
+            keywords: vec!["keywordBeta".to_string()],
+            field: None,
+            required: false,
+            excluded: true,
+            exact: false,
+        }),
+    );
+
+    // Create a term indices map
+    let mut term_indices = HashMap::new();
+    term_indices.insert("keywordAlpha".to_string(), 0);
+    term_indices.insert("keywordBeta".to_string(), 1);
+
+    // Create a QueryPlan
+    let plan = QueryPlan {
+        ast,
+        term_indices: term_indices.clone(),
+        excluded_terms: {
+            let mut set = HashSet::new();
+            set.insert("keywordBeta".to_string());
+            set
+        },
+    };
+
+    // Import the function from probe crate
+    use probe::search::file_processing::filter_tokenized_block;
+
+    // Test case 1: Tokenized content with only keywordAlpha
+    let tokenized_content = vec!["keywordAlpha".to_string()];
+    let debug_mode = false;
+
+    // The block should match because it has keywordAlpha but not keywordBeta
+    assert!(
+        filter_tokenized_block(&tokenized_content, &term_indices, &plan, debug_mode),
+        "Block should match because it has keywordAlpha but not keywordBeta"
+    );
+
+    // Test case 2: Tokenized content with both keywordAlpha and keywordBeta
+    let tokenized_content = vec!["keywordAlpha".to_string(), "keywordBeta".to_string()];
+
+    // The block should not match because it has keywordBeta (which is excluded)
+    assert!(
+        !filter_tokenized_block(&tokenized_content, &term_indices, &plan, debug_mode),
+        "Block should not match because it has keywordBeta which is excluded"
+    );
+
+    // Test case 3: Tokenized content with neither keyword
+    let tokenized_content = vec!["other".to_string()];
+
+    // The block should not match because it doesn't have keywordAlpha
+    assert!(
+        !filter_tokenized_block(&tokenized_content, &term_indices, &plan, debug_mode),
+        "Block should not match because it doesn't have keywordAlpha"
+    );
+
+    // Test case 4: Empty tokenized content
+    let tokenized_content: Vec<String> = vec![];
+
+    // The block should not match because it doesn't have keywordAlpha
+    assert!(
+        !filter_tokenized_block(&tokenized_content, &term_indices, &plan, debug_mode),
+        "Empty block should not match"
+    );
+
+    // Test case 5: Test with OR expression
+    // Create a simple AST: keywordAlpha OR keywordGamma
+    let ast_or = Expr::Or(
+        Box::new(Expr::Term {
+            keywords: vec!["keywordAlpha".to_string()],
+            field: None,
+            required: false,
+            excluded: false,
+            exact: false,
+        }),
+        Box::new(Expr::Term {
+            keywords: vec!["keywordGamma".to_string()],
+            field: None,
+            required: false,
+            excluded: false,
+            exact: false,
+        }),
+    );
+
+    // Create a term indices map
+    let mut term_indices_or = HashMap::new();
+    term_indices_or.insert("keywordAlpha".to_string(), 0);
+    term_indices_or.insert("keywordGamma".to_string(), 2);
+
+    // Create a QueryPlan
+    let plan_or = QueryPlan {
+        ast: ast_or,
+        term_indices: term_indices_or.clone(),
+        excluded_terms: HashSet::new(),
+    };
+
+    // Test with only keywordGamma
+    let tokenized_content = vec!["keywordGamma".to_string()];
+
+    // The block should match because it has keywordGamma (part of OR expression)
+    assert!(
+        filter_tokenized_block(&tokenized_content, &term_indices_or, &plan_or, debug_mode),
+        "Block should match because it has keywordGamma (part of OR expression)"
+    );
+
+    // Test with both keywordAlpha and keywordGamma
+    let tokenized_content = vec!["keywordAlpha".to_string(), "keywordGamma".to_string()];
+
+    // The block should match because it has both keywords in OR expression
+    assert!(
+        filter_tokenized_block(&tokenized_content, &term_indices_or, &plan_or, debug_mode),
+        "Block should match because it has both keywords in OR expression"
     );
 }

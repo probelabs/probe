@@ -83,7 +83,6 @@ probe extract <FILES> [OPTIONS]
 | Option | Function |
 |--------|----------|
 | `<FILES>` | Files to extract from (e.g., `main.rs:42` or `main.rs#function_name`) |
-| `--allow-tests` | Include test code blocks |
 | `-c, --context <N>` | Add N context lines |
 | `-o, --format <TYPE>` | Output as: `color` (default), `terminal`, `markdown`, `plain`, `json`, `xml` |
 

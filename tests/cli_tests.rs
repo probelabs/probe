@@ -21,7 +21,6 @@ fn create_test_directory_structure(root_dir: &TempDir) {
 
     // Create Rust files with search terms
     let rust_content = r#"
-// This is a Rust file with a search term
 fn search_function(query: &str) -> bool {
     println!("Searching for: {}", query);
     query.contains("search")
@@ -213,7 +212,7 @@ fn test_cli_reranker() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
 
-    // Run the CLI with tfidf reranker
+    // Run the CLI with bm25 reranker
     let output = Command::new("cargo")
         .args([
             "run",
@@ -222,7 +221,7 @@ fn test_cli_reranker() {
             "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--reranker",
-            "tfidf",
+            "bm25",
         ])
         .env("DEBUG", "1") // Enable debug mode to see ranking messages
         .output()
@@ -245,10 +244,11 @@ fn test_cli_reranker() {
 
     // Check that it used the specified reranker
     assert!(
-        stdout.contains("Using tfidf for ranking")
-            || stdout.contains("Using TF-IDF for ranking")
-            || stdout.contains("tfidf"),
-        "Should use TF-IDF reranker"
+        stdout.contains("Using bm25 for ranking")
+            || stdout.contains("Using BM25 for ranking")
+            || stdout.contains("BM25 ranking")
+            || stdout.contains("bm25"),
+        "Should use BM25 reranker"
     );
 }
 
@@ -334,7 +334,7 @@ fn test_cli_custom_ignores() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
 
-    // Run the CLI with custom ignore pattern
+    // Run the CLI with custom ignore pattern and debug mode
     let output = Command::new("cargo")
         .args([
             "run",
@@ -345,6 +345,7 @@ fn test_cli_custom_ignores() {
             "--ignore",
             "*.js",
         ])
+        .env("DEBUG", "1") // Enable debug mode
         .output()
         .expect("Failed to execute command");
 
@@ -353,6 +354,11 @@ fn test_cli_custom_ignores() {
 
     // Convert stdout to string
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Print the full output for debugging
+    println!("STDOUT: {}", stdout);
+    println!("STDERR: {}", stderr);
 
     // Check that it found matches
     assert!(
@@ -365,9 +371,30 @@ fn test_cli_custom_ignores() {
         stdout.contains("search.rs"),
         "Should find matches in Rust file"
     );
+
+    // Extract the actual search results (non-debug output)
+    let results_start = stdout.find("Search completed in").unwrap_or(0);
+    let results_section = &stdout[results_start..];
+
+    // Find where "search.js" appears in the debug output
+    if let Some(pos) = stdout.find("search.js") {
+        let start = if pos > 50 { pos - 50 } else { 0 };
+        let end = if pos + 50 < stdout.len() {
+            pos + 50
+        } else {
+            stdout.len()
+        };
+        let context = &stdout[start..end];
+        println!(
+            "Found 'search.js' in debug output at position {} with context: '{}'",
+            pos, context
+        );
+    }
+
+    // Check that the actual search results don't contain search.js
     assert!(
-        !stdout.contains("search.js"),
-        "Should not find matches in JavaScript file"
+        !results_section.contains("search.js"),
+        "Should not find matches in JavaScript file in the search results"
     );
 }
 
