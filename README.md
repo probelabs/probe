@@ -291,7 +291,7 @@ iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -
 2. Clone this repository:
    ~~~bash
    git clone https://github.com/buger/probe.git
-   cd code-search
+   cd probe
    ~~~
 3. Build the project:
    ~~~bash
