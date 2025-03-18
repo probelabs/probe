@@ -61,9 +61,22 @@ path = "src/lib.rs"
 name = "probe"
 path = "src/main.rs"
 
+# Common release settings
 [profile.release]
 opt-level = "z"  # Optimize for size ("s" also works, but "z" is smaller)
 strip = true     # Strip symbols automatically
 lto = true       # Link-time optimization
 codegen-units = 1 # Slower compile, smaller binary
 panic = "abort"  # Ditch unwinding code
+
+# Target-specific overrides for Windows
+[target.'cfg(windows)'.profile.release]
+# Use less aggressive optimization settings for Windows compatibility
+opt-level = 2    # Standard optimization level for better compatibility
+lto = "thin"     # Use thin LTO for faster linking and better compatibility
+codegen-units = 8 # More codegen units for better compatibility with Windows toolchain
+
+# Add specific compiler flags for MSVC on Windows
+[target.'cfg(target_env = "msvc")'.build]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-args=/DEBUG:NONE /NOLOGO"]
+
