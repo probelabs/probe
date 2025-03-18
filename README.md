@@ -203,6 +203,9 @@ curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
 - **Operating Systems**: macOS, Linux, or Windows (with MSYS/Git Bash/WSL)  
 - **Architectures**: x86_64 (all platforms) or ARM64 (macOS only)  
 - **Tools**: `curl`, `bash`, and `sudo`/root privileges  
+- **Windows-specific**: For building from source on Windows, you'll need:
+  - MSYS2 with MinGW-w64 toolchain (provides GCC/G++)
+  - Visual Studio 2022 Build Tools with C++ workload (optional, but recommended)
 
 ### Manual Installation
 
@@ -234,15 +237,55 @@ curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
    ~~~bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ~~~
+   
+   For Windows, visit [rustup.rs](https://rustup.rs/) and download the installer.
+   
 2. Clone this repository:
    ~~~bash
    git clone https://github.com/buger/probe.git
-   cd code-search
+   cd probe
    ~~~
+   
 3. Build the project:
    ~~~bash
    cargo build --release
    ~~~
+   
+   **Windows-specific build requirements:**
+   
+   If you encounter this error on Windows: 
+   ```
+   error occurred in cc-rs: failed to find tool "gcc.exe": program not found 
+   (see https://docs.rs/cc/latest/cc/#compile-time-requirements for help)
+   ```
+   
+   1. Install MSYS2 (provides GCC and other build tools):
+      ~~~bash
+      winget install MSYS2.MSYS2
+      ~~~
+   
+   2. Open the "MSYS2 MSYS2" shortcut in Windows Start Menu and install the MinGW-w64 toolchain:
+      ~~~bash
+      pacman -S --needed base-devel mingw-w64-ucrt-x86_64-toolchain
+      ~~~
+   
+   3. Add the MinGW tools to your PATH environment variable:
+      - Open Windows Settings > System > About > Advanced system settings
+      - Click "Environment Variables"
+      - Edit the "Path" variable (either User or System variables)
+      - Add `C:\msys64\ucrt64\bin` to the list
+      - Click OK on all dialogs
+   
+   4. Restart your terminal/PowerShell and try building again
+:
+      ~~~bash
+      cargo build --release
+      ~~~
+
+   **For more information:**
+   - Official cc-rs documentation: https://docs.rs/cc/latest/cc/#compile-time-requirements
+   - Microsoft C++ build tools: https://code.visualstudio.com/docs/cpp/config-mingw#_installing-the-mingww64-toolchain
+   
 4. (Optional) Install globally:
    ~~~bash
    cargo install --path .
@@ -257,6 +300,7 @@ probe --version
 ### Troubleshooting
 
 - **Permissions**: Ensure you can write to `/usr/local/bin`.  
+- **Windows Build Errors**: If you see `gcc.exe: program not found` errors on Windows, follow the MSYS2 installation steps in the [Building from Source](#building-from-source) section.
 - **System Requirements**: Double-check your OS/architecture.  
 - **Manual Install**: If the quick install script fails, try [Manual Installation](#manual-installation).  
 - **GitHub Issues**: Report issues on the [GitHub repository](https://github.com/buger/probe/issues).
