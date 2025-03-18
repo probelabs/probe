@@ -179,12 +179,14 @@ Example queries:
 ### Quick Installation
 
 You can install Probe with a single command using npm, curl, or PowerShell:
+You can install Probe with a single command using npm, curl, or PowerShell:
 
 **Using npm (Recommended for Node.js users)**
 ~~~bash
 npm install -g @buger/probe
 ~~~
 
+**Using curl (For macOS and Linux)**
 **Using curl (For macOS and Linux)**
 ~~~bash
 curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
@@ -196,7 +198,43 @@ curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
 2. Fetches the latest release from GitHub
 3. Downloads the appropriate binary for your system
 4. Verifies the checksum for security
+1. Detects your operating system and architecture
+2. Fetches the latest release from GitHub
+3. Downloads the appropriate binary for your system
+4. Verifies the checksum for security
 5. Installs the binary to `/usr/local/bin`
+
+**Using PowerShell (For Windows)**
+~~~powershell
+iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex
+~~~
+
+**What the PowerShell script does**:
+
+1. Detects your system architecture (x86_64 or ARM64)
+2. Fetches the latest release from GitHub
+3. Downloads the appropriate Windows binary
+4. Verifies the checksum for security
+5. Installs the binary to your user directory (`%LOCALAPPDATA%\Probe`) by default
+6. Provides instructions to add the binary to your PATH if needed
+
+**Installation options**:
+
+The PowerShell script supports several options:
+
+~~~powershell
+# Install for current user (default)
+iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex
+
+# Install system-wide (requires admin privileges)
+iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -args "--system"
+
+# Install to a custom directory
+iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -args "--dir", "C:\Tools\Probe"
+
+# Show help
+iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -args "--help"
+~~~
 
 **Using PowerShell (For Windows)**
 ~~~powershell
@@ -289,6 +327,8 @@ iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -
    - `probe-aarch64-windows.zip` for Windows (ARM64)
    - `probe-x86_64-windows.zip` for Windows (x86_64)
    - `probe-aarch64-windows.zip` for Windows (ARM64)
+   - `probe-x86_64-windows.zip` for Windows (x86_64)
+   - `probe-aarch64-windows.zip` for Windows (ARM64)
 2. Extract the archive:
    ~~~bash
    # For Linux/macOS
@@ -302,6 +342,16 @@ iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -
    # For Linux/macOS
    sudo mv probe /usr/local/bin/
    
+   # For Windows (using PowerShell)
+   # Create a directory for the binary (if it doesn't exist)
+   $installDir = "$env:LOCALAPPDATA\Probe"
+   New-Item -ItemType Directory -Path $installDir -Force
+   
+   # Move the binary
+   Move-Item -Path .\probe\probe.exe -Destination $installDir
+   
+   # Add to PATH (optional)
+   [Environment]::SetEnvironmentVariable('PATH', [Environment]::GetEnvironmentVariable('PATH', 'User') + ";$installDir", 'User')
    # For Windows (using PowerShell)
    # Create a directory for the binary (if it doesn't exist)
    $installDir = "$env:LOCALAPPDATA\Probe"
@@ -396,12 +446,31 @@ iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -
    This will install the binary to your Cargo bin directory, which is typically:
    - `$HOME/.cargo/bin` on macOS/Linux
    - `%USERPROFILE%\.cargo\bin` on Windows
+   
+   This will install the binary to your Cargo bin directory, which is typically:
+   - `$HOME/.cargo/bin` on macOS/Linux
+   - `%USERPROFILE%\.cargo\bin` on Windows
 
 ### Verifying the Installation
 
 For macOS/Linux:
+For macOS/Linux:
 ~~~bash
 probe --version
+~~~
+
+For Windows:
+~~~powershell
+probe --version
+~~~
+
+If you get a "command not found" error on Windows, make sure the installation directory is in your PATH or use the full path to the executable:
+~~~powershell
+# If installed to the default user location
+& "$env:LOCALAPPDATA\Probe\probe.exe" --version
+
+# If installed to the default system location
+& "$env:ProgramFiles\Probe\probe.exe" --version
 ~~~
 
 For Windows:
@@ -437,6 +506,15 @@ If you get a "command not found" error on Windows, make sure the installation di
 - **Manual Install**: If the quick install script fails, try [Manual Installation](#manual-installation)
 - **GitHub Issues**: Report issues on the [GitHub repository](https://github.com/buger/probe/issues)
 >>>>>>> dda6cb5a67b76f29cbd68ab3a16049b79ef96565
+- **Permissions**:
+  - For macOS/Linux: Ensure you can write to `/usr/local/bin`
+  - For Windows: Ensure you have write permissions to the installation directory
+- **System Requirements**: Double-check your OS/architecture compatibility
+- **PATH Issues**:
+  - For Windows: Restart your terminal after adding the installation directory to PATH
+  - For macOS/Linux: Verify that `/usr/local/bin` is in your PATH
+- **Manual Install**: If the quick install script fails, try [Manual Installation](#manual-installation)
+- **GitHub Issues**: Report issues on the [GitHub repository](https://github.com/buger/probe/issues)
 
 ### Uninstalling
 
