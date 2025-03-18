@@ -623,6 +623,8 @@ pub fn format_and_print_color_results(results: &[SearchResult]) {
 
 /// Helper function to escape XML special characters
 fn escape_xml(s: &str) -> String {
+    // Note: We're still escaping apostrophes for XML compliance, but our file path
+    // extraction logic now properly handles apostrophes within words
     s.replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
