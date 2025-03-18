@@ -144,7 +144,7 @@ fn test_term_extraction() {
     assert_terms_eq("+foo", vec!["foo"], vec![]);
     assert_terms_eq("-foo", vec![], vec![]);
     
-    // Multiple terms - now treated as OR
+    // Multiple terms - now treated as AND
     assert_terms_eq("foo bar", vec![], vec!["foo", "bar"]);
     assert_terms_eq("+foo +bar", vec!["foo", "bar"], vec![]);
     assert_terms_eq("+foo bar", vec!["foo"], vec!["bar"]);
@@ -186,23 +186,23 @@ fn test_single_terms() {
 
 #[test]
 fn test_multiple_terms_implicit_or() {
-    // Simple two terms
+    // Simple two terms - now using AND for implicit combinations
     assert_parse_eq(
         "foo bar",
-        Expr::Or(Box::new(term("foo")), Box::new(term("bar")))
+        Expr::And(Box::new(term("foo")), Box::new(term("bar")))
     );
 
-    // Required term with normal term
+    // Required term with normal term - now using AND for implicit combinations
     assert_parse_eq(
         "+foo bar",
-        Expr::Or(Box::new(required_term("foo")), Box::new(term("bar")))
+        Expr::And(Box::new(required_term("foo")), Box::new(term("bar")))
     );
 
-    // Three terms with excluded
+    // Three terms with excluded - now using AND for implicit combinations
     assert_parse_eq(
         "-foo bar baz",
-        Expr::Or(
-            Box::new(Expr::Or(
+        Expr::And(
+            Box::new(Expr::And(
                 Box::new(excluded_term("foo")),
                 Box::new(term("bar"))
             )),
@@ -258,11 +258,11 @@ fn test_explicit_boolean_operators() {
         )
     );
 
-    // Implicit OR with OR
+    // Implicit AND with OR
     assert_parse_eq(
         "foo bar OR baz",
         Expr::Or(
-            Box::new(Expr::Or(
+            Box::new(Expr::And(
                 Box::new(term("foo")),
                 Box::new(term("bar"))
             )),
@@ -291,7 +291,7 @@ fn test_parentheses() {
     // Complex group with prefixes
     assert_parse_eq(
         "(+foo -bar baz)",
-        Expr::Or(
+        Expr::And(
             Box::new(Expr::And(
                 Box::new(required_term("foo")),
                 Box::new(excluded_term("bar"))
@@ -395,23 +395,18 @@ fn test_mixed_prefixes_and_operators() {
         }
         
         // Check the left side structure
-        if let Expr::Or(left_left, left_right) = *left {
+        if let Expr::And(left_left, left_right) = *left {
             assert_eq!(*left_right, term("baz"));
             
-            // The first part could be either And or Or depending on implementation
-            match *left_left {
-                Expr::And(and_left, and_right) => {
-                    assert_eq!(*and_left, required_term("foo"));
-                    assert_eq!(*and_right, excluded_term("bar"));
-                },
-                Expr::Or(or_left, or_right) => {
-                    assert_eq!(*or_left, required_term("foo"));
-                    assert_eq!(*or_right, excluded_term("bar"));
-                },
-                _ => panic!("Expected And or Or expression for left_left")
+            // The first part should be And with the new implementation
+            if let Expr::And(and_left, and_right) = *left_left {
+                assert_eq!(*and_left, required_term("foo"));
+                assert_eq!(*and_right, excluded_term("bar"));
+            } else {
+                panic!("Expected And expression for left_left");
             }
         } else {
-            panic!("Expected Or expression for left side");
+            panic!("Expected And expression for left side");
         }
     } else {
         panic!("Expected And expression");
@@ -443,10 +438,10 @@ fn test_edge_cases() {
     // Unknown symbols
     assert_parse_fails("foo & bar");
     
-    // Trailing tokens are treated as implicit OR
+    // Trailing tokens are treated as implicit AND
     assert_parse_eq(
         "(foo) some_extra",
-        Expr::Or(Box::new(term("foo")), Box::new(term("extra")))  // Changed "some_extra" to "extra"
+        Expr::And(Box::new(term("foo")), Box::new(term("extra")))  // Changed "some_extra" to "extra"
     );
     
     // Empty parentheses

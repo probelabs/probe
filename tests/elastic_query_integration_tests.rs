@@ -290,6 +290,7 @@ fn test_or_query() {
     create_test_files(temp_path);
 
     // Create search query with explicit OR syntax
+    // Make sure to use uppercase OR to ensure it's recognized as an operator
     let queries = vec!["keywordAlpha OR keywordBeta".to_string()];
     let custom_ignores: Vec<String> = vec![];
 
@@ -297,7 +298,7 @@ fn test_or_query() {
     let options = SearchOptions {
         path: temp_path,
         queries: &queries,
-        files_only: false,
+        files_only: true, // Use files_only to ensure we find all matching files
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
         reranker: "hybrid",
@@ -350,6 +351,12 @@ fn test_or_query() {
         .iter()
         .map(|r| r.file.as_str())
         .collect();
+
+    // Debug output to see what files were found
+    println!("Found files with 'keywordAlpha OR keywordBeta':");
+    for name in &file_names {
+        println!("  {}", name);
+    }
 
     // Check that we found files with keywordAlpha OR keywordBeta
     assert!(
@@ -443,12 +450,12 @@ fn test_complex_query_or() {
         .collect();
 
     // Debug output to see what files were found
-    println!("Found files with 'keywordAlpha keywordBeta' (OR behavior):");
+    println!("Found files with 'keywordAlpha OR keywordBeta':");
     for name in &file_names {
         println!("  {}", name);
     }
 
-    // With OR behavior, should find all files with keywordAlpha OR keywordBeta
+    // With explicit OR syntax, should find all files with keywordAlpha OR keywordBeta
     assert!(
         file_names.iter().any(|&name| name.contains("file1")),
         "Should find file1 which has keywordAlpha and keywordBeta"

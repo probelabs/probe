@@ -96,7 +96,6 @@ const results = await search({
   maxBytes: 1000000,
   maxTokens: 40000,
   allowTests: false,
-  anyTerm: false,
   noMerge: false,
   mergeThreshold: 5,
   json: false,
@@ -123,7 +122,6 @@ const results = await search({
 | `maxBytes` | number | Maximum bytes to return | `1000000` |
 | `maxTokens` | number | Maximum tokens to return | `40000` |
 | `allowTests` | boolean | Include test files | `false` |
-| `anyTerm` | boolean | Match any term | `false` |
 | `noMerge` | boolean | Don't merge adjacent blocks | `false` |
 | `mergeThreshold` | number | Merge threshold | `5` |
 | `session` | string | Session ID for caching results | `''` |

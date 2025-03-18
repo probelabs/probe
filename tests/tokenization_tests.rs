@@ -176,8 +176,8 @@ fn test_underscore_in_elastic_query() {
 
     // Test that the elastic query parser preserves underscores
     let query = "keyword_underscore";
-    // Use parse_query with any_term=true instead of parse_query_test
-    let ast = elastic_query::parse_query(query, true).unwrap();
+    // Use parse_query with standard Elasticsearch behavior (AND for implicit combinations)
+    let ast = elastic_query::parse_query(query).unwrap();
 
     // Check that the AST contains the tokenized terms from "keyword_underscore"
     if let elastic_query::Expr::Term { keywords, .. } = ast {

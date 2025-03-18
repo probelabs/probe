@@ -459,15 +459,13 @@ use crate::search::tokenization::{add_special_term, tokenize as custom_tokenize}
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
-    any_term: bool,
 }
 
 impl Parser {
-    fn new(tokens: Vec<Token>, any_term: bool) -> Self {
+    fn new(tokens: Vec<Token>) -> Self {
         Parser {
             tokens,
             pos: 0,
-            any_term,
         }
     }
 
@@ -548,16 +546,10 @@ impl Parser {
                 // Otherwise (Ident, QuotedString, LParen) => implicit combos
                 Token::Ident(_) | Token::QuotedString(_) | Token::LParen => {
                     let right = self.parse_factor()?;
-                    if self.any_term {
-                        left = Expr::Or(Box::new(left), Box::new(right));
-                        if debug_mode {
-                            println!("DEBUG: implicit OR => {:?}", left);
-                        }
-                    } else {
-                        left = Expr::And(Box::new(left), Box::new(right));
-                        if debug_mode {
-                            println!("DEBUG: implicit AND => {:?}", left);
-                        }
+                    // Always use AND for implicit combinations (standard Elasticsearch behavior)
+                    left = Expr::And(Box::new(left), Box::new(right));
+                    if debug_mode {
+                        println!("DEBUG: implicit AND => {:?}", left);
                     }
                 }
                 _ => break,
@@ -723,11 +715,11 @@ impl Parser {
 }
 
 /// Parse the query string into an AST
-pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
+pub fn parse_query(input: &str) -> Result<Expr, ParseError> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: parse_query('{}'), any_term={}", input, any_term);
+        println!("DEBUG: parse_query('{}')", input);
     }
 
     // Tokenize
@@ -762,7 +754,7 @@ pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
     };
 
     // Parse into AST
-    let mut parser = Parser::new(tokens, any_term);
+    let mut parser = Parser::new(tokens);
     let parsed = parser.parse_expr();
 
     if parsed.is_err() {
@@ -796,12 +788,12 @@ pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
 /// Backward compatibility wrapper for parse_query
 #[allow(dead_code)]
 pub fn parse_query_compat(input: &str) -> Result<Expr, ParseError> {
-    parse_query(input, true)
+    parse_query(input)
 }
 
 #[cfg(test)]
 pub fn parse_query_test(input: &str) -> Result<Expr, ParseError> {
-    parse_query(input, true)
+    parse_query(input)
 }
 
 #[cfg(test)]

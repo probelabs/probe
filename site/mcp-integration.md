@@ -92,7 +92,6 @@ Search code in a specified directory using Elasticsearch-like query syntax with 
 | `maxBytes` | number | Maximum total bytes of code content to return | No |
 | `maxTokens` | number | Maximum total tokens in code content to return (for AI usage) | No |
 | `allowTests` | boolean | Allow test files and test code blocks in search results | No |
-| `anyTerm` | boolean | Match files that contain any of the search terms | No |
 | `noMerge` | boolean | Disable merging of adjacent code blocks after ranking | No |
 | `mergeThreshold` | number | Maximum number of lines between code blocks to consider them adjacent for merging | No |
 | `session` | string | Session identifier for caching | No |

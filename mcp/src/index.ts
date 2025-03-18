@@ -82,7 +82,6 @@ interface SearchCodeArgs {
   maxBytes?: number;
   maxTokens?: number;
   allowTests?: boolean;
-  anyTerm?: boolean;
   noMerge?: boolean;
   mergeThreshold?: number;
   session?: string;
@@ -150,7 +149,7 @@ class ProbeServer {
                   { type: 'string' },
                   { type: 'array', items: { type: 'string' } }
                 ],
-                description: 'Query patterns to search for with Elasticsearch-like syntax support. Supports logical operators (AND, OR), required (+) and excluded (-) terms, and grouping with parentheses. Examples: "config", "+required -excluded", "(term1 OR term2) AND term3". For multiple terms, provide either a space-separated string ("term1 term2") or an array of strings (["term1", "term2"]). By default, all terms must be present in a file unless anyTerm=true is specified.',
+                description: 'Query patterns to search for with Elasticsearch-like syntax support. Supports logical operators (AND, OR), required (+) and excluded (-) terms, and grouping with parentheses. Examples: "config", "+required -excluded", "(term1 OR term2) AND term3". For multiple terms, provide either a space-separated string ("term1 term2") or an array of strings (["term1", "term2"]). By default, all terms must be present in a file (standard Elasticsearch behavior).',
               },
               filesOnly: {
                 type: 'boolean',
@@ -194,10 +193,6 @@ class ProbeServer {
               allowTests: {
                 type: 'boolean',
                 description: 'Allow test files and test code blocks in search results (disabled by default)',
-              },
-              anyTerm: {
-                type: 'boolean',
-                description: 'Match files that contain any of the search terms (by default, files must contain all terms)',
               },
               noMerge: {
                 type: 'boolean',
@@ -390,7 +385,6 @@ class ProbeServer {
       if (args.maxBytes !== undefined) options.maxBytes = args.maxBytes;
       if (args.maxTokens !== undefined) options.maxTokens = args.maxTokens;
       if (args.allowTests !== undefined) options.allowTests = args.allowTests;
-      if (args.anyTerm !== undefined) options.anyTerm = args.anyTerm;
       if (args.noMerge !== undefined) options.noMerge = args.noMerge;
       if (args.mergeThreshold !== undefined) options.mergeThreshold = args.mergeThreshold;
       if (args.session !== undefined) options.session = args.session;

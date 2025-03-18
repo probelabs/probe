@@ -1,5 +1,4 @@
 pub mod file_processing;
-pub mod file_search;
 pub mod query;
 mod result_ranking;
 // Replace the old search_execution with new modules

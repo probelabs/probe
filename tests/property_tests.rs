@@ -92,6 +92,7 @@ proptest! {
         let params = RankingParams {
             documents: &docs_refs,
             query: &query,
+            pre_tokenized: None,
         };
 
         // This should never panic

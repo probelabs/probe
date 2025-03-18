@@ -105,11 +105,8 @@ fn test_complex_query_filtering(_temp_path: &Path) {
     // Create a complex query: (ip OR port) AND (whitelist OR allowlist) AND -denylist
     let query = "(ip OR port) AND (whitelist OR allowlist) AND -denylist";
 
-    // Set the ANY_TERM environment variable to 1 for this test
-    std::env::set_var("ANY_TERM", "1");
-
-    // Parse the query into an AST with any_term=true
-    let ast = parse_query(query, true).unwrap();
+    // Parse the query into an AST using standard Elasticsearch behavior (AND for implicit combinations)
+    let ast = parse_query(query).unwrap();
     println!("Parsed AST: {:?}", ast);
 
     // Create a QueryPlan

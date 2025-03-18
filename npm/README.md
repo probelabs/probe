@@ -94,7 +94,6 @@ const results = await search({
   maxBytes: 1000000,
   maxTokens: 40000,
   allowTests: false,
-  anyTerm: false,
   noMerge: false,
   mergeThreshold: 5,
   json: false,
@@ -119,7 +118,6 @@ const results = await search({
 - `maxBytes`: Maximum bytes to return
 - `maxTokens`: Maximum tokens to return
 - `allowTests`: Include test files
-- `anyTerm`: Match any term
 - `noMerge`: Don't merge adjacent blocks
 - `mergeThreshold`: Merge threshold
 - `json`: Return results as parsed JSON instead of string
@@ -291,8 +289,7 @@ async function advancedSearchExample() {
       frequencySearch: true,
       maxResults: 10,
       maxTokens: 20000,
-      allowTests: false,
-      anyTerm: false
+      allowTests: false
     });
     
     console.log('Advanced search results:');

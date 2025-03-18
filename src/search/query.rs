@@ -112,8 +112,8 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
     }
 
     // Parse the query into an AST with processed terms
-    // We always use AND for implicit combinations (space-separated terms)
-    let ast = elastic_query::parse_query(query, true)?;
+    // We use standard Elasticsearch behavior (AND for implicit combinations)
+    let ast = elastic_query::parse_query(query)?;
 
     let parsing_duration = parsing_start.elapsed();
 

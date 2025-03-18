@@ -2,16 +2,14 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use crate::search::file_list_cache;
 // No need for term_exceptions import
-
-use rayon::prelude::*;
 
 use crate::models::{LimitedSearchResults, SearchResult};
 use crate::search::{
     cache,
     // file_list_cache, // Add the new file_list_cache module (unused)
     file_processing::{process_file_with_results, FileProcessingParams},
-    file_search::{find_files_with_pattern, find_matching_filenames, search_file_for_pattern},
     query::{create_query_plan, create_structured_patterns, QueryPlan},
     result_ranking::rank_search_results,
     search_limiter::apply_limits,
@@ -327,9 +325,8 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         if debug_mode {
             println!("DEBUG: Starting filename matching...");
         }
-
         // Find all files that match our patterns by filename, along with the terms that matched
-        let filename_matches: HashMap<PathBuf, HashSet<usize>> = find_matching_filenames(
+        let filename_matches: HashMap<PathBuf, HashSet<usize>> = file_list_cache::find_matching_filenames(
             path,
             queries,
             &all_files,
@@ -441,6 +438,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 println!("DEBUG: Matched terms: {:?}", matched_terms);
                 println!("DEBUG: Term indices: {:?}", plan.term_indices);
             }
+
             if plan.ast.evaluate(&matched_terms, &plan.term_indices, true) {
                 filtered_file_term_map.insert(pathbuf.clone(), term_map.clone());
                 filtered_all_files.insert(pathbuf.clone());
@@ -869,7 +867,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     Ok(final_results)
 }
 /// Helper function to search files using structured patterns from a QueryPlan.
-/// This function uses parallel processing to search for patterns and collects matches by term indices.
+/// This function uses a single-pass approach with processing to search for patterns
+/// and collects matches by term indices. It uses the file_list_cache to get a filtered
+/// list of files respecting ignore patterns.
 ///
 /// # Arguments
 /// * `root_path` - The base path to search in
@@ -885,97 +885,153 @@ pub fn search_with_structured_patterns(
     allow_tests: bool,
 ) -> Result<HashMap<PathBuf, HashMap<usize, HashSet<usize>>>> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    // Start timing the structured pattern search
     let search_start = Instant::now();
 
+    // Step 1: Create combined regex
     if debug_mode {
-        println!("DEBUG: Starting simplified structured pattern search...");
-        println!("DEBUG: Using {} patterns", patterns.len());
-    }
-
-    // Step 1: Find all files matching any pattern
-    let mut all_files = HashSet::new();
-
-    for (pattern, _) in patterns {
-        if let Ok(files) = find_files_with_pattern(root_path, pattern, custom_ignores, allow_tests)
-        {
-            all_files.extend(files);
-        }
-    }
-
-    if debug_mode {
+        println!("DEBUG: Starting single-pass structured pattern search...");
         println!(
-            "DEBUG: Found {} unique files matching patterns",
-            all_files.len()
+            "DEBUG: Creating combined regex from {} patterns",
+            patterns.len()
         );
     }
 
-    // Step 2: Process files in parallel to build term match maps
-    let file_term_maps: HashMap<PathBuf, HashMap<usize, HashSet<usize>>> = all_files
-        .par_iter()
-        .filter_map(|file_path| {
-            let mut term_map = HashMap::new();
+    let combined_pattern = patterns
+        .iter()
+        .map(|(p, _)| format!("({})", p))
+        .collect::<Vec<_>>()
+        .join("|");
 
-            // Search for each pattern in the file
-            for (pattern, term_indices) in patterns {
-                if let Ok((matched, line_matches)) = search_file_for_pattern(file_path, pattern) {
-                    if matched {
-                        if debug_mode {
-                            println!(
-                                "DEBUG: File {:?} matched pattern '{}' on {} lines",
-                                file_path,
-                                pattern,
-                                line_matches.len()
-                            );
-                            println!("DEBUG: Associated term indices: {:?}", term_indices);
-                            if !line_matches.is_empty() {
-                                println!(
-                                    "DEBUG: First few matching lines: {:?}",
-                                    line_matches.keys().take(5).collect::<Vec<_>>()
-                                );
-                                // Print some match content examples
-                                for (line_num, matches) in line_matches.iter().take(2) {
-                                    println!(
-                                        "DEBUG: Line {}: Match examples: {:?}",
-                                        line_num,
-                                        matches.iter().take(3).collect::<Vec<_>>()
-                                    );
-                                }
-                            }
-                        }
-
-                        // Add matches for all terms associated with this pattern
-                        for &term_idx in term_indices {
-                            let term_entry = term_map.entry(term_idx).or_insert_with(HashSet::new);
-
-                            // Add all line numbers to the term map
-                            term_entry.extend(line_matches.keys());
-                        }
-                    }
-                }
-            }
-
-            Some((file_path.clone(), term_map))
-        })
-        .collect();
+    let combined_regex = regex::Regex::new(&format!("(?i){}", combined_pattern))?;
+    let pattern_to_terms: Vec<HashSet<usize>> =
+        patterns.iter().map(|(_, terms)| terms.clone()).collect();
 
     if debug_mode {
-        println!("DEBUG: Built term maps for {} files", file_term_maps.len());
+        println!("DEBUG: Combined regex created successfully");
     }
 
-    // We no longer need to filter files here since we do it in the early filtering step
-    let filtered_map = file_term_maps;
+    // Step 2: Get filtered file list from cache
+    if debug_mode {
+        println!("DEBUG: Getting filtered file list from cache");
+        println!("DEBUG: Custom ignore patterns: {:?}", custom_ignores);
+    }
+
+    // Use file_list_cache to get a filtered list of files
+    let file_list =
+        crate::search::file_list_cache::get_file_list(root_path, allow_tests, custom_ignores)?;
+
+    if debug_mode {
+        println!("DEBUG: Got {} files from cache", file_list.files.len());
+    }
+
+    // Step 3: Process files
+    let mut file_term_maps = HashMap::new();
+
+    if debug_mode {
+        println!("DEBUG: Starting file processing with combined regex");
+    }
+
+    for file_path in &file_list.files {
+        // Search file with combined pattern
+        match search_file_with_combined_pattern(file_path, &combined_regex, &pattern_to_terms) {
+            Ok(term_map) => {
+                if !term_map.is_empty() {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: File {:?} matched combined pattern with {} term indices",
+                            file_path,
+                            term_map.len()
+                        );
+                    }
+
+                    // Add to results
+                    file_term_maps.insert(file_path.clone(), term_map);
+                }
+            }
+            Err(e) => {
+                if debug_mode {
+                    println!("DEBUG: Error searching file {:?}: {:?}", file_path, e);
+                }
+            }
+        }
+    }
 
     let total_duration = search_start.elapsed();
 
     if debug_mode {
         println!(
-            "DEBUG: Simplified structured pattern search completed in {} - Found matches in {} files",
+            "DEBUG: Single-pass search completed in {} - Found matches in {} files",
             format_duration(total_duration),
-            filtered_map.len()
+            file_term_maps.len()
         );
     }
 
-    Ok(filtered_map)
+    Ok(file_term_maps)
+}
+
+/// Helper function to search a file with a combined regex pattern
+/// This function searches a file for matches against a combined regex pattern
+/// and maps the matches to their corresponding term indices.
+///
+/// It processes all matching capture groups in each regex match, ensuring that
+/// if multiple patterns match in a single capture, all of them are properly recorded.
+/// This is important for complex regex patterns where multiple groups might match
+/// simultaneously, ensuring search stability and consistent results.
+fn search_file_with_combined_pattern(
+    file_path: &Path,
+    combined_regex: &regex::Regex,
+    pattern_to_terms: &[HashSet<usize>],
+) -> Result<HashMap<usize, HashSet<usize>>> {
+    let mut term_map = HashMap::new();
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Read the file content
+    let content = match std::fs::read_to_string(file_path) {
+        Ok(content) => content,
+        Err(e) => {
+            if debug_mode {
+                println!("DEBUG: Error reading file {:?}: {:?}", file_path, e);
+            }
+            return Err(anyhow::anyhow!("Failed to read file: {}", e));
+        }
+    };
+
+    // Process each line
+    for (line_number, line) in content.lines().enumerate() {
+        // Skip lines that are too long
+        if line.len() > 2000 {
+            if debug_mode {
+                println!(
+                    "DEBUG: Skipping line {} in file {:?} - line too long ({} characters)",
+                    line_number + 1,
+                    file_path,
+                    line.len()
+                );
+            }
+            continue;
+        }
+
+        // Find all matches in the line
+        for cap in combined_regex.captures_iter(line) {
+            // Check all possible pattern groups in this capture
+            for i in 1..=pattern_to_terms.len() {
+                if cap.get(i).is_some() {
+                    let pattern_idx = i - 1;
+
+                    // Add matches for all terms associated with this pattern
+                    for &term_idx in &pattern_to_terms[pattern_idx] {
+                        term_map
+                            .entry(term_idx)
+                            .or_insert_with(HashSet::new)
+                            .insert(line_number + 1); // Convert to 1-based line numbers
+                    }
+                    
+                    // Note: We removed the break statement here to process all matching groups
+                    // in a capture, not just the first one. This fixes the search instability issue.
+                }
+            }
+        }
+    }
+
+    Ok(term_map)
 }
