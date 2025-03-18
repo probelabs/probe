@@ -213,7 +213,7 @@ fn test_cli_reranker() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
 
-    // Run the CLI with tfidf reranker
+    // Run the CLI with bm25 reranker
     let output = Command::new("cargo")
         .args([
             "run",
@@ -222,7 +222,7 @@ fn test_cli_reranker() {
             "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--reranker",
-            "tfidf",
+            "bm25",
         ])
         .env("DEBUG", "1") // Enable debug mode to see ranking messages
         .output()
@@ -245,10 +245,11 @@ fn test_cli_reranker() {
 
     // Check that it used the specified reranker
     assert!(
-        stdout.contains("Using tfidf for ranking")
-            || stdout.contains("Using TF-IDF for ranking")
-            || stdout.contains("tfidf"),
-        "Should use TF-IDF reranker"
+        stdout.contains("Using bm25 for ranking")
+            || stdout.contains("Using BM25 for ranking")
+            || stdout.contains("BM25 ranking")
+            || stdout.contains("bm25"),
+        "Should use BM25 reranker"
     );
 }
 

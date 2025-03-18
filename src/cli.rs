@@ -31,8 +31,8 @@ pub struct Args {
     #[arg(short = 'n', long = "exclude-filenames")]
     pub exclude_filenames: bool,
 
-    /// Reranking method to use for search results
-    #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "hybrid2", "bm25", "tfidf"])]
+    /// BM25 ranking for search results
+    #[arg(short = 'r', long = "reranker", default_value = "bm25", value_parser = ["bm25"])]
     pub reranker: String,
 
     /// Use frequency-based search with stemming and stopword removal (enabled by default)
@@ -90,7 +90,7 @@ pub enum Commands {
     ///
     /// This command searches your codebase using regex patterns with semantic understanding.
     /// It uses frequency-based search with stemming and stopword removal by default,
-    /// and ranks results using a hybrid algorithm that combines TF-IDF and BM25.
+    /// and ranks results using the BM25 algorithm.
     /// Results are presented as code blocks with relevant context.
     Search {
         /// Search pattern (regex supported)
@@ -113,8 +113,8 @@ pub enum Commands {
         #[arg(short = 'n', long = "exclude-filenames")]
         exclude_filenames: bool,
 
-        /// Reranking method to use for search results
-        #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "hybrid2", "bm25", "tfidf"])]
+        /// BM25 ranking for search results
+        #[arg(short = 'r', long = "reranker", default_value = "bm25", value_parser = ["bm25"])]
         reranker: String,
 
         /// Use frequency-based search with stemming and stopword removal (enabled by default)
