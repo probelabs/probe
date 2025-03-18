@@ -10,10 +10,16 @@ The easiest way to install Probe is via npm:
 npm install -g @buger/probe
 ```
 
-Or using curl:
+Or using curl (for macOS and Linux):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
+```
+
+Or using PowerShell (for Windows):
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex
 ```
 
 For more detailed installation instructions, including manual installation and building from source, see the [Installation Guide](/installation).
