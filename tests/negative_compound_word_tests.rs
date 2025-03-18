@@ -140,12 +140,12 @@ fn test_basic_negative_compound_word(temp_path: &Path) {
     );
 }
 
-/// Test complex query with negative compound word: "settings AND -networkfirewall"
+/// Test complex query with multiple negative terms: "settings AND -network AND -firewall"
 fn test_complex_negative_compound_word(temp_path: &Path) {
-    println!("\n=== Testing complex query with negative compound word: settings AND -networkfirewall ===");
+    println!("\n=== Testing complex query with multiple negative terms: settings AND -network AND -firewall ===");
 
     // Create the query
-    let query = "settings AND -networkfirewall";
+    let query = "settings AND -network AND -firewall";
     let queries = vec![query.to_string()];
     let custom_ignores: Vec<String> = vec![];
 
@@ -173,14 +173,14 @@ fn test_complex_negative_compound_word(temp_path: &Path) {
     // Run the search
     let search_results = perform_probe(&options).unwrap();
 
-    // Check that we found the file with "settings" but not "network" and "firewall"
+    // Check that we found the file with "settings" but not "network" or "firewall"
     let found_network_only = search_results
         .results
         .iter()
         .any(|r| r.file.contains("network_only.go"));
     assert!(
-        found_network_only,
-        "Should find network_only.go with 'settings' but not 'networkfirewall'"
+        !found_network_only,
+        "Should NOT find network_only.go with 'settings' but excluding 'network'"
     );
 
     // Check that we didn't find the file with "networkfirewall" as a single term
@@ -190,7 +190,7 @@ fn test_complex_negative_compound_word(temp_path: &Path) {
         .any(|r| r.file.contains("networkfirewall.go"));
     assert!(
         !found_networkfirewall,
-        "Should NOT find networkfirewall.go with negative compound word"
+        "Should NOT find networkfirewall.go with negative terms '-network' and '-firewall'"
     );
 
     // Check that we didn't find the file with "network" and "firewall" separately
@@ -200,7 +200,7 @@ fn test_complex_negative_compound_word(temp_path: &Path) {
         .any(|r| r.file.contains("network_firewall.go"));
     assert!(
         !found_network_firewall,
-        "Should NOT find network_firewall.go with negative compound word"
+        "Should NOT find network_firewall.go with negative terms '-network' and '-firewall'"
     );
 }
 

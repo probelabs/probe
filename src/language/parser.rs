@@ -149,10 +149,13 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
     }
 
     if debug_mode {
-        println!("DEBUG: No acceptable parent found for line {}, trying additional strategies", line);
+        println!(
+            "DEBUG: No acceptable parent found for line {}, trying additional strategies",
+            line
+        );
         println!("DEBUG: Target node type: {}", target_node.kind());
     }
-    
+
     // Additional strategy: If the target node is a doc_comment, try to find the next sibling
     // which might be the struct_item or function_item we're looking for
     if target_node.kind() == "doc_comment" || target_node.kind() == "line_comment" {
@@ -165,7 +168,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
                     next_sibling.end_position().row + 1
                 );
             }
-            
+
             // Check if the next sibling is an acceptable parent
             if language_impl.is_acceptable_parent(&next_sibling) {
                 if debug_mode {
@@ -173,7 +176,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
                 }
                 return Some(next_sibling);
             }
-            
+
             // If not, try to find an acceptable parent in the next sibling's children
             if let Some(child) = find_acceptable_child(next_sibling, language_impl.as_ref()) {
                 if debug_mode {
@@ -188,7 +191,7 @@ pub fn find_code_structure<'a>(node: Node<'a>, line: usize, extension: &str) -> 
             }
         }
     }
-    
+
     // FINAL FALLBACK: If we never found an "acceptable parent,"
     // just return the original node anyway instead of returning None
     if debug_mode {
@@ -404,142 +407,6 @@ fn find_acceptable_child<'a>(node: Node<'a>, language_impl: &dyn LanguageImpl) -
     None // No acceptable child found
 }
 
-/// Function to extract all top-level AST blocks from a file
-pub fn extract_all_top_level_blocks(
-    content: &str,
-    extension: &str,
-    allow_tests: bool,
-) -> Result<Vec<CodeBlock>> {
-    // Get the appropriate language implementation
-    let language_impl = match get_language_impl(extension) {
-        Some(lang) => lang,
-        None => {
-            return Err(anyhow::anyhow!(format!(
-                "Unsupported file type: {}",
-                extension
-            )))
-        }
-    };
-
-    // Get the tree-sitter language
-    let language = language_impl.get_tree_sitter_language();
-
-    // Parse the file
-    let mut parser = TSParser::new();
-    parser.set_language(&language)?;
-
-    let tree = parser
-        .parse(content, None)
-        .context("Failed to parse the file")?;
-
-    let root_node = tree.root_node();
-
-    // Check for debug mode
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    if debug_mode {
-        println!(
-            "DEBUG: Extracting all top-level blocks from file with extension: {}",
-            extension
-        );
-        println!("DEBUG: Root node type: {}", root_node.kind());
-    }
-
-    // Collect all top-level code blocks
-    let mut code_blocks: Vec<CodeBlock> = Vec::new();
-    let mut seen_nodes: HashSet<(usize, usize)> = HashSet::new();
-
-    // Recursive function to find all acceptable parent nodes
-    fn find_all_acceptable_parents(
-        node: Node<'_>,
-        language_impl: &dyn LanguageImpl,
-        seen_nodes: &mut HashSet<(usize, usize)>,
-        code_blocks: &mut Vec<CodeBlock>,
-        allow_tests: bool,
-        content: &[u8],
-        debug_mode: bool,
-    ) {
-        // Check if this node is an acceptable parent
-        if language_impl.is_acceptable_parent(&node) {
-            let start_pos = node.start_position();
-            let end_pos = node.end_position();
-            let node_key = (start_pos.row, end_pos.row);
-
-            // Skip if we've already seen this node
-            if !seen_nodes.contains(&node_key) {
-                seen_nodes.insert(node_key);
-
-                // Skip test nodes unless allow_tests is true
-                if !allow_tests && language_impl.is_test_node(&node, content) {
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Skipping test node at lines {}-{}, type: {}",
-                            start_pos.row + 1,
-                            end_pos.row + 1,
-                            node.kind()
-                        );
-                    }
-                } else {
-                    // Add this node as a code block
-                    code_blocks.push(CodeBlock {
-                        start_row: start_pos.row,
-                        end_row: end_pos.row,
-                        start_byte: node.start_byte(),
-                        end_byte: node.end_byte(),
-                        node_type: node.kind().to_string(),
-                        parent_node_type: None,
-                        parent_start_row: None,
-                        parent_end_row: None,
-                    });
-
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Added top-level block: type='{}', lines={}-{}",
-                            node.kind(),
-                            start_pos.row + 1,
-                            end_pos.row + 1
-                        );
-                    }
-                }
-            }
-        }
-
-        // Recursively process all children
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            find_all_acceptable_parents(
-                child,
-                language_impl,
-                seen_nodes,
-                code_blocks,
-                allow_tests,
-                content,
-                debug_mode,
-            );
-        }
-    }
-
-    // Start the recursive search from the root node
-    find_all_acceptable_parents(
-        root_node,
-        language_impl.as_ref(),
-        &mut seen_nodes,
-        &mut code_blocks,
-        allow_tests,
-        content.as_bytes(),
-        debug_mode,
-    );
-
-    // Sort code blocks by start position
-    code_blocks.sort_by_key(|block| block.start_row);
-
-    if debug_mode {
-        println!("DEBUG: Extracted {} top-level blocks", code_blocks.len());
-    }
-
-    Ok(code_blocks)
-}
-
 /// Function to parse a file and extract code blocks for the given line numbers
 pub fn parse_file_for_code_blocks(
     content: &str,
@@ -734,12 +601,16 @@ pub fn parse_file_for_code_blocks(
         // Special case for line-based extraction: If we're looking for a specific line
         // that might be a struct or function definition, search the entire AST for nodes
         // that start exactly at this line
-        let mut exact_line_match = None;
-        
+
         // Helper function to find nodes that start exactly at the target line
-        fn find_node_at_exact_line<'a>(node: Node<'a>, line: usize, debug_mode: bool, language_impl: &dyn LanguageImpl) -> Option<Node<'a>> {
+        fn find_node_at_exact_line<'a>(
+            node: Node<'a>,
+            line: usize,
+            debug_mode: bool,
+            language_impl: &dyn LanguageImpl,
+        ) -> Option<Node<'a>> {
             let start_line = node.start_position().row + 1;
-            
+
             // Check if this node starts exactly at the target line
             if start_line == line && language_impl.is_acceptable_parent(&node) {
                 if debug_mode {
@@ -753,30 +624,32 @@ pub fn parse_file_for_code_blocks(
                 }
                 return Some(node);
             }
-            
+
             // Recursively check children
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                if let Some(found) = find_node_at_exact_line(child, line, debug_mode, language_impl) {
+                if let Some(found) = find_node_at_exact_line(child, line, debug_mode, language_impl)
+                {
                     return Some(found);
                 }
             }
-            
+
             None
         }
-        
+
         // Try to find a node that starts exactly at the target line
-        exact_line_match = find_node_at_exact_line(root_node, line, debug_mode, language_impl.as_ref());
-        
+        let exact_line_match =
+            find_node_at_exact_line(root_node, line, debug_mode, language_impl.as_ref());
+
         // If we found an exact match, use it
         if let Some(exact_match) = exact_line_match {
             let start_pos = exact_match.start_position();
             let end_pos = exact_match.end_position();
             let node_key = (start_pos.row, end_pos.row);
-            
+
             if !seen_nodes.contains(&node_key) {
                 seen_nodes.insert(node_key);
-                
+
                 if debug_mode {
                     println!(
                         "DEBUG: Using exact line match at line {}: type='{}', lines={}-{}",
@@ -786,7 +659,7 @@ pub fn parse_file_for_code_blocks(
                         end_pos.row + 1
                     );
                 }
-                
+
                 code_blocks.push(CodeBlock {
                     start_row: start_pos.row,
                     end_row: end_pos.row,
@@ -797,11 +670,11 @@ pub fn parse_file_for_code_blocks(
                     parent_start_row: None,
                     parent_end_row: None,
                 });
-                
+
                 continue;
             }
         }
-        
+
         // If no exact match found, fall back to the standard approach
         if let Some(node) = find_code_structure(root_node, line, extension) {
             let start_pos = node.start_position();

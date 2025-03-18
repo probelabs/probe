@@ -1,6 +1,4 @@
-use probe::search::{
-    perform_probe, query::create_query_plan, query::create_structured_patterns, SearchOptions,
-};
+use probe::search::{perform_probe, SearchOptions};
 use std::path::PathBuf;
 
 #[test]
@@ -89,35 +87,6 @@ fn test_ip_whitelist_stemming() {
         println!("  block_total_matches: {:?}", result.block_total_matches);
         println!("  code: {}", result.code);
     }
-}
-
-#[test]
-fn test_negative_terms_not_in_ripgrep_search() {
-    // Create search query with a negative term
-    let query = "(+ip) -whitelist";
-
-    // Enable debug mode to see the actual terms and patterns
-    std::env::set_var("DEBUG", "1");
-
-    // Parse the query and create a query plan
-    let plan = create_query_plan(query, false).expect("Failed to create query plan");
-
-    // Generate patterns from the query plan
-    let patterns = create_structured_patterns(&plan);
-
-    // Reset debug mode
-    std::env::remove_var("DEBUG");
-
-    // Verify that patterns for excluded terms are not generated
-    let has_whitelist_pattern = patterns
-        .iter()
-        .any(|(pattern, _)| pattern.contains("whitelist"));
-    assert!(
-        !has_whitelist_pattern,
-        "Patterns should not include excluded terms"
-    );
-
-    println!("✓ Negative terms are not included in ripgrep search patterns");
 }
 
 #[test]

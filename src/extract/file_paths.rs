@@ -3,12 +3,12 @@
 //! This module provides functions for parsing file paths with optional line numbers,
 //! line ranges, or symbol references from text input.
 
+use crate::language::is_test_file;
 use glob::glob;
 use ignore::WalkBuilder;
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use crate::language::is_test_file;
 
 /// Represents a file path with optional line numbers and symbol information
 ///
@@ -17,7 +17,13 @@ use crate::language::is_test_file;
 /// - Second `Option<usize>`: Optional end line number
 /// - `Option<String>`: Optional symbol name
 /// - `Option<HashSet<usize>>`: Optional set of specific line numbers
-pub type FilePathInfo = (PathBuf, Option<usize>, Option<usize>, Option<String>, Option<HashSet<usize>>);
+pub type FilePathInfo = (
+    PathBuf,
+    Option<usize>,
+    Option<usize>,
+    Option<String>,
+    Option<HashSet<usize>>,
+);
 /// Check if content is in git diff format
 ///
 /// This function checks if the content starts with "diff --git" which indicates
@@ -59,8 +65,7 @@ pub fn extract_file_paths_from_git_diff(text: &str, allow_tests: bool) -> Vec<Fi
     //   @@ -oldStart,oldLen +newStart,newLen @@
     // The length part may be omitted if 1 (in which case the diff might display e.g. @@ -10 +20 @@).
     // We'll default missing length to 1.
-    let hunk_header_regex =
-        Regex::new(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").unwrap();
+    let hunk_header_regex = Regex::new(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").unwrap();
 
     // Helper function to finalize a file (add to results if it has changes)
     let finalize_file = |results: &mut Vec<FilePathInfo>,
@@ -70,22 +75,31 @@ pub fn extract_file_paths_from_git_diff(text: &str, allow_tests: bool) -> Vec<Fi
                          allow_tests: bool,
                          debug_mode: bool| {
         // Only process if we have lines and haven't processed this file yet
-        if !changed_lines.is_empty() && !processed_files.contains(&file_path.to_string_lossy().to_string()) {
+        if !changed_lines.is_empty()
+            && !processed_files.contains(&file_path.to_string_lossy().to_string())
+        {
             // Skip test files if allow_tests is false
             let is_test = is_test_file(file_path);
             if !is_ignored_by_gitignore(file_path) && (allow_tests || !is_test) {
                 if debug_mode {
                     println!(
                         "[DEBUG] Adding file with {} changed lines: {:?}",
-                        changed_lines.len(), file_path
+                        changed_lines.len(),
+                        file_path
                     );
                 }
                 // Use the min and max values in the HashSet for start and end lines
                 let start_line = changed_lines.iter().min().cloned();
                 let end_line = changed_lines.iter().max().cloned();
-                
+
                 // Pass both the start/end line numbers and the full set of lines
-                results.push((file_path.clone(), start_line, end_line, None, Some(changed_lines.clone())));
+                results.push((
+                    file_path.clone(),
+                    start_line,
+                    end_line,
+                    None,
+                    Some(changed_lines.clone()),
+                ));
                 processed_files.insert(file_path.to_string_lossy().to_string());
             } else if debug_mode {
                 if is_ignored_by_gitignore(file_path) {
@@ -133,7 +147,7 @@ pub fn extract_file_paths_from_git_diff(text: &str, allow_tests: bool) -> Vec<Fi
             if let Some(file_path) = &current_file {
                 // Get the line numbers from the hunk header
                 let new_start: usize = cap.get(3).unwrap().as_str().parse().unwrap_or(1);
-                let new_len: usize = cap
+                let _new_len: usize = cap
                     .get(4)
                     .map(|m| m.as_str().parse().unwrap_or(1))
                     .unwrap_or(1);
@@ -147,35 +161,38 @@ pub fn extract_file_paths_from_git_diff(text: &str, allow_tests: bool) -> Vec<Fi
 
                 // Move to the next line after the hunk header
                 i += 1;
-                
+
                 // Process lines within this hunk
                 let mut current_line = new_start;
                 while i < lines.len() {
                     let hunk_line = lines[i];
-                    
+
                     // Check if we've reached the next hunk or next diff
                     if hunk_line.starts_with("@@") || hunk_line.starts_with("diff --git") {
                         // Do not increment i here, so the outer loop sees this line
                         break;
                     }
-                    
+
                     // Process lines within the hunk
                     if hunk_line.starts_with('+') && !hunk_line.starts_with("+++") {
                         // This is an added/modified line in the new version
                         if debug_mode {
-                            println!("[DEBUG] Found changed line at {}: {}", current_line, hunk_line);
+                            println!(
+                                "[DEBUG] Found changed line at {}: {}",
+                                current_line, hunk_line
+                            );
                         }
                         current_file_lines.insert(current_line);
                     }
-                    
+
                     // Advance the line counter for all lines except removed lines
                     if !hunk_line.starts_with('-') {
                         current_line += 1;
                     }
-                    
+
                     i += 1;
                 }
-                
+
                 // We've processed this hunk, continue to the next line
                 continue;
             }
@@ -223,7 +240,8 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
 
     // First, try to match file paths with symbol references (e.g., file.rs#function_name)
     let file_symbol_regex =
-        Regex::new(r"(?:^|[\s\r\n])([a-zA-Z0-9_\-./\*\{\}]+\.[a-zA-Z0-9]+)#([a-zA-Z0-9_]+)").unwrap();
+        Regex::new(r"(?:^|[\s\r\n])([a-zA-Z0-9_\-./\*\{\}]+\.[a-zA-Z0-9]+)#([a-zA-Z0-9_]+)")
+            .unwrap();
 
     for cap in file_symbol_regex.captures_iter(text) {
         let file_path = cap.get(1).unwrap().as_str();
@@ -238,7 +256,8 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                 for entry in paths.flatten() {
                     // Check if the file should be ignored or is a test file
                     let is_test = is_test_file(&entry);
-                    let should_include = !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
+                    let should_include =
+                        !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
                     if should_include {
                         let path_str = entry.to_string_lossy().to_string();
                         processed_paths.insert(path_str.clone());
@@ -292,7 +311,8 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                     for entry in paths.flatten() {
                         // Check if the file should be ignored or is a test file
                         let is_test = is_test_file(&entry);
-                        let should_include = !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
+                        let should_include =
+                            !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
                         if should_include {
                             processed_paths.insert(entry.to_string_lossy().to_string());
                             results.push((entry, Some(start), Some(end), None, None));
@@ -324,7 +344,8 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
 
     // Then, try to match file paths with single line numbers (and optional column numbers)
     let file_line_regex =
-        Regex::new(r"(?:^|[\s\r\n])([a-zA-Z0-9_\-./\*\{\}]+\.[a-zA-Z0-9]+):(\d+)(?::\d+)?").unwrap();
+        Regex::new(r"(?:^|[\s\r\n])([a-zA-Z0-9_\-./\*\{\}]+\.[a-zA-Z0-9]+):(\d+)(?::\d+)?")
+            .unwrap();
 
     for cap in file_line_regex.captures_iter(text) {
         let file_path = cap.get(1).unwrap().as_str();
@@ -344,7 +365,8 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                     if !processed_paths.contains(&path_str) {
                         // Check if the file should be ignored or is a test file
                         let is_test = is_test_file(&entry);
-                        let should_include = !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
+                        let should_include =
+                            !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
                         if should_include {
                             processed_paths.insert(path_str);
                             results.push((entry, line_num, None, None, None));
@@ -376,7 +398,8 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
 
     // Finally, match file paths without line numbers or symbols
     // But only if they haven't been processed already
-    let simple_file_regex = Regex::new(r"(?:^|[\s\r\n])([a-zA-Z0-9_\-./\*\{\}]+\.[a-zA-Z0-9]+)").unwrap();
+    let simple_file_regex =
+        Regex::new(r"(?:^|[\s\r\n])([a-zA-Z0-9_\-./\*\{\}]+\.[a-zA-Z0-9]+)").unwrap();
 
     for cap in simple_file_regex.captures_iter(text) {
         let file_path = cap.get(1).unwrap().as_str();
@@ -391,7 +414,8 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                         if !processed_paths.contains(&path_str) {
                             // Check if the file should be ignored or is a test file
                             let is_test = is_test_file(&entry);
-                            let should_include = !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
+                            let should_include =
+                                !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
                             if should_include {
                                 processed_paths.insert(path_str);
                                 results.push((entry, None, None, None, None));
@@ -438,13 +462,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
         let path = PathBuf::from(file_part);
         let is_test = is_test_file(&path);
         if allow_tests || !is_test {
-            results.push((
-                path,
-                None,
-                None,
-                Some(symbol.to_string()),
-                None,
-            ));
+            results.push((path, None, None, Some(symbol.to_string()), None));
         }
         return results;
     } else if let Some((file_part, rest)) = input.split_once(':') {
@@ -471,7 +489,8 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                         for entry in paths.flatten() {
                             // Check if the file should be ignored or is a test file
                             let is_test = is_test_file(&entry);
-                            let should_include = !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
+                            let should_include =
+                                !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
                             if should_include {
                                 results.push((entry, Some(start), Some(end), None, None));
                             }
@@ -497,7 +516,8 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                         for entry in paths.flatten() {
                             // Check if the file should be ignored or is a test file
                             let is_test = is_test_file(&entry);
-                            let should_include = !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
+                            let should_include =
+                                !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
                             if should_include {
                                 // Create a HashSet with just this line number
                                 let mut lines_set = HashSet::new();
@@ -526,7 +546,8 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                 for entry in paths.flatten() {
                     // Check if the file should be ignored or is a test file
                     let is_test = is_test_file(&entry);
-                    let should_include = !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
+                    let should_include =
+                        !is_ignored_by_gitignore(&entry) && (allow_tests || !is_test);
                     if should_include {
                         results.push((entry, None, None, None, None));
                     }

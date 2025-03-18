@@ -28,7 +28,7 @@ pub fn find_symbol_in_file(
     path: &Path,
     symbol: &str,
     content: &str,
-    allow_tests: bool,
+    _allow_tests: bool,
     context_lines: usize,
 ) -> Result<SearchResult> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -227,11 +227,20 @@ pub fn find_symbol_in_file(
             );
         }
 
+        // Tokenize the content
+        let filename = path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let node_text_str = node_text.to_string();
+        let tokenized_content =
+            crate::ranking::preprocess_text_with_filename(&node_text_str, &filename);
+
         return Ok(SearchResult {
             file: path.to_string_lossy().to_string(),
             lines: (node_start_line, node_end_line),
             node_type: found_node.kind().to_string(),
-            code: node_text.to_string(),
+            code: node_text_str,
             matched_by_filename: None,
             rank: None,
             score: None,
@@ -250,6 +259,7 @@ pub fn find_symbol_in_file(
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            tokenized_content: Some(tokenized_content),
         });
     }
 
@@ -316,6 +326,13 @@ pub fn find_symbol_in_file(
             println!("[DEBUG] Content size: {} bytes", context.len());
         }
 
+        // Tokenize the content
+        let filename = path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let tokenized_content = crate::ranking::preprocess_text_with_filename(&context, &filename);
+
         return Ok(SearchResult {
             file: path.to_string_lossy().to_string(),
             lines: (start_line, end_line),
@@ -339,6 +356,7 @@ pub fn find_symbol_in_file(
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            tokenized_content: Some(tokenized_content),
         });
     }
 

@@ -175,10 +175,6 @@ pub enum Commands {
         #[arg(value_name = "FILES")]
         files: Vec<String>,
 
-        /// Allow test files and test code blocks in results
-        #[arg(long = "allow-tests")]
-        allow_tests: bool,
-
         /// Custom patterns to ignore (in addition to .gitignore and common patterns)
         #[arg(short, long)]
         ignore: Vec<String>,
@@ -203,6 +199,14 @@ pub enum Commands {
         /// Output only file names and line numbers without full content
         #[arg(long = "dry-run")]
         dry_run: bool,
+
+        /// Parse input as git diff format
+        #[arg(long = "diff")]
+        diff: bool,
+
+        /// Allow test files and test code blocks in extraction results (only applies when reading from stdin or clipboard)
+        #[arg(long = "allow-tests")]
+        allow_tests: bool,
     },
 
     /// Search code using AST patterns for precise structural matching

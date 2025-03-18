@@ -11,13 +11,16 @@ mod symbol_finder;
 
 // Re-export public functions
 #[allow(unused_imports)]
+pub use file_paths::{
+    extract_file_paths_from_git_diff, extract_file_paths_from_text, is_git_diff_format,
+    parse_file_with_line,
+};
+#[allow(unused_imports)]
 pub use formatter::format_and_print_extraction_results;
 #[allow(unused_imports)]
 pub use formatter::format_extraction_dry_run;
 #[allow(unused_imports)]
 pub use processor::process_file_for_extraction;
-#[allow(unused_imports)]
-pub use file_paths::{extract_file_paths_from_git_diff, extract_file_paths_from_text, is_git_diff_format, parse_file_with_line};
 
 use crate::extract::file_paths::{set_custom_ignores, FilePathInfo};
 use anyhow::Result;
@@ -88,7 +91,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
         // Auto-detect git diff format or use explicit flag
         let is_diff_format = options.diff || is_git_diff_format(&buffer);
-        
+
         if is_diff_format {
             // Parse as git diff format
             if debug_mode {
@@ -108,7 +111,11 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             for (path, start, end, symbol, lines) in &file_paths {
                 println!(
                     "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?}, specific lines: {:?})",
-                    path, start, end, symbol, lines.as_ref().map(|l| l.len())
+                    path,
+                    start,
+                    end,
+                    symbol,
+                    lines.as_ref().map(|l| l.len())
                 );
             }
         }
@@ -120,7 +127,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     } else if options.files.is_empty() {
         // Check if stdin is available (not a terminal)
         let is_stdin_available = !atty::is(atty::Stream::Stdin);
-        
+
         if is_stdin_available {
             // Read from stdin
             println!("{}", "Reading from stdin...".bold().blue());
@@ -136,7 +143,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
             // Auto-detect git diff format or use explicit flag
             let is_diff_format = options.diff || is_git_diff_format(&buffer);
-            
+
             if is_diff_format {
                 // Parse as git diff format
                 if debug_mode {
@@ -149,7 +156,12 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             }
         } else {
             // No arguments and no stdin, show help
-            println!("{}", "No files specified and no stdin input detected.".yellow().bold());
+            println!(
+                "{}",
+                "No files specified and no stdin input detected."
+                    .yellow()
+                    .bold()
+            );
             println!("{}", "Use --help for usage information.".blue());
             return Ok(());
         }
@@ -162,7 +174,11 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             for (path, start, end, symbol, lines) in &file_paths {
                 println!(
                     "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?}, specific lines: {:?})",
-                    path, start, end, symbol, lines.as_ref().map(|l| l.len())
+                    path,
+                    start,
+                    end,
+                    symbol,
+                    lines.as_ref().map(|l| l.len())
                 );
             }
         }
@@ -193,7 +209,11 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 for (path, start, end, symbol, lines) in &paths {
                     println!(
                         "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?}, specific lines: {:?})",
-                        path, start, end, symbol, lines.as_ref().map(|l| l.len())
+                        path,
+                        start,
+                        end,
+                        symbol,
+                        lines.as_ref().map(|l| l.len())
                     );
                 }
             }
@@ -214,7 +234,11 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             } else if let Some(sym) = symbol {
                 println!("  {} (symbol: {})", path.display(), sym);
             } else if let Some(lines_set) = lines {
-                println!("  {} (specific lines: {} lines)", path.display(), lines_set.len());
+                println!(
+                    "  {} (specific lines: {} lines)",
+                    path.display(),
+                    lines_set.len()
+                );
             } else {
                 println!("  {}", path.display());
             }
@@ -242,7 +266,10 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             println!("[DEBUG] Start line: {:?}", start_line);
             println!("[DEBUG] End line: {:?}", end_line);
             println!("[DEBUG] Symbol: {:?}", symbol);
-            println!("[DEBUG] Specific lines: {:?}", specific_lines.as_ref().map(|l| l.len()));
+            println!(
+                "[DEBUG] Specific lines: {:?}",
+                specific_lines.as_ref().map(|l| l.len())
+            );
 
             // Check if file exists
             if path.exists() {
@@ -273,7 +300,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         if debug_mode && crate::language::is_test_file(&path) && !options.allow_tests {
             println!("[DEBUG] Test file detected: {:?}", path);
         }
-        
+
         match processor::process_file_for_extraction(
             &path,
             start_line,

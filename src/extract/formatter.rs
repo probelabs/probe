@@ -30,7 +30,10 @@ pub fn format_extraction_dry_run(results: &[SearchResult], format: &str) -> Resu
             }
 
             // Helper function to serialize lines as an array
-            fn serialize_lines_as_array<S>(lines: &(usize, usize), serializer: S) -> Result<S::Ok, S::Error>
+            fn serialize_lines_as_array<S>(
+                lines: &(usize, usize),
+                serializer: S,
+            ) -> Result<S::Ok, S::Error>
             where
                 S: serde::Serializer,
             {

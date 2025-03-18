@@ -64,6 +64,9 @@ pub struct SearchResult {
     pub block_id: Option<usize>,
     // The actual keywords that matched in this result
     pub matched_keywords: Option<Vec<String>>,
+    /// Tokenized version of the code block with filename prepended
+    #[allow(dead_code)]
+    pub tokenized_content: Option<Vec<String>>,
 }
 
 // Structure to hold node information for merging

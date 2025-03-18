@@ -6,6 +6,7 @@ mod result_ranking;
 pub mod block_merging;
 pub mod cache; // New module for caching search results
 pub mod elastic_query;
+pub mod file_list_cache; // New module for caching file lists
 mod search_limiter;
 mod search_options;
 mod search_output;

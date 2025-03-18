@@ -106,7 +106,7 @@ function bar() {
 
     // The second block should be the function containing the keyword in its body
     assert_eq!(
-        result[1].node_type, "function",
+        result[1].node_type, "function_declaration",
         "Second block should be the function with keyword in its body"
     );
 
@@ -133,9 +133,9 @@ function bar() {
         "One block should be at line 9 (the function declaration line)"
     );
 
-    // Verify the second block is of type 'function'
+    // Verify the second block is of type 'function_declaration'
     assert_eq!(
-        result[1].node_type, "function",
+        result[1].node_type, "function_declaration",
         "Second block should be the function"
     );
 

@@ -65,45 +65,20 @@ pub fn tokenize(text: &str) -> Vec<String> {
     tokenization::tokenize(text)
 }
 /// Preprocesses text for search by tokenizing and removing duplicates
-pub fn preprocess_text(text: &str, exact: bool) -> Vec<String> {
-    if exact {
-        text.to_lowercase()
-            .split_whitespace()
-            .map(String::from)
-            .collect()
-    } else {
-        tokenize(text)
-    }
+pub fn preprocess_text(text: &str) -> Vec<String> {
+    tokenize(text)
 }
 
 /// Preprocesses text with filename for search by tokenizing and removing duplicates
 /// This is used for filename matching - it adds the filename to the tokens
-pub fn preprocess_text_with_filename(text: &str, filename: &str, exact: bool) -> Vec<String> {
-    if exact {
-        let mut tokens: Vec<String> = text
-            .to_lowercase()
-            .split_whitespace()
-            .map(String::from)
-            .collect();
+pub fn preprocess_text_with_filename(text: &str, filename: &str) -> Vec<String> {
+    let mut tokens = tokenize(text);
 
-        // Add filename tokens
-        let filename_tokens: Vec<String> = filename
-            .to_lowercase()
-            .split_whitespace()
-            .map(String::from)
-            .collect();
+    // Add filename tokens
+    let filename_tokens = tokenize(filename);
 
-        tokens.extend(filename_tokens);
-        tokens
-    } else {
-        let mut tokens = tokenize(text);
-
-        // Add filename tokens
-        let filename_tokens = tokenize(filename);
-
-        tokens.extend(filename_tokens);
-        tokens
-    }
+    tokens.extend(filename_tokens);
+    tokens
 }
 
 /// Computes term frequencies (TF) for each document, document frequencies (DF) for each term,
@@ -312,7 +287,7 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64, f64, f64, f64)
     let avgdl = compute_avgdl(&tf_df_result.document_lengths);
 
     // Preprocess query
-    let query_tokens = preprocess_text(params.query, false);
+    let query_tokens = preprocess_text(params.query);
     let mut query_tf = HashMap::new();
     for token in query_tokens.iter() {
         *query_tf.entry(token.clone()).or_insert(0) += 1;
@@ -459,13 +434,6 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64, f64, f64, f64)
             + 0.05 * br_score
             + 0.05 * fmr_score
             + type_bonus;
-
-        if debug_mode {
-            println!(
-                "Score components for doc {}: cs_norm={:.3}, tf_norm={:.3}, bm_norm={:.3}, fut_norm={:.3}, ftm_norm={:.3}, but_norm={:.3}, btm_norm={:.3}, tr_score={:.3}, br_score={:.3}, fmr_score={:.3}, type_bonus={:.3} => new_score={:.3}",
-                i, cs_norm, tf_norm, bm_norm, fut_norm, ftm_norm, but_norm, btm_norm, tr_score, br_score, fmr_score, type_bonus, new_score
-            );
-        }
 
         new_scores.push((i, *combined, *tfidf, *bm25, new_score));
     }

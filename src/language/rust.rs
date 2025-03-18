@@ -39,14 +39,14 @@ impl LanguageImpl for RustLanguage {
         ) {
             return true;
         }
-        
+
         // Special handling for token trees inside macros
         if node.kind() == "token_tree" {
             // Check if this token tree is inside a macro invocation
             if let Some(parent) = node.parent() {
                 if parent.kind() == "macro_invocation" {
                     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-                    
+
                     // For Rust property tests, we want to consider token trees inside macros
                     // as acceptable parents, especially for proptest! macros
                     if debug_mode {
@@ -56,10 +56,10 @@ impl LanguageImpl for RustLanguage {
                             node.end_position().row + 1
                         );
                     }
-                    
+
                     // We previously tried to use the file path as a heuristic,
                     // but we don't have access to the actual file path here
-                    
+
                     // If the token tree is large enough (contains multiple lines of code),
                     // it's likely a meaningful code block that should be extracted
                     let node_size = node.end_position().row - node.start_position().row;
@@ -75,7 +75,7 @@ impl LanguageImpl for RustLanguage {
                 }
             }
         }
-        
+
         false
     }
 

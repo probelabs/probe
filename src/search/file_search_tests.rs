@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -59,12 +59,19 @@ mod tests {
         let content = "line 1: no match\nline 2: contains search term\nline 3: no match\n";
         let file_path = create_test_file(&temp_dir, "test.txt", content);
 
-        let (matched, line_numbers) = search_file_for_pattern(&file_path, "search", true)
+        let (matched, line_matches) = search_file_for_pattern(&file_path, "search")
             .expect("Failed to search file");
 
         assert!(matched);
-        assert_eq!(line_numbers.len(), 1);
-        assert!(line_numbers.contains(&2));  // Line 2 contains "search"
+        assert_eq!(line_matches.len(), 1);
+        
+        // Check that line 2 contains a match
+        assert!(line_matches.contains_key(&2));
+        
+        // Check that the match content is correct
+        let matches = line_matches.get(&2).unwrap();
+        assert!(!matches.is_empty());
+        assert!(matches.iter().any(|m| m == "search"));
     }
 
     #[test]
@@ -73,11 +80,11 @@ mod tests {
         let content = "line 1: no match\nline 2: no match\nline 3: no match\n";
         let file_path = create_test_file(&temp_dir, "test.txt", content);
 
-        let (matched, line_numbers) = search_file_for_pattern(&file_path, "nonexistent", true)
+        let (matched, line_matches) = search_file_for_pattern(&file_path, "nonexistent")
             .expect("Failed to search file");
 
         assert!(!matched);
-        assert_eq!(line_numbers.len(), 0);
+        assert_eq!(line_matches.len(), 0);
     }
 
     #[test]
@@ -87,12 +94,19 @@ mod tests {
         let file_path = create_test_file(&temp_dir, "test.txt", content);
 
         // Search should be case-insensitive by default
-        let (matched, line_numbers) = search_file_for_pattern(&file_path, "search", true)
+        let (matched, line_matches) = search_file_for_pattern(&file_path, "search")
             .expect("Failed to search file");
 
         assert!(matched);
-        assert_eq!(line_numbers.len(), 1);
-        assert!(line_numbers.contains(&2));  // Line 2 contains "SEARCH"
+        assert_eq!(line_matches.len(), 1);
+        
+        // Check that line 2 contains a match
+        assert!(line_matches.contains_key(&2));
+        
+        // Check that the match content is correct (case-insensitive)
+        let matches = line_matches.get(&2).unwrap();
+        assert!(!matches.is_empty());
+        assert!(matches.iter().any(|m| m.to_uppercase() == "SEARCH"));
     }
 
     #[test]
@@ -102,14 +116,22 @@ mod tests {
         let file_path = create_test_file(&temp_dir, "test.txt", content);
 
         // With word boundaries (exact=false), "ip" should match "ip" but not "skipped"
-        let (matched, line_numbers) = search_file_for_pattern(&file_path, "ip", false)
+        let (matched, line_matches) = search_file_for_pattern(&file_path, "ip")
             .expect("Failed to search file");
 
         assert!(matched);
+        
+        // Get the line numbers from the keys
+        let line_numbers: HashSet<usize> = line_matches.keys().cloned().collect();
+        
         assert_eq!(line_numbers.len(), 2);
         assert!(line_numbers.contains(&1));  // Line 1 contains "ip"
         assert!(line_numbers.contains(&3));  // Line 3 contains "ip"
         assert!(!line_numbers.contains(&2)); // Line 2 contains "skipped" but should not match
+        
+        // Check match content
+        assert!(line_matches.get(&1).unwrap().iter().any(|m| m == "ip"));
+        assert!(line_matches.get(&3).unwrap().iter().any(|m| m == "ip"));
     }
 
     #[test]
@@ -119,14 +141,23 @@ mod tests {
         let file_path = create_test_file(&temp_dir, "test.txt", content);
 
         // In exact mode (exact=true), "ip" should match both "ip" and "skipped"
-        let (matched, line_numbers) = search_file_for_pattern(&file_path, "ip", true)
+        let (matched, line_matches) = search_file_for_pattern(&file_path, "ip")
             .expect("Failed to search file");
 
         assert!(matched);
+        
+        // Get the line numbers from the keys
+        let line_numbers: HashSet<usize> = line_matches.keys().cloned().collect();
+        
         assert_eq!(line_numbers.len(), 3);  // All 3 lines should match
         assert!(line_numbers.contains(&1));  // Line 1 contains "ip"
         assert!(line_numbers.contains(&2));  // Line 2 contains "skipped" which contains "ip"
         assert!(line_numbers.contains(&3));  // Line 3 contains "ip"
+        
+        // Check match content
+        assert!(line_matches.get(&1).unwrap().iter().any(|m| m == "ip"));
+        assert!(line_matches.get(&2).unwrap().iter().any(|m| m == "ip"));
+        assert!(line_matches.get(&3).unwrap().iter().any(|m| m == "ip"));
     }
 
     #[test]

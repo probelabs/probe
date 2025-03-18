@@ -23,19 +23,18 @@ fn test_compound_word_splitting() {
 
     // Add specific programming terms to the vocabulary
     for term in [
-        "rpc", "storage", "handler", "client", "server", "api", "service",
+        "rpc", "storage", "handler", "client", "server", "api", "service", "http", "handler",
     ] {
         enhanced_vocab.insert(term.to_string());
     }
 
-    let input = "whitelist";
+    let input = "httpHandler";
     let compound_parts = split_compound_word(input, &enhanced_vocab);
 
     println!("Compound split of '{}': {:?}", input, compound_parts);
 
-    // We expect "whitelist" to be split into ["white", "list"]
-    assert!(compound_parts.contains(&"white".to_string()));
-    assert!(compound_parts.contains(&"list".to_string()));
+    assert!(compound_parts.contains(&"http".to_string()));
+    assert!(compound_parts.contains(&"Handler".to_string()));
 }
 
 #[test]

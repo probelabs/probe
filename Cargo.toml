@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
+atty = "0.2"
 colored = "3.0.0"
 dirs = "5.0.1"
 grep = "0.3.2"

@@ -287,7 +287,7 @@ fn format_and_print_color_results(
         if let Some(keywords) = &result.matched_keywords {
             for keyword in keywords {
                 // Create a case-insensitive regex for the keyword with word boundaries
-                if let Ok(regex) = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(keyword))) {
+                if let Ok(regex) = Regex::new(&format!(r"(?i){}", regex::escape(keyword))) {
                     patterns.push(regex);
                 }
 

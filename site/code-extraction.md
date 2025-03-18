@@ -18,8 +18,8 @@ probe extract <FILES> [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--allow-tests` | Include test code blocks | Off |
 | `-c, --context <N>` | Add N context lines | 0 |
+| `--diff` | Process input as git diff format | Off |
 | `-f, --format <TYPE>` | Output as: `markdown`, `plain`, `json`, `xml`, `color` | `color` |
 | `--to-clipboard` | Copy results to clipboard | Off |
 | `--from-clipboard` | Read file paths from clipboard | Off |
@@ -164,6 +164,29 @@ rustc main.rs 2>&1 | probe extract
 go test ./... | probe extract
 ```
 
+### GIT DIFF EXTRACTION
+
+Extract code from git diff output with automatic format detection:
+
+```bash
+# Extract code from git diff output (auto-detection)
+git diff | probe extract
+
+# Extract code from a diff file (auto-detection)
+probe extract diff_file.patch
+
+# Extract code from clipboard containing git diff (auto-detection)
+probe extract --from-clipboard
+```
+
+Probe automatically detects git diff format when content starts with `diff --git`, making the `--diff` flag optional. This works with:
+
+- Piped git diff output
+- Diff files provided as arguments
+- Clipboard content with `--from-clipboard`
+
+The `--diff` flag is still supported for backward compatibility and explicit format specification.
+
 ### PIPELINE INTEGRATION
 
 Chain with other tools for powerful workflows:
@@ -217,8 +240,14 @@ probe extract src/main.rs#handle_request src/models.rs#User
 ### CODE REVIEW WORKFLOWS
 
 ```bash
-# Extract changes for review
-git diff --name-only | grep "\.rs$" | xargs -I{} probe extract {}
+# Extract changes for review (using auto-detection)
+git diff | probe extract
+
+# Extract changes from a specific commit
+git show commit_hash | probe extract
+
+# Extract changes between branches
+git diff main..feature-branch | probe extract
 
 # Extract functions modified in a PR
 git diff --name-only origin/main | xargs grep -l "fn " | xargs -I{} probe extract {}
@@ -242,7 +271,15 @@ probe extract src/main.rs:42 --format json | jq '.results[0].code' | ai-assistan
 
 # Extract multiple related functions for AI analysis
 probe extract src/auth.rs#authenticate src/auth.rs#validate --format json --max-tokens 4000
+
+# Code review with git diff and AST extraction
+git diff | tee /tmp/changes.diff | ai-assistant "Here are the changes:" && git diff | probe extract | ai-assistant "Here are the complete functions that were modified:"
+
+# Comprehensive code review with both diff and AST context
+git diff > /tmp/changes.diff && git diff | probe extract > /tmp/ast_blocks.txt && cat /tmp/changes.diff /tmp/ast_blocks.txt | ai-assistant "Review these changes. The first part shows the diff, and the second part shows the complete AST blocks of modified functions."
 ```
+
+The git diff auto-detection feature is particularly valuable for AI code review workflows. When you pipe a git diff to `probe extract`, it automatically extracts the complete AST nodes (functions, classes, methods) that contain the changes, providing AI tools with both the specific changes (from the diff) and the full context (from the AST extraction).
 
 ### DEBUGGING ASSISTANCE
 

@@ -1,30 +1,84 @@
 use crate::models::SearchResult;
 use crate::ranking;
+use std::time::Instant;
 // No need for term_exceptions import
+
+/// Helper function to format duration in a human-readable way
+fn format_duration(duration: std::time::Duration) -> String {
+    if duration.as_millis() < 1000 {
+        format!("{}ms", duration.as_millis())
+    } else {
+        format!("{:.2}s", duration.as_secs_f64())
+    }
+}
 
 /// Function to rank search results based on query relevance
 pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], reranker: &str) {
+    let start_time = Instant::now();
+
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
+    if debug_mode {
+        println!(
+            "DEBUG: Starting result ranking with {} results",
+            results.len()
+        );
+        println!("DEBUG: Using reranker: {}", reranker);
+        println!("DEBUG: Queries: {:?}", queries);
+    }
+
     // Combine all queries into a single string for ranking
+    let query_combine_start = Instant::now();
     let combined_query = queries.join(" ");
+    let query_combine_duration = query_combine_start.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Query combination completed in {} - Combined query: '{}'",
+            format_duration(query_combine_duration),
+            combined_query
+        );
+    }
 
     // Extract document texts for ranking, including filename in each document
+    let document_extraction_start = Instant::now();
     // This ensures filename terms are considered in the ranking algorithms
     let documents: Vec<String> = results
         .iter()
         .map(|r| format!("// Filename: {}\n{}", r.file, r.code))
         .collect();
     let documents_refs: Vec<&str> = documents.iter().map(|s| s.as_str()).collect();
+    let document_extraction_duration = document_extraction_start.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Document extraction completed in {} - Extracted {} documents",
+            format_duration(document_extraction_duration),
+            documents.len()
+        );
+    }
 
     // Rank the documents
+    let metrics_extraction_start = Instant::now();
     // Get metrics from the first result (assuming they're the same for all results in this set)
     let file_unique_terms = results.first().and_then(|r| r.file_unique_terms);
     let file_total_matches = results.first().and_then(|r| r.file_total_matches);
     let block_unique_terms = results.first().and_then(|r| r.block_unique_terms);
     let block_total_matches = results.first().and_then(|r| r.block_total_matches);
     let node_type = results.first().map(|r| r.node_type.as_str());
+    let metrics_extraction_duration = metrics_extraction_start.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Metrics extraction completed in {}",
+            format_duration(metrics_extraction_duration)
+        );
+        println!(
+            "DEBUG: Extracted metrics - file_unique_terms: {:?}, file_total_matches: {:?}, block_unique_terms: {:?}, block_total_matches: {:?}",
+            file_unique_terms, file_total_matches, block_unique_terms, block_total_matches
+        );
+    }
 
     let ranking_params = ranking::RankingParams {
         documents: &documents_refs,
@@ -37,9 +91,25 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
         node_type,
     };
 
+    let document_ranking_start = Instant::now();
+    if debug_mode {
+        println!("DEBUG: Starting document ranking...");
+    }
+
     let ranked_indices = ranking::rank_documents(&ranking_params);
 
+    let document_ranking_duration = document_ranking_start.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Document ranking completed in {} - Ranked {} documents",
+            format_duration(document_ranking_duration),
+            ranked_indices.len()
+        );
+    }
+
     // Store original document indices and their various scores for later use
+    let score_update_start = Instant::now();
     let mut doc_scores: Vec<(usize, f64, f64, f64, f64)> = Vec::new();
 
     // Update the search results with rank and score information
@@ -63,7 +133,17 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
         }
     }
 
+    let score_update_duration = score_update_start.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Score update completed in {}",
+            format_duration(score_update_duration)
+        );
+    }
+
     // Create separate rankings for TF-IDF and BM25 scores
+    let ranking_creation_start = Instant::now();
     let mut tfidf_ranking: Vec<(usize, f64)> = results
         .iter()
         .enumerate()
@@ -84,11 +164,25 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
         .collect();
 
     // Sort by scores in descending order
+    let sorting_start = Instant::now();
     tfidf_ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     bm25_ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     hybrid2_ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let sorting_duration = sorting_start.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Ranking creation completed in {}",
+            format_duration(ranking_creation_start.elapsed())
+        );
+        println!(
+            "DEBUG: Ranking sorting completed in {}",
+            format_duration(sorting_duration)
+        );
+    }
 
     // Assign ranks for each metric
+    let rank_assignment_start = Instant::now();
     for (rank, (idx, _)) in tfidf_ranking.iter().enumerate() {
         if let Some(result) = results.get_mut(*idx) {
             result.tfidf_rank = Some(rank + 1); // 1-based rank
@@ -108,7 +202,24 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
         }
     }
 
+    let rank_assignment_duration = rank_assignment_start.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Rank assignment completed in {}",
+            format_duration(rank_assignment_duration)
+        );
+    }
+
     // Sort the results based on the selected reranker
+    let reranker_sort_start = Instant::now();
+    if debug_mode {
+        println!(
+            "DEBUG: Starting reranker-specific sorting with reranker: {}",
+            reranker
+        );
+    }
+
     match reranker {
         "tfidf" => {
             if debug_mode {
@@ -263,6 +374,15 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
         }
     }
 
+    let reranker_sort_duration = reranker_sort_start.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Reranker-specific sorting completed in {}",
+            format_duration(reranker_sort_duration)
+        );
+    }
+
     // Log ranking information in debug mode
     if debug_mode {
         println!("DEBUG: Ranked {} search results", results.len());
@@ -270,6 +390,7 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
 
     // Now that all scores have been calculated, filter out results with zero scores and matches
     // This ensures we only filter after scores have been properly calculated
+    let filtering_start = Instant::now();
     let mut filtered_results = Vec::new();
 
     // First, determine the total number of unique terms across all queries
@@ -369,5 +490,24 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
             result.score = Some(0.0);
             result.rank = Some(usize::MAX);
         }
+    }
+
+    let filtering_duration = filtering_start.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Result filtering completed in {} - Retained {} results",
+            format_duration(filtering_duration),
+            filtered_len
+        );
+    }
+
+    let total_duration = start_time.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Total result ranking completed in {}",
+            format_duration(total_duration)
+        );
     }
 }

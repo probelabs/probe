@@ -3,6 +3,23 @@ use crate::search::term_exceptions::{is_exception_term, EXCEPTION_TERMS};
 use decompound::{decompound, DecompositionOptions};
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
+use std::sync::Mutex;
+
+// Dynamic set of special terms that should not be tokenized
+// This includes terms from queries with exact=true or excluded=true flags
+static DYNAMIC_SPECIAL_TERMS: Lazy<Mutex<HashSet<String>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// Add a term to the dynamic special terms list
+pub fn add_special_term(term: &str) {
+    let mut special_terms = DYNAMIC_SPECIAL_TERMS.lock().unwrap();
+    special_terms.insert(term.to_lowercase());
+
+    // Debug output
+    if std::env::var("DEBUG").unwrap_or_default() == "1" {
+        println!("DEBUG: Added special term: {}", term);
+    }
+}
 
 /// Static set of common English stop words
 static ENGLISH_STOP_WORDS: Lazy<HashSet<String>> = Lazy::new(|| {
@@ -181,6 +198,7 @@ static ENGLISH_STOP_WORDS: Lazy<HashSet<String>> = Lazy::new(|| {
         "yours",
         "yourself",
         "yourselves",
+        "ing",
     ]
     .into_iter()
     .map(String::from)
@@ -287,6 +305,11 @@ static SPECIAL_CASE_WORDS: Lazy<HashSet<String>> = Lazy::new(|| {
         "fetch",
         "grpc",
         "http2",
+        "whitelist",
+        "blacklist",
+        "allowlist",
+        "blocklist",
+        "denylist",
     ]
     .into_iter()
     .map(String::from)
@@ -312,13 +335,26 @@ fn is_number(c: char) -> bool {
 }
 
 /// Checks if a word is a special case that should be treated as a single token
-fn is_special_case(word: &str) -> bool {
+pub fn is_special_case(word: &str) -> bool {
     // Convert to lowercase for case-insensitive comparison
     let lowercase = word.to_lowercase();
 
-    // Check if the word is in the special case list
+    // Check if the word is in the static special case list
+    if SPECIAL_CASE_WORDS.contains(&lowercase) {
+        return true;
+    }
 
-    SPECIAL_CASE_WORDS.contains(&lowercase)
+    // Check if the word is in the dynamic special terms list
+    let special_terms = DYNAMIC_SPECIAL_TERMS.lock().unwrap();
+    if special_terms.contains(&lowercase) {
+        // Debug output
+        if std::env::var("DEBUG").unwrap_or_default() == "1" {
+            println!("DEBUG: Found dynamic special term: {}", lowercase);
+        }
+        return true;
+    }
+
+    false
 }
 
 /// Splits a string on camel case boundaries
@@ -329,7 +365,7 @@ fn is_special_case(word: &str) -> bool {
 /// - special cases like OAuth2 -> ["oauth2"]
 /// - also attempts to split lowercase identifiers that might have been camelCase originally
 pub fn split_camel_case(input: &str) -> Vec<String> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let _debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if input.is_empty() {
         return vec![];
@@ -361,31 +397,13 @@ pub fn split_camel_case(input: &str) -> Vec<String> {
     // General special case handling
     for special_case in special_cases {
         if lowercase.starts_with(special_case) {
-            if debug_mode {
-                println!(
-                    "Found special case '{}' at start of '{}'",
-                    special_case, lowercase
-                );
-            }
-
             // Find the corresponding part in the original input
-            let original_part = &input[0..special_case.len()];
+            let _original_part = &input[0..special_case.len()];
             let remaining = &input[special_case.len()..];
-
-            if debug_mode {
-                println!(
-                    "Original part: '{}', Remaining: '{}'",
-                    original_part, remaining
-                );
-            }
 
             if !remaining.is_empty() {
                 let mut result = vec![special_case.clone()];
                 result.extend(split_camel_case(remaining));
-
-                if debug_mode {
-                    println!("Returning result with special case: {:?}", result);
-                }
 
                 return result;
             }
@@ -504,6 +522,11 @@ pub fn is_stop_word(word: &str) -> bool {
 /// Attempts to split a compound word into its constituent parts using a vocabulary
 /// Returns the original word if it cannot be split
 pub fn split_compound_word(word: &str, vocab: &HashSet<String>) -> Vec<String> {
+    // First check if this is a special case word that should never be split
+    if is_special_case(word) {
+        return vec![word.to_lowercase()];
+    }
+
     // Use the exception terms from our centralized list
     let common_terms = EXCEPTION_TERMS
         .iter()
@@ -1262,8 +1285,8 @@ mod tests {
 
         // Test compound word splitting
         let tokens = tokenize("whitelist blackmail firewall");
-        assert!(tokens.contains(&"white".to_string()));
-        assert!(tokens.contains(&"list".to_string()));
+        // "whitelist" is now a special case word that should not be split
+        assert!(tokens.contains(&"whitelist".to_string()));
         assert!(tokens.contains(&"black".to_string()));
         assert!(tokens.contains(&"mail".to_string()));
         assert!(tokens.contains(&"firewall".to_string()));
@@ -1272,10 +1295,9 @@ mod tests {
         let tokens = tokenize("enableFirewallWhitelist");
         assert!(tokens.contains(&"enabl".to_string())); // stemmed "enable"
         assert!(tokens.contains(&"firewall".to_string())); // Now we keep firewall as a whole
-        assert!(tokens.contains(&"white".to_string()));
-        assert!(tokens.contains(&"list".to_string()));
+                                                           // "whitelist" is now a special case word that should not be split
+        assert!(tokens.contains(&"whitelist".to_string()));
     }
-
     #[test]
     fn test_compound_word_splitting() {
         // Test basic compound word splitting
@@ -1286,9 +1308,11 @@ mod tests {
             "mail".to_string(),
         ]);
 
+        // "whitelist" is now a special case word that should not be split
         let parts = split_compound_word("whitelist", &vocab);
-        assert_eq!(parts, vec!["white".to_string(), "list".to_string()]);
+        assert_eq!(parts, vec!["whitelist".to_string()]);
 
+        // "blackmail" is not in the special case list, so it should still be split
         let parts = split_compound_word("blackmail", &vocab);
         assert_eq!(parts, vec!["black".to_string(), "mail".to_string()]);
 
@@ -1302,9 +1326,9 @@ mod tests {
         // Test tokenization with compound word splitting
         let tokens = tokenize("whitelist blackmail firewall");
 
-        // Check that compound words are split and stemmed
-        assert!(tokens.contains(&"white".to_string()));
-        assert!(tokens.contains(&"list".to_string()));
+        // "whitelist" is now a special case word that should not be split
+        assert!(tokens.contains(&"whitelist".to_string()));
+        // "blackmail" is not in the special case list, so it should still be split
         assert!(tokens.contains(&"black".to_string()));
         assert!(tokens.contains(&"mail".to_string()));
         assert!(tokens.contains(&"firewall".to_string()));
