@@ -2,12 +2,31 @@ use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, Instant};
 use tree_sitter;
 
 use crate::language::{is_test_file, parse_file_for_code_blocks};
 use crate::models::SearchResult;
 use crate::ranking;
 use crate::search::tokenization;
+
+/// Structure to hold timing information for file processing stages
+pub struct FileProcessingTimings {
+    pub file_io: Option<Duration>,
+
+    // AST parsing timings
+    pub ast_parsing: Option<Duration>,
+    pub ast_parsing_language_init: Option<Duration>,
+    pub ast_parsing_parser_init: Option<Duration>,
+    pub ast_parsing_tree_parsing: Option<Duration>,
+    pub ast_parsing_line_map_building: Option<Duration>,
+
+    // Block extraction timings
+    pub block_extraction: Option<Duration>,
+    pub block_extraction_code_structure: Option<Duration>,
+    pub block_extraction_filtering: Option<Duration>,
+    pub block_extraction_result_building: Option<Duration>,
+}
 
 /// Parameters for file processing
 pub struct FileProcessingParams<'a> {
@@ -305,9 +324,32 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
     "code".to_string()
 }
 /// Main function for processing a file with matched lines
-pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<SearchResult>> {
+pub fn process_file_with_results(
+    params: &FileProcessingParams,
+) -> Result<(Vec<SearchResult>, FileProcessingTimings)> {
+    let mut timings = FileProcessingTimings {
+        file_io: None,
+
+        // AST parsing timings
+        ast_parsing: None,
+        ast_parsing_language_init: None,
+        ast_parsing_parser_init: None,
+        ast_parsing_tree_parsing: None,
+        ast_parsing_line_map_building: None,
+
+        // Block extraction timings
+        block_extraction: None,
+        block_extraction_code_structure: None,
+        block_extraction_filtering: None,
+        block_extraction_result_building: None,
+    };
+
+    // Measure file I/O time
+    let file_io_start = Instant::now();
     let content = fs::read_to_string(params.path)
         .context(format!("Failed to read file: {:?}", params.path))?;
+    let file_io_duration = file_io_start.elapsed();
+    timings.file_io = Some(file_io_duration);
 
     let extension = params
         .path
@@ -342,15 +384,71 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
     if debug_mode {
         println!("DEBUG: Processing file: {:?}", params.path);
         println!("DEBUG:   matched lines: {:?}", params.line_numbers);
+        println!("DEBUG:   file I/O time: {:?}", file_io_duration);
     }
 
-    if let Ok(code_blocks) = parse_file_for_code_blocks(
+    // Measure AST parsing time with sub-steps
+    let ast_parsing_start = Instant::now();
+
+    // Measure language initialization time
+    let language_init_start = Instant::now();
+    let language_impl = crate::language::factory::get_language_impl(extension);
+    let language_init_duration = language_init_start.elapsed();
+    timings.ast_parsing_language_init = Some(language_init_duration);
+
+    // Measure parser initialization time
+    let parser_init_start = Instant::now();
+    let mut parser = tree_sitter::Parser::new();
+    if let Some(lang_impl) = &language_impl {
+        let _ = parser.set_language(&lang_impl.get_tree_sitter_language());
+    }
+    let parser_init_duration = parser_init_start.elapsed();
+    timings.ast_parsing_parser_init = Some(parser_init_duration);
+
+    // Measure tree parsing time
+    let tree_parsing_start = Instant::now();
+    let file_path = params.path.to_string_lossy().to_string();
+    let cache_key = format!("{}_{}", file_path, extension);
+
+    let _ = if language_impl.is_some() {
+        crate::language::tree_cache::get_or_parse_tree(&cache_key, &content, &mut parser).ok()
+    } else {
+        None
+    };
+    let tree_parsing_duration = tree_parsing_start.elapsed();
+    timings.ast_parsing_tree_parsing = Some(tree_parsing_duration);
+
+    // Measure line map building time (this is an approximation since we can't directly measure it)
+    let line_map_building_start = Instant::now();
+
+    // Call the original parse_file_for_code_blocks function
+    let code_blocks_result = parse_file_for_code_blocks(
         &content,
         extension,
         params.line_numbers,
         params.allow_tests,
         Some(params.term_matches),
-    ) {
+    );
+
+    let line_map_building_duration = line_map_building_start.elapsed();
+    timings.ast_parsing_line_map_building = Some(line_map_building_duration);
+
+    // Calculate total AST parsing time
+    let ast_parsing_duration = ast_parsing_start.elapsed();
+    timings.ast_parsing = Some(ast_parsing_duration);
+
+    if debug_mode {
+        println!("DEBUG:   AST parsing time: {:?}", ast_parsing_duration);
+        println!("DEBUG:     - Language init: {:?}", language_init_duration);
+        println!("DEBUG:     - Parser init: {:?}", parser_init_duration);
+        println!("DEBUG:     - Tree parsing: {:?}", tree_parsing_duration);
+        println!(
+            "DEBUG:     - Line map building: {:?}",
+            line_map_building_duration
+        );
+    }
+
+    if let Ok(code_blocks) = code_blocks_result {
         if debug_mode {
             println!("DEBUG: AST parsing successful");
             println!("DEBUG:   Found {} code blocks", code_blocks.len());
@@ -368,7 +466,20 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
 
         let file_id = format!("{}", params.path.to_string_lossy());
 
+        // Measure block extraction time with sub-steps
+        let block_extraction_start = Instant::now();
+
+        // Measure code structure finding time
+        let _code_structure_start = Instant::now();
+        let mut code_structure_duration = Duration::new(0, 0);
+        let mut filtering_duration = Duration::new(0, 0);
+        let mut result_building_duration = Duration::new(0, 0);
+
+        // Process each block
         for (block_idx, block) in code_blocks.iter().enumerate() {
+            // Start measuring code structure finding time for this block
+            let block_start = Instant::now();
+
             let start_line = block.start_row + 1;
             let end_line = block.end_row + 1;
 
@@ -398,8 +509,15 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 "".to_string()
             };
 
+            // End code structure finding time for this block
+            let block_duration = block_start.elapsed();
+            code_structure_duration += block_duration;
+
             // Early tokenization with filename prepended
             let block_terms = ranking::preprocess_text_with_filename(&full_code, &filename);
+
+            // Start measuring filtering time
+            let filtering_start = Instant::now();
 
             // Early filtering using tokenized content
             let should_include = {
@@ -427,6 +545,10 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                 result
             };
 
+            // End filtering time measurement
+            let filtering_block_duration = filtering_start.elapsed();
+            filtering_duration += filtering_block_duration;
+
             if debug_mode {
                 println!(
                     "DEBUG: Block lines {}-{} => should_include={}",
@@ -440,6 +562,9 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
             }
 
             if should_include {
+                // Start measuring result building time
+                let result_building_start = Instant::now();
+
                 // Calculate metrics using the already tokenized content
                 let direct_matches: HashSet<&String> = block_terms
                     .iter()
@@ -530,7 +655,34 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
                     },
                     tokenized_content: Some(block_terms),
                 });
+
+                // End result building time measurement
+                let result_building_block_duration = result_building_start.elapsed();
+                result_building_duration += result_building_block_duration;
             }
+        }
+
+        // Store the sub-step timings
+        let block_extraction_duration = block_extraction_start.elapsed();
+        timings.block_extraction = Some(block_extraction_duration);
+        timings.block_extraction_code_structure = Some(code_structure_duration);
+        timings.block_extraction_filtering = Some(filtering_duration);
+        timings.block_extraction_result_building = Some(result_building_duration);
+
+        if debug_mode {
+            println!(
+                "DEBUG:   Block extraction time: {:?}",
+                block_extraction_duration
+            );
+            println!(
+                "DEBUG:     - Code structure finding: {:?}",
+                code_structure_duration
+            );
+            println!("DEBUG:     - Filtering: {:?}", filtering_duration);
+            println!(
+                "DEBUG:     - Result building: {:?}",
+                result_building_duration
+            );
         }
     }
 
@@ -736,5 +888,39 @@ pub fn process_file_with_results(params: &FileProcessingParams) -> Result<Vec<Se
         }
     }
 
-    Ok(results)
+    if debug_mode {
+        println!("DEBUG: File processing timings:");
+        if let Some(duration) = timings.file_io {
+            println!("DEBUG:   File I/O: {:?}", duration);
+        }
+        if let Some(duration) = timings.ast_parsing {
+            println!("DEBUG:   AST parsing: {:?}", duration);
+            if let Some(d) = timings.ast_parsing_language_init {
+                println!("DEBUG:     - Language init: {:?}", d);
+            }
+            if let Some(d) = timings.ast_parsing_parser_init {
+                println!("DEBUG:     - Parser init: {:?}", d);
+            }
+            if let Some(d) = timings.ast_parsing_tree_parsing {
+                println!("DEBUG:     - Tree parsing: {:?}", d);
+            }
+            if let Some(d) = timings.ast_parsing_line_map_building {
+                println!("DEBUG:     - Line map building: {:?}", d);
+            }
+        }
+        if let Some(duration) = timings.block_extraction {
+            println!("DEBUG:   Block extraction: {:?}", duration);
+            if let Some(d) = timings.block_extraction_code_structure {
+                println!("DEBUG:     - Code structure finding: {:?}", d);
+            }
+            if let Some(d) = timings.block_extraction_filtering {
+                println!("DEBUG:     - Filtering: {:?}", d);
+            }
+            if let Some(d) = timings.block_extraction_result_building {
+                println!("DEBUG:     - Result building: {:?}", d);
+            }
+        }
+    }
+
+    Ok((results, timings))
 }

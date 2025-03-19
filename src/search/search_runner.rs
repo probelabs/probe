@@ -1,8 +1,8 @@
+use crate::search::file_list_cache;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use crate::search::file_list_cache;
 // No need for term_exceptions import
 
 use crate::models::{LimitedSearchResults, SearchResult};
@@ -25,6 +25,23 @@ pub struct SearchTimings {
     pub early_filtering: Option<Duration>,
     pub early_caching: Option<Duration>,
     pub result_processing: Option<Duration>,
+    // Granular result processing timings
+    pub result_processing_file_io: Option<Duration>,
+    pub result_processing_line_collection: Option<Duration>,
+    pub result_processing_ast_parsing: Option<Duration>,
+    pub result_processing_block_extraction: Option<Duration>,
+    pub result_processing_result_building: Option<Duration>,
+
+    // Granular AST parsing sub-step timings
+    pub result_processing_ast_parsing_language_init: Option<Duration>,
+    pub result_processing_ast_parsing_parser_init: Option<Duration>,
+    pub result_processing_ast_parsing_tree_parsing: Option<Duration>,
+    pub result_processing_ast_parsing_line_map_building: Option<Duration>,
+
+    // Granular block extraction sub-step timings
+    pub result_processing_block_extraction_code_structure: Option<Duration>,
+    pub result_processing_block_extraction_filtering: Option<Duration>,
+    pub result_processing_block_extraction_result_building: Option<Duration>,
     pub result_ranking: Option<Duration>,
     pub limit_application: Option<Duration>,
     pub block_merging: Option<Duration>,
@@ -76,6 +93,52 @@ pub fn print_timings(timings: &SearchTimings) {
 
     if let Some(duration) = timings.result_processing {
         println!("Result processing:     {}", format_duration(duration));
+
+        // Print granular result processing timings if available
+        if let Some(duration) = timings.result_processing_file_io {
+            println!("  - File I/O:           {}", format_duration(duration));
+        }
+
+        if let Some(duration) = timings.result_processing_line_collection {
+            println!("  - Line collection:    {}", format_duration(duration));
+        }
+
+        if let Some(duration) = timings.result_processing_ast_parsing {
+            println!("  - AST parsing:        {}", format_duration(duration));
+
+            // Print granular AST parsing sub-step timings
+            if let Some(d) = timings.result_processing_ast_parsing_language_init {
+                println!("    - Language init:     {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_ast_parsing_parser_init {
+                println!("    - Parser init:       {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_ast_parsing_tree_parsing {
+                println!("    - Tree parsing:      {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_ast_parsing_line_map_building {
+                println!("    - Line map building: {}", format_duration(d));
+            }
+        }
+
+        if let Some(duration) = timings.result_processing_block_extraction {
+            println!("  - Block extraction:   {}", format_duration(duration));
+
+            // Print granular block extraction sub-step timings
+            if let Some(d) = timings.result_processing_block_extraction_code_structure {
+                println!("    - Code structure:    {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_block_extraction_filtering {
+                println!("    - Filtering:         {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_block_extraction_result_building {
+                println!("    - Result building:   {}", format_duration(d));
+            }
+        }
+
+        if let Some(duration) = timings.result_processing_result_building {
+            println!("  - Result building:    {}", format_duration(duration));
+        }
     }
 
     if let Some(duration) = timings.result_ranking {
@@ -211,6 +274,23 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         early_filtering: None,
         early_caching: None,
         result_processing: None,
+        result_processing_file_io: None,
+        result_processing_line_collection: None,
+        result_processing_ast_parsing: None,
+        result_processing_block_extraction: None,
+        result_processing_result_building: None,
+
+        // Initialize granular AST parsing sub-step timings
+        result_processing_ast_parsing_language_init: None,
+        result_processing_ast_parsing_parser_init: None,
+        result_processing_ast_parsing_tree_parsing: None,
+        result_processing_ast_parsing_line_map_building: None,
+
+        // Initialize granular block extraction sub-step timings
+        result_processing_block_extraction_code_structure: None,
+        result_processing_block_extraction_filtering: None,
+        result_processing_block_extraction_result_building: None,
+
         result_ranking: None,
         limit_application: None,
         block_merging: None,
@@ -326,14 +406,15 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             println!("DEBUG: Starting filename matching...");
         }
         // Find all files that match our patterns by filename, along with the terms that matched
-        let filename_matches: HashMap<PathBuf, HashSet<usize>> = file_list_cache::find_matching_filenames(
-            path,
-            queries,
-            &all_files,
-            custom_ignores,
-            *allow_tests,
-            &plan.term_indices,
-        )?;
+        let filename_matches: HashMap<PathBuf, HashSet<usize>> =
+            file_list_cache::find_matching_filenames(
+                path,
+                queries,
+                &all_files,
+                custom_ignores,
+                *allow_tests,
+                &plan.term_indices,
+            )?;
 
         if debug_mode {
             println!(
@@ -586,6 +667,24 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     let mut final_results = Vec::new();
 
+    // Track granular timing for result processing stages
+    let mut total_file_io_time = Duration::new(0, 0);
+    let mut total_line_collection_time = Duration::new(0, 0);
+    let mut total_ast_parsing_time = Duration::new(0, 0);
+    let mut total_block_extraction_time = Duration::new(0, 0);
+    let mut total_result_building_time = Duration::new(0, 0);
+
+    // Track granular timing for AST parsing sub-steps
+    let mut total_ast_parsing_language_init_time = Duration::new(0, 0);
+    let mut total_ast_parsing_parser_init_time = Duration::new(0, 0);
+    let mut total_ast_parsing_tree_parsing_time = Duration::new(0, 0);
+    let mut total_ast_parsing_line_map_building_time = Duration::new(0, 0);
+
+    // Track granular timing for block extraction sub-steps
+    let mut total_block_extraction_code_structure_time = Duration::new(0, 0);
+    let mut total_block_extraction_filtering_time = Duration::new(0, 0);
+    let mut total_block_extraction_result_building_time = Duration::new(0, 0);
+
     for pathbuf in &all_files {
         if debug_mode {
             println!("DEBUG: Processing file: {:?}", pathbuf);
@@ -597,14 +696,21 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 println!("DEBUG: Term map for file: {:?}", term_map);
             }
 
-            // Gather matched lines
+            // Gather matched lines - measure line collection time
+            let line_collection_start = Instant::now();
             let mut all_lines = HashSet::new();
             for lineset in term_map.values() {
                 all_lines.extend(lineset.iter());
             }
+            let line_collection_duration = line_collection_start.elapsed();
+            total_line_collection_time += line_collection_duration;
 
             if debug_mode {
-                println!("DEBUG: Found {} matched lines in file", all_lines.len());
+                println!(
+                    "DEBUG: Found {} matched lines in file in {}",
+                    all_lines.len(),
+                    format_duration(line_collection_duration)
+                );
             }
 
             // Process file with matched lines
@@ -634,10 +740,97 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 println!("DEBUG: Processing file with params: {:?}", pparams.path);
             }
 
+            // Process file and track granular timings
+            let result_building_start = Instant::now();
             match process_file_with_results(&pparams) {
-                Ok(mut file_res) => {
+                Ok((mut file_res, file_timings)) => {
+                    // Accumulate granular timings from file processing
+                    if let Some(duration) = file_timings.file_io {
+                        total_file_io_time += duration;
+                    }
+                    if let Some(duration) = file_timings.ast_parsing {
+                        total_ast_parsing_time += duration;
+                    }
+                    if let Some(duration) = file_timings.block_extraction {
+                        total_block_extraction_time += duration;
+                    }
+
+                    // Add the new granular timings for AST parsing sub-steps
+                    if let Some(duration) = file_timings.ast_parsing_language_init {
+                        total_ast_parsing_language_init_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Language init: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.ast_parsing_parser_init {
+                        total_ast_parsing_parser_init_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Parser init: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.ast_parsing_tree_parsing {
+                        total_ast_parsing_tree_parsing_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Tree parsing: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.ast_parsing_line_map_building {
+                        total_ast_parsing_line_map_building_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Line map building: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+
+                    // Add the new granular timings for block extraction sub-steps
+                    if let Some(duration) = file_timings.block_extraction_code_structure {
+                        total_block_extraction_code_structure_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Code structure finding: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+                    if let Some(duration) = file_timings.block_extraction_filtering {
+                        total_block_extraction_filtering_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Filtering: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.block_extraction_result_building {
+                        total_block_extraction_result_building_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Result building: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+
+                    let result_building_duration = result_building_start.elapsed();
+                    total_result_building_time += result_building_duration;
+
                     if debug_mode {
                         println!("DEBUG: Got {} results from file processing", file_res.len());
+                        if let Some(duration) = file_timings.file_io {
+                            println!("DEBUG:   File I/O time: {}", format_duration(duration));
+                        }
+                        if let Some(duration) = file_timings.ast_parsing {
+                            println!("DEBUG:   AST parsing time: {}", format_duration(duration));
+                        }
+                        if let Some(duration) = file_timings.block_extraction {
+                            println!(
+                                "DEBUG:   Block extraction time: {}",
+                                format_duration(duration)
+                            );
+                        }
+                        println!(
+                            "DEBUG:   Result building time: {}",
+                            format_duration(result_building_duration)
+                        );
                     }
                     final_results.append(&mut file_res);
                 }
@@ -660,12 +853,79 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     let rp_duration = rp_start.elapsed();
     timings.result_processing = Some(rp_duration);
+    timings.result_processing_file_io = Some(total_file_io_time);
+    timings.result_processing_line_collection = Some(total_line_collection_time);
+    timings.result_processing_ast_parsing = Some(total_ast_parsing_time);
+    timings.result_processing_block_extraction = Some(total_block_extraction_time);
+    timings.result_processing_result_building = Some(total_result_building_time);
+
+    // Set the granular AST parsing sub-step timings
+    timings.result_processing_ast_parsing_language_init =
+        Some(total_ast_parsing_language_init_time);
+    timings.result_processing_ast_parsing_parser_init = Some(total_ast_parsing_parser_init_time);
+    timings.result_processing_ast_parsing_tree_parsing = Some(total_ast_parsing_tree_parsing_time);
+    timings.result_processing_ast_parsing_line_map_building =
+        Some(total_ast_parsing_line_map_building_time);
+
+    // Set the granular block extraction sub-step timings
+    timings.result_processing_block_extraction_code_structure =
+        Some(total_block_extraction_code_structure_time);
+    timings.result_processing_block_extraction_filtering =
+        Some(total_block_extraction_filtering_time);
+    timings.result_processing_block_extraction_result_building =
+        Some(total_block_extraction_result_building_time);
 
     if debug_mode {
         println!(
             "DEBUG: Result processing completed in {} - Generated {} results",
             format_duration(rp_duration),
             final_results.len()
+        );
+        println!("DEBUG: Granular result processing timings:");
+        println!("DEBUG:   File I/O: {}", format_duration(total_file_io_time));
+        println!(
+            "DEBUG:   Line collection: {}",
+            format_duration(total_line_collection_time)
+        );
+        println!(
+            "DEBUG:   AST parsing: {}",
+            format_duration(total_ast_parsing_time)
+        );
+        println!(
+            "DEBUG:     - Language init: {}",
+            format_duration(total_ast_parsing_language_init_time)
+        );
+        println!(
+            "DEBUG:     - Parser init: {}",
+            format_duration(total_ast_parsing_parser_init_time)
+        );
+        println!(
+            "DEBUG:     - Tree parsing: {}",
+            format_duration(total_ast_parsing_tree_parsing_time)
+        );
+        println!(
+            "DEBUG:     - Line map building: {}",
+            format_duration(total_ast_parsing_line_map_building_time)
+        );
+        println!(
+            "DEBUG:   Block extraction: {}",
+            format_duration(total_block_extraction_time)
+        );
+        println!(
+            "DEBUG:     - Code structure finding: {}",
+            format_duration(total_block_extraction_code_structure_time)
+        );
+        println!(
+            "DEBUG:     - Filtering: {}",
+            format_duration(total_block_extraction_filtering_time)
+        );
+        println!(
+            "DEBUG:     - Result building: {}",
+            format_duration(total_block_extraction_result_building_time)
+        );
+        println!(
+            "DEBUG:   Result building: {}",
+            format_duration(total_result_building_time)
         );
     }
 
@@ -1025,7 +1285,7 @@ fn search_file_with_combined_pattern(
                             .or_insert_with(HashSet::new)
                             .insert(line_number + 1); // Convert to 1-based line numbers
                     }
-                    
+
                     // Note: We removed the break statement here to process all matching groups
                     // in a capture, not just the first one. This fixes the search instability issue.
                 }

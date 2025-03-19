@@ -5,6 +5,7 @@ use tree_sitter::{Node, Parser as TSParser};
 use crate::language::common::find_most_specific_node;
 use crate::language::factory::get_language_impl;
 use crate::language::language_trait::LanguageImpl;
+use crate::language::tree_cache;
 use crate::models::CodeBlock;
 
 /// Function to find the closest acceptable parent entity that encompasses a given line.
@@ -407,6 +408,15 @@ fn find_acceptable_child<'a>(node: Node<'a>, language_impl: &dyn LanguageImpl) -
     None // No acceptable child found
 }
 
+/// Structure to hold node information for a specific line
+#[derive(Clone, Copy)]
+struct NodeInfo<'a> {
+    node: Node<'a>,
+    is_comment: bool,
+    context_node: Option<Node<'a>>,
+    is_test: bool,
+}
+
 /// Function to parse a file and extract code blocks for the given line numbers
 pub fn parse_file_for_code_blocks(
     content: &str,
@@ -433,8 +443,10 @@ pub fn parse_file_for_code_blocks(
     let mut parser = TSParser::new();
     parser.set_language(&language)?;
 
-    let tree = parser
-        .parse(content, None)
+    // Use the tree cache to get or parse the tree
+    // We use a stable identifier for the file
+    let cache_key = format!("file_{}", extension);
+    let tree = tree_cache::get_or_parse_tree(&cache_key, content, &mut parser)
         .context("Failed to parse the file")?;
 
     let root_node = tree.root_node();
@@ -452,107 +464,211 @@ pub fn parse_file_for_code_blocks(
         println!("DEBUG: All node types in file: {:?}", node_types);
     }
 
+    // Create a line-to-node map for the entire file
+    let line_count = content.lines().count();
+    let mut line_map: Vec<Option<NodeInfo>> = vec![None; line_count];
+
+    // Build the line-to-node map with a single traversal
+    if debug_mode {
+        println!("DEBUG: Building line-to-node map with a single traversal");
+    }
+
+    // Helper function to process a node and its children
+    fn process_node<'a>(
+        node: Node<'a>,
+        line_map: &mut Vec<Option<NodeInfo<'a>>>,
+        extension: &str,
+        language_impl: &dyn LanguageImpl,
+        content: &[u8],
+        allow_tests: bool,
+        _debug_mode: bool,
+    ) {
+        let start_row = node.start_position().row;
+        let end_row = node.end_position().row;
+
+        // Skip nodes that are outside the file bounds
+        if start_row >= line_map.len() {
+            return;
+        }
+
+        let is_comment = node.kind() == "comment"
+            || node.kind() == "line_comment"
+            || node.kind() == "block_comment"
+            || node.kind() == "//";
+
+        let is_test = !allow_tests && language_impl.is_test_node(&node, content);
+
+        // Get context node for comments
+        let context_node = if is_comment {
+            get_comment_context(node, extension)
+        } else {
+            None
+        };
+
+        // Update the line map for each line covered by this node
+        for line in start_row..=end_row {
+            if line >= line_map.len() {
+                break;
+            }
+
+            // Only update if this node is more specific (smaller) than the current one
+            let should_update = match &line_map[line] {
+                None => true,
+                Some(current) => {
+                    let current_size = current.node.end_byte() - current.node.start_byte();
+                    let this_size = node.end_byte() - node.start_byte();
+                    this_size < current_size
+                }
+            };
+
+            if should_update {
+                line_map[line] = Some(NodeInfo {
+                    node,
+                    is_comment,
+                    context_node,
+                    is_test,
+                });
+            }
+        }
+
+        // Process children
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            process_node(
+                child,
+                line_map,
+                extension,
+                language_impl,
+                content,
+                allow_tests,
+                _debug_mode,
+            );
+        }
+    }
+
+    // Start the traversal from the root node
+    process_node(
+        root_node,
+        &mut line_map,
+        extension,
+        language_impl.as_ref(),
+        content.as_bytes(),
+        allow_tests,
+        debug_mode,
+    );
+
+    if debug_mode {
+        println!("DEBUG: Line-to-node map built successfully");
+    }
+
     // Collect all code blocks
     let mut code_blocks: Vec<CodeBlock> = Vec::new();
     let mut seen_nodes: HashSet<(usize, usize)> = HashSet::new();
 
-    // Process each line number
+    // Process each line number using the precomputed map
     for &line in line_numbers {
-        let target_node = find_most_specific_node(root_node, line);
-        let is_comment = target_node.kind() == "comment"
-            || target_node.kind() == "line_comment"
-            || target_node.kind() == "block_comment"
-            || target_node.kind() == "//"; // Add support for comment token in new tree-sitter
+        // Adjust for 0-based indexing
+        let line_idx = line - 1;
 
-        // Special handling for comments
-        if is_comment {
+        // Skip if line is out of bounds
+        if line_idx >= line_map.len() {
             if debug_mode {
-                println!(
-                    "DEBUG: Found comment node at line {}: {}",
-                    line,
-                    target_node.kind()
-                );
+                println!("DEBUG: Line {} is out of bounds", line);
             }
+            continue;
+        }
 
+        // Get the node info for this line
+        if let Some(info) = &line_map[line_idx] {
+            let target_node = info.node;
             let start_pos = target_node.start_position();
             let end_pos = target_node.end_position();
-            let comment_key = (start_pos.row, end_pos.row);
+            let node_key = (start_pos.row, end_pos.row);
 
-            // Skip if we've already processed this comment
-            if seen_nodes.contains(&comment_key) {
+            // Skip if we've already processed this node
+            if seen_nodes.contains(&node_key) {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Already processed node at lines {}-{}, type: {}",
+                        start_pos.row + 1,
+                        end_pos.row + 1,
+                        target_node.kind()
+                    );
+                }
                 continue;
             }
 
-            // Mark this comment as seen
-            seen_nodes.insert(comment_key);
+            // Mark this node as seen
+            seen_nodes.insert(node_key);
 
-            // We'll decide whether to add the comment block after checking for a context node
-            let added_comment = false;
-
-            // Try to find the context node for this comment
-            if let Some(context_node) = get_comment_context(target_node, extension) {
-                let rel_start_pos = context_node.start_position();
-                let rel_end_pos = context_node.end_position();
-                let rel_key = (rel_start_pos.row, rel_end_pos.row);
-
-                // Skip test nodes unless allow_tests is true
-                if !allow_tests && language_impl.is_test_node(&context_node, content.as_bytes()) {
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Skipping test node at lines {}-{}, type: {}",
-                            rel_start_pos.row + 1,
-                            rel_end_pos.row + 1,
-                            context_node.kind()
-                        );
-                    }
-                } else {
-                    // Instead of adding both comment and context as separate blocks,
-                    // create a merged block that includes both the comment and its context
-                    let merged_start_row = std::cmp::min(start_pos.row, rel_start_pos.row);
-                    let merged_end_row = std::cmp::max(end_pos.row, rel_end_pos.row);
-                    let merged_start_byte =
-                        std::cmp::min(target_node.start_byte(), context_node.start_byte());
-                    let merged_end_byte =
-                        std::cmp::max(target_node.end_byte(), context_node.end_byte());
-
-                    // Use the context node's type as the merged block's type
-                    let merged_node_type = context_node.kind().to_string();
-
-                    // Mark both the comment and context as seen
-                    seen_nodes.insert(comment_key);
-                    seen_nodes.insert(rel_key);
-
-                    // Add the merged block
-                    code_blocks.push(CodeBlock {
-                        start_row: merged_start_row,
-                        end_row: merged_end_row,
-                        start_byte: merged_start_byte,
-                        end_byte: merged_end_byte,
-                        node_type: merged_node_type.clone(), // Clone here to avoid move
-                        parent_node_type: None,
-                        parent_start_row: None,
-                        parent_end_row: None,
-                    });
-
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Added merged block (comment + context) at lines {}-{}, type: {}",
-                            merged_start_row + 1,
-                            merged_end_row + 1,
-                            merged_node_type
-                        );
-                    }
-
-                    // We've added the comment as part of a merged block
-
-                    // Skip adding the individual comment block since it's now part of the merged block
-                    continue;
+            // Special handling for comments
+            if info.is_comment {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Found comment node at line {}: {}",
+                        line,
+                        target_node.kind()
+                    );
                 }
-            }
 
-            // If we didn't add the comment as part of a merged block, add it individually
-            if !added_comment {
-                // Add the comment block
+                // If we have a context node for this comment
+                if let Some(context_node) = info.context_node {
+                    let rel_start_pos = context_node.start_position();
+                    let rel_end_pos = context_node.end_position();
+                    let rel_key = (rel_start_pos.row, rel_end_pos.row);
+
+                    // Skip test nodes unless allow_tests is true
+                    if !allow_tests && language_impl.is_test_node(&context_node, content.as_bytes())
+                    {
+                        if debug_mode {
+                            println!(
+                                "DEBUG: Skipping test node at lines {}-{}, type: {}",
+                                rel_start_pos.row + 1,
+                                rel_end_pos.row + 1,
+                                context_node.kind()
+                            );
+                        }
+                    } else {
+                        // Create a merged block that includes both the comment and its context
+                        let merged_start_row = std::cmp::min(start_pos.row, rel_start_pos.row);
+                        let merged_end_row = std::cmp::max(end_pos.row, rel_end_pos.row);
+                        let merged_start_byte =
+                            std::cmp::min(target_node.start_byte(), context_node.start_byte());
+                        let merged_end_byte =
+                            std::cmp::max(target_node.end_byte(), context_node.end_byte());
+
+                        // Use the context node's type as the merged block's type
+                        let merged_node_type = context_node.kind().to_string();
+
+                        // Mark both the comment and context as seen
+                        seen_nodes.insert(rel_key);
+
+                        // Add the merged block
+                        code_blocks.push(CodeBlock {
+                            start_row: merged_start_row,
+                            end_row: merged_end_row,
+                            start_byte: merged_start_byte,
+                            end_byte: merged_end_byte,
+                            node_type: merged_node_type.clone(),
+                            parent_node_type: None,
+                            parent_start_row: None,
+                            parent_end_row: None,
+                        });
+
+                        if debug_mode {
+                            println!(
+                                "DEBUG: Added merged block (comment + context) at lines {}-{}, type: {}",
+                                merged_start_row + 1,
+                                merged_end_row + 1,
+                                merged_node_type
+                            );
+                        }
+
+                        continue;
+                    }
+                }
+
+                // If we didn't add the comment as part of a merged block, add it individually
                 code_blocks.push(CodeBlock {
                     start_row: start_pos.row,
                     end_row: end_pos.row,
@@ -572,183 +688,186 @@ pub fn parse_file_for_code_blocks(
                         target_node.kind()
                     );
                 }
+                continue;
             }
-            continue;
-        }
 
-        // For non-comments, first check if this line is within any existing block
-        let mut existing_block = false;
-        for block in &code_blocks {
-            if line > block.start_row && line <= block.end_row + 1 {
+            // Skip test nodes unless allow_tests is true
+            if info.is_test {
                 if debug_mode {
                     println!(
-                        "DEBUG: Line {} is within existing block: type='{}', lines={}-{}",
+                        "DEBUG: Skipping test node at line {}, type: {}",
                         line,
-                        block.node_type,
-                        block.start_row + 1,
-                        block.end_row + 1
+                        target_node.kind()
                     );
                 }
-                existing_block = true;
-                break;
-            }
-        }
-
-        if existing_block {
-            continue;
-        }
-
-        // Special case for line-based extraction: If we're looking for a specific line
-        // that might be a struct or function definition, search the entire AST for nodes
-        // that start exactly at this line
-
-        // Helper function to find nodes that start exactly at the target line
-        fn find_node_at_exact_line<'a>(
-            node: Node<'a>,
-            line: usize,
-            debug_mode: bool,
-            language_impl: &dyn LanguageImpl,
-        ) -> Option<Node<'a>> {
-            let start_line = node.start_position().row + 1;
-
-            // Check if this node starts exactly at the target line
-            if start_line == line && language_impl.is_acceptable_parent(&node) {
-                if debug_mode {
-                    println!(
-                        "DEBUG: Found node that starts exactly at line {}: type='{}', lines={}-{}",
-                        line,
-                        node.kind(),
-                        start_line,
-                        node.end_position().row + 1
-                    );
-                }
-                return Some(node);
+                continue;
             }
 
-            // Recursively check children
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if let Some(found) = find_node_at_exact_line(child, line, debug_mode, language_impl)
-                {
-                    return Some(found);
+            // For non-comments, first check if this line is within any existing block
+            let mut existing_block = false;
+            for block in &code_blocks {
+                if line > block.start_row + 1 && line <= block.end_row + 1 {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Line {} is within existing block: type='{}', lines={}-{}",
+                            line,
+                            block.node_type,
+                            block.start_row + 1,
+                            block.end_row + 1
+                        );
+                    }
+                    existing_block = true;
+                    break;
                 }
             }
 
-            None
-        }
+            if existing_block {
+                continue;
+            }
 
-        // Try to find a node that starts exactly at the target line
-        let exact_line_match =
-            find_node_at_exact_line(root_node, line, debug_mode, language_impl.as_ref());
+            // Special case for line-based extraction: check if there's a node that starts exactly at this line
+            let exact_line_match = if target_node.start_position().row + 1 == line
+                && language_impl.is_acceptable_parent(&target_node)
+            {
+                Some(target_node)
+            } else {
+                // Try to find a node that starts exactly at the target line
+                fn find_node_at_exact_line<'a>(
+                    node: Node<'a>,
+                    line: usize,
+                    debug_mode: bool,
+                    language_impl: &dyn LanguageImpl,
+                ) -> Option<Node<'a>> {
+                    let start_line = node.start_position().row + 1;
 
-        // If we found an exact match, use it
-        if let Some(exact_match) = exact_line_match {
-            let start_pos = exact_match.start_position();
-            let end_pos = exact_match.end_position();
-            let node_key = (start_pos.row, end_pos.row);
+                    // Check if this node starts exactly at the target line
+                    if start_line == line && language_impl.is_acceptable_parent(&node) {
+                        if debug_mode {
+                            println!(
+                                "DEBUG: Found node that starts exactly at line {}: type='{}', lines={}-{}",
+                                line,
+                                node.kind(),
+                                start_line,
+                                node.end_position().row + 1
+                            );
+                        }
+                        return Some(node);
+                    }
 
-            if !seen_nodes.contains(&node_key) {
+                    // Recursively check children
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        if let Some(found) =
+                            find_node_at_exact_line(child, line, debug_mode, language_impl)
+                        {
+                            return Some(found);
+                        }
+                    }
+
+                    None
+                }
+
+                find_node_at_exact_line(root_node, line, debug_mode, language_impl.as_ref())
+            };
+
+            // If we found an exact match, use it
+            if let Some(exact_match) = exact_line_match {
+                let start_pos = exact_match.start_position();
+                let end_pos = exact_match.end_position();
+                let node_key = (start_pos.row, end_pos.row);
+
+                if !seen_nodes.contains(&node_key) {
+                    seen_nodes.insert(node_key);
+
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Using exact line match at line {}: type='{}', lines={}-{}",
+                            line,
+                            exact_match.kind(),
+                            start_pos.row + 1,
+                            end_pos.row + 1
+                        );
+                    }
+
+                    code_blocks.push(CodeBlock {
+                        start_row: start_pos.row,
+                        end_row: end_pos.row,
+                        start_byte: exact_match.start_byte(),
+                        end_byte: exact_match.end_byte(),
+                        node_type: exact_match.kind().to_string(),
+                        parent_node_type: None,
+                        parent_start_row: None,
+                        parent_end_row: None,
+                    });
+
+                    continue;
+                }
+            }
+
+            // If no exact match found, fall back to the standard approach
+            if let Some(node) = find_code_structure(root_node, line, extension) {
+                let start_pos = node.start_position();
+                let end_pos = node.end_position();
+                let node_key = (start_pos.row, end_pos.row);
+
+                if seen_nodes.contains(&node_key) {
+                    continue;
+                }
+
                 seen_nodes.insert(node_key);
 
                 if debug_mode {
                     println!(
-                        "DEBUG: Using exact line match at line {}: type='{}', lines={}-{}",
+                        "DEBUG: Match at line {}, found node type: {}",
                         line,
-                        exact_match.kind(),
+                        node.kind()
+                    );
+                    println!(
+                        "DEBUG: Node spans lines {}-{}",
                         start_pos.row + 1,
                         end_pos.row + 1
                     );
                 }
 
+                // Ensure we never have an empty node_type
+                let node_type = node.kind().to_string();
+
+                // Check if this node has a parent that is a function or method
+                let parent_info = if node_type == "struct_type" {
+                    if let Some(parent_node) = language_impl.find_parent_function(node) {
+                        let parent_type = parent_node.kind().to_string();
+                        let parent_start = parent_node.start_position().row;
+                        let parent_end = parent_node.end_position().row;
+
+                        if debug_mode {
+                            println!(
+                                "DEBUG: Found parent {} for struct_type at lines {}-{}, parent at {}-{}",
+                                parent_type, start_pos.row + 1, end_pos.row + 1,
+                                parent_start + 1, parent_end + 1
+                            );
+                        }
+
+                        Some((parent_type, parent_start, parent_end))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 code_blocks.push(CodeBlock {
                     start_row: start_pos.row,
                     end_row: end_pos.row,
-                    start_byte: exact_match.start_byte(),
-                    end_byte: exact_match.end_byte(),
-                    node_type: exact_match.kind().to_string(),
-                    parent_node_type: None,
-                    parent_start_row: None,
-                    parent_end_row: None,
+                    start_byte: node.start_byte(),
+                    end_byte: node.end_byte(),
+                    node_type,
+                    parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
+                    parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
+                    parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
                 });
-
-                continue;
             }
-        }
-
-        // If no exact match found, fall back to the standard approach
-        if let Some(node) = find_code_structure(root_node, line, extension) {
-            let start_pos = node.start_position();
-            let end_pos = node.end_position();
-            let node_key = (start_pos.row, end_pos.row);
-
-            if seen_nodes.contains(&node_key) {
-                continue;
-            }
-
-            seen_nodes.insert(node_key);
-
-            // Skip test nodes unless allow_tests is true
-            if !allow_tests && language_impl.is_test_node(&node, content.as_bytes()) {
-                if debug_mode {
-                    println!(
-                        "DEBUG: Skipping test node at line {}, type: {}",
-                        line,
-                        node.kind()
-                    );
-                }
-                continue;
-            }
-
-            if debug_mode {
-                println!(
-                    "DEBUG: Match at line {}, found node type: {}",
-                    line,
-                    node.kind()
-                );
-                println!(
-                    "DEBUG: Node spans lines {}-{}",
-                    start_pos.row + 1,
-                    end_pos.row + 1
-                );
-            }
-
-            // Ensure we never have an empty node_type
-            let node_type = node.kind().to_string();
-
-            // Check if this node has a parent that is a function or method
-            let parent_info = if node_type == "struct_type" {
-                // language_impl is a Box<dyn LanguageImpl>, not an Option
-                if let Some(parent_node) = language_impl.find_parent_function(node) {
-                    let parent_type = parent_node.kind().to_string();
-                    let parent_start = parent_node.start_position().row;
-                    let parent_end = parent_node.end_position().row;
-
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Found parent {} for struct_type at lines {}-{}, parent at {}-{}", 
-                            parent_type, start_pos.row + 1, end_pos.row + 1,
-                            parent_start + 1, parent_end + 1
-                        );
-                    }
-
-                    Some((parent_type, parent_start, parent_end))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            code_blocks.push(CodeBlock {
-                start_row: start_pos.row,
-                end_row: end_pos.row,
-                start_byte: node.start_byte(),
-                end_byte: node.end_byte(),
-                node_type,
-                parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
-                parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
-                parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
-            });
+        } else if debug_mode {
+            println!("DEBUG: No node found for line {}", line);
         }
     }
 

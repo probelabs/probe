@@ -757,3 +757,7 @@ fn print_ast_structure(node: tree_sitter::Node, depth: usize) {
         print_ast_structure(child, depth + 1);
     }
 }
+
+// Include tree cache tests
+#[path = "tree_cache_tests.rs"]
+mod tree_cache_tests;

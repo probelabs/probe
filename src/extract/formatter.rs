@@ -402,7 +402,15 @@ pub fn format_xml_results(output: &mut String, results: &[SearchResult]) -> Resu
             .unwrap();
         }
 
-        writeln!(output, "    <code><![CDATA[{}]]></code>", result.code).unwrap();
+        // Handle CDATA sections properly by escaping any CDATA closing sequences
+        // Split the code at each occurrence of "]]>" and join with escaped version
+        let safe_cdata = if result.code.contains("]]>") {
+            // Replace "]]>" with "]]]]><![CDATA[>" to properly escape it
+            result.code.replace("]]>", "]]]]><![CDATA[>")
+        } else {
+            result.code.clone()
+        };
+        writeln!(output, "    <code><![CDATA[{}]]></code>", safe_cdata).unwrap();
         writeln!(output, "  </result>").unwrap();
     }
 

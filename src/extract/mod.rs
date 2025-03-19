@@ -23,7 +23,9 @@ pub use formatter::format_extraction_dry_run;
 pub use processor::process_file_for_extraction;
 
 use crate::extract::file_paths::{set_custom_ignores, FilePathInfo};
+use crate::models::SearchResult;
 use anyhow::Result;
+use std::collections::HashSet;
 use std::io::Read;
 #[allow(unused_imports)]
 use std::path::PathBuf;
@@ -255,28 +257,63 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         println!("Format: {}", options.format);
         println!();
     }
+    // Process files in parallel using Rayon
+    use rayon::prelude::*;
+    use std::sync::{Arc, Mutex};
 
-    let mut results = Vec::new();
-    let mut errors = Vec::new();
+    // Create thread-safe containers for results and errors
+    let results_mutex = Arc::new(Mutex::new(Vec::<SearchResult>::new()));
+    let errors_mutex = Arc::new(Mutex::new(Vec::<String>::new()));
 
-    // Process each file
-    for (path, start_line, end_line, symbol, specific_lines) in file_paths {
-        if debug_mode {
-            println!("\n[DEBUG] Processing file: {:?}", path);
-            println!("[DEBUG] Start line: {:?}", start_line);
-            println!("[DEBUG] End line: {:?}", end_line);
-            println!("[DEBUG] Symbol: {:?}", symbol);
+    // Create a struct to hold all parameters for parallel processing
+    struct FileProcessingParams {
+        path: std::path::PathBuf,
+        start_line: Option<usize>,
+        end_line: Option<usize>,
+        symbol: Option<String>,
+        specific_lines: Option<HashSet<usize>>,
+        allow_tests: bool,
+        context_lines: usize,
+        debug_mode: bool,
+        format: String,
+    }
+
+    // Collect all file parameters
+    let file_params: Vec<FileProcessingParams> = file_paths
+        .into_iter()
+        .map(
+            |(path, start_line, end_line, symbol, specific_lines)| FileProcessingParams {
+                path,
+                start_line,
+                end_line,
+                symbol,
+                specific_lines,
+                allow_tests: options.allow_tests,
+                context_lines: options.context_lines,
+                debug_mode,
+                format: options.format.clone(),
+            },
+        )
+        .collect();
+
+    // Process files in parallel
+    file_params.par_iter().for_each(|params| {
+        if params.debug_mode {
+            println!("\n[DEBUG] Processing file: {:?}", params.path);
+            println!("[DEBUG] Start line: {:?}", params.start_line);
+            println!("[DEBUG] End line: {:?}", params.end_line);
+            println!("[DEBUG] Symbol: {:?}", params.symbol);
             println!(
                 "[DEBUG] Specific lines: {:?}",
-                specific_lines.as_ref().map(|l| l.len())
+                params.specific_lines.as_ref().map(|l| l.len())
             );
 
             // Check if file exists
-            if path.exists() {
+            if params.path.exists() {
                 println!("[DEBUG] File exists: Yes");
 
                 // Get file extension and language
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if let Some(ext) = params.path.extension().and_then(|e| e.to_str()) {
                     let language = formatter::get_language_from_extension(ext);
                     println!("[DEBUG] File extension: {}", ext);
                     println!(
@@ -297,22 +334,22 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
         // The allow_tests check is now handled in the file path extraction functions
         // We only need to check if this is a test file for debugging purposes
-        if debug_mode && crate::language::is_test_file(&path) && !options.allow_tests {
-            println!("[DEBUG] Test file detected: {:?}", path);
+        if params.debug_mode && crate::language::is_test_file(&params.path) && !params.allow_tests {
+            println!("[DEBUG] Test file detected: {:?}", params.path);
         }
 
         match processor::process_file_for_extraction(
-            &path,
-            start_line,
-            end_line,
-            symbol.as_deref(),
-            options.allow_tests,
-            options.context_lines,
-            specific_lines.as_ref(),
+            &params.path,
+            params.start_line,
+            params.end_line,
+            params.symbol.as_deref(),
+            params.allow_tests,
+            params.context_lines,
+            params.specific_lines.as_ref(),
         ) {
             Ok(result) => {
-                if debug_mode {
-                    println!("[DEBUG] Successfully extracted code from {:?}", path);
+                if params.debug_mode {
+                    println!("[DEBUG] Successfully extracted code from {:?}", params.path);
                     println!("[DEBUG] Extracted lines: {:?}", result.lines);
                     println!("[DEBUG] Node type: {}", result.node_type);
                     println!("[DEBUG] Code length: {} bytes", result.code.len());
@@ -321,21 +358,35 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                         crate::search::search_tokens::count_tokens(&result.code)
                     );
                 }
+                // Thread-safe addition to results
+                let mut results = results_mutex.lock().unwrap();
                 results.push(result);
             }
             Err(e) => {
-                let error_msg = format!("Error processing file {:?}: {}", path, e);
-                if debug_mode {
+                let error_msg = format!("Error processing file {:?}: {}", params.path, e);
+                if params.debug_mode {
                     println!("[DEBUG] Error: {}", error_msg);
                 }
                 // Only print error messages for non-JSON/XML formats
-                if options.format != "json" && options.format != "xml" {
+                if params.format != "json" && params.format != "xml" {
                     eprintln!("{}", error_msg.red());
                 }
+                // Thread-safe addition to errors
+                let mut errors = errors_mutex.lock().unwrap();
                 errors.push(error_msg);
             }
         }
-    }
+    });
+    // Move results and errors from the mutex containers
+    let results = Arc::try_unwrap(results_mutex)
+        .expect("Failed to unwrap results mutex")
+        .into_inner()
+        .expect("Failed to get inner results");
+
+    let errors = Arc::try_unwrap(errors_mutex)
+        .expect("Failed to unwrap errors mutex")
+        .into_inner()
+        .expect("Failed to get inner errors");
 
     if debug_mode {
         println!("\n[DEBUG] ===== Extraction Summary =====");
