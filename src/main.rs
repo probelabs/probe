@@ -285,6 +285,9 @@ async fn main() -> Result<()> {
             dry_run,
             diff,
             allow_tests,
+            keep_input,
+            prompt,
+            instructions,
         }) => extract::handle_extract(extract::ExtractOptions {
             files,
             custom_ignores: ignore,
@@ -295,6 +298,12 @@ async fn main() -> Result<()> {
             dry_run,
             diff,
             allow_tests,
+            keep_input,
+            prompt: prompt.map(|p| crate::extract::PromptTemplate::from_str(&p).unwrap_or_else(|e| {
+                eprintln!("Warning: {}", e);
+                crate::extract::PromptTemplate::Engineer
+            })),
+            instructions,
         })?,
         Some(Commands::Query {
             pattern,

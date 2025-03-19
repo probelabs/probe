@@ -67,6 +67,20 @@ const code = await extract({
   ]
 });
 
+// Extract with LLM prompt and instructions
+const codeWithPrompt = await extract({
+  files: ['/path/to/your/project/src/auth.js#authenticate'],
+  prompt: 'engineer',  // Use engineer template
+  instructions: 'Explain this authentication function'
+});
+
+// Extract with custom prompt template
+const codeWithCustomPrompt = await extract({
+  files: ['/path/to/your/project/src/api.js:42'],
+  prompt: '/path/to/custom/prompt.txt',  // Path to custom prompt file
+  instructions: 'Refactor this code'
+});
+
 console.log(code);
 ```
 
@@ -297,9 +311,11 @@ app.post('/api/query', async (req, res) => {
 // Extract endpoint
 app.post('/api/extract', async (req, res) => {
   try {
-    const { files, options } = req.body;
+    const { files, prompt, instructions, options } = req.body;
     const results = await extract({
       files,
+      prompt,
+      instructions,
       ...options
     });
     res.json({ results });

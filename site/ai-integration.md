@@ -967,10 +967,44 @@ const results = await extract({
 - `allowTests`: Include test files
 - `contextLines`: Number of context lines to include
 - `format`: Output format ('markdown', 'plain', 'json')
+- `prompt`: System prompt template for LLM models ('engineer', 'architect', or path to file)
+- `instructions`: User instructions for LLM models
 - `json`: Return results as parsed JSON instead of string
 - `binaryOptions`: Options for getting the binary
   - `forceDownload`: Force download even if binary exists
   - `version`: Specific version to download
+
+#### LLM Integration with Extract
+
+```javascript
+import { extract } from '@buger/probe';
+
+// Extract code with engineer prompt template
+const results = await extract({
+  files: ['/path/to/your/project/src/auth.js#authenticate'],
+  prompt: 'engineer',
+  instructions: 'Explain this authentication function',
+  format: 'json'
+});
+
+// Extract code with architect prompt template
+const results = await extract({
+  files: ['/path/to/your/project/src/auth.js'],
+  prompt: 'architect',
+  instructions: 'Analyze this authentication module',
+  format: 'json'
+});
+
+// Extract code with custom prompt template
+const results = await extract({
+  files: ['/path/to/your/project/src/api.js:42'],
+  prompt: '/path/to/custom/prompt.txt',
+  instructions: 'Refactor this code',
+  format: 'json'
+});
+```
+
+The `prompt` and `instructions` parameters are particularly useful for AI integration workflows, as they allow you to include standardized prompts and specific instructions in the extraction output. This makes it easier to create consistent AI prompting patterns and provide context for code analysis.
 
 #### Binary Management
 

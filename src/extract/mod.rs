@@ -7,6 +7,7 @@
 mod file_paths;
 mod formatter;
 mod processor;
+mod prompts;
 mod symbol_finder;
 
 // Re-export public functions
@@ -16,11 +17,13 @@ pub use file_paths::{
     parse_file_with_line,
 };
 #[allow(unused_imports)]
-pub use formatter::format_and_print_extraction_results;
-#[allow(unused_imports)]
-pub use formatter::format_extraction_dry_run;
+pub use formatter::{
+    format_and_print_extraction_results, format_extraction_dry_run, format_extraction_results
+};
 #[allow(unused_imports)]
 pub use processor::process_file_for_extraction;
+#[allow(unused_imports)]
+pub use prompts::{PromptTemplate, format_prompt_with_instructions};
 
 use crate::extract::file_paths::{set_custom_ignores, FilePathInfo};
 use crate::models::SearchResult;
@@ -50,6 +53,12 @@ pub struct ExtractOptions {
     pub diff: bool,
     /// Whether to allow test files and test code blocks
     pub allow_tests: bool,
+    /// Whether to keep and display the original input content
+    pub keep_input: bool,
+    /// Optional prompt template for LLM models
+    pub prompt: Option<prompts::PromptTemplate>,
+    /// Optional user instructions for LLM models
+    pub instructions: Option<String>,
 }
 
 /// Handle the extract command
@@ -71,6 +80,8 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         println!("[DEBUG] Dry run: {}", options.dry_run);
         println!("[DEBUG] Parse as git diff: {}", options.diff);
         println!("[DEBUG] Allow tests: {}", options.allow_tests);
+        println!("[DEBUG] Prompt template: {:?}", options.prompt);
+        println!("[DEBUG] Instructions: {:?}", options.instructions);
     }
 
     // Set custom ignore patterns
@@ -78,11 +89,25 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
     let mut file_paths: Vec<FilePathInfo> = Vec::new();
 
+    // Store the original input if the keep_input flag is set
+    let mut original_input: Option<String> = None;
+
     if options.from_clipboard {
         // Read from clipboard
         println!("{}", "Reading from clipboard...".bold().blue());
         let mut clipboard = Clipboard::new()?;
         let buffer = clipboard.get_text()?;
+
+        // Store the original input if keep_input is true
+        if options.keep_input {
+            original_input = Some(buffer.clone());
+            if debug_mode {
+                println!(
+                    "[DEBUG] Stored original clipboard input: {} bytes",
+                    original_input.as_ref().map_or(0, |s| s.len())
+                );
+            }
+        }
 
         if debug_mode {
             println!(
@@ -135,6 +160,17 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             println!("{}", "Reading from stdin...".bold().blue());
             let mut buffer = String::new();
             std::io::stdin().read_to_string(&mut buffer)?;
+
+            // Store the original input if keep_input is true
+            if options.keep_input {
+                original_input = Some(buffer.clone());
+                if debug_mode {
+                    println!(
+                        "[DEBUG] Stored original stdin input: {} bytes",
+                        original_input.as_ref().map_or(0, |s| s.len())
+                    );
+                }
+            }
 
             if debug_mode {
                 println!(
@@ -193,6 +229,17 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         // Parse command-line arguments
         if debug_mode {
             println!("[DEBUG] Parsing command-line arguments");
+        }
+
+        // Store the original input if keep_input is true
+        if options.keep_input {
+            original_input = Some(options.files.join(" "));
+            if debug_mode {
+                println!(
+                    "[DEBUG] Stored original command-line input: {}",
+                    original_input.as_ref().unwrap_or(&String::new())
+                );
+            }
         }
 
         for file in &options.files {
@@ -257,6 +304,31 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         println!("Format: {}", options.format);
         println!();
     }
+
+    // Process prompt template and instructions if provided
+    let system_prompt = if let Some(prompt_template) = &options.prompt {
+        if debug_mode {
+            println!("[DEBUG] Processing prompt template: {:?}", prompt_template);
+        }
+        match prompt_template.get_content() {
+            Ok(content) => {
+                if debug_mode {
+                    println!("[DEBUG] Loaded prompt template content ({} bytes)", content.len());
+                }
+                Some(content)
+            }
+            Err(e) => {
+                eprintln!("{}", format!("Error loading prompt template: {}", e).red());
+                if debug_mode {
+                    println!("[DEBUG] Error loading prompt template: {}", e);
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Process files in parallel using Rayon
     use rayon::prelude::*;
     use std::sync::{Arc, Mutex};
@@ -276,6 +348,9 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         context_lines: usize,
         debug_mode: bool,
         format: String,
+        original_input: Option<String>,
+        system_prompt: Option<String>,
+        user_instructions: Option<String>,
     }
 
     // Collect all file parameters
@@ -292,6 +367,9 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 context_lines: options.context_lines,
                 debug_mode,
                 format: options.format.clone(),
+                original_input: original_input.clone(),
+                system_prompt: system_prompt.clone(),
+                user_instructions: options.instructions.clone(),
             },
         )
         .collect();
@@ -347,7 +425,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             params.context_lines,
             params.specific_lines.as_ref(),
         ) {
-            Ok(result) => {
+            Ok(mut result) => {
                 if params.debug_mode {
                     println!("[DEBUG] Successfully extracted code from {:?}", params.path);
                     println!("[DEBUG] Extracted lines: {:?}", result.lines);
@@ -358,6 +436,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                         crate::search::search_tokens::count_tokens(&result.code)
                     );
                 }
+
                 // Thread-safe addition to results
                 let mut results = results_mutex.lock().unwrap();
                 results.push(result);
@@ -409,9 +488,21 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
         // Format the results
         let result = if options.dry_run {
-            formatter::format_extraction_dry_run(&results, &options.format)
+            formatter::format_extraction_dry_run(
+                &results,
+                &options.format,
+                original_input.as_deref(),
+                system_prompt.as_deref(),
+                options.instructions.as_deref()
+            )
         } else {
-            formatter::format_extraction_results(&results, &options.format)
+            formatter::format_extraction_results(
+                &results,
+                &options.format,
+                original_input.as_deref(),
+                system_prompt.as_deref(),
+                options.instructions.as_deref()
+            )
         };
 
         // Restore color settings if they were changed

@@ -207,6 +207,18 @@ pub enum Commands {
         /// Allow test files and test code blocks in extraction results (only applies when reading from stdin or clipboard)
         #[arg(long = "allow-tests")]
         allow_tests: bool,
+
+        /// Keep and display the original, unstructured input content
+        #[arg(short = 'k', long = "keep-input")]
+        keep_input: bool,
+
+        /// System prompt template for LLM models (engineer, architect, or path to file)
+        #[arg(long = "prompt")]
+        prompt: Option<String>,
+
+        /// User instructions for LLM models
+        #[arg(long = "instructions")]
+        instructions: Option<String>,
     },
 
     /// Search code using AST patterns for precise structural matching

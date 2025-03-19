@@ -124,6 +124,16 @@ You can even pipe failing test output and it will extract needed files and AST o
 go test | probe extract
 ```
 
+Extract code with LLM prompt and instructions for AI integration:
+
+```bash
+# Extract with engineer prompt template
+probe extract src/auth.rs#authenticate --prompt engineer --instructions "Explain this authentication function"
+
+# Extract with architect prompt template
+probe extract src/api.js --prompt architect --instructions "Analyze this API module"
+```
+
 To learn more about code extraction features, see the [Code Extraction](/code-extraction) documentation.
 
 ## Query Code Structures
@@ -217,6 +227,13 @@ const queryResults = await query({
 // Extract code blocks
 const extractResults = await extract({
   files: ['/path/to/your/project/src/main.js:42']
+});
+
+// Extract with LLM prompt and instructions
+const extractWithPrompt = await extract({
+  files: ['/path/to/your/project/src/auth.js#authenticate'],
+  prompt: 'engineer',
+  instructions: 'Explain this authentication function'
 });
 
 console.log(searchResults);

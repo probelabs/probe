@@ -174,11 +174,20 @@ fn test_format_and_print_extraction_results() {
     let results = vec![result];
 
     // We can't easily test the output directly, but we can at least ensure the function doesn't panic
-    format_and_print_extraction_results(&results, "terminal").unwrap();
-    format_and_print_extraction_results(&results, "markdown").unwrap();
-    format_and_print_extraction_results(&results, "plain").unwrap();
-    format_and_print_extraction_results(&results, "json").unwrap();
-    format_and_print_extraction_results(&results, "xml").unwrap();
+    format_and_print_extraction_results(&results, "terminal", None, None, None).unwrap();
+    format_and_print_extraction_results(&results, "markdown", None, None, None).unwrap();
+    format_and_print_extraction_results(&results, "plain", None, None, None).unwrap();
+    format_and_print_extraction_results(&results, "json", None, None, None).unwrap();
+    format_and_print_extraction_results(&results, "xml", None, None, None).unwrap();
+    
+    // Test with system prompt and user instructions
+    format_and_print_extraction_results(
+        &results,
+        "terminal",
+        None,
+        Some("Test system prompt"),
+        Some("Test user instructions")
+    ).unwrap();
 }
 
 #[test]
@@ -215,6 +224,10 @@ fn test() {
             "--format",
             "json",
             "--allow-tests", // Add this flag to ensure test files are included
+            "--prompt",
+            "engineer",
+            "--instructions",
+            "Extract the main function"
         ])
         .output()
         .expect("Failed to execute command");
@@ -353,6 +366,22 @@ fn test() {
 
     // Validate the count matches the number of results
     assert_eq!(summary.get("count").unwrap().as_u64().unwrap(), 1);
+    
+    // Validate system_prompt and user_instructions are present
+    assert!(
+        json_value.get("system_prompt").is_some(),
+        "JSON output should have a 'system_prompt' field"
+    );
+    assert!(
+        json_value.get("user_instructions").is_some(),
+        "JSON output should have a 'user_instructions' field"
+    );
+    
+    // Validate the content of system_prompt and user_instructions
+    assert!(
+        json_value.get("user_instructions").unwrap().as_str().unwrap() == "Extract the main function",
+        "user_instructions should match the provided value"
+    );
 }
 
 #[test]
@@ -389,6 +418,10 @@ fn test() {
             "--format",
             "xml",
             "--allow-tests", // Add this flag to ensure test files are included
+            "--prompt",
+            "engineer",
+            "--instructions",
+            "Extract the main function"
         ])
         .output()
         .expect("Failed to execute command");
@@ -476,6 +509,24 @@ fn test() {
                 .find(|n| n.is_element() && n.tag_name().name() == "lines");
             assert!(lines.is_some(), "Result should have a lines element");
         }
+        
+        // Validate system_prompt and user_instructions are present
+        let system_prompt = root
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "system_prompt");
+        assert!(system_prompt.is_some(), "Should have a system_prompt element");
+        
+        let user_instructions = root
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "user_instructions");
+        assert!(user_instructions.is_some(), "Should have a user_instructions element");
+        
+        // Validate the content of user_instructions
+        assert_eq!(
+            user_instructions.unwrap().text().unwrap(),
+            "Extract the main function",
+            "user_instructions should match the provided value"
+        );
     }
 
     // The node_type element might not be present for all extraction types
@@ -1505,4 +1556,131 @@ fn test_tokenize_with_stemming() {
     // When processing a diff file directly, we only get one "File:" entry for the diff itself
     let file_count = stdout.matches("File:").count();
     assert_eq!(file_count, 1, "Should process the diff file");
+}
+
+#[test]
+fn test_keep_input_option_with_stdin() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    
+    // Get the project root directory (where Cargo.toml is)
+    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    
+    // Create a temporary file with some content
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("test_file.rs");
+    let content = r#"
+fn main() {
+    println!("Hello, world!");
+}
+"#;
+    fs::write(&file_path, content).unwrap();
+    
+    // Create input content that references the file
+    let input_content = format!("{}", file_path.to_string_lossy());
+    
+    // Run the extract command with stdin input and keep_input flag
+    let mut child = Command::new("cargo")
+        .args([
+            "run",
+            "--manifest-path",
+            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
+            "--",
+            "extract",
+            "--keep-input",
+            "--allow-tests", // Add this flag to ensure test files are included
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn command");
+    
+    // Write to stdin
+    {
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        stdin.write_all(input_content.as_bytes()).expect("Failed to write to stdin");
+    }
+    
+    // Get the output
+    let output = child.wait_with_output().expect("Failed to read stdout");
+    
+    // Check that the command executed successfully
+    assert!(output.status.success(), "Command failed to execute");
+    
+    // Get the output as a string
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    
+    // The output should contain the original input
+    assert!(
+        stdout.contains("Original Input:"),
+        "Output should contain 'Original Input:' section"
+    );
+    assert!(
+        stdout.contains(&input_content),
+        "Output should contain the original input content"
+    );
+}
+
+#[test]
+fn test_keep_input_option_with_clipboard() {
+    use arboard::Clipboard;
+    use std::process::Command;
+    
+    // Skip this test if clipboard access is not available
+    let clipboard_result = Clipboard::new();
+    if clipboard_result.is_err() {
+        println!("Skipping clipboard test as clipboard access is not available");
+        return;
+    }
+    
+    // Get the project root directory (where Cargo.toml is)
+    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    
+    // Create a temporary file with some content
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("test_file.rs");
+    let content = r#"
+fn main() {
+    println!("Hello, world!");
+}
+"#;
+    fs::write(&file_path, content).unwrap();
+    
+    // Create input content that references the file
+    let input_content = format!("{}", file_path.to_string_lossy());
+    
+    // Set clipboard content
+    let mut clipboard = Clipboard::new().unwrap();
+    clipboard.set_text(&input_content).unwrap();
+    
+    // Run the extract command with clipboard input and keep_input flag
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--manifest-path",
+            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
+            "--",
+            "extract",
+            "--from-clipboard",
+            "--keep-input",
+            "--allow-tests", // Add this flag to ensure test files are included
+        ])
+        .output()
+        .expect("Failed to execute command");
+    
+    // Check that the command executed successfully
+    assert!(output.status.success(), "Command failed to execute");
+    
+    // Get the output as a string
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    
+    // The output should contain the original input
+    assert!(
+        stdout.contains("Original Input:"),
+        "Output should contain 'Original Input:' section"
+    );
+    assert!(
+        stdout.contains(&input_content),
+        "Output should contain the original input content"
+    );
 }
