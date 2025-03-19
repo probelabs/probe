@@ -6,15 +6,14 @@
 use crate::models::SearchResult;
 use crate::search::search_tokens::count_tokens;
 use anyhow::Result;
-use colored::Colorize;
 use serde::Serialize;
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
 
 /// A single internal function that handles both dry-run and non-dry-run formatting.
-/// 
+///
 /// # Arguments
-/// 
+///
 /// * `results` - The search results to format
 /// * `format` - The output format (terminal, markdown, plain, json, or color)
 /// * `original_input` - Optional original user input
@@ -176,12 +175,8 @@ fn format_extraction_internal(
                 // DRY-RUN: no code, just file/lines/node_type
                 for result in results {
                     writeln!(output, "  <result>")?;
-                    writeln!(
-                        output,
-                        "    <file>{}</file>",
-                        escape_xml(&result.file)
-                    )?;
-                    
+                    writeln!(output, "    <file>{}</file>", escape_xml(&result.file))?;
+
                     if result.node_type != "file" {
                         writeln!(output, "    <lines>")?;
                         writeln!(output, "      <start>{}</start>", result.lines.0)?;
@@ -207,11 +202,7 @@ fn format_extraction_internal(
                 // NON-DRY-RUN: includes code
                 for result in results {
                     writeln!(output, "  <result>")?;
-                    writeln!(
-                        output,
-                        "    <file>{}</file>",
-                        escape_xml(&result.file)
-                    )?;
+                    writeln!(output, "    <file>{}</file>", escape_xml(&result.file))?;
 
                     if result.node_type != "file" {
                         writeln!(output, "    <lines>")?;
@@ -221,19 +212,11 @@ fn format_extraction_internal(
                     }
 
                     if result.node_type != "file" && result.node_type != "context" {
-                        writeln!(
-                            output,
-                            "    <node_type>{}</node_type>",
-                            &result.node_type
-                        )?;
+                        writeln!(output, "    <node_type>{}</node_type>", &result.node_type)?;
                     }
 
                     // Escape the code contents
-                    writeln!(
-                        output,
-                        "    <code>{}</code>",
-                        &result.code
-                    )?;
+                    writeln!(output, "    <code>{}</code>", &result.code)?;
 
                     writeln!(output, "  </result>")?;
                 }
@@ -291,11 +274,7 @@ fn format_extraction_internal(
 
             // If there are no results
             if results.is_empty() {
-                if is_dry_run {
-                    writeln!(output, "{}", "No results found.".yellow().bold())?;
-                } else {
-                    writeln!(output, "{}", "No results found.".yellow().bold())?;
-                }
+                writeln!(output, "{}", "No results found.".yellow().bold())?;
             } else {
                 // For each result, we either skip the code if is_dry_run, or include it otherwise.
                 for result in results {
@@ -389,7 +368,11 @@ fn format_extraction_internal(
                         "{} {} {}",
                         "Would extract".green().bold(),
                         results.len(),
-                        if results.len() == 1 { "result" } else { "results" }
+                        if results.len() == 1 {
+                            "result"
+                        } else {
+                            "results"
+                        }
                     )?;
                 } else {
                     writeln!(
@@ -397,7 +380,11 @@ fn format_extraction_internal(
                         "{} {} {}",
                         "Extracted".green().bold(),
                         results.len(),
-                        if results.len() == 1 { "result" } else { "results" }
+                        if results.len() == 1 {
+                            "result"
+                        } else {
+                            "results"
+                        }
                     )?;
 
                     let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();

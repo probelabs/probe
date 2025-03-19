@@ -140,8 +140,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
     builder.git_exclude(true);
 
     // Enable parallel walking for large directories
-    // Use a reasonable fixed number of threads (4) instead of num_cpus::get()
-    builder.threads(4);
+    builder.threads(rayon::current_num_threads());
 
     // Add common directories to ignore
     let mut common_ignores: Vec<String> = vec![

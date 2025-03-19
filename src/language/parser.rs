@@ -546,6 +546,13 @@ pub fn parse_file_for_code_blocks(
         }
     }
 
+    // For large files, we could parallelize the processing, but due to thread-safety
+    // constraints with the language implementation, we'll use a sequential approach
+    // that's still efficient for most cases
+    if debug_mode {
+        println!("DEBUG: Using sequential processing for AST nodes");
+    }
+
     // Start the traversal from the root node
     process_node(
         root_node,

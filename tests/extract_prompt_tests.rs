@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
@@ -57,26 +56,47 @@ fn test() {
 
     // Extract and parse the JSON
     let json_str = extract_json_from_output(&stdout);
-    let json_value: serde_json::Value = serde_json::from_str(json_str).expect("Failed to parse JSON output");
+    let json_value: serde_json::Value =
+        serde_json::from_str(json_str).expect("Failed to parse JSON output");
 
     // Validate the structure of the JSON output
     assert!(json_value.is_object(), "JSON output should be an object");
-    assert!(json_value.get("results").is_some(), "JSON output should have a 'results' field");
+    assert!(
+        json_value.get("results").is_some(),
+        "JSON output should have a 'results' field"
+    );
 
     // Validate the results array
     let results = json_value.get("results").unwrap().as_array().unwrap();
     assert!(!results.is_empty(), "Results array should not be empty");
 
-    // Validate the first result
-    let first_result = &results[0];
     // Check for system_prompt field at the top level
-    assert!(json_value.get("system_prompt").is_some(), "JSON output should have a 'system_prompt' field");
+    assert!(
+        json_value.get("system_prompt").is_some(),
+        "JSON output should have a 'system_prompt' field"
+    );
     let system_prompt = json_value.get("system_prompt").unwrap().as_str().unwrap();
-    assert!(system_prompt.contains("expert software engineer"), "System prompt should contain the engineer template");
-    
+    assert!(
+        system_prompt.contains("expert software engineer"),
+        "System prompt should contain the engineer template"
+    );
+
     // Check for user_instructions field at the top level
-    assert!(json_value.get("user_instructions").is_some(), "JSON output should have a 'user_instructions' field");
-    let user_instructions = json_value.get("user_instructions").unwrap().as_str().unwrap();
-    assert_eq!(user_instructions, "Explain what this function does", "User instructions should match the input");
-    assert_eq!(user_instructions, "Explain what this function does", "User instructions should match the input");
+    assert!(
+        json_value.get("user_instructions").is_some(),
+        "JSON output should have a 'user_instructions' field"
+    );
+    let user_instructions = json_value
+        .get("user_instructions")
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        user_instructions, "Explain what this function does",
+        "User instructions should match the input"
+    );
+    assert_eq!(
+        user_instructions, "Explain what this function does",
+        "User instructions should match the input"
+    );
 }

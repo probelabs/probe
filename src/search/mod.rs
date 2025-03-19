@@ -16,6 +16,9 @@ pub mod tokenization; // New elastic search query parser
                       // Temporarily commented out due to compilation issues
                       // mod temp_frequency_search;
 
+#[cfg(test)]
+mod file_processing_tests;
+
 // Public exports
 pub use search_options::SearchOptions;
 pub use search_output::format_and_print_search_results;

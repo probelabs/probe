@@ -179,15 +179,16 @@ fn test_format_and_print_extraction_results() {
     format_and_print_extraction_results(&results, "plain", None, None, None).unwrap();
     format_and_print_extraction_results(&results, "json", None, None, None).unwrap();
     format_and_print_extraction_results(&results, "xml", None, None, None).unwrap();
-    
+
     // Test with system prompt and user instructions
     format_and_print_extraction_results(
         &results,
         "terminal",
         None,
         Some("Test system prompt"),
-        Some("Test user instructions")
-    ).unwrap();
+        Some("Test user instructions"),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -227,7 +228,7 @@ fn test() {
             "--prompt",
             "engineer",
             "--instructions",
-            "Extract the main function"
+            "Extract the main function",
         ])
         .output()
         .expect("Failed to execute command");
@@ -366,7 +367,7 @@ fn test() {
 
     // Validate the count matches the number of results
     assert_eq!(summary.get("count").unwrap().as_u64().unwrap(), 1);
-    
+
     // Validate system_prompt and user_instructions are present
     assert!(
         json_value.get("system_prompt").is_some(),
@@ -376,10 +377,15 @@ fn test() {
         json_value.get("user_instructions").is_some(),
         "JSON output should have a 'user_instructions' field"
     );
-    
+
     // Validate the content of system_prompt and user_instructions
     assert!(
-        json_value.get("user_instructions").unwrap().as_str().unwrap() == "Extract the main function",
+        json_value
+            .get("user_instructions")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            == "Extract the main function",
         "user_instructions should match the provided value"
     );
 }
@@ -421,7 +427,7 @@ fn test() {
             "--prompt",
             "engineer",
             "--instructions",
-            "Extract the main function"
+            "Extract the main function",
         ])
         .output()
         .expect("Failed to execute command");
@@ -509,18 +515,24 @@ fn test() {
                 .find(|n| n.is_element() && n.tag_name().name() == "lines");
             assert!(lines.is_some(), "Result should have a lines element");
         }
-        
+
         // Validate system_prompt and user_instructions are present
         let system_prompt = root
             .children()
             .find(|n| n.is_element() && n.tag_name().name() == "system_prompt");
-        assert!(system_prompt.is_some(), "Should have a system_prompt element");
-        
+        assert!(
+            system_prompt.is_some(),
+            "Should have a system_prompt element"
+        );
+
         let user_instructions = root
             .children()
             .find(|n| n.is_element() && n.tag_name().name() == "user_instructions");
-        assert!(user_instructions.is_some(), "Should have a user_instructions element");
-        
+        assert!(
+            user_instructions.is_some(),
+            "Should have a user_instructions element"
+        );
+
         // Validate the content of user_instructions
         assert_eq!(
             user_instructions.unwrap().text().unwrap(),
@@ -1562,10 +1574,10 @@ fn test_tokenize_with_stemming() {
 fn test_keep_input_option_with_stdin() {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    
+
     // Get the project root directory (where Cargo.toml is)
     let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    
+
     // Create a temporary file with some content
     let temp_dir = tempfile::tempdir().unwrap();
     let file_path = temp_dir.path().join("test_file.rs");
@@ -1575,10 +1587,10 @@ fn main() {
 }
 "#;
     fs::write(&file_path, content).unwrap();
-    
+
     // Create input content that references the file
     let input_content = format!("{}", file_path.to_string_lossy());
-    
+
     // Run the extract command with stdin input and keep_input flag
     let mut child = Command::new("cargo")
         .args([
@@ -1594,22 +1606,24 @@ fn main() {
         .stdout(Stdio::piped())
         .spawn()
         .expect("Failed to spawn command");
-    
+
     // Write to stdin
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-        stdin.write_all(input_content.as_bytes()).expect("Failed to write to stdin");
+        stdin
+            .write_all(input_content.as_bytes())
+            .expect("Failed to write to stdin");
     }
-    
+
     // Get the output
     let output = child.wait_with_output().expect("Failed to read stdout");
-    
+
     // Check that the command executed successfully
     assert!(output.status.success(), "Command failed to execute");
-    
+
     // Get the output as a string
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     // The output should contain the original input
     assert!(
         stdout.contains("Original Input:"),
@@ -1625,17 +1639,17 @@ fn main() {
 fn test_keep_input_option_with_clipboard() {
     use arboard::Clipboard;
     use std::process::Command;
-    
+
     // Skip this test if clipboard access is not available
     let clipboard_result = Clipboard::new();
     if clipboard_result.is_err() {
         println!("Skipping clipboard test as clipboard access is not available");
         return;
     }
-    
+
     // Get the project root directory (where Cargo.toml is)
     let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    
+
     // Create a temporary file with some content
     let temp_dir = tempfile::tempdir().unwrap();
     let file_path = temp_dir.path().join("test_file.rs");
@@ -1645,14 +1659,14 @@ fn main() {
 }
 "#;
     fs::write(&file_path, content).unwrap();
-    
+
     // Create input content that references the file
     let input_content = format!("{}", file_path.to_string_lossy());
-    
+
     // Set clipboard content
     let mut clipboard = Clipboard::new().unwrap();
     clipboard.set_text(&input_content).unwrap();
-    
+
     // Run the extract command with clipboard input and keep_input flag
     let output = Command::new("cargo")
         .args([
@@ -1667,13 +1681,13 @@ fn main() {
         ])
         .output()
         .expect("Failed to execute command");
-    
+
     // Check that the command executed successfully
     assert!(output.status.success(), "Command failed to execute");
-    
+
     // Get the output as a string
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     // The output should contain the original input
     assert!(
         stdout.contains("Original Input:"),

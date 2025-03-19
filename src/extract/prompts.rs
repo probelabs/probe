@@ -65,6 +65,7 @@ pub enum PromptTemplate {
 
 impl PromptTemplate {
     /// Parse a prompt template string into a PromptTemplate enum
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(template_str: &str) -> Result<Self> {
         match template_str.to_lowercase().as_str() {
             "engineer" => Ok(PromptTemplate::Engineer),
@@ -89,33 +90,8 @@ impl PromptTemplate {
         match self {
             PromptTemplate::Engineer => Ok(ENGINEER_PROMPT.to_string()),
             PromptTemplate::Architect => Ok(ARCHITECT_PROMPT.to_string()),
-            PromptTemplate::Custom(path) => {
-                fs::read_to_string(path).with_context(|| format!("Failed to read prompt file: {}", path))
-            }
+            PromptTemplate::Custom(path) => fs::read_to_string(path)
+                .with_context(|| format!("Failed to read prompt file: {}", path)),
         }
     }
-}
-
-/// Format a prompt with instructions for LLM models
-pub fn format_prompt_with_instructions(
-    prompt: &PromptTemplate,
-    instructions: Option<&str>,
-) -> Result<String> {
-    let prompt_content = prompt.get_content()?;
-    
-    let mut result = String::new();
-    
-    // Add system prompt
-    result.push_str("# System Prompt\n\n");
-    result.push_str(&prompt_content);
-    result.push_str("\n\n");
-    
-    // Add user instructions if provided
-    if let Some(instr) = instructions {
-        result.push_str("# User Instructions\n\n");
-        result.push_str(instr);
-        result.push_str("\n\n");
-    }
-    
-    Ok(result)
 }

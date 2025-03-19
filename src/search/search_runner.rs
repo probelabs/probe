@@ -1144,12 +1144,15 @@ pub fn search_with_structured_patterns(
     custom_ignores: &[String],
     allow_tests: bool,
 ) -> Result<HashMap<PathBuf, HashMap<usize, HashSet<usize>>>> {
+    use rayon::prelude::*;
+    use std::sync::{Arc, Mutex};
+
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let search_start = Instant::now();
 
     // Step 1: Create combined regex
     if debug_mode {
-        println!("DEBUG: Starting single-pass structured pattern search...");
+        println!("DEBUG: Starting parallel structured pattern search...");
         println!(
             "DEBUG: Creating combined regex from {} patterns",
             patterns.len()
@@ -1182,16 +1185,20 @@ pub fn search_with_structured_patterns(
 
     if debug_mode {
         println!("DEBUG: Got {} files from cache", file_list.files.len());
+        println!("DEBUG: Starting parallel file processing with combined regex");
     }
 
-    // Step 3: Process files
-    let mut file_term_maps = HashMap::new();
+    // Step 3: Process files in parallel
+    // Create thread-safe shared resources
+    let combined_regex = Arc::new(combined_regex);
+    let pattern_to_terms = Arc::new(pattern_to_terms);
+    let file_term_maps = Arc::new(Mutex::new(HashMap::new()));
 
-    if debug_mode {
-        println!("DEBUG: Starting file processing with combined regex");
-    }
+    // Process files in parallel using rayon
+    file_list.files.par_iter().for_each(|file_path| {
+        let combined_regex = Arc::clone(&combined_regex);
+        let pattern_to_terms = Arc::clone(&pattern_to_terms);
 
-    for file_path in &file_list.files {
         // Search file with combined pattern
         match search_file_with_combined_pattern(file_path, &combined_regex, &pattern_to_terms) {
             Ok(term_map) => {
@@ -1204,8 +1211,9 @@ pub fn search_with_structured_patterns(
                         );
                     }
 
-                    // Add to results
-                    file_term_maps.insert(file_path.clone(), term_map);
+                    // Add to results with proper locking
+                    let mut maps = file_term_maps.lock().unwrap();
+                    maps.insert(file_path.clone(), term_map);
                 }
             }
             Err(e) => {
@@ -1214,19 +1222,25 @@ pub fn search_with_structured_patterns(
                 }
             }
         }
-    }
+    });
 
     let total_duration = search_start.elapsed();
 
+    // Extract the results from the Arc<Mutex<>>
+    let result = Arc::try_unwrap(file_term_maps)
+        .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+        .into_inner()
+        .unwrap();
+
     if debug_mode {
         println!(
-            "DEBUG: Single-pass search completed in {} - Found matches in {} files",
+            "DEBUG: Parallel search completed in {} - Found matches in {} files",
             format_duration(total_duration),
-            file_term_maps.len()
+            result.len()
         );
     }
 
-    Ok(file_term_maps)
+    Ok(result)
 }
 
 /// Helper function to search a file with a combined regex pattern

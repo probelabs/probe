@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tree_sitter;
 
@@ -357,10 +359,30 @@ pub fn process_file_with_results(
         .and_then(|ext| ext.to_str())
         .unwrap_or("");
 
-    let lines: Vec<&str> = content.lines().collect();
+    // Get debug mode setting
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Filter out lines longer than 500 characters
+    let lines: Vec<&str> = content
+        .lines()
+        .enumerate()
+        .map(|(i, line)| {
+            if line.len() > 500 {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Skipping line {} with length {} (exceeds 500 character limit)",
+                        i + 1,
+                        line.len()
+                    );
+                }
+                ""
+            } else {
+                line
+            }
+        })
+        .collect();
     let mut results = Vec::new();
     let mut covered_lines = HashSet::new();
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Get the filename for tokenization - do this once for the entire file
     let filename = params
@@ -471,203 +493,260 @@ pub fn process_file_with_results(
 
         // Measure code structure finding time
         let _code_structure_start = Instant::now();
-        let mut code_structure_duration = Duration::new(0, 0);
-        let mut filtering_duration = Duration::new(0, 0);
-        let mut result_building_duration = Duration::new(0, 0);
+        let code_structure_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
+        let filtering_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
+        let result_building_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
 
-        // Process each block
-        for (block_idx, block) in code_blocks.iter().enumerate() {
-            // Start measuring code structure finding time for this block
-            let block_start = Instant::now();
+        // Prepare shared resources for parallel processing
+        let shared_results = Arc::new(Mutex::new(Vec::new()));
+        let shared_covered_lines = Arc::new(Mutex::new(HashSet::new()));
 
-            let start_line = block.start_row + 1;
-            let end_line = block.end_row + 1;
+        // Process blocks in parallel
+        code_blocks
+            .par_iter()
+            .enumerate()
+            .for_each(|(block_idx, block)| {
+                // Start measuring code structure finding time for this block
+                let block_start = Instant::now();
 
-            let (final_start_line, final_end_line, is_nested_struct) = if extension == "go"
-                && block.node_type == "struct_type"
-                && block
-                    .parent_node_type
-                    .as_ref()
-                    .is_some_and(|p| p == "function_declaration" || p == "method_declaration")
-            {
-                if let Some(ps) = block.parent_start_row {
-                    if let Some(pe) = block.parent_end_row {
-                        (ps + 1, pe + 1, true)
+                let start_line = block.start_row + 1;
+                let end_line = block.end_row + 1;
+
+                let (final_start_line, final_end_line, is_nested_struct) = if extension == "go"
+                    && block.node_type == "struct_type"
+                    && block
+                        .parent_node_type
+                        .as_ref()
+                        .is_some_and(|p| p == "function_declaration" || p == "method_declaration")
+                {
+                    if let Some(ps) = block.parent_start_row {
+                        if let Some(pe) = block.parent_end_row {
+                            (ps + 1, pe + 1, true)
+                        } else {
+                            (start_line, end_line, false)
+                        }
                     } else {
                         (start_line, end_line, false)
                     }
                 } else {
                     (start_line, end_line, false)
-                }
-            } else {
-                (start_line, end_line, false)
-            };
+                };
 
-            let full_code = if final_start_line > 0 && final_end_line <= lines.len() {
-                lines[final_start_line - 1..final_end_line].join("\n")
-            } else {
-                "".to_string()
-            };
+                let full_code = if final_start_line > 0 && final_end_line <= lines.len() {
+                    // Skip empty lines (which were originally too long)
+                    lines[final_start_line - 1..final_end_line]
+                        .to_vec()
+                        .join("\n")
+                } else {
+                    "".to_string()
+                };
 
-            // End code structure finding time for this block
-            let block_duration = block_start.elapsed();
-            code_structure_duration += block_duration;
-
-            // Early tokenization with filename prepended
-            let block_terms = ranking::preprocess_text_with_filename(&full_code, &filename);
-
-            // Start measuring filtering time
-            let filtering_start = Instant::now();
-
-            // Early filtering using tokenized content
-            let should_include = {
-                if debug_mode {
-                    println!(
-                        "DEBUG: Using filter_tokenized_block for block {}-{}",
-                        final_start_line, final_end_line
-                    );
-                }
-                // Use the AST evaluation directly to ensure correct handling of complex queries
-                let result = filter_tokenized_block(
-                    &block_terms,
-                    &params.query_plan.term_indices,
-                    params.query_plan,
-                    debug_mode,
-                );
-
-                if debug_mode {
-                    println!(
-                        "DEBUG: Block {}-{} filter result: {}",
-                        final_start_line, final_end_line, result
-                    );
+                // End code structure finding time for this block
+                let block_duration = block_start.elapsed();
+                {
+                    let mut duration = code_structure_duration.lock().unwrap();
+                    *duration += block_duration;
                 }
 
-                result
-            };
+                // Early tokenization with filename prepended
+                let block_terms = ranking::preprocess_text_with_filename(&full_code, &filename);
 
-            // End filtering time measurement
-            let filtering_block_duration = filtering_start.elapsed();
-            filtering_duration += filtering_block_duration;
+                // Start measuring filtering time
+                let filtering_start = Instant::now();
 
-            if debug_mode {
-                println!(
-                    "DEBUG: Block lines {}-{} => should_include={}",
-                    final_start_line, final_end_line, should_include
-                );
-            }
-
-            // Mark lines as covered
-            for line_num in final_start_line..=final_end_line {
-                covered_lines.insert(line_num);
-            }
-
-            if should_include {
-                // Start measuring result building time
-                let result_building_start = Instant::now();
-
-                // Calculate metrics using the already tokenized content
-                let direct_matches: HashSet<&String> = block_terms
-                    .iter()
-                    .filter(|t| unique_query_terms.contains(*t))
-                    .collect();
-
-                let mut compound_matches = HashSet::new();
-                for qterm in &unique_query_terms {
-                    if block_terms.iter().any(|bt| bt == qterm) {
-                        continue;
+                // Early filtering using tokenized content
+                let should_include = {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Using filter_tokenized_block for block {}-{}",
+                            final_start_line, final_end_line
+                        );
                     }
-                    let parts =
-                        tokenization::split_compound_word(qterm, tokenization::load_vocabulary());
-                    if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                        compound_matches.insert(qterm);
+                    // Use the AST evaluation directly to ensure correct handling of complex queries
+                    let result = filter_tokenized_block(
+                        &block_terms,
+                        &params.query_plan.term_indices,
+                        params.query_plan,
+                        debug_mode,
+                    );
+
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Block {}-{} filter result: {}",
+                            final_start_line, final_end_line, result
+                        );
+                    }
+
+                    result
+                };
+
+                // End filtering time measurement
+                let filtering_block_duration = filtering_start.elapsed();
+                {
+                    let mut duration = filtering_duration.lock().unwrap();
+                    *duration += filtering_block_duration;
+                }
+
+                if debug_mode {
+                    println!(
+                        "DEBUG: Block lines {}-{} => should_include={}",
+                        final_start_line, final_end_line, should_include
+                    );
+                }
+
+                // Mark lines as covered
+                {
+                    let mut covered = shared_covered_lines.lock().unwrap();
+                    for line_num in final_start_line..=final_end_line {
+                        covered.insert(line_num);
                     }
                 }
 
-                let block_unique_terms = direct_matches.len() + compound_matches.len();
-                let block_total_matches = direct_matches.len() + compound_matches.len();
+                if should_include {
+                    // Start measuring result building time
+                    let result_building_start = Instant::now();
 
-                // Collect matched keywords
-                let mut matched_keywords = Vec::new();
-
-                // Add direct matches
-                matched_keywords.extend(direct_matches.iter().map(|s| (*s).clone()));
-
-                // Add compound matches
-                matched_keywords.extend(compound_matches.iter().map(|s| (*s).clone()));
-
-                // Get the matched term indices for this block
-                let mut matched_term_indices = HashSet::new();
-                for (&term_idx, lines) in params.term_matches {
-                    if lines
+                    // Calculate metrics using the already tokenized content
+                    let direct_matches: HashSet<&String> = block_terms
                         .iter()
-                        .any(|&l| l >= final_start_line && l <= final_end_line)
+                        .filter(|t| unique_query_terms.contains(*t))
+                        .collect();
+
+                    let mut compound_matches = HashSet::new();
+                    for qterm in &unique_query_terms {
+                        if block_terms.iter().any(|bt| bt == qterm) {
+                            continue;
+                        }
+                        let parts = tokenization::split_compound_word(
+                            qterm,
+                            tokenization::load_vocabulary(),
+                        );
+                        if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
+                            compound_matches.insert(qterm);
+                        }
+                    }
+
+                    let block_unique_terms = direct_matches.len() + compound_matches.len();
+                    let block_total_matches = direct_matches.len() + compound_matches.len();
+
+                    // Collect matched keywords
+                    let mut matched_keywords = Vec::new();
+
+                    // Add direct matches
+                    matched_keywords.extend(direct_matches.iter().map(|s| (*s).clone()));
+
+                    // Add compound matches
+                    matched_keywords.extend(compound_matches.iter().map(|s| (*s).clone()));
+
+                    // Get the matched term indices for this block
+                    let mut matched_term_indices = HashSet::new();
+                    for (&term_idx, lines) in params.term_matches {
+                        if lines
+                            .iter()
+                            .any(|&l| l >= final_start_line && l <= final_end_line)
+                        {
+                            matched_term_indices.insert(term_idx);
+                        }
+                    }
+
+                    // Add the corresponding terms from the query plan
+                    for (term, &idx) in &params.query_plan.term_indices {
+                        if matched_term_indices.contains(&idx)
+                            && !params.query_plan.excluded_terms.contains(term)
+                        {
+                            matched_keywords.push(term.clone());
+                        }
+                    }
+
+                    // Remove duplicates
+                    matched_keywords.sort();
+                    matched_keywords.dedup();
+
+                    let result = SearchResult {
+                        file: params.path.to_string_lossy().to_string(),
+                        lines: (final_start_line, final_end_line),
+                        node_type: if is_nested_struct {
+                            block
+                                .parent_node_type
+                                .clone()
+                                .unwrap_or_else(|| block.node_type.clone())
+                        } else {
+                            block.node_type.clone()
+                        },
+                        code: full_code,
+                        matched_by_filename: None,
+                        rank: None,
+                        score: None,
+                        tfidf_score: None,
+                        bm25_score: None,
+                        tfidf_rank: None,
+                        bm25_rank: None,
+                        new_score: None,
+                        hybrid2_rank: None,
+                        combined_score_rank: None,
+                        file_unique_terms: Some(block_unique_terms),
+                        file_total_matches: Some(block_total_matches),
+                        file_match_rank: None,
+                        block_unique_terms: Some(block_unique_terms),
+                        block_total_matches: Some(block_total_matches),
+                        parent_file_id: Some(file_id.clone()),
+                        block_id: Some(block_idx),
+                        matched_keywords: if matched_keywords.is_empty() {
+                            None
+                        } else {
+                            Some(matched_keywords)
+                        },
+                        tokenized_content: Some(block_terms),
+                    };
+
+                    // Add result to shared results
                     {
-                        matched_term_indices.insert(term_idx);
+                        let mut results = shared_results.lock().unwrap();
+                        results.push(result);
+                    }
+
+                    // End result building time measurement
+                    let result_building_block_duration = result_building_start.elapsed();
+                    {
+                        let mut duration = result_building_duration.lock().unwrap();
+                        *duration += result_building_block_duration;
                     }
                 }
+            });
 
-                // Add the corresponding terms from the query plan
-                for (term, &idx) in &params.query_plan.term_indices {
-                    if matched_term_indices.contains(&idx)
-                        && !params.query_plan.excluded_terms.contains(term)
-                    {
-                        matched_keywords.push(term.clone());
-                    }
-                }
+        // Extract results from shared resources
+        results = Arc::try_unwrap(shared_results)
+            .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+            .into_inner()
+            .unwrap();
 
-                // Remove duplicates
-                matched_keywords.sort();
-                matched_keywords.dedup();
+        covered_lines = Arc::try_unwrap(shared_covered_lines)
+            .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+            .into_inner()
+            .unwrap();
 
-                results.push(SearchResult {
-                    file: params.path.to_string_lossy().to_string(),
-                    lines: (final_start_line, final_end_line),
-                    node_type: if is_nested_struct {
-                        block
-                            .parent_node_type
-                            .clone()
-                            .unwrap_or_else(|| block.node_type.clone())
-                    } else {
-                        block.node_type.clone()
-                    },
-                    code: full_code,
-                    matched_by_filename: None,
-                    rank: None,
-                    score: None,
-                    tfidf_score: None,
-                    bm25_score: None,
-                    tfidf_rank: None,
-                    bm25_rank: None,
-                    new_score: None,
-                    hybrid2_rank: None,
-                    combined_score_rank: None,
-                    file_unique_terms: Some(block_unique_terms),
-                    file_total_matches: Some(block_total_matches),
-                    file_match_rank: None,
-                    block_unique_terms: Some(block_unique_terms),
-                    block_total_matches: Some(block_total_matches),
-                    parent_file_id: Some(file_id.clone()),
-                    block_id: Some(block_idx),
-                    matched_keywords: if matched_keywords.is_empty() {
-                        None
-                    } else {
-                        Some(matched_keywords)
-                    },
-                    tokenized_content: Some(block_terms),
-                });
+        // Extract durations from Arc<Mutex<>>
+        let code_structure_duration_value = Arc::try_unwrap(code_structure_duration)
+            .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+            .into_inner()
+            .unwrap();
 
-                // End result building time measurement
-                let result_building_block_duration = result_building_start.elapsed();
-                result_building_duration += result_building_block_duration;
-            }
-        }
+        let filtering_duration_value = Arc::try_unwrap(filtering_duration)
+            .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+            .into_inner()
+            .unwrap();
+
+        let result_building_duration_value = Arc::try_unwrap(result_building_duration)
+            .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+            .into_inner()
+            .unwrap();
 
         // Store the sub-step timings
         let block_extraction_duration = block_extraction_start.elapsed();
         timings.block_extraction = Some(block_extraction_duration);
-        timings.block_extraction_code_structure = Some(code_structure_duration);
-        timings.block_extraction_filtering = Some(filtering_duration);
-        timings.block_extraction_result_building = Some(result_building_duration);
+        timings.block_extraction_code_structure = Some(code_structure_duration_value);
+        timings.block_extraction_filtering = Some(filtering_duration_value);
+        timings.block_extraction_result_building = Some(result_building_duration_value);
 
         if debug_mode {
             println!(
@@ -676,12 +755,12 @@ pub fn process_file_with_results(
             );
             println!(
                 "DEBUG:     - Code structure finding: {:?}",
-                code_structure_duration
+                code_structure_duration_value
             );
-            println!("DEBUG:     - Filtering: {:?}", filtering_duration);
+            println!("DEBUG:     - Filtering: {:?}", filtering_duration_value);
             println!(
                 "DEBUG:     - Result building: {:?}",
-                result_building_duration
+                result_building_duration_value
             );
         }
     }
@@ -753,9 +832,11 @@ pub fn process_file_with_results(
 
             // Extract the context lines - ensure context_start is at least 1 to avoid underflow
             let context_code = if context_start > 0 {
-                lines[context_start - 1..context_end].join("\n")
+                // Skip empty lines (which were originally too long)
+                lines[context_start - 1..context_end].to_vec().join("\n")
             } else {
-                lines[0..context_end].join("\n")
+                // Skip empty lines (which were originally too long)
+                lines[0..context_end].to_vec().join("\n")
             };
 
             // Determine a better node type for the fallback context by analyzing the content

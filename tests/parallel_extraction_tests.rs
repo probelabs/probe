@@ -33,6 +33,9 @@ fn test_parallel_file_extraction() {
         dry_run: false,
         diff: false,
         allow_tests: true,
+        instructions: None,
+        keep_input: false,
+        prompt: None,
     };
 
     // Run the extraction
@@ -92,6 +95,9 @@ fn function_four() {
         dry_run: false,
         diff: false,
         allow_tests: true,
+        instructions: None,
+        keep_input: false,
+        prompt: None,
     };
 
     // Run the extraction
@@ -155,6 +161,9 @@ fn test_parallel_extraction_performance() {
         dry_run: true, // Use dry run to avoid large output
         diff: false,
         allow_tests: true,
+        instructions: None,
+        keep_input: false,
+        prompt: None,
     };
 
     // Run the extraction

@@ -18,12 +18,12 @@ pub use file_paths::{
 };
 #[allow(unused_imports)]
 pub use formatter::{
-    format_and_print_extraction_results, format_extraction_dry_run, format_extraction_results
+    format_and_print_extraction_results, format_extraction_dry_run, format_extraction_results,
 };
 #[allow(unused_imports)]
 pub use processor::process_file_for_extraction;
 #[allow(unused_imports)]
-pub use prompts::{PromptTemplate, format_prompt_with_instructions};
+pub use prompts::PromptTemplate;
 
 use crate::extract::file_paths::{set_custom_ignores, FilePathInfo};
 use crate::models::SearchResult;
@@ -313,7 +313,10 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         match prompt_template.get_content() {
             Ok(content) => {
                 if debug_mode {
-                    println!("[DEBUG] Loaded prompt template content ({} bytes)", content.len());
+                    println!(
+                        "[DEBUG] Loaded prompt template content ({} bytes)",
+                        content.len()
+                    );
                 }
                 Some(content)
             }
@@ -348,8 +351,12 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         context_lines: usize,
         debug_mode: bool,
         format: String,
+
+        #[allow(dead_code)]
         original_input: Option<String>,
+        #[allow(dead_code)]
         system_prompt: Option<String>,
+        #[allow(dead_code)]
         user_instructions: Option<String>,
     }
 
@@ -425,7 +432,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             params.context_lines,
             params.specific_lines.as_ref(),
         ) {
-            Ok(mut result) => {
+            Ok(result) => {
                 if params.debug_mode {
                     println!("[DEBUG] Successfully extracted code from {:?}", params.path);
                     println!("[DEBUG] Extracted lines: {:?}", result.lines);
@@ -493,7 +500,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 &options.format,
                 original_input.as_deref(),
                 system_prompt.as_deref(),
-                options.instructions.as_deref()
+                options.instructions.as_deref(),
             )
         } else {
             formatter::format_extraction_results(
@@ -501,7 +508,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 &options.format,
                 original_input.as_deref(),
                 system_prompt.as_deref(),
-                options.instructions.as_deref()
+                options.instructions.as_deref(),
             )
         };
 
