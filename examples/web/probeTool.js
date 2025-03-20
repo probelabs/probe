@@ -43,14 +43,14 @@ export const probeTool = {
 		const { keywords, folder, ...rest } = params;
 		const result = await searchToolInstance.execute({
 			query: keywords,
-			path: folder,
+			path: folder || '.',  // Default to current directory if folder is not specified
 			...rest
 		});
 
 		// Format the result to match the old format
 		return {
 			results: result,
-			command: `probe ${keywords} ${folder || ''}`,
+			command: `probe ${keywords} ${folder || '.'}`,
 			timestamp: new Date().toISOString()
 		};
 	}

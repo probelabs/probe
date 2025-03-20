@@ -238,19 +238,19 @@
 			</ul>
 			<p>You can specify a folder to search in: "Search for API handlers in folder /Users/leonidbugaev/go/src/tyk"</p>
 			<p>Probe extracts complete code blocks (functions, classes, methods) to provide full context for AI analysis.</p>
-			
+
 			<h4>Available Tools</h4>
 			<ul>
 				<li><strong>Search</strong>: Find code using Elasticsearch-like query syntax</li>
 				<li><strong>Query</strong>: Search code using ast-grep structural pattern matching</li>
 				<li><strong>Extract</strong>: Extract code blocks from files based on file paths and line numbers</li>
 			</ul>
-			
+
 			<!-- Test Mermaid diagram -->
 			<div class="mermaid">
 				graph TD
-					A[Client] --> B[Server]
-					B --> C[Database]
+				A[Client] --> B[Server]
+				B --> C[Database]
 			</div>
 		</div>
 	</div>
@@ -279,7 +279,7 @@
 				securityLevel: 'loose',
 				flowchart: { htmlLabels: true }
 			});
-			
+
 			// Run mermaid on page load to render the test diagram
 			window.addEventListener('DOMContentLoaded', () => {
 				setTimeout(() => {
@@ -346,17 +346,7 @@
 				// Create a simple test diagram directly
 				const testDiv = document.createElement('div');
 				testDiv.className = 'ai-message markdown-content';
-				
-				// First try with direct mermaid div
-				const directMermaidDiv = document.createElement('div');
-				directMermaidDiv.className = 'mermaid';
-				directMermaidDiv.textContent = `graph TD
-    A[Direct Test] --> B[No Markdown]
-    B --> C[Just Mermaid]`;
-				
-				testDiv.appendChild(directMermaidDiv);
-				messagesDiv.appendChild(testDiv);
-				
+
 				// Render the direct mermaid div
 				setTimeout(() => {
 					try {
@@ -415,16 +405,16 @@
 					if (done) break;
 					const chunk = decoder.decode(value, { stream: true });
 					aiResponse += chunk;
-					
+
 					try {
 						// Render markdown content
 						aiMsgDiv.innerHTML = renderMarkdown(aiResponse);
-						
+
 						// Apply syntax highlighting to code blocks
 						aiMsgDiv.querySelectorAll('pre code').forEach((block) => {
 							hljs.highlightElement(block);
 						});
-						
+
 						// Render any mermaid diagrams
 						try {
 							if (typeof mermaid.run === 'function') {
@@ -435,7 +425,7 @@
 						} catch (error) {
 							console.warn('Mermaid rendering error:', error);
 						}
-						
+
 						messagesDiv.scrollTop = messagesDiv.scrollHeight;
 					} catch (error) {
 						console.error('Error processing response chunk:', error);
@@ -443,7 +433,7 @@
 						aiMsgDiv.textContent = aiResponse;
 					}
 				}
-				
+
 				// Final render after all content is received
 				setTimeout(() => {
 					try {

@@ -236,7 +236,7 @@ const server = createServer(async (req, res) => {
 						// Execute the probe tool directly
 						const result = await probeTool.execute({
 							keywords,
-							folder: folder || (probeChat.allowedFolders && probeChat.allowedFolders.length > 0 ? probeChat.allowedFolders[0] : undefined),
+							folder: folder || (probeChat.allowedFolders && probeChat.allowedFolders.length > 0 ? probeChat.allowedFolders[0] : '.'),
 							exact: exact || false,
 							allow_tests: allow_tests || false
 						});
@@ -304,7 +304,7 @@ const server = createServer(async (req, res) => {
 						// Execute the query tool
 						const result = await queryTool.execute({
 							pattern,
-							path: path || (probeChat.allowedFolders && probeChat.allowedFolders.length > 0 ? probeChat.allowedFolders[0] : undefined),
+							path: path || (probeChat.allowedFolders && probeChat.allowedFolders.length > 0 ? probeChat.allowedFolders[0] : '.'),
 							language: language || undefined,
 							allow_tests: allow_tests || false
 						});

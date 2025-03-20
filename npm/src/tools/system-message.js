@@ -58,6 +58,10 @@ Search Examples:
 6. "Show me how JWTMiddleware struct defined"
    Search tool: "JWTMiddleware"
    Explanation: Using quotes because we looking exact match
+6. "Show me how Auth works"
+   Search tool: "auth"
+   Explanation: Feels like there is more relevant info, which was limited, lets do one more search to get more.
+   Search tool: "auth"
 
 Extract tool examples:
 1. Extract function or struct, from given file:
