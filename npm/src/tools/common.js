@@ -12,7 +12,7 @@ export const searchSchema = z.object({
 	exact: z.boolean().optional().default(false).describe('Use exact match for specific function or type names'),
 	allow_tests: z.boolean().optional().default(false).describe('Allow test files in search results'),
 	maxResults: z.number().optional().describe('Maximum number of results to return'),
-	maxTokens: z.number().optional().default(40000).describe('Maximum number of tokens to return')
+	maxTokens: z.number().optional().default(10000).describe('Maximum number of tokens to return')
 });
 
 export const querySchema = z.object({

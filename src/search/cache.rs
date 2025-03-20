@@ -166,10 +166,24 @@ impl SessionCache {
             .join(format!("{}.json", session_id))
     }
 }
+/// Normalize a file path for consistent cache keys
+/// Removes leading "./" and ensures consistent format
+fn normalize_path(path: &str) -> String {
+    // Remove leading "./"
+    let normalized = if let Some(stripped) = path.strip_prefix("./") {
+        stripped
+    } else {
+        path
+    };
+
+    normalized.to_string()
+}
+
 /// Generate a cache key for a search result
 /// Format: "file.rs:23-45" (file path with start-end line numbers)
 pub fn generate_cache_key(result: &SearchResult) -> String {
-    format!("{}:{}-{}", result.file, result.lines.0, result.lines.1)
+    let normalized_path = normalize_path(&result.file);
+    format!("{}:{}-{}", normalized_path, result.lines.0, result.lines.1)
 }
 
 /// Filter search results using the cache without adding to the cache
@@ -312,7 +326,9 @@ pub fn filter_matched_lines_with_cache(
         for &line_num in &all_lines {
             // Create a simple cache key for this line
             // Format: "file.rs:line_num"
-            let line_cache_key = format!("{}:{}", file_path.to_string_lossy(), line_num);
+            let path_str = file_path.to_string_lossy();
+            let normalized_path = normalize_path(&path_str);
+            let line_cache_key = format!("{}:{}", normalized_path, line_num);
 
             // Check if this line is part of a cached block
             let is_cached = cache.block_identifiers.iter().any(|block_id| {
@@ -328,7 +344,11 @@ pub fn filter_matched_lines_with_cache(
                             end_line_str.parse::<usize>(),
                         ) {
                             // Check if this line is within a cached block from the same file
-                            return file_part == file_path.to_string_lossy()
+                            let path_str = file_path.to_string_lossy();
+                            let normalized_path = normalize_path(&path_str);
+                            let normalized_file_part = normalize_path(file_part);
+
+                            return normalized_file_part == normalized_path
                                 && line_num >= start_line
                                 && line_num <= end_line;
                         }
@@ -504,4 +524,81 @@ pub fn generate_session_id() -> Result<(&'static str, bool)> {
     Err(anyhow::anyhow!(
         "Failed to generate a unique session ID after multiple attempts"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::SearchResult;
+
+    #[test]
+    fn test_path_normalization() {
+        // Test that normalize_path removes leading "./"
+        assert_eq!(normalize_path("./path/to/file.rs"), "path/to/file.rs");
+        assert_eq!(normalize_path("path/to/file.rs"), "path/to/file.rs");
+    }
+
+    #[test]
+    fn test_cache_key_generation_with_different_path_formats() {
+        // Create two search results with the same path but different formats
+        let result1 = SearchResult {
+            file: "./path/to/file.rs".to_string(),
+            lines: (10, 20),
+            node_type: "function".to_string(),
+            code: "".to_string(),
+            matched_by_filename: None,
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            bm25_score: None,
+            tfidf_rank: None,
+            bm25_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            parent_file_id: None,
+            block_id: None,
+            matched_keywords: None,
+            tokenized_content: None,
+        };
+
+        let result2 = SearchResult {
+            file: "path/to/file.rs".to_string(),
+            lines: (10, 20),
+            node_type: "function".to_string(),
+            code: "".to_string(),
+            matched_by_filename: None,
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            bm25_score: None,
+            tfidf_rank: None,
+            bm25_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            parent_file_id: None,
+            block_id: None,
+            matched_keywords: None,
+            tokenized_content: None,
+        };
+
+        // Generate cache keys for both results
+        let key1 = generate_cache_key(&result1);
+        let key2 = generate_cache_key(&result2);
+
+        // The cache keys should be identical
+        assert_eq!(key1, key2);
+        assert_eq!(key1, "path/to/file.rs:10-20");
+    }
 }

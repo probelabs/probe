@@ -49,96 +49,15 @@ pub fn preprocess_text_with_filename(text: &str, filename: &str) -> Vec<String> 
     tokens
 }
 
-/// Computes term frequencies (TF) for each document, document frequencies (DF) for each term,
-/// and document lengths.
-pub fn compute_tf_df(documents: &[&str]) -> TfDfResult {
-    use rayon::prelude::*;
-
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    if debug_mode {
-        println!(
-            "DEBUG: Starting parallel TF-DF computation for {} documents",
-            documents.len()
-        );
-    }
-
-    // Process documents in parallel to compute term frequencies and document lengths
-    let doc_results: Vec<(HashMap<String, usize>, usize, HashSet<String>)> = documents
-        .par_iter()
-        .map(|doc| {
-            let tokens = tokenize(doc);
-            let mut tf = HashMap::new();
-
-            // Compute term frequency for the current document
-            for token in tokens.iter() {
-                *tf.entry(token.clone()).or_insert(0) += 1;
-            }
-
-            // Collect unique terms for document frequency calculation
-            let unique_terms: HashSet<String> = tf.keys().cloned().collect();
-
-            (tf, tokens.len(), unique_terms)
-        })
-        .collect();
-
-    // Extract term frequencies and document lengths
-    let mut term_frequencies = Vec::with_capacity(documents.len());
-    let mut document_lengths = Vec::with_capacity(documents.len());
-
-    // Compute document frequencies in parallel using adaptive chunking
-    // This balances parallelism with reduced contention
-    let min_chunk_size = (documents.len() / rayon::current_num_threads()).max(1);
-    let document_frequencies = doc_results
-        .par_iter()
-        .with_min_len(min_chunk_size) // Adaptive chunking based on document count
-        .map(|(_, _, unique_terms)| {
-            // Create a local document frequency map for this chunk
-            let mut local_df = HashMap::new();
-            for term in unique_terms {
-                *local_df.entry(term.clone()).or_insert(0) += 1;
-            }
-            local_df
-        })
-        .reduce(HashMap::new, |mut acc, local_df| {
-            // Merge local document frequency maps
-            for (term, count) in local_df {
-                *acc.entry(term).or_insert(0) += count;
-            }
-            acc
-        });
-
-    if debug_mode {
-        println!(
-            "DEBUG: Parallel DF computation completed with {} unique terms",
-            document_frequencies.len()
-        );
-    }
-
-    // Collect results in a deterministic order
-    for (tf, doc_len, _) in doc_results {
-        term_frequencies.push(tf);
-        document_lengths.push(doc_len);
-    }
-
-    if debug_mode {
-        println!("DEBUG: Parallel TF-DF computation completed");
-    }
-
-    TfDfResult {
-        term_frequencies,
-        document_frequencies,
-        document_lengths,
-    }
-}
-
 /// Computes the average document length.
 pub fn compute_avgdl(lengths: &[usize]) -> f64 {
     if lengths.is_empty() {
         return 0.0;
     }
-    let sum: usize = lengths.iter().sum();
-    sum as f64 / lengths.len() as f64
+    // Convert to f64 before summing to prevent potential integer overflow
+    // when dealing with very large documents or a large number of documents
+    let sum: f64 = lengths.iter().map(|&x| x as f64).sum();
+    sum / lengths.len() as f64
 }
 
 // -------------------------------------------------------------------------
@@ -308,7 +227,14 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
             if debug_mode {
                 eprintln!("DEBUG: parse_query failed: {:?}", e);
             }
-            // Return empty if parse fails, or handle how you want
+            // Instead of silently returning empty results, log a warning even in non-debug mode
+            // to ensure errors are visible and can be addressed
+            eprintln!(
+                "WARNING: Query parsing failed: {:?}. Returning empty results.",
+                e
+            );
+            // In a future version, consider changing the return type to Result<Vec<(usize, f64)>, QueryError>
+            // to properly propagate errors to the caller
             return vec![];
         }
     };
@@ -325,7 +251,10 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
         if debug_mode {
             println!("DEBUG: Tokenizing documents for ranking");
         }
-        compute_tf_df(params.documents)
+        // Tokenize documents on the fly
+        let tokenized_docs: Vec<Vec<String>> =
+            params.documents.iter().map(|doc| tokenize(doc)).collect();
+        compute_tf_df_from_tokenized(&tokenized_docs)
     };
 
     let n_docs = params.documents.len();
@@ -344,6 +273,10 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
     }
 
     // 4) BM25 parameters
+    // These values are standard defaults for BM25 as established in academic literature:
+    // k1=1.2 controls term frequency saturation (higher values give more weight to term frequency)
+    // b=0.75 controls document length normalization (higher values give more penalty to longer documents)
+    // See: Robertson, S. E., & Zaragoza, H. (2009). The Probabilistic Relevance Framework: BM25 and Beyond
     let k1 = 1.2;
     let b = 0.75;
 
@@ -393,6 +326,9 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
     // 6) Sort in descending order by BM25 score, with a stable secondary sort by document index
     filtered_docs.sort_by(|a, b| {
         // First compare by score (descending)
+        // Note: unwrap_or(Ordering::Equal) handles NaN cases by treating them as equal
+        // This ensures stable sorting even if a score calculation resulted in NaN
+        // (which shouldn't happen with our implementation, but provides robustness)
         match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
             Ordering::Equal => {
                 // If scores are equal, sort by document index (ascending) for stability
@@ -447,7 +383,18 @@ pub fn compute_tf_df_from_tokenized(tokenized_docs: &[Vec<String>]) -> TfDfResul
 
     // Compute document frequencies in parallel using adaptive chunking
     // This balances parallelism with reduced contention
-    let min_chunk_size = (tokenized_docs.len() / rayon::current_num_threads()).max(1);
+    // The chunk size calculation:
+    // - Divides total documents by available threads to distribute work evenly
+    // - Ensures at least 1 document per chunk to prevent empty chunks
+    // - Larger chunks reduce thread coordination overhead but may lead to load imbalance
+    // - Smaller chunks improve load balancing but increase synchronization costs
+    // Use checked_div to safely handle the case where there are no threads (which shouldn't happen)
+    // and ensure we always have at least one item per chunk
+    let min_chunk_size = tokenized_docs
+        .len()
+        .checked_div(rayon::current_num_threads())
+        .unwrap_or(1)
+        .max(1);
     let document_frequencies = doc_results
         .par_iter()
         .with_min_len(min_chunk_size) // Adaptive chunking based on document count
@@ -514,8 +461,11 @@ mod tests {
         // Only the first doc should match, because it has all 3 required words
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, 0); // doc index 0
-                                     // BM25 score is some positive float
+
+        // Verify score is positive and within expected range for BM25
+        // BM25 scores typically fall within certain ranges based on the algorithm's properties
         assert!(results[0].1 > 0.0);
+        assert!(results[0].1 < 10.0); // Upper bound based on typical BM25 behavior with small documents
     }
 
     #[test]
@@ -546,36 +496,43 @@ mod tests {
         // Only the first doc should match, because it has all 3 required words
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, 0); // doc index 0
-                                     // BM25 score is some positive float
+
+        // Verify score is positive and within expected range for BM25
         assert!(results[0].1 > 0.0);
+        assert!(results[0].1 < 10.0); // Upper bound based on typical BM25 behavior with small documents
     }
 
     #[test]
-    fn test_precomputed_idf_values() {
-        // Test that precomputed IDF values match manually calculated ones
-        let docs = vec!["api process load", "another random text with process"];
-        let n_docs = docs.len();
+    fn test_relative_bm25_scoring() {
+        // Test that documents with more matching terms get higher scores
+        let docs = vec![
+            "api process load data", // 4 matching terms
+            "api process load",      // 3 matching terms
+            "api process",           // 2 matching terms
+            "api",                   // 1 matching term
+        ];
+        let query = "api process load data"; // All terms are optional
 
-        // Tokenize and compute TF/DF
-        let tf_df_result = compute_tf_df(&docs);
+        let params = RankingParams {
+            documents: &docs,
+            query,
+            pre_tokenized: None,
+        };
 
-        // Create a query expression
-        let query = "+api +process";
-        let parsed_expr = crate::search::elastic_query::parse_query(query).unwrap();
+        let results = rank_documents(&params);
+        // All docs should match since all terms are optional
+        assert_eq!(results.len(), 4);
 
-        // Extract query terms and precompute IDF values
-        let query_terms = extract_query_terms(&parsed_expr);
-        let precomputed_idfs =
-            precompute_idfs(&query_terms, &tf_df_result.document_frequencies, n_docs);
+        // Verify that scores decrease as fewer terms match
+        // Doc with 4 matches should be first, then 3, then 2, then 1
+        assert_eq!(results[0].0, 0); // First doc (4 matches)
+        assert_eq!(results[1].0, 1); // Second doc (3 matches)
+        assert_eq!(results[2].0, 2); // Third doc (2 matches)
+        assert_eq!(results[3].0, 3); // Fourth doc (1 match)
 
-        // Manually calculate IDF for "api" (appears in 1 doc)
-        let api_df = *tf_df_result.document_frequencies.get("api").unwrap_or(&0) as f64;
-        let api_numerator = (n_docs as f64 - api_df) + 0.5;
-        let api_denominator = api_df + 0.5;
-        let expected_api_idf = (1.0 + (api_numerator / api_denominator)).ln();
-
-        // Compare with precomputed value
-        let precomputed_api_idf = *precomputed_idfs.get("api").unwrap_or(&0.0);
-        assert!((expected_api_idf - precomputed_api_idf).abs() < 1e-10);
+        // Verify that scores decrease as expected
+        assert!(results[0].1 > results[1].1); // 4 matches > 3 matches
+        assert!(results[1].1 > results[2].1); // 3 matches > 2 matches
+        assert!(results[2].1 > results[3].1); // 2 matches > 1 match
     }
 }

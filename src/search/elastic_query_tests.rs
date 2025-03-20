@@ -186,23 +186,23 @@ fn test_single_terms() {
 
 #[test]
 fn test_multiple_terms_implicit_or() {
-    // Simple two terms - now using AND for implicit combinations
+    // Simple two terms - using OR for implicit combinations
     assert_parse_eq(
         "foo bar",
-        Expr::And(Box::new(term("foo")), Box::new(term("bar")))
+        Expr::Or(Box::new(term("foo")), Box::new(term("bar")))
     );
 
-    // Required term with normal term - now using AND for implicit combinations
+    // Required term with normal term - using OR for implicit combinations
     assert_parse_eq(
         "+foo bar",
-        Expr::And(Box::new(required_term("foo")), Box::new(term("bar")))
+        Expr::Or(Box::new(required_term("foo")), Box::new(term("bar")))
     );
 
-    // Three terms with excluded - now using AND for implicit combinations
+    // Three terms with excluded - using OR for implicit combinations
     assert_parse_eq(
         "-foo bar baz",
-        Expr::And(
-            Box::new(Expr::And(
+        Expr::Or(
+            Box::new(Expr::Or(
                 Box::new(excluded_term("foo")),
                 Box::new(term("bar"))
             )),
@@ -257,12 +257,11 @@ fn test_explicit_boolean_operators() {
             Box::new(excluded_term("bar"))
         )
     );
-
-    // Implicit AND with OR
+    // Implicit OR with explicit OR
     assert_parse_eq(
         "foo bar OR baz",
         Expr::Or(
-            Box::new(Expr::And(
+            Box::new(Expr::Or(
                 Box::new(term("foo")),
                 Box::new(term("bar"))
             )),
@@ -291,7 +290,7 @@ fn test_parentheses() {
     // Complex group with prefixes
     assert_parse_eq(
         "(+foo -bar baz)",
-        Expr::And(
+        Expr::Or(
             Box::new(Expr::And(
                 Box::new(required_term("foo")),
                 Box::new(excluded_term("bar"))
@@ -395,7 +394,7 @@ fn test_mixed_prefixes_and_operators() {
         }
         
         // Check the left side structure
-        if let Expr::And(left_left, left_right) = *left {
+        if let Expr::Or(left_left, left_right) = *left {
             assert_eq!(*left_right, term("baz"));
             
             // The first part should be And with the new implementation
@@ -406,7 +405,7 @@ fn test_mixed_prefixes_and_operators() {
                 panic!("Expected And expression for left_left");
             }
         } else {
-            panic!("Expected And expression for left side");
+            panic!("Expected Or expression for left side");
         }
     } else {
         panic!("Expected And expression");
@@ -438,10 +437,10 @@ fn test_edge_cases() {
     // Unknown symbols
     assert_parse_fails("foo & bar");
     
-    // Trailing tokens are treated as implicit AND
+    // Trailing tokens are treated as implicit OR
     assert_parse_eq(
         "(foo) some_extra",
-        Expr::And(Box::new(term("foo")), Box::new(term("extra")))  // Changed "some_extra" to "extra"
+        Expr::Or(Box::new(term("foo")), Box::new(term("extra")))  // Changed "some_extra" to "extra"
     );
     
     // Empty parentheses
@@ -496,6 +495,32 @@ fn test_deeply_nested_expressions() {
             ))
         )
     );
+}
+
+#[test]
+fn test_stop_word_removal() {
+    // Test that stop words like "type" are properly removed from queries
+    // "type" is a programming stop word, so "JWT AND type" should be parsed as just "JWT"
+    let result = parse_query_test("JWT AND type").unwrap();
+    
+    // The result should be a Term with just "JWT" as the keyword
+    match result {
+        Expr::Term { keywords, .. } => {
+            assert_eq!(keywords.len(), 1);
+            assert_eq!(keywords[0], "jwt");
+        },
+        Expr::And(left, _) => {
+            // If it's an AND expression, the right side should be empty
+            match *left {
+                Expr::Term { keywords, .. } => {
+                    assert_eq!(keywords.len(), 1);
+                    assert_eq!(keywords[0], "jwt");
+                },
+                _ => panic!("Expected Term expression for left side"),
+            }
+        },
+        _ => panic!("Expected Term or And expression"),
+    }
 }
 
 #[test]

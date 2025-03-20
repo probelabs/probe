@@ -543,10 +543,10 @@ impl Parser {
                 // Otherwise (Ident, QuotedString, LParen) => implicit combos
                 Token::Ident(_) | Token::QuotedString(_) | Token::LParen => {
                     let right = self.parse_factor()?;
-                    // Always use AND for implicit combinations (standard Elasticsearch behavior)
-                    left = Expr::And(Box::new(left), Box::new(right));
+                    // Use OR for implicit combinations (space-separated terms) - Elasticsearch standard behavior
+                    left = Expr::Or(Box::new(left), Box::new(right));
                     if debug_mode {
-                        println!("DEBUG: implicit AND => {:?}", left);
+                        println!("DEBUG: implicit OR => {:?}", left);
                     }
                 }
                 _ => break,
@@ -606,8 +606,11 @@ impl Parser {
                 let mut expanded = Vec::new();
                 for kw in &keywords {
                     let splitted = custom_tokenize(kw);
-                    expanded.extend(splitted);
+                    // Only add non-empty terms
+                    expanded.extend(splitted.into_iter().filter(|s| !s.is_empty()));
                 }
+                // If all terms were filtered out (e.g., all were stop words),
+                // return an empty vector which will be handled properly
                 expanded
             };
 

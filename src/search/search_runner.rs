@@ -947,10 +947,21 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         );
     }
 
-    // Apply caching if session is provided - BEFORE applying limits
-    let fc_start = Instant::now();
+    // We'll move the caching step AFTER limiting results
     let mut skipped_count = early_skipped_count;
-    let mut filtered_results = final_results;
+    let filtered_results = final_results;
+
+    // Apply limits
+    let la_start = Instant::now();
+    if debug_mode {
+        println!("DEBUG: Starting limit application...");
+    }
+
+    // First apply limits to the results
+    let mut limited = apply_limits(filtered_results, *max_results, *max_bytes, *max_tokens);
+
+    // Then apply caching AFTER limiting results
+    let fc_start = Instant::now();
 
     if let Some(session_id) = effective_session {
         if debug_mode {
@@ -965,75 +976,29 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             }
         }
 
-        // Filter results using the cache
-        match cache::filter_results_with_cache(&filtered_results, session_id) {
-            Ok((cache_filtered_results, cached_skipped)) => {
+        // Filter results using the cache - but only to count skipped blocks, not to filter
+        match cache::filter_results_with_cache(&limited.results, session_id) {
+            Ok((_, cached_skipped)) => {
                 if debug_mode {
                     println!(
-                        "DEBUG: Final caching skipped {} cached blocks",
+                        "DEBUG: Final caching found {} cached blocks",
                         cached_skipped
                     );
                     println!(
                         "DEBUG: Total skipped (early + final): {}",
                         early_skipped_count + cached_skipped
                     );
-
-                    // Print some details about the filtered results
-                    if !cache_filtered_results.is_empty() {
-                        println!(
-                            "DEBUG: First filtered result: file={}, lines={:?}",
-                            cache_filtered_results[0].file, cache_filtered_results[0].lines
-                        );
-                    }
                 }
 
-                // Store the filtered results
-                filtered_results = cache_filtered_results;
-                skipped_count += cached_skipped; // Add to the early skipped count
+                skipped_count += cached_skipped;
             }
             Err(e) => {
                 // Log the error but continue without caching
-                eprintln!("Error applying cache: {}", e);
+                eprintln!("Error checking cache: {}", e);
             }
         }
-    }
 
-    let fc_duration = fc_start.elapsed();
-    timings.final_caching = Some(fc_duration);
-
-    if debug_mode && effective_session.is_some() {
-        println!(
-            "DEBUG: Final caching completed in {}",
-            format_duration(fc_duration)
-        );
-    }
-
-    // Apply limits
-    let la_start = Instant::now();
-    if debug_mode {
-        println!("DEBUG: Starting limit application...");
-    }
-
-    let mut limited = apply_limits(filtered_results, *max_results, *max_bytes, *max_tokens);
-    limited.cached_blocks_skipped = if skipped_count > 0 {
-        Some(skipped_count)
-    } else {
-        None
-    };
-
-    let la_duration = la_start.elapsed();
-    timings.limit_application = Some(la_duration);
-
-    if debug_mode {
-        println!(
-            "DEBUG: Limit application completed in {} - Final result count: {}",
-            format_duration(la_duration),
-            limited.results.len()
-        );
-    }
-
-    // Update the cache with the limited results (before merging)
-    if let Some(session_id) = effective_session {
+        // Update the cache with the limited results
         if let Err(e) = cache::add_results_to_cache(&limited.results, session_id) {
             eprintln!("Error adding results to cache: {}", e);
         }
@@ -1045,6 +1010,34 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 eprintln!("Error printing updated cache: {}", e);
             }
         }
+    }
+
+    // Set the cached blocks skipped count
+    limited.cached_blocks_skipped = if skipped_count > 0 {
+        Some(skipped_count)
+    } else {
+        None
+    };
+
+    let fc_duration = fc_start.elapsed();
+    timings.final_caching = Some(fc_duration);
+
+    if debug_mode && effective_session.is_some() {
+        println!(
+            "DEBUG: Final caching completed in {}",
+            format_duration(fc_duration)
+        );
+    }
+
+    let la_duration = la_start.elapsed();
+    timings.limit_application = Some(la_duration);
+
+    if debug_mode {
+        println!(
+            "DEBUG: Limit application completed in {} - Final result count: {}",
+            format_duration(la_duration),
+            limited.results.len()
+        );
     }
 
     // Optional block merging - AFTER initial caching

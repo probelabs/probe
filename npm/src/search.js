@@ -77,8 +77,8 @@ export async function search(options) {
 
 	// Set default maxTokens if not provided
 	if (!options.maxTokens) {
-		options.maxTokens = 40000;
-		cliArgs.push('--max-tokens', '40000');
+		options.maxTokens = 10000;
+		cliArgs.push('--max-tokens', '10000');
 	}
 
 	// Add session ID from environment variable if not provided in options

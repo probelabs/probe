@@ -162,14 +162,54 @@ try {
   process.exit(1);
 }
 
-// Track token usage for monitoring (very approximate)
+// Track token usage for monitoring
 let totalRequestTokens = 0;
 let totalResponseTokens = 0;
+let toolTokenUsage = {
+  request: 0,
+  response: 0
+};
 
-// Simple token counter function (very approximate)
+// Import tiktoken at the top level
+import { get_encoding } from 'tiktoken';
+
+// Initialize tokenizer
+let tokenizer;
+try {
+  tokenizer = get_encoding('cl100k_base');
+} catch (error) {
+  console.warn('Could not initialize tiktoken, falling back to approximate token counting');
+}
+
+// Token counter function using tiktoken if available
 function countTokens(text) {
-  // Rough approximation: 1 token ≈ 4 characters for English text
-  return Math.ceil(text.length / 4);
+  if (tokenizer) {
+    try {
+      return tokenizer.encode(text).length;
+    } catch (error) {
+      // Fallback to a simple approximation (1 token ≈ 4 characters)
+      return Math.ceil(text.length / 4);
+    }
+  } else {
+    // Fallback to a simple approximation (1 token ≈ 4 characters)
+    return Math.ceil(text.length / 4);
+  }
+}
+
+// Function to extract token usage from tool results
+function extractTokenUsage(result) {
+  if (typeof result === 'string') {
+    // Try to extract token usage information from the result string
+    const tokenUsageMatch = result.match(/Token Usage:\s+Request tokens: (\d+)\s+Response tokens: (\d+)\s+Total tokens: (\d+)/);
+    if (tokenUsageMatch) {
+      return {
+        request: parseInt(tokenUsageMatch[1], 10),
+        response: parseInt(tokenUsageMatch[2], 10),
+        total: parseInt(tokenUsageMatch[3], 10)
+      };
+    }
+  }
+  return null;
 }
 
 // Function to format the AI response
@@ -204,13 +244,33 @@ async function startChat() {
       console.log(chalk.yellow('Goodbye!'));
       break;
     } else if (message.toLowerCase() === 'usage') {
-      console.log(chalk.cyan('Token Usage (approximate):'));
-      console.log(chalk.cyan(`  Request tokens: ${totalRequestTokens}`));
-      console.log(chalk.cyan(`  Response tokens: ${totalResponseTokens}`));
-      console.log(chalk.cyan(`  Total tokens: ${totalRequestTokens + totalResponseTokens}`));
+      // Calculate total tokens including tool usage
+      const totalRequest = totalRequestTokens + toolTokenUsage.request;
+      const totalResponse = totalResponseTokens + toolTokenUsage.response;
+      const total = totalRequest + totalResponse;
+
+      console.log(chalk.cyan('Token Usage:'));
+      console.log(chalk.cyan(`  Request tokens: ${totalRequest}`));
+      console.log(chalk.cyan(`  Response tokens: ${totalResponse}`));
+      console.log(chalk.cyan(`  Total tokens: ${total}`));
+
+      if (toolTokenUsage.request > 0 || toolTokenUsage.response > 0) {
+        console.log(chalk.cyan('\nTool Usage Breakdown:'));
+        console.log(chalk.cyan(`  Tool request tokens: ${toolTokenUsage.request}`));
+        console.log(chalk.cyan(`  Tool response tokens: ${toolTokenUsage.response}`));
+        console.log(chalk.cyan(`  Tool total tokens: ${toolTokenUsage.request + toolTokenUsage.response}`));
+      }
+
       continue;
     } else if (message.toLowerCase() === 'clear') {
       history = [];
+      // Reset token usage
+      totalRequestTokens = 0;
+      totalResponseTokens = 0;
+      toolTokenUsage = {
+        request: 0,
+        response: 0
+      };
       sessionId = randomUUID();
       console.log(chalk.yellow('Chat history cleared'));
       console.log(chalk.blue(`New session ID: ${sessionId}`));
@@ -280,11 +340,26 @@ async function startChat() {
       const responseTokens = countTokens(result.text);
       totalResponseTokens += responseTokens;
 
-      // Log tool usage
+      // Log tool usage and extract token information
       if (result.toolCalls && result.toolCalls.length > 0) {
         console.log('Tool was used:', result.toolCalls.length, 'times');
+
         result.toolCalls.forEach((call, index) => {
           console.log(`Tool call ${index + 1}:`, call.name);
+
+          // Extract token usage from tool results
+          if (call.result) {
+            const tokenUsage = extractTokenUsage(call.result);
+            if (tokenUsage) {
+              // Add to tool token usage
+              toolTokenUsage.request += tokenUsage.request;
+              toolTokenUsage.response += tokenUsage.response;
+
+              if (process.env.DEBUG === 'true' || process.env.DEBUG === '1') {
+                console.log(chalk.gray(`  Tool ${call.name} token usage: ${tokenUsage.request} req, ${tokenUsage.response} resp, ${tokenUsage.total} total`));
+              }
+            }
+          }
         });
       }
 
@@ -295,6 +370,24 @@ async function startChat() {
       console.log(chalk.green('Assistant:'));
       console.log(formatResponse(result.text));
       console.log(); // Add a blank line for readability
+
+      // Display token usage after each response
+      const responseTokensFormatted = responseTokens.toLocaleString();
+      const totalRequestFormatted = (totalRequestTokens + toolTokenUsage.request).toLocaleString();
+      const totalResponseFormatted = (totalResponseTokens + toolTokenUsage.response).toLocaleString();
+      const totalTokensFormatted = (totalRequestTokens + totalResponseTokens + toolTokenUsage.request + toolTokenUsage.response).toLocaleString();
+
+      console.log(chalk.gray(`Token Usage: ${responseTokensFormatted} (this response) | ${totalTokensFormatted} (total)`));
+
+      // Show detailed breakdown in debug mode
+      if (process.env.DEBUG === 'true' || process.env.DEBUG === '1') {
+        console.log(chalk.gray(`  Request: ${totalRequestFormatted} | Response: ${totalResponseFormatted}`));
+        if (toolTokenUsage.request > 0 || toolTokenUsage.response > 0) {
+          console.log(chalk.gray(`  Tool usage: ${(toolTokenUsage.request + toolTokenUsage.response).toLocaleString()}`));
+        }
+      }
+
+      console.log(); // Add another blank line after token usage
     } catch (error) {
       // Stop the spinner and show the error
       spinner.stop();

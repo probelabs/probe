@@ -14,18 +14,18 @@ import { searchSchema, querySchema, extractSchema, searchDescription, queryDescr
  * 
  * @param {Object} [options] - Configuration options
  * @param {string} [options.sessionId] - Session ID for caching search results
- * @param {number} [options.maxTokens=40000] - Default max tokens
+ * @param {number} [options.maxTokens=10000] - Default max tokens
  * @param {boolean} [options.debug=false] - Enable debug logging
  * @returns {Object} Configured search tool
  */
 export const searchTool = (options = {}) => {
-	const { sessionId, maxTokens = 40000, debug = false } = options;
+	const { sessionId, maxTokens = 10000, debug = false } = options;
 
 	return tool({
 		name: 'search',
 		description: searchDescription,
 		parameters: searchSchema,
-		execute: async ({ query: searchQuery, path, exact, allow_tests, maxResults, maxTokens: paramMaxTokens }) => {
+		execute: async ({ query: searchQuery, path, exact, allow_tests, maxTokens: paramMaxTokens }) => {
 			try {
 				// Use parameter maxTokens if provided, otherwise use the default
 				const effectiveMaxTokens = paramMaxTokens || maxTokens;
@@ -40,7 +40,6 @@ export const searchTool = (options = {}) => {
 					exact,
 					allow_tests,
 					json: false,
-					maxResults,
 					maxTokens: effectiveMaxTokens,
 					session: sessionId // Pass session ID if provided
 				});

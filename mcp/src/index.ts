@@ -187,8 +187,8 @@ class ProbeServer {
               },
               maxTokens: {
                 type: 'number',
-                description: 'Maximum total tokens in code content to return (for AI usage). Default: 40000',
-                default: 40000
+                description: 'Maximum total tokens in code content to return (for AI usage). Default: 10000',
+                default: 10000
               },
               allowTests: {
                 type: 'boolean',
@@ -470,14 +470,46 @@ class ProbeServer {
         format: args.format
       };
       
-      console.log("Executing extract with options:", JSON.stringify({
-        path: options.path,
-        files: options.files
-      }));
-      
       // Call extract with the complete options object
       try {
+        // Track request size for token usage
+        const requestSize = JSON.stringify(args).length;
+        const requestTokens = Math.ceil(requestSize / 4); // Approximate token count
+        
+        // Execute the extract command
         const result = await extract(options);
+        
+        // Parse the result to extract token information if available
+        let responseTokens = 0;
+        let totalTokens = 0;
+        
+        // Try to extract token information from the result
+        if (typeof result === 'string') {
+          const tokenMatch = result.match(/Total tokens returned: (\d+)/);
+          if (tokenMatch && tokenMatch[1]) {
+            responseTokens = parseInt(tokenMatch[1], 10);
+            totalTokens = requestTokens + responseTokens;
+          }
+          
+          // Remove spinner debug output lines
+          const cleanedLines = result.split('\n').filter(line =>
+            !line.match(/^⠙|^⠹|^⠧|^⠇|^⠏/) &&
+            !line.includes('Thinking...Extract:') &&
+            !line.includes('Extract results:')
+          );
+          
+          // Add token usage information if not already present
+          if (!result.includes('Token Usage:')) {
+            cleanedLines.push('');
+            cleanedLines.push('Token Usage:');
+            cleanedLines.push(`  Request tokens: ${requestTokens}`);
+            cleanedLines.push(`  Response tokens: ${responseTokens}`);
+            cleanedLines.push(`  Total tokens: ${totalTokens}`);
+          }
+          
+          return cleanedLines.join('\n');
+        }
+        
         return result;
       } catch (error: any) {
         console.error(`Error extracting:`, error);

@@ -222,23 +222,6 @@ If you don't know the answer or can't find relevant information, be honest about
             }
           });
         }
-      } else {
-        // Check if this is likely a code-related question that should have used tools
-        const isCodeQuestion = message.includes('code') ||
-          message.includes('function') ||
-          message.includes('how does') ||
-          message.includes('what is') ||
-          message.includes('where is') ||
-          message.includes('find') ||
-          message.includes('show me');
-
-        if (isCodeQuestion) {
-          console.log(`[WARNING] AI did not call tools for a likely code-related question: "${message}"`);
-
-          if (this.debug) {
-            console.log(`[DEBUG] Response without tool call: ${responseText}`);
-          }
-        }
       }
 
       return responseText;

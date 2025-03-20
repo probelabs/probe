@@ -55,13 +55,6 @@ export async function extract(options) {
 		cliArgs.push(escapeString(file));
 	}
 
-	// Create a single log record with all extract parameters
-	let logMessage = `Extract: files=${options.files.length} [${options.files.join(', ')}]`;
-	if (options.contextLines) logMessage += ` contextLines=${options.contextLines}`;
-	if (options.format) logMessage += ` format=${options.format}`;
-	if (options.allowTests) logMessage += " allowTests=true";
-	console.log(logMessage);
-
 	// Execute command
 	const command = `${binaryPath} extract ${cliArgs.join(' ')}`;
 
@@ -72,31 +65,52 @@ export async function extract(options) {
 			console.error(`stderr: ${stderr}`);
 		}
 
-		// Count extracted code blocks
-		let blockCount = 0;
+		// Parse the output to extract token usage information
+		let tokenUsage = {
+			requestTokens: options.files.join(' ').length / 4, // Approximate token count for the request
+			responseTokens: 0,
+			totalTokens: 0
+		};
 
-		// Try to count code blocks from stdout
-		const lines = stdout.split('\n');
-		for (const line of lines) {
-			if (line.startsWith('```') && !line.includes('```language')) {
-				blockCount++;
+		// Try to extract token information from the output
+		if (stdout.includes('Total tokens returned:')) {
+			const tokenMatch = stdout.match(/Total tokens returned: (\d+)/);
+			if (tokenMatch && tokenMatch[1]) {
+				tokenUsage.responseTokens = parseInt(tokenMatch[1], 10);
+				tokenUsage.totalTokens = tokenUsage.requestTokens + tokenUsage.responseTokens;
 			}
 		}
 
-		// Log the number of extracted code blocks
-		console.log(`Extract results: ${blockCount} code blocks extracted`);
+		// Add token usage information to the output
+		let output = stdout;
+
+		// Add token usage information at the end if not already present
+		if (!output.includes('Token Usage:')) {
+			output += `\nToken Usage:\n  Request tokens: ${tokenUsage.requestTokens}\n  Response tokens: ${tokenUsage.responseTokens}\n  Total tokens: ${tokenUsage.totalTokens}\n`;
+		}
 
 		// Parse JSON if requested or if format is json
 		if (options.json || options.format === 'json') {
 			try {
-				return JSON.parse(stdout);
+				const jsonOutput = JSON.parse(stdout);
+
+				// Add token usage to JSON output
+				if (!jsonOutput.token_usage) {
+					jsonOutput.token_usage = {
+						request_tokens: tokenUsage.requestTokens,
+						response_tokens: tokenUsage.responseTokens,
+						total_tokens: tokenUsage.totalTokens
+					};
+				}
+
+				return jsonOutput;
 			} catch (error) {
 				console.error('Error parsing JSON output:', error);
-				return stdout; // Fall back to string output
+				return output; // Fall back to string output with token usage
 			}
 		}
 
-		return stdout;
+		return output;
 	} catch (error) {
 		// Enhance error message with command details
 		const errorMessage = `Error executing extract command: ${error.message}\nCommand: ${command}`;
