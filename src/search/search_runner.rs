@@ -1,8 +1,8 @@
+use crate::search::file_list_cache;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use crate::search::file_list_cache;
 // No need for term_exceptions import
 
 use crate::models::{LimitedSearchResults, SearchResult};
@@ -326,14 +326,15 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             println!("DEBUG: Starting filename matching...");
         }
         // Find all files that match our patterns by filename, along with the terms that matched
-        let filename_matches: HashMap<PathBuf, HashSet<usize>> = file_list_cache::find_matching_filenames(
-            path,
-            queries,
-            &all_files,
-            custom_ignores,
-            *allow_tests,
-            &plan.term_indices,
-        )?;
+        let filename_matches: HashMap<PathBuf, HashSet<usize>> =
+            file_list_cache::find_matching_filenames(
+                path,
+                queries,
+                &all_files,
+                custom_ignores,
+                *allow_tests,
+                &plan.term_indices,
+            )?;
 
         if debug_mode {
             println!(
@@ -1025,7 +1026,7 @@ fn search_file_with_combined_pattern(
                             .or_insert_with(HashSet::new)
                             .insert(line_number + 1); // Convert to 1-based line numbers
                     }
-                    
+
                     // Note: We removed the break statement here to process all matching groups
                     // in a capture, not just the first one. This fixes the search instability issue.
                 }

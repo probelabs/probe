@@ -1,7 +1,7 @@
 use crate::search::elastic_query::Expr;
 use crate::search::tokenization;
-use rust_stemmers::{Algorithm, Stemmer};
 use ahash::{AHashMap, AHashSet};
+use rust_stemmers::{Algorithm, Stemmer};
 use std::sync::OnceLock;
 
 // Replace standard collections with ahash versions for better performance
@@ -53,42 +53,45 @@ pub fn preprocess_text_with_filename(text: &str, filename: &str) -> Vec<String> 
 /// and document lengths.
 pub fn compute_tf_df(documents: &[&str]) -> TfDfResult {
     use rayon::prelude::*;
-    
+
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    
+
     if debug_mode {
-        println!("DEBUG: Starting parallel TF-DF computation for {} documents", documents.len());
+        println!(
+            "DEBUG: Starting parallel TF-DF computation for {} documents",
+            documents.len()
+        );
     }
-    
+
     // Process documents in parallel to compute term frequencies and document lengths
     let doc_results: Vec<(HashMap<String, usize>, usize, HashSet<String>)> = documents
         .par_iter()
         .map(|doc| {
             let tokens = tokenize(doc);
             let mut tf = HashMap::new();
-            
+
             // Compute term frequency for the current document
             for token in tokens.iter() {
                 *tf.entry(token.clone()).or_insert(0) += 1;
             }
-            
+
             // Collect unique terms for document frequency calculation
             let unique_terms: HashSet<String> = tf.keys().cloned().collect();
-            
+
             (tf, tokens.len(), unique_terms)
         })
         .collect();
-    
+
     // Extract term frequencies and document lengths
     let mut term_frequencies = Vec::with_capacity(documents.len());
     let mut document_lengths = Vec::with_capacity(documents.len());
-    
+
     // Compute document frequencies in parallel using adaptive chunking
     // This balances parallelism with reduced contention
     let min_chunk_size = (documents.len() / rayon::current_num_threads()).max(1);
     let document_frequencies = doc_results
         .par_iter()
-        .with_min_len(min_chunk_size)  // Adaptive chunking based on document count
+        .with_min_len(min_chunk_size) // Adaptive chunking based on document count
         .map(|(_, _, unique_terms)| {
             // Create a local document frequency map for this chunk
             let mut local_df = HashMap::new();
@@ -97,27 +100,27 @@ pub fn compute_tf_df(documents: &[&str]) -> TfDfResult {
             }
             local_df
         })
-        .reduce(
-            || HashMap::new(),
-            |mut acc, local_df| {
-                // Merge local document frequency maps
-                for (term, count) in local_df {
-                    *acc.entry(term).or_insert(0) += count;
-                }
-                acc
+        .reduce(HashMap::new, |mut acc, local_df| {
+            // Merge local document frequency maps
+            for (term, count) in local_df {
+                *acc.entry(term).or_insert(0) += count;
             }
-        );
-    
+            acc
+        });
+
     if debug_mode {
-        println!("DEBUG: Parallel DF computation completed with {} unique terms", document_frequencies.len());
+        println!(
+            "DEBUG: Parallel DF computation completed with {} unique terms",
+            document_frequencies.len()
+        );
     }
-    
+
     // Collect results in a deterministic order
     for (tf, doc_len, _) in doc_results {
         term_frequencies.push(tf);
         document_lengths.push(doc_len);
     }
-    
+
     if debug_mode {
         println!("DEBUG: Parallel TF-DF computation completed");
     }
@@ -162,7 +165,7 @@ pub struct PrecomputedBm25Params<'a> {
 pub fn extract_query_terms(expr: &Expr) -> HashSet<String> {
     use Expr::*;
     let mut terms = HashSet::new();
-    
+
     match expr {
         Term { keywords, .. } => {
             terms.extend(keywords.iter().cloned());
@@ -172,19 +175,24 @@ pub fn extract_query_terms(expr: &Expr) -> HashSet<String> {
             terms.extend(extract_query_terms(right));
         }
     }
-    
+
     terms
 }
 
 /// Precomputes IDF values for a set of terms
-pub fn precompute_idfs(terms: &HashSet<String>, dfs: &HashMap<String, usize>, n_docs: usize) -> HashMap<String, f64> {
+pub fn precompute_idfs(
+    terms: &HashSet<String>,
+    dfs: &HashMap<String, usize>,
+    n_docs: usize,
+) -> HashMap<String, f64> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    
+
     if debug_mode {
         println!("DEBUG: Precomputing IDF values for {} terms", terms.len());
     }
-    
-    terms.iter()
+
+    terms
+        .iter()
         .filter_map(|term| {
             let df = *dfs.get(term).unwrap_or(&0);
             if df > 0 {
@@ -209,7 +217,7 @@ fn bm25_single_token_optimized(token: &str, params: &PrecomputedBm25Params) -> f
 
     // Use precomputed IDF value
     let idf = *params.idfs.get(token).unwrap_or(&0.0);
-    
+
     let tf_part = (freq_in_doc * (params.k1 + 1.0))
         / (freq_in_doc
             + params.k1 * (1.0 - params.b + params.b * (params.doc_len as f64 / params.avgdl)));
@@ -289,7 +297,7 @@ pub fn score_expr_bm25_optimized(expr: &Expr, params: &PrecomputedBm25Params) ->
 pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
     use rayon::prelude::*;
     use std::cmp::Ordering;
-    
+
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // 1) Parse the user query into an AST (Expr)
@@ -325,10 +333,14 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
 
     // 3) Extract query terms and precompute IDF values
     let query_terms = extract_query_terms(&parsed_expr);
-    let precomputed_idfs = precompute_idfs(&query_terms, &tf_df_result.document_frequencies, n_docs);
-    
+    let precomputed_idfs =
+        precompute_idfs(&query_terms, &tf_df_result.document_frequencies, n_docs);
+
     if debug_mode {
-        println!("DEBUG: Precomputed IDF values for {} unique query terms", precomputed_idfs.len());
+        println!(
+            "DEBUG: Precomputed IDF values for {} unique query terms",
+            precomputed_idfs.len()
+        );
     }
 
     // 4) BM25 parameters
@@ -336,7 +348,10 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
     let b = 0.75;
 
     if debug_mode {
-        println!("DEBUG: Starting parallel document scoring for {} documents", n_docs);
+        println!(
+            "DEBUG: Starting parallel document scoring for {} documents",
+            n_docs
+        );
     }
 
     // 5) Compute BM25 bool logic score for each doc in parallel
@@ -360,7 +375,7 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
 
             // Evaluate doc's BM25 sum or None if excluded using optimized function
             let bm25_score_opt = score_expr_bm25_optimized(&parsed_expr, &precomputed_bm25_params);
-            
+
             (i, bm25_score_opt)
         })
         .collect();
@@ -388,7 +403,10 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
     });
 
     if debug_mode {
-        println!("DEBUG: Sorted {} matching documents by score", filtered_docs.len());
+        println!(
+            "DEBUG: Sorted {} matching documents by score",
+            filtered_docs.len()
+        );
     }
 
     filtered_docs
@@ -398,41 +416,41 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
 /// and document lengths from pre-tokenized content.
 pub fn compute_tf_df_from_tokenized(tokenized_docs: &[Vec<String>]) -> TfDfResult {
     use rayon::prelude::*;
-    
+
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    
+
     if debug_mode {
         println!("DEBUG: Starting parallel TF-DF computation from pre-tokenized content for {} documents", tokenized_docs.len());
     }
-    
+
     // Process documents in parallel to compute term frequencies and document lengths
     let doc_results: Vec<(HashMap<String, usize>, usize, HashSet<String>)> = tokenized_docs
         .par_iter()
         .map(|tokens| {
             let mut tf = HashMap::new();
-            
+
             // Compute term frequency for the current document
             for token in tokens.iter() {
                 *tf.entry(token.clone()).or_insert(0) += 1;
             }
-            
+
             // Collect unique terms for document frequency calculation
             let unique_terms: HashSet<String> = tf.keys().cloned().collect();
-            
+
             (tf, tokens.len(), unique_terms)
         })
         .collect();
-    
+
     // Extract term frequencies and document lengths
     let mut term_frequencies = Vec::with_capacity(tokenized_docs.len());
     let mut document_lengths = Vec::with_capacity(tokenized_docs.len());
-    
+
     // Compute document frequencies in parallel using adaptive chunking
     // This balances parallelism with reduced contention
     let min_chunk_size = (tokenized_docs.len() / rayon::current_num_threads()).max(1);
     let document_frequencies = doc_results
         .par_iter()
-        .with_min_len(min_chunk_size)  // Adaptive chunking based on document count
+        .with_min_len(min_chunk_size) // Adaptive chunking based on document count
         .map(|(_, _, unique_terms)| {
             // Create a local document frequency map for this chunk
             let mut local_df = HashMap::new();
@@ -441,27 +459,27 @@ pub fn compute_tf_df_from_tokenized(tokenized_docs: &[Vec<String>]) -> TfDfResul
             }
             local_df
         })
-        .reduce(
-            || HashMap::new(),
-            |mut acc, local_df| {
-                // Merge local document frequency maps
-                for (term, count) in local_df {
-                    *acc.entry(term).or_insert(0) += count;
-                }
-                acc
+        .reduce(HashMap::new, |mut acc, local_df| {
+            // Merge local document frequency maps
+            for (term, count) in local_df {
+                *acc.entry(term).or_insert(0) += count;
             }
-        );
-    
+            acc
+        });
+
     if debug_mode {
-        println!("DEBUG: Parallel DF computation completed with {} unique terms", document_frequencies.len());
+        println!(
+            "DEBUG: Parallel DF computation completed with {} unique terms",
+            document_frequencies.len()
+        );
     }
-    
+
     // Collect results in a deterministic order
     for (tf, doc_len, _) in doc_results {
         term_frequencies.push(tf);
         document_lengths.push(doc_len);
     }
-    
+
     if debug_mode {
         println!("DEBUG: Parallel TF-DF computation from pre-tokenized content completed");
     }
@@ -531,30 +549,31 @@ mod tests {
                                      // BM25 score is some positive float
         assert!(results[0].1 > 0.0);
     }
-    
+
     #[test]
     fn test_precomputed_idf_values() {
         // Test that precomputed IDF values match manually calculated ones
         let docs = vec!["api process load", "another random text with process"];
         let n_docs = docs.len();
-        
+
         // Tokenize and compute TF/DF
         let tf_df_result = compute_tf_df(&docs);
-        
+
         // Create a query expression
         let query = "+api +process";
         let parsed_expr = crate::search::elastic_query::parse_query(query).unwrap();
-        
+
         // Extract query terms and precompute IDF values
         let query_terms = extract_query_terms(&parsed_expr);
-        let precomputed_idfs = precompute_idfs(&query_terms, &tf_df_result.document_frequencies, n_docs);
-        
+        let precomputed_idfs =
+            precompute_idfs(&query_terms, &tf_df_result.document_frequencies, n_docs);
+
         // Manually calculate IDF for "api" (appears in 1 doc)
         let api_df = *tf_df_result.document_frequencies.get("api").unwrap_or(&0) as f64;
         let api_numerator = (n_docs as f64 - api_df) + 0.5;
         let api_denominator = api_df + 0.5;
         let expected_api_idf = (1.0 + (api_numerator / api_denominator)).ln();
-        
+
         // Compare with precomputed value
         let precomputed_api_idf = *precomputed_idfs.get("api").unwrap_or(&0.0);
         assert!((expected_api_idf - precomputed_api_idf).abs() < 1e-10);
