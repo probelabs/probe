@@ -8,7 +8,7 @@ RUSTC := rustc
 # Detect operating system
 ifeq ($(OS),Windows_NT)
     # Windows - use PowerShell syntax for setting environment variables
-    SET_ENV := powershell -Command "$$env:RUST_BACKTRACE='1';"
+    SET_ENV := set "RUST_BACKTRACE=1" &&
 else
     # Unix-like systems (Linux, macOS)
     SET_ENV := RUST_BACKTRACE=1
