@@ -8,7 +8,7 @@ mod file_paths;
 mod formatter;
 mod processor;
 mod prompts;
-mod symbol_finder;
+pub mod symbol_finder;
 
 // Re-export public functions
 #[allow(unused_imports)]
@@ -464,7 +464,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         }
     });
     // Move results and errors from the mutex containers
-    let results = Arc::try_unwrap(results_mutex)
+    let mut results = Arc::try_unwrap(results_mutex)
         .expect("Failed to unwrap results mutex")
         .into_inner()
         .expect("Failed to get inner results");
@@ -473,6 +473,114 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         .expect("Failed to unwrap errors mutex")
         .into_inner()
         .expect("Failed to get inner errors");
+
+    // Deduplicate results based on file path and line range
+    if debug_mode {
+        println!("[DEBUG] Before deduplication: {} results", results.len());
+    }
+
+    // First, sort results by file path and then by line range size (largest first)
+    // This ensures that parent blocks (like classes) are processed before nested blocks (like methods)
+    results.sort_by(|a, b| {
+        let a_file = &a.file;
+        let b_file = &b.file;
+
+        // First compare by file path
+        if a_file != b_file {
+            return a_file.cmp(b_file);
+        }
+
+        // Then compare by range size (largest first)
+        let a_range_size = a.lines.1 - a.lines.0;
+        let b_range_size = b.lines.1 - b.lines.0;
+        b_range_size.cmp(&a_range_size)
+    });
+
+    if debug_mode {
+        println!("[DEBUG] Sorted results by file path and range size");
+        for (i, result) in results.iter().enumerate() {
+            println!(
+                "[DEBUG] Result {}: {} (lines {}-{}, size: {})",
+                i,
+                result.file,
+                result.lines.0,
+                result.lines.1,
+                result.lines.1 - result.lines.0
+            );
+        }
+    }
+
+    // Now deduplicate, keeping track of which results to retain
+    let mut to_retain = vec![true; results.len()];
+
+    // Use a HashSet to track exact duplicates
+    let mut seen_exact = HashSet::new();
+
+    for i in 0..results.len() {
+        if !to_retain[i] {
+            continue; // Skip already marked for removal
+        }
+
+        let result_i = &results[i];
+        let file_i = &result_i.file;
+        let start_i = result_i.lines.0;
+        let end_i = result_i.lines.1;
+
+        // Check for exact duplicates first
+        let key = format!("{}:{}:{}", file_i, start_i, end_i);
+        if !seen_exact.insert(key) {
+            to_retain[i] = false;
+            if debug_mode {
+                println!(
+                    "[DEBUG] Removing exact duplicate: {} (lines {}-{})",
+                    file_i, start_i, end_i
+                );
+            }
+            continue;
+        }
+
+        // Then check for nested duplicates
+        for j in i + 1..results.len() {
+            if !to_retain[j] {
+                continue; // Skip already marked for removal
+            }
+
+            let result_j = &results[j];
+            let file_j = &result_j.file;
+            let start_j = result_j.lines.0;
+            let end_j = result_j.lines.1;
+
+            // Only compare results from the same file
+            if file_i != file_j {
+                continue;
+            }
+
+            // Check if result_j is contained within result_i
+            if start_j >= start_i && end_j <= end_i {
+                to_retain[j] = false;
+                if debug_mode {
+                    println!("[DEBUG] Removing nested duplicate: {} (lines {}-{}) contained within (lines {}-{})",
+                             file_j, start_j, end_j, start_i, end_i);
+                }
+            }
+        }
+    }
+
+    // Apply the retention filter
+    let original_len = results.len();
+    let mut new_results = Vec::with_capacity(original_len);
+
+    for i in 0..original_len {
+        if to_retain[i] {
+            new_results.push(results[i].clone());
+        }
+    }
+
+    results = new_results;
+
+    if debug_mode {
+        println!("[DEBUG] After deduplication: {} results", results.len());
+    }
 
     if debug_mode {
         println!("\n[DEBUG] ===== Extraction Summary =====");

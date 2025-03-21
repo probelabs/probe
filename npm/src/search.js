@@ -96,7 +96,7 @@ export async function search(options) {
 	if (options.exact) logMessage += " exact=true";
 	if (options.allowTests) logMessage += " allowTests=true";
 	if (options.session) logMessage += ` session=${options.session}`;
-	console.log(logMessage);
+	console.error(logMessage);
 
 	if (queries.length > 0) {
 		// Escape the query to handle special characters
@@ -159,7 +159,7 @@ export async function search(options) {
 		if (bytesCount > 0) {
 			resultsMessage += `, ${bytesCount} bytes`;
 		}
-		console.log(resultsMessage);
+		console.error(resultsMessage);
 
 		// Parse JSON if requested
 		if (options.json) {

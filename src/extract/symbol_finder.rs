@@ -33,12 +33,32 @@ pub fn find_symbol_in_file(
 ) -> Result<SearchResult> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
+    // Check if the symbol contains a dot, indicating a nested symbol path
+    let symbol_parts: Vec<&str> = symbol.split('.').collect();
+    let is_nested_symbol = symbol_parts.len() > 1;
+
+    // For nested symbols, we'll use the AST-based approach directly
+    // The find_symbol_node function already handles nested symbols
+
     if debug_mode {
         println!("\n[DEBUG] ===== Symbol Search =====");
-        println!(
-            "[DEBUG] Searching for symbol '{}' in file {:?}",
-            symbol, path
-        );
+        if is_nested_symbol {
+            println!(
+                "[DEBUG] Searching for nested symbol '{}' in file {:?}",
+                symbol, path
+            );
+            println!(
+                "[DEBUG] Symbol parts: {:?} (parent: '{}', child: '{}')",
+                symbol_parts,
+                symbol_parts[0],
+                symbol_parts.last().unwrap_or(&"")
+            );
+        } else {
+            println!(
+                "[DEBUG] Searching for symbol '{}' in file {:?}",
+                symbol, path
+            );
+        }
         println!("[DEBUG] Content size: {} bytes", content.len());
         println!("[DEBUG] Line count: {}", content.lines().count());
     }
@@ -87,19 +107,26 @@ pub fn find_symbol_in_file(
     // Function to recursively search for a node with the given symbol name
     fn find_symbol_node<'a>(
         node: tree_sitter::Node<'a>,
-        symbol: &str,
+        symbol_parts: &[&str],
         language_impl: &dyn crate::language::language_trait::LanguageImpl,
         content: &'a [u8],
         debug_mode: bool,
     ) -> Option<tree_sitter::Node<'a>> {
+        // If we're looking for a nested symbol (e.g., "Class.method"), we need to:
+        // 1. First find the parent symbol (e.g., "Class")
+        // 2. Then search within that node for the child symbol (e.g., "method")
+        let current_symbol = symbol_parts[0];
+        let is_nested = symbol_parts.len() > 1;
+
         // Check if this node is an acceptable parent (function, struct, class, etc.)
         if language_impl.is_acceptable_parent(&node) {
             if debug_mode {
                 println!(
-                    "[DEBUG] Checking node type '{}' at {}:{}",
+                    "[DEBUG] Checking node type '{}' at {}:{} for symbol '{}'",
                     node.kind(),
                     node.start_position().row + 1,
-                    node.start_position().column + 1
+                    node.start_position().column + 1,
+                    current_symbol
                 );
             }
 
@@ -116,26 +143,185 @@ pub fn find_symbol_in_file(
                         if debug_mode {
                             println!(
                                 "[DEBUG] Found identifier: '{}' (looking for '{}')",
-                                name, symbol
+                                name, current_symbol
                             );
                         }
 
-                        if name == symbol {
-                            if debug_mode {
-                                println!(
-                                    "[DEBUG] Found symbol '{}' in node type '{}'",
-                                    symbol,
-                                    node.kind()
-                                );
-                                println!(
-                                    "[DEBUG] Symbol location: {}:{} - {}:{}",
-                                    node.start_position().row + 1,
-                                    node.start_position().column + 1,
-                                    node.end_position().row + 1,
-                                    node.end_position().column + 1
-                                );
+                        if name == current_symbol {
+                            if is_nested {
+                                // If this is a nested symbol, we found the parent
+                                // Now we need to search for the child within this node
+                                if debug_mode {
+                                    println!(
+                                        "[DEBUG] Found parent symbol '{}' in node type '{}', now searching for child '{}'",
+                                        current_symbol,
+                                        node.kind(),
+                                        symbol_parts[1]
+                                    );
+                                }
+
+                                // First, check if there's a direct method definition with this name
+                                let mut direct_method_cursor = node.walk();
+                                for direct_child in node.children(&mut direct_method_cursor) {
+                                    if direct_child.kind() == "method_definition" {
+                                        let mut method_cursor = direct_child.walk();
+                                        for method_child in
+                                            direct_child.children(&mut method_cursor)
+                                        {
+                                            if method_child.kind() == "property_identifier" {
+                                                if let Ok(method_name) =
+                                                    method_child.utf8_text(content)
+                                                {
+                                                    if debug_mode {
+                                                        println!(
+                                                            "[DEBUG] Found direct method: '{}' (looking for '{}')",
+                                                            method_name, symbol_parts[1]
+                                                        );
+                                                    }
+
+                                                    if method_name == symbol_parts[1] {
+                                                        if debug_mode {
+                                                            println!(
+                                                                "[DEBUG] Found child symbol '{}' as direct method_definition",
+                                                                symbol_parts[1]
+                                                            );
+                                                            println!(
+                                                                "[DEBUG] Symbol location: {}:{} - {}:{}",
+                                                                direct_child.start_position().row + 1,
+                                                                direct_child.start_position().column + 1,
+                                                                direct_child.end_position().row + 1,
+                                                                direct_child.end_position().column + 1
+                                                            );
+                                                        }
+                                                        return Some(direct_child);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Look for any node that might contain the child symbol
+                                let mut child_cursor = node.walk();
+                                for child_node in node.children(&mut child_cursor) {
+                                    if debug_mode {
+                                        println!(
+                                            "[DEBUG] Checking child node type '{}' for symbol '{}'",
+                                            child_node.kind(),
+                                            symbol_parts[1]
+                                        );
+                                    }
+
+                                    // Check if this node is the child symbol we're looking for
+                                    if language_impl.is_acceptable_parent(&child_node) {
+                                        // Try to extract the name of this node
+                                        let mut subcursor = child_node.walk();
+                                        for subchild in child_node.children(&mut subcursor) {
+                                            if subchild.kind() == "identifier"
+                                                || subchild.kind() == "property_identifier"
+                                                || subchild.kind() == "field_identifier"
+                                                || subchild.kind() == "type_identifier"
+                                                || subchild.kind() == "method_definition"
+                                            {
+                                                // For method_definition, we need to get the property_identifier child
+                                                if subchild.kind() == "method_definition" {
+                                                    let mut method_cursor = subchild.walk();
+                                                    for method_child in
+                                                        subchild.children(&mut method_cursor)
+                                                    {
+                                                        if method_child.kind()
+                                                            == "property_identifier"
+                                                        {
+                                                            if let Ok(method_name) =
+                                                                method_child.utf8_text(content)
+                                                            {
+                                                                if debug_mode {
+                                                                    println!(
+                                                                        "[DEBUG] Found method: '{}' (looking for '{}')",
+                                                                        method_name, symbol_parts[1]
+                                                                    );
+                                                                }
+
+                                                                if method_name == symbol_parts[1] {
+                                                                    if debug_mode {
+                                                                        println!(
+                                                                            "[DEBUG] Found child symbol '{}' in method_definition",
+                                                                            symbol_parts[1]
+                                                                        );
+                                                                        println!(
+                                                                            "[DEBUG] Symbol location: {}:{} - {}:{}",
+                                                                            subchild.start_position().row + 1,
+                                                                            subchild.start_position().column + 1,
+                                                                            subchild.end_position().row + 1,
+                                                                            subchild.end_position().column + 1
+                                                                        );
+                                                                    }
+                                                                    return Some(subchild);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    continue;
+                                                }
+                                                if let Ok(name) = subchild.utf8_text(content) {
+                                                    if debug_mode {
+                                                        println!(
+                                                            "[DEBUG] Found identifier: '{}' (looking for '{}')",
+                                                            name, symbol_parts[1]
+                                                        );
+                                                    }
+
+                                                    if name == symbol_parts[1] {
+                                                        if debug_mode {
+                                                            println!(
+                                                                "[DEBUG] Found child symbol '{}' in node type '{}'",
+                                                                symbol_parts[1],
+                                                                child_node.kind()
+                                                            );
+                                                            println!(
+                                                                "[DEBUG] Symbol location: {}:{} - {}:{}",
+                                                                child_node.start_position().row + 1,
+                                                                child_node.start_position().column + 1,
+                                                                child_node.end_position().row + 1,
+                                                                child_node.end_position().column + 1
+                                                            );
+                                                        }
+                                                        return Some(child_node);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Recursively search in this child node
+                                    if let Some(found) = find_symbol_node(
+                                        child_node,
+                                        &symbol_parts[1..],
+                                        language_impl,
+                                        content,
+                                        debug_mode,
+                                    ) {
+                                        return Some(found);
+                                    }
+                                }
+                            } else {
+                                // If this is a simple symbol, we found it
+                                if debug_mode {
+                                    println!(
+                                        "[DEBUG] Found symbol '{}' in node type '{}'",
+                                        current_symbol,
+                                        node.kind()
+                                    );
+                                    println!(
+                                        "[DEBUG] Symbol location: {}:{} - {}:{}",
+                                        node.start_position().row + 1,
+                                        node.start_position().column + 1,
+                                        node.end_position().row + 1,
+                                        node.end_position().column + 1
+                                    );
+                                }
+                                return Some(node);
                             }
-                            return Some(node);
                         }
                     }
 
@@ -150,24 +336,51 @@ pub fn find_symbol_in_file(
                             if subchild.kind() == "identifier" {
                                 if let Ok(name) = subchild.utf8_text(content) {
                                     if debug_mode {
-                                        println!("[DEBUG] Found function identifier: '{}' (looking for '{}')", name, symbol);
+                                        println!("[DEBUG] Found function identifier: '{}' (looking for '{}')", name, current_symbol);
                                     }
 
-                                    if name == symbol {
-                                        if debug_mode {
-                                            println!(
-                                                "[DEBUG] Found symbol '{}' in function_declarator",
-                                                symbol
-                                            );
-                                            println!(
-                                                "[DEBUG] Symbol location: {}:{} - {}:{}",
-                                                node.start_position().row + 1,
-                                                node.start_position().column + 1,
-                                                node.end_position().row + 1,
-                                                node.end_position().column + 1
-                                            );
+                                    if name == current_symbol {
+                                        if is_nested {
+                                            // If this is a nested symbol, we found the parent
+                                            // Now we need to search for the child within this node
+                                            if debug_mode {
+                                                println!(
+                                                    "[DEBUG] Found parent symbol '{}' in function_declarator, now searching for child '{}'",
+                                                    current_symbol,
+                                                    symbol_parts[1]
+                                                );
+                                            }
+
+                                            // Recursively search for the child symbol within this node
+                                            let mut child_cursor = node.walk();
+                                            for child_node in node.children(&mut child_cursor) {
+                                                if let Some(found) = find_symbol_node(
+                                                    child_node,
+                                                    &symbol_parts[1..],
+                                                    language_impl,
+                                                    content,
+                                                    debug_mode,
+                                                ) {
+                                                    return Some(found);
+                                                }
+                                            }
+                                        } else {
+                                            // If this is a simple symbol, we found it
+                                            if debug_mode {
+                                                println!(
+                                                    "[DEBUG] Found symbol '{}' in function_declarator",
+                                                    current_symbol
+                                                );
+                                                println!(
+                                                    "[DEBUG] Symbol location: {}:{} - {}:{}",
+                                                    node.start_position().row + 1,
+                                                    node.start_position().column + 1,
+                                                    node.end_position().row + 1,
+                                                    node.end_position().column + 1
+                                                );
+                                            }
+                                            return Some(node);
                                         }
-                                        return Some(node);
                                     }
                                 }
                             }
@@ -180,7 +393,8 @@ pub fn find_symbol_in_file(
         // Recursively search in children
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if let Some(found) = find_symbol_node(child, symbol, language_impl, content, debug_mode)
+            if let Some(found) =
+                find_symbol_node(child, symbol_parts, language_impl, content, debug_mode)
             {
                 return Some(found);
             }
@@ -192,7 +406,7 @@ pub fn find_symbol_in_file(
     // Search for the symbol in the AST
     if let Some(found_node) = find_symbol_node(
         root_node,
-        symbol,
+        &symbol_parts,
         language_impl.as_ref(),
         content.as_bytes(),
         debug_mode,
@@ -274,16 +488,33 @@ pub fn find_symbol_in_file(
     let lines: Vec<&str> = content.lines().collect();
     let mut found_line = None;
 
+    // For nested symbols, we'll try to find lines that contain all parts
+    // This is a simple fallback and may not be as accurate as AST parsing
+    let search_terms = if is_nested_symbol {
+        // For nested symbols, we'll look for lines containing all parts
+        if debug_mode {
+            println!(
+                "[DEBUG] Using fallback search for nested symbol: looking for lines containing all parts"
+            );
+        }
+        symbol_parts.to_vec()
+    } else {
+        vec![symbol]
+    };
+
     if debug_mode {
         println!(
-            "[DEBUG] Performing text search for '{}' across {} lines",
-            symbol,
+            "[DEBUG] Performing text search for '{:?}' across {} lines",
+            search_terms,
             lines.len()
         );
     }
 
     for (i, line) in lines.iter().enumerate() {
-        if line.contains(symbol) {
+        // Check if the line contains all search terms
+        let found = search_terms.iter().all(|term| line.contains(term));
+
+        if found {
             found_line = Some(i + 1); // 1-indexed line number
             if debug_mode {
                 println!(

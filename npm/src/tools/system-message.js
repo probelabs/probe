@@ -23,6 +23,7 @@ Search Guidelines:
 - Avoid vague terms: combine keywords for precision.
 - Do not limit by max results. Repeat the same search request multiple times, if you want to read more records (it has built-in pagination)
 - Search automatically caches results, if search returned 0 results, maybe its already in your history.
+- If search tool returns you sessionID in response, you can use that sessionID in next search request to get cached results.
 
 Execution Flow:
 1. Interpret user role and intent.

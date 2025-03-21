@@ -31,7 +31,7 @@ export const searchTool = (options = {}) => {
 				const effectiveMaxTokens = paramMaxTokens || maxTokens;
 
 				if (debug) {
-					console.log(`Executing search with query: "${searchQuery}", path: "${path || '.'}", session: ${sessionId || 'none'}`);
+					console.error(`Executing search with query: "${searchQuery}", path: "${path || '.'}", session: ${sessionId || 'none'}`);
 				}
 
 				const results = await search({
@@ -70,7 +70,7 @@ export const queryTool = (options = {}) => {
 		execute: async ({ pattern, path, language, allow_tests }) => {
 			try {
 				if (debug) {
-					console.log(`Executing query with pattern: "${pattern}", path: "${path || '.'}", language: ${language || 'auto'}`);
+					console.error(`Executing query with pattern: "${pattern}", path: "${path || '.'}", language: ${language || 'auto'}`);
 				}
 
 				const results = await query({
@@ -107,7 +107,7 @@ export const extractTool = (options = {}) => {
 		execute: async ({ file_path, line, end_line, allow_tests, context_lines, format }) => {
 			try {
 				if (debug) {
-					console.log(`Executing extract with file: "${file_path}", context lines: ${context_lines || 10}`);
+					console.error(`Executing extract with file: "${file_path}", context lines: ${context_lines || 10}`);
 				}
 
 				// Parse file_path to handle line numbers and symbol names

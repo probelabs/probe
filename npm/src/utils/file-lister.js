@@ -37,8 +37,8 @@ export async function listFilesByLevel(options) {
 		try {
 			return await listFilesUsingGit(directory, maxFiles);
 		} catch (error) {
-			console.warn(`Warning: Failed to use git ls-files: ${error.message}`);
-			console.warn('Falling back to manual file listing');
+			console.error(`Warning: Failed to use git ls-files: ${error.message}`);
+			console.error('Falling back to manual file listing');
 		}
 	}
 
@@ -129,7 +129,7 @@ async function listFilesByLevelManually(directory, maxFiles, respectGitignore) {
 				queue.push({ dir: subdirPath, level: level + 1 });
 			}
 		} catch (error) {
-			console.warn(`Warning: Could not read directory ${dir}: ${error.message}`);
+			console.error(`Warning: Could not read directory ${dir}: ${error.message}`);
 		}
 	}
 
@@ -156,7 +156,7 @@ function loadGitignorePatterns(directory) {
 			.map(line => line.trim())
 			.filter(line => line && !line.startsWith('#'));
 	} catch (error) {
-		console.warn(`Warning: Could not read .gitignore: ${error.message}`);
+		console.error(`Warning: Could not read .gitignore: ${error.message}`);
 		return [];
 	}
 }
