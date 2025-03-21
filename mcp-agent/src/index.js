@@ -17,6 +17,7 @@ import config from './config.js';
 function parseArgs() {
 	const args = process.argv.slice(2);
 	for (let i = 0; i < args.length; i++) {
+		// Handle --provider flag
 		if (args[i] === '--provider' && i + 1 < args.length) {
 			const provider = args[i + 1].toLowerCase();
 			if (['anthropic', 'openai', 'google'].includes(provider)) {
@@ -26,6 +27,19 @@ function parseArgs() {
 				console.error(`Invalid provider: ${provider}. Must be one of: anthropic, openai, google`);
 				process.exit(1);
 			}
+		}
+		// Handle shorthand flags
+		else if (args[i] === '--google') {
+			process.env.FORCE_PROVIDER = 'google';
+			console.error('Forcing provider: google');
+		}
+		else if (args[i] === '--openai') {
+			process.env.FORCE_PROVIDER = 'openai';
+			console.error('Forcing provider: openai');
+		}
+		else if (args[i] === '--anthropic') {
+			process.env.FORCE_PROVIDER = 'anthropic';
+			console.error('Forcing provider: anthropic');
 		}
 	}
 }
@@ -140,7 +154,14 @@ class ProbeAgentServer {
 				}
 
 				// Process the query using the AI agent
-				const result = await this.agent.processQuery(args.query, args.path);
+				// If path is not provided, use the current working directory
+				const searchPath = args.path || process.cwd();
+
+				// Log the search path for debugging
+				console.error(`Using search path: ${searchPath}`);
+				console.error(`Current working directory: ${process.cwd()}`);
+
+				const result = await this.agent.processQuery(args.query, searchPath);
 
 				// Get token usage
 				const tokenUsage = this.agent.getTokenUsage();

@@ -55,6 +55,16 @@ for (const folder of allowedFolders) {
 	}
 }
 
+// Log environment variables for debugging
+console.error('Environment variables:');
+console.error(`- ANTHROPIC_API_KEY: ${process.env.ANTHROPIC_API_KEY ? '✓ Present' : '✗ Missing'}`);
+console.error(`- OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? '✓ Present' : '✗ Missing'}`);
+console.error(`- GOOGLE_API_KEY: ${process.env.GOOGLE_API_KEY ? '✓ Present' : '✗ Missing'}`);
+console.error(`- FORCE_PROVIDER: ${process.env.FORCE_PROVIDER || '(not set)'}`);
+console.error(`- MODEL_NAME: ${process.env.MODEL_NAME || '(not set)'}`);
+console.error(`- DEBUG: ${process.env.DEBUG || '(not set)'}`);
+console.error(`- Current working directory: ${process.cwd()}`);
+
 // Create configuration object
 export const config = configSchema.parse({
 	anthropicApiKey: process.env.ANTHROPIC_API_KEY,

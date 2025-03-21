@@ -48,7 +48,8 @@ export class ProbeAgent {
 		// Configure tools with the session ID
 		const configOptions = {
 			sessionId: this.sessionId,
-			debug: config.debug
+			debug: config.debug,
+			defaultPath: process.cwd() // Set default path to current working directory
 		};
 
 		// Create configured tool instances
@@ -69,29 +70,44 @@ export class ProbeAgent {
 	 * Initialize the AI model based on available API keys and forced provider setting
 	 */
 	initializeModel() {
+		console.error('Initializing AI model...');
+
 		// Check if a specific provider is forced
 		if (config.forceProvider) {
+			console.error(`Provider forced to: ${config.forceProvider}`);
+
 			if (config.forceProvider === 'anthropic' && config.anthropicApiKey) {
+				console.error('Using Anthropic provider as forced');
 				this.initializeAnthropicModel();
 				return;
 			} else if (config.forceProvider === 'openai' && config.openaiApiKey) {
+				console.error('Using OpenAI provider as forced');
 				this.initializeOpenAIModel();
 				return;
 			} else if (config.forceProvider === 'google' && config.googleApiKey) {
+				console.error('Using Google provider as forced');
 				this.initializeGoogleModel();
 				return;
 			}
+
+			console.error(`WARNING: Forced provider "${config.forceProvider}" selected but API key is missing!`);
 			// If we get here, the validation in config.js should have already thrown an error
 		}
 
 		// If no provider is forced, use the first available API key
+		console.error('No provider forced, selecting based on available API keys');
+
 		if (config.anthropicApiKey) {
+			console.error('Using Anthropic provider (API key available)');
 			this.initializeAnthropicModel();
 		} else if (config.openaiApiKey) {
+			console.error('Using OpenAI provider (API key available)');
 			this.initializeOpenAIModel();
 		} else if (config.googleApiKey) {
+			console.error('Using Google provider (API key available)');
 			this.initializeGoogleModel();
 		} else {
+			console.error('ERROR: No API keys available!');
 			throw new Error('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.');
 		}
 	}
@@ -108,8 +124,12 @@ export class ProbeAgent {
 		this.model = config.modelName || config.defaultAnthropicModel;
 		this.apiType = 'anthropic';
 
+		// Always log when using Anthropic API, regardless of debug mode
+		console.error(`Using Anthropic API with model: ${this.model}`);
+
 		if (config.debug) {
-			console.error(`[DEBUG] Using Anthropic API with model: ${this.model}`);
+			console.error(`[DEBUG] Anthropic API Key: ${config.anthropicApiKey ? '✓ Present' : '✗ Missing'}`);
+			console.error(`[DEBUG] Anthropic API URL: ${config.anthropicApiUrl}`);
 		}
 	}
 
@@ -125,8 +145,12 @@ export class ProbeAgent {
 		this.model = config.modelName || config.defaultOpenAIModel;
 		this.apiType = 'openai';
 
+		// Always log when using OpenAI API, regardless of debug mode
+		console.error(`Using OpenAI API with model: ${this.model}`);
+
 		if (config.debug) {
-			console.error(`[DEBUG] Using OpenAI API with model: ${this.model}`);
+			console.error(`[DEBUG] OpenAI API Key: ${config.openaiApiKey ? '✓ Present' : '✗ Missing'}`);
+			console.error(`[DEBUG] OpenAI API URL: ${config.openaiApiUrl}`);
 		}
 	}
 
@@ -142,8 +166,12 @@ export class ProbeAgent {
 		this.model = config.modelName || config.defaultGoogleModel;
 		this.apiType = 'google';
 
+		// Always log when using Google API, regardless of debug mode
+		console.error(`Using Google API with model: ${this.model}`);
+
 		if (config.debug) {
-			console.error(`[DEBUG] Using Google API with model: ${this.model}`);
+			console.error(`[DEBUG] Google API Key: ${config.googleApiKey ? '✓ Present' : '✗ Missing'}`);
+			console.error(`[DEBUG] Google API URL: ${config.googleApiUrl}`);
 		}
 	}
 
@@ -163,7 +191,7 @@ If you don't know the answer or can't find relevant information, be honest about
 			const folderList = config.allowedFolders.map(f => `"${f}"`).join(', ');
 			systemMessage += `\n\nThe following folders are configured for code search: ${folderList}. When using search, specify one of these folders in the path argument.`;
 		} else {
-			systemMessage += `\n\nNo specific folders are configured for code search, so the current directory will be used by default. You can omit the path parameter in your search calls, or use '.' to explicitly search in the current directory.`;
+			systemMessage += `\n\nNo specific folders are configured for code search, so the current working directory (${process.cwd()}) will be used by default. You can omit the path parameter in your search calls, or use '.' to explicitly search in the current directory.`;
 		}
 
 		systemMessage += `\n\nREQUIRMENT: At the end of message respond with all the files and dependencies, even small ones, which were required to answer this question, for example: file#symbol or file:start-end. If symbol, like function or struct is known, use symbol syntax, when range fits better, respond with line range. Be very detailed, and prefer symbol syntax. Use absolute paths.
@@ -180,13 +208,14 @@ Examples:
 
 		// Add file list information if available
 		try {
-			const searchDirectory = config.allowedFolders.length > 0 ? config.allowedFolders[0] : '.';
+			const searchDirectory = config.allowedFolders.length > 0 ? config.allowedFolders[0] : process.cwd();
 			console.error(`Generating file list for ${searchDirectory}...`);
 
 			const files = await listFilesByLevel({
 				directory: searchDirectory,
 				maxFiles: 100,
-				respectGitignore: true
+				respectGitignore: true,
+				cwd: process.cwd() // Explicitly set the current working directory
 			});
 
 			if (files.length > 0) {
@@ -207,11 +236,12 @@ Examples:
 	 */
 	async processQuery(query, path) {
 		try {
+			// If path is not provided, use the current working directory
+			const searchPath = path || process.cwd();
+
 			if (config.debug) {
 				console.error(`[DEBUG] Received user query: ${query}`);
-				if (path) {
-					console.error(`[DEBUG] Path context: ${path}`);
-				}
+				console.error(`[DEBUG] Path context: ${searchPath}`);
 			}
 
 			// Count tokens in the user query
@@ -243,7 +273,11 @@ Examples:
 				model: this.provider(this.model),
 				messages: messages,
 				system: await this.getSystemMessage(),
-				tools: this.tools,
+				tools: this.tools.map(tool => {
+					// Clone the tool and add the search path to its configuration
+					const toolConfig = { ...tool.config, defaultPath: searchPath };
+					return { ...tool, config: toolConfig };
+				}),
 				maxSteps: 15,
 				temperature: 0.7,
 				maxTokens: config.maxTokens
@@ -375,7 +409,8 @@ Examples:
 		// Reconfigure tools with the new session ID
 		const configOptions = {
 			sessionId: this.sessionId,
-			debug: config.debug
+			debug: config.debug,
+			defaultPath: process.cwd() // Set default path to current working directory
 		};
 
 		// Create new configured tool instances
