@@ -1,7 +1,7 @@
 // AI agent implementation
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
-import { createGoogle } from '@ai-sdk/google';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText } from 'ai';
 import { randomUUID } from 'crypto';
 import { get_encoding } from 'tiktoken';
@@ -135,7 +135,7 @@ export class ProbeAgent {
 	 */
 	initializeGoogleModel() {
 		// Initialize Google provider
-		this.provider = createGoogle({
+		this.provider = createGoogleGenerativeAI({
 			apiKey: config.googleApiKey,
 			baseURL: config.googleApiUrl,
 		});

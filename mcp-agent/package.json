@@ -33,7 +33,7 @@
   "license": "ISC",
   "dependencies": {
     "@ai-sdk/anthropic": "^1.1.15",
-    "@ai-sdk/google": "^1.1.15",
+    "@ai-sdk/google": "^1.2.0",
     "@ai-sdk/openai": "^1.1.15",
     "@buger/probe": "*",
     "@modelcontextprotocol/sdk": "^1.6.0",
