@@ -199,7 +199,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // Handle session ID generation if session is provided but empty
     // For test runs, force session to None to disable caching
     let (effective_session, session_was_generated) = if let Some(s) = session {
-        if s.is_empty() {
+        if s.is_empty() || *s == "new" {
             // Check if we have a session ID in the environment variable
             if let Ok(env_session_id) = std::env::var("PROBE_SESSION_ID") {
                 if !env_session_id.is_empty() {
@@ -1103,7 +1103,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     if let Some(session_id) = effective_session {
         if session_was_generated {
             println!(
-                "Session ID: {} (generated - used it in future sessions for caching)",
+                "Session ID: {} (generated - ALWAYS USE IT in future sessions for caching)",
                 session_id
             );
         } else {

@@ -509,13 +509,14 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
         input.trim_matches(|c| c == '`' || c == '"')
     };
 
-    // Check if the input contains a symbol reference (file#symbol)
+    // Check if the input contains a symbol reference (file#symbol or file#parent.child)
     if let Some((file_part, symbol)) = cleaned_input.split_once('#') {
         // For symbol references, we don't have line numbers yet
         // We'll need to find the symbol in the file later
         let path = PathBuf::from(file_part);
         let is_test = is_test_file(&path);
         if allow_tests || !is_test {
+            // Symbol can be a simple name or a dot-separated path (e.g., "Class.method")
             results.push((path, None, None, Some(symbol.to_string()), None));
         }
         return results;

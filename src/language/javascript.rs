@@ -36,6 +36,9 @@ impl LanguageImpl for JavaScriptLanguage {
                 | "export_statement"
                 | "variable_declaration"
                 | "lexical_declaration"
+                | "property_identifier"  // Added for JavaScript method names
+                | "class_body"           // Added for JavaScript class body
+                | "class" // Added for JavaScript class
         )
     }
 

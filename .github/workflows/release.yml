@@ -143,6 +143,50 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  publish-mcp-agent:
+    name: Publish MCP Agent to npm
+    needs: publish-npm-package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: extract_version
+        run: |
+          # Remove 'v' prefix from tag (e.g., v1.0.0 -> 1.0.0)
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Extracted version: $VERSION"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          registry-url: "https://registry.npmjs.org/"
+          scope: "@buger"
+          token: ${{ secrets.NPM_TOKEN }} # Let setup-node handle authentication
+
+      - name: Install dependencies
+        run: cd mcp-agent && npm install
+
+      - name: Update package version and dependencies
+        run: |
+          cd mcp-agent
+          # Update version in package.json without git operations
+          npm version $VERSION --no-git-tag-version
+          # Update dependency on @buger/probe to use the specific version
+          npm pkg set dependencies."@buger/probe"="^$VERSION"
+          echo "Updated MCP Agent package.json to version $VERSION with @buger/probe dependency set to ^$VERSION"
+
+      - name: Build
+        run: cd mcp-agent && npm run build
+
+      - name: Publish to npm
+        run: cd mcp-agent && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   publish-mcp:
     name: Publish MCP to npm
     needs: publish-npm-package

@@ -67,7 +67,7 @@ export async function query(options) {
 	if (options.language) logMessage += ` language=${options.language}`;
 	if (options.maxResults) logMessage += ` maxResults=${options.maxResults}`;
 	if (options.allowTests) logMessage += " allowTests=true";
-	console.log(logMessage);
+	console.error(logMessage);
 
 	// Execute command
 	const command = `${binaryPath} query ${cliArgs.join(' ')}`;
@@ -91,7 +91,7 @@ export async function query(options) {
 		}
 
 		// Log the results count
-		console.log(`Query results: ${resultCount} matches`);
+		console.error(`Query results: ${resultCount} matches`);
 
 		// Parse JSON if requested or if format is json
 		if (options.json || options.format === 'json') {

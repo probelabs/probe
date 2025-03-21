@@ -1,0 +1,392 @@
+// AI agent implementation
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createGoogle } from '@ai-sdk/google';
+import { generateText } from 'ai';
+import { randomUUID } from 'crypto';
+import { get_encoding } from 'tiktoken';
+import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE, listFilesByLevel } from '@buger/probe';
+import config from './config.js';
+
+// Initialize tokenizer
+let tokenizer;
+try {
+	tokenizer = get_encoding('cl100k_base');
+} catch (error) {
+	console.warn('Could not initialize tiktoken, falling back to approximate token counting');
+}
+
+// Token counter function
+function countTokens(text) {
+	if (tokenizer) {
+		try {
+			return tokenizer.encode(text).length;
+		} catch (error) {
+			// Fallback to a simple approximation (1 token ≈ 4 characters)
+			return Math.ceil(text.length / 4);
+		}
+	} else {
+		// Fallback to a simple approximation (1 token ≈ 4 characters)
+		return Math.ceil(text.length / 4);
+	}
+}
+
+export class ProbeAgent {
+	constructor() {
+		// Initialize token counters
+		this.requestTokens = 0;
+		this.responseTokens = 0;
+		this.toolTokenUsage = { request: 0, response: 0 };
+
+		// Generate a unique session ID for this agent instance
+		this.sessionId = randomUUID();
+
+		if (config.debug) {
+			console.error(`[DEBUG] Generated session ID for agent: ${this.sessionId}`);
+		}
+
+		// Configure tools with the session ID
+		const configOptions = {
+			sessionId: this.sessionId,
+			debug: config.debug
+		};
+
+		// Create configured tool instances
+		this.tools = [
+			searchTool(configOptions),
+			queryTool(configOptions),
+			extractTool(configOptions)
+		];
+
+		// Initialize the AI model
+		this.initializeModel();
+
+		// Initialize chat history
+		this.history = [];
+	}
+
+	/**
+	 * Initialize the AI model based on available API keys and forced provider setting
+	 */
+	initializeModel() {
+		// Check if a specific provider is forced
+		if (config.forceProvider) {
+			if (config.forceProvider === 'anthropic' && config.anthropicApiKey) {
+				this.initializeAnthropicModel();
+				return;
+			} else if (config.forceProvider === 'openai' && config.openaiApiKey) {
+				this.initializeOpenAIModel();
+				return;
+			} else if (config.forceProvider === 'google' && config.googleApiKey) {
+				this.initializeGoogleModel();
+				return;
+			}
+			// If we get here, the validation in config.js should have already thrown an error
+		}
+
+		// If no provider is forced, use the first available API key
+		if (config.anthropicApiKey) {
+			this.initializeAnthropicModel();
+		} else if (config.openaiApiKey) {
+			this.initializeOpenAIModel();
+		} else if (config.googleApiKey) {
+			this.initializeGoogleModel();
+		} else {
+			throw new Error('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.');
+		}
+	}
+
+	/**
+	 * Initialize Anthropic model
+	 */
+	initializeAnthropicModel() {
+		// Initialize Anthropic provider
+		this.provider = createAnthropic({
+			apiKey: config.anthropicApiKey,
+			baseURL: config.anthropicApiUrl,
+		});
+		this.model = config.modelName || config.defaultAnthropicModel;
+		this.apiType = 'anthropic';
+
+		if (config.debug) {
+			console.error(`[DEBUG] Using Anthropic API with model: ${this.model}`);
+		}
+	}
+
+	/**
+	 * Initialize OpenAI model
+	 */
+	initializeOpenAIModel() {
+		// Initialize OpenAI provider
+		this.provider = createOpenAI({
+			apiKey: config.openaiApiKey,
+			baseURL: config.openaiApiUrl,
+		});
+		this.model = config.modelName || config.defaultOpenAIModel;
+		this.apiType = 'openai';
+
+		if (config.debug) {
+			console.error(`[DEBUG] Using OpenAI API with model: ${this.model}`);
+		}
+	}
+
+	/**
+	 * Initialize Google model
+	 */
+	initializeGoogleModel() {
+		// Initialize Google provider
+		this.provider = createGoogle({
+			apiKey: config.googleApiKey,
+			baseURL: config.googleApiUrl,
+		});
+		this.model = config.modelName || config.defaultGoogleModel;
+		this.apiType = 'google';
+
+		if (config.debug) {
+			console.error(`[DEBUG] Using Google API with model: ${this.model}`);
+		}
+	}
+
+	/**
+	 * Get the system message with instructions for the AI
+	 */
+	async getSystemMessage() {
+		// Use the default system message from the probe package as a base
+		let systemMessage = DEFAULT_SYSTEM_MESSAGE || `You are a helpful AI assistant that can search and analyze code repositories using the Probe tool.
+You have access to a code search tool that can help you find relevant code snippets.
+Always use the search tool first before attempting to answer questions about the codebase.
+When responding to questions about code, make sure to include relevant code snippets and explain them clearly.
+If you don't know the answer or can't find relevant information, be honest about it.`;
+
+		// Add folder information
+		if (config.allowedFolders.length > 0) {
+			const folderList = config.allowedFolders.map(f => `"${f}"`).join(', ');
+			systemMessage += `\n\nThe following folders are configured for code search: ${folderList}. When using search, specify one of these folders in the path argument.`;
+		} else {
+			systemMessage += `\n\nNo specific folders are configured for code search, so the current directory will be used by default. You can omit the path parameter in your search calls, or use '.' to explicitly search in the current directory.`;
+		}
+
+		systemMessage += `\n\nREQUIRMENT: At the end of message respond with all the files and dependencies, even small ones, which were required to answer this question, for example: file#symbol or file:start-end. If symbol, like function or struct is known, use symbol syntax, when range fits better, respond with line range. Be very detailed, and prefer symbol syntax. Use absolute paths.
+
+Examples:
+- /src/utils/parser.js#parseConfig - for a specific function
+- /src/models/User.js#User.authenticate - for a specific method
+- /src/controllers/auth.js:15-42 - for a specific code range
+- /package.json - for configuration files
+- /src/components/Button.tsx#ButtonProps - for TypeScript interfaces/types
+- /src/database/migrations/20230101_create_users.sql:5-10 - for database queries`;
+
+		console.error(systemMessage);
+
+		// Add file list information if available
+		try {
+			const searchDirectory = config.allowedFolders.length > 0 ? config.allowedFolders[0] : '.';
+			console.error(`Generating file list for ${searchDirectory}...`);
+
+			const files = await listFilesByLevel({
+				directory: searchDirectory,
+				maxFiles: 100,
+				respectGitignore: true
+			});
+
+			if (files.length > 0) {
+				systemMessage += `\n\nHere is a list of up to 100 files in the codebase (organized by directory depth):\n\n`;
+				systemMessage += files.map(file => `- ${file}`).join('\n');
+			}
+
+			console.error(`Added ${files.length} files to system message`);
+		} catch (error) {
+			console.warn(`Warning: Could not generate file list: ${error.message}`);
+		}
+
+		return systemMessage;
+	}
+
+	/**
+	 * Process a user query and get a response
+	 */
+	async processQuery(query, path) {
+		try {
+			if (config.debug) {
+				console.error(`[DEBUG] Received user query: ${query}`);
+				if (path) {
+					console.error(`[DEBUG] Path context: ${path}`);
+				}
+			}
+
+			// Count tokens in the user query
+			const queryTokens = countTokens(query);
+			this.requestTokens += queryTokens;
+
+			// Limit history to prevent token overflow
+			if (this.history.length > config.maxHistoryMessages) {
+				const historyStart = this.history.length - config.maxHistoryMessages;
+				this.history = this.history.slice(historyStart);
+
+				if (config.debug) {
+					console.error(`[DEBUG] Trimmed history to ${this.history.length} messages`);
+				}
+			}
+
+			// Prepare messages array
+			const messages = [
+				...this.history,
+				{ role: 'user', content: query }
+			];
+
+			if (config.debug) {
+				console.error(`[DEBUG] Sending ${messages.length} messages to model`);
+			}
+
+			// Configure generateText options
+			const generateOptions = {
+				model: this.provider(this.model),
+				messages: messages,
+				system: await this.getSystemMessage(),
+				tools: this.tools,
+				maxSteps: 15,
+				temperature: 0.7,
+				maxTokens: config.maxTokens
+			};
+
+			// Add API-specific options
+			if (this.apiType === 'anthropic' && this.model.includes('3-7')) {
+				generateOptions.experimental_thinking = {
+					enabled: true,
+					budget: 8000
+				};
+			} else if (this.apiType === 'google' && this.model.includes('gemini-1.5')) {
+				// Add any Google-specific options here if needed
+				generateOptions.temperature = 0.5; // Google models may need different temperature settings
+			}
+
+			// Generate response using AI model with tools
+			const result = await generateText(generateOptions);
+
+			// Extract the text content from the response
+			const responseText = result.text;
+
+			// Add the message and response to history
+			this.history.push({ role: 'user', content: query });
+			this.history.push({ role: 'assistant', content: responseText });
+
+			// Count tokens in the response
+			const responseTokens = countTokens(responseText);
+			this.responseTokens += responseTokens;
+
+			// Log tool usage if available
+			if (result.toolCalls && result.toolCalls.length > 0) {
+				console.error(`Tool was used: ${result.toolCalls.length} times`);
+
+				if (config.debug) {
+					result.toolCalls.forEach((call, index) => {
+						console.error(`[DEBUG] Tool call ${index + 1}: ${call.name}`);
+						if (call.args) {
+							console.error(`[DEBUG] Tool call ${index + 1} args:`, JSON.stringify(call.args, null, 2));
+						}
+						if (call.result) {
+							const resultPreview = typeof call.result === 'string'
+								? (call.result.length > 100 ? call.result.substring(0, 100) + '... (truncated)' : call.result)
+								: JSON.stringify(call.result, null, 2).substring(0, 100) + '... (truncated)';
+							console.error(`[DEBUG] Tool call ${index + 1} result preview: ${resultPreview}`);
+						}
+					});
+				}
+			}
+
+			// Add token usage information
+			const tokenUsage = {
+				request: this.requestTokens + this.toolTokenUsage.request,
+				response: this.responseTokens + this.toolTokenUsage.response,
+				total: this.requestTokens + this.responseTokens + this.toolTokenUsage.request + this.toolTokenUsage.response
+			};
+
+			// Format the response with token usage
+			const formattedResponse = `${responseText}\n\n---\nToken Usage: ${tokenUsage.total.toLocaleString()} tokens`;
+
+			// Use the extract command to extract code from the AI response
+			let extractedCode = '';
+			try {
+				// Import required modules
+				const { execSync } = await import('child_process');
+				const { writeFileSync, unlinkSync } = await import('fs');
+				const { join } = await import('path');
+
+				// Create a temporary file with the AI response
+				const tempFilePath = `/tmp/ai-response-${this.sessionId}.txt`;
+				writeFileSync(tempFilePath, responseText);
+
+				// Get the path to the probe binary
+				const probeBinPath = join(process.cwd(), 'npm', 'bin', 'probe');
+
+				// Execute the extract command on the response
+				const extractCommand = `${probeBinPath} extract -f ${tempFilePath}`;
+				console.error(`Executing extract command: ${extractCommand}`);
+
+				extractedCode = execSync(extractCommand, { encoding: 'utf-8' });
+
+				// Clean up the temporary file
+				unlinkSync(tempFilePath);
+
+				console.error(`Extract command output length: ${extractedCode.length} bytes`);
+			} catch (extractError) {
+				console.error('Error executing extract command:', extractError);
+				extractedCode = `Error executing extract command: ${extractError.message}`;
+			}
+
+			// Prepend the extracted code to the response
+			const finalResponse = `<code>${extractedCode}</code>\n\n${formattedResponse}`;
+
+			return finalResponse;
+		} catch (error) {
+			console.error('Error in processQuery:', error);
+			return `Error: ${error.message}`;
+		}
+	}
+
+	/**
+	 * Get the current token usage
+	 */
+	getTokenUsage() {
+		return {
+			request: this.requestTokens + this.toolTokenUsage.request,
+			response: this.responseTokens + this.toolTokenUsage.response,
+			total: this.requestTokens + this.responseTokens + this.toolTokenUsage.request + this.toolTokenUsage.response
+		};
+	}
+
+	/**
+	 * Get the session ID for this agent instance
+	 */
+	getSessionId() {
+		return this.sessionId;
+	}
+
+	/**
+	 * Reset the agent's history and token counters
+	 */
+	reset() {
+		this.history = [];
+		this.requestTokens = 0;
+		this.responseTokens = 0;
+		this.toolTokenUsage = { request: 0, response: 0 };
+		this.sessionId = randomUUID();
+
+		// Reconfigure tools with the new session ID
+		const configOptions = {
+			sessionId: this.sessionId,
+			debug: config.debug
+		};
+
+		// Create new configured tool instances
+		this.tools = [
+			searchTool(configOptions),
+			queryTool(configOptions),
+			extractTool(configOptions)
+		];
+
+		if (config.debug) {
+			console.error(`[DEBUG] Agent reset with new session ID: ${this.sessionId}`);
+		}
+	}
+}
