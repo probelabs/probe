@@ -437,6 +437,28 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                             }
 
                             results.push((pattern, HashSet::from([idx])));
+
+                            // Generate patterns for each token of the term to match AST tokenization
+                            let tokens = crate::search::tokenization::tokenize_and_stem(keyword);
+
+                            if debug_mode && tokens.len() > 1 {
+                                println!("DEBUG: Term '{}' tokenized into: {:?}", keyword, tokens);
+                            }
+
+                            // Generate a pattern for each token with the same term index
+                            for token in tokens {
+                                let token_pattern = regex_escape(&token);
+                                let pattern = format!("({})", token_pattern);
+
+                                if debug_mode {
+                                    println!(
+                                        "DEBUG: Created pattern for token '{}' from term '{}': '{}'",
+                                        token, keyword, pattern
+                                    );
+                                }
+
+                                results.push((pattern, HashSet::from([idx])));
+                            }
                         }
                     }
                 }

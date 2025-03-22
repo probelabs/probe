@@ -132,6 +132,26 @@ impl Expr {
                     if has_required_anywhere {
                         true
                     } else {
+                        // When there are no required terms, we still need to enforce that all keywords
+                        // within a single Term are present (AND logic within a Term).
+                        // This ensures that for a term like "JWTMiddleware" which gets tokenized to
+                        // ["jwt", "middleware"], both parts must be present.
+
+                        // Check if any keywords are present
+                        let any_present = keywords.iter().any(|kw| {
+                            term_indices
+                                .get(kw)
+                                .map(|idx| matched_terms.contains(idx))
+                                .unwrap_or(false)
+                        });
+
+                        // If no keywords are present, the term doesn't match
+                        if !any_present {
+                            return false;
+                        }
+
+                        // If at least one keyword is present, require all keywords to be present
+                        // This maintains the AND relationship between keywords in a single Term
                         all_present
                     }
                 }
@@ -160,6 +180,9 @@ impl Expr {
                 lval && rval
             }
             Expr::Or(left, right) => {
+                // For OR expressions, we need to be careful about how we handle has_required_anywhere
+                // We want to maintain the behavior that at least one term must be present
+
                 let lval = left.evaluate_with_has_required(
                     matched_terms,
                     term_indices,
@@ -172,6 +195,7 @@ impl Expr {
                     ignore_negatives,
                     has_required_anywhere,
                 );
+
                 if debug_mode {
                     println!(
                         "DEBUG: OR => left={}, right={}, result={}",

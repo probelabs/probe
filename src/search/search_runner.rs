@@ -369,6 +369,18 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         println!("DEBUG: Starting file searching...");
     }
 
+    /*
+      Important Note on Non-Determinism:
+      The code in `search_with_structured_patterns` builds a single "combined" regex
+      with multiple capturing groups. If more than one subpattern can match the same
+      text, the regex engine’s backtracking might fill capture group 1 vs. group 2
+      differently from run to run under multithreading, producing inconsistent
+      matched lines (and thus inconsistent "required terms"). That can cause files
+      to be accepted or removed in “early filtering” unpredictably. If you're
+      experiencing random 0-result runs, this combined-regex approach is the most
+      likely culprit.
+    */
+
     let mut file_term_map = search_with_structured_patterns(
         path,
         &plan,
@@ -428,12 +440,58 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
         // Process files that matched by filename
         for (pathbuf, matched_terms) in &filename_matches {
+            // Define a reasonable maximum file size (e.g., 10MB)
+            const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+            // Check file metadata and resolve symlinks before reading
+            let resolved_path = match std::fs::canonicalize(pathbuf.as_path()) {
+                Ok(path) => path,
+                Err(e) => {
+                    if debug_mode {
+                        println!("DEBUG: Error resolving path for {:?}: {:?}", pathbuf, e);
+                    }
+                    continue;
+                }
+            };
+
+            // Get file metadata to check size and file type
+            let metadata = match std::fs::metadata(&resolved_path) {
+                Ok(meta) => meta,
+                Err(e) => {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Error getting metadata for {:?}: {:?}",
+                            resolved_path, e
+                        );
+                    }
+                    continue;
+                }
+            };
+
+            // Check if the file is too large
+            if metadata.len() > MAX_FILE_SIZE {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Skipping file {:?} - file too large ({} bytes > {} bytes limit)",
+                        resolved_path,
+                        metadata.len(),
+                        MAX_FILE_SIZE
+                    );
+                }
+                continue;
+            }
+
             // Read the file content to get the total number of lines
-            let file_content = match std::fs::read_to_string(pathbuf.as_path()) {
+            let file_content = match std::fs::read_to_string(&resolved_path) {
                 Ok(content) => content,
                 Err(e) => {
                     if debug_mode {
-                        println!("DEBUG: Error reading file {:?}: {:?}", pathbuf, e);
+                        println!(
+                            "DEBUG: Error reading file {:?}: {:?} (size: {} bytes)",
+                            resolved_path,
+                            e,
+                            metadata.len()
+                        );
                     }
                     continue;
                 }
@@ -499,7 +557,8 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         println!("DEBUG: all_files after filename matches: {:?}", all_files);
     }
 
-    // Early filtering step - filter both all_files and file_term_map using full AST evaluation (including excluded terms)
+    // Early filtering step - filter both all_files and file_term_map using full AST evaluation (including excluded terms?).
+    // Actually we pass 'true' to 'evaluate(..., true)', so that ignores excluded terms, contrary to the debug comment.
     let early_filter_start = Instant::now();
     if debug_mode {
         println!("DEBUG: Starting early AST filtering...");
@@ -515,14 +574,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             // Extract unique terms found in the file
             let matched_terms: HashSet<usize> = term_map.keys().copied().collect();
 
-            // Evaluate the file against the AST, including negative terms
-            // Debug log of path, matched terms and term indices
-            if debug_mode {
-                println!("DEBUG: Evaluating file {:?} with AST", pathbuf);
-                println!("DEBUG: Matched terms: {:?}", matched_terms);
-                println!("DEBUG: Term indices: {:?}", plan.term_indices);
-            }
-
+            // Evaluate the file against the AST, but we pass 'true' for ignore_negatives
             if plan.ast.evaluate(&matched_terms, &plan.term_indices, true) {
                 filtered_file_term_map.insert(pathbuf.clone(), term_map.clone());
                 filtered_all_files.insert(pathbuf.clone());
@@ -617,16 +669,26 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let ec_start = Instant::now();
     let mut early_skipped_count = 0;
     if let Some(session_id) = effective_session {
+        // Get the raw query string for caching
+        let raw_query = if queries.len() > 1 {
+            queries.join(" AND ")
+        } else {
+            queries[0].clone()
+        };
+
         if debug_mode {
-            println!("DEBUG: Starting early caching for session: {}", session_id);
+            println!(
+                "DEBUG: Starting early caching for session: {} with query: {}",
+                session_id, raw_query
+            );
             // Print cache contents before filtering
-            if let Err(e) = cache::debug_print_cache(session_id) {
+            if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
                 eprintln!("Error printing cache: {}", e);
             }
         }
 
         // Filter matched lines using the cache
-        match cache::filter_matched_lines_with_cache(&mut file_term_map, session_id) {
+        match cache::filter_matched_lines_with_cache(&mut file_term_map, session_id, &raw_query) {
             Ok(skipped) => {
                 if debug_mode {
                     println!("DEBUG: Early caching skipped {} matched lines", skipped);
@@ -966,20 +1028,30 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let fc_start = Instant::now();
 
     if let Some(session_id) = effective_session {
+        // Get the raw query string for caching
+        let raw_query = if queries.len() > 1 {
+            queries.join(" AND ")
+        } else {
+            queries[0].clone()
+        };
+
         if debug_mode {
-            println!("DEBUG: Starting final caching for session: {}", session_id);
+            println!(
+                "DEBUG: Starting final caching for session: {} with query: {}",
+                session_id, raw_query
+            );
             println!(
                 "DEBUG: Already skipped {} lines in early caching",
                 early_skipped_count
             );
             // Print cache contents before filtering
-            if let Err(e) = cache::debug_print_cache(session_id) {
+            if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
                 eprintln!("Error printing cache: {}", e);
             }
         }
 
         // Filter results using the cache - but only to count skipped blocks, not to filter
-        match cache::filter_results_with_cache(&limited.results, session_id) {
+        match cache::filter_results_with_cache(&limited.results, session_id, &raw_query) {
             Ok((_, cached_skipped)) => {
                 if debug_mode {
                     println!(
@@ -1001,14 +1073,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
 
         // Update the cache with the limited results
-        if let Err(e) = cache::add_results_to_cache(&limited.results, session_id) {
+        if let Err(e) = cache::add_results_to_cache(&limited.results, session_id, &raw_query) {
             eprintln!("Error adding results to cache: {}", e);
         }
 
         if debug_mode {
             println!("DEBUG: Added limited results to cache before merging");
             // Print cache contents after adding new results
-            if let Err(e) = cache::debug_print_cache(session_id) {
+            if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
                 eprintln!("Error printing updated cache: {}", e);
             }
         }
@@ -1073,14 +1145,21 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
         // Update the cache with the merged results (after merging)
         if let Some(session_id) = effective_session {
-            if let Err(e) = cache::add_results_to_cache(&merged, session_id) {
+            // Get the raw query string for caching
+            let raw_query = if queries.len() > 1 {
+                queries.join(" AND ")
+            } else {
+                queries[0].clone()
+            };
+
+            if let Err(e) = cache::add_results_to_cache(&merged, session_id, &raw_query) {
                 eprintln!("Error adding merged results to cache: {}", e);
             }
 
             if debug_mode {
                 println!("DEBUG: Added merged results to cache after merging");
                 // Print cache contents after adding merged results
-                if let Err(e) = cache::debug_print_cache(session_id) {
+                if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
                     eprintln!("Error printing updated cache: {}", e);
                 }
             }
@@ -1124,8 +1203,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     Ok(final_results)
 }
+
 /// Helper function to search files using structured patterns from a QueryPlan.
-/// This function uses a single-pass approach with processing to search for patterns
+/// This function uses a RegexSet approach for deterministic pattern matching
 /// and collects matches by term indices. It uses the file_list_cache to get a filtered
 /// list of files respecting ignore patterns.
 ///
@@ -1143,32 +1223,30 @@ pub fn search_with_structured_patterns(
     allow_tests: bool,
 ) -> Result<HashMap<PathBuf, HashMap<usize, HashSet<usize>>>> {
     use rayon::prelude::*;
+    use regex::RegexSet;
     use std::sync::{Arc, Mutex};
 
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let search_start = Instant::now();
 
-    // Step 1: Create combined regex
+    // Step 1: Create RegexSet for deterministic pattern matching
     if debug_mode {
-        println!("DEBUG: Starting parallel structured pattern search...");
-        println!(
-            "DEBUG: Creating combined regex from {} patterns",
-            patterns.len()
-        );
+        println!("DEBUG: Starting parallel structured pattern search with RegexSet...");
+        println!("DEBUG: Creating RegexSet from {} patterns", patterns.len());
     }
 
-    let combined_pattern = patterns
-        .iter()
-        .map(|(p, _)| format!("({})", p))
-        .collect::<Vec<_>>()
-        .join("|");
+    // Extract just the patterns for the RegexSet
+    let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| format!("(?i){}", p)).collect();
 
-    let combined_regex = regex::Regex::new(&format!("(?i){}", combined_pattern))?;
+    // Create a RegexSet for deterministic matching
+    let regex_set = RegexSet::new(&pattern_strings)?;
+
+    // Create a mapping from pattern index to term indices
     let pattern_to_terms: Vec<HashSet<usize>> =
         patterns.iter().map(|(_, terms)| terms.clone()).collect();
 
     if debug_mode {
-        println!("DEBUG: Combined regex created successfully");
+        println!("DEBUG: RegexSet created successfully");
     }
 
     // Step 2: Get filtered file list from cache
@@ -1183,26 +1261,39 @@ pub fn search_with_structured_patterns(
 
     if debug_mode {
         println!("DEBUG: Got {} files from cache", file_list.files.len());
-        println!("DEBUG: Starting parallel file processing with combined regex");
+        println!("DEBUG: Starting parallel file processing with RegexSet");
     }
+
     // Step 3: Process files in parallel
     // Create thread-safe shared resources
-    let combined_regex = Arc::new(combined_regex);
+    let regex_set = Arc::new(regex_set);
     let pattern_to_terms = Arc::new(pattern_to_terms);
     let file_term_maps = Arc::new(Mutex::new(HashMap::new()));
 
-    // Process files in parallel using rayon
-    file_list.files.par_iter().for_each(|file_path| {
-        let combined_regex = Arc::clone(&combined_regex);
-        let pattern_to_terms = Arc::clone(&pattern_to_terms);
+    // Also create individual regexes for line number extraction
+    let individual_regexes: Vec<regex::Regex> = pattern_strings
+        .iter()
+        .map(|p| regex::Regex::new(p).unwrap())
+        .collect();
+    let individual_regexes = Arc::new(individual_regexes);
 
-        // Search file with combined pattern
-        match search_file_with_combined_pattern(file_path, &combined_regex, &pattern_to_terms) {
+    file_list.files.par_iter().for_each(|file_path| {
+        let regex_set = Arc::clone(&regex_set);
+        let pattern_to_terms = Arc::clone(&pattern_to_terms);
+        let individual_regexes = Arc::clone(&individual_regexes);
+
+        // Search file with RegexSet for deterministic matching
+        match search_file_with_regex_set(
+            file_path,
+            &regex_set,
+            &individual_regexes,
+            &pattern_to_terms,
+        ) {
             Ok(term_map) => {
                 if !term_map.is_empty() {
                     if debug_mode {
                         println!(
-                            "DEBUG: File {:?} matched combined pattern with {} term indices",
+                            "DEBUG: File {:?} matched patterns with {} term indices",
                             file_path,
                             term_map.len()
                         );
@@ -1240,28 +1331,77 @@ pub fn search_with_structured_patterns(
     Ok(result)
 }
 
-/// Helper function to search a file with a combined regex pattern
-/// This function searches a file for matches against a combined regex pattern
-/// and maps the matches to their corresponding term indices.
+/// Helper function to search a file with a RegexSet for deterministic pattern matching
+/// This function searches a file for matches against a RegexSet and individual regexes
+/// to map the matches to their corresponding term indices.
 ///
-/// It processes all matching capture groups in each regex match, ensuring that
-/// if multiple patterns match in a single capture, all of them are properly recorded.
-/// This is important for complex regex patterns where multiple groups might match
-/// simultaneously, ensuring search stability and consistent results.
-fn search_file_with_combined_pattern(
+/// Using RegexSet ensures deterministic pattern matching across multiple runs,
+/// avoiding the non-deterministic behavior of capturing groups in a combined regex.
+fn search_file_with_regex_set(
     file_path: &Path,
-    combined_regex: &regex::Regex,
+    regex_set: &regex::RegexSet,
+    individual_regexes: &[regex::Regex],
     pattern_to_terms: &[HashSet<usize>],
 ) -> Result<HashMap<usize, HashSet<usize>>> {
     let mut term_map = HashMap::new();
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
-    // Read the file content
-    let content = match std::fs::read_to_string(file_path) {
+    // Define a reasonable maximum file size (e.g., 1MB)
+    const MAX_FILE_SIZE: u64 = 1024 * 1024;
+
+    // Check file metadata and resolve symlinks before reading
+    let resolved_path = match std::fs::canonicalize(file_path) {
+        Ok(path) => path,
+        Err(e) => {
+            if debug_mode {
+                println!("DEBUG: Error resolving path for {:?}: {:?}", file_path, e);
+            }
+            return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
+        }
+    };
+
+    // Get file metadata to check size and file type
+    let metadata = match std::fs::metadata(&resolved_path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            if debug_mode {
+                println!(
+                    "DEBUG: Error getting metadata for {:?}: {:?}",
+                    resolved_path, e
+                );
+            }
+            return Err(anyhow::anyhow!("Failed to get file metadata: {}", e));
+        }
+    };
+
+    // Check if the file is too large
+    if metadata.len() > MAX_FILE_SIZE {
+        if debug_mode {
+            println!(
+                "DEBUG: Skipping file {:?} - file too large ({} bytes > {} bytes limit)",
+                resolved_path,
+                metadata.len(),
+                MAX_FILE_SIZE
+            );
+        }
+        return Err(anyhow::anyhow!(
+            "File too large: {} bytes (limit: {} bytes)",
+            metadata.len(),
+            MAX_FILE_SIZE
+        ));
+    }
+
+    // Read the file content with proper error handling
+    let content = match std::fs::read_to_string(&resolved_path) {
         Ok(content) => content,
         Err(e) => {
             if debug_mode {
-                println!("DEBUG: Error reading file {:?}: {:?}", file_path, e);
+                println!(
+                    "DEBUG: Error reading file {:?}: {:?} (size: {} bytes)",
+                    resolved_path,
+                    e,
+                    metadata.len()
+                );
             }
             return Err(anyhow::anyhow!("Failed to read file: {}", e));
         }
@@ -1282,13 +1422,13 @@ fn search_file_with_combined_pattern(
             continue;
         }
 
-        // Find all matches in the line
-        for cap in combined_regex.captures_iter(line) {
-            // Check all possible pattern groups in this capture
-            for i in 1..=pattern_to_terms.len() {
-                if cap.get(i).is_some() {
-                    let pattern_idx = i - 1;
-
+        // First check if any pattern matches using the RegexSet
+        let matches = regex_set.matches(line);
+        if matches.matched_any() {
+            // For each matched pattern, find the specific line numbers using individual regexes
+            for pattern_idx in matches.iter() {
+                // Use the individual regex to find all matches in the line
+                if individual_regexes[pattern_idx].is_match(line) {
                     // Add matches for all terms associated with this pattern
                     for &term_idx in &pattern_to_terms[pattern_idx] {
                         term_map
@@ -1296,9 +1436,6 @@ fn search_file_with_combined_pattern(
                             .or_insert_with(HashSet::new)
                             .insert(line_number + 1); // Convert to 1-based line numbers
                     }
-
-                    // Note: We removed the break statement here to process all matching groups
-                    // in a capture, not just the first one. This fixes the search instability issue.
                 }
             }
         }

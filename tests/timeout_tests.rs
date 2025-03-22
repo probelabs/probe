@@ -7,9 +7,10 @@ use tempfile::TempDir;
 fn create_large_test_file(temp_dir: &Path) {
     let file_path = temp_dir.join("large_file.rs");
 
-    // Create a large file with many lines
+    // Create a very large file with many lines to ensure the search takes longer than the timeout
     let mut content = String::new();
-    for i in 0..100000 {
+    for i in 0..500000 {
+        // Increased to 500,000 lines
         content.push_str(&format!("// Line {} with searchable content\n", i));
         content.push_str(&format!("fn function_{}() {{\n", i));
         content.push_str(&format!("    let search_term = {};\n", i));
@@ -32,27 +33,18 @@ fn test_search_timeout() {
     // Create a large test file
     create_large_test_file(temp_dir.path());
 
-    // Get the path to the probe binary
-    let probe_binary = std::env::current_exe()
-        .expect("Failed to get current executable path")
-        .parent()
-        .expect("Failed to get parent directory")
-        .parent()
-        .expect("Failed to get parent directory")
-        .join("probe");
-
-    println!("Using probe binary at: {:?}", probe_binary);
-
     // Measure the time it takes to run the search
     let start_time = Instant::now();
 
-    // Run the search command with a timeout of 1 second
-    let output = Command::new(probe_binary)
+    // Run the search command with a very short timeout using cargo run
+    let output = Command::new("cargo")
+        .arg("run")
+        .arg("--")
         .arg("search")
-        .arg("search_term")
-        .arg(temp_dir.path())
+        .arg("search_term") // This term appears in every function
+        .arg("/")
         .arg("--timeout")
-        .arg("1")
+        .arg("1") // 1 second timeout should be short enough to trigger
         .output()
         .expect("Failed to execute command");
 

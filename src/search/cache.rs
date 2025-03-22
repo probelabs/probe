@@ -1,36 +1,49 @@
 use anyhow::Result;
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fs::{create_dir_all, File};
+use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use crate::models::SearchResult;
+
+/// Generate a hash for a query string
+/// This is used to create a unique identifier for each query
+pub fn hash_query(query: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    query.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
+}
 
 /// Structure to hold cache data for a session
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionCache {
     /// Session identifier
     pub session_id: String,
+    /// Query hash for this cache
+    pub query_hash: String,
     /// Set of block identifiers that have been seen in this session
     /// Format: "file.rs:23-45" (file path with start-end line numbers)
     pub block_identifiers: HashSet<String>,
 }
 
 impl SessionCache {
-    /// Create a new session cache with the given ID
-    pub fn new(session_id: String) -> Self {
+    /// Create a new session cache with the given ID and query hash
+    pub fn new(session_id: String, query_hash: String) -> Self {
         Self {
             session_id,
+            query_hash,
             block_identifiers: HashSet::new(),
         }
     }
 
     /// Load a session cache from disk
-    pub fn load(session_id: &str) -> Result<Self> {
+    pub fn load(session_id: &str, query_hash: &str) -> Result<Self> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-        let cache_path = Self::get_cache_path(session_id);
+        let cache_path = Self::get_cache_path(session_id, query_hash);
 
         // If the cache file doesn't exist, create a new empty cache
         if !cache_path.exists() {
@@ -40,7 +53,7 @@ impl SessionCache {
                     cache_path
                 );
             }
-            return Ok(Self::new(session_id.to_string()));
+            return Ok(Self::new(session_id.to_string(), query_hash.to_string()));
         }
 
         if debug_mode {
@@ -54,7 +67,7 @@ impl SessionCache {
                 if debug_mode {
                     println!("DEBUG: Error opening cache file: {}", e);
                 }
-                return Ok(Self::new(session_id.to_string()));
+                return Ok(Self::new(session_id.to_string(), query_hash.to_string()));
             }
         };
 
@@ -63,7 +76,7 @@ impl SessionCache {
             if debug_mode {
                 println!("DEBUG: Error reading cache file: {}", e);
             }
-            return Ok(Self::new(session_id.to_string()));
+            return Ok(Self::new(session_id.to_string(), query_hash.to_string()));
         }
 
         // Parse the JSON
@@ -82,7 +95,7 @@ impl SessionCache {
                 if debug_mode {
                     println!("DEBUG: Error parsing cache JSON: {}", e);
                 }
-                Ok(Self::new(session_id.to_string()))
+                Ok(Self::new(session_id.to_string(), query_hash.to_string()))
             }
         }
     }
@@ -90,7 +103,7 @@ impl SessionCache {
     /// Save the session cache to disk
     pub fn save(&self) -> Result<()> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-        let cache_path = Self::get_cache_path(&self.session_id);
+        let cache_path = Self::get_cache_path(&self.session_id, &self.query_hash);
 
         if debug_mode {
             println!(
@@ -157,13 +170,13 @@ impl SessionCache {
     }
 
     /// Get the path to the cache file
-    pub fn get_cache_path(session_id: &str) -> PathBuf {
+    pub fn get_cache_path(session_id: &str, query_hash: &str) -> PathBuf {
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         home_dir
             .join(".cache")
             .join("probe")
             .join("sessions")
-            .join(format!("{}.json", session_id))
+            .join(format!("{}_{}.json", session_id, query_hash))
     }
 }
 /// Normalize a file path for consistent cache keys
@@ -190,11 +203,13 @@ pub fn generate_cache_key(result: &SearchResult) -> String {
 pub fn filter_results_with_cache(
     results: &[SearchResult],
     session_id: &str,
+    query: &str,
 ) -> Result<(Vec<SearchResult>, usize)> {
+    let query_hash = hash_query(query);
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Check if this is a new session by looking for the cache file
-    let cache_path = SessionCache::get_cache_path(session_id);
+    let cache_path = SessionCache::get_cache_path(session_id, &query_hash);
     let is_new_session = !cache_path.exists();
 
     // For a new session, don't skip any results
@@ -207,7 +222,7 @@ pub fn filter_results_with_cache(
     }
 
     // Load the cache
-    let cache = SessionCache::load(session_id)?;
+    let cache = SessionCache::load(session_id, &query_hash)?;
 
     // If the cache is empty, don't skip any results
     if cache.block_identifiers.is_empty() {
@@ -264,11 +279,13 @@ pub fn filter_results_with_cache(
 pub fn filter_matched_lines_with_cache(
     file_term_map: &mut HashMap<PathBuf, HashMap<usize, HashSet<usize>>>,
     session_id: &str,
+    query: &str,
 ) -> Result<usize> {
+    let query_hash = hash_query(query);
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Check if this is a new session by looking for the cache file
-    let cache_path = SessionCache::get_cache_path(session_id);
+    let cache_path = SessionCache::get_cache_path(session_id, &query_hash);
     let is_new_session = !cache_path.exists();
 
     // For a new session, don't skip any lines
@@ -280,7 +297,7 @@ pub fn filter_matched_lines_with_cache(
     }
 
     // Load the cache
-    let cache = SessionCache::load(session_id)?;
+    let cache = SessionCache::load(session_id, &query_hash)?;
 
     // If the cache is empty, don't skip any lines
     if cache.block_identifiers.is_empty() {
@@ -409,11 +426,12 @@ pub fn filter_matched_lines_with_cache(
 }
 
 /// Add search results to the cache
-pub fn add_results_to_cache(results: &[SearchResult], session_id: &str) -> Result<()> {
+pub fn add_results_to_cache(results: &[SearchResult], session_id: &str, query: &str) -> Result<()> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let query_hash = hash_query(query);
 
     // Load or create the cache
-    let mut cache = SessionCache::load(session_id)?;
+    let mut cache = SessionCache::load(session_id, &query_hash)?;
 
     if debug_mode {
         println!(
@@ -455,14 +473,19 @@ pub fn add_results_to_cache(results: &[SearchResult], session_id: &str) -> Resul
 }
 
 /// Debug function to print cache contents (only used when DEBUG=1)
-pub fn debug_print_cache(session_id: &str) -> Result<()> {
+pub fn debug_print_cache(session_id: &str, query: &str) -> Result<()> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     if !debug_mode {
         return Ok(());
     }
 
-    let cache = SessionCache::load(session_id)?;
-    println!("DEBUG: Cache for session {}", session_id);
+    let query_hash = hash_query(query);
+    let cache = SessionCache::load(session_id, &query_hash)?;
+
+    println!(
+        "DEBUG: Cache for session {} with query hash {}",
+        session_id, query_hash
+    );
     println!(
         "DEBUG: Contains {} cached blocks",
         cache.block_identifiers.len()
@@ -484,8 +507,8 @@ pub fn debug_print_cache(session_id: &str) -> Result<()> {
 pub fn generate_session_id() -> Result<(&'static str, bool)> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
-    // Try up to 10 times to generate a unique session ID
-    for _ in 0..10 {
+    // Generate a single session ID instead of looping
+    if (0..10).next().is_some() {
         // Generate a random 4-character alphanumeric string
         let session_id: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
@@ -500,24 +523,14 @@ pub fn generate_session_id() -> Result<(&'static str, bool)> {
             println!("DEBUG: Generated session ID: {}", session_id);
         }
 
-        // Check if a cache file with this name already exists
-        let cache_path = SessionCache::get_cache_path(&session_id);
-        if !cache_path.exists() {
-            if debug_mode {
-                println!(
-                    "DEBUG: No existing cache file found for session ID: {}",
-                    session_id
-                );
-            }
-            // Convert to a static string (this leaks memory, but it's a small amount and only happens once per session)
-            let static_id: &'static str = Box::leak(session_id.into_boxed_str());
-            return Ok((static_id, true));
-        } else if debug_mode {
-            println!(
-                "DEBUG: Cache file already exists for session ID: {}",
-                session_id
-            );
+        // We don't check for existing cache files here since we're just generating a session ID
+        // The actual cache file will be created with both session ID and query hash
+        if debug_mode {
+            println!("DEBUG: Generated new session ID: {}", session_id);
         }
+        // Convert to a static string (this leaks memory, but it's a small amount and only happens once per session)
+        let static_id: &'static str = Box::leak(session_id.into_boxed_str());
+        return Ok((static_id, true));
     }
 
     // If we couldn't generate a unique ID after 10 attempts, return an error
@@ -536,6 +549,18 @@ mod tests {
         // Test that normalize_path removes leading "./"
         assert_eq!(normalize_path("./path/to/file.rs"), "path/to/file.rs");
         assert_eq!(normalize_path("path/to/file.rs"), "path/to/file.rs");
+    }
+
+    #[test]
+    fn test_query_hashing() {
+        // Test that different queries produce different hashes
+        let hash1 = hash_query("query1");
+        let hash2 = hash_query("query2");
+        assert_ne!(hash1, hash2);
+
+        // Test that the same query produces the same hash
+        let hash3 = hash_query("query1");
+        assert_eq!(hash1, hash3);
     }
 
     #[test]
@@ -600,5 +625,29 @@ mod tests {
         // The cache keys should be identical
         assert_eq!(key1, key2);
         assert_eq!(key1, "path/to/file.rs:10-20");
+    }
+
+    #[test]
+    fn test_session_cache_with_query_hash() {
+        // Test that different queries for the same session have different cache paths
+        let session_id = "test_session";
+        let query1 = "query1";
+        let query2 = "query2";
+
+        let hash1 = hash_query(query1);
+        let hash2 = hash_query(query2);
+
+        let path1 = SessionCache::get_cache_path(session_id, &hash1);
+        let path2 = SessionCache::get_cache_path(session_id, &hash2);
+
+        // Paths should be different for different queries
+        assert_ne!(path1, path2);
+
+        // Create caches with different queries
+        let cache1 = SessionCache::new(session_id.to_string(), hash1);
+        let cache2 = SessionCache::new(session_id.to_string(), hash2);
+
+        // Caches should have different query hashes
+        assert_ne!(cache1.query_hash, cache2.query_hash);
     }
 }
