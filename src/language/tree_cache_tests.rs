@@ -1,12 +1,21 @@
 use crate::language::tree_cache;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use tree_sitter::Parser;
 
+// Create a test mutex for synchronization
+lazy_static::lazy_static! {
+    static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
+}
+
 #[test]
 fn test_tree_cache_basic() {
+    // Acquire the test mutex to prevent concurrent test execution
+    let _guard = TEST_MUTEX.lock().unwrap();
     // Clear the cache before starting the test
     tree_cache::clear_tree_cache();
+    tree_cache::reset_cache_hit_counter();
 
     // Create a parser
     let mut parser = Parser::new();
@@ -22,14 +31,16 @@ fn test_tree_cache_basic() {
     "#;
 
     // First parse - should be a cache miss
-    let start = std::time::Instant::now();
     let tree1 = tree_cache::get_or_parse_tree("test_file.rs", content, &mut parser).unwrap();
-    let first_parse_time = start.elapsed();
 
-    // Second parse of the same content - should be a cache hit and faster
-    let start = std::time::Instant::now();
+    // Verify cache hit count is still 0
+    assert_eq!(tree_cache::get_cache_hit_count(), 0);
+
+    // Second parse of the same content - should be a cache hit
     let tree2 = tree_cache::get_or_parse_tree("test_file.rs", content, &mut parser).unwrap();
-    let second_parse_time = start.elapsed();
+
+    // Verify cache hit count is now 1
+    assert_eq!(tree_cache::get_cache_hit_count(), 1);
 
     // Verify both trees have the same structure
     assert_eq!(tree1.root_node().kind(), tree2.root_node().kind());
@@ -42,16 +53,15 @@ fn test_tree_cache_basic() {
         tree2.root_node().end_position()
     );
 
-    // The second parse should be significantly faster due to caching
-    // This is a loose check since exact timing depends on the system
-    assert!(second_parse_time < first_parse_time);
-
     // Check that the cache has one entry
-    assert!(tree_cache::get_cache_size() > 0);
+    assert_eq!(tree_cache::get_cache_size(), 1);
+    assert!(tree_cache::is_in_cache("test_file.rs"));
 }
 
 #[test]
 fn test_tree_cache_invalidation() {
+    // Acquire the test mutex to prevent concurrent test execution
+    let _guard = TEST_MUTEX.lock().unwrap();
     // Clear the cache before starting the test
     tree_cache::clear_tree_cache();
 
@@ -77,6 +87,10 @@ fn test_tree_cache_invalidation() {
     // First parse
     let tree1 = tree_cache::get_or_parse_tree("test_file2.rs", content1, &mut parser).unwrap();
 
+    // Verify cache has one entry
+    assert_eq!(tree_cache::get_cache_size(), 1);
+    assert!(tree_cache::is_in_cache("test_file2.rs"));
+
     // Parse with modified content - should invalidate cache and reparse
     let tree2 = tree_cache::get_or_parse_tree("test_file2.rs", content2, &mut parser).unwrap();
 
@@ -94,12 +108,15 @@ fn test_tree_cache_invalidation() {
     // But the content is different, so the byte positions should differ
     assert_ne!(tree1.root_node().end_byte(), tree2.root_node().end_byte());
 
-    // Check that the cache has entries
-    assert!(tree_cache::get_cache_size() > 0);
+    // Check that the cache still has one entry (the updated one)
+    assert_eq!(tree_cache::get_cache_size(), 1);
+    assert!(tree_cache::is_in_cache("test_file2.rs"));
 }
 
 #[test]
 fn test_tree_cache_clear() {
+    // Acquire the test mutex to prevent concurrent test execution
+    let _guard = TEST_MUTEX.lock().unwrap();
     // Clear the cache before starting the test
     tree_cache::clear_tree_cache();
 
@@ -134,6 +151,8 @@ fn test_tree_cache_clear() {
 
 #[test]
 fn test_tree_cache_invalidate_entry() {
+    // Acquire the test mutex to prevent concurrent test execution
+    let _guard = TEST_MUTEX.lock().unwrap();
     // Clear the cache before starting the test
     tree_cache::clear_tree_cache();
 
@@ -150,26 +169,25 @@ fn test_tree_cache_invalidate_entry() {
         }
     "#;
 
-    // Parse a file
-    tree_cache::get_or_parse_tree("test_file4.rs", content, &mut parser).unwrap();
-
     // Parse a file to add an entry to the cache
     tree_cache::get_or_parse_tree("test_file4.rs", content, &mut parser).unwrap();
 
-    // Verify cache has entries
-    let initial_size = tree_cache::get_cache_size();
-    assert!(initial_size > 0);
+    // Verify cache has exactly one entry
+    assert_eq!(tree_cache::get_cache_size(), 1);
+    assert!(tree_cache::is_in_cache("test_file4.rs"));
 
-    // Invalidate a specific entry
+    // Invalidate the specific entry
     tree_cache::invalidate_cache_entry("test_file4.rs");
 
-    // Verify cache size decreased
-    let new_size = tree_cache::get_cache_size();
-    assert!(new_size < initial_size);
+    // Verify cache is now empty and the specific entry is gone
+    assert_eq!(tree_cache::get_cache_size(), 0);
+    assert!(!tree_cache::is_in_cache("test_file4.rs"));
 }
 
 #[test]
 fn test_tree_cache_concurrent_access() {
+    // Acquire the test mutex to prevent concurrent test execution
+    let _guard = TEST_MUTEX.lock().unwrap();
     // Clear the cache before starting the test
     tree_cache::clear_tree_cache();
 

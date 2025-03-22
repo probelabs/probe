@@ -12,6 +12,12 @@ lazy_static::lazy_static! {
     /// When the same file is parsed multiple times, this avoids the overhead
     /// of re-parsing unchanged files.
     static ref TREE_CACHE: Mutex<HashMap<String, (Tree, u64)>> = Mutex::new(HashMap::new());
+
+    /// A counter for cache hits, used for testing
+    static ref CACHE_HITS: Mutex<usize> = Mutex::new(0);
+
+    /// A mutex for test synchronization to prevent concurrent test execution
+    static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
 }
 
 /// Compute a hash of the content for cache validation
@@ -51,6 +57,12 @@ pub fn get_or_parse_tree(
         let cache = TREE_CACHE.lock().unwrap();
         if let Some((cached_tree, cached_hash)) = cache.get(file_path) {
             if cached_hash == &content_hash {
+                // Increment cache hit counter
+                {
+                    let mut hits = CACHE_HITS.lock().unwrap();
+                    *hits += 1;
+                }
+
                 if debug_mode {
                     println!("[DEBUG] Cache hit for file: {}", file_path);
                 }
@@ -98,6 +110,10 @@ pub fn clear_tree_cache() {
     }
 
     cache.clear();
+
+    // Also reset the cache hit counter
+    let mut hits = CACHE_HITS.lock().unwrap();
+    *hits = 0;
 }
 
 /// Remove a specific file from the tree cache
@@ -113,6 +129,15 @@ pub fn invalidate_cache_entry(file_path: &str) {
     if cache.remove(file_path).is_some() && debug_mode {
         println!("[DEBUG] Removed file from cache: {}", file_path);
     }
+
+    /// Acquire the test mutex for test synchronization
+    ///
+    /// This function is used by tests to prevent concurrent access to the cache
+    /// during test execution, which can lead to flaky tests.
+    #[allow(dead_code)]
+    pub fn acquire_test_mutex() -> std::sync::MutexGuard<'static, ()> {
+        TEST_MUTEX.lock().unwrap()
+    }
 }
 
 /// Get the current size of the tree cache
@@ -120,4 +145,25 @@ pub fn invalidate_cache_entry(file_path: &str) {
 pub fn get_cache_size() -> usize {
     let cache = TREE_CACHE.lock().unwrap();
     cache.len()
+}
+
+/// Check if a specific file exists in the cache
+#[allow(dead_code)]
+pub fn is_in_cache(file_path: &str) -> bool {
+    let cache = TREE_CACHE.lock().unwrap();
+    cache.contains_key(file_path)
+}
+
+/// Reset the cache hit counter (for testing)
+#[allow(dead_code)]
+pub fn reset_cache_hit_counter() {
+    let mut hits = CACHE_HITS.lock().unwrap();
+    *hits = 0;
+}
+
+/// Get the current cache hit count (for testing)
+#[allow(dead_code)]
+pub fn get_cache_hit_count() -> usize {
+    let hits = CACHE_HITS.lock().unwrap();
+    *hits
 }

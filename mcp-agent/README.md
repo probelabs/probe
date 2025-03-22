@@ -68,8 +68,11 @@ MODEL_NAME=claude-3-7-sonnet-latest
 MAX_TOKENS=4000
 MAX_HISTORY_MESSAGES=20
 
-# Allowed Folders (optional)
+# Allowed Folders (optional, but recommended for security)
 ALLOWED_FOLDERS=/path/to/repo1,/path/to/repo2
+
+# Setting ALLOWED_FOLDERS restricts code search to only these directories
+# and prevents access to other parts of the filesystem
 
 # Debug Mode (optional)
 DEBUG=true
@@ -102,7 +105,7 @@ probe-mcp-agent --provider google
 The server exposes a single tool called `search_code` with the following parameters:
 
 - `query` (required): The question or request about the codebase
-- `path` (optional): Path to the directory to search in
+- `path` (optional): Path to the directory to search in. If ALLOWED_FOLDERS is set, this path must be within one of the allowed folders for security reasons
 - `context` (optional): Additional context to help the AI understand the request
 - `max_tokens` (optional): Maximum number of tokens to return
 
@@ -134,6 +137,27 @@ Default models:
 - Anthropic: `claude-3-7-sonnet-latest`
 - OpenAI: `gpt-4o-2024-05-13`
 - Google: `gemini-1.5-pro-latest`
+
+## Security Considerations
+
+### Folder Protection
+
+The MCP agent implements folder protection to prevent unauthorized access to files outside of allowed directories:
+
+1. When the `ALLOWED_FOLDERS` environment variable is set, the agent will only allow searches within those directories
+2. Any attempt to search outside of allowed folders will result in an error
+3. The path parameter in search requests is validated to ensure it's within an allowed folder
+4. This protection is communicated to the AI model in the system message
+
+It's strongly recommended to set `ALLOWED_FOLDERS` in production environments to limit the scope of code search to specific repositories or directories.
+
+Example:
+```bash
+# Restrict searches to only these two repositories
+ALLOWED_FOLDERS=/home/user/projects/repo1,/home/user/projects/repo2
+```
+
+Without this setting, the agent will default to using the current working directory, which may expose more files than intended.
 
 ## Development
 

@@ -111,7 +111,7 @@ class ProbeAgentServer {
 							},
 							path: {
 								type: 'string',
-								description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject").',
+								description: 'Absolute path to one of the allowed directories to search in. For security reasons, only allowed folders can be searched.',
 							},
 							context: {
 								type: 'string',
@@ -154,8 +154,19 @@ class ProbeAgentServer {
 				}
 
 				// Process the query using the AI agent
-				// If path is not provided, use the current working directory
-				const searchPath = args.path || process.cwd();
+				// If path is not provided, use the first allowed folder or current working directory
+				let searchPath = args.path || (config.allowedFolders.length > 0 ? config.allowedFolders[0] : process.cwd());
+
+				// Validate that the search path is within allowed folders
+				if (config.allowedFolders.length > 0) {
+					const isAllowed = config.allowedFolders.some(folder =>
+						searchPath === folder || searchPath.startsWith(`${folder}/`)
+					);
+
+					if (!isAllowed) {
+						throw new Error(`Path "${searchPath}" is not within allowed folders. Allowed folders: ${config.allowedFolders.join(', ')}`);
+					}
+				}
 
 				// Log the search path for debugging
 				console.error(`Using search path: ${searchPath}`);

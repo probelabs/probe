@@ -49,7 +49,8 @@ export class ProbeAgent {
 		const configOptions = {
 			sessionId: this.sessionId,
 			debug: config.debug,
-			defaultPath: process.cwd() // Set default path to current working directory
+			defaultPath: config.allowedFolders.length > 0 ? config.allowedFolders[0] : process.cwd(), // Use first allowed folder or current working directory
+			allowedFolders: config.allowedFolders // Pass allowed folders to tools
 		};
 
 		// Create configured tool instances
@@ -186,10 +187,13 @@ Always use the search tool first before attempting to answer questions about the
 When responding to questions about code, make sure to include relevant code snippets and explain them clearly.
 If you don't know the answer or can't find relevant information, be honest about it.`;
 
-		// Add folder information
+		// Add folder information with clear security instructions
 		if (config.allowedFolders.length > 0) {
 			const folderList = config.allowedFolders.map(f => `"${f}"`).join(', ');
-			systemMessage += `\n\nThe following folders are configured for code search: ${folderList}. When using search, specify one of these folders in the path argument.`;
+			systemMessage += `\n\nIMPORTANT: For security reasons, code search is restricted to the following allowed folders: ${folderList}.
+You MUST specify one of these folders in the path argument when using the search_code tool.
+Attempting to search outside these folders will result in an error.
+You can search in subfolders by specifying a path like "${config.allowedFolders[0]}/subfolder".`;
 		} else {
 			systemMessage += `\n\nNo specific folders are configured for code search, so the current working directory (${process.cwd()}) will be used by default. You can omit the path parameter in your search calls, or use '.' to explicitly search in the current directory.`;
 		}
@@ -236,8 +240,19 @@ Examples:
 	 */
 	async processQuery(query, path) {
 		try {
-			// If path is not provided, use the current working directory
-			const searchPath = path || process.cwd();
+			// If path is not provided, use the first allowed folder or current working directory
+			let searchPath = path || (config.allowedFolders.length > 0 ? config.allowedFolders[0] : process.cwd());
+
+			// Validate that the search path is within allowed folders
+			if (config.allowedFolders.length > 0) {
+				const isAllowed = config.allowedFolders.some(folder =>
+					searchPath === folder || searchPath.startsWith(`${folder}/`)
+				);
+
+				if (!isAllowed) {
+					throw new Error(`Path "${searchPath}" is not within allowed folders. Allowed folders: ${config.allowedFolders.join(', ')}`);
+				}
+			}
 
 			if (config.debug) {
 				console.error(`[DEBUG] Received user query: ${query}`);
@@ -275,7 +290,12 @@ Examples:
 				system: await this.getSystemMessage(),
 				tools: this.tools.map(tool => {
 					// Clone the tool and add the search path to its configuration
-					const toolConfig = { ...tool.config, defaultPath: searchPath };
+					// For search tools, the path is treated as an allowed folder, not just a default
+					const toolConfig = {
+						...tool.config,
+						defaultPath: searchPath,
+						allowedFolders: config.allowedFolders // Pass allowed folders to all tools
+					};
 					return { ...tool, config: toolConfig };
 				}),
 				maxSteps: 15,
@@ -431,7 +451,8 @@ Examples:
 		const configOptions = {
 			sessionId: this.sessionId,
 			debug: config.debug,
-			defaultPath: process.cwd() // Set default path to current working directory
+			defaultPath: config.allowedFolders.length > 0 ? config.allowedFolders[0] : process.cwd(), // Use first allowed folder or current working directory
+			allowedFolders: config.allowedFolders // Pass allowed folders to tools
 		};
 
 		// Create new configured tool instances
