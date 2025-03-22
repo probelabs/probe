@@ -157,6 +157,16 @@ class ProbeAgentServer {
 				// If path is not provided, use the first allowed folder or current working directory
 				let searchPath = args.path || (config.allowedFolders.length > 0 ? config.allowedFolders[0] : process.cwd());
 
+				// If path is "." or "./", use the default path if available
+				const defaultPath = config.allowedFolders.length > 0 ? config.allowedFolders[0] : process.cwd();
+				if ((searchPath === "." || searchPath === "./") && defaultPath) {
+					console.error(`Using default path "${defaultPath}" instead of "${searchPath}"`);
+					searchPath = defaultPath;
+				}
+
+				// Create a copy of the allowed folders for potential modification
+				let updatedAllowedFolders = [...config.allowedFolders];
+
 				// Validate that the search path is within allowed folders
 				if (config.allowedFolders.length > 0) {
 					const isAllowed = config.allowedFolders.some(folder =>
@@ -166,6 +176,16 @@ class ProbeAgentServer {
 					if (!isAllowed) {
 						throw new Error(`Path "${searchPath}" is not within allowed folders. Allowed folders: ${config.allowedFolders.join(', ')}`);
 					}
+				}
+
+				// Add searchPath to allowedFolders if it's not already included
+				if (searchPath && !updatedAllowedFolders.includes(searchPath) &&
+					!updatedAllowedFolders.some(folder => searchPath.startsWith(`${folder}/`))) {
+					updatedAllowedFolders.push(searchPath);
+					console.error(`Added search path "${searchPath}" to allowed folders`);
+
+					// Update the global config for this request
+					config.allowedFolders = updatedAllowedFolders;
 				}
 
 				// Log the search path for debugging

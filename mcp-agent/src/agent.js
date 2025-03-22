@@ -243,6 +243,13 @@ Examples:
 			// If path is not provided, use the first allowed folder or current working directory
 			let searchPath = path || (config.allowedFolders.length > 0 ? config.allowedFolders[0] : process.cwd());
 
+			// If path is "." or "./", use the default path if available
+			const defaultPath = config.allowedFolders.length > 0 ? config.allowedFolders[0] : process.cwd();
+			if ((searchPath === "." || searchPath === "./") && defaultPath) {
+				console.error(`Using default path "${defaultPath}" instead of "${searchPath}"`);
+				searchPath = defaultPath;
+			}
+
 			// Validate that the search path is within allowed folders
 			if (config.allowedFolders.length > 0) {
 				const isAllowed = config.allowedFolders.some(folder =>
@@ -291,10 +298,18 @@ Examples:
 				tools: this.tools.map(tool => {
 					// Clone the tool and add the search path to its configuration
 					// For search tools, the path is treated as an allowed folder, not just a default
+					const updatedAllowedFolders = [...config.allowedFolders];
+
+					// Add searchPath to allowedFolders if it's not already included
+					if (searchPath && !updatedAllowedFolders.includes(searchPath) &&
+						!updatedAllowedFolders.some(folder => searchPath.startsWith(`${folder}/`))) {
+						updatedAllowedFolders.push(searchPath);
+					}
+
 					const toolConfig = {
 						...tool.config,
 						defaultPath: searchPath,
-						allowedFolders: config.allowedFolders // Pass allowed folders to all tools
+						allowedFolders: updatedAllowedFolders // Pass updated allowed folders to all tools
 					};
 					return { ...tool, config: toolConfig };
 				}),

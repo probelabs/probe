@@ -31,7 +31,15 @@ export const searchTool = (options = {}) => {
 				const effectiveMaxTokens = paramMaxTokens || maxTokens;
 
 				// Use the path from parameters if provided, otherwise use defaultPath from config
-				const searchPath = path || options.defaultPath || '.';
+				let searchPath = path || options.defaultPath || '.';
+
+				// If path is "." or "./", use the defaultPath if available
+				if ((searchPath === "." || searchPath === "./") && options.defaultPath) {
+					if (debug) {
+						console.error(`Using default path "${options.defaultPath}" instead of "${searchPath}"`);
+					}
+					searchPath = options.defaultPath;
+				}
 
 				if (debug) {
 					console.error(`Executing search with query: "${searchQuery}", path: "${searchPath}", session: ${sessionId || 'none'}`);
@@ -73,7 +81,15 @@ export const queryTool = (options = {}) => {
 		execute: async ({ pattern, path, language, allow_tests }) => {
 			try {
 				// Use the path from parameters if provided, otherwise use defaultPath from config
-				const queryPath = path || options.defaultPath || '.';
+				let queryPath = path || options.defaultPath || '.';
+
+				// If path is "." or "./", use the defaultPath if available
+				if ((queryPath === "." || queryPath === "./") && options.defaultPath) {
+					if (debug) {
+						console.error(`Using default path "${options.defaultPath}" instead of "${queryPath}"`);
+					}
+					queryPath = options.defaultPath;
+				}
 
 				if (debug) {
 					console.error(`Executing query with pattern: "${pattern}", path: "${queryPath}", language: ${language || 'auto'}`);
@@ -113,7 +129,15 @@ export const extractTool = (options = {}) => {
 		execute: async ({ file_path, input_content, line, end_line, allow_tests, context_lines, format }) => {
 			try {
 				// Use the defaultPath from config for context
-				const extractPath = options.defaultPath || '.';
+				let extractPath = options.defaultPath || '.';
+
+				// If path is "." or "./", use the defaultPath if available
+				if ((extractPath === "." || extractPath === "./") && options.defaultPath) {
+					if (debug) {
+						console.error(`Using default path "${options.defaultPath}" instead of "${extractPath}"`);
+					}
+					extractPath = options.defaultPath;
+				}
 
 				if (debug) {
 					if (file_path) {
