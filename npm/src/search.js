@@ -109,6 +109,9 @@ export async function search(options) {
 	// Execute command
 	const command = `${binaryPath} search ${cliArgs.join(' ')}`;
 
+	// Debug log to see the actual command with quotes
+	console.error(`Executing command: ${command}`);
+
 	try {
 		const { stdout, stderr } = await execAsync(command);
 

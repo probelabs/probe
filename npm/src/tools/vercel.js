@@ -30,13 +30,16 @@ export const searchTool = (options = {}) => {
 				// Use parameter maxTokens if provided, otherwise use the default
 				const effectiveMaxTokens = paramMaxTokens || maxTokens;
 
+				// Use the path from parameters if provided, otherwise use defaultPath from config
+				const searchPath = path || options.defaultPath || '.';
+
 				if (debug) {
-					console.error(`Executing search with query: "${searchQuery}", path: "${path || '.'}", session: ${sessionId || 'none'}`);
+					console.error(`Executing search with query: "${searchQuery}", path: "${searchPath}", session: ${sessionId || 'none'}`);
 				}
 
 				const results = await search({
 					query: searchQuery,
-					path,
+					path: searchPath,
 					exact,
 					allow_tests,
 					json: false,
@@ -69,13 +72,16 @@ export const queryTool = (options = {}) => {
 		parameters: querySchema,
 		execute: async ({ pattern, path, language, allow_tests }) => {
 			try {
+				// Use the path from parameters if provided, otherwise use defaultPath from config
+				const queryPath = path || options.defaultPath || '.';
+
 				if (debug) {
-					console.error(`Executing query with pattern: "${pattern}", path: "${path || '.'}", language: ${language || 'auto'}`);
+					console.error(`Executing query with pattern: "${pattern}", path: "${queryPath}", language: ${language || 'auto'}`);
 				}
 
 				const results = await query({
 					pattern,
-					path,
+					path: queryPath,
 					language,
 					allow_tests,
 					json: false
@@ -106,17 +112,20 @@ export const extractTool = (options = {}) => {
 		parameters: extractSchema,
 		execute: async ({ file_path, input_content, line, end_line, allow_tests, context_lines, format }) => {
 			try {
+				// Use the defaultPath from config for context
+				const extractPath = options.defaultPath || '.';
+
 				if (debug) {
 					if (file_path) {
-						console.error(`Executing extract with file: "${file_path}", context lines: ${context_lines || 10}`);
+						console.error(`Executing extract with file: "${file_path}", path: "${extractPath}", context lines: ${context_lines || 10}`);
 					} else if (input_content) {
-						console.error(`Executing extract with input content, context lines: ${context_lines || 10}`);
+						console.error(`Executing extract with input content, path: "${extractPath}", context lines: ${context_lines || 10}`);
 					}
 				}
 
 				// Create a temporary file for input content if provided
 				let tempFilePath = null;
-				let extractOptions = {};
+				let extractOptions = { path: extractPath };
 
 				if (input_content) {
 					// Import required modules
