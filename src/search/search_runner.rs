@@ -14,6 +14,7 @@ use crate::search::{
     result_ranking::rank_search_results,
     search_limiter::apply_limits,
     search_options::SearchOptions,
+    timeout,
 };
 
 /// Struct to hold timing information for different stages of the search process
@@ -191,7 +192,10 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         merge_threshold,
         dry_run: _, // We don't need this in perform_probe, but need to include it in the pattern
         session,
+        timeout,
     } = options;
+    // Start the timeout thread
+    let timeout_handle = timeout::start_timeout_thread(*timeout);
 
     let include_filenames = !exclude_filenames;
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -684,7 +688,6 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let mut total_block_extraction_code_structure_time = Duration::new(0, 0);
     let mut total_block_extraction_filtering_time = Duration::new(0, 0);
     let mut total_block_extraction_result_building_time = Duration::new(0, 0);
-
     for pathbuf in &all_files {
         if debug_mode {
             println!("DEBUG: Processing file: {:?}", pathbuf);
@@ -1117,6 +1120,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // Print timing information
     print_timings(&timings);
 
+    // Stop the timeout thread
+    timeout_handle.store(true, std::sync::atomic::Ordering::SeqCst);
+
     Ok(final_results)
 }
 /// Helper function to search files using structured patterns from a QueryPlan.
@@ -1180,7 +1186,6 @@ pub fn search_with_structured_patterns(
         println!("DEBUG: Got {} files from cache", file_list.files.len());
         println!("DEBUG: Starting parallel file processing with combined regex");
     }
-
     // Step 3: Process files in parallel
     // Create thread-safe shared resources
     let combined_regex = Arc::new(combined_regex);

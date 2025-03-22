@@ -23,12 +23,12 @@ fn test_ip_whitelist_stemming() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-
         exact: false, // Important: set to false to enable stemming
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Enable debug mode to see the actual terms
@@ -117,6 +117,7 @@ fn test_negative_terms_exclude_files() {
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Enable debug mode to see the actual terms

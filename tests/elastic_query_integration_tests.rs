@@ -116,6 +116,7 @@ fn test_required_term_query() {
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the temp_path for debugging
@@ -222,6 +223,7 @@ fn test_excluded_term_query() {
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the query for debugging
@@ -312,6 +314,7 @@ fn test_or_query() {
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the test files for debugging
@@ -410,6 +413,7 @@ fn test_complex_query_or() {
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the test files for debugging
@@ -506,6 +510,7 @@ fn test_complex_query_exclusion() {
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the query for debugging
@@ -603,6 +608,7 @@ fn test_function() {
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Run the search

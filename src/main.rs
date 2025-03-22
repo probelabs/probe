@@ -33,6 +33,7 @@ struct SearchParams {
     dry_run: bool,
     format: String,
     session: Option<String>,
+    timeout: u64,
 }
 
 fn handle_search(params: SearchParams) -> Result<()> {
@@ -82,6 +83,11 @@ fn handle_search(params: SearchParams) -> Result<()> {
         advanced_options.push(format!("Session: {}", session));
     }
 
+    // Show timeout if it's not the default value of 30 seconds
+    if params.timeout != 30 {
+        advanced_options.push(format!("Timeout: {} seconds", params.timeout));
+    }
+
     if !advanced_options.is_empty() {
         println!(
             "{} {}",
@@ -112,6 +118,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
         merge_threshold: params.merge_threshold,
         dry_run: params.dry_run,
         session: params.session.as_deref(),
+        timeout: params.timeout,
     };
 
     let limited_results = perform_probe(&search_options)?;
@@ -236,6 +243,7 @@ async fn main() -> Result<()> {
                 dry_run: args.dry_run,
                 format: args.format,
                 session: args.session,
+                timeout: args.timeout,
             })?
         }
         Some(Commands::Search {
@@ -256,6 +264,7 @@ async fn main() -> Result<()> {
             dry_run,
             format,
             session,
+            timeout,
         }) => handle_search(SearchParams {
             pattern,
             paths,
@@ -274,6 +283,7 @@ async fn main() -> Result<()> {
             dry_run,
             format,
             session,
+            timeout,
         })?,
         Some(Commands::Extract {
             files,

@@ -309,6 +309,7 @@ func (i *IPWhiteListMiddleware) Process() {
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Run the search
@@ -386,6 +387,7 @@ func Process() {
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Run the search

@@ -82,6 +82,7 @@ fn test_parallel_file_search() {
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Measure search time
@@ -206,6 +207,7 @@ fn function_{}() {{
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Measure search time
@@ -307,6 +309,7 @@ fn function_with_blocks_{}() {{
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Measure search time

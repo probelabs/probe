@@ -26,12 +26,13 @@ const SEARCH_FLAG_MAP = {
 	allowTests: '--allow-tests',
 	noMerge: '--no-merge',
 	mergeThreshold: '--merge-threshold',
-	session: '--session'
+	session: '--session',
+	timeout: '--timeout'
 };
 
 /**
  * Search code in a specified directory
- * 
+ *
  * @param {Object} options - Search options
  * @param {string} options.path - Path to search in
  * @param {string|string[]} options.query - Search query or queries
@@ -48,6 +49,7 @@ const SEARCH_FLAG_MAP = {
  * @param {boolean} [options.noMerge] - Don't merge adjacent blocks
  * @param {number} [options.mergeThreshold] - Merge threshold
  * @param {string} [options.session] - Session ID for caching results
+ * @param {number} [options.timeout] - Timeout in seconds (default: 30)
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists
  * @param {string} [options.binaryOptions.version] - Specific version to download
@@ -81,6 +83,12 @@ export async function search(options) {
 		cliArgs.push('--max-tokens', '10000');
 	}
 
+	// Set default timeout if not provided
+	if (!options.timeout) {
+		options.timeout = 30;
+		cliArgs.push('--timeout', '30');
+	}
+
 	// Add session ID from environment variable if not provided in options
 	if (!options.session && process.env.PROBE_SESSION_ID) {
 		options.session = process.env.PROBE_SESSION_ID;
@@ -93,27 +101,45 @@ export async function search(options) {
 	let logMessage = `\nSearch: query="${queries[0]}" path="${options.path}"`;
 	if (options.maxResults) logMessage += ` maxResults=${options.maxResults}`;
 	logMessage += ` maxTokens=${options.maxTokens}`;
+	logMessage += ` timeout=${options.timeout}`;
 	if (options.exact) logMessage += " exact=true";
 	if (options.allowTests) logMessage += " allowTests=true";
 	if (options.session) logMessage += ` session=${options.session}`;
 	console.error(logMessage);
+	// Create positional arguments array separate from flags
+	const positionalArgs = [];
 
 	if (queries.length > 0) {
 		// Escape the query to handle special characters
-		cliArgs.push(escapeString(queries[0]));
+		positionalArgs.push(escapeString(queries[0]));
 	}
 
 	// Escape the path to handle spaces and special characters
-	cliArgs.push(escapeString(options.path));
+	positionalArgs.push(escapeString(options.path));
+	// Don't add the path to cliArgs, it should only be a positional argument
 
-	// Execute command
-	const command = `${binaryPath} search ${cliArgs.join(' ')}`;
+	// Execute command with flags first, then positional arguments
+	const command = `${binaryPath} search ${cliArgs.join(' ')} ${positionalArgs.join(' ')}`;
 
-	// Debug log to see the actual command with quotes
+	// Debug logs to see the actual command with quotes and the path
 	console.error(`Executing command: ${command}`);
+	console.error(`Path being used: "${options.path}"`);
+	console.error(`Escaped path: ${escapeString(options.path)}`);
+	console.error(`Command flags: ${cliArgs.join(' ')}`);
+	console.error(`Positional arguments: ${positionalArgs.join(' ')}`);
 
 	try {
-		const { stdout, stderr } = await execAsync(command);
+		// Log before executing
+		console.error(`About to execute command: ${command}`);
+
+		// Execute the command with options to preserve quotes and apply timeout
+		const { stdout, stderr } = await execAsync(command, {
+			shell: true,
+			timeout: options.timeout * 1000 // Convert seconds to milliseconds
+		});
+
+		// Log after executing
+		console.error(`Command executed successfully`);
 
 		if (stderr) {
 			console.error(`stderr: ${stderr}`);
@@ -176,6 +202,13 @@ export async function search(options) {
 
 		return stdout;
 	} catch (error) {
+		// Check if the error is a timeout
+		if (error.code === 'ETIMEDOUT' || error.killed) {
+			const timeoutMessage = `Search operation timed out after ${options.timeout} seconds.\nCommand: ${command}`;
+			console.error(timeoutMessage);
+			throw new Error(timeoutMessage);
+		}
+
 		// Enhance error message with command details
 		const errorMessage = `Error executing search command: ${error.message}\nCommand: ${command}`;
 		throw new Error(errorMessage);

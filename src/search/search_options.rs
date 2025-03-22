@@ -19,4 +19,5 @@ pub struct SearchOptions<'a> {
     pub merge_threshold: Option<usize>,
     pub dry_run: bool,
     pub session: Option<&'a str>,
+    pub timeout: u64,
 }

@@ -12,6 +12,7 @@ mod search_output;
 pub mod search_runner;
 pub mod search_tokens;
 pub mod term_exceptions; // New module for term exceptions
+pub mod timeout; // New module for timeout functionality
 pub mod tokenization; // New elastic search query parser
                       // Temporarily commented out due to compilation issues
                       // mod temp_frequency_search;

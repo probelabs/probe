@@ -80,6 +80,7 @@ fn test_cache_after_limit() {
         merge_threshold: None,
         dry_run: false,
         session: Some(&session_id), // Use our session ID
+        timeout: 30,
     };
 
     // Perform the first search with limited results
@@ -110,6 +111,7 @@ fn test_cache_after_limit() {
         merge_threshold: None,
         dry_run: false,
         session: Some(&session_id), // Same session ID
+        timeout: 30,
     };
 
     // Perform the second search with no limits
@@ -158,6 +160,7 @@ fn test_cache_updates() {
         merge_threshold: None,
         dry_run: false,
         session: Some(&session_id), // Use our session ID
+        timeout: 30,
     };
 
     // Perform the first search with limited results

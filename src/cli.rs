@@ -80,6 +80,10 @@ pub struct Args {
     #[arg(long = "session")]
     pub session: Option<String>,
 
+    /// Timeout in seconds for search operation (default: 30)
+    #[arg(long = "timeout", default_value = "30")]
+    pub timeout: u64,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -161,6 +165,10 @@ pub enum Commands {
         /// Session ID for caching search results
         #[arg(long = "session")]
         session: Option<String>,
+
+        /// Timeout in seconds for search operation (default: 30)
+        #[arg(long = "timeout", default_value = "30")]
+        timeout: u64,
     },
 
     /// Extract code blocks from files

@@ -99,6 +99,7 @@ fn test_stemming_with_and_query(temp_path: &Path) {
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Run the search
@@ -177,6 +178,7 @@ fn test_stemming_with_or_query(temp_path: &Path) {
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Run the search
@@ -372,12 +374,12 @@ fn test_compound_word_splitting(temp_path: &Path) {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-
         exact: false, // Enable stemming and compound word splitting
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Run the search
@@ -421,6 +423,7 @@ fn test_compound_word_splitting(temp_path: &Path) {
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Run the search
@@ -471,12 +474,12 @@ fn test_negative_compound_word_in_existing_tests(temp_path: &Path) {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-
         exact: false, // Enable stemming and compound word splitting
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Run the search

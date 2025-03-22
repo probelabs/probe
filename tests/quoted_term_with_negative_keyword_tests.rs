@@ -85,6 +85,7 @@ fn test_quoted_term_with_negative_keyword() {
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the query for debugging
@@ -164,6 +165,7 @@ fn test_negative_quoted_term() {
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the query for debugging
