@@ -16,14 +16,16 @@ const execAsync = promisify(exec);
 const EXTRACT_FLAG_MAP = {
 	allowTests: '--allow-tests',
 	contextLines: '--context',
-	format: '--format'
+	format: '--format',
+	inputFile: '--input-file'
 };
 
 /**
  * Extract code blocks from files
  * 
  * @param {Object} options - Extract options
- * @param {string[]} options.files - Files to extract from (can include line numbers with colon, e.g., "/path/to/file.rs:10")
+ * @param {string[]} [options.files] - Files to extract from (can include line numbers with colon, e.g., "/path/to/file.rs:10")
+ * @param {string} [options.inputFile] - Path to a file containing unstructured text to extract file paths from
  * @param {boolean} [options.allowTests] - Include test files
  * @param {number} [options.contextLines] - Number of context lines to include
  * @param {string} [options.format] - Output format ('markdown', 'plain', 'json')
@@ -35,8 +37,13 @@ const EXTRACT_FLAG_MAP = {
  * @throws {Error} If the extraction fails
  */
 export async function extract(options) {
-	if (!options || !options.files || !Array.isArray(options.files) || options.files.length === 0) {
-		throw new Error('Files array is required and must not be empty');
+	if (!options) {
+		throw new Error('Options object is required');
+	}
+
+	// Either files or inputFile must be provided
+	if ((!options.files || !Array.isArray(options.files) || options.files.length === 0) && !options.inputFile) {
+		throw new Error('Either files array or inputFile must be provided');
 	}
 
 	// Get the binary path
@@ -50,9 +57,11 @@ export async function extract(options) {
 		cliArgs.push('--format', 'json');
 	}
 
-	// Add files as positional arguments
-	for (const file of options.files) {
-		cliArgs.push(escapeString(file));
+	// Add files as positional arguments if provided
+	if (options.files && Array.isArray(options.files) && options.files.length > 0) {
+		for (const file of options.files) {
+			cliArgs.push(escapeString(file));
+		}
 	}
 
 	// Execute command
@@ -67,10 +76,17 @@ export async function extract(options) {
 
 		// Parse the output to extract token usage information
 		let tokenUsage = {
-			requestTokens: options.files.join(' ').length / 4, // Approximate token count for the request
+			requestTokens: 0,
 			responseTokens: 0,
 			totalTokens: 0
 		};
+
+		// Calculate approximate request tokens
+		if (options.files && Array.isArray(options.files)) {
+			tokenUsage.requestTokens = options.files.join(' ').length / 4;
+		} else if (options.inputFile) {
+			tokenUsage.requestTokens = options.inputFile.length / 4;
+		}
 
 		// Try to extract token information from the output
 		if (stdout.includes('Total tokens returned:')) {

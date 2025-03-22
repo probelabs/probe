@@ -104,21 +104,72 @@ export const extractTool = (options = {}) => {
 		name: 'extract',
 		description: extractDescription,
 		parameters: extractSchema,
-		execute: async ({ file_path, line, end_line, allow_tests, context_lines, format }) => {
+		execute: async ({ file_path, input_content, line, end_line, allow_tests, context_lines, format }) => {
 			try {
 				if (debug) {
-					console.error(`Executing extract with file: "${file_path}", context lines: ${context_lines || 10}`);
+					if (file_path) {
+						console.error(`Executing extract with file: "${file_path}", context lines: ${context_lines || 10}`);
+					} else if (input_content) {
+						console.error(`Executing extract with input content, context lines: ${context_lines || 10}`);
+					}
 				}
 
-				// Parse file_path to handle line numbers and symbol names
-				const files = [file_path];
+				// Create a temporary file for input content if provided
+				let tempFilePath = null;
+				let extractOptions = {};
 
-				const results = await extract({
-					files,
-					allowTests: allow_tests,
-					contextLines: context_lines,
-					format
-				});
+				if (input_content) {
+					// Import required modules
+					const { writeFileSync, unlinkSync } = await import('fs');
+					const { join } = await import('path');
+					const { tmpdir } = await import('os');
+					const { randomUUID } = await import('crypto');
+
+					// Create a temporary file with the input content
+					tempFilePath = join(tmpdir(), `probe-extract-${randomUUID()}.txt`);
+					writeFileSync(tempFilePath, input_content);
+
+					if (debug) {
+						console.error(`Created temporary file for input content: ${tempFilePath}`);
+					}
+
+					// Set up extract options with input file
+					extractOptions = {
+						inputFile: tempFilePath,
+						allowTests: allow_tests,
+						contextLines: context_lines,
+						format
+					};
+				} else if (file_path) {
+					// Parse file_path to handle line numbers and symbol names
+					const files = [file_path];
+
+					// Set up extract options with files
+					extractOptions = {
+						files,
+						allowTests: allow_tests,
+						contextLines: context_lines,
+						format
+					};
+				} else {
+					throw new Error('Either file_path or input_content must be provided');
+				}
+
+				// Execute the extract command
+				const results = await extract(extractOptions);
+
+				// Clean up temporary file if created
+				if (tempFilePath) {
+					const { unlinkSync } = await import('fs');
+					try {
+						unlinkSync(tempFilePath);
+						if (debug) {
+							console.error(`Removed temporary file: ${tempFilePath}`);
+						}
+					} catch (cleanupError) {
+						console.error(`Warning: Failed to remove temporary file: ${cleanupError.message}`);
+					}
+				}
 
 				return results;
 			} catch (error) {

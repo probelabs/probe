@@ -29,6 +29,7 @@ fn test_parallel_file_extraction() {
         context_lines: 0,
         format: "plain".to_string(),
         from_clipboard: false,
+        input_file: None,
         to_clipboard: false,
         dry_run: false,
         diff: false,
@@ -83,7 +84,6 @@ fn function_four() {
         fs::write(&path, content).unwrap();
         file_paths.push(path.to_string_lossy().to_string());
     }
-
     // Create options for extraction with specific lines
     let options = ExtractOptions {
         files: file_paths,
@@ -91,6 +91,7 @@ fn function_four() {
         context_lines: 0,
         format: "plain".to_string(),
         from_clipboard: false,
+        input_file: None,
         to_clipboard: false,
         dry_run: false,
         diff: false,
@@ -157,6 +158,7 @@ fn test_parallel_extraction_performance() {
         context_lines: 0,
         format: "plain".to_string(),
         from_clipboard: false,
+        input_file: None,
         to_clipboard: false,
         dry_run: true, // Use dry run to avoid large output
         diff: false,

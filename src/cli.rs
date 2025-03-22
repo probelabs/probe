@@ -191,6 +191,9 @@ pub enum Commands {
         /// Read input from clipboard instead of files
         #[arg(short = 'f', long = "from-clipboard")]
         from_clipboard: bool,
+        /// Read input from a file (treats file content like stdin or clipboard)
+        #[arg(short = 'F', long = "input-file")]
+        input_file: Option<String>,
 
         /// Write output to clipboard
         #[arg(short = 't', long = "to-clipboard")]

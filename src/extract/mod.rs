@@ -45,6 +45,8 @@ pub struct ExtractOptions {
     pub format: String,
     /// Whether to read from clipboard
     pub from_clipboard: bool,
+    /// Path to input file to read from
+    pub input_file: Option<String>,
     /// Whether to write to clipboard
     pub to_clipboard: bool,
     /// Whether to perform a dry run
@@ -149,6 +151,85 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
         if file_paths.is_empty() {
             println!("{}", "No file paths found in clipboard.".yellow().bold());
+            return Ok(());
+        }
+    } else if let Some(input_file_path) = &options.input_file {
+        // Read from input file
+        println!(
+            "{}",
+            format!("Reading from file: {}...", input_file_path)
+                .bold()
+                .blue()
+        );
+
+        // Check if the file exists
+        let input_path = std::path::Path::new(input_file_path);
+        if !input_path.exists() {
+            return Err(anyhow::anyhow!(
+                "Input file does not exist: {}",
+                input_file_path
+            ));
+        }
+
+        // Read the file content
+        let buffer = std::fs::read_to_string(input_path)?;
+
+        // Store the original input if keep_input is true
+        if options.keep_input {
+            original_input = Some(buffer.clone());
+            if debug_mode {
+                println!(
+                    "[DEBUG] Stored original file input: {} bytes",
+                    original_input.as_ref().map_or(0, |s| s.len())
+                );
+            }
+        }
+
+        if debug_mode {
+            println!(
+                "[DEBUG] Reading from file, content length: {} bytes",
+                buffer.len()
+            );
+        }
+
+        // Auto-detect git diff format or use explicit flag
+        let is_diff_format = options.diff || is_git_diff_format(&buffer);
+
+        if is_diff_format {
+            // Parse as git diff format
+            if debug_mode {
+                println!("[DEBUG] Parsing file content as git diff format");
+            }
+            file_paths = extract_file_paths_from_git_diff(&buffer, options.allow_tests);
+        } else {
+            // Parse as regular text
+            file_paths = file_paths::extract_file_paths_from_text(&buffer, options.allow_tests);
+        }
+
+        if debug_mode {
+            println!(
+                "[DEBUG] Extracted {} file paths from input file",
+                file_paths.len()
+            );
+            for (path, start, end, symbol, lines) in &file_paths {
+                println!(
+                    "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?}, specific lines: {:?})",
+                    path,
+                    start,
+                    end,
+                    symbol,
+                    lines.as_ref().map(|l| l.len())
+                );
+            }
+        }
+
+        if file_paths.is_empty() {
+            println!(
+                "{}",
+                format!("No file paths found in input file: {}", input_file_path)
+                    .yellow()
+                    .bold()
+            );
             return Ok(());
         }
     } else if options.files.is_empty() {

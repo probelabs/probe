@@ -342,30 +342,51 @@ Examples:
 			let extractedCode = '';
 			try {
 				// Import required modules
-				const { execSync } = await import('child_process');
-				const { writeFileSync, unlinkSync } = await import('fs');
+				const { tmpdir } = await import('os');
 				const { join } = await import('path');
+				const { writeFileSync, unlinkSync } = await import('fs');
 
 				// Create a temporary file with the AI response
-				const tempFilePath = `/tmp/ai-response-${this.sessionId}.txt`;
+				const tempFilePath = join(tmpdir(), `ai-response-${this.sessionId}.txt`);
 				writeFileSync(tempFilePath, responseText);
 
-				// Get the path to the probe binary
-				const probeBinPath = join(process.cwd(), 'npm', 'bin', 'probe');
+				if (config.debug) {
+					console.error(`Created temporary file for AI response: ${tempFilePath}`);
+				}
 
-				// Execute the extract command on the response
-				const extractCommand = `${probeBinPath} extract -f ${tempFilePath}`;
-				console.error(`Executing extract command: ${extractCommand}`);
+				// Use the extract tool from the probe package with the input-file option
+				try {
+					// Use the extract function from the probe package
+					const { extract } = await import('@buger/probe');
 
-				extractedCode = execSync(extractCommand, { encoding: 'utf-8' });
+					// Call the extract function with the input file
+					extractedCode = await extract({
+						inputFile: tempFilePath,
+						allowTests: true,
+						contextLines: 10,
+						format: 'plain'
+					});
+
+					if (config.debug) {
+						console.error(`Extract command output length: ${extractedCode.length} bytes`);
+					}
+				} catch (extractError) {
+					console.error('Error using extract function:', extractError);
+					extractedCode = `Error extracting code: ${extractError.message}`;
+				}
 
 				// Clean up the temporary file
-				unlinkSync(tempFilePath);
-
-				console.error(`Extract command output length: ${extractedCode.length} bytes`);
-			} catch (extractError) {
-				console.error('Error executing extract command:', extractError);
-				extractedCode = `Error executing extract command: ${extractError.message}`;
+				try {
+					unlinkSync(tempFilePath);
+					if (config.debug) {
+						console.error(`Removed temporary file: ${tempFilePath}`);
+					}
+				} catch (cleanupError) {
+					console.error(`Warning: Failed to remove temporary file: ${cleanupError.message}`);
+				}
+			} catch (fileError) {
+				console.error('Error handling temporary file:', fileError);
+				extractedCode = `Error handling temporary file: ${fileError.message}`;
 			}
 
 			// Prepend the extracted code to the response

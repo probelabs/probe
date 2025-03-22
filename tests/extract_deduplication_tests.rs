@@ -43,6 +43,7 @@ fn standalone_function() {
         context_lines: 0,
         format: "plain".to_string(),
         from_clipboard: false,
+        input_file: None,
         to_clipboard: false,
         dry_run: true, // Use dry run to avoid actual output
         diff: false,

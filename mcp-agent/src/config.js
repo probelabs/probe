@@ -24,7 +24,7 @@ const configSchema = zod.object({
 	modelName: zod.string().optional(),
 	defaultAnthropicModel: zod.string().default('claude-3-7-sonnet-latest'),
 	defaultOpenAIModel: zod.string().default('gpt-4o-2024-05-13'),
-	defaultGoogleModel: zod.string().default('gemini-1.5-pro-latest'),
+	defaultGoogleModel: zod.string().default('gemini-2.0-flash'),
 
 	// Force specific provider
 	forceProvider: zod.enum(['anthropic', 'openai', 'google']).optional(),
