@@ -165,8 +165,8 @@ probe search "authentication" --format json
 # Exclude filenames to save tokens
 probe search "authentication" --exclude-filenames
 
-# Use exact matching to reduce noise
-probe search "authentication" --exact
+# Use more specific search terms to reduce noise
+probe search "authentication function"
 
 # Focus on specific file types
 probe search "authentication" ./src --ignore "*.test.js,*.spec.js,*.css,*.html"
@@ -180,8 +180,8 @@ probe search "authentication" ./src --ignore "*.test.js,*.spec.js,*.css,*.html"
 # Use frequency-based search (default)
 probe search "authentication" --frequency
 
-# For exact literal matching (faster but less flexible)
-probe search "exactString" --exact
+# Use more specific search terms for better precision
+probe search "exactString function"
 
 # Search only filenames first, then content
 probe search "config" --files-only

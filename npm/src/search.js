@@ -19,7 +19,6 @@ const SEARCH_FLAG_MAP = {
 	excludeFilenames: '--exclude-filenames',
 	reranker: '--reranker',
 	frequencySearch: '--frequency',
-	exact: '--exact',
 	maxResults: '--max-results',
 	maxBytes: '--max-bytes',
 	maxTokens: '--max-tokens',
@@ -41,7 +40,6 @@ const SEARCH_FLAG_MAP = {
  * @param {boolean} [options.excludeFilenames] - Exclude filenames from search
  * @param {string} [options.reranker] - Reranking method ('hybrid', 'hybrid2', 'bm25', 'tfidf')
  * @param {boolean} [options.frequencySearch] - Use frequency-based search
- * @param {boolean} [options.exact] - Use exact matching
  * @param {number} [options.maxResults] - Maximum number of results
  * @param {number} [options.maxBytes] - Maximum bytes to return
  * @param {number} [options.maxTokens] - Maximum tokens to return
@@ -102,7 +100,6 @@ export async function search(options) {
 	if (options.maxResults) logMessage += ` maxResults=${options.maxResults}`;
 	logMessage += ` maxTokens=${options.maxTokens}`;
 	logMessage += ` timeout=${options.timeout}`;
-	if (options.exact) logMessage += " exact=true";
 	if (options.allowTests) logMessage += " allowTests=true";
 	if (options.session) logMessage += ` session=${options.session}`;
 	console.error(logMessage);

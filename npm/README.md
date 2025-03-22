@@ -89,7 +89,6 @@ const results = await search({
   excludeFilenames: false,
   reranker: 'hybrid',
   frequencySearch: true,
-  exact: false,
   maxResults: 10,
   maxBytes: 1000000,
   maxTokens: 40000,
@@ -113,7 +112,6 @@ const results = await search({
 - `excludeFilenames`: Exclude filenames from search
 - `reranker`: Reranking method ('hybrid', 'hybrid2', 'bm25', 'tfidf')
 - `frequencySearch`: Use frequency-based search
-- `exact`: Use exact matching
 - `maxResults`: Maximum number of results
 - `maxBytes`: Maximum bytes to return
 - `maxTokens`: Maximum tokens to return

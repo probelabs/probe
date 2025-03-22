@@ -44,7 +44,10 @@ fn format_duration(duration: std::time::Duration) -> String {
 
 /// Create a QueryPlan from a raw query string. This fully parses the query into an AST,
 /// then extracts all terms (including excluded), and prepares a term-index map.
-pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_query::ParseError> {
+pub fn create_query_plan(
+    query: &str,
+    _exact: bool,
+) -> Result<QueryPlan, elastic_query::ParseError> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 
@@ -52,59 +55,7 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
         println!("DEBUG: Starting query plan creation for query: '{}'", query);
     }
 
-    if exact {
-        if debug_mode {
-            println!("DEBUG: Using exact mode, bypassing complex AST parsing");
-        }
-
-        // For exact mode, create a simple Term expression with the exact query
-        let exact_start = Instant::now();
-
-        // Split by whitespace to handle multi-word queries
-        let keywords: Vec<String> = query.split_whitespace().map(|s| s.to_lowercase()).collect();
-
-        // Create a simple Term expression
-        let ast = elastic_query::Expr::Term {
-            keywords: keywords.clone(),
-            field: None,
-            required: false,
-            excluded: false,
-            exact: true, // Mark as exact match
-        };
-
-        // Build term index map directly
-        let mut term_indices = HashMap::new();
-        for (i, term) in keywords.iter().enumerate() {
-            term_indices.insert(term.clone(), i);
-        }
-
-        let exact_duration = exact_start.elapsed();
-
-        if debug_mode {
-            println!(
-                "DEBUG: Created exact mode AST in {}",
-                format_duration(exact_duration)
-            );
-            println!("DEBUG: Created exact mode AST: {:?}", ast);
-            println!("DEBUG: Term indices: {:?}", term_indices);
-        }
-
-        let total_duration = start_time.elapsed();
-        if debug_mode {
-            println!(
-                "DEBUG: Query plan creation completed in {}",
-                format_duration(total_duration)
-            );
-        }
-
-        return Ok(QueryPlan {
-            ast,
-            term_indices,
-            excluded_terms: HashSet::new(),
-        });
-    }
-
-    // For non-exact mode, use the regular AST parsing
+    // Use the regular AST parsing
     let parsing_start = Instant::now();
 
     if debug_mode {

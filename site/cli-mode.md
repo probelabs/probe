@@ -21,7 +21,6 @@ probe search <QUERY> [PATH] [OPTIONS]
 | `--exclude-filenames, -n` | Exclude filenames from matching |
 | `--reranker, -r <TYPE>` | Algorithm: `hybrid`, `hybrid2`, `bm25`, `tfidf` |
 | `--frequency, -s` | Enable smart token matching (default) |
-| `--exact` | Literal text matching only |
 | `--max-results <N>` | Limit number of results |
 | `--max-bytes <N>` | Limit total bytes of code |
 | `--max-tokens <N>` | Limit total tokens (for AI) |
@@ -38,8 +37,8 @@ probe search <QUERY> [PATH] [OPTIONS]
 # Basic search - current directory
 probe search "authentication flow"
 
-# Exact match in specific folder
-probe search "updateUser" ./src/api --exact
+# Search in specific folder
+probe search "updateUser" ./src/api
 
 # Limit for AI context windows
 probe search "error handling" --max-tokens 8000

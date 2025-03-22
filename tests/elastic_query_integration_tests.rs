@@ -111,7 +111,6 @@ fn test_required_term_query() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
@@ -218,7 +217,6 @@ fn test_excluded_term_query() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
@@ -229,8 +227,8 @@ fn test_excluded_term_query() {
     // Print the query for debugging
     println!("Executing search with query: {:?}", queries);
     println!(
-        "Path: {:?}, exact: {}, frequency_search: {}",
-        options.path, options.exact, options.frequency_search
+        "Path: {:?}, frequency_search: {}",
+        options.path, options.frequency_search
     );
 
     // Run the search
@@ -309,7 +307,6 @@ fn test_or_query() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
@@ -335,8 +332,8 @@ fn test_or_query() {
     // Print the query for debugging
     println!("Executing search with query: {:?}", queries);
     println!(
-        "Path: {:?}, exact: {}, frequency_search: {}",
-        options.path, options.exact, options.frequency_search
+        "Path: {:?}, frequency_search: {}",
+        options.path, options.frequency_search
     );
 
     // Run the search
@@ -408,7 +405,6 @@ fn test_complex_query_or() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
@@ -434,8 +430,8 @@ fn test_complex_query_or() {
     // Print the query for debugging
     println!("Executing search with query: {:?}", queries);
     println!(
-        "Path: {:?}, exact: {}, frequency_search: {}",
-        options.path, options.exact, options.frequency_search
+        "Path: {:?}, frequency_search: {}",
+        options.path, options.frequency_search
     );
 
     // Run the search
@@ -505,7 +501,6 @@ fn test_complex_query_exclusion() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
@@ -516,8 +511,8 @@ fn test_complex_query_exclusion() {
     // Print the query for debugging
     println!("Executing search with query: {:?}", queries);
     println!(
-        "Path: {:?}, exact: {}, frequency_search: {}",
-        options.path, options.exact, options.frequency_search
+        "Path: {:?}, frequency_search: {}",
+        options.path, options.frequency_search
     );
 
     // Run the search
@@ -603,7 +598,6 @@ fn test_function() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,

@@ -72,6 +72,8 @@ export class ProbeAgent {
 	 */
 	initializeModel() {
 		console.error('Initializing AI model...');
+		console.error(`Available API keys: Anthropic=${!!config.anthropicApiKey}, OpenAI=${!!config.openaiApiKey}, Google=${!!config.googleApiKey}`);
+		console.error(`Force provider config value: "${config.forceProvider}"`);
 
 		// Check if a specific provider is forced
 		if (config.forceProvider) {
@@ -191,9 +193,7 @@ If you don't know the answer or can't find relevant information, be honest about
 		if (config.allowedFolders.length > 0) {
 			const folderList = config.allowedFolders.map(f => `"${f}"`).join(', ');
 			systemMessage += `\n\nIMPORTANT: For security reasons, code search is restricted to the following allowed folders: ${folderList}.
-You MUST specify one of these folders in the path argument when using the search_code tool.
-Attempting to search outside these folders will result in an error.
-You can search in subfolders by specifying a path like "${config.allowedFolders[0]}/subfolder".`;
+You MUST specify one of these folders in the path argument when using the search_code tool.".`;
 		} else {
 			systemMessage += `\n\nNo specific folders are configured for code search, so the current working directory (${process.cwd()}) will be used by default. You can omit the path parameter in your search calls, or use '.' to explicitly search in the current directory.`;
 		}

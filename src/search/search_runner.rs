@@ -187,7 +187,6 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         max_bytes,
         max_tokens,
         allow_tests,
-        exact,
         no_merge,
         merge_threshold,
         dry_run: _, // We don't need this in perform_probe, but need to include it in the pattern
@@ -311,9 +310,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let parse_res = if queries.len() > 1 {
         // Join multiple queries with AND
         let combined_query = queries.join(" AND ");
-        create_query_plan(&combined_query, *exact)
+        create_query_plan(&combined_query, false)
     } else {
-        create_query_plan(&queries[0], *exact)
+        create_query_plan(&queries[0], false)
     };
 
     let qp_duration = qp_start.elapsed();

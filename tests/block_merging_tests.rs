@@ -185,7 +185,6 @@ fn test_integration_with_search_flow() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(20), // Increase threshold to ensure non-adjacent blocks are merged
         dry_run: false,
@@ -297,7 +296,6 @@ fn test_no_merge_flag() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(20), // Increase threshold to ensure non-adjacent blocks are merged
         dry_run: false,
@@ -321,7 +319,6 @@ fn test_no_merge_flag() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: true,
         merge_threshold: Some(20), // Increase threshold to ensure non-adjacent blocks are merged
         dry_run: false,

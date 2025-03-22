@@ -98,7 +98,6 @@ fn test_basic_negative_compound_word(temp_path: &Path) {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false, // Enable stemming and compound word splitting
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
@@ -163,7 +162,6 @@ fn test_complex_negative_compound_word(temp_path: &Path) {
         max_tokens: None,
         allow_tests: true,
         // Use all terms mode
-        exact: false, // Enable stemming
         no_merge: true,
         merge_threshold: None,
         dry_run: false,

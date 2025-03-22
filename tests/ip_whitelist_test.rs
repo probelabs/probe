@@ -23,7 +23,6 @@ fn test_ip_whitelist_stemming() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false, // Important: set to false to enable stemming
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
@@ -111,8 +110,6 @@ fn test_negative_terms_exclude_files() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        // Important: set to false to require all terms
-        exact: false,
         no_merge: true,
         merge_threshold: None,
         dry_run: false,

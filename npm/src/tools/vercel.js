@@ -25,7 +25,7 @@ export const searchTool = (options = {}) => {
 		name: 'search',
 		description: searchDescription,
 		parameters: searchSchema,
-		execute: async ({ query: searchQuery, path, exact, allow_tests, maxTokens: paramMaxTokens }) => {
+		execute: async ({ query: searchQuery, path, allow_tests, maxTokens: paramMaxTokens }) => {
 			try {
 				// Use parameter maxTokens if provided, otherwise use the default
 				const effectiveMaxTokens = paramMaxTokens || maxTokens;
@@ -48,7 +48,6 @@ export const searchTool = (options = {}) => {
 				const results = await search({
 					query: searchQuery,
 					path: searchPath,
-					exact,
 					allow_tests,
 					json: false,
 					maxTokens: effectiveMaxTokens,

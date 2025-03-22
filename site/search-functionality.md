@@ -24,7 +24,6 @@ probe search <QUERY> [PATH] [OPTIONS]
 | `--exclude-filenames, -n` | Exclude filenames from matching | Off |
 | `--reranker, -r <TYPE>` | Ranking algorithm: `hybrid`, `hybrid2`, `bm25`, `tfidf` | `hybrid` |
 | `--frequency, -s` | Enable smart token matching | On |
-| `--exact` | Literal text matching only (disables stemming) | Off |
 | `--max-results <N>` | Limit number of results | No limit |
 | `--max-bytes <N>` | Limit total bytes of code returned | No limit |
 | `--max-tokens <N>` | Limit total tokens | No limit |

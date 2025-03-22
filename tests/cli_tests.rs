@@ -292,42 +292,7 @@ fn test_cli_default_frequency_search() {
     );
 }
 
-#[test]
-fn test_cli_exact_search() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    create_test_directory_structure(&temp_dir);
-
-    // Run the CLI with exact search option
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "search",
-            "search", // Pattern to search for
-            temp_dir.path().to_str().unwrap(),
-            "--exact",
-        ])
-        .output()
-        .expect("Failed to execute command");
-
-    // Check that the command succeeded
-    assert!(output.status.success());
-
-    // Convert stdout to string
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Check that it found matches
-    assert!(
-        stdout.contains("Found"),
-        "Output should indicate matches were found"
-    );
-
-    // Check that it did NOT use frequency-based search
-    assert!(
-        !stdout.contains("Frequency search enabled"),
-        "Should not use frequency-based search with --exact option"
-    );
-}
+// Test removed as --exact flag has been removed from the codebase
 
 #[test]
 fn test_cli_custom_ignores() {

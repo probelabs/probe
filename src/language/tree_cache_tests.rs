@@ -11,11 +11,28 @@ lazy_static::lazy_static! {
 
 #[test]
 fn test_tree_cache_basic() {
+    // Use a unique file name for this test to avoid interference with other tests
+    let unique_file_name = "test_file_basic_unique.rs";
+
     // Acquire the test mutex to prevent concurrent test execution
-    let _guard = TEST_MUTEX.lock().unwrap();
+    let _guard = TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     // Clear the cache before starting the test
     tree_cache::clear_tree_cache();
     tree_cache::reset_cache_hit_counter();
+
+    // Verify the cache is empty after clearing
+    assert_eq!(
+        tree_cache::get_cache_size(),
+        0,
+        "Cache should be empty after clearing"
+    );
+    assert!(
+        !tree_cache::is_in_cache(unique_file_name),
+        "Test file should not be in cache initially"
+    );
 
     // Create a parser
     let mut parser = Parser::new();
@@ -31,13 +48,19 @@ fn test_tree_cache_basic() {
     "#;
 
     // First parse - should be a cache miss
-    let tree1 = tree_cache::get_or_parse_tree("test_file.rs", content, &mut parser).unwrap();
+    let tree1 = tree_cache::get_or_parse_tree(unique_file_name, content, &mut parser).unwrap();
 
     // Verify cache hit count is still 0
     assert_eq!(tree_cache::get_cache_hit_count(), 0);
 
+    // Verify our file is in the cache
+    assert!(
+        tree_cache::is_in_cache(unique_file_name),
+        "Test file should be in cache after first parse"
+    );
+
     // Second parse of the same content - should be a cache hit
-    let tree2 = tree_cache::get_or_parse_tree("test_file.rs", content, &mut parser).unwrap();
+    let tree2 = tree_cache::get_or_parse_tree(unique_file_name, content, &mut parser).unwrap();
 
     // Verify cache hit count is now 1
     assert_eq!(tree_cache::get_cache_hit_count(), 1);
@@ -53,15 +76,33 @@ fn test_tree_cache_basic() {
         tree2.root_node().end_position()
     );
 
-    // Check that the cache has one entry
-    assert_eq!(tree_cache::get_cache_size(), 1);
-    assert!(tree_cache::is_in_cache("test_file.rs"));
+    // Verify our file is still in the cache
+    assert!(
+        tree_cache::is_in_cache(unique_file_name),
+        "Test file should still be in cache after second parse"
+    );
+
+    // Parse the same content again - should be another cache hit
+    let _tree3 = tree_cache::get_or_parse_tree(unique_file_name, content, &mut parser).unwrap();
+
+    // Verify cache hit count is now 2
+    assert_eq!(tree_cache::get_cache_hit_count(), 2);
+    assert!(tree_cache::is_in_cache(unique_file_name));
+
+    // Clean up - remove our test entry
+    tree_cache::invalidate_cache_entry(unique_file_name);
+    assert!(
+        !tree_cache::is_in_cache(unique_file_name),
+        "Test file should be removed after cleanup"
+    );
 }
 
 #[test]
 fn test_tree_cache_invalidation() {
     // Acquire the test mutex to prevent concurrent test execution
-    let _guard = TEST_MUTEX.lock().unwrap();
+    let _guard = TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Clear the cache before starting the test
     tree_cache::clear_tree_cache();
 
@@ -116,7 +157,9 @@ fn test_tree_cache_invalidation() {
 #[test]
 fn test_tree_cache_clear() {
     // Acquire the test mutex to prevent concurrent test execution
-    let _guard = TEST_MUTEX.lock().unwrap();
+    let _guard = TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Clear the cache before starting the test
     tree_cache::clear_tree_cache();
 
@@ -151,10 +194,23 @@ fn test_tree_cache_clear() {
 
 #[test]
 fn test_tree_cache_invalidate_entry() {
+    // Use a unique file name for this test to avoid interference with other tests
+    let unique_file_name = "test_file_invalidate_unique.rs";
+
     // Acquire the test mutex to prevent concurrent test execution
-    let _guard = TEST_MUTEX.lock().unwrap();
+    let _guard = TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     // Clear the cache before starting the test
     tree_cache::clear_tree_cache();
+
+    // Verify the cache is empty after clearing
+    assert_eq!(
+        tree_cache::get_cache_size(),
+        0,
+        "Cache should be empty after clearing"
+    );
 
     // Create a parser
     let mut parser = Parser::new();
@@ -170,24 +226,40 @@ fn test_tree_cache_invalidate_entry() {
     "#;
 
     // Parse a file to add an entry to the cache
-    tree_cache::get_or_parse_tree("test_file4.rs", content, &mut parser).unwrap();
+    tree_cache::get_or_parse_tree(unique_file_name, content, &mut parser).unwrap();
 
-    // Verify cache has exactly one entry
-    assert_eq!(tree_cache::get_cache_size(), 1);
-    assert!(tree_cache::is_in_cache("test_file4.rs"));
+    // Verify our file is in the cache
+    assert!(
+        tree_cache::is_in_cache(unique_file_name),
+        "Test file should be in cache after parsing"
+    );
+
+    // Get the current cache size - we only care that our file is in it
+    let cache_size_after_parse = tree_cache::get_cache_size();
 
     // Invalidate the specific entry
-    tree_cache::invalidate_cache_entry("test_file4.rs");
+    tree_cache::invalidate_cache_entry(unique_file_name);
 
-    // Verify cache is now empty and the specific entry is gone
-    assert_eq!(tree_cache::get_cache_size(), 0);
-    assert!(!tree_cache::is_in_cache("test_file4.rs"));
+    // Verify our file is no longer in the cache
+    assert!(
+        !tree_cache::is_in_cache(unique_file_name),
+        "Test file should be removed after invalidation"
+    );
+
+    // Verify the cache size decreased by 1
+    assert_eq!(
+        tree_cache::get_cache_size(),
+        cache_size_after_parse - 1,
+        "Cache size should decrease by 1 after invalidation"
+    );
 }
 
 #[test]
 fn test_tree_cache_concurrent_access() {
     // Acquire the test mutex to prevent concurrent test execution
-    let _guard = TEST_MUTEX.lock().unwrap();
+    let _guard = TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Clear the cache before starting the test
     tree_cache::clear_tree_cache();
 

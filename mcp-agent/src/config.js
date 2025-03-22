@@ -27,7 +27,12 @@ const configSchema = zod.object({
 	defaultGoogleModel: zod.string().default('gemini-2.0-flash'),
 
 	// Force specific provider
-	forceProvider: zod.enum(['anthropic', 'openai', 'google']).optional(),
+	forceProvider: zod.string()
+		.transform(val => val?.toLowerCase())
+		.refine(val => !val || ['anthropic', 'openai', 'google'].includes(val), {
+			message: "forceProvider must be one of: 'anthropic', 'openai', or 'google'"
+		})
+		.optional(),
 
 	// Token limits
 	maxTokens: zod.number().default(4000),
@@ -85,6 +90,10 @@ export const config = configSchema.parse({
 if (!config.anthropicApiKey && !config.openaiApiKey && !config.googleApiKey) {
 	throw new Error('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.');
 }
+
+// Debug log for provider selection
+console.error(`Raw FORCE_PROVIDER env value: "${process.env.FORCE_PROVIDER}"`);
+console.error(`Parsed forceProvider config value: "${config.forceProvider}"`);
 
 // Validate forced provider has matching API key
 if (config.forceProvider) {

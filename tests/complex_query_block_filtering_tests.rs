@@ -303,8 +303,6 @@ func (i *IPWhiteListMiddleware) Process() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        // Use all terms mode
-        exact: false, // Enable stemming
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
@@ -382,7 +380,6 @@ func Process() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: true,
         merge_threshold: None,
         dry_run: false,

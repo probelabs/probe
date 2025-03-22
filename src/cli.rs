@@ -39,10 +39,6 @@ pub struct Args {
     #[arg(short = 's', long = "frequency", default_value = "true")]
     pub frequency_search: bool,
 
-    /// Use exact matching without stemming or stopword removal
-    #[arg(long = "exact")]
-    pub exact: bool,
-
     /// Maximum number of results to return
     #[arg(long = "max-results")]
     pub max_results: Option<usize>,
@@ -124,10 +120,6 @@ pub enum Commands {
         /// Use frequency-based search with stemming and stopword removal (enabled by default)
         #[arg(short = 's', long = "frequency", default_value = "true")]
         frequency_search: bool,
-
-        /// Use exact matching without stemming or stopword removal
-        #[arg(long = "exact")]
-        exact: bool,
 
         /// Maximum number of results to return
         #[arg(long = "max-results")]

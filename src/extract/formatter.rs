@@ -215,8 +215,8 @@ fn format_extraction_internal(
                         writeln!(output, "    <node_type>{}</node_type>", &result.node_type)?;
                     }
 
-                    // Escape the code contents
-                    writeln!(output, "    <code>{}</code>", &result.code)?;
+                    // Use CDATA to preserve formatting and special characters
+                    writeln!(output, "    <code><![CDATA[{}]]></code>", &result.code)?;
 
                     writeln!(output, "  </result>")?;
                 }
@@ -237,33 +237,33 @@ fn format_extraction_internal(
                 writeln!(output, "  </summary>")?;
             }
 
-            // Close the root tag
-            writeln!(output, "</probe_results>")?;
-
+            // Add original_input, system_prompt, and user_instructions inside the root element
             if let Some(input) = original_input {
                 writeln!(
                     output,
-                    "<original_input>\n{}\n</original_input>",
-                    escape_xml(input)
+                    "  <original_input><![CDATA[{}]]></original_input>",
+                    input
                 )?;
             }
 
-            // Now place system_prompt, user_instructions, and original_input outside </probe_results>
             if let Some(prompt) = system_prompt {
                 writeln!(
                     output,
-                    "<system_prompt>\n{}\n</system_prompt>",
-                    escape_xml(prompt)
+                    "  <system_prompt><![CDATA[{}]]></system_prompt>",
+                    prompt
                 )?;
             }
 
             if let Some(instructions) = user_instructions {
                 writeln!(
                     output,
-                    "<user_instructions>\n{}\n</user_instructions>",
-                    escape_xml(instructions)
+                    "  <user_instructions><![CDATA[{}]]></user_instructions>",
+                    instructions
                 )?;
             }
+
+            // Close the root tag
+            writeln!(output, "</probe_results>")?;
         }
 
         // ---------------------------------------
@@ -278,17 +278,29 @@ fn format_extraction_internal(
             } else {
                 // For each result, we either skip the code if is_dry_run, or include it otherwise.
                 for result in results {
-                    // Common: show file
-                    writeln!(output, "File: {}", result.file.yellow())?;
+                    // Common: show file (with format-specific prefix)
+                    if format == "markdown" {
+                        writeln!(output, "## File: {}", result.file.yellow())?;
+                    } else {
+                        writeln!(output, "File: {}", result.file.yellow())?;
+                    }
 
                     // Show lines if not a full file
                     if result.node_type != "file" {
-                        writeln!(output, "Lines: {}-{}", result.lines.0, result.lines.1)?;
+                        if format == "markdown" {
+                            writeln!(output, "### Lines: {}-{}", result.lines.0, result.lines.1)?;
+                        } else {
+                            writeln!(output, "Lines: {}-{}", result.lines.0, result.lines.1)?;
+                        }
                     }
 
                     // Show node type if not file/context
                     if result.node_type != "file" && result.node_type != "context" {
-                        writeln!(output, "Type: {}", result.node_type.cyan())?;
+                        if format == "markdown" {
+                            writeln!(output, "### Type: {}", result.node_type.cyan())?;
+                        } else {
+                            writeln!(output, "Type: {}", result.node_type.cyan())?;
+                        }
                     }
 
                     // In dry-run, we do NOT print the code

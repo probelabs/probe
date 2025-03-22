@@ -77,7 +77,7 @@ fn test() {
     );
     let system_prompt = json_value.get("system_prompt").unwrap().as_str().unwrap();
     assert!(
-        system_prompt.contains("expert software engineer"),
+        system_prompt.contains("senior software engineer"),
         "System prompt should contain the engineer template"
     );
 

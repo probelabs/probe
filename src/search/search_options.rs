@@ -14,7 +14,6 @@ pub struct SearchOptions<'a> {
     pub max_bytes: Option<usize>,
     pub max_tokens: Option<usize>,
     pub allow_tests: bool,
-    pub exact: bool,
     pub no_merge: bool,
     pub merge_threshold: Option<usize>,
     pub dry_run: bool,

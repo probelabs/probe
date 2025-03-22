@@ -54,12 +54,16 @@ pub fn get_or_parse_tree(
 
     // Try to get from cache first
     {
-        let cache = TREE_CACHE.lock().unwrap();
+        let cache = TREE_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some((cached_tree, cached_hash)) = cache.get(file_path) {
             if cached_hash == &content_hash {
                 // Increment cache hit counter
                 {
-                    let mut hits = CACHE_HITS.lock().unwrap();
+                    let mut hits = CACHE_HITS
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *hits += 1;
                 }
 
@@ -85,7 +89,9 @@ pub fn get_or_parse_tree(
 
     // Store in cache
     {
-        let mut cache = TREE_CACHE.lock().unwrap();
+        let mut cache = TREE_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         cache.insert(file_path.to_string(), (tree.clone(), content_hash));
 
         if debug_mode {
@@ -102,7 +108,9 @@ pub fn get_or_parse_tree(
 /// This function can be used to free memory or force re-parsing of all files.
 #[allow(dead_code)]
 pub fn clear_tree_cache() {
-    let mut cache = TREE_CACHE.lock().unwrap();
+    let mut cache = TREE_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
@@ -112,7 +120,9 @@ pub fn clear_tree_cache() {
     cache.clear();
 
     // Also reset the cache hit counter
-    let mut hits = CACHE_HITS.lock().unwrap();
+    let mut hits = CACHE_HITS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *hits = 0;
 }
 
@@ -123,47 +133,59 @@ pub fn clear_tree_cache() {
 /// * `file_path` - The path of the file to remove from the cache
 #[allow(dead_code)]
 pub fn invalidate_cache_entry(file_path: &str) {
-    let mut cache = TREE_CACHE.lock().unwrap();
+    let mut cache = TREE_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if cache.remove(file_path).is_some() && debug_mode {
         println!("[DEBUG] Removed file from cache: {}", file_path);
     }
+}
 
-    /// Acquire the test mutex for test synchronization
-    ///
-    /// This function is used by tests to prevent concurrent access to the cache
-    /// during test execution, which can lead to flaky tests.
-    #[allow(dead_code)]
-    pub fn acquire_test_mutex() -> std::sync::MutexGuard<'static, ()> {
-        TEST_MUTEX.lock().unwrap()
-    }
+/// Acquire the test mutex for test synchronization
+///
+/// This function is used by tests to prevent concurrent access to the cache
+/// during test execution, which can lead to flaky tests.
+#[allow(dead_code)]
+pub fn acquire_test_mutex() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Get the current size of the tree cache
 #[allow(dead_code)]
 pub fn get_cache_size() -> usize {
-    let cache = TREE_CACHE.lock().unwrap();
+    let cache = TREE_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     cache.len()
 }
 
 /// Check if a specific file exists in the cache
 #[allow(dead_code)]
 pub fn is_in_cache(file_path: &str) -> bool {
-    let cache = TREE_CACHE.lock().unwrap();
+    let cache = TREE_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     cache.contains_key(file_path)
 }
 
 /// Reset the cache hit counter (for testing)
 #[allow(dead_code)]
 pub fn reset_cache_hit_counter() {
-    let mut hits = CACHE_HITS.lock().unwrap();
+    let mut hits = CACHE_HITS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *hits = 0;
 }
 
 /// Get the current cache hit count (for testing)
 #[allow(dead_code)]
 pub fn get_cache_hit_count() -> usize {
-    let hits = CACHE_HITS.lock().unwrap();
+    let hits = CACHE_HITS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *hits
 }
