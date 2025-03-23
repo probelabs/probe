@@ -95,7 +95,7 @@ export async function search(options) {
 	// Add query and path as positional arguments
 	const queries = Array.isArray(options.query) ? options.query : [options.query];
 
-	// Create a single log record with all search parameters
+	// Create a single log record with all search parameters (commented out for less verbose output)
 	let logMessage = `\nSearch: query="${queries[0]}" path="${options.path}"`;
 	if (options.maxResults) logMessage += ` maxResults=${options.maxResults}`;
 	logMessage += ` maxTokens=${options.maxTokens}`;
@@ -119,15 +119,15 @@ export async function search(options) {
 	const command = `${binaryPath} search ${cliArgs.join(' ')} ${positionalArgs.join(' ')}`;
 
 	// Debug logs to see the actual command with quotes and the path
-	console.error(`Executing command: ${command}`);
-	console.error(`Path being used: "${options.path}"`);
-	console.error(`Escaped path: ${escapeString(options.path)}`);
-	console.error(`Command flags: ${cliArgs.join(' ')}`);
-	console.error(`Positional arguments: ${positionalArgs.join(' ')}`);
+	// console.error(`Executing command: ${command}`);
+	// console.error(`Path being used: "${options.path}"`);
+	// console.error(`Escaped path: ${escapeString(options.path)}`);
+	// console.error(`Command flags: ${cliArgs.join(' ')}`);
+	// console.error(`Positional arguments: ${positionalArgs.join(' ')}`);
 
 	try {
 		// Log before executing
-		console.error(`About to execute command: ${command}`);
+		// console.error(`About to execute command: ${command}`);
 
 		// Execute the command with options to preserve quotes and apply timeout
 		const { stdout, stderr } = await execAsync(command, {
@@ -136,9 +136,9 @@ export async function search(options) {
 		});
 
 		// Log after executing
-		console.error(`Command executed successfully`);
+		// console.error(`Command executed successfully`);
 
-		if (stderr) {
+		if (stderr && process.env.DEBUG) {
 			console.error(`stderr: ${stderr}`);
 		}
 
@@ -180,7 +180,7 @@ export async function search(options) {
 			}
 		}
 
-		// Log the results count, token count, and bytes count
+		// Log the results count, token count, and bytes count (commented out for less verbose output)
 		let resultsMessage = `\nSearch results: ${resultCount} matches, ${tokenCount} tokens`;
 		if (bytesCount > 0) {
 			resultsMessage += `, ${bytesCount} bytes`;

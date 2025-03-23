@@ -15,30 +15,173 @@
 	<style>
 		body {
 			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-			margin: 20px;
+			margin: 0;
+			padding: 0;
 			line-height: 1.5;
 			color: #333;
+			height: 100vh;
+			overflow: hidden;
 		}
 
 		#chat-container {
-			max-width: 900px;
-			margin: auto;
+			max-width: 868px;
+			/* 900px - 16px padding on each side */
+			margin: 0 auto;
+			display: flex;
+			flex-direction: column;
+			height: 100vh;
+			position: relative;
+			box-sizing: border-box;
+		}
+
+		.header {
+			padding: 20px 0 0 0;
 		}
 
 		#messages {
-			border: 1px solid #ddd;
-			border-radius: 8px;
-			padding: 16px;
-			height: 500px;
-			overflow-y: auto;
+			flex: 1;
 			background-color: #fff;
-			box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+			overflow-y: auto;
+			margin-bottom: 80px;
+			/* Space for fixed input form */
 		}
 
-		#input-form {
-			margin-top: 16px;
-			display: flex;
+		.tool-call {
+			margin: 10px 0;
+			border: 1px solid #ddd;
+			border-radius: 8px;
+			background-color: #f8f9fa;
+			overflow: hidden;
+			box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+			transition: all 0.2s ease;
 		}
+
+		.tool-call:hover {
+			box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+		}
+
+		.tool-call-header {
+			background-color: #e9ecef;
+			padding: 10px 14px;
+			font-weight: bold;
+			border-bottom: 1px solid #ddd;
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+		}
+
+		.tool-call-name {
+			color: #0066cc;
+			font-size: 1.05em;
+		}
+
+		.tool-call-timestamp {
+			font-size: 0.8em;
+			color: #666;
+			font-style: italic;
+		}
+
+		.tool-call-content {
+			padding: 12px;
+		}
+
+		.tool-call-description {
+			background-color: #ffffff;
+			padding: 10px 12px;
+			border-radius: 6px;
+			border-left: 3px solid #44CDF3;
+			margin-bottom: 10px;
+			font-size: 0.95em;
+			color: #333;
+		}
+
+		.tool-call-args {
+			background-color: #ffffff;
+			padding: 10px;
+			border-radius: 6px;
+			border: 1px solid #eee;
+			font-family: SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace;
+			font-size: 0.9em;
+			margin-bottom: 10px;
+			white-space: pre-wrap;
+		}
+
+		.tool-call-result {
+			background-color: #f0f8ff;
+			padding: 10px;
+			border-radius: 6px;
+			border: 1px solid #e0e8ff;
+			font-family: SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace;
+			font-size: 0.9em;
+			white-space: pre-wrap;
+			max-height: 300px;
+			overflow-y: auto;
+		}
+
+
+		#input-form {
+			position: fixed;
+			display: flex;
+			padding: 16px 0;
+			background-color: white;
+			border-top: 1px solid #ddd;
+			z-index: 100;
+			max-width: 868px;
+			width: calc(100% - 32px);
+			margin: 0 auto;
+			left: 50%;
+			transform: translateX(-50%);
+			box-sizing: border-box;
+		}
+
+		#input-form.centered {
+			top: 50%;
+			transform: translate(-50%, -50%);
+			border-top: none;
+		}
+
+		#input-form.bottom {
+			bottom: 0;
+		}
+
+		.search-suggestions {
+			color: #999;
+			font-size: 0.85em;
+			display: none;
+			text-align: left;
+			padding: 0;
+			position: fixed;
+			max-width: 868px;
+			width: calc(100% - 32px);
+			margin: 0 auto;
+			background-color: white;
+			left: 50%;
+			transform: translateX(-50%);
+			z-index: 99;
+		}
+
+		.search-suggestions ul {
+			list-style: none;
+			padding: 0;
+			margin: 0;
+			display: flex;
+			flex-wrap: wrap;
+		}
+
+		.search-suggestions li {
+			padding: 6px 16px 6px 0;
+			white-space: nowrap;
+			cursor: pointer;
+		}
+
+		.search-suggestions li:hover {
+			color: #44CDF3;
+		}
+
+		#input-form.centered .search-suggestions {
+			display: block;
+		}
+
 
 		#message-input {
 			flex: 1;
@@ -51,7 +194,7 @@
 		button {
 			padding: 12px 20px;
 			margin-left: 8px;
-			background-color: #2196F3;
+			background-color: #44CDF3;
 			color: white;
 			border: none;
 			border-radius: 4px;
@@ -60,45 +203,62 @@
 		}
 
 		button:hover {
-			background-color: #0b7dda;
+			background-color: #2bb5db;
 		}
 
 		#allowed-folders {
-			margin-top: 16px;
-			padding: 12px;
+			margin-top: 10px;
+			margin-bottom: 10px;
+			padding: 8px 12px;
 			background-color: #f5f5f5;
 			border-radius: 4px;
 			border-left: 4px solid #2196F3;
+			font-size: 0.9em;
 		}
 
 		#allowed-folders h3 {
 			margin-top: 0;
-			margin-bottom: 8px;
-			font-size: 16px;
+			margin-bottom: 4px;
+			font-size: 14px;
 			color: #333;
 		}
 
 		#folder-list {
-			margin-top: 8px;
-			font-size: 14px;
+			margin-top: 4px;
+			font-size: 13px;
 		}
 
 		.folder-item {
-			padding: 4px 0;
+			padding: 2px 0;
 		}
 
-		#probe-info {
-			margin-top: 20px;
-			padding: 16px;
-			background-color: #e9f7fe;
-			border-radius: 4px;
-			border-left: 4px solid #2196F3;
+		.footer {
+			text-align: center;
+			padding: 10px;
+			font-size: 12px;
+			color: #666;
+			position: fixed;
+			bottom: 0;
+			left: 0;
+			right: 0;
+			background-color: white;
+			border-top: 1px solid #eee;
+			z-index: 50;
 		}
 
-		#probe-info h3 {
-			margin-top: 0;
+		.footer a {
 			color: #2196F3;
-			font-size: 18px;
+			text-decoration: none;
+		}
+
+		.footer a:hover {
+			text-decoration: underline;
+		}
+
+		.header-container {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
 		}
 
 		.example {
@@ -179,9 +339,8 @@
 		}
 
 		.ai-message {
-			background-color: #e3f2fd;
+			background-color: transparent;
 			padding: 10px 14px;
-			border-radius: 18px;
 			margin-bottom: 12px;
 			max-width: 90%;
 			align-self: flex-start;
@@ -211,55 +370,115 @@
 
 <body>
 	<div id="chat-container">
-		<h1>Code Search with Probe and AI</h1>
-		<div id="messages" class="message-container"></div>
-		<form id="input-form">
-			<input type="text" id="message-input" placeholder="Ask about code or search for patterns..." required>
-			<button type="submit">Send</button>
-		</form>
-		<div id="allowed-folders">
-			<h3>Configured Search Folders:</h3>
-			<div id="folder-list">Loading configured folders...</div>
-		</div>
-		<div id="probe-info">
-			<h3>About Probe Tool</h3>
-			<p>This chat interface uses the Probe semantic code search tool. The AI (powered by either Anthropic's Claude or
-				OpenAI's GPT)
-				can search through your codebase to find relevant code blocks and create diagrams to explain code structure.</p>
-			<p class="example">Example queries:</p>
-			<ul>
-				<li>"Search for functions that handle authentication"</li>
-				<li>"Find code related to database connections"</li>
-				<li>"Look for implementations of the Observer pattern"</li>
-				<li>"Create a diagram of the authentication flow"</li>
-				<li>"Explain the project structure with a flowchart"</li>
-				<li>"Find all functions with more than 3 parameters"</li>
-				<li>"Show me the implementation of the 'login' function"</li>
-			</ul>
-			<p>You can specify a folder to search in: "Search for API handlers in folder /Users/leonidbugaev/go/src/tyk"</p>
-			<p>Probe extracts complete code blocks (functions, classes, methods) to provide full context for AI analysis.</p>
-
-			<h4>Available Tools</h4>
-			<ul>
-				<li><strong>Search</strong>: Find code using Elasticsearch-like query syntax</li>
-				<li><strong>Query</strong>: Search code using ast-grep structural pattern matching</li>
-				<li><strong>Extract</strong>: Extract code blocks from files based on file paths and line numbers</li>
-			</ul>
-
-			<!-- Test Mermaid diagram -->
-			<div class="mermaid">
-				graph TD
-				A[Client] --> B[Server]
-				B --> C[Database]
+		<div class="header">
+			<div class="header-container">
+				<h1>Code Search with Probe and AI</h1>
+			</div>
+			<div id="allowed-folders">
+				<h3>Configured Search Folders:</h3>
+				<div id="folder-list">Loading configured folders...</div>
 			</div>
 		</div>
+		<div id="messages" class="message-container"></div>
+		<form id="input-form">
+			<input type="text" id="message-input" placeholder="Ask about code..." required>
+			<button type="submit">Search</button>
+		</form>
+		<div class="search-suggestions">
+			<ul>
+				<li>Find functions that handle user authentication</li>
+				<li>Search for database connection implementations</li>
+				<li>Show error handling patterns in the codebase</li>
+				<li>List all API endpoints in the project</li>
+				<li>Find code that processes user input</li>
+				<li>Show how configuration is loaded</li>
+				<li>Find file parsing implementations</li>
+			</ul>
+		</div>
+		<div class="footer">
+			Powered by <a href="https://probeai.dev/" target="_blank">Probe AI</a>
+		</div>
 	</div>
-
 	<script>
+		// Session ID for this chat session - we'll store it in localStorage to maintain consistency
+		let sessionId;
+		// Try to get the session ID from localStorage
+		if (localStorage.getItem('probeSessionId')) {
+			sessionId = localStorage.getItem('probeSessionId');
+			console.log(`Using existing session ID from localStorage: ${sessionId}`);
+		} else {
+			// Generate a new session ID if none exists
+			sessionId = crypto.randomUUID();
+			localStorage.setItem('probeSessionId', sessionId);
+			console.log(`Generated new session ID: ${sessionId}`);
+		}
 		const messagesDiv = document.getElementById('messages');
 		const form = document.getElementById('input-form');
+		const searchSuggestionsDiv = document.querySelector('.search-suggestions');
 		const input = document.getElementById('message-input');
 		const folderListDiv = document.getElementById('folder-list');
+
+		// Position the input form in the center initially and handle UI elements visibility
+		function positionInputForm() {
+			const footer = document.querySelector('.footer');
+			const allowedFoldersSection = document.getElementById('allowed-folders');
+
+			if (messagesDiv.children.length === 0) {
+				form.classList.add('centered');
+				form.classList.remove('bottom');
+				// Show footer and folders section when no messages
+				if (footer) {
+					footer.style.display = 'block';
+				}
+				if (allowedFoldersSection) {
+					allowedFoldersSection.style.display = 'block';
+				}
+			} else {
+				form.classList.remove('centered');
+				form.classList.add('bottom');
+				// Hide footer and folders section when chat is started
+				if (footer) {
+					footer.style.display = 'none';
+				}
+				if (allowedFoldersSection) {
+					allowedFoldersSection.style.display = 'none';
+				}
+			}
+		}
+
+		// Make search suggestions clickable
+		function setupSearchSuggestions() {
+			document.querySelectorAll('.search-suggestions li').forEach(item => {
+				item.addEventListener('click', () => {
+					input.value = item.textContent;
+					input.focus();
+				});
+			});
+		}
+
+		// Initialize on page load
+		window.addEventListener('load', () => {
+			setupSearchSuggestions();
+			positionInputForm();
+			positionSearchSuggestions();
+		});
+
+
+		// Position search suggestions relative to input form
+		function positionSearchSuggestions() {
+			const formRect = form.getBoundingClientRect();
+
+			if (form.classList.contains('centered')) {
+				// Position directly below the form
+				searchSuggestionsDiv.style.top = formRect.bottom + 'px';
+				searchSuggestionsDiv.style.display = 'block';
+			} else {
+				searchSuggestionsDiv.style.display = 'none';
+			}
+		}
+
+		// Update search suggestions position when window is resized
+		window.addEventListener('resize', positionSearchSuggestions);
 
 		// Check if Mermaid is properly loaded
 		function checkMermaidLoaded() {
@@ -325,7 +544,7 @@
 		// Update the UI with allowed folders
 		function updateFolderListUI() {
 			if (allowedFolders.length === 0) {
-				folderListDiv.textContent = 'No folders configured. Please set ALLOWED_FOLDERS in .env';
+				folderListDiv.textContent = 'No folders configured. Please set ALLOWED_FOLDERS in .env. Search will be limited to the current folder.';
 			} else {
 				folderListDiv.innerHTML = allowedFolders.map(f =>
 					`<div class="folder-item">- ${f}</div>`
@@ -370,11 +589,266 @@
 			setTimeout(testMermaidRendering, 1000);
 		});
 
+		// Connect to SSE endpoint for tool calls
+		let eventSource;
+		let currentAiMessageDiv = null;
+
+		function connectToToolEvents() {
+			// Close existing connection if any
+			if (eventSource) {
+				console.log('Closing existing SSE connection');
+				eventSource.close();
+			}
+
+			console.log(`%c Connecting to SSE endpoint with session ID: ${sessionId}`, 'background: #FF9800; color: white; padding: 2px 5px; border-radius: 2px;');
+			// Connect to SSE endpoint with session ID
+			const sseUrl = `/api/tool-events?sessionId=${sessionId}`;
+			console.log('SSE URL:', sseUrl);
+			eventSource = new EventSource(sseUrl);
+
+			// Handle connection event
+			eventSource.addEventListener('connection', (event) => {
+				console.log('%c Connected to tool events stream', 'background: #4CAF50; color: white; padding: 2px 5px; border-radius: 2px;', event.data);
+				try {
+					const connectionData = JSON.parse(event.data);
+					console.log('Connection data:', connectionData);
+				} catch (error) {
+					console.error('Error parsing connection data:', error, event.data);
+				}
+			});
+
+			// Handle test events
+			eventSource.addEventListener('test', (event) => {
+				console.log('%c Received test event:', 'background: #9C27B0; color: white; padding: 2px 5px; border-radius: 2px;', event.data);
+				try {
+					const testData = JSON.parse(event.data);
+					console.log('%c Test data:', 'background: #673AB7; color: white; padding: 2px 5px; border-radius: 2px;', testData);
+
+					// Log specific test data properties
+					console.log('Test message:', testData.message);
+					console.log('Test timestamp:', testData.timestamp);
+					console.log('Test session ID:', testData.sessionId);
+
+					if (testData.status) {
+						console.log('Test status:', testData.status);
+					}
+
+					if (testData.connectionInfo) {
+						console.log('Connection info:', testData.connectionInfo);
+					}
+
+					if (testData.sequence === 2) {
+						console.log('%c SSE connection fully verified with follow-up test', 'background: #4CAF50; color: white; padding: 2px 5px; border-radius: 2px;');
+					}
+
+					// Add a visual indicator that the SSE connection is working
+					const connectionIndicator = document.createElement('div');
+					connectionIndicator.style.position = 'fixed';
+					connectionIndicator.style.bottom = '10px';
+					connectionIndicator.style.right = '10px';
+					connectionIndicator.style.backgroundColor = '#4CAF50';
+					connectionIndicator.style.color = 'white';
+					connectionIndicator.style.padding = '5px 10px';
+					connectionIndicator.style.borderRadius = '4px';
+					connectionIndicator.style.fontSize = '12px';
+					connectionIndicator.style.zIndex = '1000';
+					connectionIndicator.style.opacity = '0.8';
+					connectionIndicator.textContent = 'SSE Connected';
+
+					// Remove after 3 seconds
+					setTimeout(() => {
+						if (document.body.contains(connectionIndicator)) {
+							document.body.removeChild(connectionIndicator);
+						}
+					}, 3000);
+
+					document.body.appendChild(connectionIndicator);
+
+				} catch (error) {
+					console.error('Error parsing test event data:', error, event.data);
+				}
+			});
+
+			// Handle tool call events
+			eventSource.addEventListener('toolCall', (event) => {
+				console.log('%c Received tool call event:', 'background: #4CAF50; color: white; padding: 2px 5px; border-radius: 2px;', event);
+				try {
+					const toolCall = JSON.parse(event.data);
+					console.log('%c Tool call data:', 'background: #2196F3; color: white; padding: 2px 5px; border-radius: 2px;', toolCall);
+					console.log('Tool call name:', toolCall.name);
+					console.log('Tool call args:', toolCall.args);
+					console.log('Tool call result preview:', toolCall.resultPreview);
+					// Create a more robust ID for deduplication
+					// Include all relevant properties to ensure uniqueness
+					const query = toolCall.args.query || toolCall.args.keywords || toolCall.args.pattern || '';
+					const path = toolCall.args.path || toolCall.args.folder || '.';
+					const toolCallId = toolCall.id ||
+						`${toolCall.name}-${query}-${path}-${toolCall.timestamp}`;
+
+					// Store tool call descriptions to check for duplicates
+					if (!window.toolCallDescriptions) {
+						window.toolCallDescriptions = new Map();
+					}
+
+					// Format the tool call description (same as in addToolCallToMessage)
+					let toolDescription = '';
+					if (toolCall.name === 'searchCode') {
+						toolDescription = `Searching code with "${query}"${path === '.' ? '' : ` in ${path}`}`;
+					} else if (toolCall.name === 'queryCode') {
+						toolDescription = `Querying code with pattern "${query}"${path === '.' ? '' : ` in ${path}`}`;
+					} else if (toolCall.name === 'extractCode') {
+						const filePath = toolCall.args.file_path || '';
+						const line = toolCall.args.line;
+						const endLine = toolCall.args.end_line;
+
+						if (line && endLine) {
+							toolDescription = `Extracting code from ${filePath} (lines ${line}-${endLine})`;
+						} else if (line) {
+							toolDescription = `Extracting code from ${filePath} (from line ${line})`;
+						} else {
+							toolDescription = `Extracting code from ${filePath}`;
+						}
+					} else {
+						toolDescription = `Using ${toolCall.name} tool`;
+					}
+
+					// Check if we've already processed this exact description
+					if (window.toolCallDescriptions.has(toolDescription)) {
+						console.log(`%c Skipping duplicate tool call: "${toolDescription}"`, 'background: #FF9800; color: white; padding: 2px 5px; border-radius: 2px;');
+						return;
+					}
+
+					// Add this description to our map
+					window.toolCallDescriptions.set(toolDescription, toolCallId);
+					console.log(`%c Added tool call description: "${toolDescription}"`, 'background: #9C27B0; color: white; padding: 2px 5px; border-radius: 2px;');
+
+					// Also track by ID for backward compatibility
+					if (!window.processedToolCalls) {
+						window.processedToolCalls = new Set();
+					}
+					window.processedToolCalls.add(toolCallId);
+					console.log(`%c Added tool call to processed set: ${toolCallId}`, 'background: #9C27B0; color: white; padding: 2px 5px; border-radius: 2px;');
+
+					// Add tool call to the current AI message if it exists
+					if (currentAiMessageDiv) {
+						addToolCallToMessage(currentAiMessageDiv, toolCall);
+					} else {
+						console.warn('No current AI message div to add tool call to');
+						// Create a temporary div to display the tool call
+						const tempDiv = document.createElement('div');
+						tempDiv.className = 'ai-message';
+						tempDiv.innerHTML = '<div class="tool-call-header">Tool call received but no message context</div>';
+						messagesDiv.appendChild(tempDiv);
+						addToolCallToMessage(tempDiv, toolCall);
+					}
+				} catch (error) {
+					console.error('Error parsing tool call data:', error, event.data);
+				}
+			});
+
+			// Handle errors
+			eventSource.onerror = (error) => {
+				console.error('%c SSE Error:', 'background: #F44336; color: white; padding: 2px 5px; border-radius: 2px;', error);
+
+				// Log detailed readyState information
+				const readyStateMap = {
+					0: 'CONNECTING',
+					1: 'OPEN',
+					2: 'CLOSED'
+				};
+				const readyState = eventSource.readyState;
+				console.log(`EventSource readyState: ${readyState} (${readyStateMap[readyState] || 'UNKNOWN'})`);
+
+				// Check if the connection was established before the error
+				if (readyState === 2) {
+					console.log('Connection was closed. Attempting to reconnect...');
+				} else if (readyState === 0) {
+					console.log('Connection is still trying to connect. Will retry if it fails.');
+				}
+
+				// Try to reconnect after a delay
+				console.log('Will attempt to reconnect in 5 seconds...');
+				setTimeout(connectToToolEvents, 5000);
+			};
+
+			// Add open event handler
+			eventSource.onopen = () => {
+				console.log('%c SSE connection opened successfully', 'background: #4CAF50; color: white; padding: 2px 5px; border-radius: 2px;');
+				console.log('Ready to receive tool call events for session:', sessionId);
+			};
+		}
+
+		// Add tool call to the AI message
+		function addToolCallToMessage(messageDiv, toolCall) {
+			console.log('%c Adding tool call to message:', 'background: #4CAF50; color: white; padding: 2px 5px; border-radius: 2px;', toolCall);
+
+			try {
+				// Format the tool call in a user-friendly way
+				let toolDescription = '';
+
+				// Format based on tool type
+				if (toolCall.name === 'searchCode') {
+					const query = toolCall.args.query || toolCall.args.keywords || '';
+					const path = toolCall.args.path || toolCall.args.folder || '.';
+
+					toolDescription = `Searching code with "${query}"${path === '.' ? '' : ` in ${path}`}`;
+				}
+				else if (toolCall.name === 'queryCode') {
+					const pattern = toolCall.args.pattern || '';
+					const path = toolCall.args.path || '.';
+
+					toolDescription = `Querying code with pattern "${pattern}"${path === '.' ? '' : ` in ${path}`}`;
+				}
+				else if (toolCall.name === 'extractCode') {
+					const filePath = toolCall.args.file_path || '';
+					const line = toolCall.args.line;
+					const endLine = toolCall.args.end_line;
+
+					if (line && endLine) {
+						toolDescription = `Extracting code from ${filePath} (lines ${line}-${endLine})`;
+					} else if (line) {
+						toolDescription = `Extracting code from ${filePath} (from line ${line})`;
+					} else {
+						toolDescription = `Extracting code from ${filePath}`;
+					}
+				}
+				else {
+					// Default formatting for other tools
+					toolDescription = `Using ${toolCall.name} tool`;
+				}
+
+				// Create a paragraph element for the tool description
+				const toolParagraph = document.createElement('p');
+				toolParagraph.textContent = toolDescription;
+				toolParagraph.style.fontStyle = 'italic';
+				toolParagraph.style.color = '#555';
+				toolParagraph.style.margin = '8px 0';
+
+				// Add the paragraph to the message div
+				messageDiv.appendChild(toolParagraph);
+
+				// Scroll to the bottom
+				messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+				console.log('%c Tool call added successfully', 'background: #4CAF50; color: white; padding: 2px 5px; border-radius: 2px;');
+			} catch (error) {
+				console.error('Error adding tool call to message:', error);
+			}
+		}
+
+		// Connect to tool events on page load
+		window.addEventListener('DOMContentLoaded', () => {
+			connectToToolEvents();
+		});
+
 		// Handle form submission
 		form.addEventListener('submit', async (e) => {
 			e.preventDefault();
 			const message = input.value.trim();
 			if (!message) return;
+
+			// Check if this is the first message
+			const isFirstMessage = messagesDiv.children.length === 0;
 
 			// Display user message
 			const userMsgDiv = document.createElement('div');
@@ -383,17 +857,70 @@
 			messagesDiv.appendChild(userMsgDiv);
 			input.value = '';
 
+			// If this is the first message, move the input form to the bottom and hide UI elements
+			if (isFirstMessage) {
+				positionInputForm();
+				searchSuggestionsDiv.style.display = 'none';
+
+				// Ensure footer and folders section are hidden when chat starts
+				const footer = document.querySelector('.footer');
+				const allowedFoldersSection = document.getElementById('allowed-folders');
+
+				if (footer) {
+					footer.style.display = 'none';
+				}
+
+				if (allowedFoldersSection) {
+					allowedFoldersSection.style.display = 'none';
+				}
+			}
+
 			// Create AI message container
 			const aiMsgDiv = document.createElement('div');
 			aiMsgDiv.className = 'ai-message markdown-content';
 			messagesDiv.appendChild(aiMsgDiv);
 
+			// Set as current AI message for tool calls
+			currentAiMessageDiv = aiMsgDiv;
+
 			// Send message to server
 			try {
+				// Log the session ID being used
+				console.log(`%c Using session ID for chat request: ${sessionId}`, 'background: #FF9800; color: white; padding: 2px 5px; border-radius: 2px;');
+
+				const requestData = {
+					message,
+					sessionId // Include session ID with the request
+				};
+				console.log('Sending chat request with data:', requestData);
+
+				// Add a visual indicator that we're using this session ID
+				const sessionIndicator = document.createElement('div');
+				sessionIndicator.style.position = 'fixed';
+				sessionIndicator.style.top = '10px';
+				sessionIndicator.style.right = '10px';
+				sessionIndicator.style.backgroundColor = '#FF9800';
+				sessionIndicator.style.color = 'white';
+				sessionIndicator.style.padding = '5px 10px';
+				sessionIndicator.style.borderRadius = '4px';
+				sessionIndicator.style.fontSize = '12px';
+				sessionIndicator.style.zIndex = '1000';
+				sessionIndicator.style.opacity = '0.8';
+				sessionIndicator.textContent = `Session ID: ${sessionId.substring(0, 8)}...`;
+
+				// Remove after 3 seconds
+				setTimeout(() => {
+					if (document.body.contains(sessionIndicator)) {
+						document.body.removeChild(sessionIndicator);
+					}
+				}, 3000);
+
+				document.body.appendChild(sessionIndicator);
+
 				const response = await fetch('/chat', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ message }),
+					body: JSON.stringify(requestData),
 				});
 
 				const reader = response.body.getReader();

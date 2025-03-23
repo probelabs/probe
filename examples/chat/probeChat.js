@@ -5,7 +5,8 @@ import { generateText } from 'ai';
 import { randomUUID } from 'crypto';
 import { TokenCounter } from './tokenCounter.js';
 import { existsSync } from 'fs';
-import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE } from '@buger/probe';
+// Import the tools that emit events
+import { DEFAULT_SYSTEM_MESSAGE, searchTool, queryTool, extractTool, probeTool, searchToolInstance, queryToolInstance, extractToolInstance } from './probeTool.js';
 
 // Maximum number of messages to keep in history
 const MAX_HISTORY_MESSAGES = 20;
@@ -33,18 +34,23 @@ if (allowedFolders.length === 0) {
  * ProbeChat class to handle chat interactions with AI models
  */
 export class ProbeChat {
-  constructor() {
+  /**
+   * Create a new ProbeChat instance
+   * @param {Object} options - Configuration options
+   * @param {Function} options.toolCallCallback - Callback function for tool calls (sessionId, toolCallData)
+   */
+  constructor(options = {}) {
     // Make allowedFolders accessible as a property of the class
     this.allowedFolders = allowedFolders;
 
     // Initialize token counter
     this.tokenCounter = new TokenCounter();
 
-    // Generate a unique session ID for this chat instance
-    this.sessionId = randomUUID();
+    // Use provided session ID or generate a unique one
+    this.sessionId = options.sessionId || randomUUID();
 
     // Get debug mode
-    this.debug = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+    this.debug = process.env.DEBUG === '1';
 
     if (this.debug) {
       console.log(`[DEBUG] Generated session ID for chat: ${this.sessionId}`);
@@ -56,11 +62,65 @@ export class ProbeChat {
       debug: this.debug
     };
 
-    // Create configured tool instances
+    // Create configured tool instances that emit SSE events
+    // We need to ensure the tools use the correct session ID
     this.tools = [
-      searchTool(this.configOptions),
-      queryTool(this.configOptions),
-      extractTool(this.configOptions)
+      {
+        ...probeTool,
+        execute: async (params) => {
+          // Ensure the session ID is passed to the tool
+          const enhancedParams = {
+            ...params,
+            sessionId: this.sessionId
+          };
+          if (this.debug) {
+            console.log(`[DEBUG] ProbeChat executing probeTool with sessionId: ${this.sessionId}`);
+          }
+          return await probeTool.execute(enhancedParams);
+        }
+      },
+      {
+        ...searchToolInstance,
+        execute: async (params) => {
+          // Ensure the session ID is passed to the tool
+          const enhancedParams = {
+            ...params,
+            sessionId: this.sessionId
+          };
+          if (this.debug) {
+            console.log(`[DEBUG] ProbeChat executing searchToolInstance with sessionId: ${this.sessionId}`);
+          }
+          return await searchToolInstance.execute(enhancedParams);
+        }
+      },
+      {
+        ...queryToolInstance,
+        execute: async (params) => {
+          // Ensure the session ID is passed to the tool
+          const enhancedParams = {
+            ...params,
+            sessionId: this.sessionId
+          };
+          if (this.debug) {
+            console.log(`[DEBUG] ProbeChat executing queryToolInstance with sessionId: ${this.sessionId}`);
+          }
+          return await queryToolInstance.execute(enhancedParams);
+        }
+      },
+      {
+        ...extractToolInstance,
+        execute: async (params) => {
+          // Ensure the session ID is passed to the tool
+          const enhancedParams = {
+            ...params,
+            sessionId: this.sessionId
+          };
+          if (this.debug) {
+            console.log(`[DEBUG] ProbeChat executing extractToolInstance with sessionId: ${this.sessionId}`);
+          }
+          return await extractToolInstance.execute(enhancedParams);
+        }
+      }
     ];
 
     // Initialize the chat model
@@ -141,9 +201,100 @@ If you don't know the answer or can't find relevant information, be honest about
   /**
    * Process a user message and get a response
    * @param {string} message - The user message
+   * @param {string} [sessionId] - Optional session ID to use for this chat (overrides the default)
    * @returns {Promise<string>} - The AI response
    */
-  async chat(message) {
+  async chat(message, sessionId) {
+    // If a session ID is provided, always use it (don't restore the original)
+    if (sessionId) {
+      if (this.debug) {
+        console.log(`[DEBUG] Using provided session ID: ${sessionId} (instead of ${this.sessionId})`);
+      }
+      // Update the session ID permanently
+      this.sessionId = sessionId;
+      // Update tool configurations with the new session ID
+      this.configOptions.sessionId = sessionId;
+
+      // Create configured tool instances that emit SSE events
+      // We need to ensure the tools use the correct session ID
+      this.tools = [
+        {
+          ...probeTool,
+          execute: async (params) => {
+            // Ensure the session ID is passed to the tool
+            const enhancedParams = {
+              ...params,
+              sessionId: this.sessionId
+            };
+            if (this.debug) {
+              console.log(`[DEBUG] ProbeChat executing probeTool with sessionId: ${this.sessionId}`);
+            }
+            return await probeTool.execute(enhancedParams);
+          }
+        },
+        {
+          ...searchToolInstance,
+          execute: async (params) => {
+            // Ensure the session ID is passed to the tool
+            const enhancedParams = {
+              ...params,
+              sessionId: this.sessionId
+            };
+            if (this.debug) {
+              console.log(`[DEBUG] ProbeChat executing searchToolInstance with sessionId: ${this.sessionId}`);
+            }
+            return await searchToolInstance.execute(enhancedParams);
+          }
+        },
+        {
+          ...queryToolInstance,
+          execute: async (params) => {
+            // Ensure the session ID is passed to the tool
+            const enhancedParams = {
+              ...params,
+              sessionId: this.sessionId
+            };
+            if (this.debug) {
+              console.log(`[DEBUG] ProbeChat executing queryToolInstance with sessionId: ${this.sessionId}`);
+            }
+            return await queryToolInstance.execute(enhancedParams);
+          }
+        },
+        {
+          ...extractToolInstance,
+          execute: async (params) => {
+            // Ensure the session ID is passed to the tool
+            const enhancedParams = {
+              ...params,
+              sessionId: this.sessionId
+            };
+            if (this.debug) {
+              console.log(`[DEBUG] ProbeChat executing extractToolInstance with sessionId: ${this.sessionId}`);
+            }
+            return await extractToolInstance.execute(enhancedParams);
+          }
+        }
+      ];
+
+      if (this.debug) {
+        console.log(`[DEBUG] Recreated tools with new session ID: ${this.sessionId}`);
+      }
+
+      // Process the message with the new session ID
+      return await this._processChat(message);
+    } else {
+      // Use the default session ID
+      return await this._processChat(message);
+    }
+  }
+
+  /**
+   * Internal method to process a chat message
+   * @param {string} message - The user message
+   * @returns {Promise<string>} - The AI response
+   * @private
+   */
+  async _processChat(message) {
     try {
       if (this.debug) {
         console.log(`[DEBUG] Received user message: ${message}`);
@@ -208,8 +359,9 @@ If you don't know the answer or can't find relevant information, be honest about
       if (result.toolCalls && result.toolCalls.length > 0) {
         console.log(`Tool was used: ${result.toolCalls.length} times`);
 
-        if (this.debug) {
-          result.toolCalls.forEach((call, index) => {
+        // Process each tool call
+        result.toolCalls.forEach((call, index) => {
+          if (this.debug) {
             console.log(`[DEBUG] Tool call ${index + 1}: ${call.name}`);
             if (call.args) {
               console.log(`[DEBUG] Tool call ${index + 1} args:`, JSON.stringify(call.args, null, 2));
@@ -222,8 +374,12 @@ If you don't know the answer or can't find relevant information, be honest about
                 : JSON.stringify(call.result, null, 2).substring(0, 100) + '... (truncated)';
               console.log(`[DEBUG] Tool call ${index + 1} result preview: ${preview}`);
             }
-          });
-        }
+          }
+          // Note: We no longer need to emit events here as they're emitted directly from the tools
+          if (this.debug) {
+            console.log(`[DEBUG] Tool call completed: ${call.name}`);
+          }
+        });
       }
 
       return responseText;
@@ -254,13 +410,74 @@ If you don't know the answer or can't find relevant information, be honest about
       console.log(`[DEBUG] Cleared chat history; new session ID: ${this.sessionId}`);
     }
 
-    // Reconfigure the tools with the new session ID
+    // Update the session ID in the config options
     this.configOptions.sessionId = this.sessionId;
+
+    // Create configured tool instances that emit SSE events
+    // We need to ensure the tools use the correct session ID
     this.tools = [
-      searchTool(this.configOptions),
-      queryTool(this.configOptions),
-      extractTool(this.configOptions)
+      {
+        ...probeTool,
+        execute: async (params) => {
+          // Ensure the session ID is passed to the tool
+          const enhancedParams = {
+            ...params,
+            sessionId: this.sessionId
+          };
+          if (this.debug) {
+            console.log(`[DEBUG] ProbeChat executing probeTool with sessionId: ${this.sessionId}`);
+          }
+          return await probeTool.execute(enhancedParams);
+        }
+      },
+      {
+        ...searchToolInstance,
+        execute: async (params) => {
+          // Ensure the session ID is passed to the tool
+          const enhancedParams = {
+            ...params,
+            sessionId: this.sessionId
+          };
+          if (this.debug) {
+            console.log(`[DEBUG] ProbeChat executing searchToolInstance with sessionId: ${this.sessionId}`);
+          }
+          return await searchToolInstance.execute(enhancedParams);
+        }
+      },
+      {
+        ...queryToolInstance,
+        execute: async (params) => {
+          // Ensure the session ID is passed to the tool
+          const enhancedParams = {
+            ...params,
+            sessionId: this.sessionId
+          };
+          if (this.debug) {
+            console.log(`[DEBUG] ProbeChat executing queryToolInstance with sessionId: ${this.sessionId}`);
+          }
+          return await queryToolInstance.execute(enhancedParams);
+        }
+      },
+      {
+        ...extractToolInstance,
+        execute: async (params) => {
+          // Ensure the session ID is passed to the tool
+          const enhancedParams = {
+            ...params,
+            sessionId: this.sessionId
+          };
+          if (this.debug) {
+            console.log(`[DEBUG] ProbeChat executing extractToolInstance with sessionId: ${this.sessionId}`);
+          }
+          return await extractToolInstance.execute(enhancedParams);
+        }
+      }
     ];
+
+    if (this.debug) {
+      console.log(`[DEBUG] Recreated tools with new session ID: ${this.sessionId}`);
+    }
+
     return this.sessionId;
   }
 

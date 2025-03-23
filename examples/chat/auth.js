@@ -7,7 +7,7 @@ import 'dotenv/config';
  */
 export function authMiddleware(req, res, next) {
 	// Check if authentication is enabled
-	const AUTH_ENABLED = process.env.AUTH_ENABLED === 'true' || process.env.AUTH_ENABLED === '1';
+	const AUTH_ENABLED = process.env.AUTH_ENABLED === '1';
 
 	// If authentication is not enabled, skip authentication check
 	if (!AUTH_ENABLED) {

@@ -4,9 +4,10 @@ import { streamText } from 'ai';
 import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import { ProbeChat } from './probeChat.js';
 import { authMiddleware, withAuth } from './auth.js';
-import { probeTool, searchToolInstance, queryToolInstance, extractToolInstance } from './probeTool.js';
+import { probeTool, searchToolInstance, queryToolInstance, extractToolInstance, toolCallEmitter } from './probeTool.js';
 
 // Get the directory name of the current module
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -17,7 +18,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  */
 export function startWebServer(version) {
 	// Authentication configuration
-	const AUTH_ENABLED = process.env.AUTH_ENABLED === 'true' || process.env.AUTH_ENABLED === '1';
+	const AUTH_ENABLED = process.env.AUTH_ENABLED === '1';
 	const AUTH_USERNAME = process.env.AUTH_USERNAME || 'admin';
 	const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'password';
 
@@ -27,11 +28,20 @@ export function startWebServer(version) {
 		console.log('Authentication disabled');
 	}
 
+	// Map to store SSE clients by session ID
+	const sseClients = new Map();
+
 	// Initialize the ProbeChat instance
 	let probeChat;
 	try {
-		probeChat = new ProbeChat();
-		console.log(`Session ID: ${probeChat.getSessionId()}`);
+		// Generate a default session ID for the server
+		const defaultSessionId = randomUUID();
+		console.log(`Generated default session ID: ${defaultSessionId}`);
+
+		probeChat = new ProbeChat({
+			sessionId: defaultSessionId // Use the default session ID
+		});
+		console.log(`Server initialized with session ID: ${probeChat.getSessionId()}`);
 	} catch (error) {
 		console.error('Error initializing ProbeChat:', error.message);
 		process.exit(1);
@@ -47,16 +57,17 @@ export function startWebServer(version) {
 	/**
 	 * Handle non-streaming chat request (returns complete response as JSON)
 	 */
-	async function handleNonStreamingChatRequest(req, res, message) {
+	async function handleNonStreamingChatRequest(req, res, message, sessionId) {
 		try {
-			const DEBUG = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+			const DEBUG = process.env.DEBUG === '1';
 			if (DEBUG) {
 				console.log(`\n[DEBUG] ===== API Chat Request (non-streaming) =====`);
 				console.log(`[DEBUG] User message: "${message}"`);
 			}
 
 			// Use the ProbeChat instance to get a response
-			const responseText = await probeChat.chat(message);
+			// If a session ID was provided, use it to track the conversation
+			const responseText = await probeChat.chat(message, sessionId);
 
 			// Get token usage
 			const tokenUsage = probeChat.getTokenUsage();
@@ -116,9 +127,9 @@ export function startWebServer(version) {
 	/**
 	 * Handle streaming chat request (returns chunks of text)
 	 */
-	async function handleStreamingChatRequest(req, res, message) {
+	async function handleStreamingChatRequest(req, res, message, sessionId) {
 		try {
-			const DEBUG = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+			const DEBUG = process.env.DEBUG === '1';
 			if (DEBUG) {
 				console.log(`\n[DEBUG] ===== API Chat Request (streaming) =====`);
 				console.log(`[DEBUG] User message: "${message}"`);
@@ -132,7 +143,8 @@ export function startWebServer(version) {
 			});
 
 			// Use the ProbeChat instance to get a response
-			const responseText = await probeChat.chat(message);
+			// If a session ID was provided, use it to track the conversation
+			const responseText = await probeChat.chat(message, sessionId);
 
 			// Get token usage
 			const tokenUsage = probeChat.getTokenUsage();
@@ -182,6 +194,24 @@ export function startWebServer(version) {
 		}
 	}
 
+	// Helper function to send SSE data
+	function sendSSEData(res, data, eventType = 'message') {
+		const DEBUG = process.env.DEBUG === '1';
+		try {
+			if (DEBUG) {
+				console.log(`[DEBUG] Sending SSE data, event type: ${eventType}`);
+			}
+			res.write(`event: ${eventType}\n`);
+			res.write(`data: ${JSON.stringify(data)}\n\n`);
+			if (DEBUG) {
+				console.log(`[DEBUG] SSE data sent successfully for event: ${eventType}`);
+				console.log(`[DEBUG] SSE data content: ${JSON.stringify(data).substring(0, 200)}${JSON.stringify(data).length > 200 ? '...' : ''}`);
+			}
+		} catch (error) {
+			console.error(`[DEBUG] Error sending SSE data:`, error);
+		}
+	}
+
 	const server = createServer(async (req, res) => {
 		// Define route handlers with authentication
 		const routes = {
@@ -209,6 +239,197 @@ export function startWebServer(version) {
 				}
 			},
 
+			// SSE endpoint for tool calls - no authentication for easier testing
+			'GET /api/tool-events': (req, res) => {
+				// Parse session ID from query parameter
+				let sessionId;
+				try {
+					const url = new URL(req.url, `http://${req.headers.host}`);
+					sessionId = url.searchParams.get('sessionId');
+					const DEBUG = process.env.DEBUG === '1';
+					if (DEBUG) {
+						console.log(`[DEBUG] Parsed URL: ${url.toString()}, sessionId: ${sessionId}`);
+					}
+				} catch (error) {
+					const DEBUG = process.env.DEBUG === '1';
+					if (DEBUG) {
+						console.error(`[DEBUG] Error parsing URL: ${error.message}`);
+					}
+					// Fallback to manual parsing
+					const queryString = req.url.split('?')[1] || '';
+					const params = new URLSearchParams(queryString);
+					sessionId = params.get('sessionId');
+					if (DEBUG) {
+						console.log(`[DEBUG] Manually parsed sessionId: ${sessionId}`);
+					}
+				}
+
+				if (!sessionId) {
+					if (process.env.DEBUG === '1') {
+						console.error(`[DEBUG] No sessionId found in request URL: ${req.url}`);
+					}
+					res.writeHead(400, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: 'Missing sessionId parameter' }));
+					return;
+				}
+
+				const DEBUG = process.env.DEBUG === '1';
+				if (DEBUG) {
+					console.log(`[DEBUG] Setting up SSE connection for session: ${sessionId}`);
+				}
+
+				// Set headers for SSE
+				res.writeHead(200, {
+					'Content-Type': 'text/event-stream',
+					'Cache-Control': 'no-cache',
+					'Connection': 'keep-alive',
+					'Access-Control-Allow-Origin': '*'
+				});
+
+				if (DEBUG) {
+					console.log(`[DEBUG] SSE headers set for session: ${sessionId}`);
+					console.log(`[DEBUG] Headers:`, {
+						'Content-Type': 'text/event-stream',
+						'Cache-Control': 'no-cache',
+						'Connection': 'keep-alive',
+						'Access-Control-Allow-Origin': '*'
+					});
+				}
+
+				// Send initial connection established event
+				const connectionData = {
+					type: 'connection',
+					message: 'Connection established',
+					sessionId,
+					timestamp: new Date().toISOString()
+				};
+
+				if (DEBUG) {
+					console.log(`[DEBUG] Sending initial connection event for session: ${sessionId}`);
+					console.log(`[DEBUG] Connection data:`, connectionData);
+				}
+
+				sendSSEData(res, connectionData, 'connection');
+
+				// Send a test event to verify the connection is working
+				setTimeout(() => {
+					const DEBUG = process.env.DEBUG === '1';
+
+					if (DEBUG) {
+						console.log(`[DEBUG] Sending test event to session: ${sessionId}`);
+					}
+
+					const testData = {
+						type: 'test',
+						message: 'SSE connection test event',
+						timestamp: new Date().toISOString(),
+						sessionId,
+						status: 'active',
+						connectionInfo: {
+							clientCount: sseClients.size,
+							serverTime: new Date().toISOString(),
+							testId: Math.random().toString(36).substring(2, 15)
+						}
+					};
+
+					if (DEBUG) {
+						console.log(`[DEBUG] Test event data:`, testData);
+					}
+
+					sendSSEData(res, testData, 'test');
+
+					// Send a second test event after a short delay to verify continuous connection
+					setTimeout(() => {
+						if (DEBUG) {
+							console.log(`[DEBUG] Sending follow-up test event to session: ${sessionId}`);
+						}
+
+						const followUpTestData = {
+							type: 'test',
+							message: 'SSE connection follow-up test event',
+							timestamp: new Date().toISOString(),
+							sessionId,
+							status: 'confirmed',
+							sequence: 2
+						};
+
+						sendSSEData(res, followUpTestData, 'test');
+					}, 2000);
+				}, 1000);
+
+				// Function to handle tool call events for this session
+				const handleToolCall = (toolCall) => {
+					const DEBUG = process.env.DEBUG === '1';
+
+					if (DEBUG) {
+						console.log(`[DEBUG] Handling tool call for session ${sessionId}:`);
+						console.log(`[DEBUG] Tool call name: ${toolCall.name}`);
+						console.log(`[DEBUG] Tool call timestamp: ${toolCall.timestamp}`);
+						console.log(`[DEBUG] Tool call args:`, toolCall.args);
+
+						// Only log a preview of the result to avoid flooding the console
+						if (toolCall.resultPreview) {
+							const preview = toolCall.resultPreview.substring(0, 100) +
+								(toolCall.resultPreview.length > 100 ? '... (truncated)' : '');
+							console.log(`[DEBUG] Tool call result preview: ${preview}`);
+						}
+					}
+
+					// Add a flag to indicate this is being sent via SSE
+					const enhancedToolCall = {
+						...toolCall,
+						_via_sse: true,
+						_sent_at: new Date().toISOString()
+					};
+
+					// Send the tool call data via SSE
+					sendSSEData(res, enhancedToolCall, 'toolCall');
+
+					if (DEBUG) {
+						console.log(`[DEBUG] Tool call event sent via SSE for session ${sessionId}`);
+					}
+				};
+
+				// Register event listener for this session
+				const eventName = `toolCall:${sessionId}`;
+				if (DEBUG) {
+					console.log(`[DEBUG] Registering event listener for: ${eventName}`);
+				}
+
+				// Remove any existing listeners for this session to avoid duplicates
+				toolCallEmitter.removeAllListeners(eventName);
+
+				// Add the new listener
+				toolCallEmitter.on(eventName, handleToolCall);
+				if (DEBUG) {
+					console.log(`[DEBUG] Registered event listener for session ${sessionId}`);
+				}
+
+				// Log the number of listeners
+				if (process.env.DEBUG === '1') {
+					const listenerCount = toolCallEmitter.listenerCount(eventName);
+					console.log(`[DEBUG] Current listener count for ${eventName}: ${listenerCount}`);
+				}
+
+				// Add client to the map
+				sseClients.set(sessionId, res);
+				if (DEBUG) {
+					console.log(`[DEBUG] Added SSE client for session ${sessionId}, total clients: ${sseClients.size}`);
+				}
+
+				// Handle client disconnect
+				req.on('close', () => {
+					if (DEBUG) {
+						console.log(`[DEBUG] SSE client disconnecting: ${sessionId}`);
+					}
+					toolCallEmitter.removeListener(eventName, handleToolCall);
+					sseClients.delete(sessionId);
+					if (DEBUG) {
+						console.log(`[DEBUG] SSE client disconnected: ${sessionId}, remaining clients: ${sseClients.size}`);
+					}
+				});
+			},
+
 			// API Routes
 			'POST /api/search': withAuth(async (req, res) => {
 				let body = '';
@@ -223,7 +444,7 @@ export function startWebServer(version) {
 							return;
 						}
 
-						const DEBUG = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+						const DEBUG = process.env.DEBUG === '1';
 						if (DEBUG) {
 							console.log(`\n[DEBUG] ===== API Search Request =====`);
 							console.log(`[DEBUG] Keywords: "${keywords}"`);
@@ -233,6 +454,13 @@ export function startWebServer(version) {
 						}
 
 						try {
+							// Get session ID from request if available
+							const requestSessionId = JSON.parse(body).sessionId;
+							const sessionId = requestSessionId || probeChat.getSessionId();
+							if (DEBUG) {
+								console.log(`[DEBUG] Using session ID for direct tool call: ${sessionId}`);
+							}
+
 							// Execute the probe tool directly
 							const result = await probeTool.execute({
 								keywords,
@@ -240,6 +468,26 @@ export function startWebServer(version) {
 								exact: exact || false,
 								allow_tests: allow_tests || false
 							});
+
+							// Emit tool call event
+							const toolCallData = {
+								timestamp: new Date().toISOString(),
+								name: 'searchCode',
+								args: {
+									keywords,
+									folder: folder || '.',
+									exact: exact || false,
+									allow_tests: allow_tests || false
+								},
+								resultPreview: JSON.stringify(result).substring(0, 200) + '... (truncated)'
+							};
+
+							if (DEBUG) {
+								console.log(`[DEBUG] Emitting direct tool call event for session ${sessionId}`);
+							}
+							// Add a unique ID to the tool call data to help with deduplication
+							toolCallData.id = `${toolCallData.name}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+							toolCallEmitter.emit(`toolCall:${sessionId}`, toolCallData);
 
 							res.writeHead(200, { 'Content-Type': 'application/json' });
 							res.end(JSON.stringify(result));
@@ -292,7 +540,7 @@ export function startWebServer(version) {
 							return;
 						}
 
-						const DEBUG = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+						const DEBUG = process.env.DEBUG === '1';
 						if (DEBUG) {
 							console.log(`\n[DEBUG] ===== API Query Request =====`);
 							console.log(`[DEBUG] Pattern: "${pattern}"`);
@@ -302,6 +550,13 @@ export function startWebServer(version) {
 						}
 
 						try {
+							// Get session ID from request if available
+							const requestSessionId = JSON.parse(body).sessionId;
+							const sessionId = requestSessionId || probeChat.getSessionId();
+							if (DEBUG) {
+								console.log(`[DEBUG] Using session ID for direct tool call: ${sessionId}`);
+							}
+
 							// Execute the query tool
 							const result = await queryToolInstance.execute({
 								pattern,
@@ -309,6 +564,26 @@ export function startWebServer(version) {
 								language: language || undefined,
 								allow_tests: allow_tests || false
 							});
+
+							// Emit tool call event
+							const toolCallData = {
+								timestamp: new Date().toISOString(),
+								name: 'queryCode',
+								args: {
+									pattern,
+									path: path || '.',
+									language: language || undefined,
+									allow_tests: allow_tests || false
+								},
+								resultPreview: JSON.stringify(result).substring(0, 200) + '... (truncated)'
+							};
+
+							if (DEBUG) {
+								console.log(`[DEBUG] Emitting direct tool call event for session ${sessionId}`);
+							}
+							// Add a unique ID to the tool call data to help with deduplication
+							toolCallData.id = `${toolCallData.name}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+							toolCallEmitter.emit(`toolCall:${sessionId}`, toolCallData);
 
 							res.writeHead(200, { 'Content-Type': 'application/json' });
 							res.end(JSON.stringify({
@@ -364,7 +639,7 @@ export function startWebServer(version) {
 							return;
 						}
 
-						const DEBUG = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+						const DEBUG = process.env.DEBUG === '1';
 						if (DEBUG) {
 							console.log(`\n[DEBUG] ===== API Extract Request =====`);
 							console.log(`[DEBUG] File path: "${file_path}"`);
@@ -376,6 +651,13 @@ export function startWebServer(version) {
 						}
 
 						try {
+							// Get session ID from request if available
+							const requestSessionId = JSON.parse(body).sessionId;
+							const sessionId = requestSessionId || probeChat.getSessionId();
+							if (DEBUG) {
+								console.log(`[DEBUG] Using session ID for direct tool call: ${sessionId}`);
+							}
+
 							// Execute the extract tool
 							const result = await extractToolInstance.execute({
 								file_path,
@@ -385,6 +667,28 @@ export function startWebServer(version) {
 								context_lines: context_lines || 10,
 								format: format || 'plain'
 							});
+
+							// Emit tool call event
+							const toolCallData = {
+								timestamp: new Date().toISOString(),
+								name: 'extractCode',
+								args: {
+									file_path,
+									line,
+									end_line,
+									allow_tests: allow_tests || false,
+									context_lines: context_lines || 10,
+									format: format || 'plain'
+								},
+								resultPreview: JSON.stringify(result).substring(0, 200) + '... (truncated)'
+							};
+
+							if (DEBUG) {
+								console.log(`[DEBUG] Emitting direct tool call event for session ${sessionId}`);
+							}
+							// Add a unique ID to the tool call data to help with deduplication
+							toolCallData.id = `${toolCallData.name}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+							toolCallEmitter.emit(`toolCall:${sessionId}`, toolCallData);
 
 							res.writeHead(200, { 'Content-Type': 'application/json' });
 							res.end(JSON.stringify({
@@ -432,7 +736,7 @@ export function startWebServer(version) {
 				req.on('data', chunk => body += chunk);
 				req.on('end', async () => {
 					try {
-						const { message, stream } = JSON.parse(body);
+						const { message, stream, sessionId } = JSON.parse(body);
 
 						if (!message) {
 							res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -440,15 +744,18 @@ export function startWebServer(version) {
 							return;
 						}
 
+						// Use the provided session ID or the default one
+						const chatSessionId = sessionId || probeChat.getSessionId();
+
 						// Handle streaming vs non-streaming response
 						const shouldStream = stream !== false; // Default to streaming
 
 						if (!shouldStream) {
 							// Non-streaming response (complete response as JSON)
-							await handleNonStreamingChatRequest(req, res, message);
+							await handleNonStreamingChatRequest(req, res, message, chatSessionId);
 						} else {
 							// Streaming response (chunks of text)
-							await handleStreamingChatRequest(req, res, message);
+							await handleStreamingChatRequest(req, res, message, chatSessionId);
 						}
 					} catch (error) {
 						console.error('Error parsing request body:', error);
@@ -463,12 +770,20 @@ export function startWebServer(version) {
 				req.on('data', chunk => body += chunk);
 				req.on('end', async () => {
 					try {
-						const { message } = JSON.parse(body);
+						const requestData = JSON.parse(body);
+						const { message, sessionId } = requestData;
 
-						const DEBUG = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+						const DEBUG = process.env.DEBUG === '1';
+						// Debug logs moved to conditional block below
+
 						if (DEBUG) {
 							console.log(`\n[DEBUG] ===== Chat Request =====`);
+							console.log(`[DEBUG] Full request data:`, requestData);
 							console.log(`[DEBUG] User message: "${message}"`);
+							console.log(`[DEBUG] Session ID: ${sessionId || 'not provided'}`);
+							if (sessionId) {
+								console.log(`[DEBUG] Session ID: ${sessionId}`);
+							}
 						}
 
 						res.writeHead(200, {
@@ -479,7 +794,12 @@ export function startWebServer(version) {
 						});
 
 						// Use the ProbeChat instance to get a response
-						const responseText = await probeChat.chat(message);
+						// Use the provided session ID or the default one
+						const chatSessionId = sessionId || probeChat.getSessionId();
+						if (DEBUG) {
+							console.log(`[DEBUG] Using session ID for chat: ${chatSessionId}`);
+						}
+						const responseText = await probeChat.chat(message, chatSessionId);
 
 						// Write the response
 						res.write(responseText);

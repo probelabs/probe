@@ -62,7 +62,7 @@ const options = program.opts();
 const pathArg = program.args[0];
 
 if (options.debug) {
-  process.env.DEBUG = 'true';
+  process.env.DEBUG = '1';
   console.log(chalk.yellow('Debug mode enabled'));
 }
 if (options.model) {
