@@ -73,6 +73,19 @@ export class TokenCounter {
   }
 
   /**
+   * Reset counters back to zero
+   */
+  clear() {
+    this.requestTokens = 0;
+    this.responseTokens = 0;
+
+    const debug = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+    if (debug) {
+      console.log(`[DEBUG] Token usage reset to 0`);
+    }
+  }
+
+  /**
    * Get the current token usage
    * @returns {Object} - Object containing request, response, and total token counts
    */
@@ -83,4 +96,4 @@ export class TokenCounter {
       total: this.requestTokens + this.responseTokens
     };
   }
-} 
+}

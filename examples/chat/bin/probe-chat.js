@@ -13,7 +13,6 @@ import { Command } from 'commander';
 import { existsSync, realpathSync, readFileSync } from 'fs';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { generateText } from 'ai';
 import { ProbeChat } from '../probeChat.js';
 
 // Get the directory name of the current module

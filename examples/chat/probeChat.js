@@ -10,9 +10,6 @@ import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE } from '@bug
 // Maximum number of messages to keep in history
 const MAX_HISTORY_MESSAGES = 20;
 
-// Maximum length for tool results
-const MAX_TOOL_RESULT_LENGTH = 100000;
-
 // Parse and validate allowed folders from environment variable
 const allowedFolders = process.env.ALLOWED_FOLDERS
   ? process.env.ALLOWED_FOLDERS.split(',').map(folder => folder.trim()).filter(Boolean)
@@ -87,7 +84,7 @@ export class ProbeChat {
 
     // Determine which API to use based on available keys
     if (anthropicApiKey) {
-      // Initialize Anthropic provider with API key and custom URL if provided
+      // Initialize Anthropic provider
       this.provider = createAnthropic({
         apiKey: anthropicApiKey,
         baseURL: anthropicApiUrl,
@@ -99,7 +96,7 @@ export class ProbeChat {
         console.log(`[DEBUG] Using Anthropic API with model: ${this.model}`);
       }
     } else if (openaiApiKey) {
-      // Initialize OpenAI provider with API key and custom URL if provided
+      // Initialize OpenAI provider
       this.provider = createOpenAI({
         apiKey: openaiApiKey,
         baseURL: openaiApiUrl,
@@ -215,10 +212,12 @@ If you don't know the answer or can't find relevant information, be honest about
               console.log(`[DEBUG] Tool call ${index + 1} args:`, JSON.stringify(call.args, null, 2));
             }
             if (call.result) {
-              const resultPreview = typeof call.result === 'string'
-                ? (call.result.length > 100 ? call.result.substring(0, 100) + '... (truncated)' : call.result)
+              const preview = typeof call.result === 'string'
+                ? (call.result.length > 100
+                  ? call.result.substring(0, 100) + '... (truncated)'
+                  : call.result)
                 : JSON.stringify(call.result, null, 2).substring(0, 100) + '... (truncated)';
-              console.log(`[DEBUG] Tool call ${index + 1} result preview: ${resultPreview}`);
+              console.log(`[DEBUG] Tool call ${index + 1} result preview: ${preview}`);
             }
           });
         }
@@ -237,6 +236,29 @@ If you don't know the answer or can't find relevant information, be honest about
    */
   getTokenUsage() {
     return this.tokenCounter.getTokenUsage();
+  }
+
+  /**
+   * Clear the entire history and reset session/token usage
+   * @returns {string} - The new session ID
+   */
+  clearHistory() {
+    this.history = [];
+    this.sessionId = randomUUID();
+    this.tokenCounter.clear();
+
+    if (this.debug) {
+      console.log(`[DEBUG] Cleared chat history; new session ID: ${this.sessionId}`);
+    }
+
+    // Reconfigure the tools with the new session ID
+    this.configOptions.sessionId = this.sessionId;
+    this.tools = [
+      searchTool(this.configOptions),
+      queryTool(this.configOptions),
+      extractTool(this.configOptions)
+    ];
+    return this.sessionId;
   }
 
   /**
