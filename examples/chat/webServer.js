@@ -273,9 +273,21 @@ export function startWebServer(version, hasApiKeys = true) {
 			},
 
 			'GET /folders': (req, res) => {
+				// Get the current working directory
+				const currentWorkingDir = process.cwd();
+
+				// Use the allowed folders if available, or default to the current working directory
+				const folders = probeChat && probeChat.allowedFolders && probeChat.allowedFolders.length > 0
+					? probeChat.allowedFolders
+					: [currentWorkingDir];
+
+				console.log(`Current working directory: ${currentWorkingDir}`);
+				console.log(`Returning folders: ${JSON.stringify(folders)}`);
+
 				res.writeHead(200, { 'Content-Type': 'application/json' });
 				res.end(JSON.stringify({
-					folders: probeChat ? probeChat.allowedFolders || [] : [],
+					folders: folders,
+					currentDir: currentWorkingDir,
 					noApiKeysMode: noApiKeysMode
 				}));
 			},

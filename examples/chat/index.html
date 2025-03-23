@@ -982,19 +982,40 @@
 			// Clear any existing content
 			folderInfoDiv.innerHTML = '';
 
-			if (folders && folders.length > 0) {
-				// Create content for the folder info
-				if (folders.length === 1) {
-					folderInfoDiv.textContent = `Searching in: ${folders[0]}`;
-				} else {
-					folderInfoDiv.textContent = `Searching in: ${folders[0]} (and ${folders.length - 1} other folder${folders.length > 2 ? 's' : ''})`;
-				}
-			} else {
-				// When no folders are configured, we need to show the absolute path of the current working directory
-				// We'll use the process.cwd() value from the server, which is typically /Users/leonidbugaev/go/src/code-search
-				// for this project based on the environment details
-				folderInfoDiv.textContent = `Searching in: /Users/leonidbugaev/go/src/code-search (current directory)`;
-			}
+			// Set a loading message
+			folderInfoDiv.textContent = 'Determining search location...';
+
+			// Fetch the current directory from the server's /folders endpoint
+			fetch('/folders')
+				.then(response => response.json())
+				.then(data => {
+					// Use the currentDir property which contains the absolute path
+					if (data.currentDir) {
+						// Display the absolute path from the server
+						folderInfoDiv.textContent = `Searching in: ${data.currentDir}`;
+
+						// If there are multiple folders, show that info
+						if (data.folders && data.folders.length > 1) {
+							folderInfoDiv.textContent += ` (and ${data.folders.length - 1} other folder${data.folders.length > 2 ? 's' : ''})`;
+						}
+					}
+					// Fallback to folders if currentDir is not available
+					else if (data.folders && data.folders.length > 0) {
+						folderInfoDiv.textContent = `Searching in: ${data.folders[0]}`;
+
+						if (data.folders.length > 1) {
+							folderInfoDiv.textContent += ` (and ${data.folders.length - 1} other folder${data.folders.length > 2 ? 's' : ''})`;
+						}
+					}
+					// Last resort fallback
+					else {
+						folderInfoDiv.textContent = `Searching in: . (current directory)`;
+					}
+				})
+				.catch(error => {
+					console.error('Error fetching folder info:', error);
+					folderInfoDiv.textContent = `Searching in: . (current directory)`;
+				});
 		}
 
 		// Handle no API keys mode
@@ -1308,49 +1329,46 @@
 			console.log('%c Adding tool call to message:', 'background: #4CAF50; color: white; padding: 2px 5px; border-radius: 2px;', toolCall);
 
 			try {
-				// Format the tool call in a user-friendly way
-				let toolDescription = '';
-
-				// Format based on tool type
-				if (toolCall.name === 'searchCode') {
+				// Only display the search query as a simple paragraph
+				if (toolCall.name === 'searchCode' || toolCall.name === 'search') {
 					const query = toolCall.args.query || toolCall.args.keywords || '';
-					const path = toolCall.args.path || toolCall.args.folder || '.';
 
-					toolDescription = `Searching code with "${query}"${path === '.' ? '' : ` in ${path}`}`;
+					// Create a simple paragraph element
+					const paragraph = document.createElement('p');
+					paragraph.textContent = `Searching code with "${query}"`;
+					paragraph.style.fontStyle = 'italic';
+					paragraph.style.color = '#555';
+					paragraph.style.margin = '8px 0';
+
+					// Add the paragraph to the message div
+					messageDiv.appendChild(paragraph);
 				}
-				else if (toolCall.name === 'queryCode') {
+				else if (toolCall.name === 'queryCode' || toolCall.name === 'query') {
 					const pattern = toolCall.args.pattern || '';
-					const path = toolCall.args.path || '.';
 
-					toolDescription = `Querying code with pattern "${pattern}"${path === '.' ? '' : ` in ${path}`}`;
+					// Create a simple paragraph element
+					const paragraph = document.createElement('p');
+					paragraph.textContent = `Querying code with pattern "${pattern}"`;
+					paragraph.style.fontStyle = 'italic';
+					paragraph.style.color = '#555';
+					paragraph.style.margin = '8px 0';
+
+					// Add the paragraph to the message div
+					messageDiv.appendChild(paragraph);
 				}
-				else if (toolCall.name === 'extractCode') {
+				else if (toolCall.name === 'extractCode' || toolCall.name === 'extract') {
 					const filePath = toolCall.args.file_path || '';
-					const line = toolCall.args.line;
-					const endLine = toolCall.args.end_line;
 
-					if (line && endLine) {
-						toolDescription = `Extracting code from ${filePath} (lines ${line}-${endLine})`;
-					} else if (line) {
-						toolDescription = `Extracting code from ${filePath} (from line ${line})`;
-					} else {
-						toolDescription = `Extracting code from ${filePath}`;
-					}
+					// Create a simple paragraph element
+					const paragraph = document.createElement('p');
+					paragraph.textContent = `Extracting code from ${filePath}`;
+					paragraph.style.fontStyle = 'italic';
+					paragraph.style.color = '#555';
+					paragraph.style.margin = '8px 0';
+
+					// Add the paragraph to the message div
+					messageDiv.appendChild(paragraph);
 				}
-				else {
-					// Default formatting for other tools
-					toolDescription = `Using ${toolCall.name} tool`;
-				}
-
-				// Create a paragraph element for the tool description
-				const toolParagraph = document.createElement('p');
-				toolParagraph.textContent = toolDescription;
-				toolParagraph.style.fontStyle = 'italic';
-				toolParagraph.style.color = '#555';
-				toolParagraph.style.margin = '8px 0';
-
-				// Add the paragraph to the message div
-				messageDiv.appendChild(toolParagraph);
 
 				// Scroll to the bottom
 				messagesDiv.scrollTop = messagesDiv.scrollHeight;
