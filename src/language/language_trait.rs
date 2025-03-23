@@ -16,12 +16,6 @@ pub trait LanguageImpl {
     #[allow(dead_code)]
     fn get_extension(&self) -> &'static str;
 
-    /// Find the topmost struct type (mainly for Go)
-    fn find_topmost_struct_type<'a>(&self, node: Node<'a>) -> Option<Node<'a>> {
-        // Default implementation returns the node itself
-        Some(node)
-    }
-
     /// Find the parent function or method declaration for a node (if any)
     fn find_parent_function<'a>(&self, _node: Node<'a>) -> Option<Node<'a>> {
         // Default implementation returns None

@@ -373,19 +373,16 @@ pub fn find_matching_filenames(
             continue;
         }
 
-        // Get the filename
-        let filename = match file_path.file_name() {
-            Some(name) => name.to_string_lossy().to_string(),
-            None => continue,
-        };
+        // Get the full relative path including directory structure
+        let relative_path = file_path.to_string_lossy().to_string();
 
-        // Tokenize the filename using the standard tokenizer
-        let filename_tokens = tokenization::tokenize(&filename);
+        // Tokenize the full relative path using the standard tokenizer
+        let filename_tokens = tokenization::tokenize(&relative_path);
 
         if debug_mode && !filename_tokens.is_empty() {
             println!(
-                "DEBUG: Filename '{}' tokenized as: {:?}",
-                filename, filename_tokens
+                "DEBUG: Path '{}' tokenized as: {:?}",
+                relative_path, filename_tokens
             );
         }
         // Find which terms match the filename
@@ -405,8 +402,8 @@ pub fn find_matching_filenames(
                 matched_terms.insert(idx);
                 if debug_mode {
                     println!(
-                        "DEBUG: Term '{}' matched filename '{}', adding index {}",
-                        term, filename, idx
+                        "DEBUG: Term '{}' matched path '{}', adding index {}",
+                        term, relative_path, idx
                     );
                 }
             }

@@ -26,6 +26,8 @@ impl LanguageImpl for RustLanguage {
     }
 
     fn is_acceptable_parent(&self, node: &Node) -> bool {
+        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
         // Check for standard Rust items
         if matches!(
             node.kind(),
@@ -38,6 +40,21 @@ impl LanguageImpl for RustLanguage {
                 | "macro_definition"
         ) {
             return true;
+        }
+
+        // For expression_statement nodes, we need to find the parent function
+        if node.kind() == "expression_statement" {
+            if debug_mode {
+                println!(
+                    "DEBUG: Found expression_statement at lines {}-{}",
+                    node.start_position().row + 1,
+                    node.end_position().row + 1
+                );
+            }
+
+            // Instead of returning true directly, we'll look for the parent function
+            // and return that node in the parser.rs code
+            return false;
         }
 
         // Special handling for token trees inside macros

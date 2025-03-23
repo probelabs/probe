@@ -28,6 +28,14 @@ pub struct FileProcessingTimings {
     pub block_extraction_code_structure: Option<Duration>,
     pub block_extraction_filtering: Option<Duration>,
     pub block_extraction_result_building: Option<Duration>,
+
+    // Detailed result building timings
+    pub result_building_term_matching: Option<Duration>,
+    pub result_building_compound_processing: Option<Duration>,
+    pub result_building_line_matching: Option<Duration>,
+    pub result_building_result_creation: Option<Duration>,
+    pub result_building_synchronization: Option<Duration>,
+    pub result_building_uncovered_lines: Option<Duration>,
 }
 
 /// Parameters for file processing
@@ -344,6 +352,14 @@ pub fn process_file_with_results(
         block_extraction_code_structure: None,
         block_extraction_filtering: None,
         block_extraction_result_building: None,
+
+        // Detailed result building timings
+        result_building_term_matching: None,
+        result_building_compound_processing: None,
+        result_building_line_matching: None,
+        result_building_result_creation: None,
+        result_building_synchronization: None,
+        result_building_uncovered_lines: None,
     };
 
     // Measure file I/O time
@@ -383,13 +399,7 @@ pub fn process_file_with_results(
         .collect();
     let mut results = Vec::new();
     let mut covered_lines = HashSet::new();
-
-    // Get the filename for tokenization - do this once for the entire file
-    let filename = params
-        .path
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_default();
+    // We now use params.path.to_string_lossy() directly for tokenization
 
     // Prepare query terms once for the entire file
     let query_terms: Vec<String> = if let Some(prep) = params.preprocessed_queries {
@@ -497,6 +507,13 @@ pub fn process_file_with_results(
         let filtering_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
         let result_building_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
 
+        // Track detailed result building timings
+        let term_matching_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
+        let compound_processing_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
+        let line_matching_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
+        let result_creation_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
+        let synchronization_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
+
         // Prepare shared resources for parallel processing
         let shared_results = Arc::new(Mutex::new(Vec::new()));
         let shared_covered_lines = Arc::new(Mutex::new(HashSet::new()));
@@ -548,8 +565,21 @@ pub fn process_file_with_results(
                     *duration += block_duration;
                 }
 
-                // Early tokenization with filename prepended
-                let block_terms = ranking::preprocess_text_with_filename(&full_code, &filename);
+                // Start measuring term matching time
+                let term_matching_start = Instant::now();
+
+                // Early tokenization with full path prepended
+                let block_terms = ranking::preprocess_text_with_filename(
+                    &full_code,
+                    &params.path.to_string_lossy(),
+                );
+
+                // End term matching time measurement
+                let term_matching_block_duration = term_matching_start.elapsed();
+                {
+                    let mut duration = term_matching_duration.lock().unwrap();
+                    *duration += term_matching_block_duration;
+                }
 
                 // Start measuring filtering time
                 let filtering_start = Instant::now();
@@ -606,24 +636,41 @@ pub fn process_file_with_results(
                     // Start measuring result building time
                     let result_building_start = Instant::now();
 
+                    // Start measuring term matching time
+                    let direct_matches_start = Instant::now();
+
                     // Calculate metrics using the already tokenized content
                     let direct_matches: HashSet<&String> = block_terms
                         .iter()
                         .filter(|t| unique_query_terms.contains(*t))
                         .collect();
 
+                    let direct_matches_duration = direct_matches_start.elapsed();
+                    {
+                        let mut duration = term_matching_duration.lock().unwrap();
+                        *duration += direct_matches_duration;
+                    }
+
+                    // Start measuring compound word processing time
+                    let compound_start = Instant::now();
+
                     let mut compound_matches = HashSet::new();
+                    // Load vocabulary once before the loop
+                    let vocabulary = tokenization::load_vocabulary();
                     for qterm in &unique_query_terms {
                         if block_terms.iter().any(|bt| bt == qterm) {
                             continue;
                         }
-                        let parts = tokenization::split_compound_word(
-                            qterm,
-                            tokenization::load_vocabulary(),
-                        );
+                        let parts = tokenization::split_compound_word(qterm, vocabulary);
                         if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
                             compound_matches.insert(qterm);
                         }
+                    }
+
+                    let compound_duration = compound_start.elapsed();
+                    {
+                        let mut duration = compound_processing_duration.lock().unwrap();
+                        *duration += compound_duration;
                     }
 
                     let block_unique_terms = direct_matches.len() + compound_matches.len();
@@ -638,6 +685,9 @@ pub fn process_file_with_results(
                     // Add compound matches
                     matched_keywords.extend(compound_matches.iter().map(|s| (*s).clone()));
 
+                    // Start measuring line matching time
+                    let line_matching_start = Instant::now();
+
                     // Get the matched term indices for this block
                     let mut matched_term_indices = HashSet::new();
                     for (&term_idx, lines) in params.term_matches {
@@ -647,6 +697,12 @@ pub fn process_file_with_results(
                         {
                             matched_term_indices.insert(term_idx);
                         }
+                    }
+
+                    let line_matching_duration_value = line_matching_start.elapsed();
+                    {
+                        let mut duration = line_matching_duration.lock().unwrap();
+                        *duration += line_matching_duration_value;
                     }
 
                     // Add the corresponding terms from the query plan
@@ -661,6 +717,9 @@ pub fn process_file_with_results(
                     // Remove duplicates
                     matched_keywords.sort();
                     matched_keywords.dedup();
+
+                    // Start measuring result creation time
+                    let result_creation_start = Instant::now();
 
                     let result = SearchResult {
                         file: params.path.to_string_lossy().to_string(),
@@ -699,10 +758,25 @@ pub fn process_file_with_results(
                         tokenized_content: Some(block_terms),
                     };
 
+                    let result_creation_duration_value = result_creation_start.elapsed();
+                    {
+                        let mut duration = result_creation_duration.lock().unwrap();
+                        *duration += result_creation_duration_value;
+                    }
+
+                    // Start measuring synchronization time
+                    let sync_start = Instant::now();
+
                     // Add result to shared results
                     {
                         let mut results = shared_results.lock().unwrap();
                         results.push(result);
+                    }
+
+                    let sync_duration = sync_start.elapsed();
+                    {
+                        let mut duration = synchronization_duration.lock().unwrap();
+                        *duration += sync_duration;
                     }
 
                     // End result building time measurement
@@ -741,12 +815,45 @@ pub fn process_file_with_results(
             .into_inner()
             .unwrap();
 
+        // Extract detailed result building timings
+        let term_matching_duration_value = Arc::try_unwrap(term_matching_duration)
+            .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+            .into_inner()
+            .unwrap();
+
+        let compound_processing_duration_value = Arc::try_unwrap(compound_processing_duration)
+            .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+            .into_inner()
+            .unwrap();
+
+        let line_matching_duration_value = Arc::try_unwrap(line_matching_duration)
+            .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+            .into_inner()
+            .unwrap();
+
+        let result_creation_duration_value = Arc::try_unwrap(result_creation_duration)
+            .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+            .into_inner()
+            .unwrap();
+
+        let synchronization_duration_value = Arc::try_unwrap(synchronization_duration)
+            .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+            .into_inner()
+            .unwrap();
+
         // Store the sub-step timings
         let block_extraction_duration = block_extraction_start.elapsed();
         timings.block_extraction = Some(block_extraction_duration);
         timings.block_extraction_code_structure = Some(code_structure_duration_value);
         timings.block_extraction_filtering = Some(filtering_duration_value);
         timings.block_extraction_result_building = Some(result_building_duration_value);
+
+        // Store detailed result building timings
+        timings.result_building_term_matching = Some(term_matching_duration_value);
+        timings.result_building_compound_processing = Some(compound_processing_duration_value);
+        timings.result_building_line_matching = Some(line_matching_duration_value);
+        timings.result_building_result_creation = Some(result_creation_duration_value);
+        timings.result_building_synchronization = Some(synchronization_duration_value);
 
         if debug_mode {
             println!(
@@ -765,209 +872,300 @@ pub fn process_file_with_results(
         }
     }
 
-    // Check for any line numbers that weren't covered
+    // Collect all uncovered lines first without processing them
+    let mut uncovered_lines = Vec::new();
     for &line_num in params.line_numbers {
         if !covered_lines.contains(&line_num) {
             if debug_mode {
                 println!(
-                    "DEBUG: Line {} not covered, using fallback context",
+                    "DEBUG: Line {} not covered, will use fallback context",
                     line_num
                 );
                 if line_num <= lines.len() {
                     println!("DEBUG:   Line content: '{}'", lines[line_num - 1].trim());
                 }
             }
+            uncovered_lines.push(line_num);
+        }
+    }
 
-            // Skip fallback context for test files if allow_tests is false
-            if !params.allow_tests && is_test_file(params.path) {
-                if debug_mode {
-                    println!(
-                        "DEBUG: Skipping fallback context for test file: {:?}",
-                        params.path
-                    );
-                }
-                continue;
+    // Start measuring uncovered lines processing time
+    let uncovered_lines_start = Instant::now();
+
+    // Process uncovered lines only after all AST blocks have been processed
+    for line_num in uncovered_lines {
+        // Skip fallback context for test files if allow_tests is false
+        if !params.allow_tests && is_test_file(params.path) {
+            if debug_mode {
+                println!(
+                    "DEBUG: Skipping fallback context for test file: {:?}",
+                    params.path
+                );
             }
+            continue;
+        }
 
-            // Check if the line is in a test function/module using language-specific detection
-            if !params.allow_tests && line_num <= lines.len() {
-                // Get the language implementation for this file extension
-                if let Some(language_impl) = crate::language::factory::get_language_impl(extension)
+        // Check if the line is in a test function/module using language-specific detection
+        if !params.allow_tests && line_num <= lines.len() {
+            // Get the language implementation for this file extension
+            if let Some(language_impl) = crate::language::factory::get_language_impl(extension) {
+                let line_content = lines[line_num - 1];
+
+                // Create a simple parser to check this line
+                let mut parser = tree_sitter::Parser::new();
+                if parser
+                    .set_language(&language_impl.get_tree_sitter_language())
+                    .is_ok()
                 {
-                    let line_content = lines[line_num - 1];
+                    // Try to parse just this line to get a node
+                    if let Some(tree) = parser.parse(line_content, None) {
+                        let node = tree.root_node();
 
-                    // Create a simple parser to check this line
-                    let mut parser = tree_sitter::Parser::new();
-                    if parser
-                        .set_language(&language_impl.get_tree_sitter_language())
-                        .is_ok()
-                    {
-                        // Try to parse just this line to get a node
-                        if let Some(tree) = parser.parse(line_content, None) {
-                            let node = tree.root_node();
-
-                            // Use the language-specific test detection
-                            if language_impl.is_test_node(&node, line_content.as_bytes()) {
-                                if debug_mode {
-                                    println!(
-                                        "DEBUG: Skipping fallback context for test code: '{}'",
-                                        line_content.trim()
-                                    );
-                                }
-                                continue;
+                        // Use the language-specific test detection
+                        if language_impl.is_test_node(&node, line_content.as_bytes()) {
+                            if debug_mode {
+                                println!(
+                                    "DEBUG: Skipping fallback context for test code: '{}'",
+                                    line_content.trim()
+                                );
                             }
+                            continue;
                         }
                     }
                 }
             }
+        }
 
-            // Fallback: Get context around the line (20 lines before and after)
-            let context_start = line_num.saturating_sub(10);
-            let context_end = std::cmp::min(line_num + 10, lines.len());
+        // Use a smaller, adaptive context size (5 lines by default)
+        // This reduces the chance of overshadowing more specific blocks
+        let default_context_size = 5;
 
-            // Skip if we don't have enough context
-            if context_start >= context_end {
-                continue;
-            }
+        // Calculate 0-based array indices for context
+        // line_num is 1-based, so we subtract 1 to get 0-based index
+        let line_idx = line_num - 1;
+        let context_start_idx = line_idx.saturating_sub(default_context_size);
+        let context_end_idx = std::cmp::min(line_idx + default_context_size, lines.len() - 1);
 
-            // Extract the context lines - ensure context_start is at least 1 to avoid underflow
-            let context_code = if context_start > 0 {
-                // Skip empty lines (which were originally too long)
-                lines[context_start - 1..context_end].to_vec().join("\n")
-            } else {
-                // Skip empty lines (which were originally too long)
-                lines[0..context_end].to_vec().join("\n")
-            };
+        // Skip if we don't have enough context
+        if context_start_idx >= context_end_idx {
+            continue;
+        }
 
-            // Determine a better node type for the fallback context by analyzing the content
-            let node_type = determine_fallback_node_type(lines[line_num - 1], Some(extension));
+        // Convert back to 1-based line numbers for display and tracking
+        let context_start = context_start_idx + 1;
+        let context_end = context_end_idx + 1;
 
+        // Extract the context lines using 0-based indices
+        let context_code = lines[context_start_idx..=context_end_idx]
+            .to_vec()
+            .join("\n");
+
+        // Determine a better node type for the fallback context by analyzing the content
+        let node_type = determine_fallback_node_type(lines[line_num - 1], Some(extension));
+
+        if debug_mode {
+            println!(
+                "DEBUG: Inferred node type for fallback context: {}",
+                node_type
+            );
+            println!(
+                "DEBUG: Using adaptive context size: lines {}-{} (size: {})",
+                context_start,
+                context_end,
+                context_end - context_start + 1
+            );
+        }
+
+        // Start measuring term matching time for uncovered lines
+        let term_matching_start = Instant::now();
+
+        // Early tokenization for fallback context
+        let context_terms =
+            ranking::preprocess_text_with_filename(&context_code, &params.path.to_string_lossy());
+
+        // Add to term matching time
+        let term_matching_duration_value = term_matching_start.elapsed();
+        if let Some(duration) = timings.result_building_term_matching {
+            timings.result_building_term_matching = Some(duration + term_matching_duration_value);
+        } else {
+            timings.result_building_term_matching = Some(term_matching_duration_value);
+        }
+
+        // Start measuring filtering time for uncovered lines
+        let filtering_start = Instant::now();
+
+        // Early filtering for fallback context
+        let should_include = {
             if debug_mode {
                 println!(
-                    "DEBUG: Inferred node type for fallback context: {}",
-                    node_type
+                    "DEBUG: Using filter_tokenized_block for fallback context {}-{}",
+                    context_start, context_end
                 );
             }
+            filter_tokenized_block(
+                &context_terms,
+                &params.query_plan.term_indices,
+                params.query_plan,
+                debug_mode,
+            )
+        };
 
-            // Early tokenization for fallback context
-            let context_terms = ranking::preprocess_text_with_filename(&context_code, &filename);
+        // We don't add this to any timing since filtering is not part of result building
+        let _filtering_duration = filtering_start.elapsed();
 
-            // Early filtering for fallback context
-            let should_include = {
-                if debug_mode {
-                    println!(
-                        "DEBUG: Using filter_tokenized_block for fallback context {}-{}",
-                        context_start, context_end
-                    );
-                }
-                filter_tokenized_block(
-                    &context_terms,
-                    &params.query_plan.term_indices,
-                    params.query_plan,
-                    debug_mode,
-                )
-            };
+        if debug_mode {
+            println!(
+                "DEBUG: Block at {}-{} filtered: included={}",
+                context_start, context_end, should_include
+            );
+        }
 
-            if debug_mode {
-                println!(
-                    "DEBUG: Block at {}-{} filtered: included={}",
-                    context_start, context_end, should_include
-                );
-            }
-
-            // Mark these lines as covered (even if we don't include the result)
+        // Only mark these lines as covered if we're including the result
+        // This allows for potentially better blocks to be found for these lines later
+        if should_include {
             for line in context_start..=context_end {
                 covered_lines.insert(line);
             }
+        }
 
-            // Add to results only if it passes the filter
-            if should_include {
-                // Calculate metrics for fallback context using the already tokenized content
-                let direct_matches: HashSet<&String> = context_terms
+        // Add to results only if it passes the filter
+        if should_include {
+            // Start measuring compound word processing time
+            let compound_start = Instant::now();
+
+            // Calculate metrics for fallback context using the already tokenized content
+            let direct_matches: HashSet<&String> = context_terms
+                .iter()
+                .filter(|t| unique_query_terms.contains(*t))
+                .collect();
+
+            let mut compound_matches = HashSet::new();
+            // Load vocabulary once before the loop
+            let vocabulary = tokenization::load_vocabulary();
+            for qterm in &unique_query_terms {
+                if context_terms.iter().any(|bt| bt == qterm) {
+                    continue;
+                }
+                let parts = tokenization::split_compound_word(qterm, vocabulary);
+                if parts.len() > 1 && parts.iter().all(|part| context_terms.contains(part)) {
+                    compound_matches.insert(qterm);
+                }
+            }
+
+            // Add to compound processing time
+            let compound_duration = compound_start.elapsed();
+            if let Some(duration) = timings.result_building_compound_processing {
+                timings.result_building_compound_processing = Some(duration + compound_duration);
+            } else {
+                timings.result_building_compound_processing = Some(compound_duration);
+            }
+
+            let context_unique_terms = direct_matches.len() + compound_matches.len();
+            let context_total_matches = direct_matches.len() + compound_matches.len();
+
+            // Collect matched keywords for fallback context
+            let mut matched_keywords = Vec::new();
+
+            // Add direct matches
+            matched_keywords.extend(direct_matches.iter().map(|s| (*s).clone()));
+
+            // Add compound matches
+            matched_keywords.extend(compound_matches.iter().map(|s| (*s).clone()));
+
+            // Start measuring line matching time
+            let line_matching_start = Instant::now();
+
+            // Get the matched term indices for this context block
+            let mut matched_term_indices = HashSet::new();
+            for (&term_idx, lines) in params.term_matches {
+                if lines
                     .iter()
-                    .filter(|t| unique_query_terms.contains(*t))
-                    .collect();
-
-                let mut compound_matches = HashSet::new();
-                for qterm in &unique_query_terms {
-                    if context_terms.iter().any(|bt| bt == qterm) {
-                        continue;
-                    }
-                    let parts =
-                        tokenization::split_compound_word(qterm, tokenization::load_vocabulary());
-                    if parts.len() > 1 && parts.iter().all(|part| context_terms.contains(part)) {
-                        compound_matches.insert(qterm);
-                    }
+                    .any(|&l| l >= context_start && l <= context_end)
+                {
+                    matched_term_indices.insert(term_idx);
                 }
+            }
 
-                let context_unique_terms = direct_matches.len() + compound_matches.len();
-                let context_total_matches = direct_matches.len() + compound_matches.len();
+            // Add to line matching time
+            let line_matching_duration = line_matching_start.elapsed();
+            if let Some(duration) = timings.result_building_line_matching {
+                timings.result_building_line_matching = Some(duration + line_matching_duration);
+            } else {
+                timings.result_building_line_matching = Some(line_matching_duration);
+            }
 
-                // Collect matched keywords for fallback context
-                let mut matched_keywords = Vec::new();
-
-                // Add direct matches
-                matched_keywords.extend(direct_matches.iter().map(|s| (*s).clone()));
-
-                // Add compound matches
-                matched_keywords.extend(compound_matches.iter().map(|s| (*s).clone()));
-
-                // Get the matched term indices for this context block
-                let mut matched_term_indices = HashSet::new();
-                for (&term_idx, lines) in params.term_matches {
-                    if lines
-                        .iter()
-                        .any(|&l| l >= context_start && l <= context_end)
-                    {
-                        matched_term_indices.insert(term_idx);
-                    }
+            // Add the corresponding terms from the query plan
+            for (term, &idx) in &params.query_plan.term_indices {
+                if matched_term_indices.contains(&idx)
+                    && !params.query_plan.excluded_terms.contains(term)
+                {
+                    matched_keywords.push(term.clone());
                 }
+            }
 
-                // Add the corresponding terms from the query plan
-                for (term, &idx) in &params.query_plan.term_indices {
-                    if matched_term_indices.contains(&idx)
-                        && !params.query_plan.excluded_terms.contains(term)
-                    {
-                        matched_keywords.push(term.clone());
-                    }
-                }
+            // Remove duplicates
+            matched_keywords.sort();
+            matched_keywords.dedup();
 
-                // Remove duplicates
-                matched_keywords.sort();
-                matched_keywords.dedup();
+            // Start measuring result creation time
+            let result_creation_start = Instant::now();
 
-                results.push(SearchResult {
-                    file: params.path.to_string_lossy().to_string(),
-                    lines: (context_start, context_end),
-                    node_type,
-                    code: context_code,
-                    matched_by_filename: None,
-                    rank: None,
-                    score: None,
-                    tfidf_score: None,
-                    bm25_score: None,
-                    tfidf_rank: None,
-                    bm25_rank: None,
-                    new_score: None,
-                    hybrid2_rank: None,
-                    combined_score_rank: None,
-                    file_unique_terms: Some(context_unique_terms),
-                    file_total_matches: Some(context_total_matches),
-                    file_match_rank: None,
-                    block_unique_terms: Some(context_unique_terms),
-                    block_total_matches: Some(context_total_matches),
-                    parent_file_id: None,
-                    block_id: None,
-                    matched_keywords: if matched_keywords.is_empty() {
-                        None
-                    } else {
-                        Some(matched_keywords)
-                    },
-                    tokenized_content: Some(context_terms),
-                });
+            let result = SearchResult {
+                file: params.path.to_string_lossy().to_string(),
+                lines: (context_start, context_end),
+                node_type,
+                code: context_code,
+                matched_by_filename: None,
+                rank: None,
+                score: None,
+                tfidf_score: None,
+                bm25_score: None,
+                tfidf_rank: None,
+                bm25_rank: None,
+                new_score: None,
+                hybrid2_rank: None,
+                combined_score_rank: None,
+                file_unique_terms: Some(context_unique_terms),
+                file_total_matches: Some(context_total_matches),
+                file_match_rank: None,
+                block_unique_terms: Some(context_unique_terms),
+                block_total_matches: Some(context_total_matches),
+                parent_file_id: None,
+                block_id: None,
+                matched_keywords: if matched_keywords.is_empty() {
+                    None
+                } else {
+                    Some(matched_keywords)
+                },
+                tokenized_content: Some(context_terms),
+            };
+
+            // Add to result creation time
+            let result_creation_duration = result_creation_start.elapsed();
+            if let Some(duration) = timings.result_building_result_creation {
+                timings.result_building_result_creation = Some(duration + result_creation_duration);
+            } else {
+                timings.result_building_result_creation = Some(result_creation_duration);
+            }
+
+            // Start measuring synchronization time (in this case, just adding to results)
+            let sync_start = Instant::now();
+
+            results.push(result);
+
+            // Add to synchronization time
+            let sync_duration = sync_start.elapsed();
+            if let Some(duration) = timings.result_building_synchronization {
+                timings.result_building_synchronization = Some(duration + sync_duration);
+            } else {
+                timings.result_building_synchronization = Some(sync_duration);
             }
         }
     }
+
+    // End uncovered lines processing time measurement
+    let uncovered_lines_duration = uncovered_lines_start.elapsed();
+    timings.result_building_uncovered_lines = Some(uncovered_lines_duration);
 
     if debug_mode {
         println!("DEBUG: File processing timings:");
@@ -1000,6 +1198,28 @@ pub fn process_file_with_results(
             if let Some(d) = timings.block_extraction_result_building {
                 println!("DEBUG:     - Result building: {:?}", d);
             }
+        }
+    }
+
+    if debug_mode {
+        println!("DEBUG: Detailed result building timings:");
+        if let Some(duration) = timings.result_building_term_matching {
+            println!("DEBUG:   Term matching: {:?}", duration);
+        }
+        if let Some(duration) = timings.result_building_compound_processing {
+            println!("DEBUG:   Compound word processing: {:?}", duration);
+        }
+        if let Some(duration) = timings.result_building_line_matching {
+            println!("DEBUG:   Line range matching: {:?}", duration);
+        }
+        if let Some(duration) = timings.result_building_result_creation {
+            println!("DEBUG:   Result creation: {:?}", duration);
+        }
+        if let Some(duration) = timings.result_building_synchronization {
+            println!("DEBUG:   Synchronization: {:?}", duration);
+        }
+        if let Some(duration) = timings.result_building_uncovered_lines {
+            println!("DEBUG:   Uncovered lines processing: {:?}", duration);
         }
     }
 

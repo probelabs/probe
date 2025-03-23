@@ -43,6 +43,15 @@ pub struct SearchTimings {
     pub result_processing_block_extraction_code_structure: Option<Duration>,
     pub result_processing_block_extraction_filtering: Option<Duration>,
     pub result_processing_block_extraction_result_building: Option<Duration>,
+
+    // Detailed result building timings
+    pub result_processing_term_matching: Option<Duration>,
+    pub result_processing_compound_processing: Option<Duration>,
+    pub result_processing_line_matching: Option<Duration>,
+    pub result_processing_result_creation: Option<Duration>,
+    pub result_processing_synchronization: Option<Duration>,
+    pub result_processing_uncovered_lines: Option<Duration>,
+
     pub result_ranking: Option<Duration>,
     pub limit_application: Option<Duration>,
     pub block_merging: Option<Duration>,
@@ -139,6 +148,26 @@ pub fn print_timings(timings: &SearchTimings) {
 
         if let Some(duration) = timings.result_processing_result_building {
             println!("  - Result building:    {}", format_duration(duration));
+
+            // Print detailed result building timings if available
+            if let Some(d) = timings.result_processing_term_matching {
+                println!("    - Term matching:      {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_compound_processing {
+                println!("    - Compound processing: {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_line_matching {
+                println!("    - Line matching:      {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_result_creation {
+                println!("    - Result creation:    {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_synchronization {
+                println!("    - Synchronization:    {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_uncovered_lines {
+                println!("    - Uncovered lines:    {}", format_duration(d));
+            }
         }
     }
 
@@ -294,6 +323,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         result_processing_block_extraction_filtering: None,
         result_processing_block_extraction_result_building: None,
 
+        // Initialize detailed result building timings
+        result_processing_term_matching: None,
+        result_processing_compound_processing: None,
+        result_processing_line_matching: None,
+        result_processing_result_creation: None,
+        result_processing_synchronization: None,
+        result_processing_uncovered_lines: None,
+
         result_ranking: None,
         limit_application: None,
         block_merging: None,
@@ -441,7 +478,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         // Process files that matched by filename
         for (pathbuf, matched_terms) in &filename_matches {
             // Define a reasonable maximum file size (e.g., 10MB)
-            const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+            const MAX_FILE_SIZE: u64 = 1024 * 1024;
 
             // Check file metadata and resolve symlinks before reading
             let resolved_path = match std::fs::canonicalize(pathbuf.as_path()) {
@@ -737,7 +774,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let mut total_line_collection_time = Duration::new(0, 0);
     let mut total_ast_parsing_time = Duration::new(0, 0);
     let mut total_block_extraction_time = Duration::new(0, 0);
-    let mut total_result_building_time = Duration::new(0, 0);
+    let _total_result_building_time = Duration::new(0, 0);
 
     // Track granular timing for AST parsing sub-steps
     let mut total_ast_parsing_language_init_time = Duration::new(0, 0);
@@ -749,6 +786,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let mut total_block_extraction_code_structure_time = Duration::new(0, 0);
     let mut total_block_extraction_filtering_time = Duration::new(0, 0);
     let mut total_block_extraction_result_building_time = Duration::new(0, 0);
+
+    // Track detailed result building timings
+    let mut total_term_matching_time = Duration::new(0, 0);
+    let mut total_compound_processing_time = Duration::new(0, 0);
+    let mut total_line_matching_time = Duration::new(0, 0);
+    let mut total_result_creation_time = Duration::new(0, 0);
+    let mut total_synchronization_time = Duration::new(0, 0);
+    let mut total_uncovered_lines_time = Duration::new(0, 0);
     for pathbuf in &all_files {
         if debug_mode {
             println!("DEBUG: Processing file: {:?}", pathbuf);
@@ -805,7 +850,6 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             }
 
             // Process file and track granular timings
-            let result_building_start = Instant::now();
             match process_file_with_results(&pparams) {
                 Ok((mut file_res, file_timings)) => {
                     // Accumulate granular timings from file processing
@@ -874,8 +918,55 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                         }
                     }
 
-                    let result_building_duration = result_building_start.elapsed();
-                    total_result_building_time += result_building_duration;
+                    // Add the detailed result building timings
+                    if let Some(duration) = file_timings.result_building_term_matching {
+                        total_term_matching_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Term matching: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.result_building_compound_processing {
+                        total_compound_processing_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Compound processing: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+                    if let Some(duration) = file_timings.result_building_line_matching {
+                        total_line_matching_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Line matching: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.result_building_result_creation {
+                        total_result_creation_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Result creation: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+                    if let Some(duration) = file_timings.result_building_synchronization {
+                        total_synchronization_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Synchronization: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+                    if let Some(duration) = file_timings.result_building_uncovered_lines {
+                        total_uncovered_lines_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Uncovered lines: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
 
                     if debug_mode {
                         println!("DEBUG: Got {} results from file processing", file_res.len());
@@ -891,10 +982,12 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                                 format_duration(duration)
                             );
                         }
-                        println!(
-                            "DEBUG:   Result building time: {}",
-                            format_duration(result_building_duration)
-                        );
+                        if let Some(duration) = file_timings.block_extraction_result_building {
+                            println!(
+                                "DEBUG:   Result building time: {}",
+                                format_duration(duration)
+                            );
+                        }
                     }
                     final_results.append(&mut file_res);
                 }
@@ -916,12 +1009,44 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     }
 
     let rp_duration = rp_start.elapsed();
+    // Calculate the total time spent on detailed result building operations
+    let detailed_result_building_time = total_term_matching_time
+        + total_compound_processing_time
+        + total_line_matching_time
+        + total_result_creation_time
+        + total_synchronization_time
+        + total_uncovered_lines_time;
+
+    // Calculate the result building time as the remaining time after accounting for other operations
+    let accounted_time = total_file_io_time
+        + total_line_collection_time
+        + total_ast_parsing_time
+        + total_block_extraction_time;
+    let remaining_time = if rp_duration > accounted_time {
+        rp_duration - accounted_time
+    } else {
+        // Use the sum of detailed timings if available, otherwise fallback to block extraction result building time
+        if detailed_result_building_time > Duration::new(0, 0) {
+            detailed_result_building_time
+        } else {
+            total_block_extraction_result_building_time
+        }
+    };
+
     timings.result_processing = Some(rp_duration);
     timings.result_processing_file_io = Some(total_file_io_time);
     timings.result_processing_line_collection = Some(total_line_collection_time);
     timings.result_processing_ast_parsing = Some(total_ast_parsing_time);
     timings.result_processing_block_extraction = Some(total_block_extraction_time);
-    timings.result_processing_result_building = Some(total_result_building_time);
+    timings.result_processing_result_building = Some(remaining_time);
+
+    // Set the detailed result building timings
+    timings.result_processing_term_matching = Some(total_term_matching_time);
+    timings.result_processing_compound_processing = Some(total_compound_processing_time);
+    timings.result_processing_line_matching = Some(total_line_matching_time);
+    timings.result_processing_result_creation = Some(total_result_creation_time);
+    timings.result_processing_synchronization = Some(total_synchronization_time);
+    timings.result_processing_uncovered_lines = Some(total_uncovered_lines_time);
 
     // Set the granular AST parsing sub-step timings
     timings.result_processing_ast_parsing_language_init =
@@ -989,7 +1114,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         );
         println!(
             "DEBUG:   Result building: {}",
-            format_duration(total_result_building_time)
+            format_duration(remaining_time)
         );
     }
 

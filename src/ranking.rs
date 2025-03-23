@@ -41,7 +41,7 @@ pub fn tokenize(text: &str) -> Vec<String> {
 }
 
 /// Preprocesses text with filename for search by tokenizing and removing duplicates
-/// This is used for filename matching - it adds the filename to the tokens
+/// This is used for filename matching - it adds the filename and its directory structure to the tokens
 pub fn preprocess_text_with_filename(text: &str, filename: &str) -> Vec<String> {
     let mut tokens = tokenize(text);
     let filename_tokens = tokenize(filename);
