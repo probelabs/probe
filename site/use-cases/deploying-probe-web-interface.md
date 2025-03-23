@@ -6,7 +6,6 @@ This guide explains how to set up and deploy Probe's web interface as a centrali
 
 Probe's web interface provides a user-friendly chat experience that allows all team members to interact with your codebase using AI. By hosting this interface, you create a source of truth for how your product works that's accessible to both technical and non-technical team members. This enables quick issue resolution, documentation generation, architecture understanding, and helps product managers, QA teams, and other stakeholders make informed decisions without needing to understand implementation details.
 
-> **Note**: Probe now features a unified interface that combines both CLI and web functionality in a single package. The previously separate `@buger/probe-web` package is now deprecated, and its functionality is included in the `@buger/probe-chat` package. For more information, see the [NPM Package Changes](/npm-package-changes) documentation.
 
 ## Docker-Based Setup
 

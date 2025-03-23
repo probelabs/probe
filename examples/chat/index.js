@@ -53,6 +53,7 @@ program
   .version(version)
   .option('-d, --debug', 'Enable debug mode')
   .option('-m, --model <model>', 'Specify the model to use')
+  .option('-f, --force-provider <provider>', 'Force a specific provider (options: anthropic, openai, google)')
   .option('-w, --web', 'Run in web interface mode')
   .option('-p, --port <port>', 'Port to run web server on (default: 8080)')
   .argument('[path]', 'Path to the codebase to search (overrides ALLOWED_FOLDERS)')
@@ -68,6 +69,15 @@ if (options.debug) {
 if (options.model) {
   process.env.MODEL_NAME = options.model;
   console.log(chalk.blue(`Using model: ${options.model}`));
+}
+if (options.forceProvider) {
+  const provider = options.forceProvider.toLowerCase();
+  if (!['anthropic', 'openai', 'google'].includes(provider)) {
+    console.error(chalk.red(`Error: Invalid provider "${provider}". Must be one of: anthropic, openai, google`));
+    process.exit(1);
+  }
+  process.env.FORCE_PROVIDER = provider;
+  console.log(chalk.blue(`Forcing provider: ${provider}`));
 }
 
 // Resolve path argument to override ALLOWED_FOLDERS
@@ -91,9 +101,36 @@ if (options.port) {
 // Check for API keys
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 const openaiApiKey = process.env.OPENAI_API_KEY;
-if (!anthropicApiKey && !openaiApiKey) {
-  console.error(chalk.red('Error: No API key provided. Please set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.'));
-  process.exit(1);
+const googleApiKey = process.env.GOOGLE_API_KEY;
+
+// Debug: Print which API keys are detected (without showing the actual keys)
+console.log(chalk.blue('API Keys detected:'));
+console.log(chalk.blue(`- Anthropic API Key: ${anthropicApiKey ? 'YES' : 'NO'}`));
+console.log(chalk.blue(`- OpenAI API Key: ${openaiApiKey ? 'YES' : 'NO'}`));
+console.log(chalk.blue(`- Google API Key: ${googleApiKey ? 'YES' : 'NO'}`));
+
+// Check if we have at least one API key
+const hasApiKeys = !!(anthropicApiKey || openaiApiKey || googleApiKey);
+if (!hasApiKeys) {
+  console.warn(chalk.yellow('Warning: No API key provided. The web interface will show instructions on how to set up API keys.'));
+  // We'll continue execution for web mode, but CLI mode will exit
+}
+
+// Check if forced provider has a matching API key
+if (process.env.FORCE_PROVIDER) {
+  const forceProvider = process.env.FORCE_PROVIDER.toLowerCase();
+  if (forceProvider === 'anthropic' && !anthropicApiKey) {
+    console.error(chalk.red('Error: Forced provider "anthropic" selected but ANTHROPIC_API_KEY is not set.'));
+    process.exit(1);
+  }
+  if (forceProvider === 'openai' && !openaiApiKey) {
+    console.error(chalk.red('Error: Forced provider "openai" selected but OPENAI_API_KEY is not set.'));
+    process.exit(1);
+  }
+  if (forceProvider === 'google' && !googleApiKey) {
+    console.error(chalk.red('Error: Forced provider "google" selected but GOOGLE_API_KEY is not set.'));
+    process.exit(1);
+  }
 }
 
 // Determine whether to run in CLI or web mode
@@ -102,13 +139,22 @@ if (options.web) {
   import('./webServer.js')
     .then(module => {
       const { startWebServer } = module;
-      startWebServer(version);
+      startWebServer(version, hasApiKeys);
     })
     .catch(error => {
       console.error(chalk.red(`Error starting web server: ${error.message}`));
       process.exit(1);
     });
 } else {
+  // In CLI mode, we need API keys to proceed
+  if (!hasApiKeys) {
+    console.error(chalk.red('Error: No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.'));
+    console.log(chalk.cyan('You can find these instructions in the .env.example file:'));
+    console.log(chalk.cyan('1. Create a .env file by copying .env.example'));
+    console.log(chalk.cyan('2. Add your API key to the .env file'));
+    console.log(chalk.cyan('3. Restart the application'));
+    process.exit(1);
+  }
   // Run in CLI mode
   // Initialize the ProbeChat
   let chat;
@@ -118,8 +164,10 @@ if (options.web) {
     // Print which model is being used
     if (chat.apiType === 'anthropic') {
       console.log(chalk.green(`Using Anthropic API with model: ${chat.model}`));
-    } else {
+    } else if (chat.apiType === 'openai') {
       console.log(chalk.green(`Using OpenAI API with model: ${chat.model}`));
+    } else if (chat.apiType === 'google') {
+      console.log(chalk.green(`Using Google API with model: ${chat.model}`));
     }
 
     console.log(chalk.blue(`Session ID: ${chat.getSessionId()}`));

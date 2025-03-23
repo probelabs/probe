@@ -27,6 +27,8 @@ npx -y @buger/probe-chat --web
 export ANTHROPIC_API_KEY=your_api_key
 # Or for OpenAI
 # export OPENAI_API_KEY=your_api_key
+# Or for Google
+# export GOOGLE_API_KEY=your_api_key
 
 # Or specify a directory to search
 npx -y @buger/probe-chat /path/to/your/project
@@ -58,6 +60,8 @@ npm install
 export ANTHROPIC_API_KEY=your_api_key
 # Or for OpenAI
 # export OPENAI_API_KEY=your_api_key
+# Or for Google
+# export GOOGLE_API_KEY=your_api_key
 
 # Start the chat interface in CLI mode
 node index.js
@@ -79,12 +83,30 @@ The AI Chat mode uses large language models to understand your questions and sea
 
 ### Multi-Model Support
 
-Probe's AI Chat mode supports both Anthropic's Claude and OpenAI's GPT models:
+Probe's AI Chat mode supports multiple AI providers:
 
-- **Claude Models**: Provide excellent code understanding and explanation capabilities
-- **GPT Models**: Offer strong general-purpose capabilities
+- **Anthropic Claude**: Provides excellent code understanding and explanation capabilities
+- **OpenAI GPT**: Offers strong general-purpose capabilities
+- **Google Gemini**: Delivers fast responses and efficient code search
 
-The default model is selected based on which API key you provide.
+The default model is selected based on which API key you provide, or you can force a specific provider using the `--force-provider` option.
+
+#### Force Provider Option
+
+You can force the chat to use a specific provider regardless of which API keys are available:
+
+```bash
+# Force using Anthropic Claude
+probe-chat --force-provider anthropic
+
+# Force using OpenAI
+probe-chat --force-provider openai
+
+# Force using Google Gemini
+probe-chat --force-provider google
+```
+
+This is useful when you have multiple API keys configured but want to use a specific provider for certain tasks.
 
 ### Token Tracking
 
@@ -116,6 +138,9 @@ node index.js --debug
 # Specify a model
 node index.js --model claude-3-7-sonnet-latest
 
+# Force a specific provider
+node index.js --force-provider anthropic
+
 # Run in web mode
 node index.js --web
 
@@ -133,9 +158,14 @@ node index.js /path/to/your/project
 export MODEL_NAME=claude-3-opus-20240229
 probe-chat
 
+# Force a specific provider
+export FORCE_PROVIDER=anthropic  # Options: anthropic, openai, google
+probe-chat
+
 # Override API URLs (useful for proxies or enterprise deployments)
 export ANTHROPIC_API_URL=https://your-anthropic-proxy.com
 export OPENAI_API_URL=https://your-openai-proxy.com/v1
+export GOOGLE_API_URL=https://your-google-proxy.com
 probe-chat
 
 # Enable debug mode for detailed logging

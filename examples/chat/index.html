@@ -4,7 +4,7 @@
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Code Search with Probe and AI</title>
+	<title>Probe - AI-Native Code Understanding</title>
 	<!-- Add Marked.js for Markdown rendering -->
 	<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 	<!-- Add Highlight.js for syntax highlighting -->
@@ -19,8 +19,9 @@
 			padding: 0;
 			line-height: 1.5;
 			color: #333;
-			height: 100vh;
-			overflow: hidden;
+			min-height: 100vh;
+			overflow-x: hidden;
+			overflow-y: auto;
 		}
 
 		#chat-container {
@@ -35,7 +36,41 @@
 		}
 
 		.header {
-			padding: 20px 0 0 0;
+			padding: 10px 0;
+			border-bottom: 1px solid #eee;
+		}
+
+		.header-container {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+		}
+
+		.header-left {
+			display: flex;
+			align-items: center;
+		}
+
+		.header-logo {
+			height: 30px;
+			margin-right: 10px;
+		}
+
+		.new-chat-link {
+			font-size: 15px;
+			color: #555;
+			text-decoration: none;
+			font-weight: 500;
+			padding: 5px 10px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			margin-left: 5px;
+			transition: all 0.2s ease;
+		}
+
+		.new-chat-link:hover {
+			background-color: #f5f5f5;
+			border-color: #ccc;
 		}
 
 		#messages {
@@ -43,6 +78,7 @@
 			background-color: #fff;
 			overflow-y: auto;
 			margin-bottom: 80px;
+			margin-top: 20px;
 			/* Space for fixed input form */
 		}
 
@@ -132,12 +168,49 @@
 			left: 50%;
 			transform: translateX(-50%);
 			box-sizing: border-box;
+			align-items: flex-end;
+			/* Align items to the bottom */
 		}
 
 		#input-form.centered {
 			top: 50%;
 			transform: translate(-50%, -50%);
 			border-top: none;
+		}
+
+		.centered-logo-container {
+			text-align: center;
+			margin-bottom: 20px;
+			position: fixed;
+			top: 35%;
+			left: 50%;
+			transform: translate(-50%, -100%);
+			z-index: 99;
+		}
+
+		.api-setup-mode .centered-logo-container {
+			position: static;
+			margin: 40px auto 20px;
+			width: 100%;
+			max-width: 800px;
+			transform: none;
+		}
+
+		.centered-logo-container h1 {
+			font-weight: 300;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			margin: 0;
+		}
+
+		.centered-logo-container h1 img {
+			height: 80px;
+			margin-right: 16px;
+		}
+
+		.centered-logo-container h1 {
+			font-size: 38px;
 		}
 
 		#input-form.bottom {
@@ -182,60 +255,83 @@
 			display: block;
 		}
 
+		.folder-info {
+			color: #666;
+			font-size: 0.9em;
+			margin-top: 10px;
+			padding-top: 10px;
+			border-top: 1px solid #e0e0e0;
+			font-style: italic;
+			font-weight: 500;
+		}
+
+		#input-form.centered .folder-info {
+			display: block;
+		}
+
 
 		#message-input {
+			resize: none;
 			flex: 1;
-			padding: 12px;
+			padding: 12px 16px;
 			border: 1px solid #ddd;
-			border-radius: 4px;
-			font-size: 16px;
+			border-radius: 8px;
+			font-size: 14px;
+			box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+			resize: none;
+			overflow-y: auto;
+			height: 1.5em;
+			/* Changed from 44px to auto */
+			min-height: 44px;
+			/* Ensures 1 row minimum */
+			max-height: 200px;
+			/* Limits to ~10 rows */
+			line-height: 1.5em;
+
+			box-sizing: border-box;
 		}
 
 		button {
-			padding: 12px 20px;
-			margin-left: 8px;
+			padding: 12px 24px;
+			margin-left: 10px;
 			background-color: #44CDF3;
 			color: white;
 			border: none;
-			border-radius: 4px;
+			border-radius: 8px;
 			cursor: pointer;
 			font-weight: bold;
+			font-size: 18px;
+			box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+			transition: all 0.2s ease;
+			align-self: flex-end;
+			/* Ensure button aligns to bottom */
+			height: 44px;
+			/* Match the height of the single-line textarea */
 		}
 
 		button:hover {
 			background-color: #2bb5db;
 		}
 
-		#allowed-folders {
-			margin-top: 10px;
-			margin-bottom: 10px;
-			padding: 8px 12px;
-			background-color: #f5f5f5;
-			border-radius: 4px;
-			border-left: 4px solid #2196F3;
-			font-size: 0.9em;
+
+		#folder-list ul {
+			margin: 4px 0;
+			padding-left: 20px;
 		}
 
-		#allowed-folders h3 {
-			margin-top: 0;
-			margin-bottom: 4px;
-			font-size: 14px;
-			color: #333;
-		}
-
-		#folder-list {
-			margin-top: 4px;
-			font-size: 13px;
-		}
-
-		.folder-item {
+		#folder-list li {
 			padding: 2px 0;
+		}
+
+		#folder-list strong {
+			color: #333;
+			font-weight: 600;
 		}
 
 		.footer {
 			text-align: center;
 			padding: 10px;
-			font-size: 12px;
+			font-size: 14px;
 			color: #666;
 			position: fixed;
 			bottom: 0;
@@ -341,9 +437,42 @@
 		.ai-message {
 			background-color: transparent;
 			padding: 10px 14px;
-			margin-bottom: 12px;
+			margin-bottom: 4px;
 			max-width: 90%;
 			align-self: flex-start;
+		}
+
+		.message-container {
+			display: flex;
+			flex-direction: column;
+		}
+
+		.copy-button-container {
+			align-self: flex-start;
+			margin-bottom: 12px;
+			margin-top: -20px;
+		}
+
+		.copy-button {
+			background-color: white;
+			border-radius: 4px;
+			padding: 4px 8px;
+			cursor: pointer;
+			font-size: 12px;
+			color: #666;
+			display: flex;
+			align-items: center;
+			border: none;
+		}
+
+		.copy-button:hover {
+			background-color: #d0d0d0;
+		}
+
+		.copy-button svg {
+			width: 16px;
+			height: 16px;
+			margin-right: 4px;
 		}
 
 		.message-container {
@@ -366,40 +495,292 @@
 			height: auto;
 		}
 	</style>
+	<style>
+		/* Styles for the API key setup message */
+		#api-key-setup {
+			display: none;
+			background-color: #f8f9fa;
+			border: 1px solid #ddd;
+			border-radius: 8px;
+			padding: 20px;
+			margin: 20px auto;
+			max-width: 800px;
+			box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+		}
+
+		#api-key-setup h2 {
+			color: #333;
+			margin-top: 0;
+			border-bottom: 1px solid #eee;
+			padding-bottom: 10px;
+		}
+
+		#api-key-setup code {
+			background-color: #f1f1f1;
+			padding: 2px 5px;
+			border-radius: 3px;
+			font-family: monospace;
+		}
+
+		/* API Key Form Styles */
+		#api-key-form {
+			background-color: #fff;
+			border: 1px solid #ddd;
+			border-radius: 8px;
+			padding: 20px;
+			margin-top: 20px;
+		}
+
+		#api-key-form h3 {
+			margin-top: 0;
+			color: #44CDF3;
+		}
+
+		#api-key-form .form-group {
+			margin-bottom: 15px;
+		}
+
+		#api-key-form label {
+			display: block;
+			margin-bottom: 5px;
+			font-weight: 500;
+		}
+
+		#api-key-form select,
+		#api-key-form input {
+			width: 100%;
+			padding: 10px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			font-size: 14px;
+		}
+
+		#api-key-form .buttons {
+			display: flex;
+			justify-content: space-between;
+			margin-top: 20px;
+		}
+
+		#api-key-form button {
+			padding: 10px 15px;
+			background-color: #44CDF3;
+			color: white;
+			border: none;
+			border-radius: 4px;
+			cursor: pointer;
+			font-weight: bold;
+		}
+
+		#api-key-form button:hover {
+			background-color: #2bb5db;
+		}
+
+		#reset-api-key {
+			background-color: #f44336 !important;
+		}
+
+		#reset-api-key:hover {
+			background-color: #d32f2f !important;
+		}
+
+		.api-key-status {
+			margin-top: 10px;
+			padding: 10px;
+			border-radius: 4px;
+			font-size: 14px;
+		}
+
+		.api-key-status.success {
+			background-color: #e8f5e9;
+			color: #2e7d32;
+			border-left: 4px solid #4caf50;
+		}
+
+		.api-key-status.error {
+			background-color: #ffebee;
+			color: #c62828;
+			border-left: 4px solid #f44336;
+		}
+
+		h1 a:hover {
+			text-decoration: underline;
+		}
+	</style>
 </head>
 
 <body>
 	<div id="chat-container">
 		<div class="header">
 			<div class="header-container">
-				<h1>Code Search with Probe and AI</h1>
+				<div class="header-left">
+					<img src="logo.png" alt="Probe Logo" class="header-logo">
+					<a href="javascript:location.reload()" class="new-chat-link">New chat</a>
+				</div>
+				<div id="api-settings">
+					<a href="#" id="header-reset-api-key"
+						style="display: none; font-size: 12px; color: #f44336; text-decoration: none;">Reset API Key</a>
+				</div>
 			</div>
-			<div id="allowed-folders">
-				<h3>Configured Search Folders:</h3>
-				<div id="folder-list">Loading configured folders...</div>
+		</div>
+
+		<div id="empty-state-logo" class="centered-logo-container">
+			<h1><img src="logo.png" alt="Probe Logo"><a href="https://probeai.dev/"
+					style="color: inherit; text-decoration: none;">Probe </a>&nbsp;- AI-Native Code Understanding</h1>
+		</div>
+
+		<!-- API Key Setup Instructions -->
+		<div id="api-key-setup">
+			<h2>API Key Setup Required</h2>
+			<p>To use the Probe AI chat interface, you need to configure at least one API key. You have two options:</p>
+
+			<!-- API Key Web Form -->
+			<div id="api-key-form">
+				<h3>Option 1: Configure API Key in Browser</h3>
+				<p>Enter your API key details below to start using the chat interface immediately:</p>
+
+				<div class="form-group">
+					<label for="api-provider">API Provider:</label>
+					<select id="api-provider">
+						<option value="anthropic">Anthropic Claude</option>
+						<option value="openai">OpenAI</option>
+						<option value="google">Google AI</option>
+					</select>
+				</div>
+
+				<div class="form-group">
+					<label for="api-key">API Key:</label>
+					<input type="password" id="api-key" placeholder="Enter your API key">
+				</div>
+
+				<div class="form-group">
+					<label for="api-url">Custom API URL (Optional):</label>
+					<input type="text" id="api-url" placeholder="Leave blank for default API URL">
+				</div>
+
+				<div class="api-key-status" id="api-key-status" style="display: none;"></div>
+
+				<div class="buttons">
+					<button type="button" id="save-api-key">Save API Key</button>
+				</div>
+
+				<p style="margin-top: 10px; font-size: 0.9em; color: #666;">
+					Your API key will be stored in your browser's local storage and sent with each request.
+					No data is stored on our servers.
+				</p>
+			</div>
+
+			<div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+				<h3>Option 2: Using Server-Side Configuration</h3>
+				<p>Alternatively, you can configure API keys on the server:</p>
+
+				<div style="background-color: #f8f9fa; padding: 15px; border-radius: 6px; margin-top: 10px;">
+					<p><strong>Using a .env file:</strong></p>
+					<ol style="margin-left: 20px;">
+						<li>Create a <code>.env</code> file in the current directory by copying <code>.env.example</code></li>
+						<li>Add your API key to the <code>.env</code> file (uncomment and replace with your key)</li>
+						<li>Restart the application</li>
+					</ol>
+
+					<p style="margin-top: 15px;"><strong>Using environment variables:</strong></p>
+					<ul style="margin-left: 20px;">
+						<li>Anthropic: <code>ANTHROPIC_API_KEY=your_anthropic_api_key</code></li>
+						<li>OpenAI: <code>OPENAI_API_KEY=your_openai_api_key</code></li>
+						<li>Google AI: <code>GOOGLE_API_KEY=your_google_api_key</code></li>
+					</ul>
+				</div>
 			</div>
 		</div>
 		<div id="messages" class="message-container"></div>
-		<form id="input-form">
-			<input type="text" id="message-input" placeholder="Ask about code..." required>
-			<button type="submit">Search</button>
-		</form>
-		<div class="search-suggestions">
-			<ul>
-				<li>Find functions that handle user authentication</li>
-				<li>Search for database connection implementations</li>
-				<li>Show error handling patterns in the codebase</li>
-				<li>List all API endpoints in the project</li>
-				<li>Find code that processes user input</li>
-				<li>Show how configuration is loaded</li>
-				<li>Find file parsing implementations</li>
-			</ul>
-		</div>
-		<div class="footer">
-			Powered by <a href="https://probeai.dev/" target="_blank">Probe AI</a>
-		</div>
+	</div>
+	<form id="input-form">
+		<textarea id="message-input" placeholder="Ask about code..." required rows="1"></textarea>
+		<button type="submit">Search</button>
+	</form>
+	<div class="search-suggestions">
+		<ul>
+			<li>Find functions that handle user authentication</li>
+			<li>Search for database connection implementations</li>
+			<li>Show error handling patterns in the codebase</li>
+			<li>List all API endpoints in the project</li>
+			<li>Find code that processes user input</li>
+			<li>Show how configuration is loaded</li>
+			<li>Find file parsing implementations</li>
+		</ul>
+		<div id="folder-info" class="folder-info"></div>
+	</div>
+	<div class="footer">
+		Powered by <a href="https://probeai.dev/" target="_blank">Probe</a>
+	</div>
 	</div>
 	<script>
+		function convertSvgToPng(svgElement, containerDiv, index) {
+			if (!svgElement) {
+				console.error('No SVG found!');
+				return;
+			}
+
+			try {
+				// Get the actual rendered size of the SVG
+				const rect = svgElement.getBoundingClientRect();
+				const svgWidth = rect.width;
+				const svgHeight = rect.height;
+				console.log(`SVG rendered size: ${svgWidth}x${svgHeight}`);
+
+				// Define scale factor for higher resolution (increase for more clarity)
+				const scale = 2; // Try 3 or 4 if still blurry
+
+				// Create canvas with scaled dimensions
+				const canvasWidth = svgWidth * scale;
+				const canvasHeight = svgHeight * scale;
+				const canvas = document.createElement('canvas');
+				canvas.width = canvasWidth;
+				canvas.height = canvasHeight;
+				const ctx = canvas.getContext('2d');
+
+				// Enable image smoothing for better quality
+				ctx.imageSmoothingEnabled = true;
+				ctx.imageSmoothingQuality = 'high';
+
+				// Serialize SVG to string
+				const svgString = new XMLSerializer().serializeToString(svgElement);
+				const svgDataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgString);
+
+				const img = new Image();
+				img.onload = function () {
+					// Draw the image onto the canvas at scaled size
+					ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight);
+
+					// Convert canvas to PNG data URL
+					const pngDataUrl = canvas.toDataURL('image/png');
+
+					// Create the PNG image element
+					const pngImage = document.createElement('img');
+					pngImage.src = pngDataUrl;
+					pngImage.width = svgWidth; // Display at original size
+					pngImage.height = svgHeight;
+					pngImage.alt = 'Diagram as PNG';
+					pngImage.className = 'mermaid-png';
+
+					// Log PNG natural size to verify resolution
+					pngImage.onload = function () {
+						console.log(`PNG natural size: ${this.naturalWidth}x${this.naturalHeight}`);
+					};
+
+					// Replace the SVG with the PNG image
+					svgElement.style.display = 'none';
+					svgElement.insertAdjacentElement('afterend', pngImage);
+
+					console.log(`Replaced SVG with PNG image (index: ${index || 0})`);
+				};
+				img.onerror = function () {
+					console.error('Error loading SVG image for conversion');
+				};
+				img.src = svgDataUrl;
+			} catch (error) {
+				console.error('Error in SVG to PNG conversion process:', error);
+			}
+		}
+
 		// Session ID for this chat session - we'll store it in localStorage to maintain consistency
 		let sessionId;
 		// Try to get the session ID from localStorage
@@ -421,27 +802,36 @@
 		// Position the input form in the center initially and handle UI elements visibility
 		function positionInputForm() {
 			const footer = document.querySelector('.footer');
-			const allowedFoldersSection = document.getElementById('allowed-folders');
+			const header = document.querySelector('.header');
+			const emptyStateLogo = document.getElementById('empty-state-logo');
 
 			if (messagesDiv.children.length === 0) {
 				form.classList.add('centered');
 				form.classList.remove('bottom');
-				// Show footer and folders section when no messages
+				// Show footer when no messages
 				if (footer) {
 					footer.style.display = 'block';
 				}
-				if (allowedFoldersSection) {
-					allowedFoldersSection.style.display = 'block';
+				// Hide the top header and show the centered logo
+				if (header) {
+					header.style.display = 'none';
+				}
+				if (emptyStateLogo) {
+					emptyStateLogo.style.display = 'block';
 				}
 			} else {
 				form.classList.remove('centered');
 				form.classList.add('bottom');
-				// Hide footer and folders section when chat is started
+				// Hide footer when chat is started
 				if (footer) {
 					footer.style.display = 'none';
 				}
-				if (allowedFoldersSection) {
-					allowedFoldersSection.style.display = 'none';
+				// Show the top header and hide the centered logo
+				if (header) {
+					header.style.display = 'block';
+				}
+				if (emptyStateLogo) {
+					emptyStateLogo.style.display = 'none';
 				}
 			}
 		}
@@ -461,6 +851,14 @@
 			setupSearchSuggestions();
 			positionInputForm();
 			positionSearchSuggestions();
+
+			// Focus the input field on page load
+			setTimeout(() => {
+				const inputField = document.getElementById('message-input');
+				if (inputField) {
+					inputField.focus();
+				}
+			}, 100);
 		});
 
 
@@ -496,7 +894,9 @@
 				startOnLoad: false,
 				theme: 'default',
 				securityLevel: 'loose',
-				flowchart: { htmlLabels: true }
+				flowchart: { htmlLabels: true },
+				logLevel: 3, // Add logging for debugging (1: error, 2: warn, 3: info, 4: debug, 5: trace)
+				fontFamily: 'monospace'
 			});
 
 			// Run mermaid on page load to render the test diagram
@@ -513,9 +913,12 @@
 		}
 
 		// Configure marked.js
+		// Configure Marked.js with logging
 		marked.setOptions({
 			highlight: function (code, lang) {
+				console.log(`Highlighting code with language: ${lang}`);
 				if (lang === 'mermaid') {
+					console.log('Returning mermaid div');
 					return `<div class="mermaid">${code}</div>`;
 				}
 				const language = hljs.getLanguage(lang) ? lang : 'plaintext';
@@ -525,32 +928,129 @@
 			gfm: true,
 			breaks: true
 		});
-
-		let allowedFolders = []; // Array to store allowed folder paths from server
-
-		// Fetch allowed folders from server on page load
+		// Fetch API key status and check for no API keys mode on page load
 		window.addEventListener('DOMContentLoaded', async () => {
+			// First check if we have an API key in local storage
+			const storedApiKey = localStorage.getItem('probeApiKey');
+			if (storedApiKey) {
+				// Show the reset button in the header
+				const headerResetButton = document.getElementById('header-reset-api-key');
+				if (headerResetButton) {
+					headerResetButton.style.display = 'inline-block';
+				}
+			}
+			// Check if we're in API key setup mode
+			const apiKeySetupDiv = document.getElementById('api-key-setup');
+			const inputForm = document.getElementById('input-form');
+			const searchSuggestions = document.querySelector('.search-suggestions');
+
+			// If API key setup is visible, we're in API setup mode
+			if (apiKeySetupDiv && window.getComputedStyle(apiKeySetupDiv).display !== 'none') {
+				// Add class to body for API setup mode styling
+				document.body.classList.add('api-setup-mode');
+
+				// Hide search suggestions and input form
+				if (inputForm) inputForm.style.display = 'none';
+				if (searchSuggestions) searchSuggestions.style.display = 'none';
+			} else {
+				// Remove API setup mode class if not in setup mode
+				document.body.classList.remove('api-setup-mode');
+			}
+
 			try {
 				const response = await fetch('/folders');
 				const data = await response.json();
-				allowedFolders = data.folders || [];
-				updateFolderListUI();
+
+				// Check if we're in no API keys mode
+				if (data.noApiKeysMode) {
+					handleNoApiKeysMode();
+				}
+
+				// Display folder information
+				displayFolderInfo(data.folders);
 			} catch (error) {
-				console.error('Error fetching allowed folders:', error);
-				folderListDiv.textContent = 'Error loading configured folders';
+				console.error('Error fetching API status:', error);
 			}
 		});
 
-		// Update the UI with allowed folders
-		function updateFolderListUI() {
-			if (allowedFolders.length === 0) {
-				folderListDiv.textContent = 'No folders configured. Please set ALLOWED_FOLDERS in .env. Search will be limited to the current folder.';
+		// Function to display folder information
+		function displayFolderInfo(folders) {
+			const folderInfoDiv = document.getElementById('folder-info');
+
+			if (!folderInfoDiv) return;
+
+			// Clear any existing content
+			folderInfoDiv.innerHTML = '';
+
+			if (folders && folders.length > 0) {
+				// Create content for the folder info
+				if (folders.length === 1) {
+					folderInfoDiv.textContent = `Searching in: ${folders[0]}`;
+				} else {
+					folderInfoDiv.textContent = `Searching in: ${folders[0]} (and ${folders.length - 1} other folder${folders.length > 2 ? 's' : ''})`;
+				}
 			} else {
-				folderListDiv.innerHTML = allowedFolders.map(f =>
-					`<div class="folder-item">- ${f}</div>`
-				).join('');
+				// When no folders are configured, we need to show the absolute path of the current working directory
+				// We'll use the process.cwd() value from the server, which is typically /Users/leonidbugaev/go/src/code-search
+				// for this project based on the environment details
+				folderInfoDiv.textContent = `Searching in: /Users/leonidbugaev/go/src/code-search (current directory)`;
 			}
 		}
+
+		// Handle no API keys mode
+		function handleNoApiKeysMode() {
+			// Check if body has the data-no-api-keys attribute
+			const noApiKeys = document.body.getAttribute('data-no-api-keys') === 'true';
+
+			// Check if API key is already stored in local storage
+			const storedApiKey = localStorage.getItem('probeApiKey');
+
+			// Add or remove api-setup-mode class based on whether we need to show the API key setup
+			if (noApiKeys && !storedApiKey) {
+				document.body.classList.add('api-setup-mode');
+			} else {
+				document.body.classList.remove('api-setup-mode');
+			}
+
+			// Get UI elements
+			const apiKeySetupDiv = document.getElementById('api-key-setup');
+			const inputForm = document.getElementById('input-form');
+			const searchSuggestions = document.querySelector('.search-suggestions');
+
+			if (noApiKeys && !storedApiKey) {
+				console.log('No API keys detected and no local storage key - showing setup instructions');
+
+				// Show the API key setup div
+				if (apiKeySetupDiv) {
+					apiKeySetupDiv.style.display = 'block';
+				}
+
+				// Hide the chat interface elements
+				if (inputForm) {
+					inputForm.style.display = 'none';
+				}
+
+				if (searchSuggestions) {
+					searchSuggestions.style.display = 'none';
+				}
+			} else if (noApiKeys && storedApiKey) {
+				console.log('No server API keys but local storage key found - enabling chat interface');
+
+				// Hide the API key setup div
+				if (apiKeySetupDiv) {
+					apiKeySetupDiv.style.display = 'none';
+				}
+
+				// Show the chat interface elements
+				if (inputForm) {
+					inputForm.style.display = 'flex';
+				}
+
+				// Remove API setup mode class
+				document.body.classList.remove('api-setup-mode');
+			}
+		}
+
 
 		// Render markdown content
 		function renderMarkdown(text) {
@@ -564,21 +1064,46 @@
 			try {
 				// Create a simple test diagram directly
 				const testDiv = document.createElement('div');
-				testDiv.className = 'ai-message markdown-content';
+				testDiv.className = 'mermaid';
+				testDiv.textContent = 'graph TD;\nA-->B;';
+				document.body.appendChild(testDiv);
+
+				console.log('Created test diagram with content:', testDiv.textContent);
 
 				// Render the direct mermaid div
 				setTimeout(() => {
 					try {
-						console.log('Running mermaid on direct div');
+						console.log('Running mermaid on test div');
 						if (typeof mermaid.run === 'function') {
-							mermaid.run();
+							console.log('Using mermaid.run() for test');
+							mermaid.run({
+								nodes: [testDiv]
+							});
 						} else if (typeof mermaid.init === 'function') {
-							mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+							console.log('Using mermaid.init() for test');
+							mermaid.init(undefined, [testDiv]);
 						}
+
+						// Verify if rendering worked
+						setTimeout(() => {
+							const svg = testDiv.querySelector('svg');
+							if (svg) {
+								console.log('Test diagram rendered successfully!');
+							} else {
+								console.error('Test diagram did not render to SVG');
+							}
+
+							// Remove test div after verification
+							document.body.removeChild(testDiv);
+						}, 100);
 					} catch (error) {
-						console.error('Error rendering direct mermaid:', error);
+						console.error('Error rendering test mermaid diagram:', error);
+						console.error('Error details:', error.message);
+
+						// Remove test div on error
+						document.body.removeChild(testDiv);
 					}
-				}, 100);
+				}, 200);
 			} catch (error) {
 				console.error('Unexpected error in test function:', error);
 			}
@@ -838,12 +1363,63 @@
 
 		// Connect to tool events on page load
 		window.addEventListener('DOMContentLoaded', () => {
-			connectToToolEvents();
+			// Check if we're in no API keys mode
+			const noApiKeys = document.body.getAttribute('data-no-api-keys') === 'true';
+
+			if (!noApiKeys) {
+				connectToToolEvents();
+			}
 		});
+
+		// Controller for aborting fetch requests
+		let currentController = null;
+		// Flag to track if a request is in progress
+		let isRequestInProgress = false;
+
+		// Function to cancel the current request on the server
+		async function cancelRequest(sessionId) {
+			try {
+				const response = await fetch('/cancel-request', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ sessionId })
+				});
+
+				if (response.ok) {
+					console.log('Request cancelled successfully on server');
+				} else {
+					console.error('Failed to cancel request on server');
+				}
+			} catch (error) {
+				console.error('Error cancelling request:', error);
+			}
+		}
 
 		// Handle form submission
 		form.addEventListener('submit', async (e) => {
 			e.preventDefault();
+
+			// If this is a stop action
+			if (form.querySelector('button').textContent === 'Stop') {
+				// Abort the current fetch request
+				if (currentController) {
+					currentController.abort();
+					currentController = null;
+				}
+
+				// Send cancellation request to the server
+				if (isRequestInProgress) {
+					await cancelRequest(sessionId);
+					isRequestInProgress = false;
+				}
+
+				// Reset the button to "Search" and enable input
+				form.querySelector('button').textContent = 'Search';
+				form.querySelector('button').style.backgroundColor = '#44CDF3';
+				input.disabled = false;
+				return;
+			}
+
 			const message = input.value.trim();
 			if (!message) return;
 
@@ -862,35 +1438,54 @@
 				positionInputForm();
 				searchSuggestionsDiv.style.display = 'none';
 
-				// Ensure footer and folders section are hidden when chat starts
+				// Ensure footer is hidden when chat starts
 				const footer = document.querySelector('.footer');
-				const allowedFoldersSection = document.getElementById('allowed-folders');
-
 				if (footer) {
 					footer.style.display = 'none';
 				}
 
-				if (allowedFoldersSection) {
-					allowedFoldersSection.style.display = 'none';
-				}
+				// Keep the allowed folders section visible during chat
+				// This is the key change - we don't hide the folder information anymore
 			}
 
 			// Create AI message container
 			const aiMsgDiv = document.createElement('div');
 			aiMsgDiv.className = 'ai-message markdown-content';
+
+			// Store the original message for copying
+			aiMsgDiv.setAttribute('data-original-markdown', '');
+
+			// Add the AI message to the DOM
 			messagesDiv.appendChild(aiMsgDiv);
 
 			// Set as current AI message for tool calls
 			currentAiMessageDiv = aiMsgDiv;
+
+			// Disable input and change button to "Stop"
+			input.disabled = true;
+			const submitButton = form.querySelector('button');
+			submitButton.textContent = 'Stop';
+			submitButton.style.backgroundColor = '#f44336';
+
+			// Set request in progress flag
+			isRequestInProgress = true;
 
 			// Send message to server
 			try {
 				// Log the session ID being used
 				console.log(`%c Using session ID for chat request: ${sessionId}`, 'background: #FF9800; color: white; padding: 2px 5px; border-radius: 2px;');
 
+				// Get API key from local storage if available
+				const storedApiProvider = localStorage.getItem('probeApiProvider');
+				const storedApiKey = localStorage.getItem('probeApiKey');
+				const storedApiUrl = localStorage.getItem('probeApiUrl');
+
 				const requestData = {
 					message,
-					sessionId // Include session ID with the request
+					sessionId, // Include session ID with the request
+					apiProvider: storedApiProvider,
+					apiKey: storedApiKey,
+					apiUrl: storedApiUrl
 				};
 				console.log('Sending chat request with data:', requestData);
 
@@ -917,11 +1512,32 @@
 
 				document.body.appendChild(sessionIndicator);
 
+				// Create a new AbortController for this request
+				currentController = new AbortController();
+				const signal = currentController.signal;
+
 				const response = await fetch('/chat', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify(requestData),
+					signal: signal
+				}).catch(error => {
+					if (error.name === 'AbortError') {
+						console.log('Fetch aborted');
+						aiMsgDiv.innerHTML += '<p><em>Search was stopped by user.</em></p>';
+						return null;
+					}
+					throw error;
 				});
+
+				// If response is null (aborted), reset UI and return
+				if (!response) {
+					// Reset button to "Search" and enable input
+					form.querySelector('button').textContent = 'Search';
+					form.querySelector('button').style.backgroundColor = '#44CDF3';
+					input.disabled = false;
+					return;
+				}
 
 				const reader = response.body.getReader();
 				const decoder = new TextDecoder();
@@ -933,6 +1549,9 @@
 					const chunk = decoder.decode(value, { stream: true });
 					aiResponse += chunk;
 
+					// Update the original markdown attribute
+					aiMsgDiv.setAttribute('data-original-markdown', aiResponse);
+
 					try {
 						// Render markdown content
 						aiMsgDiv.innerHTML = renderMarkdown(aiResponse);
@@ -942,16 +1561,8 @@
 							hljs.highlightElement(block);
 						});
 
-						// Render any mermaid diagrams
-						try {
-							if (typeof mermaid.run === 'function') {
-								mermaid.run();
-							} else if (typeof mermaid.init === 'function') {
-								mermaid.init(undefined, document.querySelectorAll('.mermaid'));
-							}
-						} catch (error) {
-							console.warn('Mermaid rendering error:', error);
-						}
+						// Don't render mermaid diagrams during streaming - will render once at the end
+						// This prevents premature rendering attempts that might fail
 
 						messagesDiv.scrollTop = messagesDiv.scrollHeight;
 					} catch (error) {
@@ -964,32 +1575,263 @@
 				// Final render after all content is received
 				setTimeout(() => {
 					try {
-						const finalMermaidDivs = aiMsgDiv.querySelectorAll('.mermaid');
+						// Specifically target mermaid diagrams in the current message
+						const finalMermaidDivs = aiMsgDiv.querySelectorAll('.language-mermaid');
+
 						if (finalMermaidDivs.length > 0) {
-							console.log(`Final render: Found ${finalMermaidDivs.length} mermaid diagrams`);
-							// Try direct rendering as a fallback if needed
+							console.log(`Final render: Found ${finalMermaidDivs.length} mermaid diagrams in current message`);
+
+							// Log the content of the first diagram for debugging
+							if (finalMermaidDivs[0]) {
+								console.log('First diagram content:', finalMermaidDivs[0].textContent.substring(0, 100) + '...');
+							}
+
+							// Try direct rendering with specific nodes from current message
 							if (typeof mermaid.run === 'function') {
-								mermaid.run();
+								console.log('Using mermaid.run() for rendering');
+								mermaid.run({
+									nodes: finalMermaidDivs
+								});
 							} else if (typeof mermaid.init === 'function') {
 								// Fallback to older mermaid versions
+								console.log('Using mermaid.init() for rendering');
 								mermaid.init(undefined, finalMermaidDivs);
 							} else {
 								console.error('No suitable mermaid rendering method found');
 							}
+
+							// Verify rendering success
+							setTimeout(() => {
+								// Update selector to find SVGs inside code.language-mermaid elements
+								const renderedSvgs = aiMsgDiv.querySelectorAll('.language-mermaid svg, .mermaid svg');
+								console.log(`Rendering verification: Found ${renderedSvgs.length} rendered SVGs`);
+
+								// Convert SVGs to PNGs if any were rendered
+								if (renderedSvgs.length > 0) {
+									console.log('Converting SVGs to PNGs...');
+									renderedSvgs.forEach((svg, index) => {
+										convertSvgToPng(svg, aiMsgDiv, index);
+									});
+								}
+							}, 100);
+						} else {
+							console.log('No mermaid diagrams found in current message');
 						}
 					} catch (error) {
 						console.warn('Final mermaid rendering error:', error);
+						console.error('Error details:', error.message);
 					}
-				}, 300);
+
+					// Add copy button below the message after rendering is complete
+					if (!aiMsgDiv.nextElementSibling || !aiMsgDiv.nextElementSibling.classList.contains('copy-button-container')) {
+						// Create copy button container
+						const copyButtonContainer = document.createElement('div');
+						copyButtonContainer.className = 'copy-button-container';
+
+						// Create copy button
+						const copyButton = document.createElement('button');
+						copyButton.className = 'copy-button';
+						copyButton.innerHTML = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M7 5C7 3.34315 8.34315 2 10 2H19C20.6569 2 22 3.34315 22 5V14C22 15.6569 20.6569 17 19 17H17V19C17 20.6569 15.6569 22 14 22H5C3.34315 22 2 20.6569 2 19V10C2 8.34315 3.34315 7 5 7H7V5ZM9 7H14C15.6569 7 17 8.34315 17 10V15H19C19.5523 15 20 14.5523 20 14V5C20 4.44772 19.5523 4 19 4H10C9.44772 4 9 4.44772 9 5V7ZM5 9C4.44772 9 4 9.44772 4 10V19C4 19.5523 4.44772 20 5 20H14C14.5523 20 15 19.5523 15 19V10C15 9.44772 14.5523 9 14 9H5Z" fill="#666"></path></svg>Copy`;
+
+						// Add click event to copy button
+						copyButton.addEventListener('click', function () {
+							const markdown = aiMsgDiv.getAttribute('data-original-markdown');
+							if (markdown) {
+								navigator.clipboard.writeText(markdown).then(() => {
+									// Visual feedback
+									copyButton.textContent = 'Copied!';
+
+									setTimeout(() => {
+										copyButton.innerHTML = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M7 5C7 3.34315 8.34315 2 10 2H19C20.6569 2 22 3.34315 22 5V14C22 15.6569 20.6569 17 19 17H17V19C17 20.6569 15.6569 22 14 22H5C3.34315 22 2 20.6569 2 19V10C2 8.34315 3.34315 7 5 7H7V5ZM9 7H14C15.6569 7 17 8.34315 17 10V15H19C19.5523 15 20 14.5523 20 14V5C20 4.44772 19.5523 4 19 4H10C9.44772 4 9 4.44772 9 5V7ZM5 9C4.44772 9 4 9.44772 4 10V19C4 19.5523 4.44772 20 5 20H14C14.5523 20 15 19.5523 15 19V10C15 9.44772 14.5523 9 14 9H5Z" fill="#666"></path></svg>Copy`;
+									}, 2000);
+								}).catch(err => {
+									console.error('Failed to copy text: ', err);
+									copyButton.textContent = 'Failed to copy';
+
+									setTimeout(() => {
+										copyButton.innerHTML = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M7 5C7 3.34315 8.34315 2 10 2H19C20.6569 2 22 3.34315 22 5V14C22 15.6569 20.6569 17 19 17H17V19C17 20.6569 15.6569 22 14 22H5C3.34315 22 2 20.6569 2 19V10C2 8.34315 3.34315 7 5 7H7V5ZM9 7H14C15.6569 7 17 8.34315 17 10V15H19C19.5523 15 20 14.5523 20 14V5C20 4.44772 19.5523 4 19 4H10C9.44772 4 9 4.44772 9 5V7ZM5 9C4.44772 9 4 9.44772 4 10V19C4 19.5523 4.44772 20 5 20H14C14.5523 20 15 19.5523 15 19V10C15 9.44772 14.5523 9 14 9H5Z" fill="#666"></path></svg>Copy`;
+									}, 2000);
+								});
+							}
+						});
+
+						// Add elements to the DOM
+						copyButtonContainer.appendChild(copyButton);
+
+						// Insert after the AI message
+						if (aiMsgDiv.nextSibling) {
+							messagesDiv.insertBefore(copyButtonContainer, aiMsgDiv.nextSibling);
+						} else {
+							messagesDiv.appendChild(copyButtonContainer);
+						}
+					}
+				}, 500); // Increased timeout to ensure DOM is fully updated
 			} catch (error) {
 				console.error('Error:', error);
 				const errorMsg = document.createElement('div');
 				errorMsg.className = 'ai-message';
 				errorMsg.textContent = 'Error occurred while processing your request.';
 				messagesDiv.appendChild(errorMsg);
+			} finally {
+				// Reset button to "Search" and enable input
+				form.querySelector('button').textContent = 'Search';
+				form.querySelector('button').style.backgroundColor = '#44CDF3';
+				input.disabled = false;
+				currentController = null;
+				isRequestInProgress = false;
 			}
 
 			messagesDiv.scrollTop = messagesDiv.scrollHeight;
+		});
+
+		const messageInput = document.getElementById('message-input');
+
+		function autoResizeTextarea() {
+			messageInput.style.height = 'auto'; // Reset to natural height
+			const scrollHeight = messageInput.scrollHeight;
+			messageInput.style.height = Math.min(scrollHeight, 200) + 'px'; // Set height, capped at 200px
+		}
+
+		// Initialize height on page load
+		window.addEventListener('load', () => {
+			autoResizeTextarea(); // Set initial height based on content (empty = min-height)
+		});
+
+		// Auto-resize as user types
+		messageInput.addEventListener('input', autoResizeTextarea);
+
+		// Handle Shift+Enter for new line and Enter for form submission
+		messageInput.addEventListener('keydown', function (e) {
+			if (e.key === 'Enter') {
+				if (e.shiftKey) {
+					// Allow new line with Shift+Enter and resize
+					setTimeout(autoResizeTextarea, 0);
+				} else {
+					// Submit form on Enter without Shift
+					e.preventDefault();
+					form.dispatchEvent(new Event('submit'));
+				}
+			}
+		});
+
+		// API Key Form Functionality
+		document.addEventListener('DOMContentLoaded', function () {
+			// Check if API key is already stored
+			const storedApiProvider = localStorage.getItem('probeApiProvider');
+			const storedApiKey = localStorage.getItem('probeApiKey');
+			const storedApiUrl = localStorage.getItem('probeApiUrl');
+
+			const apiProviderSelect = document.getElementById('api-provider');
+			const apiKeyInput = document.getElementById('api-key');
+			const apiUrlInput = document.getElementById('api-url');
+			const saveButton = document.getElementById('save-api-key');
+			const headerResetButton = document.getElementById('header-reset-api-key');
+			const statusDiv = document.getElementById('api-key-status');
+			const apiKeySetupDiv = document.getElementById('api-key-setup');
+			const inputForm = document.getElementById('input-form');
+
+			// If API key is stored, show a success message and show the header reset button
+			if (storedApiKey) {
+				// Show the reset button in the header
+				headerResetButton.style.display = 'inline-block';
+				statusDiv.textContent = `API key for ${storedApiProvider} is configured`;
+				statusDiv.className = 'api-key-status success';
+				statusDiv.style.display = 'block';
+
+				// Fill the form with stored values
+				if (storedApiProvider) {
+					apiProviderSelect.value = storedApiProvider;
+				}
+				if (storedApiKey) {
+					apiKeyInput.value = '••••••••••••••••••••••••••';
+				}
+				if (storedApiUrl) {
+					apiUrlInput.value = storedApiUrl;
+				}
+
+				// If we have an API key in local storage, always enable the chat interface
+				// regardless of no API keys mode
+				// Hide API key setup and show input form
+				apiKeySetupDiv.style.display = 'none';
+				inputForm.style.display = 'flex';
+
+				// Remove API setup mode class
+				document.body.classList.remove('api-setup-mode');
+			}
+
+			// Save API key to local storage
+			saveButton.addEventListener('click', function () {
+				const provider = apiProviderSelect.value;
+				const key = apiKeyInput.value;
+				const url = apiUrlInput.value;
+
+				// Don't save if the key is masked
+				if (key === '••••••••••••••••••••••••••') {
+					statusDiv.textContent = 'No changes made to API key';
+					statusDiv.className = 'api-key-status';
+					statusDiv.style.display = 'block';
+					return;
+				}
+
+				// Validate inputs
+				if (!key) {
+					statusDiv.textContent = 'Please enter an API key';
+					statusDiv.className = 'api-key-status error';
+					statusDiv.style.display = 'block';
+					return;
+				}
+
+				// Save to local storage
+				localStorage.setItem('probeApiProvider', provider);
+				localStorage.setItem('probeApiKey', key);
+				if (url) {
+					localStorage.setItem('probeApiUrl', url);
+				} else {
+					localStorage.removeItem('probeApiUrl');
+				}
+
+				// Show success message
+				statusDiv.textContent = `API key for ${provider} saved successfully`;
+				statusDiv.className = 'api-key-status success';
+				statusDiv.style.display = 'block';
+
+				// Mask the API key for security
+				apiKeyInput.value = '••••••••••••••••••••••••••';
+
+				// If we're in no API keys mode, enable the chat interface
+				if (document.body.getAttribute('data-no-api-keys') === 'true') {
+					// Hide API key setup and show input form
+					apiKeySetupDiv.style.display = 'none';
+					inputForm.style.display = 'flex';
+
+					// Refresh the page to apply changes
+					setTimeout(() => {
+						window.location.reload();
+					}, 1000);
+				}
+			});
+
+			// Reset API key from header button
+			headerResetButton.addEventListener('click', function (e) {
+				e.preventDefault();
+
+				// Confirm before resetting
+				if (confirm('Are you sure you want to reset your API key configuration?')) {
+					// Remove from local storage
+					localStorage.removeItem('probeApiProvider');
+					localStorage.removeItem('probeApiKey');
+					localStorage.removeItem('probeApiUrl');
+
+					// Hide the reset button
+					headerResetButton.style.display = 'none';
+
+					// Show message
+					alert('API key configuration has been reset.');
+
+					// Reload the page
+					window.location.reload();
+				}
+			});
 		});
 	</script>
 </body>

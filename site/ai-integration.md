@@ -33,11 +33,12 @@ When using Probe's AI integration features, it's important to understand the pri
 
 - **Local Search Engine**: Probe itself is a fully local semantic code search tool that doesn't require embedding generation or cloud indexing
 - **Works Like Elastic Search**: Probe functions like a full elastic search on top of your codebase or documentation, without requiring indexing
-- **AI Service Integration**: When using Probe with external AI services (Anthropic, OpenAI, etc.), code snippets found by Probe are sent to those services
+- **AI Service Integration**: When using Probe with external AI services (Anthropic, OpenAI, Google, etc.), code snippets found by Probe are sent to those services
 - **Data Transmission**: The following data may be transmitted to external AI providers:
   - Your natural language queries
   - Code snippets and context found by Probe's search
   - Conversation history for contextual awareness
+- **Provider Selection**: You can choose which AI provider to use based on your privacy requirements
 - **Local Model Options**: For maximum privacy, Probe can be used with locally-running AI models, keeping all data on your machine
 
 Consider these privacy aspects when choosing how to integrate Probe with AI services, especially when working with sensitive or proprietary code.
@@ -69,6 +70,8 @@ npx -y @buger/probe-chat
 export ANTHROPIC_API_KEY=your_api_key
 # Or for OpenAI
 # export OPENAI_API_KEY=your_api_key
+# Or for Google
+# export GOOGLE_API_KEY=your_api_key
 
 # Or specify a directory to search
 npx -y @buger/probe-chat /path/to/your/project
@@ -97,6 +100,8 @@ npm install
 export ANTHROPIC_API_KEY=your_api_key
 # Or for OpenAI
 # export OPENAI_API_KEY=your_api_key
+# Or for Google
+# export GOOGLE_API_KEY=your_api_key
 
 # Start the chat interface
 node index.js
@@ -115,12 +120,30 @@ The AI Chat mode uses large language models to understand your questions and sea
 
 #### Multi-Model Support
 
-Probe's AI Chat mode supports both Anthropic's Claude and OpenAI's GPT models:
+Probe's AI Chat mode supports multiple AI providers:
 
-- **Claude Models**: Provide excellent code understanding and explanation capabilities
-- **GPT Models**: Offer strong general-purpose capabilities
+- **Anthropic Claude**: Provides excellent code understanding and explanation capabilities
+- **OpenAI GPT**: Offers strong general-purpose capabilities
+- **Google Gemini**: Delivers fast responses and efficient code search
 
-The default model is selected based on which API key you provide.
+The default model is selected based on which API key you provide, or you can force a specific provider using the `--force-provider` option or the `FORCE_PROVIDER` environment variable.
+
+#### Force Provider Option
+
+You can force the chat to use a specific provider regardless of which API keys are available:
+
+```bash
+# Force using Anthropic Claude
+probe-chat --force-provider anthropic
+
+# Force using OpenAI
+probe-chat --force-provider openai
+
+# Force using Google Gemini
+probe-chat --force-provider google
+```
+
+This is useful when you have multiple API keys configured but want to use a specific provider for certain tasks.
 
 #### Token Tracking
 
@@ -162,6 +185,18 @@ You can configure the AI Chat mode using environment variables:
 # Override the default model
 export MODEL_NAME=claude-3-opus-20240229
 probe-chat
+
+# For Google models
+export MODEL_NAME=gemini-2.0-flash
+probe-chat
+```
+
+#### Force Provider
+
+```bash
+# Force a specific provider
+export FORCE_PROVIDER=anthropic  # Options: anthropic, openai, google
+probe-chat
 ```
 
 #### API URLs
@@ -170,6 +205,7 @@ probe-chat
 # Override API URLs (useful for proxies or enterprise deployments)
 export ANTHROPIC_API_URL=https://your-anthropic-proxy.com
 export OPENAI_API_URL=https://your-openai-proxy.com/v1
+export GOOGLE_API_URL=https://your-google-proxy.com
 probe-chat
 ```
 
@@ -202,6 +238,12 @@ import { StreamingTextResponse } from 'ai';
 const chat = new ProbeChat({
   model: 'claude-3-sonnet-20240229',
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  // Or use OpenAI
+  // openaiApiKey: process.env.OPENAI_API_KEY,
+  // Or use Google
+  // googleApiKey: process.env.GOOGLE_API_KEY,
+  // Force a specific provider
+  // forceProvider: 'anthropic', // Options: 'anthropic', 'openai', 'google'
   allowedFolders: ['/path/to/your/project']
 });
 
@@ -230,6 +272,9 @@ You can customize the system message to provide specific instructions to the AI:
 const chat = new ProbeChat({
   model: 'claude-3-sonnet-20240229',
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  // Or use a different provider
+  // forceProvider: 'google',
+  // googleApiKey: process.env.GOOGLE_API_KEY,
   allowedFolders: ['/path/to/your/project'],
   systemMessage: 'You are a code expert focusing on security issues. When analyzing code, prioritize identifying security vulnerabilities.'
 });

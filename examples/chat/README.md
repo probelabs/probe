@@ -6,7 +6,8 @@ A command-line and web interface for interacting with Probe code search using AI
 
 - Interactive CLI chat interface
 - Web-based chat interface with Markdown and syntax highlighting
-- Support for both Anthropic Claude and OpenAI models
+- Support for Anthropic Claude, OpenAI, and Google Gemini models
+- Force provider option to specify which AI provider to use
 - Semantic code search using Probe's search capabilities
 - AST-based code querying for finding specific code structures
 - Code extraction for viewing complete context
@@ -19,7 +20,7 @@ A command-line and web interface for interacting with Probe code search using AI
 
 - Node.js 18 or higher
 - Probe CLI installed and available in your PATH
-- An API key for either Anthropic Claude or OpenAI
+- An API key for Anthropic Claude, OpenAI, or Google Gemini
 
 ## Installation
 
@@ -37,6 +38,10 @@ npm install
 # API Keys (uncomment and add your key)
 ANTHROPIC_API_KEY=your_anthropic_api_key
 # OPENAI_API_KEY=your_openai_api_key
+# GOOGLE_API_KEY=your_google_api_key
+
+# Force a specific provider (optional)
+# FORCE_PROVIDER=anthropic  # Options: anthropic, openai, google
 
 # Debug mode (set to true for verbose logging)
 DEBUG=false
@@ -44,6 +49,7 @@ DEBUG=false
 # Default model (optional)
 # For Anthropic: MODEL_NAME=claude-3-7-sonnet-latest
 # For OpenAI: MODEL_NAME=gpt-4o-2024-05-13
+# For Google: MODEL_NAME=gemini-2.0-flash
 
 # Folders to search (comma-separated list of paths)
 # If not specified, the current directory will be used by default
@@ -109,7 +115,8 @@ This will override any ALLOWED_FOLDERS setting in your .env file.
 ### Command-line Options
 
 - `-d, --debug`: Enable debug mode for verbose logging
-- `-m, --model <model>`: Specify the model to use (e.g., `claude-3-7-sonnet-latest`, `gpt-4o-2024-05-13`)
+- `-m, --model <model>`: Specify the model to use (e.g., `claude-3-7-sonnet-latest`, `gpt-4o-2024-05-13`, `gemini-2.0-flash`)
+- `-f, --force-provider <provider>`: Force a specific provider (options: `anthropic`, `openai`, `google`)
 - `-w, --web`: Run in web interface mode
 - `-p, --port <port>`: Port to run web server on (default: 8080)
 - `[path]`: Path to the codebase to search (overrides ALLOWED_FOLDERS)
@@ -137,6 +144,65 @@ The AI is instructed to use these tools to answer your questions about the codeb
 The tool automatically generates a unique session ID for each chat session and passes it to the Probe CLI commands using the `--session` parameter. This enables caching of search results within a session, which can significantly improve performance when similar searches are performed multiple times.
 
 The session ID is managed internally and doesn't require any user intervention. When you start a new chat session (or use the "clear" command), a new session ID is generated, and a new cache is created.
+
+## Provider Options
+
+Probe Chat supports multiple AI providers, giving you flexibility in choosing which model to use for your code search and analysis:
+
+### Supported Providers
+
+1. **Anthropic Claude**
+   - Default model: `claude-3-7-sonnet-latest`
+   - Environment variable: `ANTHROPIC_API_KEY`
+   - Best for: Complex code analysis, detailed explanations, and understanding nuanced patterns
+
+2. **OpenAI GPT**
+   - Default model: `gpt-4o-2024-05-13`
+   - Environment variable: `OPENAI_API_KEY`
+   - Best for: General code search, pattern recognition, and concise explanations
+
+3. **Google Gemini**
+   - Default model: `gemini-2.0-flash`
+   - Environment variable: `GOOGLE_API_KEY`
+   - Best for: Fast responses, code generation, and efficient search
+
+### Forcing a Specific Provider
+
+You can force Probe Chat to use a specific provider in two ways:
+
+1. **Using the command line option**:
+   ```bash
+   node index.js --force-provider anthropic
+   node index.js --force-provider openai
+   node index.js --force-provider google
+   ```
+
+2. **Using the environment variable**:
+   Add this to your `.env` file:
+   ```
+   FORCE_PROVIDER=anthropic  # or openai, google
+   ```
+
+When forcing a provider, Probe Chat will verify that you have the corresponding API key set. If the API key is missing, it will display an error message.
+
+### Customizing Models
+
+You can specify which model to use for each provider:
+
+1. **Using the command line option**:
+   ```bash
+   node index.js --model claude-3-7-sonnet-latest
+   node index.js --model gpt-4o-2024-05-13
+   node index.js --model gemini-2.0-flash
+   ```
+
+2. **Using the environment variable**:
+   Add this to your `.env` file:
+   ```
+   MODEL_NAME=claude-3-7-sonnet-latest
+   ```
+
+Note that the model must be compatible with the selected provider. If you force a specific provider and specify a model, the model must be available for that provider.
 
 ## Example Queries
 
