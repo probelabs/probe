@@ -1215,34 +1215,49 @@
 				}
 			});
 
+			// Initialize a Set to track displayed tool calls
+			if (!window.displayedToolCalls) {
+				window.displayedToolCalls = new Set();
+			}
+
 			// Handle tool call events
 			eventSource.addEventListener('toolCall', (event) => {
 				console.log('%c Received tool call event:', 'background: #4CAF50; color: white; padding: 2px 5px; border-radius: 2px;', event);
 				try {
 					const toolCall = JSON.parse(event.data);
 					console.log('%c Tool call data:', 'background: #2196F3; color: white; padding: 2px 5px; border-radius: 2px;', toolCall);
-					console.log('Tool call name:', toolCall.name);
-					console.log('Tool call args:', toolCall.args);
-					console.log('Tool call result preview:', toolCall.resultPreview);
-					// Create a more robust ID for deduplication
-					// Include all relevant properties to ensure uniqueness
-					const query = toolCall.args.query || toolCall.args.keywords || toolCall.args.pattern || '';
-					const path = toolCall.args.path || toolCall.args.folder || '.';
-					const toolCallId = toolCall.id ||
-						`${toolCall.name}-${query}-${path}-${toolCall.timestamp}`;
 
-					// Store tool call descriptions to check for duplicates
-					if (!window.toolCallDescriptions) {
-						window.toolCallDescriptions = new Map();
+					// Skip events with status "started" - only process "completed" events
+					if (toolCall.status === "started") {
+						console.log('%c Skipping "started" event, waiting for "completed"', 'background: #FF9800; color: white; padding: 2px 5px; border-radius: 2px;');
+						return;
 					}
 
-					// Format the tool call description (same as in addToolCallToMessage)
+					// Create a unique identifier for this tool call
+					const query = toolCall.args.query || toolCall.args.keywords || toolCall.args.pattern || '';
+					const path = toolCall.args.path || toolCall.args.folder || '.';
+
+					// Create a simpler fingerprint that doesn't include timestamp
+					// This helps catch duplicate events with different timestamps
+					const toolCallFingerprint = `${toolCall.name}-${query}-${path}`;
+
+					// Check if we've already displayed this exact tool call
+					if (window.displayedToolCalls.has(toolCallFingerprint)) {
+						console.log(`%c Skipping duplicate tool call: ${toolCallFingerprint}`, 'background: #FF9800; color: white; padding: 2px 5px; border-radius: 2px;');
+						return;
+					}
+
+					// Add this tool call to our set of displayed tool calls
+					window.displayedToolCalls.add(toolCallFingerprint);
+					console.log(`%c Added tool call to displayed set: ${toolCallFingerprint}`, 'background: #9C27B0; color: white; padding: 2px 5px; border-radius: 2px;');
+
+					// Format the tool call description for display
 					let toolDescription = '';
-					if (toolCall.name === 'searchCode') {
+					if (toolCall.name === 'searchCode' || toolCall.name === 'search') {
 						toolDescription = `Searching code with "${query}"${path === '.' ? '' : ` in ${path}`}`;
-					} else if (toolCall.name === 'queryCode') {
+					} else if (toolCall.name === 'queryCode' || toolCall.name === 'query') {
 						toolDescription = `Querying code with pattern "${query}"${path === '.' ? '' : ` in ${path}`}`;
-					} else if (toolCall.name === 'extractCode') {
+					} else if (toolCall.name === 'extractCode' || toolCall.name === 'extract') {
 						const filePath = toolCall.args.file_path || '';
 						const line = toolCall.args.line;
 						const endLine = toolCall.args.end_line;
@@ -1258,22 +1273,8 @@
 						toolDescription = `Using ${toolCall.name} tool`;
 					}
 
-					// Check if we've already processed this exact description
-					if (window.toolCallDescriptions.has(toolDescription)) {
-						console.log(`%c Skipping duplicate tool call: "${toolDescription}"`, 'background: #FF9800; color: white; padding: 2px 5px; border-radius: 2px;');
-						return;
-					}
-
-					// Add this description to our map
-					window.toolCallDescriptions.set(toolDescription, toolCallId);
-					console.log(`%c Added tool call description: "${toolDescription}"`, 'background: #9C27B0; color: white; padding: 2px 5px; border-radius: 2px;');
-
-					// Also track by ID for backward compatibility
-					if (!window.processedToolCalls) {
-						window.processedToolCalls = new Set();
-					}
-					window.processedToolCalls.add(toolCallId);
-					console.log(`%c Added tool call to processed set: ${toolCallId}`, 'background: #9C27B0; color: white; padding: 2px 5px; border-radius: 2px;');
+					// Log the tool call being processed
+					console.log(`%c Processing tool call: "${toolDescription}"`, 'background: #9C27B0; color: white; padding: 2px 5px; border-radius: 2px;');
 
 					// Add tool call to the current AI message if it exists
 					if (currentAiMessageDiv) {
