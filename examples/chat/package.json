@@ -61,7 +61,9 @@
     "webServer.js",
     "auth.js",
     "probeTool.js",
+    "cancelRequest.js",
     "index.html",
+    "logo.png",
     "README.md",
     "LICENSE"
   ]
