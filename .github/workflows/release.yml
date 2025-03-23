@@ -311,43 +311,5 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  publish-probe-web-package:
-    name: Publish Probe Web Package to npm
-    needs: publish-npm-package
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Extract version from tag
-        id: extract_version
-        run: |
-          # Remove 'v' prefix from tag (e.g., v1.0.0 -> 1.0.0)
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Extracted version: $VERSION"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          registry-url: "https://registry.npmjs.org/"
-          scope: "@buger"
-          token: ${{ secrets.NPM_TOKEN }}
-
-      - name: Install dependencies
-        run: cd examples/web && npm install
-
-      - name: Update package version and dependencies
-        run: |
-          cd examples/web
-          # Update version in package.json without git operations
-          npm version $VERSION --no-git-tag-version
-          # Update dependency on @buger/probe to use the specific version
-          npm pkg set dependencies."@buger/probe"="^$VERSION"
-          echo "Updated probe-web package.json to version $VERSION with @buger/probe dependency set to ^$VERSION"
-
-      - name: Publish to npm
-        run: cd examples/web && npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+# The publish-probe-web-package job has been removed as the web functionality
+# has been merged into the probe-chat package

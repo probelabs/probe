@@ -6,6 +6,8 @@ This guide explains how to set up and deploy Probe's web interface as a centrali
 
 Probe's web interface provides a user-friendly chat experience that allows all team members to interact with your codebase using AI. By hosting this interface, you create a source of truth for how your product works that's accessible to both technical and non-technical team members. This enables quick issue resolution, documentation generation, architecture understanding, and helps product managers, QA teams, and other stakeholders make informed decisions without needing to understand implementation details.
 
+> **Note**: Probe now features a unified interface that combines both CLI and web functionality in a single package. The previously separate `@buger/probe-web` package is now deprecated, and its functionality is included in the `@buger/probe-chat` package. For more information, see the [NPM Package Changes](/npm-package-changes) documentation.
+
 ## Docker-Based Setup
 
 The most reliable way to deploy Probe's web interface for a team is using Docker:
@@ -15,7 +17,7 @@ The most reliable way to deploy Probe's web interface for a team is using Docker
 ```bash
 # Clone the repository if you haven't already
 git clone https://github.com/buger/probe.git
-cd probe/examples/web
+cd probe/examples/chat
 
 # Build the Docker image
 docker build -t probe-web-interface .
@@ -139,7 +141,7 @@ For more complex deployments, use Docker Compose:
 version: '3'
 services:
   probe-web:
-    build: ./examples/web
+    build: ./examples/chat
     ports:
       - "8080:8080"
     environment:
@@ -152,6 +154,61 @@ services:
     volumes:
       - /path/to/your/repos:/app/code:ro
     restart: unless-stopped
+```
+
+## Running Without Docker
+
+You can also run the web interface directly using Node.js:
+
+### Using npx (Recommended)
+
+```bash
+# Run directly with npx (no installation needed)
+npx -y @buger/probe-chat --web
+
+# Set your API key first
+export ANTHROPIC_API_KEY=your_api_key
+# Or for OpenAI
+# export OPENAI_API_KEY=your_api_key
+
+# Configure allowed folders
+export ALLOWED_FOLDERS=/path/to/repo1,/path/to/repo2
+
+# Enable authentication
+export AUTH_ENABLED=true
+export AUTH_USERNAME=admin
+export AUTH_PASSWORD=secure_password
+```
+
+### Using the npm package
+
+```bash
+# Install globally
+npm install -g @buger/probe-chat
+
+# Start the web interface
+probe-chat --web --port 3000
+```
+
+### Command-Line Options
+
+The unified interface supports the following command-line options:
+
+```bash
+# Show help
+probe-chat --help
+
+# Run in web mode on a specific port
+probe-chat --web --port 3000
+
+# Specify a model
+probe-chat --web --model claude-3-7-sonnet-latest
+
+# Enable debug mode
+probe-chat --web --debug
+
+# Specify a directory to search
+probe-chat --web /path/to/your/project
 ```
 
 ## Best Practices for Organization-Wide Usage
@@ -282,6 +339,6 @@ spec:
 
 ## Next Steps
 
-- For individual developer workflows, see [Integrating Probe into AI Code Editors](/use-cases/ai-code-editors)
-- For advanced CLI usage, check out [CLI AI Workflows](/use-cases/cli-ai-workflows)
+- For individual developer workflows, see [Integrating Probe into AI Code Editors](/use-cases/integrating-probe-into-ai-code-editors)
+- For advanced CLI usage, check out [CLI AI Workflows](/use-cases/advanced-cli)
 - For programmatic access, explore [Building AI Tools on Probe](/use-cases/building-ai-tools)

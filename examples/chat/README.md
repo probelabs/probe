@@ -1,17 +1,19 @@
-# Probe Chat CLI
+# Probe Chat
 
-A command-line interface for interacting with Probe code search using AI models through the Vercel AI SDK.
+A command-line and web interface for interacting with Probe code search using AI models through the Vercel AI SDK.
 
 ## Features
 
 - Interactive CLI chat interface
+- Web-based chat interface with Markdown and syntax highlighting
 - Support for both Anthropic Claude and OpenAI models
 - Semantic code search using Probe's search capabilities
 - AST-based code querying for finding specific code structures
 - Code extraction for viewing complete context
 - Session-based search caching for improved performance
 - Token usage tracking
-- Colorized output for better readability
+- Colorized output for better readability (CLI mode)
+- Diagram generation with Mermaid.js (Web mode)
 
 ## Prerequisites
 
@@ -46,11 +48,19 @@ DEBUG=false
 # Folders to search (comma-separated list of paths)
 # If not specified, the current directory will be used by default
 # ALLOWED_FOLDERS=/path/to/folder1,/path/to/folder2
+
+# Web interface settings (optional)
+# PORT=8080
+# AUTH_ENABLED=false
+# AUTH_USERNAME=admin
+# AUTH_PASSWORD=password
 ```
 
 ## Usage
 
-Start the chat interface:
+### CLI Mode
+
+Start the chat interface in CLI mode:
 
 ```bash
 node index.js
@@ -60,6 +70,26 @@ Or with npm:
 
 ```bash
 npm start
+```
+
+### Web Mode
+
+Start the chat interface in web mode:
+
+```bash
+node index.js --web
+```
+
+Or with npm:
+
+```bash
+npm run web
+```
+
+You can specify a custom port:
+
+```bash
+node index.js --web --port 3000
 ```
 
 You can also specify a path to the codebase you want to search:
@@ -80,6 +110,8 @@ This will override any ALLOWED_FOLDERS setting in your .env file.
 
 - `-d, --debug`: Enable debug mode for verbose logging
 - `-m, --model <model>`: Specify the model to use (e.g., `claude-3-7-sonnet-latest`, `gpt-4o-2024-05-13`)
+- `-w, --web`: Run in web interface mode
+- `-p, --port <port>`: Port to run web server on (default: 8080)
 - `[path]`: Path to the codebase to search (overrides ALLOWED_FOLDERS)
 
 ### Special Commands
@@ -116,10 +148,13 @@ The session ID is managed internally and doesn't require any user intervention. 
 
 ## Architecture
 
-- `index.js`: Main CLI interface
+- `index.js`: Main entry point for both CLI and web interfaces
 - `probeChat.js`: Core chat functionality
-- `tools.js`: Tool definitions for code search, query, and extraction
+- `webServer.js`: Web server implementation
+- `auth.js`: Authentication middleware for web interface
+- `probeTool.js`: Tool definitions for code search, query, and extraction
 - `tokenCounter.js`: Utility for tracking token usage
+- `index.html`: Web interface HTML template
 
 ## License
 

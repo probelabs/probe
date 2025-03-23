@@ -1,8 +1,14 @@
 # AI Chat Mode
 
-Probe's AI Chat mode provides an interactive CLI interface where you can ask questions about your codebase and get AI-powered responses. This mode combines Probe's powerful code search capabilities with large language models to help you understand and navigate your codebase more effectively.
+Probe's AI Chat mode provides an interactive interface where you can ask questions about your codebase and get AI-powered responses. This mode combines Probe's powerful code search capabilities with large language models to help you understand and navigate your codebase more effectively.
 
 > **Note**: For comprehensive documentation on all AI integration features, including the AI chat mode, MCP server integration, and Node.js SDK, see the [AI Integration](./ai-integration.md) page.
+
+## Unified Interface
+
+Probe now features a unified interface that combines both CLI and web functionality in a single package. The `@buger/probe-chat` package supports both CLI mode (default) and web mode (with the `--web` flag).
+
+For detailed information about the web interface mode, see the [Web Interface](./web-interface.md) documentation.
 
 ## Getting Started
 
@@ -11,8 +17,11 @@ The AI chat functionality is available as a standalone npm package that can be r
 ### Using npx (Recommended)
 
 ```bash
-# Run directly with npx (no installation needed)
+# Run directly with npx in CLI mode (no installation needed)
 npx -y @buger/probe-chat
+
+# Run in web interface mode
+npx -y @buger/probe-chat --web
 
 # Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
@@ -29,8 +38,11 @@ npx -y @buger/probe-chat /path/to/your/project
 # Install globally
 npm install -g @buger/probe-chat
 
-# Start the chat interface
+# Start the chat interface in CLI mode
 probe-chat
+
+# Start the chat interface in web mode
+probe-chat --web
 ```
 
 ### Using the example code
@@ -47,8 +59,11 @@ export ANTHROPIC_API_KEY=your_api_key
 # Or for OpenAI
 # export OPENAI_API_KEY=your_api_key
 
-# Start the chat interface
+# Start the chat interface in CLI mode
 node index.js
+
+# Start the chat interface in web mode
+node index.js --web
 ```
 
 ## Features
@@ -90,32 +105,42 @@ The terminal interface provides user-friendly colored output with syntax highlig
 
 ## Configuration
 
-You can configure the AI Chat mode using environment variables:
+You can configure the AI Chat mode using environment variables or command-line options:
 
-### Model Selection
+### Command-Line Options
+
+```bash
+# Enable debug mode
+node index.js --debug
+
+# Specify a model
+node index.js --model claude-3-7-sonnet-latest
+
+# Run in web mode
+node index.js --web
+
+# Specify a port for web mode
+node index.js --web --port 3000
+
+# Specify a directory to search
+node index.js /path/to/your/project
+```
+
+### Environment Variables
 
 ```bash
 # Override the default model
 export MODEL_NAME=claude-3-opus-20240229
-probe chat
-```
+probe-chat
 
-### API URLs
-
-```bash
 # Override API URLs (useful for proxies or enterprise deployments)
 export ANTHROPIC_API_URL=https://your-anthropic-proxy.com
 export OPENAI_API_URL=https://your-openai-proxy.com/v1
-probe chat
-```
+probe-chat
 
-### Debug Mode
-
-```bash
 # Enable debug mode for detailed logging
-export DEBUG=1 probe chat
+export DEBUG=1 probe-chat
 ```
-
 
 ## Example Usage
 
@@ -170,6 +195,15 @@ Total: 2777 tokens (Cumulative for entire session)
 ─────────────────────────────────────────────────────────────────────
 ```
 
+## CLI Commands
+
+While in the chat interface, you can use these commands:
+
+- `help`: Display help information
+- `quit` or `exit`: Exit the assistant
+- `usage`: Display token usage statistics
+- `clear`: Clear the chat history and start a new session
+
 ## Tips for Effective Use
 
 1. **Be Specific**: Ask specific questions about your codebase for more targeted answers
@@ -178,13 +212,6 @@ Total: 2777 tokens (Cumulative for entire session)
 4. **Reference Files**: Mention specific files or directories if you want to focus on a particular area
 5. **Ask for Explanations**: The AI is particularly good at explaining complex code or concepts
 6. **Request Examples**: Ask for examples if you're trying to understand how to use a particular feature or API
-
-## CLI Commands
-
-While in the chat interface, you can use these commands:
-
-- `help`: Display help information
-- `quit`: Exit the assistant
 
 ## Limitations
 

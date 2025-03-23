@@ -34,6 +34,9 @@ if (allowedFolders.length === 0) {
  */
 export class ProbeChat {
   constructor() {
+    // Make allowedFolders accessible as a property of the class
+    this.allowedFolders = allowedFolders;
+
     // Initialize token counter
     this.tokenCounter = new TokenCounter();
 
