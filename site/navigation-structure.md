@@ -16,8 +16,6 @@ The Probe documentation is organized into three main sections, each serving a sp
 - **What is Probe?** - Overview of core features, local privacy, AI readiness
 - **Installation** - Platform-specific installation instructions
 - **Quick Start** - Get up and running in minutes
-- **Language Support** - How Probe understands different languages
-- **Supported Languages** - List of languages with parsing capabilities
 - **How It Works** - Technical deep dive into Probe's architecture
 
 This section provides the foundation for understanding Probe. It answers the questions "What is it?", "How do I get it?", and "How does it work?" - giving users the context they need before diving into specific use cases.
@@ -50,6 +48,8 @@ This section is scenario-based rather than feature-based. It recognizes that dif
 - **Search Functionality** - Detailed search capabilities
 - **Code Extraction** - Extract meaningful code blocks
 - **Adding Languages** - Contribute support for new languages
+- **Language Support** - How Probe understands different languages
+- **Supported Languages** - List of languages with parsing capabilities
 - **Documentation Maintenance** - For documentation maintainers
 
 This section serves as a comprehensive reference for all of Probe's features and capabilities. It's designed for users who need detailed information about specific aspects of the tool, whether for advanced usage, troubleshooting, or integration.

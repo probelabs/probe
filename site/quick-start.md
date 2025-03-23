@@ -156,11 +156,11 @@ The query command uses tree-sitter patterns to find specific code structures in 
 For more details on the query command, see the [CLI Mode](/cli-mode#query-command) documentation.
 
 ## Interactive AI Chat
-
-Use the built-in AI assistant to ask questions about your codebase:
+Use the built-in AI assistant with web interface for the best code search experience:
 
 ```bash
 # Run directly with npx (no installation needed)
+npx -y @buger/probe-chat --web
 npx -y @buger/probe-chat
 
 # Set your API key first
