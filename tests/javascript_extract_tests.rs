@@ -54,7 +54,7 @@ const positionComponent = {
         (0, 1, 1), // before start of file
         (1, 1, 1), // initial blank line
         (2, 2, 2), // reisterComponent call
-        (3, 3, 3), // const declaration
+        (3, 3, 16), // object declaration
         (4, 4, 4), // schema definition
         (5, 3, 16), // entire positionComponent
         (6, 6, 10), // update function
@@ -66,14 +66,14 @@ const positionComponent = {
         (13, 12, 15), // remove function
         (14, 12, 15), // remove function
         (15, 12, 15), // remove function
-        (16, 16, 16), // close parentheses
-        (17, 16, 16), // end of file
-        (25, 16, 16), // beyond end of file
+        (16, 3, 16), // close object definition
+        (17, 3, 16), // end of file
+        (25, 3, 16), // beyond end of file
     ];
 
     execute_test(content, expected_outputs);
 }
-/* WIP, not woriking yet *
+
 #[test]
 fn test_javascript_extraction_object() {    
     let content = r#"
@@ -97,20 +97,20 @@ const user = {
         // Example structure: (line: usize, expected_value: SomeType)
         (0, 1, 1), // before start of file
         (1, 1, 1), // blank line
-        (2, 2, 2), // const declaaration
+        (2, 2, 13), // entire object
         (3, 2, 13), // entire object
         (4, 2, 13), // entire object
         (5, 2, 13), // entire object
-        (6, 2, 13), // entire object
-        (7, 2, 13), // entire object
-        (8, 2, 13), // entire object
-        (9, 2, 13), // entire object
-        (10, 2, 13), // entire object
+        (6, 6, 10), // nested object
+        (7, 6, 10), // nested object
+        (8, 6, 10), // nested object
+        (9, 6, 10), // nested object
+        (10, 6, 10), // nested object
         (11, 2, 13), // entire object
         (12, 2, 13), // entire object
         (13, 2, 13), // entire object
     ];
 
     execute_test(content, expected_outputs);
-}*/
+}
 

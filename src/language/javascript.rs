@@ -29,6 +29,7 @@ impl LanguageImpl for JavaScriptLanguage {
         matches!(
             node.kind(),
             "function_declaration"
+                | "object"
                 | "function_expression"
                 | "method_definition"
                 | "class_declaration"
