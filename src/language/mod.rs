@@ -8,6 +8,7 @@ pub mod factory;
 pub mod language_trait;
 pub mod parser;
 pub mod test_detection;
+pub mod tree_cache;
 
 // Language implementations
 pub mod c;
@@ -26,6 +27,8 @@ pub mod typescript;
 // Re-export items for backward compatibility
 pub use parser::parse_file_for_code_blocks;
 pub use test_detection::is_test_file;
+#[allow(unused_imports)]
+pub use tree_cache::{clear_tree_cache, get_cache_size, invalidate_cache_entry};
 
 #[cfg(test)]
 mod tests;

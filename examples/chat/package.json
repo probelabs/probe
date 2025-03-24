@@ -1,14 +1,16 @@
 {
   "name": "@buger/probe-chat",
   "version": "1.0.0",
-  "description": "CLI chat interface for Probe code search",
+  "description": "CLI and web interface for Probe code search (formerly @buger/probe-web and @buger/probe-chat)",
   "main": "index.js",
   "type": "module",
   "bin": {
-    "probe-chat": "./bin/probe-chat.js"
+    "probe-chat": "./bin/probe-chat.js",
+    "probe-web": "./bin/probe-chat.js"
   },
   "scripts": {
     "start": "node index.js",
+    "web": "node index.js --web",
     "test": "echo \"Error: no test specified\" && exit 1",
     "prepublishOnly": "chmod +x ./bin/probe-chat.js"
   },
@@ -17,15 +19,17 @@
     "code-search",
     "chat",
     "ai",
-    "cli"
+    "cli",
+    "web"
   ],
   "author": "Leonid Bugaev",
   "license": "Apache-2.0",
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.1.15",
-    "@ai-sdk/openai": "^1.1.15",
+    "@ai-sdk/anthropic": "^1.2.0",
+    "@ai-sdk/google": "^1.2.1",
+    "@ai-sdk/openai": "^1.3.0",
     "@buger/probe": "*",
-    "ai": "^4.1.54",
+    "ai": "^4.2.0",
     "chalk": "^5.3.0",
     "commander": "^11.1.0",
     "dotenv": "^16.4.7",
@@ -54,6 +58,12 @@
     "probeChat.js",
     "tokenCounter.js",
     "tools.js",
+    "webServer.js",
+    "auth.js",
+    "probeTool.js",
+    "cancelRequest.js",
+    "index.html",
+    "logo.png",
     "README.md",
     "LICENSE"
   ]

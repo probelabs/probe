@@ -124,6 +124,16 @@ You can even pipe failing test output and it will extract needed files and AST o
 go test | probe extract
 ```
 
+Extract code with LLM prompt and instructions for AI integration:
+
+```bash
+# Extract with engineer prompt template
+probe extract src/auth.rs#authenticate --prompt engineer --instructions "Explain this authentication function"
+
+# Extract with architect prompt template
+probe extract src/api.js --prompt architect --instructions "Analyze this API module"
+```
+
 To learn more about code extraction features, see the [Code Extraction](/code-extraction) documentation.
 
 ## Query Code Structures
@@ -146,11 +156,11 @@ The query command uses tree-sitter patterns to find specific code structures in 
 For more details on the query command, see the [CLI Mode](/cli-mode#query-command) documentation.
 
 ## Interactive AI Chat
-
-Use the built-in AI assistant to ask questions about your codebase:
+Use the built-in AI assistant with web interface for the best code search experience:
 
 ```bash
 # Run directly with npx (no installation needed)
+npx -y @buger/probe-chat --web
 npx -y @buger/probe-chat
 
 # Set your API key first
@@ -217,6 +227,13 @@ const queryResults = await query({
 // Extract code blocks
 const extractResults = await extract({
   files: ['/path/to/your/project/src/main.js:42']
+});
+
+// Extract with LLM prompt and instructions
+const extractWithPrompt = await extract({
+  files: ['/path/to/your/project/src/auth.js#authenticate'],
+  prompt: 'engineer',
+  instructions: 'Explain this authentication function'
 });
 
 console.log(searchResults);

@@ -6,7 +6,410 @@
 use crate::models::SearchResult;
 use crate::search::search_tokens::count_tokens;
 use anyhow::Result;
+use serde::Serialize;
+use std::fmt::Write as FmtWrite;
 use std::path::Path;
+
+/// A single internal function that handles both dry-run and non-dry-run formatting.
+///
+/// # Arguments
+///
+/// * `results` - The search results to format
+/// * `format` - The output format (terminal, markdown, plain, json, or color)
+/// * `original_input` - Optional original user input
+/// * `system_prompt` - Optional system prompt for LLM models
+/// * `user_instructions` - Optional user instructions for LLM models
+/// * `is_dry_run` - Whether this is a dry-run request (only file names/line numbers)
+fn format_extraction_internal(
+    results: &[SearchResult],
+    format: &str,
+    original_input: Option<&str>,
+    system_prompt: Option<&str>,
+    user_instructions: Option<&str>,
+    is_dry_run: bool,
+) -> Result<String> {
+    let mut output = String::new();
+
+    match format {
+        // ---------------------------------------
+        // JSON output
+        // ---------------------------------------
+        "json" => {
+            if is_dry_run {
+                // DRY-RUN JSON structure
+                #[derive(Serialize)]
+                struct JsonDryRunResult<'a> {
+                    file: &'a str,
+                    #[serde(serialize_with = "serialize_lines_as_array")]
+                    lines: (usize, usize),
+                    node_type: &'a str,
+                }
+
+                // Helper function to serialize lines as an array
+                fn serialize_lines_as_array<S>(
+                    lines: &(usize, usize),
+                    serializer: S,
+                ) -> std::result::Result<S::Ok, S::Error>
+                where
+                    S: serde::Serializer,
+                {
+                    use serde::ser::SerializeSeq;
+                    let mut seq = serializer.serialize_seq(Some(2))?;
+                    seq.serialize_element(&lines.0)?;
+                    seq.serialize_element(&lines.1)?;
+                    seq.end()
+                }
+
+                let json_results: Vec<JsonDryRunResult> = results
+                    .iter()
+                    .map(|r| JsonDryRunResult {
+                        file: &r.file,
+                        lines: r.lines,
+                        node_type: &r.node_type,
+                    })
+                    .collect();
+
+                // Create a wrapper object with results and summary
+                let mut wrapper = serde_json::json!({
+                    "results": json_results,
+                    "summary": {
+                        "count": results.len(),
+                    }
+                });
+
+                // Add system prompt, user instructions, and original_input if provided
+                if let Some(prompt) = system_prompt {
+                    wrapper["system_prompt"] = serde_json::Value::String(prompt.to_string());
+                }
+
+                if let Some(instructions) = user_instructions {
+                    wrapper["user_instructions"] =
+                        serde_json::Value::String(instructions.to_string());
+                }
+
+                if let Some(input) = original_input {
+                    wrapper["original_input"] = serde_json::Value::String(input.to_string());
+                }
+
+                write!(output, "{}", serde_json::to_string_pretty(&wrapper)?)?;
+            } else {
+                // NON-DRY-RUN JSON structure
+                #[derive(Serialize)]
+                struct JsonResult<'a> {
+                    file: &'a str,
+                    #[serde(serialize_with = "serialize_lines_as_array")]
+                    lines: (usize, usize),
+                    node_type: &'a str,
+                    code: &'a str,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    original_input: Option<&'a str>,
+                }
+
+                // Helper function to serialize lines as an array
+                fn serialize_lines_as_array<S>(
+                    lines: &(usize, usize),
+                    serializer: S,
+                ) -> std::result::Result<S::Ok, S::Error>
+                where
+                    S: serde::Serializer,
+                {
+                    use serde::ser::SerializeSeq;
+                    let mut seq = serializer.serialize_seq(Some(2))?;
+                    seq.serialize_element(&lines.0)?;
+                    seq.serialize_element(&lines.1)?;
+                    seq.end()
+                }
+
+                let json_results: Vec<JsonResult> = results
+                    .iter()
+                    .map(|r| JsonResult {
+                        file: &r.file,
+                        lines: r.lines,
+                        node_type: &r.node_type,
+                        code: &r.code,
+                        // We no longer put original_input per result. If you truly need it,
+                        // you can uncomment the line below, but it's typically at the root.
+                        // original_input: r.original_input.as_deref(),
+                        original_input: None,
+                    })
+                    .collect();
+
+                // Create a wrapper object with results and summary
+                let mut wrapper = serde_json::json!({
+                    "results": json_results,
+                    "summary": {
+                        "count": results.len(),
+                        "total_bytes": results.iter().map(|r| r.code.len()).sum::<usize>(),
+                        "total_tokens": results.iter().map(|r| count_tokens(&r.code)).sum::<usize>(),
+                    }
+                });
+
+                // Add system prompt, user instructions, and original_input if provided
+                if let Some(input) = original_input {
+                    wrapper["original_input"] = serde_json::Value::String(input.to_string());
+                }
+
+                if let Some(prompt) = system_prompt {
+                    wrapper["system_prompt"] = serde_json::Value::String(prompt.to_string());
+                }
+
+                if let Some(instructions) = user_instructions {
+                    wrapper["user_instructions"] =
+                        serde_json::Value::String(instructions.to_string());
+                }
+
+                write!(output, "{}", serde_json::to_string_pretty(&wrapper)?)?;
+            }
+        }
+
+        // ---------------------------------------
+        // XML output
+        // ---------------------------------------
+        "xml" => {
+            // XML declaration
+            writeln!(output, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>")?;
+            // Open the root tag
+            writeln!(output, "<probe_results>")?;
+
+            if is_dry_run {
+                // DRY-RUN: no code, just file/lines/node_type
+                for result in results {
+                    writeln!(output, "  <result>")?;
+                    writeln!(output, "    <file>{}</file>", escape_xml(&result.file))?;
+
+                    if result.node_type != "file" {
+                        writeln!(output, "    <lines>")?;
+                        writeln!(output, "      <start>{}</start>", result.lines.0)?;
+                        writeln!(output, "      <end>{}</end>", result.lines.1)?;
+                        writeln!(output, "    </lines>")?;
+                    }
+
+                    if result.node_type != "file" && result.node_type != "context" {
+                        writeln!(
+                            output,
+                            "    <node_type>{}</node_type>",
+                            escape_xml(&result.node_type)
+                        )?;
+                    }
+
+                    writeln!(output, "  </result>")?;
+                }
+                // Summary
+                writeln!(output, "  <summary>")?;
+                writeln!(output, "    <count>{}</count>", results.len())?;
+                writeln!(output, "  </summary>")?;
+            } else {
+                // NON-DRY-RUN: includes code
+                for result in results {
+                    writeln!(output, "  <result>")?;
+                    writeln!(output, "    <file>{}</file>", escape_xml(&result.file))?;
+
+                    if result.node_type != "file" {
+                        writeln!(output, "    <lines>")?;
+                        writeln!(output, "      <start>{}</start>", result.lines.0)?;
+                        writeln!(output, "      <end>{}</end>", result.lines.1)?;
+                        writeln!(output, "    </lines>")?;
+                    }
+
+                    if result.node_type != "file" && result.node_type != "context" {
+                        writeln!(output, "    <node_type>{}</node_type>", &result.node_type)?;
+                    }
+
+                    // Use CDATA to preserve formatting and special characters
+                    writeln!(output, "    <code><![CDATA[{}]]></code>", &result.code)?;
+
+                    writeln!(output, "  </result>")?;
+                }
+
+                // Summary
+                writeln!(output, "  <summary>")?;
+                writeln!(output, "    <count>{}</count>", results.len())?;
+                writeln!(
+                    output,
+                    "    <total_bytes>{}</total_bytes>",
+                    results.iter().map(|r| r.code.len()).sum::<usize>()
+                )?;
+                writeln!(
+                    output,
+                    "    <total_tokens>{}</total_tokens>",
+                    results.iter().map(|r| count_tokens(&r.code)).sum::<usize>()
+                )?;
+                writeln!(output, "  </summary>")?;
+            }
+
+            // Add original_input, system_prompt, and user_instructions inside the root element
+            if let Some(input) = original_input {
+                writeln!(
+                    output,
+                    "  <original_input><![CDATA[{}]]></original_input>",
+                    input
+                )?;
+            }
+
+            if let Some(prompt) = system_prompt {
+                writeln!(
+                    output,
+                    "  <system_prompt><![CDATA[{}]]></system_prompt>",
+                    prompt
+                )?;
+            }
+
+            if let Some(instructions) = user_instructions {
+                writeln!(
+                    output,
+                    "  <user_instructions><![CDATA[{}]]></user_instructions>",
+                    instructions
+                )?;
+            }
+
+            // Close the root tag
+            writeln!(output, "</probe_results>")?;
+        }
+
+        // ---------------------------------------
+        // All other formats (terminal, markdown, plain, color)
+        // ---------------------------------------
+        _ => {
+            use colored::*;
+
+            // If there are no results
+            if results.is_empty() {
+                writeln!(output, "{}", "No results found.".yellow().bold())?;
+            } else {
+                // For each result, we either skip the code if is_dry_run, or include it otherwise.
+                for result in results {
+                    // Common: show file (with format-specific prefix)
+                    if format == "markdown" {
+                        writeln!(output, "## File: {}", result.file.yellow())?;
+                    } else {
+                        writeln!(output, "File: {}", result.file.yellow())?;
+                    }
+
+                    // Show lines if not a full file
+                    if result.node_type != "file" {
+                        if format == "markdown" {
+                            writeln!(output, "### Lines: {}-{}", result.lines.0, result.lines.1)?;
+                        } else {
+                            writeln!(output, "Lines: {}-{}", result.lines.0, result.lines.1)?;
+                        }
+                    }
+
+                    // Show node type if not file/context
+                    if result.node_type != "file" && result.node_type != "context" {
+                        if format == "markdown" {
+                            writeln!(output, "### Type: {}", result.node_type.cyan())?;
+                        } else {
+                            writeln!(output, "Type: {}", result.node_type.cyan())?;
+                        }
+                    }
+
+                    // In dry-run, we do NOT print the code
+                    if !is_dry_run {
+                        // Attempt a basic "highlight" approach by checking file extension
+                        let extension = Path::new(&result.file)
+                            .extension()
+                            .and_then(|ext| ext.to_str())
+                            .unwrap_or("");
+                        let language = get_language_from_extension(extension);
+
+                        match format {
+                            "markdown" => {
+                                if !language.is_empty() {
+                                    writeln!(output, "```{}", language)?;
+                                } else {
+                                    writeln!(output, "```")?;
+                                }
+                                writeln!(output, "{}", result.code)?;
+                                writeln!(output, "```")?;
+                            }
+                            "plain" => {
+                                writeln!(output)?;
+                                writeln!(output, "{}", result.code)?;
+                                writeln!(output)?;
+                                writeln!(output, "----------------------------------------")?;
+                                writeln!(output)?;
+                            }
+                            "color" => {
+                                if !language.is_empty() {
+                                    writeln!(output, "```{}", language)?;
+                                } else {
+                                    writeln!(output, "```")?;
+                                }
+                                writeln!(output, "{}", result.code)?;
+                                writeln!(output, "```")?;
+                            }
+                            // "terminal" or anything else not covered
+                            _ => {
+                                if !language.is_empty() {
+                                    writeln!(output, "```{}", language)?;
+                                } else {
+                                    writeln!(output, "```")?;
+                                }
+                                writeln!(output, "{}", result.code)?;
+                                writeln!(output, "```")?;
+                            }
+                        }
+                    }
+
+                    writeln!(output)?;
+                }
+            }
+
+            // Now, print the root-level data (system prompt, user instructions, original input)
+            if let Some(input) = original_input {
+                writeln!(output, "{}", "Original Input:".yellow().bold())?;
+                writeln!(output, "{}", input)?;
+            }
+            if let Some(prompt) = system_prompt {
+                writeln!(output)?;
+                writeln!(output, "{}", "System Prompt:".yellow().bold())?;
+                writeln!(output, "{}", prompt)?;
+            }
+            if let Some(instructions) = user_instructions {
+                writeln!(output)?;
+                writeln!(output, "{}", "User Instructions:".yellow().bold())?;
+                writeln!(output, "{}", instructions)?;
+            }
+
+            // Summaries for non-JSON/XML:
+            if !["json", "xml"].contains(&format) && !results.is_empty() {
+                writeln!(output)?;
+                if is_dry_run {
+                    writeln!(
+                        output,
+                        "{} {} {}",
+                        "Would extract".green().bold(),
+                        results.len(),
+                        if results.len() == 1 {
+                            "result"
+                        } else {
+                            "results"
+                        }
+                    )?;
+                } else {
+                    writeln!(
+                        output,
+                        "{} {} {}",
+                        "Extracted".green().bold(),
+                        results.len(),
+                        if results.len() == 1 {
+                            "result"
+                        } else {
+                            "results"
+                        }
+                    )?;
+
+                    let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
+                    let total_tokens: usize = results.iter().map(|r| count_tokens(&r.code)).sum();
+                    writeln!(output, "Total bytes returned: {}", total_bytes)?;
+                    writeln!(output, "Total tokens returned: {}", total_tokens)?;
+                }
+            }
+        }
+    }
+
+    Ok(output)
+}
 
 /// Format the extraction results for dry-run mode (only file names and line numbers)
 ///
@@ -14,132 +417,23 @@ use std::path::Path;
 ///
 /// * `results` - The search results to format
 /// * `format` - The output format (terminal, markdown, plain, json, or color)
-pub fn format_extraction_dry_run(results: &[SearchResult], format: &str) -> Result<String> {
-    use std::fmt::Write;
-    let mut output = String::new();
-
-    match format {
-        "json" => {
-            // Create a simplified version of the results for JSON output
-            #[derive(serde::Serialize)]
-            struct JsonDryRunResult<'a> {
-                file: &'a str,
-                #[serde(serialize_with = "serialize_lines_as_array")]
-                lines: (usize, usize),
-                node_type: &'a str,
-            }
-
-            // Helper function to serialize lines as an array
-            fn serialize_lines_as_array<S>(
-                lines: &(usize, usize),
-                serializer: S,
-            ) -> Result<S::Ok, S::Error>
-            where
-                S: serde::Serializer,
-            {
-                use serde::ser::SerializeSeq;
-                let mut seq = serializer.serialize_seq(Some(2))?;
-                seq.serialize_element(&lines.0)?;
-                seq.serialize_element(&lines.1)?;
-                seq.end()
-            }
-
-            let json_results: Vec<JsonDryRunResult> = results
-                .iter()
-                .map(|r| JsonDryRunResult {
-                    file: &r.file,
-                    lines: r.lines,
-                    node_type: &r.node_type,
-                })
-                .collect();
-
-            // Create a wrapper object with results and summary
-            let wrapper = serde_json::json!({
-                "results": json_results,
-                "summary": {
-                    "count": results.len(),
-                }
-            });
-
-            write!(output, "{}", serde_json::to_string_pretty(&wrapper)?)?;
-        }
-        "xml" => {
-            writeln!(output, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").unwrap();
-            writeln!(output, "<probe_results>").unwrap();
-
-            for result in results {
-                writeln!(output, "  <result>").unwrap();
-                writeln!(output, "    <file>{}</file>", escape_xml(&result.file)).unwrap();
-
-                if result.node_type != "file" {
-                    writeln!(output, "    <lines>").unwrap();
-                    writeln!(output, "      <start>{}</start>", result.lines.0).unwrap();
-                    writeln!(output, "      <end>{}</end>", result.lines.1).unwrap();
-                    writeln!(output, "    </lines>").unwrap();
-                }
-
-                if result.node_type != "file" && result.node_type != "context" {
-                    writeln!(
-                        output,
-                        "    <node_type>{}</node_type>",
-                        escape_xml(&result.node_type)
-                    )
-                    .unwrap();
-                }
-
-                writeln!(output, "  </result>").unwrap();
-            }
-
-            // Add summary section
-            writeln!(output, "  <summary>").unwrap();
-            writeln!(output, "    <count>{}</count>", results.len()).unwrap();
-            writeln!(output, "  </summary>").unwrap();
-
-            writeln!(output, "</probe_results>").unwrap();
-        }
-        _ => {
-            // For all other formats (terminal, markdown, plain, color)
-            use colored::*;
-
-            if results.is_empty() {
-                writeln!(output, "{}", "No results found.".yellow().bold()).unwrap();
-                return Ok(output);
-            }
-
-            for result in results {
-                // Write file info
-                writeln!(output, "File: {}", result.file.yellow()).unwrap();
-
-                // Write lines if not a full file
-                if result.node_type != "file" {
-                    writeln!(output, "Lines: {}-{}", result.lines.0, result.lines.1).unwrap();
-                }
-
-                // Write node type if available and not "file" or "context"
-                if result.node_type != "file" && result.node_type != "context" {
-                    writeln!(output, "Type: {}", result.node_type.cyan()).unwrap();
-                }
-
-                writeln!(output).unwrap();
-            }
-
-            // Add summary
-            writeln!(
-                output,
-                "{} {} {}",
-                "Would extract".green().bold(),
-                results.len(),
-                if results.len() == 1 {
-                    "result"
-                } else {
-                    "results"
-                }
-            )
-            .unwrap();
-        }
-    }
-
-    Ok(output)
+/// * `system_prompt` - Optional system prompt for LLM models
+/// * `user_instructions` - Optional user instructions for LLM models
+pub fn format_extraction_dry_run(
+    results: &[SearchResult],
+    format: &str,
+    original_input: Option<&str>,
+    system_prompt: Option<&str>,
+    user_instructions: Option<&str>,
+) -> Result<String> {
+    format_extraction_internal(
+        results,
+        format,
+        original_input,
+        system_prompt,
+        user_instructions,
+        true, // is_dry_run
+    )
 }
 
 /// Format the extraction results in the specified format and return as a string
@@ -148,55 +442,23 @@ pub fn format_extraction_dry_run(results: &[SearchResult], format: &str) -> Resu
 ///
 /// * `results` - The search results to format
 /// * `format` - The output format (terminal, markdown, plain, json, or color)
-pub fn format_extraction_results(results: &[SearchResult], format: &str) -> Result<String> {
-    use std::fmt::Write;
-    let mut output = String::new();
-
-    match format {
-        "markdown" => {
-            format_markdown_results(&mut output, results);
-        }
-        "plain" => {
-            format_plain_results(&mut output, results);
-        }
-        "json" => {
-            format_json_results(&mut output, results)?;
-        }
-        "xml" => {
-            format_xml_results(&mut output, results)?;
-        }
-        "color" => {
-            format_color_results(&mut output, results);
-        }
-        _ => {
-            format_terminal_results(&mut output, results);
-        }
-    }
-
-    // Add summary (only for non-JSON/XML formats)
-    if format != "json" && format != "xml" {
-        use colored::*;
-        writeln!(output)?;
-        writeln!(
-            output,
-            "{} {} {}",
-            "Extracted".green().bold(),
-            results.len(),
-            if results.len() == 1 {
-                "result"
-            } else {
-                "results"
-            }
-        )?;
-
-        // Calculate and add total bytes and tokens
-        let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
-        let total_tokens: usize = results.iter().map(|r| count_tokens(&r.code)).sum();
-        writeln!(output, "Total bytes returned: {}", total_bytes)?;
-        writeln!(output, "Total tokens returned: {}", total_tokens)?;
-    }
-
-    Ok(output)
+/// * `system_prompt` - Optional system prompt for LLM models
+/// * `user_instructions` - Optional user instructions for LLM models
+pub fn format_extraction_results(
+    results: &[SearchResult],
+    format: &str,
+    original_input: Option<&str>,
+    system_prompt: Option<&str>,
+    user_instructions: Option<&str>,
+) -> Result<String> {
+    format_extraction_internal(
+        results,
+        format,
+        original_input,
+        system_prompt,
+        user_instructions,
+        false, // is_dry_run
+    )
 }
 
 /// Format and print the extraction results in the specified format
@@ -205,420 +467,25 @@ pub fn format_extraction_results(results: &[SearchResult], format: &str) -> Resu
 ///
 /// * `results` - The search results to format and print
 /// * `format` - The output format (terminal, markdown, plain, json, or color)
+/// * `system_prompt` - Optional system prompt for LLM models
+/// * `user_instructions` - Optional user instructions for LLM models
 #[allow(dead_code)]
-pub fn format_and_print_extraction_results(results: &[SearchResult], format: &str) -> Result<()> {
-    let output = format_extraction_results(results, format)?;
+pub fn format_and_print_extraction_results(
+    results: &[SearchResult],
+    format: &str,
+    original_input: Option<&str>,
+    system_prompt: Option<&str>,
+    user_instructions: Option<&str>,
+) -> Result<()> {
+    let output = format_extraction_results(
+        results,
+        format,
+        original_input,
+        system_prompt,
+        user_instructions,
+    )?;
     println!("{}", output);
     Ok(())
-}
-
-/// Format results in terminal format with colors and write to a string buffer
-pub fn format_terminal_results(output: &mut String, results: &[SearchResult]) {
-    use colored::*;
-    use std::fmt::Write;
-
-    if results.is_empty() {
-        writeln!(output, "{}", "No results found.".yellow().bold()).unwrap();
-        return;
-    }
-
-    for result in results {
-        // Get file extension
-        let file_path = Path::new(&result.file);
-        let extension = file_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
-
-        // Write file info with more descriptive header
-        writeln!(output, "File: {}", result.file.yellow()).unwrap();
-
-        // Write lines if not a full file
-        if result.node_type != "file" {
-            writeln!(output, "Lines: {}-{}", result.lines.0, result.lines.1).unwrap();
-        }
-
-        // Write node type if available and not "file" or "context"
-        if result.node_type != "file" && result.node_type != "context" {
-            writeln!(output, "Type: {}", result.node_type.cyan()).unwrap();
-        }
-
-        // Add a note about string literals if this is from a git diff
-        if result.code.contains("diff --git") || result.code.contains("@@ -") {
-            writeln!(output, "{}", "Note: The code below contains string literals that look like git diff content. These are part of the extracted code, not the diff format.".yellow()).unwrap();
-        }
-
-        // Determine the language for syntax highlighting
-        let language = get_language_from_extension(extension);
-
-        // Write the code with syntax highlighting
-        if !language.is_empty() {
-            writeln!(output, "```{}", language).unwrap();
-        } else {
-            writeln!(output, "```").unwrap();
-        }
-
-        writeln!(output, "{}", result.code).unwrap();
-        writeln!(output, "```").unwrap();
-        writeln!(output).unwrap();
-    }
-}
-
-/// Format and print results in terminal format with colors
-#[allow(dead_code)]
-pub fn format_and_print_terminal_results(results: &[SearchResult]) {
-    let mut output = String::new();
-    format_terminal_results(&mut output, results);
-    print!("{}", output);
-}
-
-/// Format results in markdown format and write to a string buffer
-pub fn format_markdown_results(output: &mut String, results: &[SearchResult]) {
-    use std::fmt::Write;
-
-    if results.is_empty() {
-        writeln!(output, "No results found.").unwrap();
-        return;
-    }
-
-    for result in results {
-        // Get file extension
-        let file_path = Path::new(&result.file);
-        let extension = file_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
-
-        // Write file info with more descriptive header
-        writeln!(output, "## File: {}", result.file).unwrap();
-
-        // Write lines if not a full file
-        if result.node_type != "file" {
-            writeln!(output, "Lines: {}-{}", result.lines.0, result.lines.1).unwrap();
-        }
-
-        // Write node type if available and not "file" or "context"
-        if result.node_type != "file" && result.node_type != "context" {
-            writeln!(output, "Type: {}", result.node_type).unwrap();
-        }
-
-        // Add a note about string literals if this is from a git diff
-        if result.code.contains("diff --git") || result.code.contains("@@ -") {
-            writeln!(output, "**Note**: The code below contains string literals that look like git diff content. These are part of the extracted code, not the diff format.").unwrap();
-        }
-
-        // Determine the language for syntax highlighting
-        let language = get_language_from_extension(extension);
-
-        // Write the code with syntax highlighting
-        if !language.is_empty() {
-            writeln!(output, "```{}", language).unwrap();
-        } else {
-            writeln!(output, "```").unwrap();
-        }
-
-        writeln!(output, "{}", result.code).unwrap();
-        writeln!(output, "```").unwrap();
-        writeln!(output).unwrap();
-    }
-}
-
-/// Format and print results in markdown format
-#[allow(dead_code)]
-pub fn format_and_print_markdown_results(results: &[SearchResult]) {
-    let mut output = String::new();
-    format_markdown_results(&mut output, results);
-    print!("{}", output);
-}
-
-/// Format results in plain text format and write to a string buffer
-pub fn format_plain_results(output: &mut String, results: &[SearchResult]) {
-    use std::fmt::Write;
-
-    if results.is_empty() {
-        writeln!(output, "No results found.").unwrap();
-        return;
-    }
-
-    for result in results {
-        // Write file info with more descriptive header
-        writeln!(output, "File: {}", result.file).unwrap();
-
-        // Write lines if not a full file
-        if result.node_type != "file" {
-            writeln!(output, "Lines: {}-{}", result.lines.0, result.lines.1).unwrap();
-        }
-
-        // Write node type if available and not "file" or "context"
-        if result.node_type != "file" && result.node_type != "context" {
-            writeln!(output, "Type: {}", result.node_type).unwrap();
-        }
-
-        // Add a note about string literals if this is from a git diff
-        if result.code.contains("diff --git") || result.code.contains("@@ -") {
-            writeln!(output, "Note: The code below contains string literals that look like git diff content. These are part of the extracted code, not the diff format.").unwrap();
-        }
-
-        writeln!(output).unwrap();
-        writeln!(output, "{}", result.code).unwrap();
-        writeln!(output).unwrap();
-        writeln!(output, "----------------------------------------").unwrap();
-        writeln!(output).unwrap();
-    }
-}
-
-/// Format and print results in plain text format
-#[allow(dead_code)]
-pub fn format_and_print_plain_results(results: &[SearchResult]) {
-    let mut output = String::new();
-    format_plain_results(&mut output, results);
-    print!("{}", output);
-}
-
-/// Format results in XML format and write to a string buffer
-pub fn format_xml_results(output: &mut String, results: &[SearchResult]) -> Result<()> {
-    use std::fmt::Write;
-
-    writeln!(output, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").unwrap();
-    writeln!(output, "<probe_results>").unwrap();
-
-    for result in results {
-        writeln!(output, "  <result>").unwrap();
-        writeln!(output, "    <file>{}</file>", escape_xml(&result.file)).unwrap();
-
-        if result.node_type != "file" {
-            writeln!(output, "    <lines>").unwrap();
-            writeln!(output, "      <start>{}</start>", result.lines.0).unwrap();
-            writeln!(output, "      <end>{}</end>", result.lines.1).unwrap();
-            writeln!(output, "    </lines>").unwrap();
-        }
-
-        if result.node_type != "file" && result.node_type != "context" {
-            writeln!(
-                output,
-                "    <node_type>{}</node_type>",
-                escape_xml(&result.node_type)
-            )
-            .unwrap();
-        }
-
-        writeln!(output, "    <code><![CDATA[{}]]></code>", result.code).unwrap();
-        writeln!(output, "  </result>").unwrap();
-    }
-
-    // Add summary section
-    writeln!(output, "  <summary>").unwrap();
-    writeln!(output, "    <count>{}</count>", results.len()).unwrap();
-    writeln!(
-        output,
-        "    <total_bytes>{}</total_bytes>",
-        results.iter().map(|r| r.code.len()).sum::<usize>()
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "    <total_tokens>{}</total_tokens>",
-        results.iter().map(|r| count_tokens(&r.code)).sum::<usize>()
-    )
-    .unwrap();
-    writeln!(output, "  </summary>").unwrap();
-
-    writeln!(output, "</probe_results>").unwrap();
-    Ok(())
-}
-
-/// Format and print results in XML format
-#[allow(dead_code)]
-pub fn format_and_print_xml_results(results: &[SearchResult]) -> Result<()> {
-    let mut output = String::new();
-    format_xml_results(&mut output, results)?;
-    print!("{}", output);
-    Ok(())
-}
-
-/// Format results in JSON format and write to a string buffer
-pub fn format_json_results(output: &mut String, results: &[SearchResult]) -> Result<()> {
-    use std::fmt::Write;
-
-    // Create a simplified version of the results for JSON output
-    #[derive(serde::Serialize)]
-    struct JsonResult<'a> {
-        file: &'a str,
-        #[serde(serialize_with = "serialize_lines_as_array")]
-        lines: (usize, usize),
-        node_type: &'a str,
-        code: &'a str,
-    }
-
-    // Helper function to serialize lines as an array
-    fn serialize_lines_as_array<S>(lines: &(usize, usize), serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeSeq;
-        let mut seq = serializer.serialize_seq(Some(2))?;
-        seq.serialize_element(&lines.0)?;
-        seq.serialize_element(&lines.1)?;
-        seq.end()
-    }
-
-    let json_results: Vec<JsonResult> = results
-        .iter()
-        .map(|r| JsonResult {
-            file: &r.file,
-            lines: r.lines,
-            node_type: &r.node_type,
-            code: &r.code,
-        })
-        .collect();
-
-    // Create a wrapper object with results and summary
-    let wrapper = serde_json::json!({
-        "results": json_results,
-        "summary": {
-            "count": results.len(),
-            "total_bytes": results.iter().map(|r| r.code.len()).sum::<usize>(),
-            "total_tokens": results.iter().map(|r| count_tokens(&r.code)).sum::<usize>(),
-        }
-    });
-
-    write!(output, "{}", serde_json::to_string_pretty(&wrapper)?)?;
-    Ok(())
-}
-
-/// Format and print results in JSON format
-#[allow(dead_code)]
-pub fn format_and_print_json_results(results: &[SearchResult]) -> Result<()> {
-    let mut output = String::new();
-    format_json_results(&mut output, results)?;
-    print!("{}", output);
-    Ok(())
-}
-
-/// Format results with color highlighting and write to a string buffer
-pub fn format_color_results(output: &mut String, results: &[SearchResult]) {
-    use colored::*;
-    use regex::Regex;
-    use std::collections::HashSet;
-    use std::fmt::Write;
-
-    if results.is_empty() {
-        writeln!(output, "No results found.").unwrap();
-        return;
-    }
-
-    // Extract search terms from the results
-    // We'll use the unique terms from the results if available
-    let mut search_terms = HashSet::new();
-    for result in results {
-        if let Some(terms) = &result.file_unique_terms {
-            if *terms > 0 {
-                // If we have unique terms data, we can try to extract terms from the code
-                // This is a simple approach - in a real implementation, you might want to
-                // get the actual search terms from the search query
-                let words: Vec<&str> = result.code.split_whitespace().collect();
-                for word in words {
-                    // Clean up the word (remove punctuation, etc.)
-                    let clean_word = word.trim_matches(|c: char| !c.is_alphanumeric());
-                    if !clean_word.is_empty() {
-                        search_terms.insert(clean_word.to_lowercase());
-                    }
-                }
-            }
-        }
-    }
-
-    // Use the search terms we extracted, or an empty list if none were found
-    // This removes the default highlighting of common programming terms
-    let default_terms: Vec<String> = search_terms.into_iter().collect();
-
-    // Create regex patterns for the terms
-    let mut patterns = Vec::new();
-    for term in &default_terms {
-        // Create a case-insensitive regex for the term
-        // We use word boundaries to match whole words
-        if let Ok(regex) = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(term))) {
-            patterns.push(regex);
-        }
-    }
-
-    for result in results {
-        // Get file extension
-        let file_path = Path::new(&result.file);
-        let extension = file_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
-
-        // Write file info with more descriptive header
-        writeln!(output, "## File: {}", result.file).unwrap();
-
-        // Write lines if not a full file
-        if result.node_type != "file" {
-            writeln!(output, "Lines: {}-{}", result.lines.0, result.lines.1).unwrap();
-        }
-
-        // Write node type if available and not "file" or "context"
-        if result.node_type != "file" && result.node_type != "context" {
-            writeln!(output, "Type: {}", result.node_type).unwrap();
-        }
-
-        // Add a note about string literals if this is from a git diff
-        if result.code.contains("diff --git") || result.code.contains("@@ -") {
-            writeln!(output, "{}", "Note: The code below contains string literals that look like git diff content. These are part of the extracted code, not the diff format.".yellow()).unwrap();
-        }
-
-        // Determine the language for syntax highlighting
-        let language = get_language_from_extension(extension);
-
-        // Write the code with syntax highlighting
-        if !language.is_empty() {
-            writeln!(output, "```{}", language).unwrap();
-        } else {
-            writeln!(output, "```").unwrap();
-        }
-
-        // Process the code line by line to highlight matching terms
-        for line in result.code.lines() {
-            let mut highlighted_line = line.to_string();
-
-            // Apply highlighting for each pattern
-            for pattern in &patterns {
-                // Use a temporary string to build the highlighted line
-                let mut temp_line = String::new();
-                let mut last_end = 0;
-
-                // Find all matches in the line
-                for mat in pattern.find_iter(&highlighted_line) {
-                    // Add the text before the match
-                    temp_line.push_str(&highlighted_line[last_end..mat.start()]);
-
-                    // Add the highlighted match
-                    temp_line.push_str(&mat.as_str().yellow().bold().to_string());
-
-                    last_end = mat.end();
-                }
-
-                // Add the remaining text
-                temp_line.push_str(&highlighted_line[last_end..]);
-
-                highlighted_line = temp_line;
-            }
-
-            writeln!(output, "{}", highlighted_line).unwrap();
-        }
-
-        writeln!(output, "```").unwrap();
-        writeln!(output).unwrap();
-    }
-}
-
-/// Format and print results with color highlighting
-#[allow(dead_code)]
-pub fn format_and_print_color_results(results: &[SearchResult]) {
-    let mut output = String::new();
-    format_color_results(&mut output, results);
-    print!("{}", output);
 }
 
 /// Helper function to escape XML special characters

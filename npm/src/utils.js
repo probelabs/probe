@@ -109,5 +109,7 @@ export function buildCliArgs(options, flagMap) {
  * @returns {string} - Escaped string
  */
 export function escapeString(str) {
-	return `"${str.replace(/"/g, '\\"')}"`;
+	// Use single quotes instead of double quotes for better shell compatibility
+	// Escape single quotes in the string by replacing ' with '\''
+	return `'${str.replace(/'/g, "'\\''")}'`;
 }

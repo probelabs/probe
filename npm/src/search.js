@@ -19,20 +19,19 @@ const SEARCH_FLAG_MAP = {
 	excludeFilenames: '--exclude-filenames',
 	reranker: '--reranker',
 	frequencySearch: '--frequency',
-	exact: '--exact',
 	maxResults: '--max-results',
 	maxBytes: '--max-bytes',
 	maxTokens: '--max-tokens',
 	allowTests: '--allow-tests',
-	anyTerm: '--any-term',
 	noMerge: '--no-merge',
 	mergeThreshold: '--merge-threshold',
-	session: '--session'
+	session: '--session',
+	timeout: '--timeout'
 };
 
 /**
  * Search code in a specified directory
- * 
+ *
  * @param {Object} options - Search options
  * @param {string} options.path - Path to search in
  * @param {string|string[]} options.query - Search query or queries
@@ -41,15 +40,14 @@ const SEARCH_FLAG_MAP = {
  * @param {boolean} [options.excludeFilenames] - Exclude filenames from search
  * @param {string} [options.reranker] - Reranking method ('hybrid', 'hybrid2', 'bm25', 'tfidf')
  * @param {boolean} [options.frequencySearch] - Use frequency-based search
- * @param {boolean} [options.exact] - Use exact matching
  * @param {number} [options.maxResults] - Maximum number of results
  * @param {number} [options.maxBytes] - Maximum bytes to return
  * @param {number} [options.maxTokens] - Maximum tokens to return
  * @param {boolean} [options.allowTests] - Include test files
- * @param {boolean} [options.anyTerm] - Match any term
  * @param {boolean} [options.noMerge] - Don't merge adjacent blocks
  * @param {number} [options.mergeThreshold] - Merge threshold
  * @param {string} [options.session] - Session ID for caching results
+ * @param {number} [options.timeout] - Timeout in seconds (default: 30)
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists
  * @param {string} [options.binaryOptions.version] - Specific version to download
@@ -79,8 +77,14 @@ export async function search(options) {
 
 	// Set default maxTokens if not provided
 	if (!options.maxTokens) {
-		options.maxTokens = 40000;
-		cliArgs.push('--max-tokens', '40000');
+		options.maxTokens = 10000;
+		cliArgs.push('--max-tokens', '10000');
+	}
+
+	// Set default timeout if not provided
+	if (!options.timeout) {
+		options.timeout = 30;
+		cliArgs.push('--timeout', '30');
 	}
 
 	// Add session ID from environment variable if not provided in options
@@ -91,30 +95,50 @@ export async function search(options) {
 	// Add query and path as positional arguments
 	const queries = Array.isArray(options.query) ? options.query : [options.query];
 
-	// Create a single log record with all search parameters
+	// Create a single log record with all search parameters (commented out for less verbose output)
 	let logMessage = `\nSearch: query="${queries[0]}" path="${options.path}"`;
 	if (options.maxResults) logMessage += ` maxResults=${options.maxResults}`;
 	logMessage += ` maxTokens=${options.maxTokens}`;
-	if (options.exact) logMessage += " exact=true";
+	logMessage += ` timeout=${options.timeout}`;
 	if (options.allowTests) logMessage += " allowTests=true";
 	if (options.session) logMessage += ` session=${options.session}`;
-	console.log(logMessage);
+	console.error(logMessage);
+	// Create positional arguments array separate from flags
+	const positionalArgs = [];
 
 	if (queries.length > 0) {
 		// Escape the query to handle special characters
-		cliArgs.push(escapeString(queries[0]));
+		positionalArgs.push(escapeString(queries[0]));
 	}
 
 	// Escape the path to handle spaces and special characters
-	cliArgs.push(escapeString(options.path));
+	positionalArgs.push(escapeString(options.path));
+	// Don't add the path to cliArgs, it should only be a positional argument
 
-	// Execute command
-	const command = `${binaryPath} search ${cliArgs.join(' ')}`;
+	// Execute command with flags first, then positional arguments
+	const command = `${binaryPath} search ${cliArgs.join(' ')} ${positionalArgs.join(' ')}`;
+
+	// Debug logs to see the actual command with quotes and the path
+	// console.error(`Executing command: ${command}`);
+	// console.error(`Path being used: "${options.path}"`);
+	// console.error(`Escaped path: ${escapeString(options.path)}`);
+	// console.error(`Command flags: ${cliArgs.join(' ')}`);
+	// console.error(`Positional arguments: ${positionalArgs.join(' ')}`);
 
 	try {
-		const { stdout, stderr } = await execAsync(command);
+		// Log before executing
+		// console.error(`About to execute command: ${command}`);
 
-		if (stderr) {
+		// Execute the command with options to preserve quotes and apply timeout
+		const { stdout, stderr } = await execAsync(command, {
+			shell: true,
+			timeout: options.timeout * 1000 // Convert seconds to milliseconds
+		});
+
+		// Log after executing
+		// console.error(`Command executed successfully`);
+
+		if (stderr && process.env.DEBUG) {
 			console.error(`stderr: ${stderr}`);
 		}
 
@@ -156,12 +180,12 @@ export async function search(options) {
 			}
 		}
 
-		// Log the results count, token count, and bytes count
+		// Log the results count, token count, and bytes count (commented out for less verbose output)
 		let resultsMessage = `\nSearch results: ${resultCount} matches, ${tokenCount} tokens`;
 		if (bytesCount > 0) {
 			resultsMessage += `, ${bytesCount} bytes`;
 		}
-		console.log(resultsMessage);
+		console.error(resultsMessage);
 
 		// Parse JSON if requested
 		if (options.json) {
@@ -175,6 +199,13 @@ export async function search(options) {
 
 		return stdout;
 	} catch (error) {
+		// Check if the error is a timeout
+		if (error.code === 'ETIMEDOUT' || error.killed) {
+			const timeoutMessage = `Search operation timed out after ${options.timeout} seconds.\nCommand: ${command}`;
+			console.error(timeoutMessage);
+			throw new Error(timeoutMessage);
+		}
+
 		// Enhance error message with command details
 		const errorMessage = `Error executing search command: ${error.message}\nCommand: ${command}`;
 		throw new Error(errorMessage);

@@ -1,0 +1,23 @@
+# Source files (since we're publishing the build directory)
+src/
+
+# Development files
+.env
+.env.example
+.git
+.gitignore
+.github
+.vscode
+*.log
+*.tgz
+
+# Test files
+test/
+tests/
+__tests__/
+*.test.js
+*.spec.js
+
+# Misc
+node_modules/
+.DS_Store

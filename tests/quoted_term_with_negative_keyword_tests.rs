@@ -80,18 +80,18 @@ fn test_quoted_term_with_negative_keyword() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the query for debugging
     println!("Executing search with query: {:?}", queries);
     println!(
-        "Path: {:?}, exact: {}, frequency_search: {}",
-        options.path, options.exact, options.frequency_search
+        "Path: {:?}, frequency_search: {}",
+        options.path, options.frequency_search
     );
 
     // Run the search
@@ -159,11 +159,11 @@ fn test_negative_quoted_term() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the query for debugging

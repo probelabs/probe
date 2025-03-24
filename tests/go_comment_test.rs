@@ -1,66 +1,10 @@
 use anyhow::Result;
-use tree_sitter::Parser as TSParser;
-
-// Helper function to parse Go code and get the root node
-fn parse_go_code(code: &str) -> tree_sitter::Tree {
-    let mut parser = TSParser::new();
-    let language = tree_sitter_go::LANGUAGE.into();
-    parser
-        .set_language(&language)
-        .expect("Error loading Go grammar");
-    parser.parse(code, None).expect("Failed to parse code")
-}
-
-fn print_ast_structure(node: tree_sitter::Node, depth: usize) {
-    let indent = " ".repeat(depth * 2);
-    println!(
-        "{}[{}-{}] {}",
-        indent,
-        node.start_position().row + 1,
-        node.end_position().row + 1,
-        node.kind()
-    );
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        print_ast_structure(child, depth + 1);
-    }
-}
-
-// Helper function to find a comment node in the tree
-fn find_comment_node(tree: &tree_sitter::Tree, line: usize) -> Option<tree_sitter::Node<'_>> {
-    let root_node = tree.root_node();
-
-    println!("\nAST Structure:");
-    print_ast_structure(root_node, 0);
-
-    // Helper function to find a comment node recursively
-    fn find_comment_recursive(
-        node: tree_sitter::Node<'_>,
-        target_line: usize,
-    ) -> Option<tree_sitter::Node<'_>> {
-        if (node.kind() == "comment"
-            || node.kind() == "line_comment"
-            || node.kind() == "block_comment")
-            && node.start_position().row + 1 == target_line
-        {
-            return Some(node);
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if let Some(comment) = find_comment_recursive(child, target_line) {
-                return Some(comment);
-            }
-        }
-        None
-    }
-
-    find_comment_recursive(root_node, line)
-}
 
 #[test]
 fn test_go_struct_comments() -> Result<()> {
+    use probe::language::parser::parse_file_for_code_blocks;
+    use std::collections::HashSet;
+
     let code = r#"
 package main
 
@@ -75,33 +19,61 @@ type Second struct {
 }
 "#;
 
-    let tree = parse_go_code(code);
+    // Create a set with the line numbers of the comments
+    let mut line_numbers = HashSet::new();
+    line_numbers.insert(4); // First comment line
+    line_numbers.insert(9); // Second comment line
 
-    // Test first comment - should only relate to First struct
-    let first_comment = find_comment_node(&tree, 4).expect("Failed to find first comment");
-    let first_related = probe::language::parser::find_related_code_node(first_comment, "go")
-        .expect("Failed to find related node");
-    assert_eq!(first_related.kind(), "type_declaration");
-    assert_eq!(first_related.start_position().row + 1, 5); // First struct starts on line 5
+    // Parse the file for code blocks
+    let blocks = parse_file_for_code_blocks(code, "go", &line_numbers, true, None)?;
 
-    // Test second comment - should only relate to Second struct
-    let second_comment = find_comment_node(&tree, 9).expect("Failed to find second comment");
-    let second_related = probe::language::parser::find_related_code_node(second_comment, "go")
-        .expect("Failed to find related node");
-    assert_eq!(second_related.kind(), "type_declaration");
-    assert_eq!(second_related.start_position().row + 1, 10); // Second struct starts on line 10
-
-    // Verify the two structs are different
-    assert_ne!(
-        first_related.start_position().row,
-        second_related.start_position().row
+    // We should have exactly 2 blocks
+    assert_eq!(
+        blocks.len(),
+        2,
+        "Expected exactly 2 blocks, got {}",
+        blocks.len()
     );
+
+    // First block should be a type_declaration for First struct
+    assert_eq!(
+        blocks[0].node_type, "type_declaration",
+        "First block should be a type_declaration"
+    );
+    assert_eq!(
+        blocks[0].start_row + 1,
+        4,
+        "First block should start at line 4"
+    );
+    assert_eq!(blocks[0].end_row + 1, 7, "First block should end at line 7");
+
+    // Second block should be a type_declaration for Second struct
+    assert_eq!(
+        blocks[1].node_type, "type_declaration",
+        "Second block should be a type_declaration"
+    );
+    assert_eq!(
+        blocks[1].start_row + 1,
+        9,
+        "Second block should start at line 9"
+    );
+    assert_eq!(
+        blocks[1].end_row + 1,
+        12,
+        "Second block should end at line 12"
+    );
+
+    // Verify the two blocks are different
+    assert_ne!(blocks[0].start_row, blocks[1].start_row);
 
     Ok(())
 }
 
 #[test]
 fn test_go_nested_structs() -> Result<()> {
+    use probe::language::parser::parse_file_for_code_blocks;
+    use std::collections::HashSet;
+
     let code = r#"
 package main
 
@@ -114,26 +86,39 @@ type OuterType struct {
 }
 "#;
 
-    let tree = parse_go_code(code);
+    // Create a set with the line numbers of the comments
+    let mut line_numbers = HashSet::new();
+    line_numbers.insert(4); // Outer comment line
+    line_numbers.insert(6); // Inner comment line
 
-    // Test outer comment
-    let outer_comment = find_comment_node(&tree, 4).expect("Failed to find outer comment");
-    let outer_related = probe::language::parser::find_related_code_node(outer_comment, "go")
-        .expect("Failed to find related node");
-    assert_eq!(outer_related.kind(), "type_declaration");
+    // Parse the file for code blocks
+    let blocks = parse_file_for_code_blocks(code, "go", &line_numbers, true, None)?;
 
-    // Test inner comment
-    let inner_comment = find_comment_node(&tree, 6).expect("Failed to find inner comment");
-    let inner_related = probe::language::parser::find_related_code_node(inner_comment, "go")
-        .expect("Failed to find related node");
-    // The inner comment should be associated with its struct_type
-    assert_eq!(inner_related.kind(), "struct_type");
+    // Due to deduplication of overlapping blocks, we only get one block
+    // The inner struct is contained within the outer struct, so it's skipped
+    assert_eq!(
+        blocks.len(),
+        1,
+        "Expected exactly 1 block after deduplication, got {}",
+        blocks.len()
+    );
+
+    // The block should be a type_declaration for OuterType that includes both comments
+    assert_eq!(
+        blocks[0].node_type, "type_declaration",
+        "Block should be a type_declaration"
+    );
+    assert_eq!(blocks[0].start_row + 1, 4, "Block should start at line 4");
+    assert_eq!(blocks[0].end_row + 1, 10, "Block should end at line 10");
 
     Ok(())
 }
 
 #[test]
 fn test_go_mixed_declarations() -> Result<()> {
+    use probe::language::parser::parse_file_for_code_blocks;
+    use std::collections::HashSet;
+
     let code = r#"
 package main
 
@@ -148,28 +133,52 @@ type StructB struct {
 }
 "#;
 
-    let tree = parse_go_code(code);
+    // Create a set with the line numbers of the comments
+    let mut line_numbers = HashSet::new();
+    line_numbers.insert(4); // Interface comment line
+    line_numbers.insert(9); // Struct comment line
 
-    // Test interface comment
-    let interface_comment = find_comment_node(&tree, 4).expect("Failed to find interface comment");
-    let interface_related =
-        probe::language::parser::find_related_code_node(interface_comment, "go")
-            .expect("Failed to find related node");
-    assert_eq!(interface_related.kind(), "type_declaration");
-    assert_eq!(interface_related.start_position().row + 1, 5);
+    // Parse the file for code blocks
+    let blocks = parse_file_for_code_blocks(code, "go", &line_numbers, true, None)?;
 
-    // Test struct comment
-    let struct_comment = find_comment_node(&tree, 9).expect("Failed to find struct comment");
-    let struct_related = probe::language::parser::find_related_code_node(struct_comment, "go")
-        .expect("Failed to find related node");
-    assert_eq!(struct_related.kind(), "type_declaration");
-    assert_eq!(struct_related.start_position().row + 1, 10);
+    // We should have exactly 2 blocks
+    assert_eq!(
+        blocks.len(),
+        2,
+        "Expected exactly 2 blocks, got {}",
+        blocks.len()
+    );
+
+    // First block should be a type_declaration for InterfaceA
+    assert_eq!(
+        blocks[0].node_type, "type_declaration",
+        "First block should be a type_declaration"
+    );
+    assert_eq!(
+        blocks[0].start_row + 1,
+        4,
+        "First block should start at line 4"
+    );
+    assert_eq!(blocks[0].end_row + 1, 7, "First block should end at line 7");
+
+    // Second block should be a type_declaration for StructB
+    assert_eq!(
+        blocks[1].node_type, "type_declaration",
+        "Second block should be a type_declaration"
+    );
+    assert_eq!(
+        blocks[1].start_row + 1,
+        9,
+        "Second block should start at line 9"
+    );
+    assert_eq!(
+        blocks[1].end_row + 1,
+        12,
+        "Second block should end at line 12"
+    );
 
     // Verify they're different declarations
-    assert_ne!(
-        interface_related.start_position().row,
-        struct_related.start_position().row
-    );
+    assert_ne!(blocks[0].start_row, blocks[1].start_row);
 
     Ok(())
 }

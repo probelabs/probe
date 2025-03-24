@@ -21,6 +21,9 @@ probe extract <FILES> [OPTIONS]
 | `-c, --context <N>` | Add N context lines | 0 |
 | `--diff` | Process input as git diff format | Off |
 | `-f, --format <TYPE>` | Output as: `markdown`, `plain`, `json`, `xml`, `color` | `color` |
+| `-k, --keep-input` | Preserve and display original input content | Off |
+| `--prompt <TEMPLATE>` | System prompt template for LLM models (`engineer`, `architect`, or path to file) | None |
+| `--instructions <TEXT>` | User instructions for LLM models | None |
 | `--to-clipboard` | Copy results to clipboard | Off |
 | `--from-clipboard` | Read file paths from clipboard | Off |
 
@@ -149,8 +152,65 @@ Probe supports extraction for many other languages including:
 - **Markdown**: Sections, code blocks, lists, tables, frontmatter
 
 Each language implementation understands the unique syntax and structures of that language.
-
 ## ADVANCED USAGE TECHNIQUES
+
+### PRESERVING ORIGINAL INPUT WITH --KEEP-INPUT
+
+The `--keep-input` (or `-k`) flag preserves and displays the original, unstructured input content alongside the extracted code blocks:
+
+```bash
+# Extract code while preserving original input
+probe extract src/main.rs:42 --keep-input
+
+# Using the short form
+probe extract src/main.rs:42 -k
+```
+
+When this flag is enabled, the output will include:
+1. The original input text exactly as provided
+2. The structured, extracted code blocks
+
+This is particularly useful when:
+- Working with error messages or logs where the context is important
+- Debugging extraction issues by comparing input to output
+- Creating documentation that references both the original text and the extracted code
+- Preserving file paths and line numbers from compiler output
+
+#### Output Format with --keep-input
+
+In terminal output formats (`color`, `terminal`, `plain`, `markdown`), the original input is displayed first, followed by a separator, then the extracted code blocks:
+
+```
+--- Original Input ---
+src/main.rs:42: error: invalid syntax
+
+--- Extracted Code ---
+fn process_data(data: &[u8]) -> Result<Vec<u8>, Error> {
+    // Processing logic
+    ...
+}
+```
+
+In structured output formats (`json`, `xml`), the original input is included as an additional field:
+
+```json
+{
+  "original_input": "src/main.rs:42: error: invalid syntax",
+  "results": [
+    {
+      "file": "src/main.rs",
+      "lines": [40, 45],
+      "node_type": "function",
+      "code": "fn process_data(data: &[u8]) -> Result<Vec<u8>, Error> {\n    // Processing logic\n    ...\n}"
+    }
+  ],
+  "summary": {
+    "count": 1,
+    "total_bytes": 85,
+    "total_tokens": 25
+  }
+}
+```
 
 ### EXTRACTING FROM ERROR MESSAGES
 
@@ -162,6 +222,10 @@ rustc main.rs 2>&1 | probe extract
 
 # Pull code from test failures
 go test ./... | probe extract
+
+# Extract code from errors while preserving the original error message
+rustc main.rs 2>&1 | probe extract --keep-input
+```
 ```
 
 ### GIT DIFF EXTRACTION
@@ -277,9 +341,48 @@ git diff | tee /tmp/changes.diff | ai-assistant "Here are the changes:" && git d
 
 # Comprehensive code review with both diff and AST context
 git diff > /tmp/changes.diff && git diff | probe extract > /tmp/ast_blocks.txt && cat /tmp/changes.diff /tmp/ast_blocks.txt | ai-assistant "Review these changes. The first part shows the diff, and the second part shows the complete AST blocks of modified functions."
+
+# Extract code with LLM prompt and instructions
+probe extract src/auth.rs#authenticate --format json --prompt engineer --instructions "Explain this authentication function"
 ```
 
 The git diff auto-detection feature is particularly valuable for AI code review workflows. When you pipe a git diff to `probe extract`, it automatically extracts the complete AST nodes (functions, classes, methods) that contain the changes, providing AI tools with both the specific changes (from the diff) and the full context (from the AST extraction).
+
+### LLM INTEGRATION WITH PROMPTS
+
+Probe's extract command supports direct integration with Large Language Models (LLMs) through the `--prompt` and `--instructions` flags:
+
+```bash
+# Extract code with engineer prompt template
+probe extract src/main.rs#handle_request --prompt engineer --instructions "Explain this function"
+
+# Extract code with architect prompt template
+probe extract src/auth.rs --prompt architect --instructions "Analyze this authentication module"
+
+# Extract code with custom prompt template
+probe extract src/api.js:42 --prompt /path/to/custom/prompt.txt --instructions "Refactor this code"
+```
+
+#### PROMPT TEMPLATES
+
+The `--prompt` flag accepts three types of values:
+
+1. **Built-in templates**:
+   - `engineer`: A prompt template for software engineering tasks, focused on code implementation
+   - `architect`: A prompt template for architectural analysis and planning
+
+2. **Custom templates**:
+   - Path to a file containing a custom prompt template
+
+3. **Output integration**:
+   - In structured formats (JSON, XML), the prompt and instructions are included as fields
+   - In text formats, they appear as sections at the end of the output
+
+This feature is particularly useful for:
+- Creating consistent AI prompting patterns
+- Providing context for code analysis
+- Standardizing code review workflows
+- Automating documentation generation
 
 ### DEBUGGING ASSISTANCE
 

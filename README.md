@@ -395,7 +395,7 @@ probe search <SEARCH_PATTERN> [OPTIONS]
 - `--exclude-filenames, -n`: Exclude files whose names match query words (filename matching is enabled by default)
 - `--reranker, -r`: Choose a re-ranking algorithm (`hybrid`, `hybrid2`, `bm25`, `tfidf`)
 - `--frequency, -s`: Frequency-based search (tokenization, stemming, stopword removal)
-- `--exact`: Exact matching (overrides frequency search)
+=======
 - `--max-results`: Maximum number of results to return
 - `--max-bytes`: Maximum total bytes of code to return
 - `--max-tokens`: Maximum total tokens of code to return (useful for AI)
@@ -410,8 +410,8 @@ probe search <SEARCH_PATTERN> [OPTIONS]
 # 1) Search for "setTools" in the current directory with frequency-based search
 probe search "setTools"
 
-# 2) Search for "impl" in ./src with exact matching
-probe search "impl"  ./src --exact
+# 2) Search for "impl" in ./src
+probe search "impl"  ./src
 
 # 3) Search for "keyword" returning only the top 5 results
 probe search "keyword" --max-tokens 10000

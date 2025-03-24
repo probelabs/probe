@@ -2,13 +2,30 @@
 
 Probe includes a web-based chat interface that provides a user-friendly way to interact with your codebase using AI. The web interface offers a modern UI for code search and AI-powered code exploration.
 
+## Unified Interface
+
+Probe now features a unified interface that combines both CLI and web functionality in a single package. This change merges the previously separate `@buger/probe-web` and `@buger/probe-chat` packages into a single `@buger/probe-chat` package that supports both modes of operation.
+
+### Benefits of the Unified Interface
+
+- **Code Reuse**: Shared codebase for both CLI and web interfaces reduces duplication
+- **Easier Maintenance**: Single package to update and maintain
+- **Consistent Experience**: Same core functionality and tools available in both interfaces
+- **Simplified Installation**: One package to install for all Probe chat functionality
+- **Unified Configuration**: Same environment variables and settings for both modes
+
+> **Note**: The `@buger/probe-web` package is now deprecated. Its functionality is included in the `@buger/probe-chat` package.
+
 ## Quick Start with npx
 
-The easiest way to use Probe's web interface is through npx:
+The easiest way to use Probe's interface is through npx:
 
 ```bash
-# Run directly with npx (no installation needed)
-npx -y @buger/probe-web
+# Run in CLI mode (default)
+npx -y @buger/probe-chat
+
+# Run in web interface mode
+npx -y @buger/probe-chat --web
 
 # Set your API key first (either Anthropic or OpenAI)
 export ANTHROPIC_API_KEY=your_api_key
@@ -19,7 +36,85 @@ export OPENAI_API_KEY=your_api_key
 export ALLOWED_FOLDERS=/path/to/folder1,/path/to/folder2
 ```
 
-This will start a local web server and open the interface in your default browser.
+## Installation and Setup
+
+### Using npm
+
+```bash
+# Install globally
+npm install -g @buger/probe-chat
+
+# Run in CLI mode
+probe-chat
+
+# Run in web mode
+probe-chat --web
+```
+
+### Manual Installation
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/buger/probe.git
+   cd probe/examples/chat
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+
+3. **Configure environment variables**:
+   Create or edit the `.env` file in the chat directory:
+   ```
+   # Required: At least one of these API keys must be provided
+   ANTHROPIC_API_KEY=your_anthropic_api_key
+   OPENAI_API_KEY=your_openai_api_key
+   
+   # Required: Configure folders to search
+   ALLOWED_FOLDERS=/path/to/repo1,/path/to/repo2
+   
+   # Optional configuration
+   PORT=8080
+   MODEL_NAME=claude-3-7-sonnet-latest
+   AUTH_ENABLED=false
+   AUTH_USERNAME=admin
+   AUTH_PASSWORD=password
+   ```
+
+4. **Start the interface**:
+   ```bash
+   # CLI mode
+   npm start
+   
+   # Web mode
+   npm run web
+   ```
+
+## Command-Line Options
+
+The unified interface supports the following command-line options:
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-d, --debug` | Enable debug mode for verbose logging | false |
+| `-m, --model <model>` | Specify the model to use | claude-3-7-sonnet-latest (Anthropic) or gpt-4o (OpenAI) |
+| `-w, --web` | Run in web interface mode | false (CLI mode) |
+| `-p, --port <port>` | Port to run web server on (web mode only) | 8080 |
+| `[path]` | Path to the codebase to search (overrides ALLOWED_FOLDERS) | Current directory |
+
+Examples:
+
+```bash
+# Run in web mode on port 3000
+node index.js --web --port 3000
+
+# Run in CLI mode with a specific model
+node index.js --model claude-3-7-sonnet-latest
+
+# Search a specific codebase
+node index.js /path/to/codebase
+```
 
 ## Features
 
@@ -35,7 +130,7 @@ The web interface provides a clean, modern chat interface with:
 
 ### AI-Powered Code Search
 
-The web interface uses AI (Anthropic Claude or OpenAI GPT) to:
+The interface uses AI (Anthropic Claude or OpenAI GPT) to:
 
 - Search your codebase based on natural language queries
 - Explain code functionality and architecture
@@ -69,122 +164,53 @@ You can define which directories can be searched via environment variables, allo
 - Exclude sensitive directories
 - Control access to different parts of your filesystem
 
-### API Endpoints
+## Authentication System
 
-The web interface provides RESTful API endpoints for programmatic access:
+The web interface includes optional basic authentication to secure access to your codebase. This feature is disabled by default but can be enabled via environment variables.
 
-- `/api/search`: Search code repositories
-- `/api/query`: Perform AST-based structural pattern matching
-- `/api/extract`: Extract code blocks from files
-- `/api/chat`: Chat with the AI about your code
+### Enabling Authentication
 
-### Optional Authentication
+To enable authentication, set the following environment variables:
 
-The web interface includes optional basic authentication to:
+```bash
+# Enable authentication
+export AUTH_ENABLED=true
 
-- Secure access to your codebase
-- Prevent unauthorized usage
-- Customize username and password
-- Protect sensitive code information
+# Set custom username and password (optional)
+export AUTH_USERNAME=admin
+export AUTH_PASSWORD=secure_password
+```
 
-## Setup and Configuration
+Or in your `.env` file:
 
-### Prerequisites
+```
+AUTH_ENABLED=true
+AUTH_USERNAME=admin
+AUTH_PASSWORD=secure_password
+```
 
-- Node.js (v14 or later)
-- NPM (v6 or later)
-- An Anthropic API key for Claude OR an OpenAI API key for GPT models
+### How Authentication Works
 
-### Manual Installation
+When authentication is enabled:
 
-1. **Navigate to the web directory**:
-   ```bash
-   cd examples/web
-   ```
+1. All web interface endpoints (both UI and API) require basic authentication
+2. The browser will prompt for username and password when accessing the interface
+3. API requests must include the `Authorization` header with the value `Basic <base64-encoded-credentials>`
+4. Invalid or missing credentials will result in a 401 Unauthorized response
 
-2. **Install dependencies**:
-   ```bash
-   npm install
-   ```
-
-3. **Configure environment variables**:
-   Create or edit the `.env` file in the web directory:
-   ```
-   # Required: At least one of these API keys must be provided
-   ANTHROPIC_API_KEY=your_anthropic_api_key
-   OPENAI_API_KEY=your_openai_api_key
-   
-   # Required: Configure folders to search
-   ALLOWED_FOLDERS=/path/to/repo1,/path/to/repo2
-   
-   # Optional configuration
-   PORT=8080
-   MODEL_NAME=claude-3-7-sonnet-latest
-   AUTH_ENABLED=false
-   ```
-
-4. **Start the server**:
-   ```bash
-   npm start
-   ```
-
-5. **Access the web interface**:
-   Open your browser and navigate to `http://localhost:8080` (or whatever port you configured)
-
-### Environment Variables
+### Authentication Configuration
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ANTHROPIC_API_KEY` | Your Anthropic API key for Claude | (Optional if `OPENAI_API_KEY` is provided) |
-| `OPENAI_API_KEY` | Your OpenAI API key for GPT models | (Optional if `ANTHROPIC_API_KEY` is provided) |
-| `ALLOWED_FOLDERS` | Comma-separated list of folders that can be searched | (Required) |
-| `PORT` | The port to run the server on | 8080 |
-| `MODEL_NAME` | Override the default model | claude-3-7-sonnet-latest (Anthropic) or gpt-4o (OpenAI) |
-| `ANTHROPIC_API_URL` | Override the default Anthropic API URL | https://api.anthropic.com/v1 |
-| `OPENAI_API_URL` | Override the default OpenAI API URL | https://api.openai.com/v1 |
-| `DEBUG` | Enable debug mode | false |
-| `DEBUG_RAW_REQUEST` | Enable raw request debugging | false |
 | `AUTH_ENABLED` | Enable basic authentication | false |
 | `AUTH_USERNAME` | Username for basic authentication | admin |
 | `AUTH_PASSWORD` | Password for basic authentication | password |
 
-## Using the Web Interface
+## API Endpoints
 
-### Starting a Conversation
+The web interface provides RESTful API endpoints for programmatic access without using the AI chat interface. These endpoints allow direct access to Probe's core functionality.
 
-1. Open your browser and navigate to `http://localhost:8080`
-2. Type your question or request in the input field
-3. Press Enter or click the Send button
-
-### Example Queries
-
-- "Explain the architecture of this project"
-- "How does the search functionality work?"
-- "Create a diagram showing the main components"
-- "Find all code related to authentication"
-- "Explain the ranking algorithm implementation"
-
-### Viewing Code
-
-Code blocks are displayed with syntax highlighting for better readability. You can:
-
-- Copy code blocks with the copy button
-- Expand/collapse long code blocks
-- See the file path for each code block
-
-### Viewing Diagrams
-
-When you ask for a diagram, the AI will generate a Mermaid diagram that is rendered directly in the chat. You can:
-
-- Zoom in/out of diagrams
-- Copy the diagram as an image
-- Copy the Mermaid source code
-
-## API Documentation
-
-The web interface provides a full OpenAPI specification at `/openapi.yaml`. You can use this specification with tools like Swagger UI or Postman to explore and test the API.
-
-### API Endpoints
+### Available Endpoints
 
 #### 1. Search Code (`POST /api/search`)
 
@@ -295,16 +321,11 @@ Send a message to the AI and get a response.
 ```json
 {
   "response": "AI response text",
-  "toolCalls": [
-    {
-      "name": "searchCode",
-      "arguments": {
-        "keywords": "search pattern",
-        "folder": "/path/to/repo"
-      },
-      "result": "search results"
-    }
-  ],
+  "tokenUsage": {
+    "request": 123,
+    "response": 456,
+    "total": 579
+  },
   "timestamp": "2025-08-03T07:10:00.000Z"
 }
 ```
@@ -312,185 +333,49 @@ Send a message to the AI and get a response.
 **Response (stream=true):**
 Text stream of the AI response.
 
-## Authentication
+## Environment Variables
 
-When authentication is enabled (`AUTH_ENABLED=true`), all endpoints (both UI and API) require basic authentication. The default username is `admin` and the default password is `password`, but these can be customized using the `AUTH_USERNAME` and `AUTH_PASSWORD` environment variables.
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ANTHROPIC_API_KEY` | Your Anthropic API key for Claude | (Optional if `OPENAI_API_KEY` is provided) |
+| `OPENAI_API_KEY` | Your OpenAI API key for GPT models | (Optional if `ANTHROPIC_API_KEY` is provided) |
+| `ALLOWED_FOLDERS` | Comma-separated list of folders that can be searched | (Required) |
+| `PORT` | The port to run the server on | 8080 |
+| `MODEL_NAME` | Override the default model | claude-3-7-sonnet-latest (Anthropic) or gpt-4o (OpenAI) |
+| `ANTHROPIC_API_URL` | Override the default Anthropic API URL | https://api.anthropic.com/v1 |
+| `OPENAI_API_URL` | Override the default OpenAI API URL | https://api.openai.com/v1 |
+| `DEBUG` | Enable debug mode | false |
+| `DEBUG_RAW_REQUEST` | Enable raw request debugging | false |
+| `AUTH_ENABLED` | Enable basic authentication | false |
+| `AUTH_USERNAME` | Username for basic authentication | admin |
+| `AUTH_PASSWORD` | Password for basic authentication | password |
 
-To authenticate API requests, include the `Authorization` header with the value `Basic <base64-encoded-credentials>`, where `<base64-encoded-credentials>` is the Base64 encoding of `username:password`.
+## Architecture
 
-Example:
-```
-Authorization: Basic YWRtaW46cGFzc3dvcmQ=
-```
+The unified interface consists of:
 
-## Technical Details
-
-### Architecture
-
-The web interface consists of:
-
-- A Node.js backend server
-- A vanilla JavaScript frontend
-- The Vercel AI SDK for model integration
-- Probe command execution via the probeTool.js module
-
-### Technologies Used
-
-- **@buger/probe**: Node.js wrapper for the probe tool
-- **Vercel AI SDK**: For model integration and streaming responses
-- **Marked.js**: For rendering markdown
-- **Highlight.js**: For syntax highlighting
-- **Mermaid.js**: For diagram generation and visualization
-- **Express.js**: For the backend server
-
-### API Model Support
-
-The application will use the first available API in this order:
-1. Anthropic Claude (if `ANTHROPIC_API_KEY` is provided)
-2. OpenAI GPT (if `OPENAI_API_KEY` is provided)
-
-You can override the default model by setting the `MODEL_NAME` environment variable.
-
-Default models:
-- Anthropic: `claude-3-7-sonnet-latest`
-- OpenAI: `gpt-4o`
-
-### Security Considerations
-
-- The web interface only allows searching in directories specified in the `ALLOWED_FOLDERS` environment variable
-- API keys are kept server-side and never exposed to the client
-- User inputs are sanitized to prevent command injection
-- The server runs locally by default and is not exposed to the internet
-- Optional authentication can be enabled to restrict access
-
-## Deployment
-
-### Docker Deployment
-
-The web interface includes a Dockerfile for containerized deployment.
-
-#### Building the Docker Image
-
-```bash
-docker build -t code-search-chat .
-```
-
-#### Running with Docker
-
-```bash
-docker run -p 8080:8080 \
-  -e ANTHROPIC_API_KEY=your_anthropic_api_key \
-  -e ALLOWED_FOLDERS=/app/code1,/app/code2 \
-  -v /path/to/local/code1:/app/code1 \
-  -v /path/to/local/code2:/app/code2 \
-  code-search-chat
-```
-
-Or with OpenAI and authentication:
-
-```bash
-docker run -p 8080:8080 \
-  -e OPENAI_API_KEY=your_openai_api_key \
-  -e MODEL_NAME=gpt-4o \
-  -e ALLOWED_FOLDERS=/app/code1,/app/code2 \
-  -e AUTH_ENABLED=true \
-  -e AUTH_USERNAME=admin \
-  -e AUTH_PASSWORD=secure_password \
-  -v /path/to/local/code1:/app/code1 \
-  -v /path/to/local/code2:/app/code2 \
-  code-search-chat
-```
-
-### Cloud Deployment
-
-While the web interface is designed to run locally, you can deploy it to cloud platforms:
-
-1. **Deploy to a VPS or dedicated server**:
-   - Set up a Node.js environment
-   - Clone the repository
-   - Configure environment variables
-   - Use a process manager like PM2 to keep the server running
-   - Set up a reverse proxy with Nginx or Apache
-
-2. **Deploy to a container platform**:
-   - Use the provided Dockerfile
-   - Deploy to platforms like AWS ECS, Google Cloud Run, or Azure Container Instances
-   - Configure environment variables in the platform's settings
-   - Mount volumes for code repositories or use cloud storage
-
-3. **Security considerations for cloud deployment**:
-   - Always enable authentication
-   - Use HTTPS with a valid SSL certificate
-   - Implement IP whitelisting if possible
-   - Consider using a VPN for additional security
-   - Regularly update dependencies and the base image
-
-## Customization
-
-### Styling
-
-You can customize the appearance of the web interface by editing the CSS in the `examples/web/index.html` file.
-
-### Adding Features
-
-The web interface is built with vanilla JavaScript, making it easy to modify and extend. Common customizations include:
-
-- Adding authentication
-- Implementing user preferences
-- Adding support for additional AI models
-- Creating custom visualizations
-
-### Integration with Other Tools
-
-The web interface can be integrated with other development tools:
-
-#### IDE Extensions
-
-You can create extensions for popular IDEs that launch the web interface with the current project:
-
-```javascript
-// Example VS Code extension command
-vscode.commands.registerCommand('probe.openWebInterface', () => {
-  const currentWorkspace = vscode.workspace.workspaceFolders[0].uri.fsPath;
-  const env = Object.assign({}, process.env, {
-    ALLOWED_FOLDERS: currentWorkspace,
-    ANTHROPIC_API_KEY: config.get('anthropicApiKey')
-  });
-  
-  const server = spawn('npx', ['-y', '@buger/probe-web'], { env });
-  // Handle server output...
-});
-```
-
-#### CI/CD Pipelines
-
-You can integrate the web interface into CI/CD pipelines for code review and documentation:
-
-```yaml
-# Example GitHub Actions workflow
-jobs:
-  code-review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Run Probe Web Interface
-        run: |
-          export ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
-          export ALLOWED_FOLDERS=$GITHUB_WORKSPACE
-          npx -y @buger/probe-web &
-          # Use Playwright or similar to automate queries and save results
-```
+- `index.js`: Main entry point for both CLI and web interfaces
+- `probeChat.js`: Core chat functionality
+- `webServer.js`: Web server implementation
+- `auth.js`: Authentication middleware for web interface
+- `probeTool.js`: Tool definitions for code search, query, and extraction
+- `tokenCounter.js`: Utility for tracking token usage
+- `index.html`: Web interface HTML template
 
 ## Debugging
 
-The web interface includes debugging options to help troubleshoot issues:
+The unified interface includes debugging options to help troubleshoot issues:
 
 ### Debug Mode
 
 Enable debug mode to see detailed logging:
 
 ```bash
+# Via environment variable
 DEBUG=true npm start
+
+# Via command-line option
+node index.js --debug
 ```
 
 This will output:

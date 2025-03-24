@@ -31,17 +31,13 @@ pub struct Args {
     #[arg(short = 'n', long = "exclude-filenames")]
     pub exclude_filenames: bool,
 
-    /// Reranking method to use for search results
-    #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "hybrid2", "bm25", "tfidf"])]
+    /// BM25 ranking for search results
+    #[arg(short = 'r', long = "reranker", default_value = "bm25", value_parser = ["bm25"])]
     pub reranker: String,
 
     /// Use frequency-based search with stemming and stopword removal (enabled by default)
     #[arg(short = 's', long = "frequency", default_value = "true")]
     pub frequency_search: bool,
-
-    /// Use exact matching without stemming or stopword removal
-    #[arg(long = "exact")]
-    pub exact: bool,
 
     /// Maximum number of results to return
     #[arg(long = "max-results")]
@@ -80,6 +76,10 @@ pub struct Args {
     #[arg(long = "session")]
     pub session: Option<String>,
 
+    /// Timeout in seconds for search operation (default: 30)
+    #[arg(long = "timeout", default_value = "30")]
+    pub timeout: u64,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -90,7 +90,7 @@ pub enum Commands {
     ///
     /// This command searches your codebase using regex patterns with semantic understanding.
     /// It uses frequency-based search with stemming and stopword removal by default,
-    /// and ranks results using a hybrid algorithm that combines TF-IDF and BM25.
+    /// and ranks results using the BM25 algorithm.
     /// Results are presented as code blocks with relevant context.
     Search {
         /// Search pattern (regex supported)
@@ -113,17 +113,13 @@ pub enum Commands {
         #[arg(short = 'n', long = "exclude-filenames")]
         exclude_filenames: bool,
 
-        /// Reranking method to use for search results
-        #[arg(short = 'r', long = "reranker", default_value = "hybrid", value_parser = ["hybrid", "hybrid2", "bm25", "tfidf"])]
+        /// BM25 ranking for search results
+        #[arg(short = 'r', long = "reranker", default_value = "bm25", value_parser = ["bm25"])]
         reranker: String,
 
         /// Use frequency-based search with stemming and stopword removal (enabled by default)
         #[arg(short = 's', long = "frequency", default_value = "true")]
         frequency_search: bool,
-
-        /// Use exact matching without stemming or stopword removal
-        #[arg(long = "exact")]
-        exact: bool,
 
         /// Maximum number of results to return
         #[arg(long = "max-results")]
@@ -161,6 +157,10 @@ pub enum Commands {
         /// Session ID for caching search results
         #[arg(long = "session")]
         session: Option<String>,
+
+        /// Timeout in seconds for search operation (default: 30)
+        #[arg(long = "timeout", default_value = "30")]
+        timeout: u64,
     },
 
     /// Extract code blocks from files
@@ -191,6 +191,9 @@ pub enum Commands {
         /// Read input from clipboard instead of files
         #[arg(short = 'f', long = "from-clipboard")]
         from_clipboard: bool,
+        /// Read input from a file (treats file content like stdin or clipboard)
+        #[arg(short = 'F', long = "input-file")]
+        input_file: Option<String>,
 
         /// Write output to clipboard
         #[arg(short = 't', long = "to-clipboard")]
@@ -207,6 +210,18 @@ pub enum Commands {
         /// Allow test files and test code blocks in extraction results (only applies when reading from stdin or clipboard)
         #[arg(long = "allow-tests")]
         allow_tests: bool,
+
+        /// Keep and display the original, unstructured input content
+        #[arg(short = 'k', long = "keep-input")]
+        keep_input: bool,
+
+        /// System prompt template for LLM models (engineer, architect, or path to file)
+        #[arg(long = "prompt")]
+        prompt: Option<String>,
+
+        /// User instructions for LLM models
+        #[arg(long = "instructions")]
+        instructions: Option<String>,
     },
 
     /// Search code using AST patterns for precise structural matching

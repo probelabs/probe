@@ -132,6 +132,26 @@ impl Expr {
                     if has_required_anywhere {
                         true
                     } else {
+                        // When there are no required terms, we still need to enforce that all keywords
+                        // within a single Term are present (AND logic within a Term).
+                        // This ensures that for a term like "JWTMiddleware" which gets tokenized to
+                        // ["jwt", "middleware"], both parts must be present.
+
+                        // Check if any keywords are present
+                        let any_present = keywords.iter().any(|kw| {
+                            term_indices
+                                .get(kw)
+                                .map(|idx| matched_terms.contains(idx))
+                                .unwrap_or(false)
+                        });
+
+                        // If no keywords are present, the term doesn't match
+                        if !any_present {
+                            return false;
+                        }
+
+                        // If at least one keyword is present, require all keywords to be present
+                        // This maintains the AND relationship between keywords in a single Term
                         all_present
                     }
                 }
@@ -160,6 +180,9 @@ impl Expr {
                 lval && rval
             }
             Expr::Or(left, right) => {
+                // For OR expressions, we need to be careful about how we handle has_required_anywhere
+                // We want to maintain the behavior that at least one term must be present
+
                 let lval = left.evaluate_with_has_required(
                     matched_terms,
                     term_indices,
@@ -172,6 +195,7 @@ impl Expr {
                     ignore_negatives,
                     has_required_anywhere,
                 );
+
                 if debug_mode {
                     println!(
                         "DEBUG: OR => left={}, right={}, result={}",
@@ -459,16 +483,11 @@ use crate::search::tokenization::{add_special_term, tokenize as custom_tokenize}
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
-    any_term: bool,
 }
 
 impl Parser {
-    fn new(tokens: Vec<Token>, any_term: bool) -> Self {
-        Parser {
-            tokens,
-            pos: 0,
-            any_term,
-        }
+    fn new(tokens: Vec<Token>) -> Self {
+        Parser { tokens, pos: 0 }
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -548,16 +567,10 @@ impl Parser {
                 // Otherwise (Ident, QuotedString, LParen) => implicit combos
                 Token::Ident(_) | Token::QuotedString(_) | Token::LParen => {
                     let right = self.parse_factor()?;
-                    if self.any_term {
-                        left = Expr::Or(Box::new(left), Box::new(right));
-                        if debug_mode {
-                            println!("DEBUG: implicit OR => {:?}", left);
-                        }
-                    } else {
-                        left = Expr::And(Box::new(left), Box::new(right));
-                        if debug_mode {
-                            println!("DEBUG: implicit AND => {:?}", left);
-                        }
+                    // Use OR for implicit combinations (space-separated terms) - Elasticsearch standard behavior
+                    left = Expr::Or(Box::new(left), Box::new(right));
+                    if debug_mode {
+                        println!("DEBUG: implicit OR => {:?}", left);
                     }
                 }
                 _ => break,
@@ -617,8 +630,11 @@ impl Parser {
                 let mut expanded = Vec::new();
                 for kw in &keywords {
                     let splitted = custom_tokenize(kw);
-                    expanded.extend(splitted);
+                    // Only add non-empty terms
+                    expanded.extend(splitted.into_iter().filter(|s| !s.is_empty()));
                 }
+                // If all terms were filtered out (e.g., all were stop words),
+                // return an empty vector which will be handled properly
                 expanded
             };
 
@@ -723,11 +739,11 @@ impl Parser {
 }
 
 /// Parse the query string into an AST
-pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
+pub fn parse_query(input: &str) -> Result<Expr, ParseError> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: parse_query('{}'), any_term={}", input, any_term);
+        println!("DEBUG: parse_query('{}')", input);
     }
 
     // Tokenize
@@ -762,7 +778,7 @@ pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
     };
 
     // Parse into AST
-    let mut parser = Parser::new(tokens, any_term);
+    let mut parser = Parser::new(tokens);
     let parsed = parser.parse_expr();
 
     if parsed.is_err() {
@@ -796,12 +812,12 @@ pub fn parse_query(input: &str, any_term: bool) -> Result<Expr, ParseError> {
 /// Backward compatibility wrapper for parse_query
 #[allow(dead_code)]
 pub fn parse_query_compat(input: &str) -> Result<Expr, ParseError> {
-    parse_query(input, true)
+    parse_query(input)
 }
 
 #[cfg(test)]
 pub fn parse_query_test(input: &str) -> Result<Expr, ParseError> {
-    parse_query(input, true)
+    parse_query(input)
 }
 
 #[cfg(test)]

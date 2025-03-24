@@ -245,9 +245,19 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
     let mut preprocessed_text = String::with_capacity(text.len());
     let mut in_quote = false;
     let mut quote_char = ' ';
+    let mut prev_char = ' ';
 
-    for c in text.chars() {
-        if !in_quote && (c == '`' || c == '\'' || c == '"') {
+    for (i, c) in text.chars().enumerate() {
+        let next_char = text.chars().nth(i + 1).unwrap_or(' ');
+
+        // Check if this is an apostrophe within a word (like in "Here's")
+        // An apostrophe is likely part of a word if:
+        // 1. It's surrounded by alphanumeric characters (e.g., "don't", "O'Reilly")
+        // 2. It's not at the beginning or end of the text
+        let is_apostrophe_in_word =
+            c == '\'' && prev_char.is_alphanumeric() && next_char.is_alphanumeric();
+
+        if !in_quote && (c == '`' || c == '"' || (c == '\'' && !is_apostrophe_in_word)) {
             // Start of a quoted section
             in_quote = true;
             quote_char = c;
@@ -260,6 +270,8 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
             // Regular character
             preprocessed_text.push(c);
         }
+
+        prev_char = c;
     }
 
     // Use the preprocessed text for regex matching
@@ -482,16 +494,29 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
 pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo> {
     let mut results = Vec::new();
 
-    // Remove any surrounding backticks or quotes
-    let cleaned_input = input.trim_matches(|c| c == '`' || c == '\'' || c == '"');
+    // Remove any surrounding backticks or quotes, but not apostrophes within words
+    // First check if the input starts and ends with the same quote character
+    let first_char = input.chars().next().unwrap_or(' ');
+    let last_char = input.chars().last().unwrap_or(' ');
 
-    // Check if the input contains a symbol reference (file#symbol)
+    let cleaned_input = if (first_char == '`' || first_char == '\'' || first_char == '"')
+        && first_char == last_char
+    {
+        // If the input is fully wrapped in quotes, remove them
+        &input[1..input.len() - 1]
+    } else {
+        // Otherwise just trim any quotes at the beginning or end
+        input.trim_matches(|c| c == '`' || c == '"')
+    };
+
+    // Check if the input contains a symbol reference (file#symbol or file#parent.child)
     if let Some((file_part, symbol)) = cleaned_input.split_once('#') {
         // For symbol references, we don't have line numbers yet
         // We'll need to find the symbol in the file later
         let path = PathBuf::from(file_part);
         let is_test = is_test_file(&path);
         if allow_tests || !is_test {
+            // Symbol can be a simple name or a dot-separated path (e.g., "Class.method")
             results.push((path, None, None, Some(symbol.to_string()), None));
         }
         return results;

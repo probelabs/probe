@@ -103,9 +103,19 @@ Extract code blocks from files based on file paths and optional line numbers.
 ```json
 {
   "path": "/path/to/your/project",
-  "files": ["/path/to/your/project/src/main.rs:42"]
+  "files": ["/path/to/your/project/src/main.rs:42"],
+  "prompt": "engineer",
+  "instructions": "Explain this function"
 }
 ```
+
+The extract_code tool supports the following parameters:
+- `path`: The base directory to search in
+- `files`: Array of file paths to extract from (can include line numbers with colon, e.g., "file.rs:42")
+- `prompt`: Optional system prompt template for LLM models ("engineer", "architect", or path to file)
+- `instructions`: Optional user instructions for LLM models
+- `contextLines`: Number of context lines to include (default: 0)
+- `format`: Output format (default: "json")
 
 ## Using Probe with AI Assistants
 

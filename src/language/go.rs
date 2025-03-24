@@ -65,62 +65,6 @@ impl LanguageImpl for GoLanguage {
         false
     }
 
-    fn find_topmost_struct_type<'a>(&self, node: Node<'a>) -> Option<Node<'a>> {
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-        if debug_mode {
-            println!("DEBUG: Finding topmost struct_type for {}", node.kind());
-        }
-
-        // First check if we're inside a function
-        let mut current = node;
-        let mut function_node = None;
-
-        while let Some(parent) = current.parent() {
-            if parent.kind() == "function_declaration" || parent.kind() == "method_declaration" {
-                if debug_mode {
-                    println!("DEBUG: Found parent {} for struct_type", parent.kind());
-                }
-                function_node = Some(parent);
-                break;
-            }
-            current = parent;
-        }
-
-        // If we found a function, return it as the container
-        if function_node.is_some() {
-            if debug_mode {
-                println!("DEBUG: Returning function node as container");
-            }
-            return function_node;
-        }
-
-        // Otherwise look for the struct_type
-        let mut current = node;
-        let mut struct_type = None;
-
-        if node.kind() == "struct_type" {
-            struct_type = Some(node);
-        }
-
-        while let Some(parent) = current.parent() {
-            if parent.kind() == "struct_type" {
-                struct_type = Some(parent);
-            }
-            current = parent;
-        }
-
-        if debug_mode {
-            if struct_type.is_some() {
-                println!("DEBUG: Returning struct_type as container");
-            } else {
-                println!("DEBUG: No struct_type found, returning original node");
-            }
-        }
-
-        struct_type.or(Some(node))
-    }
-
     fn find_parent_function<'a>(&self, node: Node<'a>) -> Option<Node<'a>> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 

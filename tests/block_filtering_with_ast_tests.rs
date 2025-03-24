@@ -36,9 +36,8 @@ fn test_simple_and_query() {
     let query = "ip AND whitelist";
 
     // Parse the query into an AST
-    // Check if ANY_TERM environment variable is set
-    let any_term = std::env::var("ANY_TERM").unwrap_or_default() == "1";
-    let ast = parse_query(query, any_term).unwrap();
+    // Using standard Elasticsearch behavior (AND for implicit combinations)
+    let ast = parse_query(query).unwrap();
     println!("Parsed AST: {:?}", ast);
 
     // Create a QueryPlan
@@ -120,9 +119,8 @@ fn test_simple_or_query() {
     let query = "ip OR port";
 
     // Parse the query into an AST
-    // Check if ANY_TERM environment variable is set
-    let any_term = std::env::var("ANY_TERM").unwrap_or_default() == "1";
-    let ast = parse_query(query, any_term).unwrap();
+    // Using standard Elasticsearch behavior (AND for implicit combinations)
+    let ast = parse_query(query).unwrap();
     println!("Parsed AST: {:?}", ast);
 
     // Create a QueryPlan
@@ -218,9 +216,8 @@ fn test_complex_query_with_negation() {
     let query = "(ip OR port) AND whitelist AND -denylist";
 
     // Parse the query into an AST
-    // Check if ANY_TERM environment variable is set
-    let any_term = std::env::var("ANY_TERM").unwrap_or_default() == "1";
-    let ast = parse_query(query, any_term).unwrap();
+    // Using standard Elasticsearch behavior (AND for implicit combinations)
+    let ast = parse_query(query).unwrap();
     println!("Parsed AST: {:?}", ast);
 
     // Create a QueryPlan
@@ -514,9 +511,8 @@ fn test_nested_expressions_query() {
     let query = "ip AND (whitelist OR (security AND firewall))";
 
     // Parse the query into an AST
-    // Check if ANY_TERM environment variable is set
-    let any_term = std::env::var("ANY_TERM").unwrap_or_default() == "1";
-    let ast = parse_query(query, any_term).unwrap();
+    // Using standard Elasticsearch behavior (AND for implicit combinations)
+    let ast = parse_query(query).unwrap();
     println!("Parsed AST: {:?}", ast);
 
     // Create a QueryPlan

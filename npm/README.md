@@ -89,12 +89,10 @@ const results = await search({
   excludeFilenames: false,
   reranker: 'hybrid',
   frequencySearch: true,
-  exact: false,
   maxResults: 10,
   maxBytes: 1000000,
   maxTokens: 40000,
   allowTests: false,
-  anyTerm: false,
   noMerge: false,
   mergeThreshold: 5,
   json: false,
@@ -114,12 +112,10 @@ const results = await search({
 - `excludeFilenames`: Exclude filenames from search
 - `reranker`: Reranking method ('hybrid', 'hybrid2', 'bm25', 'tfidf')
 - `frequencySearch`: Use frequency-based search
-- `exact`: Use exact matching
 - `maxResults`: Maximum number of results
 - `maxBytes`: Maximum bytes to return
 - `maxTokens`: Maximum tokens to return
 - `allowTests`: Include test files
-- `anyTerm`: Match any term
 - `noMerge`: Don't merge adjacent blocks
 - `mergeThreshold`: Merge threshold
 - `json`: Return results as parsed JSON instead of string
@@ -291,8 +287,7 @@ async function advancedSearchExample() {
       frequencySearch: true,
       maxResults: 10,
       maxTokens: 20000,
-      allowTests: false,
-      anyTerm: false
+      allowTests: false
     });
     
     console.log('Advanced search results:');

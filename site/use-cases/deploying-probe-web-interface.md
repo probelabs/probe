@@ -6,41 +6,41 @@ This guide explains how to set up and deploy Probe's web interface as a centrali
 
 Probe's web interface provides a user-friendly chat experience that allows all team members to interact with your codebase using AI. By hosting this interface, you create a source of truth for how your product works that's accessible to both technical and non-technical team members. This enables quick issue resolution, documentation generation, architecture understanding, and helps product managers, QA teams, and other stakeholders make informed decisions without needing to understand implementation details.
 
-## Docker-Based Setup
 
-The most reliable way to deploy Probe's web interface for a team is using Docker:
+## Quick Setup with npx
 
-### 1. Create a Docker Deployment
-
-```bash
-# Clone the repository if you haven't already
-git clone https://github.com/buger/probe.git
-cd probe/examples/web
-
-# Build the Docker image
-docker build -t probe-web-interface .
-```
-
-### 2. Run the Container
+The easiest way to deploy Probe's web interface for a team is using npx:
 
 ```bash
-# Run the container with appropriate configuration
-docker run -p 8080:8080 \
-  -e ANTHROPIC_API_KEY=your_anthropic_api_key \
-  -e ALLOWED_FOLDERS=/app/code \
-  -e AUTH_ENABLED=true \
-  -e AUTH_USERNAME=team \
-  -e AUTH_PASSWORD=secure_password \
-  -v /path/to/your/repos:/app/code \
-  probe-web-interface
+# Set your API key first (either Anthropic or OpenAI)
+export ANTHROPIC_API_KEY=your_anthropic_api_key
+# OR
+export OPENAI_API_KEY=your_openai_api_key
+
+# Configure allowed folders (required)
+export ALLOWED_FOLDERS=/path/to/repo1,/path/to/repo2
+
+# Enable authentication for team use
+export AUTH_ENABLED=true
+export AUTH_USERNAME=team
+export AUTH_PASSWORD=secure_password
+
+# Run the web interface
+npx -y @buger/probe-chat --web
 ```
 
-### 3. Access the Web Interface
+### Access the Web Interface
 
-Once the container is running, team members can access the web interface at:
+Once the server is running, team members can access the web interface at:
 
 ```
 http://your-server-ip:8080
+```
+
+You can customize the port using the `--port` option:
+
+```bash
+npx -y @buger/probe-chat --web --port 3000
 ```
 
 ## Setting Allowed Folders (Security & Privacy)
@@ -64,11 +64,7 @@ This environment variable:
 1. **Use Absolute Paths**: Always use full paths to avoid ambiguity
 2. **Limit Scope**: Only include repositories that should be accessible
 3. **Exclude Sensitive Directories**: Don't include directories with secrets or sensitive data
-4. **Mount Read-Only**: When using Docker, consider mounting volumes as read-only:
-
-```bash
-docker run -v /path/to/your/repos:/app/code:ro ...
-```
+4. **Consider Read-Only Access**: For additional security, consider setting up read-only filesystem permissions for the user running the service
 
 ## Managing API Keys for the Chat
 
@@ -130,28 +126,38 @@ export AUTH_PASSWORD=your_secure_password
 | `AUTH_PASSWORD` | Password for authentication | password |
 | `DEBUG` | Enable debug mode | false |
 
-### Docker Compose Example
 
-For more complex deployments, use Docker Compose:
+## Command-Line Options
 
-```yaml
-# docker-compose.yml
-version: '3'
-services:
-  probe-web:
-    build: ./examples/web
-    ports:
-      - "8080:8080"
-    environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - ALLOWED_FOLDERS=/app/code
-      - AUTH_ENABLED=true
-      - AUTH_USERNAME=${AUTH_USERNAME}
-      - AUTH_PASSWORD=${AUTH_PASSWORD}
-      - MODEL_NAME=claude-3-sonnet-20240229
-    volumes:
-      - /path/to/your/repos:/app/code:ro
-    restart: unless-stopped
+The web interface supports the following command-line options:
+
+```bash
+# Show help
+npx -y @buger/probe-chat --help
+
+# Run in web mode on a specific port
+npx -y @buger/probe-chat --web --port 3000
+
+# Specify a model
+npx -y @buger/probe-chat --web --model claude-3-7-sonnet-latest
+
+# Enable debug mode
+npx -y @buger/probe-chat --web --debug
+
+# Specify a directory to search
+npx -y @buger/probe-chat --web /path/to/your/project
+```
+
+### Using the npm package (Alternative)
+
+If you prefer, you can install the package globally:
+
+```bash
+# Install globally
+npm install -g @buger/probe-chat
+
+# Start the web interface
+probe-chat --web --port 3000
 ```
 
 ## Best Practices for Organization-Wide Usage
@@ -169,7 +175,7 @@ services:
 1. **Limit Repository Size**: Include only necessary repositories
 2. **Use a Powerful Server**: Ensure adequate CPU and memory
 3. **Consider SSD Storage**: Faster disk access improves search performance
-4. **Regular Maintenance**: Update the Docker image and dependencies
+4. **Regular Maintenance**: Keep the package and Node.js updated
 
 ### Security Considerations
 
@@ -206,64 +212,26 @@ For teams working remotely:
 ### Virtual Private Server (VPS)
 
 1. Provision a VPS with adequate resources
-2. Install Docker and Docker Compose
-3. Deploy using the Docker Compose configuration above
-4. Set up a domain name and SSL certificate
-5. Configure a reverse proxy for HTTPS
+2. Install Node.js (v18 or later)
+3. Set up environment variables for API keys and allowed folders
+4. Run the web interface using npx
+5. Set up a domain name and SSL certificate
+6. Configure a reverse proxy for HTTPS
 
-### Kubernetes Deployment
+### Process Management
 
-For larger organizations:
+For production deployments, use a process manager like PM2:
 
-```yaml
-# probe-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: probe-web
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: probe-web
-  template:
-    metadata:
-      labels:
-        app: probe-web
-    spec:
-      containers:
-      - name: probe-web
-        image: your-registry/probe-web-interface:latest
-        ports:
-        - containerPort: 8080
-        env:
-        - name: ANTHROPIC_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: probe-secrets
-              key: anthropic-api-key
-        - name: ALLOWED_FOLDERS
-          value: "/app/code"
-        - name: AUTH_ENABLED
-          value: "true"
-        - name: AUTH_USERNAME
-          valueFrom:
-            secretKeyRef:
-              name: probe-secrets
-              key: auth-username
-        - name: AUTH_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: probe-secrets
-              key: auth-password
-        volumeMounts:
-        - name: code-volume
-          mountPath: /app/code
-          readOnly: true
-      volumes:
-      - name: code-volume
-        persistentVolumeClaim:
-          claimName: code-pvc
+```bash
+# Install PM2
+npm install -g pm2
+
+# Start the web interface with PM2
+pm2 start "npx -y @buger/probe-chat --web" --name "probe-web" --env "ANTHROPIC_API_KEY=your_key" "ALLOWED_FOLDERS=/path/to/repos"
+
+# Ensure it starts on system boot
+pm2 startup
+pm2 save
 ```
 
 ## Monitoring and Maintenance
@@ -276,12 +244,12 @@ spec:
 
 ### Regular Updates
 
-1. **Update Docker Image**: Regularly rebuild with the latest code
-2. **Update Dependencies**: Keep Node.js and other dependencies updated
+1. **Update Package**: Regularly update to the latest version with `npm update -g @buger/probe-chat`
+2. **Update Node.js**: Keep Node.js updated to the latest LTS version
 3. **Rotate Credentials**: Change API keys and passwords periodically
 
 ## Next Steps
 
-- For individual developer workflows, see [Integrating Probe into AI Code Editors](/use-cases/ai-code-editors)
-- For advanced CLI usage, check out [CLI AI Workflows](/use-cases/cli-ai-workflows)
+- For individual developer workflows, see [Integrating Probe into AI Code Editors](/use-cases/integrating-probe-into-ai-code-editors)
+- For advanced CLI usage, check out [CLI AI Workflows](/use-cases/advanced-cli)
 - For programmatic access, explore [Building AI Tools on Probe](/use-cases/building-ai-tools)

@@ -52,6 +52,8 @@ export default defineConfig({
           { text: 'Reference Documentation', items: [
             { text: 'CLI Reference (Commands & Flags)', link: '/cli-mode' },
             { text: 'AI Integration Overview', link: '/ai-integration' },
+            { text: 'AI Chat Mode', link: '/ai-chat' },
+            { text: 'Web Interface', link: '/web-interface' },
             { text: 'MCP Protocol & Tools Reference', link: '/mcp-server' },
             { text: 'Node.js SDK API Reference', link: '/nodejs-sdk' },
             { text: 'Output Formats Reference', link: '/output-formats' },
@@ -94,6 +96,8 @@ export default defineConfig({
         items: [
           { text: 'CLI Reference (Commands & Flags)', link: '/cli-mode' },
           { text: 'AI Integration Overview', link: '/ai-integration' },
+          { text: 'AI Chat Mode', link: '/ai-chat' },
+          { text: 'Web Interface', link: '/web-interface' },
           { text: 'MCP Protocol & Tools Reference', link: '/mcp-server' },
           { text: 'Node.js SDK API Reference', link: '/nodejs-sdk' },
           { text: 'Output Formats Reference', link: '/output-formats' },

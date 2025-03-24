@@ -140,8 +140,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
     builder.git_exclude(true);
 
     // Enable parallel walking for large directories
-    // Use a reasonable fixed number of threads (4) instead of num_cpus::get()
-    builder.threads(4);
+    builder.threads(rayon::current_num_threads());
 
     // Add common directories to ignore
     let mut common_ignores: Vec<String> = vec![
@@ -319,103 +318,6 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
     })
 }
 
-/// Get a set of files from the cache that match a specific pattern
-pub fn find_files_with_pattern(
-    path: &Path,
-    pattern: &str,
-    custom_ignores: &[String],
-    allow_tests: bool,
-) -> Result<Vec<PathBuf>> {
-    use grep::regex::RegexMatcherBuilder;
-    use grep::searcher::sinks::UTF8;
-    use grep::searcher::{BinaryDetection, SearcherBuilder};
-
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    let start_time = Instant::now();
-
-    if debug_mode {
-        println!("DEBUG: Finding files with pattern: {}", pattern);
-    }
-
-    // Get the cached file list
-    let file_list = get_file_list(path, allow_tests, custom_ignores)?;
-
-    if debug_mode {
-        println!(
-            "DEBUG: Searching through {} files from cache",
-            file_list.files.len()
-        );
-    }
-
-    // Create a matcher for the pattern
-    let matcher = RegexMatcherBuilder::new()
-        .case_insensitive(true)
-        .build(pattern)
-        .map_err(|e| anyhow::anyhow!("Failed to create regex matcher: {}", e))?;
-
-    // Configure the searcher
-    let mut searcher = SearcherBuilder::new()
-        .binary_detection(BinaryDetection::quit(b'\x00'))
-        .build();
-
-    // Search each file for the pattern
-    let mut matching_files = Vec::new();
-
-    for file_path in &file_list.files {
-        let mut found_match = false;
-
-        if let Err(err) = searcher.search_path(
-            &matcher,
-            file_path,
-            UTF8(|_line_number, _line| {
-                // We only need to know if there's at least one match
-                found_match = true;
-                Ok(false) // Stop after first match
-            }),
-        ) {
-            // If we found a match, the search was interrupted
-            if found_match {
-                matching_files.push(file_path.clone());
-
-                if debug_mode {
-                    println!(
-                        "DEBUG: Found match in file: {:?} (term: {})",
-                        file_path, pattern
-                    );
-                }
-            } else {
-                eprintln!("Error searching file {:?}: {}", file_path, err);
-            }
-            continue;
-        }
-
-        // If we found a match (and the search wasn't interrupted)
-        if found_match {
-            matching_files.push(file_path.clone());
-
-            if debug_mode {
-                println!(
-                    "DEBUG: Found match in file: {:?} (term: {})",
-                    file_path, pattern
-                );
-            }
-        }
-    }
-
-    let elapsed = start_time.elapsed();
-
-    if debug_mode {
-        println!(
-            "DEBUG: Found {} files matching pattern '{}' in {}",
-            matching_files.len(),
-            pattern,
-            format_duration(elapsed)
-        );
-    }
-
-    Ok(matching_files)
-}
-
 /// Find files whose names match query words
 /// Returns a map of file paths to the term indices that matched the filename
 pub fn find_matching_filenames(
@@ -471,19 +373,16 @@ pub fn find_matching_filenames(
             continue;
         }
 
-        // Get the filename
-        let filename = match file_path.file_name() {
-            Some(name) => name.to_string_lossy().to_string(),
-            None => continue,
-        };
+        // Get the full relative path including directory structure
+        let relative_path = file_path.to_string_lossy().to_string();
 
-        // Tokenize the filename using the standard tokenizer
-        let filename_tokens = tokenization::tokenize(&filename);
+        // Tokenize the full relative path using the standard tokenizer
+        let filename_tokens = tokenization::tokenize(&relative_path);
 
         if debug_mode && !filename_tokens.is_empty() {
             println!(
-                "DEBUG: Filename '{}' tokenized as: {:?}",
-                filename, filename_tokens
+                "DEBUG: Path '{}' tokenized as: {:?}",
+                relative_path, filename_tokens
             );
         }
         // Find which terms match the filename
@@ -503,8 +402,8 @@ pub fn find_matching_filenames(
                 matched_terms.insert(idx);
                 if debug_mode {
                     println!(
-                        "DEBUG: Term '{}' matched filename '{}', adding index {}",
-                        term, filename, idx
+                        "DEBUG: Term '{}' matched path '{}', adding index {}",
+                        term, relative_path, idx
                     );
                 }
             }

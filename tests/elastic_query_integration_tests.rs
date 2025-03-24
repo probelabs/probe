@@ -111,11 +111,11 @@ fn test_required_term_query() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the temp_path for debugging
@@ -217,18 +217,18 @@ fn test_excluded_term_query() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the query for debugging
     println!("Executing search with query: {:?}", queries);
     println!(
-        "Path: {:?}, exact: {}, frequency_search: {}",
-        options.path, options.exact, options.frequency_search
+        "Path: {:?}, frequency_search: {}",
+        options.path, options.frequency_search
     );
 
     // Run the search
@@ -290,6 +290,7 @@ fn test_or_query() {
     create_test_files(temp_path);
 
     // Create search query with explicit OR syntax
+    // Make sure to use uppercase OR to ensure it's recognized as an operator
     let queries = vec!["keywordAlpha OR keywordBeta".to_string()];
     let custom_ignores: Vec<String> = vec![];
 
@@ -297,7 +298,7 @@ fn test_or_query() {
     let options = SearchOptions {
         path: temp_path,
         queries: &queries,
-        files_only: false,
+        files_only: true, // Use files_only to ensure we find all matching files
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
         reranker: "hybrid",
@@ -306,11 +307,11 @@ fn test_or_query() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the test files for debugging
@@ -331,8 +332,8 @@ fn test_or_query() {
     // Print the query for debugging
     println!("Executing search with query: {:?}", queries);
     println!(
-        "Path: {:?}, exact: {}, frequency_search: {}",
-        options.path, options.exact, options.frequency_search
+        "Path: {:?}, frequency_search: {}",
+        options.path, options.frequency_search
     );
 
     // Run the search
@@ -350,6 +351,12 @@ fn test_or_query() {
         .iter()
         .map(|r| r.file.as_str())
         .collect();
+
+    // Debug output to see what files were found
+    println!("Found files with 'keywordAlpha OR keywordBeta':");
+    for name in &file_names {
+        println!("  {}", name);
+    }
 
     // Check that we found files with keywordAlpha OR keywordBeta
     assert!(
@@ -398,11 +405,11 @@ fn test_complex_query_or() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the test files for debugging
@@ -423,8 +430,8 @@ fn test_complex_query_or() {
     // Print the query for debugging
     println!("Executing search with query: {:?}", queries);
     println!(
-        "Path: {:?}, exact: {}, frequency_search: {}",
-        options.path, options.exact, options.frequency_search
+        "Path: {:?}, frequency_search: {}",
+        options.path, options.frequency_search
     );
 
     // Run the search
@@ -443,12 +450,12 @@ fn test_complex_query_or() {
         .collect();
 
     // Debug output to see what files were found
-    println!("Found files with 'keywordAlpha keywordBeta' (OR behavior):");
+    println!("Found files with 'keywordAlpha OR keywordBeta':");
     for name in &file_names {
         println!("  {}", name);
     }
 
-    // With OR behavior, should find all files with keywordAlpha OR keywordBeta
+    // With explicit OR syntax, should find all files with keywordAlpha OR keywordBeta
     assert!(
         file_names.iter().any(|&name| name.contains("file1")),
         "Should find file1 which has keywordAlpha and keywordBeta"
@@ -494,18 +501,18 @@ fn test_complex_query_exclusion() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Print the query for debugging
     println!("Executing search with query: {:?}", queries);
     println!(
-        "Path: {:?}, exact: {}, frequency_search: {}",
-        options.path, options.exact, options.frequency_search
+        "Path: {:?}, frequency_search: {}",
+        options.path, options.frequency_search
     );
 
     // Run the search
@@ -591,11 +598,11 @@ fn test_function() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Run the search

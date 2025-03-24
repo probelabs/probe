@@ -144,7 +144,7 @@ fn test_term_extraction() {
     assert_terms_eq("+foo", vec!["foo"], vec![]);
     assert_terms_eq("-foo", vec![], vec![]);
     
-    // Multiple terms - now treated as OR
+    // Multiple terms - now treated as AND
     assert_terms_eq("foo bar", vec![], vec!["foo", "bar"]);
     assert_terms_eq("+foo +bar", vec!["foo", "bar"], vec![]);
     assert_terms_eq("+foo bar", vec!["foo"], vec!["bar"]);
@@ -186,19 +186,19 @@ fn test_single_terms() {
 
 #[test]
 fn test_multiple_terms_implicit_or() {
-    // Simple two terms
+    // Simple two terms - using OR for implicit combinations
     assert_parse_eq(
         "foo bar",
         Expr::Or(Box::new(term("foo")), Box::new(term("bar")))
     );
 
-    // Required term with normal term
+    // Required term with normal term - using OR for implicit combinations
     assert_parse_eq(
         "+foo bar",
         Expr::Or(Box::new(required_term("foo")), Box::new(term("bar")))
     );
 
-    // Three terms with excluded
+    // Three terms with excluded - using OR for implicit combinations
     assert_parse_eq(
         "-foo bar baz",
         Expr::Or(
@@ -257,8 +257,7 @@ fn test_explicit_boolean_operators() {
             Box::new(excluded_term("bar"))
         )
     );
-
-    // Implicit OR with OR
+    // Implicit OR with explicit OR
     assert_parse_eq(
         "foo bar OR baz",
         Expr::Or(
@@ -398,17 +397,12 @@ fn test_mixed_prefixes_and_operators() {
         if let Expr::Or(left_left, left_right) = *left {
             assert_eq!(*left_right, term("baz"));
             
-            // The first part could be either And or Or depending on implementation
-            match *left_left {
-                Expr::And(and_left, and_right) => {
-                    assert_eq!(*and_left, required_term("foo"));
-                    assert_eq!(*and_right, excluded_term("bar"));
-                },
-                Expr::Or(or_left, or_right) => {
-                    assert_eq!(*or_left, required_term("foo"));
-                    assert_eq!(*or_right, excluded_term("bar"));
-                },
-                _ => panic!("Expected And or Or expression for left_left")
+            // The first part should be And with the new implementation
+            if let Expr::And(and_left, and_right) = *left_left {
+                assert_eq!(*and_left, required_term("foo"));
+                assert_eq!(*and_right, excluded_term("bar"));
+            } else {
+                panic!("Expected And expression for left_left");
             }
         } else {
             panic!("Expected Or expression for left side");
@@ -501,6 +495,32 @@ fn test_deeply_nested_expressions() {
             ))
         )
     );
+}
+
+#[test]
+fn test_stop_word_removal() {
+    // Test that stop words like "type" are properly removed from queries
+    // "type" is a programming stop word, so "JWT AND type" should be parsed as just "JWT"
+    let result = parse_query_test("JWT AND type").unwrap();
+    
+    // The result should be a Term with just "JWT" as the keyword
+    match result {
+        Expr::Term { keywords, .. } => {
+            assert_eq!(keywords.len(), 1);
+            assert_eq!(keywords[0], "jwt");
+        },
+        Expr::And(left, _) => {
+            // If it's an AND expression, the right side should be empty
+            match *left {
+                Expr::Term { keywords, .. } => {
+                    assert_eq!(keywords.len(), 1);
+                    assert_eq!(keywords[0], "jwt");
+                },
+                _ => panic!("Expected Term expression for left side"),
+            }
+        },
+        _ => panic!("Expected Term or And expression"),
+    }
 }
 
 #[test]

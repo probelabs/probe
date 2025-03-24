@@ -33,8 +33,7 @@ async function advancedSearchExample() {
 			frequencySearch: true,
 			maxResults: 10,
 			maxTokens: 20000,
-			allowTests: false,
-			anyTerm: false
+			allowTests: false
 		});
 
 		console.log('Advanced search results:');

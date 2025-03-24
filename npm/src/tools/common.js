@@ -9,10 +9,9 @@ import { z } from 'zod';
 export const searchSchema = z.object({
 	query: z.string().describe('Search query with Elasticsearch syntax. Use + for important terms.'),
 	path: z.string().optional().default('.').describe('Path to search in'),
-	exact: z.boolean().optional().default(false).describe('Use exact match for specific function or type names'),
 	allow_tests: z.boolean().optional().default(false).describe('Allow test files in search results'),
 	maxResults: z.number().optional().describe('Maximum number of results to return'),
-	maxTokens: z.number().optional().default(40000).describe('Maximum number of tokens to return')
+	maxTokens: z.number().optional().default(10000).describe('Maximum number of tokens to return')
 });
 
 export const querySchema = z.object({
@@ -23,7 +22,8 @@ export const querySchema = z.object({
 });
 
 export const extractSchema = z.object({
-	file_path: z.string().describe('Path to the file to extract from. Can include line numbers or symbol names'),
+	file_path: z.string().optional().describe('Path to the file to extract from. Can include line numbers or symbol names'),
+	input_content: z.string().optional().describe('Text content to extract file paths from'),
 	line: z.number().optional().describe('Start line number to extract a specific code block'),
 	end_line: z.number().optional().describe('End line number for extracting a range of lines'),
 	allow_tests: z.boolean().optional().default(false).describe('Allow test files and test code blocks'),

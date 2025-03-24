@@ -174,6 +174,27 @@ The `extract` command's JSON output is similar to the other commands but may inc
 }
 ```
 
+When using the `--keep-input` flag, the JSON output includes an additional `original_input` field containing the exact input text:
+
+```json
+{
+  "original_input": "src/main.rs:42: error: invalid syntax",  // Original input when using --keep-input
+  "results": [
+    {
+      "file": "src/main.rs",
+      "lines": [40, 45],
+      "node_type": "function",
+      "code": "fn process_data(data: &[u8]) -> Result<Vec<u8>, Error> {\n    // Processing logic\n    ...\n}"
+    }
+  ],
+  "summary": {
+    "count": 1,
+    "total_bytes": 85,
+    "total_tokens": 25
+  }
+}
+```
+
 #### Example: Extract JSON Output
 
 ```bash
@@ -366,10 +387,39 @@ The `extract` command's XML output is similar to the other commands but may incl
 </probe_results>
 ```
 
+When using the `--keep-input` flag, the XML output includes an additional `original_input` element containing the exact input text:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<probe_results>
+  <original_input><![CDATA[src/main.rs:42: error: invalid syntax]]></original_input>
+  <result>
+    <file>src/main.rs</file>
+    <lines>
+      <start>40</start>
+      <end>45</end>
+    </lines>
+    <node_type>function</node_type>
+    <code><![CDATA[fn process_data(data: &[u8]) -> Result<Vec<u8>, Error> {
+    // Processing logic
+    ...
+}]]></code>
+  </result>
+  <summary>
+    <count>1</count>
+    <total_bytes>85</total_bytes>
+    <total_tokens>25</total_tokens>
+  </summary>
+</probe_results>
+```
+
 #### Example: Extract XML Output
 
 ```bash
 probe extract src/main.rs:42 --format xml
+
+# With --keep-input flag to preserve original input
+probe extract src/main.rs:42 --format xml --keep-input
 ```
 
 ```xml
@@ -412,6 +462,11 @@ output = subprocess.check_output(["probe", "search", "authentication", "--format
 results = json.loads(output)
 
 # Process the results
+# Check if original input is present (when using --keep-input)
+if "original_input" in results:
+    print(f"Original Input:\n{results['original_input']}")
+    print("---")
+
 for result in results["results"]:
     print(f"File: {result['file']}")
     print(f"Lines: {result['lines'][0]}-{result['lines'][1]}")
@@ -434,6 +489,12 @@ const output = execSync('probe search "authentication" --format json', { encodin
 const results = JSON.parse(output);
 
 // Process the results
+// Check if original input is present (when using --keep-input)
+if (results.original_input) {
+  console.log(`Original Input:\n${results.original_input}`);
+  console.log('---');
+}
+
 results.results.forEach(result => {
   console.log(`File: ${result.file}`);
   console.log(`Lines: ${result.lines[0]}-${result.lines[1]}`);
@@ -462,6 +523,12 @@ output = subprocess.check_output(["probe", "search", "authentication", "--format
 root = ET.fromstring(output)
 
 # Process the results
+# Check if original input is present (when using --keep-input)
+original_input = root.find('original_input')
+if original_input is not None:
+    print(f"Original Input:\n{original_input.text}")
+    print("---")
+
 for result in root.findall('./result'):
     file = result.find('file').text
     lines_start = result.find('./lines/start').text
@@ -501,6 +568,12 @@ parseString(output, (err, result) => {
   }
   
   // Process the results
+  // Check if original input is present (when using --keep-input)
+  if (result.probe_results.original_input) {
+    console.log(`Original Input:\n${result.probe_results.original_input[0]}`);
+    console.log('---');
+  }
+  
   const results = result.probe_results.result || [];
   results.forEach(result => {
     const file = result.file[0];
@@ -540,6 +613,7 @@ While the overall structure is similar, there are some differences in the output
    - Node types can be "file", "function", "range", or "context"
    - Focused on extracting specific code blocks rather than searching
    - May include context lines around the extracted code
+   - Can include original input text when using `--keep-input` flag
 
 ## Special Character Handling
 

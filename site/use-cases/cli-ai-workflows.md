@@ -166,6 +166,21 @@ Feed compiler errors directly to the AI for explanation:
 rustc main.rs 2>&1 | probe-chat
 ```
 
+### Using Extract with LLM Prompts
+
+Extract code with built-in prompt templates for LLM integration:
+
+```bash
+# Extract with engineer prompt template
+probe extract src/auth.rs#authenticate --prompt engineer --instructions "Explain this authentication function"
+
+# Extract with architect prompt template
+probe extract src/api.js --prompt architect --instructions "Analyze this API module"
+
+# Extract and pipe to AI chat
+probe extract src/main.rs:42 --prompt engineer --instructions "Explain this function" | probe-chat
+```
+
 ### Processing Search Results
 
 Use standard Unix tools to process search results:

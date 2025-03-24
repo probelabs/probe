@@ -145,12 +145,11 @@ fn test_search_single_term() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: false,
-
-        exact: false,
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Search for a single term
@@ -208,12 +207,11 @@ fn test_search_multiple_terms() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: false,
-
-        exact: false,
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Search for multiple terms
@@ -253,12 +251,11 @@ fn test_search_files_only() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: false,
-
-        exact: false,
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Search for files only
@@ -327,12 +324,11 @@ fn test_search_include_filenames() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: false,
-
-        exact: false,
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Search with filename matching enabled
@@ -382,12 +378,11 @@ fn test_search_with_limits() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: false,
-
-        exact: false,
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Search with limits
@@ -431,12 +426,11 @@ fn test_frequency_search() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: false,
-
-        exact: false,
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Search using frequency-based search
@@ -488,11 +482,11 @@ func main() {
         max_tokens: None,
         allow_tests: false,
         // using "all terms" mode
-        exact: false,
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Search for both terms in "all terms" mode
@@ -527,12 +521,11 @@ fn test_search_with_custom_ignores() {
         max_bytes: None,
         max_tokens: None,
         allow_tests: false,
-
-        exact: false,
         no_merge: true,
         merge_threshold: None,
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Search with custom ignore patterns
@@ -643,12 +636,11 @@ fn calculate_product(a: i32, b: i32) -> i32 {
         max_bytes: None,
         max_tokens: None,
         allow_tests: true,
-
-        exact: false,
         no_merge: false,
         merge_threshold: Some(5),
         dry_run: false,
         session: None,
+        timeout: 30,
     };
 
     // Perform search

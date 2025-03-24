@@ -48,7 +48,7 @@ export class TokenCounter {
     const tokenCount = this.countTokens(text);
     this.requestTokens += tokenCount;
 
-    const debug = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+    const debug = process.env.DEBUG === '1';
     if (debug) {
       console.log(
         `[DEBUG] Added ${tokenCount} request tokens for text of length ${text.length}`
@@ -64,11 +64,24 @@ export class TokenCounter {
     const tokenCount = this.countTokens(text);
     this.responseTokens += tokenCount;
 
-    const debug = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+    const debug = process.env.DEBUG === '1';
     if (debug) {
       console.log(
         `[DEBUG] Added ${tokenCount} response tokens for text of length ${text.length}`
       );
+    }
+  }
+
+  /**
+   * Reset counters back to zero
+   */
+  clear() {
+    this.requestTokens = 0;
+    this.responseTokens = 0;
+
+    const debug = process.env.DEBUG === '1';
+    if (debug) {
+      console.log(`[DEBUG] Token usage reset to 0`);
     }
   }
 
@@ -83,4 +96,4 @@ export class TokenCounter {
       total: this.requestTokens + this.responseTokens
     };
   }
-} 
+}

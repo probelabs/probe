@@ -1,21 +1,20 @@
+use crate::search::file_list_cache;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 // No need for term_exceptions import
 
-use rayon::prelude::*;
-
 use crate::models::{LimitedSearchResults, SearchResult};
 use crate::search::{
     cache,
     // file_list_cache, // Add the new file_list_cache module (unused)
     file_processing::{process_file_with_results, FileProcessingParams},
-    file_search::{find_files_with_pattern, find_matching_filenames, search_file_for_pattern},
     query::{create_query_plan, create_structured_patterns, QueryPlan},
     result_ranking::rank_search_results,
     search_limiter::apply_limits,
     search_options::SearchOptions,
+    timeout,
 };
 
 /// Struct to hold timing information for different stages of the search process
@@ -27,6 +26,32 @@ pub struct SearchTimings {
     pub early_filtering: Option<Duration>,
     pub early_caching: Option<Duration>,
     pub result_processing: Option<Duration>,
+    // Granular result processing timings
+    pub result_processing_file_io: Option<Duration>,
+    pub result_processing_line_collection: Option<Duration>,
+    pub result_processing_ast_parsing: Option<Duration>,
+    pub result_processing_block_extraction: Option<Duration>,
+    pub result_processing_result_building: Option<Duration>,
+
+    // Granular AST parsing sub-step timings
+    pub result_processing_ast_parsing_language_init: Option<Duration>,
+    pub result_processing_ast_parsing_parser_init: Option<Duration>,
+    pub result_processing_ast_parsing_tree_parsing: Option<Duration>,
+    pub result_processing_ast_parsing_line_map_building: Option<Duration>,
+
+    // Granular block extraction sub-step timings
+    pub result_processing_block_extraction_code_structure: Option<Duration>,
+    pub result_processing_block_extraction_filtering: Option<Duration>,
+    pub result_processing_block_extraction_result_building: Option<Duration>,
+
+    // Detailed result building timings
+    pub result_processing_term_matching: Option<Duration>,
+    pub result_processing_compound_processing: Option<Duration>,
+    pub result_processing_line_matching: Option<Duration>,
+    pub result_processing_result_creation: Option<Duration>,
+    pub result_processing_synchronization: Option<Duration>,
+    pub result_processing_uncovered_lines: Option<Duration>,
+
     pub result_ranking: Option<Duration>,
     pub limit_application: Option<Duration>,
     pub block_merging: Option<Duration>,
@@ -78,6 +103,72 @@ pub fn print_timings(timings: &SearchTimings) {
 
     if let Some(duration) = timings.result_processing {
         println!("Result processing:     {}", format_duration(duration));
+
+        // Print granular result processing timings if available
+        if let Some(duration) = timings.result_processing_file_io {
+            println!("  - File I/O:           {}", format_duration(duration));
+        }
+
+        if let Some(duration) = timings.result_processing_line_collection {
+            println!("  - Line collection:    {}", format_duration(duration));
+        }
+
+        if let Some(duration) = timings.result_processing_ast_parsing {
+            println!("  - AST parsing:        {}", format_duration(duration));
+
+            // Print granular AST parsing sub-step timings
+            if let Some(d) = timings.result_processing_ast_parsing_language_init {
+                println!("    - Language init:     {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_ast_parsing_parser_init {
+                println!("    - Parser init:       {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_ast_parsing_tree_parsing {
+                println!("    - Tree parsing:      {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_ast_parsing_line_map_building {
+                println!("    - Line map building: {}", format_duration(d));
+            }
+        }
+
+        if let Some(duration) = timings.result_processing_block_extraction {
+            println!("  - Block extraction:   {}", format_duration(duration));
+
+            // Print granular block extraction sub-step timings
+            if let Some(d) = timings.result_processing_block_extraction_code_structure {
+                println!("    - Code structure:    {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_block_extraction_filtering {
+                println!("    - Filtering:         {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_block_extraction_result_building {
+                println!("    - Result building:   {}", format_duration(d));
+            }
+        }
+
+        if let Some(duration) = timings.result_processing_result_building {
+            println!("  - Result building:    {}", format_duration(duration));
+
+            // Print detailed result building timings if available
+            if let Some(d) = timings.result_processing_term_matching {
+                println!("    - Term matching:      {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_compound_processing {
+                println!("    - Compound processing: {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_line_matching {
+                println!("    - Line matching:      {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_result_creation {
+                println!("    - Result creation:    {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_synchronization {
+                println!("    - Synchronization:    {}", format_duration(d));
+            }
+            if let Some(d) = timings.result_processing_uncovered_lines {
+                println!("    - Uncovered lines:    {}", format_duration(d));
+            }
+        }
     }
 
     if let Some(duration) = timings.result_ranking {
@@ -125,12 +216,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         max_bytes,
         max_tokens,
         allow_tests,
-        exact,
         no_merge,
         merge_threshold,
         dry_run: _, // We don't need this in perform_probe, but need to include it in the pattern
         session,
+        timeout,
     } = options;
+    // Start the timeout thread
+    let timeout_handle = timeout::start_timeout_thread(*timeout);
 
     let include_filenames = !exclude_filenames;
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -138,7 +231,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // Handle session ID generation if session is provided but empty
     // For test runs, force session to None to disable caching
     let (effective_session, session_was_generated) = if let Some(s) = session {
-        if s.is_empty() {
+        if s.is_empty() || *s == "new" {
             // Check if we have a session ID in the environment variable
             if let Ok(env_session_id) = std::env::var("PROBE_SESSION_ID") {
                 if !env_session_id.is_empty() {
@@ -213,6 +306,31 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         early_filtering: None,
         early_caching: None,
         result_processing: None,
+        result_processing_file_io: None,
+        result_processing_line_collection: None,
+        result_processing_ast_parsing: None,
+        result_processing_block_extraction: None,
+        result_processing_result_building: None,
+
+        // Initialize granular AST parsing sub-step timings
+        result_processing_ast_parsing_language_init: None,
+        result_processing_ast_parsing_parser_init: None,
+        result_processing_ast_parsing_tree_parsing: None,
+        result_processing_ast_parsing_line_map_building: None,
+
+        // Initialize granular block extraction sub-step timings
+        result_processing_block_extraction_code_structure: None,
+        result_processing_block_extraction_filtering: None,
+        result_processing_block_extraction_result_building: None,
+
+        // Initialize detailed result building timings
+        result_processing_term_matching: None,
+        result_processing_compound_processing: None,
+        result_processing_line_matching: None,
+        result_processing_result_creation: None,
+        result_processing_synchronization: None,
+        result_processing_uncovered_lines: None,
+
         result_ranking: None,
         limit_application: None,
         block_merging: None,
@@ -229,9 +347,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let parse_res = if queries.len() > 1 {
         // Join multiple queries with AND
         let combined_query = queries.join(" AND ");
-        create_query_plan(&combined_query, *exact)
+        create_query_plan(&combined_query, false)
     } else {
-        create_query_plan(&queries[0], *exact)
+        create_query_plan(&queries[0], false)
     };
 
     let qp_duration = qp_start.elapsed();
@@ -288,6 +406,18 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         println!("DEBUG: Starting file searching...");
     }
 
+    /*
+      Important Note on Non-Determinism:
+      The code in `search_with_structured_patterns` builds a single "combined" regex
+      with multiple capturing groups. If more than one subpattern can match the same
+      text, the regex engine’s backtracking might fill capture group 1 vs. group 2
+      differently from run to run under multithreading, producing inconsistent
+      matched lines (and thus inconsistent "required terms"). That can cause files
+      to be accepted or removed in “early filtering” unpredictably. If you're
+      experiencing random 0-result runs, this combined-regex approach is the most
+      likely culprit.
+    */
+
     let mut file_term_map = search_with_structured_patterns(
         path,
         &plan,
@@ -327,16 +457,16 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         if debug_mode {
             println!("DEBUG: Starting filename matching...");
         }
-
         // Find all files that match our patterns by filename, along with the terms that matched
-        let filename_matches: HashMap<PathBuf, HashSet<usize>> = find_matching_filenames(
-            path,
-            queries,
-            &all_files,
-            custom_ignores,
-            *allow_tests,
-            &plan.term_indices,
-        )?;
+        let filename_matches: HashMap<PathBuf, HashSet<usize>> =
+            file_list_cache::find_matching_filenames(
+                path,
+                queries,
+                &all_files,
+                custom_ignores,
+                *allow_tests,
+                &plan.term_indices,
+            )?;
 
         if debug_mode {
             println!(
@@ -347,12 +477,58 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
         // Process files that matched by filename
         for (pathbuf, matched_terms) in &filename_matches {
+            // Define a reasonable maximum file size (e.g., 10MB)
+            const MAX_FILE_SIZE: u64 = 1024 * 1024;
+
+            // Check file metadata and resolve symlinks before reading
+            let resolved_path = match std::fs::canonicalize(pathbuf.as_path()) {
+                Ok(path) => path,
+                Err(e) => {
+                    if debug_mode {
+                        println!("DEBUG: Error resolving path for {:?}: {:?}", pathbuf, e);
+                    }
+                    continue;
+                }
+            };
+
+            // Get file metadata to check size and file type
+            let metadata = match std::fs::metadata(&resolved_path) {
+                Ok(meta) => meta,
+                Err(e) => {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Error getting metadata for {:?}: {:?}",
+                            resolved_path, e
+                        );
+                    }
+                    continue;
+                }
+            };
+
+            // Check if the file is too large
+            if metadata.len() > MAX_FILE_SIZE {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Skipping file {:?} - file too large ({} bytes > {} bytes limit)",
+                        resolved_path,
+                        metadata.len(),
+                        MAX_FILE_SIZE
+                    );
+                }
+                continue;
+            }
+
             // Read the file content to get the total number of lines
-            let file_content = match std::fs::read_to_string(pathbuf.as_path()) {
+            let file_content = match std::fs::read_to_string(&resolved_path) {
                 Ok(content) => content,
                 Err(e) => {
                     if debug_mode {
-                        println!("DEBUG: Error reading file {:?}: {:?}", pathbuf, e);
+                        println!(
+                            "DEBUG: Error reading file {:?}: {:?} (size: {} bytes)",
+                            resolved_path,
+                            e,
+                            metadata.len()
+                        );
                     }
                     continue;
                 }
@@ -418,7 +594,8 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         println!("DEBUG: all_files after filename matches: {:?}", all_files);
     }
 
-    // Early filtering step - filter both all_files and file_term_map using full AST evaluation (including excluded terms)
+    // Early filtering step - filter both all_files and file_term_map using full AST evaluation (including excluded terms?).
+    // Actually we pass 'true' to 'evaluate(..., true)', so that ignores excluded terms, contrary to the debug comment.
     let early_filter_start = Instant::now();
     if debug_mode {
         println!("DEBUG: Starting early AST filtering...");
@@ -434,13 +611,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             // Extract unique terms found in the file
             let matched_terms: HashSet<usize> = term_map.keys().copied().collect();
 
-            // Evaluate the file against the AST, including negative terms
-            // Debug log of path, matched terms and term indices
-            if debug_mode {
-                println!("DEBUG: Evaluating file {:?} with AST", pathbuf);
-                println!("DEBUG: Matched terms: {:?}", matched_terms);
-                println!("DEBUG: Term indices: {:?}", plan.term_indices);
-            }
+            // Evaluate the file against the AST, but we pass 'true' for ignore_negatives
             if plan.ast.evaluate(&matched_terms, &plan.term_indices, true) {
                 filtered_file_term_map.insert(pathbuf.clone(), term_map.clone());
                 filtered_all_files.insert(pathbuf.clone());
@@ -535,16 +706,26 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let ec_start = Instant::now();
     let mut early_skipped_count = 0;
     if let Some(session_id) = effective_session {
+        // Get the raw query string for caching
+        let raw_query = if queries.len() > 1 {
+            queries.join(" AND ")
+        } else {
+            queries[0].clone()
+        };
+
         if debug_mode {
-            println!("DEBUG: Starting early caching for session: {}", session_id);
+            println!(
+                "DEBUG: Starting early caching for session: {} with query: {}",
+                session_id, raw_query
+            );
             // Print cache contents before filtering
-            if let Err(e) = cache::debug_print_cache(session_id) {
+            if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
                 eprintln!("Error printing cache: {}", e);
             }
         }
 
         // Filter matched lines using the cache
-        match cache::filter_matched_lines_with_cache(&mut file_term_map, session_id) {
+        match cache::filter_matched_lines_with_cache(&mut file_term_map, session_id, &raw_query) {
             Ok(skipped) => {
                 if debug_mode {
                     println!("DEBUG: Early caching skipped {} matched lines", skipped);
@@ -588,6 +769,31 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     let mut final_results = Vec::new();
 
+    // Track granular timing for result processing stages
+    let mut total_file_io_time = Duration::new(0, 0);
+    let mut total_line_collection_time = Duration::new(0, 0);
+    let mut total_ast_parsing_time = Duration::new(0, 0);
+    let mut total_block_extraction_time = Duration::new(0, 0);
+    let _total_result_building_time = Duration::new(0, 0);
+
+    // Track granular timing for AST parsing sub-steps
+    let mut total_ast_parsing_language_init_time = Duration::new(0, 0);
+    let mut total_ast_parsing_parser_init_time = Duration::new(0, 0);
+    let mut total_ast_parsing_tree_parsing_time = Duration::new(0, 0);
+    let mut total_ast_parsing_line_map_building_time = Duration::new(0, 0);
+
+    // Track granular timing for block extraction sub-steps
+    let mut total_block_extraction_code_structure_time = Duration::new(0, 0);
+    let mut total_block_extraction_filtering_time = Duration::new(0, 0);
+    let mut total_block_extraction_result_building_time = Duration::new(0, 0);
+
+    // Track detailed result building timings
+    let mut total_term_matching_time = Duration::new(0, 0);
+    let mut total_compound_processing_time = Duration::new(0, 0);
+    let mut total_line_matching_time = Duration::new(0, 0);
+    let mut total_result_creation_time = Duration::new(0, 0);
+    let mut total_synchronization_time = Duration::new(0, 0);
+    let mut total_uncovered_lines_time = Duration::new(0, 0);
     for pathbuf in &all_files {
         if debug_mode {
             println!("DEBUG: Processing file: {:?}", pathbuf);
@@ -599,14 +805,21 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 println!("DEBUG: Term map for file: {:?}", term_map);
             }
 
-            // Gather matched lines
+            // Gather matched lines - measure line collection time
+            let line_collection_start = Instant::now();
             let mut all_lines = HashSet::new();
             for lineset in term_map.values() {
                 all_lines.extend(lineset.iter());
             }
+            let line_collection_duration = line_collection_start.elapsed();
+            total_line_collection_time += line_collection_duration;
 
             if debug_mode {
-                println!("DEBUG: Found {} matched lines in file", all_lines.len());
+                println!(
+                    "DEBUG: Found {} matched lines in file in {}",
+                    all_lines.len(),
+                    format_duration(line_collection_duration)
+                );
             }
 
             // Process file with matched lines
@@ -636,10 +849,145 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 println!("DEBUG: Processing file with params: {:?}", pparams.path);
             }
 
+            // Process file and track granular timings
             match process_file_with_results(&pparams) {
-                Ok(mut file_res) => {
+                Ok((mut file_res, file_timings)) => {
+                    // Accumulate granular timings from file processing
+                    if let Some(duration) = file_timings.file_io {
+                        total_file_io_time += duration;
+                    }
+                    if let Some(duration) = file_timings.ast_parsing {
+                        total_ast_parsing_time += duration;
+                    }
+                    if let Some(duration) = file_timings.block_extraction {
+                        total_block_extraction_time += duration;
+                    }
+
+                    // Add the new granular timings for AST parsing sub-steps
+                    if let Some(duration) = file_timings.ast_parsing_language_init {
+                        total_ast_parsing_language_init_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Language init: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.ast_parsing_parser_init {
+                        total_ast_parsing_parser_init_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Parser init: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.ast_parsing_tree_parsing {
+                        total_ast_parsing_tree_parsing_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Tree parsing: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.ast_parsing_line_map_building {
+                        total_ast_parsing_line_map_building_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Line map building: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+
+                    // Add the new granular timings for block extraction sub-steps
+                    if let Some(duration) = file_timings.block_extraction_code_structure {
+                        total_block_extraction_code_structure_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Code structure finding: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+                    if let Some(duration) = file_timings.block_extraction_filtering {
+                        total_block_extraction_filtering_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Filtering: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.block_extraction_result_building {
+                        total_block_extraction_result_building_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Result building: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+
+                    // Add the detailed result building timings
+                    if let Some(duration) = file_timings.result_building_term_matching {
+                        total_term_matching_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Term matching: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.result_building_compound_processing {
+                        total_compound_processing_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Compound processing: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+                    if let Some(duration) = file_timings.result_building_line_matching {
+                        total_line_matching_time += duration;
+                        if debug_mode {
+                            println!("DEBUG:     - Line matching: {}", format_duration(duration));
+                        }
+                    }
+                    if let Some(duration) = file_timings.result_building_result_creation {
+                        total_result_creation_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Result creation: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+                    if let Some(duration) = file_timings.result_building_synchronization {
+                        total_synchronization_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Synchronization: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+                    if let Some(duration) = file_timings.result_building_uncovered_lines {
+                        total_uncovered_lines_time += duration;
+                        if debug_mode {
+                            println!(
+                                "DEBUG:     - Uncovered lines: {}",
+                                format_duration(duration)
+                            );
+                        }
+                    }
+
                     if debug_mode {
                         println!("DEBUG: Got {} results from file processing", file_res.len());
+                        if let Some(duration) = file_timings.file_io {
+                            println!("DEBUG:   File I/O time: {}", format_duration(duration));
+                        }
+                        if let Some(duration) = file_timings.ast_parsing {
+                            println!("DEBUG:   AST parsing time: {}", format_duration(duration));
+                        }
+                        if let Some(duration) = file_timings.block_extraction {
+                            println!(
+                                "DEBUG:   Block extraction time: {}",
+                                format_duration(duration)
+                            );
+                        }
+                        if let Some(duration) = file_timings.block_extraction_result_building {
+                            println!(
+                                "DEBUG:   Result building time: {}",
+                                format_duration(duration)
+                            );
+                        }
                     }
                     final_results.append(&mut file_res);
                 }
@@ -661,13 +1009,112 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     }
 
     let rp_duration = rp_start.elapsed();
+    // Calculate the total time spent on detailed result building operations
+    let detailed_result_building_time = total_term_matching_time
+        + total_compound_processing_time
+        + total_line_matching_time
+        + total_result_creation_time
+        + total_synchronization_time
+        + total_uncovered_lines_time;
+
+    // Calculate the result building time as the remaining time after accounting for other operations
+    let accounted_time = total_file_io_time
+        + total_line_collection_time
+        + total_ast_parsing_time
+        + total_block_extraction_time;
+    let remaining_time = if rp_duration > accounted_time {
+        rp_duration - accounted_time
+    } else {
+        // Use the sum of detailed timings if available, otherwise fallback to block extraction result building time
+        if detailed_result_building_time > Duration::new(0, 0) {
+            detailed_result_building_time
+        } else {
+            total_block_extraction_result_building_time
+        }
+    };
+
     timings.result_processing = Some(rp_duration);
+    timings.result_processing_file_io = Some(total_file_io_time);
+    timings.result_processing_line_collection = Some(total_line_collection_time);
+    timings.result_processing_ast_parsing = Some(total_ast_parsing_time);
+    timings.result_processing_block_extraction = Some(total_block_extraction_time);
+    timings.result_processing_result_building = Some(remaining_time);
+
+    // Set the detailed result building timings
+    timings.result_processing_term_matching = Some(total_term_matching_time);
+    timings.result_processing_compound_processing = Some(total_compound_processing_time);
+    timings.result_processing_line_matching = Some(total_line_matching_time);
+    timings.result_processing_result_creation = Some(total_result_creation_time);
+    timings.result_processing_synchronization = Some(total_synchronization_time);
+    timings.result_processing_uncovered_lines = Some(total_uncovered_lines_time);
+
+    // Set the granular AST parsing sub-step timings
+    timings.result_processing_ast_parsing_language_init =
+        Some(total_ast_parsing_language_init_time);
+    timings.result_processing_ast_parsing_parser_init = Some(total_ast_parsing_parser_init_time);
+    timings.result_processing_ast_parsing_tree_parsing = Some(total_ast_parsing_tree_parsing_time);
+    timings.result_processing_ast_parsing_line_map_building =
+        Some(total_ast_parsing_line_map_building_time);
+
+    // Set the granular block extraction sub-step timings
+    timings.result_processing_block_extraction_code_structure =
+        Some(total_block_extraction_code_structure_time);
+    timings.result_processing_block_extraction_filtering =
+        Some(total_block_extraction_filtering_time);
+    timings.result_processing_block_extraction_result_building =
+        Some(total_block_extraction_result_building_time);
 
     if debug_mode {
         println!(
             "DEBUG: Result processing completed in {} - Generated {} results",
             format_duration(rp_duration),
             final_results.len()
+        );
+        println!("DEBUG: Granular result processing timings:");
+        println!("DEBUG:   File I/O: {}", format_duration(total_file_io_time));
+        println!(
+            "DEBUG:   Line collection: {}",
+            format_duration(total_line_collection_time)
+        );
+        println!(
+            "DEBUG:   AST parsing: {}",
+            format_duration(total_ast_parsing_time)
+        );
+        println!(
+            "DEBUG:     - Language init: {}",
+            format_duration(total_ast_parsing_language_init_time)
+        );
+        println!(
+            "DEBUG:     - Parser init: {}",
+            format_duration(total_ast_parsing_parser_init_time)
+        );
+        println!(
+            "DEBUG:     - Tree parsing: {}",
+            format_duration(total_ast_parsing_tree_parsing_time)
+        );
+        println!(
+            "DEBUG:     - Line map building: {}",
+            format_duration(total_ast_parsing_line_map_building_time)
+        );
+        println!(
+            "DEBUG:   Block extraction: {}",
+            format_duration(total_block_extraction_time)
+        );
+        println!(
+            "DEBUG:     - Code structure finding: {}",
+            format_duration(total_block_extraction_code_structure_time)
+        );
+        println!(
+            "DEBUG:     - Filtering: {}",
+            format_duration(total_block_extraction_filtering_time)
+        );
+        println!(
+            "DEBUG:     - Result building: {}",
+            format_duration(total_block_extraction_result_building_time)
+        );
+        println!(
+            "DEBUG:   Result building: {}",
+            format_duration(remaining_time)
         );
     }
 
@@ -689,56 +1136,87 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         );
     }
 
-    // Apply caching if session is provided - BEFORE applying limits
-    let fc_start = Instant::now();
+    // We'll move the caching step AFTER limiting results
     let mut skipped_count = early_skipped_count;
-    let mut filtered_results = final_results;
+    let filtered_results = final_results;
+
+    // Apply limits
+    let la_start = Instant::now();
+    if debug_mode {
+        println!("DEBUG: Starting limit application...");
+    }
+
+    // First apply limits to the results
+    let mut limited = apply_limits(filtered_results, *max_results, *max_bytes, *max_tokens);
+
+    // Then apply caching AFTER limiting results
+    let fc_start = Instant::now();
 
     if let Some(session_id) = effective_session {
+        // Get the raw query string for caching
+        let raw_query = if queries.len() > 1 {
+            queries.join(" AND ")
+        } else {
+            queries[0].clone()
+        };
+
         if debug_mode {
-            println!("DEBUG: Starting final caching for session: {}", session_id);
+            println!(
+                "DEBUG: Starting final caching for session: {} with query: {}",
+                session_id, raw_query
+            );
             println!(
                 "DEBUG: Already skipped {} lines in early caching",
                 early_skipped_count
             );
             // Print cache contents before filtering
-            if let Err(e) = cache::debug_print_cache(session_id) {
+            if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
                 eprintln!("Error printing cache: {}", e);
             }
         }
 
-        // Filter results using the cache
-        match cache::filter_results_with_cache(&filtered_results, session_id) {
-            Ok((cache_filtered_results, cached_skipped)) => {
+        // Filter results using the cache - but only to count skipped blocks, not to filter
+        match cache::filter_results_with_cache(&limited.results, session_id, &raw_query) {
+            Ok((_, cached_skipped)) => {
                 if debug_mode {
                     println!(
-                        "DEBUG: Final caching skipped {} cached blocks",
+                        "DEBUG: Final caching found {} cached blocks",
                         cached_skipped
                     );
                     println!(
                         "DEBUG: Total skipped (early + final): {}",
                         early_skipped_count + cached_skipped
                     );
-
-                    // Print some details about the filtered results
-                    if !cache_filtered_results.is_empty() {
-                        println!(
-                            "DEBUG: First filtered result: file={}, lines={:?}",
-                            cache_filtered_results[0].file, cache_filtered_results[0].lines
-                        );
-                    }
                 }
 
-                // Store the filtered results
-                filtered_results = cache_filtered_results;
-                skipped_count += cached_skipped; // Add to the early skipped count
+                skipped_count += cached_skipped;
             }
             Err(e) => {
                 // Log the error but continue without caching
-                eprintln!("Error applying cache: {}", e);
+                eprintln!("Error checking cache: {}", e);
+            }
+        }
+
+        // Update the cache with the limited results
+        if let Err(e) = cache::add_results_to_cache(&limited.results, session_id, &raw_query) {
+            eprintln!("Error adding results to cache: {}", e);
+        }
+
+        if debug_mode {
+            println!("DEBUG: Added limited results to cache before merging");
+            // Print cache contents after adding new results
+            if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
+                eprintln!("Error printing updated cache: {}", e);
             }
         }
     }
+
+    // Set the cached blocks skipped count
+    limited.cached_blocks_skipped = if skipped_count > 0 {
+        Some(skipped_count)
+    } else {
+        None
+    };
 
     let fc_duration = fc_start.elapsed();
     timings.final_caching = Some(fc_duration);
@@ -750,19 +1228,6 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         );
     }
 
-    // Apply limits
-    let la_start = Instant::now();
-    if debug_mode {
-        println!("DEBUG: Starting limit application...");
-    }
-
-    let mut limited = apply_limits(filtered_results, *max_results, *max_bytes, *max_tokens);
-    limited.cached_blocks_skipped = if skipped_count > 0 {
-        Some(skipped_count)
-    } else {
-        None
-    };
-
     let la_duration = la_start.elapsed();
     timings.limit_application = Some(la_duration);
 
@@ -772,21 +1237,6 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             format_duration(la_duration),
             limited.results.len()
         );
-    }
-
-    // Update the cache with the limited results (before merging)
-    if let Some(session_id) = effective_session {
-        if let Err(e) = cache::add_results_to_cache(&limited.results, session_id) {
-            eprintln!("Error adding results to cache: {}", e);
-        }
-
-        if debug_mode {
-            println!("DEBUG: Added limited results to cache before merging");
-            // Print cache contents after adding new results
-            if let Err(e) = cache::debug_print_cache(session_id) {
-                eprintln!("Error printing updated cache: {}", e);
-            }
-        }
     }
 
     // Optional block merging - AFTER initial caching
@@ -820,14 +1270,21 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
         // Update the cache with the merged results (after merging)
         if let Some(session_id) = effective_session {
-            if let Err(e) = cache::add_results_to_cache(&merged, session_id) {
+            // Get the raw query string for caching
+            let raw_query = if queries.len() > 1 {
+                queries.join(" AND ")
+            } else {
+                queries[0].clone()
+            };
+
+            if let Err(e) = cache::add_results_to_cache(&merged, session_id, &raw_query) {
                 eprintln!("Error adding merged results to cache: {}", e);
             }
 
             if debug_mode {
                 println!("DEBUG: Added merged results to cache after merging");
                 // Print cache contents after adding merged results
-                if let Err(e) = cache::debug_print_cache(session_id) {
+                if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
                     eprintln!("Error printing updated cache: {}", e);
                 }
             }
@@ -852,7 +1309,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     if let Some(session_id) = effective_session {
         if session_was_generated {
             println!(
-                "Session ID: {} (generated - used it in future sessions for caching)",
+                "Session ID: {} (generated - ALWAYS USE IT in future sessions for caching)",
                 session_id
             );
         } else {
@@ -866,10 +1323,16 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // Print timing information
     print_timings(&timings);
 
+    // Stop the timeout thread
+    timeout_handle.store(true, std::sync::atomic::Ordering::SeqCst);
+
     Ok(final_results)
 }
+
 /// Helper function to search files using structured patterns from a QueryPlan.
-/// This function uses parallel processing to search for patterns and collects matches by term indices.
+/// This function uses a RegexSet approach for deterministic pattern matching
+/// and collects matches by term indices. It uses the file_list_cache to get a filtered
+/// list of files respecting ignore patterns.
 ///
 /// # Arguments
 /// * `root_path` - The base path to search in
@@ -884,98 +1347,224 @@ pub fn search_with_structured_patterns(
     custom_ignores: &[String],
     allow_tests: bool,
 ) -> Result<HashMap<PathBuf, HashMap<usize, HashSet<usize>>>> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    use rayon::prelude::*;
+    use regex::RegexSet;
+    use std::sync::{Arc, Mutex};
 
-    // Start timing the structured pattern search
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let search_start = Instant::now();
 
+    // Step 1: Create RegexSet for deterministic pattern matching
     if debug_mode {
-        println!("DEBUG: Starting simplified structured pattern search...");
-        println!("DEBUG: Using {} patterns", patterns.len());
+        println!("DEBUG: Starting parallel structured pattern search with RegexSet...");
+        println!("DEBUG: Creating RegexSet from {} patterns", patterns.len());
     }
 
-    // Step 1: Find all files matching any pattern
-    let mut all_files = HashSet::new();
+    // Extract just the patterns for the RegexSet
+    let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| format!("(?i){}", p)).collect();
 
-    for (pattern, _) in patterns {
-        if let Ok(files) = find_files_with_pattern(root_path, pattern, custom_ignores, allow_tests)
-        {
-            all_files.extend(files);
-        }
-    }
+    // Create a RegexSet for deterministic matching
+    let regex_set = RegexSet::new(&pattern_strings)?;
+
+    // Create a mapping from pattern index to term indices
+    let pattern_to_terms: Vec<HashSet<usize>> =
+        patterns.iter().map(|(_, terms)| terms.clone()).collect();
 
     if debug_mode {
-        println!(
-            "DEBUG: Found {} unique files matching patterns",
-            all_files.len()
-        );
+        println!("DEBUG: RegexSet created successfully");
     }
 
-    // Step 2: Process files in parallel to build term match maps
-    let file_term_maps: HashMap<PathBuf, HashMap<usize, HashSet<usize>>> = all_files
-        .par_iter()
-        .filter_map(|file_path| {
-            let mut term_map = HashMap::new();
+    // Step 2: Get filtered file list from cache
+    if debug_mode {
+        println!("DEBUG: Getting filtered file list from cache");
+        println!("DEBUG: Custom ignore patterns: {:?}", custom_ignores);
+    }
 
-            // Search for each pattern in the file
-            for (pattern, term_indices) in patterns {
-                if let Ok((matched, line_matches)) = search_file_for_pattern(file_path, pattern) {
-                    if matched {
-                        if debug_mode {
-                            println!(
-                                "DEBUG: File {:?} matched pattern '{}' on {} lines",
-                                file_path,
-                                pattern,
-                                line_matches.len()
-                            );
-                            println!("DEBUG: Associated term indices: {:?}", term_indices);
-                            if !line_matches.is_empty() {
-                                println!(
-                                    "DEBUG: First few matching lines: {:?}",
-                                    line_matches.keys().take(5).collect::<Vec<_>>()
-                                );
-                                // Print some match content examples
-                                for (line_num, matches) in line_matches.iter().take(2) {
-                                    println!(
-                                        "DEBUG: Line {}: Match examples: {:?}",
-                                        line_num,
-                                        matches.iter().take(3).collect::<Vec<_>>()
-                                    );
-                                }
-                            }
-                        }
+    // Use file_list_cache to get a filtered list of files
+    let file_list =
+        crate::search::file_list_cache::get_file_list(root_path, allow_tests, custom_ignores)?;
 
-                        // Add matches for all terms associated with this pattern
-                        for &term_idx in term_indices {
-                            let term_entry = term_map.entry(term_idx).or_insert_with(HashSet::new);
+    if debug_mode {
+        println!("DEBUG: Got {} files from cache", file_list.files.len());
+        println!("DEBUG: Starting parallel file processing with RegexSet");
+    }
 
-                            // Add all line numbers to the term map
-                            term_entry.extend(line_matches.keys());
-                        }
+    // Step 3: Process files in parallel
+    // Create thread-safe shared resources
+    let regex_set = Arc::new(regex_set);
+    let pattern_to_terms = Arc::new(pattern_to_terms);
+    let file_term_maps = Arc::new(Mutex::new(HashMap::new()));
+
+    // Also create individual regexes for line number extraction
+    let individual_regexes: Vec<regex::Regex> = pattern_strings
+        .iter()
+        .map(|p| regex::Regex::new(p).unwrap())
+        .collect();
+    let individual_regexes = Arc::new(individual_regexes);
+
+    file_list.files.par_iter().for_each(|file_path| {
+        let regex_set = Arc::clone(&regex_set);
+        let pattern_to_terms = Arc::clone(&pattern_to_terms);
+        let individual_regexes = Arc::clone(&individual_regexes);
+
+        // Search file with RegexSet for deterministic matching
+        match search_file_with_regex_set(
+            file_path,
+            &regex_set,
+            &individual_regexes,
+            &pattern_to_terms,
+        ) {
+            Ok(term_map) => {
+                if !term_map.is_empty() {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: File {:?} matched patterns with {} term indices",
+                            file_path,
+                            term_map.len()
+                        );
                     }
+
+                    // Add to results with proper locking
+                    let mut maps = file_term_maps.lock().unwrap();
+                    maps.insert(file_path.clone(), term_map);
                 }
             }
-
-            Some((file_path.clone(), term_map))
-        })
-        .collect();
-
-    if debug_mode {
-        println!("DEBUG: Built term maps for {} files", file_term_maps.len());
-    }
-
-    // We no longer need to filter files here since we do it in the early filtering step
-    let filtered_map = file_term_maps;
+            Err(e) => {
+                if debug_mode {
+                    println!("DEBUG: Error searching file {:?}: {:?}", file_path, e);
+                }
+            }
+        }
+    });
 
     let total_duration = search_start.elapsed();
 
+    // Extract the results from the Arc<Mutex<>>
+    let result = Arc::try_unwrap(file_term_maps)
+        .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+        .into_inner()
+        .unwrap();
+
     if debug_mode {
         println!(
-            "DEBUG: Simplified structured pattern search completed in {} - Found matches in {} files",
+            "DEBUG: Parallel search completed in {} - Found matches in {} files",
             format_duration(total_duration),
-            filtered_map.len()
+            result.len()
         );
     }
 
-    Ok(filtered_map)
+    Ok(result)
+}
+
+/// Helper function to search a file with a RegexSet for deterministic pattern matching
+/// This function searches a file for matches against a RegexSet and individual regexes
+/// to map the matches to their corresponding term indices.
+///
+/// Using RegexSet ensures deterministic pattern matching across multiple runs,
+/// avoiding the non-deterministic behavior of capturing groups in a combined regex.
+fn search_file_with_regex_set(
+    file_path: &Path,
+    regex_set: &regex::RegexSet,
+    individual_regexes: &[regex::Regex],
+    pattern_to_terms: &[HashSet<usize>],
+) -> Result<HashMap<usize, HashSet<usize>>> {
+    let mut term_map = HashMap::new();
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Define a reasonable maximum file size (e.g., 1MB)
+    const MAX_FILE_SIZE: u64 = 1024 * 1024;
+
+    // Check file metadata and resolve symlinks before reading
+    let resolved_path = match std::fs::canonicalize(file_path) {
+        Ok(path) => path,
+        Err(e) => {
+            if debug_mode {
+                println!("DEBUG: Error resolving path for {:?}: {:?}", file_path, e);
+            }
+            return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
+        }
+    };
+
+    // Get file metadata to check size and file type
+    let metadata = match std::fs::metadata(&resolved_path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            if debug_mode {
+                println!(
+                    "DEBUG: Error getting metadata for {:?}: {:?}",
+                    resolved_path, e
+                );
+            }
+            return Err(anyhow::anyhow!("Failed to get file metadata: {}", e));
+        }
+    };
+
+    // Check if the file is too large
+    if metadata.len() > MAX_FILE_SIZE {
+        if debug_mode {
+            println!(
+                "DEBUG: Skipping file {:?} - file too large ({} bytes > {} bytes limit)",
+                resolved_path,
+                metadata.len(),
+                MAX_FILE_SIZE
+            );
+        }
+        return Err(anyhow::anyhow!(
+            "File too large: {} bytes (limit: {} bytes)",
+            metadata.len(),
+            MAX_FILE_SIZE
+        ));
+    }
+
+    // Read the file content with proper error handling
+    let content = match std::fs::read_to_string(&resolved_path) {
+        Ok(content) => content,
+        Err(e) => {
+            if debug_mode {
+                println!(
+                    "DEBUG: Error reading file {:?}: {:?} (size: {} bytes)",
+                    resolved_path,
+                    e,
+                    metadata.len()
+                );
+            }
+            return Err(anyhow::anyhow!("Failed to read file: {}", e));
+        }
+    };
+
+    // Process each line
+    for (line_number, line) in content.lines().enumerate() {
+        // Skip lines that are too long
+        if line.len() > 2000 {
+            if debug_mode {
+                println!(
+                    "DEBUG: Skipping line {} in file {:?} - line too long ({} characters)",
+                    line_number + 1,
+                    file_path,
+                    line.len()
+                );
+            }
+            continue;
+        }
+
+        // First check if any pattern matches using the RegexSet
+        let matches = regex_set.matches(line);
+        if matches.matched_any() {
+            // For each matched pattern, find the specific line numbers using individual regexes
+            for pattern_idx in matches.iter() {
+                // Use the individual regex to find all matches in the line
+                if individual_regexes[pattern_idx].is_match(line) {
+                    // Add matches for all terms associated with this pattern
+                    for &term_idx in &pattern_to_terms[pattern_idx] {
+                        term_map
+                            .entry(term_idx)
+                            .or_insert_with(HashSet::new)
+                            .insert(line_number + 1); // Convert to 1-based line numbers
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(term_map)
 }

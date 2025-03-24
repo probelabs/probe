@@ -30,7 +30,7 @@ hero:
             <div class="quick-start-option">
               <h3>AI Chat</h3>
               <div class="pre-wrapper">
-                <div class="language-bash"><pre><code>npx -y @buger/probe-chat</code></pre></div>
+                <div class="language-bash"><pre><code>npx -y @buger/probe-chat --web</code></pre></div>
               </div>
               <p class="option-description">Built-in AI agent. <small>OpenAI or Anthropic (API key required)</small></p>
             </div>

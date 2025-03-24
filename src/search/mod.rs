@@ -1,5 +1,4 @@
 pub mod file_processing;
-pub mod file_search;
 pub mod query;
 mod result_ranking;
 // Replace the old search_execution with new modules
@@ -13,9 +12,13 @@ mod search_output;
 pub mod search_runner;
 pub mod search_tokens;
 pub mod term_exceptions; // New module for term exceptions
+pub mod timeout; // New module for timeout functionality
 pub mod tokenization; // New elastic search query parser
                       // Temporarily commented out due to compilation issues
                       // mod temp_frequency_search;
+
+#[cfg(test)]
+mod file_processing_tests;
 
 // Public exports
 pub use search_options::SearchOptions;

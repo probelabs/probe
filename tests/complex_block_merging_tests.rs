@@ -418,12 +418,11 @@ fn third_function() {
             max_bytes: None,
             max_tokens: None,
             allow_tests: true,
-
-            exact: false,
             no_merge: false,
             merge_threshold: Some(threshold),
             dry_run: false,
             session: None,
+            timeout: 30,
         };
 
         // Run the search

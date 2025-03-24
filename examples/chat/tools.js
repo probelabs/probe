@@ -7,7 +7,7 @@ const sessionId = process.env.PROBE_SESSION_ID || randomUUID();
 console.log(`Generated session ID for search caching: ${sessionId}`);
 
 // Debug mode
-const debug = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+const debug = process.env.DEBUG === '1';
 
 // Configure tools with the session ID
 const configOptions = {

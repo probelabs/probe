@@ -23,7 +23,6 @@ struct SearchParams {
     exclude_filenames: bool,
     reranker: String,
     frequency_search: bool,
-    exact: bool,
     max_results: Option<usize>,
     max_bytes: Option<usize>,
     max_tokens: Option<usize>,
@@ -33,14 +32,11 @@ struct SearchParams {
     dry_run: bool,
     format: String,
     session: Option<String>,
+    timeout: u64,
 }
 
 fn handle_search(params: SearchParams) -> Result<()> {
-    let use_frequency = if params.exact {
-        false
-    } else {
-        params.frequency_search
-    };
+    let use_frequency = params.frequency_search;
 
     println!("{} {}", "Pattern:".bold().green(), params.pattern);
     println!(
@@ -63,9 +59,6 @@ fn handle_search(params: SearchParams) -> Result<()> {
     if !use_frequency {
         advanced_options.push("Frequency search disabled".to_string());
     }
-    if params.exact {
-        advanced_options.push("Exact match".to_string());
-    }
     if params.allow_tests {
         advanced_options.push("Including tests".to_string());
     }
@@ -80,6 +73,11 @@ fn handle_search(params: SearchParams) -> Result<()> {
     }
     if let Some(session) = &params.session {
         advanced_options.push(format!("Session: {}", session));
+    }
+
+    // Show timeout if it's not the default value of 30 seconds
+    if params.timeout != 30 {
+        advanced_options.push(format!("Timeout: {} seconds", params.timeout));
     }
 
     if !advanced_options.is_empty() {
@@ -103,7 +101,6 @@ fn handle_search(params: SearchParams) -> Result<()> {
         exclude_filenames: params.exclude_filenames,
         reranker: &params.reranker,
         frequency_search: use_frequency,
-        exact: params.exact,
         max_results: params.max_results,
         max_bytes: params.max_bytes,
         max_tokens: params.max_tokens,
@@ -112,6 +109,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
         merge_threshold: params.merge_threshold,
         dry_run: params.dry_run,
         session: params.session.as_deref(),
+        timeout: params.timeout,
     };
 
     let limited_results = perform_probe(&search_options)?;
@@ -123,10 +121,9 @@ fn handle_search(params: SearchParams) -> Result<()> {
     let query_plan = if search_options.queries.len() > 1 {
         // Join multiple queries with AND
         let combined_query = search_options.queries.join(" AND ");
-        crate::search::query::create_query_plan(&combined_query, search_options.exact).ok()
+        crate::search::query::create_query_plan(&combined_query, false).ok()
     } else {
-        crate::search::query::create_query_plan(&search_options.queries[0], search_options.exact)
-            .ok()
+        crate::search::query::create_query_plan(&search_options.queries[0], false).ok()
     };
 
     if limited_results.results.is_empty() {
@@ -226,7 +223,6 @@ async fn main() -> Result<()> {
                 exclude_filenames: args.exclude_filenames,
                 reranker: args.reranker,
                 frequency_search: args.frequency_search,
-                exact: args.exact,
                 max_results: args.max_results,
                 max_bytes: args.max_bytes,
                 max_tokens: args.max_tokens,
@@ -236,6 +232,7 @@ async fn main() -> Result<()> {
                 dry_run: args.dry_run,
                 format: args.format,
                 session: args.session,
+                timeout: args.timeout,
             })?
         }
         Some(Commands::Search {
@@ -246,7 +243,6 @@ async fn main() -> Result<()> {
             exclude_filenames,
             reranker,
             frequency_search,
-            exact,
             max_results,
             max_bytes,
             max_tokens,
@@ -256,6 +252,7 @@ async fn main() -> Result<()> {
             dry_run,
             format,
             session,
+            timeout,
         }) => handle_search(SearchParams {
             pattern,
             paths,
@@ -264,7 +261,6 @@ async fn main() -> Result<()> {
             exclude_filenames,
             reranker,
             frequency_search,
-            exact,
             max_results,
             max_bytes,
             max_tokens,
@@ -274,6 +270,7 @@ async fn main() -> Result<()> {
             dry_run,
             format,
             session,
+            timeout,
         })?,
         Some(Commands::Extract {
             files,
@@ -281,20 +278,33 @@ async fn main() -> Result<()> {
             context_lines,
             format,
             from_clipboard,
+            input_file,
             to_clipboard,
             dry_run,
             diff,
             allow_tests,
+            keep_input,
+            prompt,
+            instructions,
         }) => extract::handle_extract(extract::ExtractOptions {
             files,
             custom_ignores: ignore,
             context_lines,
             format,
             from_clipboard,
+            input_file,
             to_clipboard,
             dry_run,
             diff,
             allow_tests,
+            keep_input,
+            prompt: prompt.map(|p| {
+                crate::extract::PromptTemplate::from_str(&p).unwrap_or_else(|e| {
+                    eprintln!("Warning: {}", e);
+                    crate::extract::PromptTemplate::Engineer
+                })
+            }),
+            instructions,
         })?,
         Some(Commands::Query {
             pattern,
