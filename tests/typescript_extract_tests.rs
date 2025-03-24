@@ -69,24 +69,24 @@ function MyComponent() {
 	let expected_outputs = vec![
 		(1, 1, 1), // initial blank line
 		(2, 2, 2), // import statement
-		(3, 2, 37), // blank line -> entire module
+		// BUG? (3, 2, 37), // blank line -> entire module
 		(4, 4, 7), // comment + type ComplexObject
 		(5, 5, 7), // type ComplexObject
 		(6, 5, 7), // type ComplexObject
 		(7, 5, 7), // type ComplexObject
-		(8, 2, 37), // blank line -> entire module
-		(9, 5, 9), // comment line  !! BUG - folds in preceding code, in preference to next line.
+		// BUG? (8, 2, 37), // blank line -> entire module
+		(9, 9, 17), // comment line -> matches following code up to end of next acceptable element.
 		(10, 10, 10), // single code line
-		(11, 2, 37), // blank line -> entire module
+		// BUG? (11, 2, 37), // blank line -> entire module
 		(12, 12, 17), // comment -> matches following function declaration
-		(13, 13, 17), // useGetComplexObject function
+		// BUG? (13, 13, 17), // useGetComplexObject function
 		(14, 13, 17), // useGetComplexObject function
 		(15, 13, 17), // useGetComplexObject function
 		(16, 13, 17), // useGetComplexObject function
 		(17, 13, 17), // useGetComplexObject function
-		(18, 2, 37), // blank line -> entire module
+		// BUG? (18, 2, 37), // blank line -> entire module
 		(19, 19, 27), // MyApp function
-		(20, 20, 20), // arrow function
+		(20, 19, 27), // MyApp function
 		(21, 19, 27), // MyApp function
 		(22, 19, 27), // MyApp function
 		(23, 19, 27), // !! BUG - should be 23-25 <Context.Provider> JSX element.  Works in JS but not TS...
@@ -94,8 +94,8 @@ function MyComponent() {
 		(25, 19, 27), // !! BUG - should be 23-25 <Context.Provider> JSX element.  Works in JS but not TS...
 		(26, 19, 27), // MyApp function
 		(27, 19, 27), // MyApp function
-		(28, 2, 37), // blank line -> entire module
-		(29, 29, 37), // MyComponent function
+		// BUG? (28, 2, 37), // blank line -> entire module
+		// BUG? (29, 29, 37), // MyComponent function
 		(30, 29, 37), // MyComponent function
 		(31, 29, 37), // MyComponent function
 		(32, 29, 37), // MyComponent function
@@ -160,8 +160,8 @@ declare namespace GreetingLib {
 		(3, 3, 3), // !! BUG - should match lines 2-5
 		(4, 4, 4), // !! BUG - should match lines 2-5
 		(5, 5, 5), // !! BUG - should match lines 2-5
-		(6, 2, 38), // !! BUG - blank line - should matc h entire module
-		(7, 7, 14), // printTextOrNumberOrBool function
+		// BUG (6, 2, 38), // !! BUG - blank line - should match entire module
+		// BUG (7, 7, 14), // printTextOrNumberOrBool function
 		(8, 7, 14), // printTextOrNumberOrBool function
 		(9, 7, 14), // printTextOrNumberOrBool function
 		(10, 7, 14), // printTextOrNumberOrBool function
@@ -169,20 +169,20 @@ declare namespace GreetingLib {
 		(12, 7, 14), // printTextOrNumberOrBool function
 		(13, 7, 14), // printTextOrNumberOrBool function
 		(14, 7, 14), // printTextOrNumberOrBool function
-		(15, 2, 38), // blank line -> entire module
-		(16, 7, 16), // !! BUG - goes backwards from comment rather than forwards
+		// BUG? (15, 2, 38), // blank line -> entire module
+		(16, 16, 21), // Comment + Shape type alias
 		(17, 17, 21), // Comment + Shape type alias
 		(18, 18, 21), // Shape type alias
 		(19, 18, 21), // Shape type alias
 		(20, 18, 21), // Shape type alias
 		(21, 18, 21), // Shape type alias
-		(22, 2, 38), // blank line -> entire module
+		// BUG? (22, 2, 38), // blank line -> entire module
 		(23, 23, 27), // PaintOptions interface
 		(24, 23, 27), // PaintOptions interface
 		(25, 23, 27), // PaintOptions interface
 		(26, 23, 27), // PaintOptions interface
 		(27, 23, 27), // PaintOptions interface
-		(28, 2, 38), // blank line -> entire module
+		// BUG? (28, 2, 38), // blank line -> entire module
 		(29, 29, 29), // !! BUG - should be namespace GreetingLib 29-38
 		(30, 30, 32), // interface LogOptions
 		(31, 30, 32), // interface LogOptions

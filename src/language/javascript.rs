@@ -38,6 +38,7 @@ impl LanguageImpl for JavaScriptLanguage {
                 | "function"
                 | "export_statement"
                 | "jsx_element"
+                | "jsx_self_closing_element"
                 | "property_identifier"  // Added for JavaScript method names
                 | "class_body"           // Added for JavaScript class body
                 | "class" // Added for JavaScript class

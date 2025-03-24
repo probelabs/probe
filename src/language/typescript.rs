@@ -46,6 +46,7 @@ impl LanguageImpl for TypeScriptLanguage {
                 | "function"
                 | "export_statement"
                 | "jsx_element"
+                | "jsx_self_closing_element"
                 | "interface_declaration"  // TypeScript specific
                 | "type_alias_declaration" // TypeScript specific
                 | "enum_declaration" // TypeScript specific
