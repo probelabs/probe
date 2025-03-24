@@ -109,7 +109,7 @@ const user = {
 }
 
 #[test]
-fn test_javascript_array() {    
+fn test_javascript_extraction_array() {    
 		let content = r#"
 const array = [
 	{
@@ -145,7 +145,7 @@ const array = [
 }
 
 #[test]
-fn test_javascript_react_code() {
+fn test_javascript_extraction_react_code() {
 
 	/* Code provided by Facebook in their React Tutorial: https://react.dev/learn/tutorial-tic-tac-toe */
 		let content = r#"
