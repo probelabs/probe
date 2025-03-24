@@ -16,9 +16,6 @@ fn execute_test(content: &str, expected_outputs: Vec<(usize, usize, usize)>) {
 		// Call process_file_for_extraction for the current line number
 		let result = process_file_for_extraction(&file_path, Some(line_number), None, None, false, 0, None).unwrap();
 
-		// Print or log the result for debugging
-		//println!("Result for line {}: {:?}", line_number, result.code);
-
 		// Compare outputs against the expected output structure
 		assert_eq!(result.file, file_path.to_string_lossy().to_string());
 		assert!(result.lines.0 == expected_start && result.lines.1 == expected_end, 
