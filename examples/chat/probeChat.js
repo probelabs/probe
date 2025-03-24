@@ -466,6 +466,23 @@ If you don't know the answer or can't find relevant information, be honest about
         throw new Error('Request was cancelled by the user');
       }
 
+      // Determine max tokens based on model name
+      let maxTokens = 4096; // Default value
+
+      // If model starts with gpt-4o, set to 4096
+      if (this.model.startsWith('gpt-4o')) {
+        maxTokens = 4096;
+      }
+      // If model is claude-3-5, claude-3-7, gemini, or o3-mini, set to 8000
+      else if (this.model.includes('claude-3-5') || this.model.includes('claude-3-7') ||
+        this.model.includes('gemini') || this.model.includes('o3-mini')) {
+        maxTokens = 8000;
+      }
+
+      if (this.debug) {
+        console.log(`[DEBUG] Using max tokens: ${maxTokens} for model: ${this.model}`);
+      }
+
       // Configure generateText options
       const generateOptions = {
         model: this.provider(this.model),
@@ -474,7 +491,7 @@ If you don't know the answer or can't find relevant information, be honest about
         tools: this.tools,
         maxSteps: 15,
         temperature: 0.7,
-        maxTokens: 8000,
+        maxTokens: maxTokens,
         signal: this.abortController.signal
       };
 

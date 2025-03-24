@@ -24,7 +24,6 @@ function parseArgs() {
 				process.env.FORCE_PROVIDER = provider;
 				console.error(`Forcing provider: ${provider}`);
 			} else {
-				console.error(`Invalid provider: ${provider}. Must be one of: anthropic, openai, google`);
 				process.exit(1);
 			}
 		}
