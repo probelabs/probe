@@ -30,6 +30,7 @@ impl LanguageImpl for JavaScriptLanguage {
             node.kind(),
             "function_declaration"
                 | "object"
+                | "array"
                 | "function_expression"
                 | "method_definition"
                 | "class_declaration"
