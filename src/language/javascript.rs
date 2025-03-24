@@ -29,13 +29,12 @@ impl LanguageImpl for JavaScriptLanguage {
         matches!(
             node.kind(),
             "function_declaration"
+                | "function_expression"
                 | "method_definition"
                 | "class_declaration"
                 | "arrow_function"
                 | "function"
                 | "export_statement"
-                | "variable_declaration"
-                | "lexical_declaration"
         )
     }
 
