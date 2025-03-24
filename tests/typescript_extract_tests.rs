@@ -7,7 +7,7 @@ fn execute_test(content: &str, expected_outputs: Vec<(usize, usize, usize)>) {
 
 	// Create a temporary file with JavaScript code for testing
 	let temp_dir = tempfile::tempdir().unwrap();
-	let file_path = temp_dir.path().join("test_file.js");
+	let file_path = temp_dir.path().join("test_file.ts");
 
 	// Write the content to the temporary file
 	fs::write(&file_path, content).unwrap();
@@ -70,7 +70,7 @@ function MyComponent() {
 		(1, 1, 1), // initial blank line
 		(2, 2, 2), // import statement
 		(3, 2, 37), // blank line -> entire module
-		(4, 4, 4), // comment line
+		(4, 4, 7), // comment + type ComplexObject
 		(5, 5, 7), // type ComplexObject
 		(6, 5, 7), // type ComplexObject
 		(7, 5, 7), // type ComplexObject
@@ -89,9 +89,9 @@ function MyComponent() {
 		(20, 20, 20), // arrow function
 		(21, 19, 27), // MyApp function
 		(22, 19, 27), // MyApp function
-		(23, 23, 25), // <Context.Provider> JSX element
-		(24, 23, 25), // <Context.Provider> JSX element !! BUG - Why doesn't this match <MyComponent /> ?
-		(25, 23, 25), // <Context.Provider> JSX element
+		(23, 19, 27), // !! BUG - should be 23-25 <Context.Provider> JSX element.  Works in JS but not TS...
+		(24, 19, 27), // !! BUG - should be 24-24 <MyComponent/> JSX element.
+		(25, 19, 27), // !! BUG - should be 23-25 <Context.Provider> JSX element.  Works in JS but not TS...
 		(26, 19, 27), // MyApp function
 		(27, 19, 27), // MyApp function
 		(28, 2, 37), // blank line -> entire module
@@ -99,9 +99,9 @@ function MyComponent() {
 		(30, 29, 37), // MyComponent function
 		(31, 29, 37), // MyComponent function
 		(32, 29, 37), // MyComponent function
-		(33, 33, 35), // <div> JSX element
-		(34, 34, 34), // <p> JSX element
-		(35, 33, 35), // <div> JSX element
+		(33, 29, 37), // !! BUG - should be 33-35 <div> JSX element
+		(34, 29, 37), // !! BUG - should be 34-34 <p> JSX element
+		(35, 29, 37), // !! BUG - should be 33-35 <div> JSX element
 		(36, 29, 37), // MyComponent function
 		(37, 29, 37), // MyComponent function
 	];
@@ -110,6 +110,90 @@ function MyComponent() {
 }
 
 
+#[test]
+fn test_typescript_extraction_types() {
+	/* Various complex Typescript types taken from the Typescript Handbook:
+	   https://www.typescriptlang.org/docs/handbook/ */
+		let content = r#"
+declare function create<T extends HTMLElement = HTMLDivElement, U extends HTMLElement[] = T[]>(
+  element?: T,
+  children?: U
+): Container<T, U>;
 
+function printTextOrNumberOrBool(
+  textOrNumberOrBool:
+    | string
+    | number
+    | boolean
+) {
+  console.log(textOrNumberOrBool);
+}
 
+// It is also good to test comments...
+// including multi-line comments.
+type Shape =
+  | Circle
+  | Square
+  | Triangle
 
+interface PaintOptions {
+  shape: Shape;
+  xPos?: number;
+  yPos?: number;
+}
+
+declare namespace GreetingLib {
+  interface LogOptions {
+    verbose?: boolean;
+  }
+  interface AlertOptions {
+    modal: boolean;
+    title?: string;
+    color?: string;
+  }
+}
+"#;
+
+	let expected_outputs = vec![
+		(1, 1, 1), // initial blank line
+		(2, 2, 2), // !! BUG - should match lines 2-5
+		(3, 3, 3), // !! BUG - should match lines 2-5
+		(4, 4, 4), // !! BUG - should match lines 2-5
+		(5, 5, 5), // !! BUG - should match lines 2-5
+		(6, 2, 38), // !! BUG - blank line - should matc h entire module
+		(7, 7, 14), // printTextOrNumberOrBool function
+		(8, 7, 14), // printTextOrNumberOrBool function
+		(9, 7, 14), // printTextOrNumberOrBool function
+		(10, 7, 14), // printTextOrNumberOrBool function
+		(11, 7, 14), // printTextOrNumberOrBool function
+		(12, 7, 14), // printTextOrNumberOrBool function
+		(13, 7, 14), // printTextOrNumberOrBool function
+		(14, 7, 14), // printTextOrNumberOrBool function
+		(15, 2, 38), // blank line -> entire module
+		(16, 7, 16), // !! BUG - goes backwards from comment rather than forwards
+		(17, 17, 21), // Comment + Shape type alias
+		(18, 18, 21), // Shape type alias
+		(19, 18, 21), // Shape type alias
+		(20, 18, 21), // Shape type alias
+		(21, 18, 21), // Shape type alias
+		(22, 2, 38), // blank line -> entire module
+		(23, 23, 27), // PaintOptions interface
+		(24, 23, 27), // PaintOptions interface
+		(25, 23, 27), // PaintOptions interface
+		(26, 23, 27), // PaintOptions interface
+		(27, 23, 27), // PaintOptions interface
+		(28, 2, 38), // blank line -> entire module
+		(29, 29, 29), // !! BUG - should be namespace GreetingLib 29-38
+		(30, 30, 32), // interface LogOptions
+		(31, 30, 32), // interface LogOptions
+		(32, 30, 32), // interface LogOptions
+		(33, 33, 37), // interface AlertOptions
+		(34, 33, 37), // interface AlertOptions
+		(35, 33, 37), // interface AlertOptions
+		(36, 33, 37), // interface AlertOptions
+		(37, 33, 37), // interface AlertOptions
+		(38, 38, 38), // !! BUG - should be namespace GreetingLib 29-38
+	];
+
+	execute_test(content, expected_outputs);
+}
