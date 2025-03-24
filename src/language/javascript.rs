@@ -37,6 +37,7 @@ impl LanguageImpl for JavaScriptLanguage {
                 | "arrow_function"
                 | "function"
                 | "export_statement"
+                | "jsx_element"
         )
     }
 

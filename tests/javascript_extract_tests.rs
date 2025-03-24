@@ -47,10 +47,7 @@ const positionComponent = {
 };
 "#;
 
-	// Declare expected output for values 1, 2, 3, etc.
 	let expected_outputs = vec![
-		// This needs to be replaced with actual expected data structures
-		// Example structure: (line: usize, expected_value: SomeType)
 		(0, 1, 1), // before start of file
 		(1, 1, 1), // initial blank line
 		(2, 2, 2), // reisterComponent call
@@ -91,10 +88,7 @@ const user = {
 };
 "#;
 
-	// Declare expected output for values 1, 2, 3, etc.
 	let expected_outputs = vec![
-		// This needs to be replaced with actual expected data structures
-		// Example structure: (line: usize, expected_value: SomeType)
 		(0, 1, 1), // before start of file
 		(1, 1, 1), // blank line
 		(2, 2, 13), // entire object
@@ -131,10 +125,7 @@ const array = [
 ];
 "#;
 
-	// Declare expected output for values 1, 2, 3, etc.
 	let expected_outputs = vec![
-		// This needs to be replaced with actual expected data structures
-		// Example structure: (line: usize, expected_value: SomeType)
 		(1, 1, 1), // blank line
 		(2, 2, 13), // entire array
 		(3, 3, 7), // 1st object
@@ -151,4 +142,159 @@ const array = [
 	];
 
 	execute_test(content, expected_outputs);
+}
+
+#[test]
+fn test_javascript_react_code() {
+
+	/* Code provided by Facebook in their React Tutorial: https://react.dev/learn/tutorial-tic-tac-toe */
+		let content = r#"
+import { useState } from 'react';
+
+function Square({ value, onSquareClick }) {
+  return (
+    <button className="square" onClick={onSquareClick}>
+      {value}
+    </button>
+  );
+}
+
+function Board({ xIsNext, squares, onPlay }) {
+  function handleClick(i) {
+    if (calculateWinner(squares) || squares[i]) {
+      return;
+    }
+    const nextSquares = squares.slice();
+    if (xIsNext) {
+      nextSquares[i] = 'X';
+    } else {
+      nextSquares[i] = 'O';
+    }
+    onPlay(nextSquares);
+  }
+
+  const winner = calculateWinner(squares);
+  let status;
+  if (winner) {
+    status = 'Winner: ' + winner;
+  } else {
+    status = 'Next player: ' + (xIsNext ? 'X' : 'O');
+  }
+
+  return (
+    <>
+      <div className="status">{status}</div>
+      <div className="board-row">
+        <Square value={squares[0]} onSquareClick={() => handleClick(0)} />
+        <Square value={squares[1]} onSquareClick={() => handleClick(1)} />
+        <Square value={squares[2]} onSquareClick={() => handleClick(2)} />
+      </div>
+      <div className="board-row">
+        <Square value={squares[3]} onSquareClick={() => handleClick(3)} />
+        <Square value={squares[4]} onSquareClick={() => handleClick(4)} />
+        <Square value={squares[5]} onSquareClick={() => handleClick(5)} />
+      </div>
+      <div className="board-row">
+        <Square value={squares[6]} onSquareClick={() => handleClick(6)} />
+        <Square value={squares[7]} onSquareClick={() => handleClick(7)} />
+        <Square value={squares[8]} onSquareClick={() => handleClick(8)} />
+      </div>
+    </>
+  );
+}
+
+export default function Game() {
+  const [history, setHistory] = useState([Array(9).fill(null)]);
+  const [currentMove, setCurrentMove] = useState(0);
+  const xIsNext = currentMove % 2 === 0;
+  const currentSquares = history[currentMove];
+
+  function handlePlay(nextSquares) {
+    const nextHistory = [...history.slice(0, currentMove + 1), nextSquares];
+    setHistory(nextHistory);
+    setCurrentMove(nextHistory.length - 1);
+  }
+
+  function jumpTo(nextMove) {
+    setCurrentMove(nextMove);
+  }
+
+  const moves = history.map((squares, move) => {
+    let description;
+    if (move > 0) {
+      description = 'Go to move #' + move;
+    } else {
+      description = 'Go to game start';
+    }
+    return (
+      <li key={move}>
+        <button onClick={() => jumpTo(move)}>{description}</button>
+      </li>
+    );
+  });
+
+  return (
+    <div className="game">
+      <div className="game-board">
+        <Board xIsNext={xIsNext} squares={currentSquares} onPlay={handlePlay} />
+      </div>
+      <div className="game-info">
+        <ol>{moves}</ol>
+      </div>
+    </div>
+  );
+}
+
+function calculateWinner(squares) {
+  const lines = [
+    [0, 1, 2],
+    [3, 4, 5],
+    [6, 7, 8],
+    [0, 3, 6],
+    [1, 4, 7],
+    [2, 5, 8],
+    [0, 4, 8],
+    [2, 4, 6],
+  ];
+  for (let i = 0; i < lines.length; i++) {
+    const [a, b, c] = lines[i];
+    if (squares[a] && squares[a] === squares[b] && squares[a] === squares[c]) {
+      return squares[a];
+    }
+  }
+  return null;
+}
+"#;
+
+// Declare expected output for values 1, 2, 3, etc.
+// Since the fragment is long, we check a selection of sample points, rather than 
+// checking exhaustively.
+let expected_outputs = vec![
+	(1, 1, 1), // blank line
+	(5, 4, 10), // Square function
+	(10, 4, 10), // Square function
+	(15, 13, 24), // handleClick function
+	(20, 13, 24), // handleClick function
+	(25, 12, 54), // entire Board function
+	(30, 12, 54), // entire Board function
+	(35, 35, 52), // JSX element 
+	(40, 40, 40), // single JSX element <Square>
+	(45, 45, 45), // single JSX element <Square>
+	(50, 50, 50), // single JSX element <Square>
+	(55, 2, 116), // entire object
+	(60, 56, 96), // entire Game function
+	(65, 62, 66), // handlePlay function
+	(70, 68, 70), // jumpTo function
+	(75, 72, 84), // history.map expression
+	(80, 80, 82), // <li> JSX element
+	(85, 56, 96), // entire Game function
+	(90, 88, 90), // "game-board" <div> JSX element
+	(95, 56, 96), // entire Game function
+	(100, 100, 100), // single-line array in lines
+	(105, 105, 105), // single-line array in lines
+	(110, 98, 116), // calculateWinner function
+	(115, 98, 116), // calculateWinner function
+];
+
+execute_test(content, expected_outputs);
 }
