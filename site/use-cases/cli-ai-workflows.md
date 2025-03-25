@@ -39,7 +39,7 @@ For regular use, you might prefer a global installation:
 
 ```bash
 # Install globally
-npm install -g @buger/probe-chat
+npm install -g @buger/probe-chat@latest
 
 # Start the chat interface
 probe-chat

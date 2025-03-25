@@ -38,7 +38,7 @@ npx -y @buger/probe-chat@latest /path/to/your/project
 
 ```bash
 # Install globally
-npm install -g @buger/probe-chat
+npm install -g @buger/probe-chat@latest
 
 # Start the chat interface in CLI mode
 probe-chat

@@ -154,7 +154,7 @@ If you prefer, you can install the package globally:
 
 ```bash
 # Install globally
-npm install -g @buger/probe-chat
+npm install -g @buger/probe-chat@latest
 
 # Start the web interface
 probe-chat --web --port 3000

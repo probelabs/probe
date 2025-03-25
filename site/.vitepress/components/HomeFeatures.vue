@@ -119,13 +119,13 @@ Lines: 56-62
         <p>Built by developers for developers, Probe is designed to be easy to install and extend:</p>
         
         <div class="language-bash"><pre style="font-family:monospace;color: rgb(68, 68, 68); background-color: rgb(243, 243, 243); font-weight: 400; "><code><span style="color: rgb(105, 112, 112); font-weight: 400;"># Use the core Probe tool without installation</span>
-npx -y @buger/probe search <span style="color: rgb(136, 0, 0); font-weight: 400;">"error handling"</span> ./src
+npx -y @buger/probe@latest search <span style="color: rgb(136, 0, 0); font-weight: 400;">"error handling"</span> ./src
 
 <span style="color: rgb(105, 112, 112); font-weight: 400;"># Start an interactive AI chat with your codebase</span>
-npx -y @buger/probe-chat
+npx -y @buger/probe-chat@latest
 
 <span style="color: rgb(105, 112, 112); font-weight: 400;"># Start the web interface on localhost:3000</span>
-npx -y @buger/probe-web</code></pre></div>
+npx -y @buger/probe-chat@latest --web</code></pre></div>
       </template>
       <template #code>
         <div class="language-typescript"><pre style="font-family:monospace;color: rgb(68, 68, 68); background-color: rgb(243, 243, 243); font-weight: 400; "><code><span style="color: rgb(105, 112, 112); font-weight: 400;">// Example of using Probe's Node.js SDK</span>

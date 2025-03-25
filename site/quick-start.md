@@ -7,7 +7,7 @@ This guide will help you get up and running with Probe quickly. For more detaile
 The easiest way to install Probe is via npm:
 
 ```bash
-npm install -g @buger/probe
+npm install -g @buger/probe@latest
 ```
 
 Or using curl (for macOS and Linux):

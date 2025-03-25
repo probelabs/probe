@@ -26,7 +26,7 @@ The easiest way to use Probe's MCP server is through NPX:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp"
+        "@buger/probe-mcp@latest"
       ]
     }
   }
@@ -44,7 +44,7 @@ If you prefer to install the MCP server manually:
 
 1. Install the NPM package globally:
    ```bash
-   npm install -g @buger/probe-mcp
+   npm install -g @buger/probe-mcp@latest
    ```
 
 2. Configure your AI editor to use the installed package:
@@ -221,7 +221,7 @@ You can configure the MCP server to search specific directories by default:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp"
+        "@buger/probe-mcp@latest"
       ],
       "env": {
         "PROBE_DEFAULT_PATHS": "/path/to/project1,/path/to/project2"
@@ -242,7 +242,7 @@ You can set default limits for search results:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp"
+        "@buger/probe-mcp@latest"
       ],
       "env": {
         "PROBE_MAX_TOKENS": "20000"
@@ -263,7 +263,7 @@ If you have a custom build of the Probe binary, you can specify its path:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp"
+        "@buger/probe-mcp@latest"
       ],
       "env": {
         "PROBE_PATH": "/path/to/custom/probe"
@@ -284,7 +284,7 @@ Enable debug mode for detailed logging:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp"
+        "@buger/probe-mcp@latest"
       ],
       "env": {
         "DEBUG": "1"
@@ -349,7 +349,7 @@ To integrate Probe with Cline:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp"
+        "@buger/probe-mcp@latest"
       ]
     }
   }
@@ -385,7 +385,7 @@ If you encounter a "Binary not found" error:
 
 1. Check if the Probe binary exists in the expected location
 2. Set the PROBE_PATH environment variable to the location of your Probe binary
-3. Try reinstalling the @buger/probe-mcp package
+3. Try reinstalling the @buger/probe-mcp@latest package
 
 #### Permission Denied
 
@@ -493,7 +493,7 @@ You can configure multiple AI assistants to use the same Probe MCP server:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp"
+        "@buger/probe-mcp@latest"
       ],
       "env": {
         "PROBE_DEFAULT_PATHS": "/path/to/project"

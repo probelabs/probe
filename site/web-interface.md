@@ -42,7 +42,7 @@ export ALLOWED_FOLDERS=/path/to/folder1,/path/to/folder2
 
 ```bash
 # Install globally
-npm install -g @buger/probe-chat
+npm install -g @buger/probe-chat@latest
 
 # Run in CLI mode
 probe-chat

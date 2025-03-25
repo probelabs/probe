@@ -23,7 +23,7 @@ hero:
       <div class="quick-start-option">
               <h3>Core Search</h3>
               <div class="pre-wrapper">
-                <div class="language-bash"><pre><code>npx -y @buger/probe "+stemming -lexer"</code></pre></div>
+                <div class="language-bash"><pre><code>npx -y @buger/probe@latest "+stemming -lexer"</code></pre></div>
               </div>
               <p class="option-description">Fast semantic code search with elastic search syntax</p>
             </div>

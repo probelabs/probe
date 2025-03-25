@@ -15,7 +15,7 @@ The easiest way to integrate Probe with your AI code editor is through the MCP (
 ```bash
 # You don't need to install anything permanently
 # NPX will run the package directly
-npx -y @buger/probe-mcp
+npx -y @buger/probe-mcp@latest
 ```
 
 This command will:
@@ -46,7 +46,7 @@ This command will:
          "command": "npx",
          "args": [
            "-y",
-           "@buger/probe-mcp"
+           "@buger/probe-mcp@latest"
          ]
        }
      }
@@ -96,7 +96,7 @@ If you encounter issues with the integration:
 
 ```bash
 # Run the MCP server with debug logging
-DEBUG=1 npx -y @buger/probe-mcp
+DEBUG=1 npx -y @buger/probe-mcp@latest
 ```
 
 This will show detailed logs of:
@@ -133,7 +133,7 @@ For more control over the MCP server:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp"
+        "@buger/probe-mcp@latest"
       ],
       "env": {
         "PROBE_DEFAULT_PATHS": "/path/to/project1,/path/to/project2",

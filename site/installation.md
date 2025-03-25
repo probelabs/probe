@@ -9,7 +9,7 @@ You can install Probe with a single command using npm, curl, or PowerShell:
 ### Using npm (Recommended for Node.js users)
 
 ```bash
-npm install -g @buger/probe
+npm install -g @buger/probe@latest
 ```
 
 ### Using curl (For macOS and Linux)
@@ -186,7 +186,7 @@ To uninstall Probe:
 
 ```bash
 # If installed via npm
-npm uninstall -g @buger/probe
+npm uninstall -g @buger/probe@latest
 
 # If installed via curl script or manually on macOS/Linux
 sudo rm /usr/local/bin/probe

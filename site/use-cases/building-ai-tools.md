@@ -12,10 +12,10 @@ Start by adding Probe to your Node.js project:
 
 ```bash
 # Add to your project
-npm install @buger/probe
+npm install @buger/probe@latest
 
 # Or install globally
-npm install -g @buger/probe
+npm install -g @buger/probe@latest
 ```
 
 During installation, the package will automatically download the appropriate Probe binary for your platform (Windows, macOS, or Linux).

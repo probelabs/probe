@@ -95,8 +95,8 @@ Probe can be used in multiple ways, depending on your workflow:
 
 ### NPM Integration
 
-- **Global Installation**: Simple `npm install -g @buger/probe` for system-wide access
-- **NPX Execution**: Run without installation via `npx -y @buger/probe-chat`
+- **Global Installation**: Simple `npm install -g @buger/probe@latest` for system-wide access
+- **NPX Execution**: Run without installation via `npx -y @buger/probe-chat@latest`
 - **Node.js API**: Programmatic access via JavaScript
 - **Vercel AI SDK**: Streaming AI responses in web applications
 

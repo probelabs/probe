@@ -558,10 +558,10 @@ console.log(`Found ${results2.matches.length} new matches`);
 
 ```bash
 # Local installation
-npm install @buger/probe
+npm install @buger/probe@latest
 
 # Global installation
-npm install -g @buger/probe
+npm install -g @buger/probe@latest
 ```
 
 ### Basic Usage

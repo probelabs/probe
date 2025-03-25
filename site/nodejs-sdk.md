@@ -7,13 +7,13 @@ Probe provides a powerful Node.js SDK that allows you to integrate its code sear
 ### Local Installation
 
 ```bash
-npm install @buger/probe
+npm install @buger/probe@latest
 ```
 
 ### Global Installation
 
 ```bash
-npm install -g @buger/probe
+npm install -g @buger/probe@latest
 ```
 
 During installation, the package will automatically download the appropriate Probe binary for your platform (Windows, macOS, or Linux).
@@ -34,7 +34,7 @@ During installation, the package will automatically download the appropriate Pro
 ### Using as a Node.js Library
 
 ```javascript
-import { search, query, extract } from '@buger/probe';
+import { search, query, extract } from '@buger/probe@latest';
 
 // Search for code
 const searchResults = await search({
@@ -80,7 +80,7 @@ The package installs the actual Probe binary, not a JavaScript wrapper, so you g
 The `search` function allows you to search for patterns in your codebase using Elasticsearch-like query syntax.
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@buger/probe@latest';
 
 const results = await search({
   path: '/path/to/your/project',
@@ -133,7 +133,7 @@ const results = await search({
 The `query` function allows you to find specific code structures using tree-sitter patterns.
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@buger/probe@latest';
 
 const results = await query({
   path: '/path/to/your/project',
@@ -171,7 +171,7 @@ const results = await query({
 The `extract` function allows you to extract code blocks from files based on file paths and line numbers.
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@buger/probe@latest';
 
 const results = await extract({
   files: [
@@ -206,7 +206,7 @@ const results = await extract({
 The SDK provides functions for managing the Probe binary:
 
 ```javascript
-import { getBinaryPath, setBinaryPath } from '@buger/probe';
+import { getBinaryPath, setBinaryPath } from '@buger/probe@latest';
 
 // Get the path to the probe binary
 const binaryPath = await getBinaryPath({
@@ -226,7 +226,7 @@ The SDK provides built-in tools for integrating with AI frameworks. The latest v
 
 ```javascript
 import { generateText } from 'ai';
-import { searchTool, queryTool, extractTool } from '@buger/probe';
+import { searchTool, queryTool, extractTool } from '@buger/probe@latest';
 import { randomUUID } from 'crypto';
 
 // Generate a session ID
@@ -265,7 +265,7 @@ async function chatWithAI(userMessage) {
 The SDK provides tool generators that allow you to create configured instances of tools with specific options:
 
 ```javascript
-import { searchTool, queryTool, extractTool } from '@buger/probe';
+import { searchTool, queryTool, extractTool } from '@buger/probe@latest';
 import { randomUUID } from 'crypto';
 
 // Generate a session ID
@@ -297,7 +297,7 @@ const extract = extractTool({ debug: true });
 For backward compatibility, the package still exports pre-configured tools:
 
 ```javascript
-import { tools } from '@buger/probe';
+import { tools } from '@buger/probe@latest';
 
 // Use pre-configured tools
 const { searchTool, queryTool, extractTool } = tools;
@@ -307,7 +307,7 @@ const { searchTool, queryTool, extractTool } = tools;
 
 ```javascript
 import { ChatOpenAI } from '@langchain/openai';
-import { tools, createSearchTool, createQueryTool, createExtractTool } from '@buger/probe';
+import { tools, createSearchTool, createQueryTool, createExtractTool } from '@buger/probe@latest';
 import { randomUUID } from 'crypto';
 
 // Generate a session ID
@@ -343,7 +343,7 @@ async function chatWithAI(userMessage) {
 The package provides a default system message that you can use with your AI assistants:
 
 ```javascript
-import { DEFAULT_SYSTEM_MESSAGE, searchTool, queryTool, extractTool } from '@buger/probe';
+import { DEFAULT_SYSTEM_MESSAGE, searchTool, queryTool, extractTool } from '@buger/probe@latest';
 
 // Use the default system message in your AI application
 const systemMessage = DEFAULT_SYSTEM_MESSAGE;
@@ -373,7 +373,7 @@ const result = await generateText({
 
 ```javascript
 import express from 'express';
-import { search, query, extract } from '@buger/probe';
+import { search, query, extract } from '@buger/probe@latest';
 
 const app = express();
 app.use(express.json());
@@ -431,7 +431,7 @@ app.listen(3000, () => {
 ### Creating a Custom AI Assistant
 
 ```javascript
-import { search, query, extract } from '@buger/probe';
+import { search, query, extract } from '@buger/probe@latest';
 import { ChatOpenAI } from '@langchain/openai';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
@@ -496,7 +496,7 @@ console.log(answer);
 ### Batch Processing Multiple Repositories
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@buger/probe@latest';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -544,7 +544,7 @@ console.log('Search completed and results saved to search-results.json');
 ### Code Analysis Pipeline
 
 ```javascript
-import { search, query } from '@buger/probe';
+import { search, query } from '@buger/probe@latest';
 import fs from 'fs/promises';
 
 async function analyzeCodebase(codebasePath) {
@@ -660,7 +660,7 @@ This approach ensures that you get the actual native binary, not a JavaScript wr
 If you encounter a "Binary not found" error:
 
 ```javascript
-import { setBinaryPath } from '@buger/probe';
+import { setBinaryPath } from '@buger/probe@latest';
 
 // Manually set the path to the probe binary
 setBinaryPath('/path/to/probe/binary');
@@ -680,7 +680,7 @@ chmod +x /path/to/probe/binary
 If you encounter a network error during binary download:
 
 ```javascript
-import { getBinaryPath } from '@buger/probe';
+import { getBinaryPath } from '@buger/probe@latest';
 
 // Force download with a specific version
 const binaryPath = await getBinaryPath({
@@ -694,7 +694,7 @@ const binaryPath = await getBinaryPath({
 If you encounter a timeout error:
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@buger/probe@latest';
 
 // Increase the timeout by using the execAsync function directly
 import { promisify } from 'util';
@@ -702,7 +702,7 @@ import { exec } from 'child_process';
 const execAsync = promisify(exec);
 
 // Get the binary path
-import { getBinaryPath } from '@buger/probe';
+import { getBinaryPath } from '@buger/probe@latest';
 const binaryPath = await getBinaryPath();
 
 // Execute the command with a longer timeout
@@ -731,7 +731,7 @@ There are two ways to use session-based caching:
 #### 1. Using the search function directly
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@buger/probe@latest';
 
 // First search with empty session string (generates a session ID)
 const results1 = await search({
@@ -758,7 +758,7 @@ console.log(`Found ${results2.matches.length} new matches`);
 #### 2. Using the tool generators with Vercel AI SDK
 
 ```javascript
-import { searchTool } from '@buger/probe';
+import { searchTool } from '@buger/probe@latest';
 import { randomUUID } from 'crypto';
 
 // Generate a session ID
