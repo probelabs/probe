@@ -50,7 +50,6 @@ impl LanguageImpl for TypeScriptLanguage {
                 | "interface_declaration"  // TypeScript specific
                 | "type_alias_declaration" // TypeScript specific
                 | "enum_declaration" // TypeScript specific
-                
         )
     }
 
