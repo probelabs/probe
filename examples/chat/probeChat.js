@@ -5,6 +5,8 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText } from 'ai';
 import { randomUUID } from 'crypto';
 import { TokenCounter } from './tokenCounter.js';
+import { writeFileSync } from 'fs';
+import { join } from 'path';
 import { existsSync } from 'fs';
 // Import the tools that emit events and the listFilesByLevel utility
 import { DEFAULT_SYSTEM_MESSAGE, searchTool, queryTool, extractTool, listFilesByLevel } from '@buger/probe';
@@ -57,7 +59,7 @@ export class ProbeChat {
     this.sessionId = options.sessionId || randomUUID();
 
     // Get debug mode
-    this.debug = process.env.DEBUG === '1';
+    this.debug = process.env.DEBUG_CHAT === '1';
 
     if (this.debug) {
       console.log(`[DEBUG] Generated session ID for chat: ${this.sessionId}`);
@@ -195,6 +197,7 @@ export class ProbeChat {
       this.model = 'none';
       this.apiType = 'none';
       console.log('Running in NO API KEYS MODE - setup instructions will be shown to users');
+      console.log('Note: For debugging, set DEBUG_CHAT=1 environment variable');
     }
   }
 
@@ -293,19 +296,21 @@ If you don't know the answer or can't find relevant information, be honest about
         console.log(`[DEBUG] Generating file list for ${searchDirectory}...`);
       }
 
-      const files = await listFilesByLevel({
+      let files = await listFilesByLevel({
         directory: searchDirectory,
         maxFiles: 100,
         respectGitignore: true
       });
 
-      if (files.length > 0) {
-        systemMessage += `\n\nHere is a list of up to 100 files in the codebase (organized by directory depth):\n\n`;
-        systemMessage += files.map(file => `- ${file}`).join('\n');
+      // Exclude debug file(s) and node_modules in debug mode to prevent clutter or accidental large listing
+      files = files.filter((file) => {
+        const lower = file.toLowerCase();
+        return !lower.includes('probe-debug.txt') && !lower.includes('node_modules');
+      });
 
-        if (this.debug) {
-          console.log(`[DEBUG] Added ${files.length} files to system message`);
-        }
+      if (files.length > 0) {
+        systemMessage += `\n\nHere is a list of up to ${files.length} files in the codebase (organized by directory depth):\n\n`;
+        systemMessage += files.map(file => `- ${file}`).join('\n');
       }
     } catch (error) {
       console.warn(`Warning: Could not generate file list: ${error.message}`);
@@ -343,8 +348,8 @@ If you don't know the answer or can't find relevant information, be honest about
 
     // Create a new AbortController
     this.abortController = new AbortController();
-    // If a session ID is provided, always use it (don't restore the original)
-    if (sessionId) {
+    // If a session ID is provided and it's different from the current one, update it
+    if (sessionId && sessionId !== this.sessionId) {
       if (this.debug) {
         console.log(`[DEBUG] Using provided session ID: ${sessionId} (instead of ${this.sessionId})`);
       }
@@ -353,23 +358,10 @@ If you don't know the answer or can't find relevant information, be honest about
       // Update tool configurations with the new session ID
       this.configOptions.sessionId = sessionId;
 
+      // Only recreate tools if the session ID has changed
       // Create configured tool instances that emit SSE events
       // We need to ensure the tools use the correct session ID
       this.tools = {
-        // probe: {
-        //   ...probeTool,
-        //   execute: async (params) => {
-        //     // Ensure the session ID is passed to the tool
-        //     const enhancedParams = {
-        //       ...params,
-        //       sessionId: this.sessionId
-        //     };
-        //     if (this.debug) {
-        //       console.log(`[DEBUG] ProbeChat executing probeTool with sessionId: ${this.sessionId}`);
-        //     }
-        //     return await probeTool.execute(enhancedParams);
-        //   }
-        // },
         search: {
           ...searchToolInstance,
           execute: async (params) => {
@@ -436,19 +428,28 @@ If you don't know the answer or can't find relevant information, be honest about
     try {
       if (this.debug) {
         console.log(`[DEBUG] Received user message: ${message}`);
+        console.log(`[DEBUG] Current history length before adding new message: ${this.history.length}`);
+
+        // Log the current history content
+        if (this.history.length > 0) {
+          console.log(`[DEBUG] Current history content:`);
+          this.history.forEach((msg, index) => {
+            const preview = msg.content.length > 50 ?
+              `${msg.content.substring(0, 50)}...` : msg.content;
+            console.log(`[DEBUG]   ${index + 1}. ${msg.role}: ${preview}`);
+          });
+        } else {
+          console.log(`[DEBUG] No previous history found for this session`);
+        }
       }
 
       // Count tokens in the user message
       this.tokenCounter.addRequestTokens(message);
 
-      // Limit history to prevent token overflow
+      // Limit history to prevent token overflow when DEBUG_CHAT=1
       if (this.history.length > MAX_HISTORY_MESSAGES) {
         const historyStart = this.history.length - MAX_HISTORY_MESSAGES;
         this.history = this.history.slice(historyStart);
-
-        if (this.debug) {
-          console.log(`[DEBUG] Trimmed history to ${this.history.length} messages`);
-        }
       }
 
       // Prepare messages array
@@ -459,6 +460,26 @@ If you don't know the answer or can't find relevant information, be honest about
 
       if (this.debug) {
         console.log(`[DEBUG] Sending ${messages.length} messages to model`);
+        console.log(`[DEBUG] Message breakdown:`);
+        console.log(`[DEBUG]   - ${this.history.length} messages from history`);
+        console.log(`[DEBUG]   - 1 new user message`);
+
+        // Calculate approximate token count for the conversation
+        let totalTokens = 0;
+        messages.forEach((msg) => {
+          // Rough estimate: 1 token per 4 characters
+          const estimatedTokens = Math.ceil(msg.content.length / 4);
+          totalTokens += estimatedTokens;
+        });
+
+        console.log(`[DEBUG] Estimated total tokens for conversation: ~${totalTokens}`);
+        console.log(`[DEBUG] Messages being sent to model:`);
+
+        messages.forEach((msg, index) => {
+          const preview = msg.content.length > 50 ?
+            `${msg.content.substring(0, 50)}...` : msg.content;
+          console.log(`[DEBUG]   ${index + 1}. ${msg.role}: ${preview}`);
+        });
       }
 
       // Check if the request has been cancelled
@@ -489,11 +510,45 @@ If you don't know the answer or can't find relevant information, be honest about
         messages: messages,
         system: await this.getSystemMessage(),
         tools: this.tools,
-        maxSteps: 15,
+        maxSteps: 10, // Reduced from 15 to help prevent token limit issues
         temperature: 0.7,
         maxTokens: maxTokens,
         signal: this.abortController.signal
       };
+
+      // Write debug information to file if in debug mode (DEBUG_CHAT=1)
+      if (this.debug) {
+        try {
+          const systemMessage = await this.getSystemMessage();
+
+          // Estimate token counts for better debugging
+          const systemTokens = Math.ceil(systemMessage.length / 4);
+          let messagesTokens = 0;
+          messages.forEach(m => {
+            messagesTokens += Math.ceil(m.content.length / 4);
+          });
+
+          const totalEstimatedTokens = systemTokens + messagesTokens;
+
+          // Write to probe-debug.txt in the current directory
+          const debugFilePath = join(process.cwd(), 'probe-debug.txt');
+          writeFileSync(
+            debugFilePath,
+            `=== LATEST AI REQUEST (${new Date().toISOString()}) ===\n\n` +
+            `Session ID: ${this.sessionId}\n` +
+            `Model: ${this.model} (${this.apiType})\n` +
+            `History Length: ${this.history.length} messages\n` +
+            `Estimated Tokens: ~${totalEstimatedTokens} (System: ~${systemTokens}, Messages: ~${messagesTokens})\n\n` +
+            `=== SYSTEM MESSAGE ===\n${systemMessage}\n\n` +
+            `=== MESSAGES SENT TO AI ===\n${JSON.stringify(messages, null, 2)}\n\n`,
+            { flag: 'w' } // 'w' flag overwrites the file each time
+          );
+
+          console.log(`[DEBUG] Wrote latest AI request to ${debugFilePath} (Est. tokens: ~${totalEstimatedTokens})`);
+        } catch (error) {
+          console.error(`[DEBUG] Error writing debug file:`, error);
+        }
+      }
 
       // console.log("Tools:", JSON.stringify(this.tools, null, 2));
 
@@ -524,6 +579,34 @@ If you don't know the answer or can't find relevant information, be honest about
         // Count tokens in the response
         this.tokenCounter.addResponseTokens(responseText);
 
+        // Append the AI response to the debug file
+        if (this.debug) {
+          try {
+            const debugFilePath = join(process.cwd(), 'probe-debug.txt');
+            writeFileSync(
+              debugFilePath,
+              `\n=== AI RESPONSE ===\n${responseText}\n\n` +
+              `=== TOKEN USAGE ===\n` +
+              `Request tokens: ${this.tokenCounter.requestTokens}\n` +
+              `Response tokens: ${this.tokenCounter.responseTokens}\n` +
+              `Total tokens: ${this.tokenCounter.requestTokens + this.tokenCounter.responseTokens
+              }\n`,
+              { flag: 'a' } // 'a' flag appends to the file
+            );
+
+            // Also log final "raw message" that we're sending back to the UI (only if DEBUG_CHAT=1)
+            writeFileSync(
+              debugFilePath,
+              `\n=== SENT TO UI (FINAL) ===\n${responseText}\n`,
+              { flag: 'a' }
+            );
+
+            console.log(`[DEBUG] Appended AI response to ${debugFilePath}`);
+          } catch (error) {
+            console.error(`[DEBUG] Error appending to debug file:`, error);
+          }
+        }
+
         // Log tool usage if available
         if (result.toolCalls && result.toolCalls.length > 0) {
           console.log(`Tool was used: ${result.toolCalls.length} times`);
@@ -535,13 +618,74 @@ If you don't know the answer or can't find relevant information, be honest about
               if (call.args) {
                 console.log(`[DEBUG] Tool call ${index + 1} args:`, JSON.stringify(call.args, null, 2));
               }
+
+              // Calculate result size for debugging token limits
+              let resultSize = 0;
+              let resultPreview = '';
               if (call.result) {
-                const preview = typeof call.result === 'string'
-                  ? (call.result.length > 100
-                    ? call.result.substring(0, 100) + '... (truncated)'
-                    : call.result)
-                  : JSON.stringify(call.result, null, 2).substring(0, 100) + '... (truncated)';
-                console.log(`[DEBUG] Tool call ${index + 1} result preview: ${preview}`);
+                const resultStr = typeof call.result === 'string'
+                  ? call.result
+                  : JSON.stringify(call.result, null, 2);
+                resultSize = resultStr.length;
+                resultPreview = resultStr.length > 100
+                  ? resultStr.substring(0, 100) + '... (truncated)'
+                  : resultStr;
+                console.log(`[DEBUG] Tool call ${index + 1} result size: ~${Math.ceil(resultSize / 4)} tokens (${resultSize} chars)`);
+                console.log(`[DEBUG] Tool call ${index + 1} result preview: ${resultPreview}`);
+              }
+
+              // Append tool call information to the debug file
+              try {
+                const debugFilePath = join(process.cwd(), 'probe-debug.txt');
+                const toolCallInfo =
+                  `\n=== TOOL CALL ${index + 1} ===\n` +
+                  `Name: ${call.name}\n` +
+                  `Args: ${JSON.stringify(call.args, null, 2)}\n\n` +
+                  `Result Size: ~${Math.ceil(resultSize / 4)} tokens (${resultSize} chars)\n` +
+                  `Result: ${typeof call.result === 'string'
+                    ? call.result
+                    : JSON.stringify(call.result, null, 2)}\n`;
+
+                writeFileSync(debugFilePath, toolCallInfo, { flag: 'a' });
+
+                // After each tool call, also write the current conversation state to help debug token growth
+                const currentMessages = [
+                  ...this.history,
+                  { role: 'user', content: message }
+                ];
+
+                // Estimate total tokens in conversation after this tool call
+                let totalEstimatedTokens = 0;
+                currentMessages.forEach(m => {
+                  totalEstimatedTokens += Math.ceil(m.content.length / 4);
+                });
+
+                // Add estimated tokens from tool calls
+                if (result.toolCalls) {
+                  result.toolCalls.forEach((tc, i) => {
+                    if (i <= index) { // Only count up to current tool call
+                      const tcResult = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2);
+                      totalEstimatedTokens += Math.ceil(tcResult.length / 4);
+
+                      // Add args tokens
+                      const tcArgs = JSON.stringify(tc.args, null, 2);
+                      totalEstimatedTokens += Math.ceil(tcArgs.length / 4);
+                    }
+                  });
+                }
+
+                writeFileSync(
+                  debugFilePath,
+                  `\n=== CONVERSATION STATE AFTER TOOL CALL ${index + 1} ===\n` +
+                  `Current estimated tokens: ~${totalEstimatedTokens}\n` +
+                  `History messages: ${this.history.length}\n` +
+                  `Tool calls so far: ${index + 1} of ${result.toolCalls.length}\n`,
+                  { flag: 'a' }
+                );
+
+                console.log(`[DEBUG] Appended tool call ${index + 1} and conversation state to ${debugFilePath}`);
+              } catch (error) {
+                console.error(`[DEBUG] Error appending tool call to debug file:`, error);
               }
             }
             // Note: We no longer need to emit events here as they're emitted directly from the tools
@@ -588,12 +732,19 @@ If you don't know the answer or can't find relevant information, be honest about
    * @returns {string} - The new session ID
    */
   clearHistory() {
+    const oldHistoryLength = this.history.length;
+    const oldSessionId = this.sessionId;
+
     this.history = [];
     this.sessionId = randomUUID();
     this.tokenCounter.clear();
 
     if (this.debug) {
-      console.log(`[DEBUG] Cleared chat history; new session ID: ${this.sessionId}`);
+      console.log(`[DEBUG] ===== CLEARING CHAT HISTORY =====`);
+      console.log(`[DEBUG] Cleared ${oldHistoryLength} messages from history`);
+      console.log(`[DEBUG] Old session ID: ${oldSessionId}`);
+      console.log(`[DEBUG] New session ID: ${this.sessionId}`);
+      console.log(`[DEBUG] Token counter reset to zero`);
     }
 
     // Update the session ID in the config options

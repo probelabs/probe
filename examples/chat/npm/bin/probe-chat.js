@@ -36,7 +36,7 @@ const pathArg = program.args[0];
 
 // Set debug mode if specified
 if (options.debug) {
-  process.env.DEBUG = 'true';
+  process.env.DEBUG_CHAT = 'true';
   console.log(chalk.yellow('Debug mode enabled'));
 }
 
@@ -49,12 +49,12 @@ if (options.model) {
 // Set ALLOWED_FOLDERS if path is provided
 if (pathArg) {
   const resolvedPath = resolve(pathArg);
-  
+
   // Check if the path exists
   if (existsSync(resolvedPath)) {
     // Get the real path (resolves symlinks)
     const realPath = realpathSync(resolvedPath);
-    
+
     // Set the ALLOWED_FOLDERS environment variable
     process.env.ALLOWED_FOLDERS = realPath;
     console.log(chalk.blue(`Using codebase path: ${realPath}`));
@@ -68,17 +68,17 @@ if (pathArg) {
 let chat;
 try {
   chat = new ProbeChat();
-  
+
   // Print the model being used
   if (chat.apiType === 'anthropic') {
     console.log(chalk.green(`Using Anthropic API with model: ${chat.model}`));
   } else {
     console.log(chalk.green(`Using OpenAI API with model: ${chat.model}`));
   }
-  
+
   // Print the session ID
   console.log(chalk.blue(`Session ID: ${chat.getSessionId()}`));
-  
+
   console.log(chalk.cyan('Type "exit" or "quit" to end the chat'));
   console.log(chalk.cyan('Type "usage" to see token usage statistics'));
   console.log(chalk.cyan('Type "clear" to clear the chat history'));
@@ -108,7 +108,7 @@ async function startChat() {
         prefix: '',
       },
     ]);
-    
+
     // Handle special commands
     if (message.toLowerCase() === 'exit' || message.toLowerCase() === 'quit') {
       console.log(chalk.yellow('Goodbye!'));
@@ -126,17 +126,17 @@ async function startChat() {
       console.log(chalk.blue(`New session ID: ${newSessionId}`));
       continue;
     }
-    
+
     // Show a spinner while waiting for the response
     const spinner = ora('Thinking...').start();
-    
+
     try {
       // Get response from the chat
       const response = await chat.chat(message);
-      
+
       // Stop the spinner
       spinner.stop();
-      
+
       // Print the formatted response
       console.log(chalk.green('Assistant:'));
       console.log(formatResponse(response));

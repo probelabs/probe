@@ -614,7 +614,7 @@
 			<div class="header-container">
 				<div class="header-left">
 					<img src="logo.png" alt="Probe Logo" class="header-logo">
-					<a href="javascript:location.reload()" class="new-chat-link">New chat</a>
+					<a href="#" class="new-chat-link">New chat</a>
 				</div>
 				<div id="api-settings">
 					<a href="#" id="header-reset-api-key"
@@ -781,17 +781,14 @@
 			}
 		}
 
-		// Session ID for this chat session - we'll store it in localStorage to maintain consistency
-		let sessionId;
-		// Try to get the session ID from localStorage
-		if (localStorage.getItem('probeSessionId')) {
-			sessionId = localStorage.getItem('probeSessionId');
-			console.log(`Using existing session ID from localStorage: ${sessionId}`);
-		} else {
-			// Generate a new session ID if none exists
+		// Check if we have an existing session ID in localStorage, otherwise generate a new one
+		let sessionId = localStorage.getItem('probeSessionId');
+		if (!sessionId) {
 			sessionId = crypto.randomUUID();
 			localStorage.setItem('probeSessionId', sessionId);
 			console.log(`Generated new session ID: ${sessionId}`);
+		} else {
+			console.log(`Resuming session with ID: ${sessionId}`);
 		}
 		const messagesDiv = document.getElementById('messages');
 		const form = document.getElementById('input-form');
@@ -1146,6 +1143,12 @@
 				eventSource.close();
 			}
 
+			// Clear any existing displayed tool calls when connecting with a new session ID
+			if (window.displayedToolCalls) {
+				window.displayedToolCalls.clear();
+				console.log('Cleared displayed tool calls for new session');
+			}
+
 			console.log(`%c Connecting to SSE endpoint with session ID: ${sessionId}`, 'background: #FF9800; color: white; padding: 2px 5px; border-radius: 2px;');
 			// Connect to SSE endpoint with session ID
 			const sseUrl = `/api/tool-events?sessionId=${sessionId}`;
@@ -1222,6 +1225,11 @@
 
 			// Handle tool call events
 			eventSource.addEventListener('toolCall', (event) => {
+				// If no request is in progress, ignore the tool call
+				if (!isRequestInProgress) {
+					console.log('Tool call received but no request in progress, ignoring');
+					return;
+				}
 				console.log('%c Received tool call event:', 'background: #4CAF50; color: white; padding: 2px 5px; border-radius: 2px;', event);
 				try {
 					const toolCall = JSON.parse(event.data);
@@ -1379,7 +1387,6 @@
 				console.error('Error adding tool call to message:', error);
 			}
 		}
-
 		// Connect to tool events on page load
 		window.addEventListener('DOMContentLoaded', () => {
 			// Check if we're in no API keys mode
@@ -1387,6 +1394,62 @@
 
 			if (!noApiKeys) {
 				connectToToolEvents();
+			}
+		});
+
+		// Handle "New chat" button click
+		document.addEventListener('DOMContentLoaded', () => {
+			const newChatLink = document.querySelector('.new-chat-link');
+			if (newChatLink) {
+				newChatLink.addEventListener('click', (e) => {
+					e.preventDefault();
+
+					// Cancel any ongoing requests for the current session
+					cancelRequest(sessionId).catch(err => console.error('Error cancelling session on new chat:', err));
+
+					// Generate a new session ID
+					sessionId = crypto.randomUUID();
+					console.log(`New chat triggered. New session ID: ${sessionId}`);
+
+					// Update localStorage with the new session ID
+					localStorage.setItem('probeSessionId', sessionId);
+
+					// Clear the messages
+					messagesDiv.innerHTML = '';
+
+					// Reset the UI
+					positionInputForm();
+					searchSuggestionsDiv.style.display = 'block';
+
+					// Close existing SSE connection and reconnect with new session ID
+					if (eventSource) {
+						eventSource.close();
+					}
+					connectToToolEvents();
+
+					// Send a request to the server to clear the chat history for this session
+					fetch('/chat', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							message: '__clear_history__',
+							sessionId,
+							clearHistory: true
+						})
+					}).catch(err => console.error('Error clearing chat history:', err));
+				});
+			}
+		});
+
+		// Add event listener for page unload to cancel the current session
+		window.addEventListener('beforeunload', () => {
+			// If we have a sessionId that's about to become invalid, cancel it
+			if (sessionId) {
+				fetch('/cancel-request', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ sessionId })
+				}).catch((err) => console.error('Error cancelling session on unload:', err));
 			}
 		});
 

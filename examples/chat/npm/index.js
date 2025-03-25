@@ -28,40 +28,40 @@ export class ProbeChat {
   constructor(options = {}) {
     // Initialize options with defaults
     this.options = {
-      debug: process.env.DEBUG === 'true' || process.env.DEBUG === '1' || options.debug,
+      debug: process.env.DEBUG_CHAT === 'true' || process.env.DEBUG_CHAT === '1' || options.debug,
       model: options.model || process.env.MODEL_NAME,
       anthropicApiKey: options.anthropicApiKey || process.env.ANTHROPIC_API_KEY,
       openaiApiKey: options.openaiApiKey || process.env.OPENAI_API_KEY,
       anthropicApiUrl: options.anthropicApiUrl || process.env.ANTHROPIC_API_URL || 'https://api.anthropic.com/v1',
       openaiApiUrl: options.openaiApiUrl || process.env.OPENAI_API_URL || 'https://api.openai.com/v1',
-      allowedFolders: options.allowedFolders || (process.env.ALLOWED_FOLDERS ? 
+      allowedFolders: options.allowedFolders || (process.env.ALLOWED_FOLDERS ?
         process.env.ALLOWED_FOLDERS.split(',').map(folder => folder.trim()).filter(Boolean) : [])
     };
-    
+
     // Initialize token counter
     this.requestTokens = 0;
     this.responseTokens = 0;
-    
+
     // Generate a unique session ID for this chat instance
     this.sessionId = randomUUID();
-    
+
     if (this.options.debug) {
       console.log(`[DEBUG] Generated session ID for chat: ${this.sessionId}`);
     }
-    
+
     // Store the session ID in an environment variable for tools to access
     process.env.PROBE_SESSION_ID = this.sessionId;
-    
+
     // Initialize the chat model
     this.initializeModel();
-    
+
     // Initialize chat history
     this.history = [];
-    
+
     // Maximum number of messages to keep in history
     this.MAX_HISTORY_MESSAGES = 20;
   }
-  
+
   /**
    * Initialize the AI model based on available API keys
    */
@@ -77,10 +77,10 @@ export class ProbeChat {
         }
         return anthropic(modelName);
       };
-      
+
       this.model = this.options.model || 'claude-3-7-sonnet-latest';
       this.apiType = 'anthropic';
-      
+
       if (this.options.debug) {
         console.log(`[DEBUG] Using Anthropic API with model: ${this.model}`);
       }
@@ -94,10 +94,10 @@ export class ProbeChat {
         }
         return openai(modelName);
       };
-      
+
       this.model = this.options.model || 'gpt-4o-2024-05-13';
       this.apiType = 'openai';
-      
+
       if (this.options.debug) {
         console.log(`[DEBUG] Using OpenAI API with model: ${this.model}`);
       }
@@ -105,7 +105,7 @@ export class ProbeChat {
       throw new Error('No API key provided. Please set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.');
     }
   }
-  
+
   /**
    * Get the session ID
    * @returns {string} - The session ID
@@ -113,7 +113,7 @@ export class ProbeChat {
   getSessionId() {
     return this.sessionId;
   }
-  
+
   /**
    * Get token usage statistics
    * @returns {Object} - Token usage statistics
@@ -125,7 +125,7 @@ export class ProbeChat {
       total: this.requestTokens + this.responseTokens
     };
   }
-  
+
   /**
    * Get the system message with instructions for the AI
    * @returns {string} - The system message
@@ -142,7 +142,7 @@ export class ProbeChat {
 
     return systemMessage;
   }
-  
+
   /**
    * Count tokens in a text (approximate)
    * @param {string} text - The text to count tokens for
@@ -152,7 +152,7 @@ export class ProbeChat {
     // Rough approximation: 1 token ≈ 4 characters for English text
     return Math.ceil(text.length / 4);
   }
-  
+
   /**
    * Process a user message and get a response
    * @param {string} message - The user message
@@ -163,31 +163,31 @@ export class ProbeChat {
       if (this.options.debug) {
         console.log(`[DEBUG] Received user message: ${message}`);
       }
-      
+
       // Count tokens in the user message
       const messageTokens = this.countTokens(message);
       this.requestTokens += messageTokens;
-      
+
       // Limit history to prevent token overflow
       if (this.history.length > this.MAX_HISTORY_MESSAGES) {
         const historyStart = this.history.length - this.MAX_HISTORY_MESSAGES;
         this.history = this.history.slice(historyStart);
-        
+
         if (this.options.debug) {
           console.log(`[DEBUG] Trimmed history to ${this.history.length} messages`);
         }
       }
-      
+
       // Prepare messages array
       const messages = [
         ...this.history,
         { role: 'user', content: message }
       ];
-      
+
       if (this.options.debug) {
         console.log(`[DEBUG] Sending ${messages.length} messages to model`);
       }
-      
+
       // Configure generateText options
       const generateOptions = {
         model: this.provider(this.model),
@@ -201,7 +201,7 @@ export class ProbeChat {
         maxSteps: 15,
         temperature: 0.7
       };
-      
+
       // Add API-specific options
       if (this.apiType === 'anthropic' && this.model.includes('3-7')) {
         generateOptions.experimental_thinking = {
@@ -209,18 +209,18 @@ export class ProbeChat {
           budget: 8000
         };
       }
-      
+
       // Generate response
       const result = await generateText(generateOptions);
-      
+
       // Add the response to history
       this.history.push({ role: 'user', content: message });
       this.history.push({ role: 'assistant', content: result.text });
-      
+
       // Count tokens in the response
       const responseTokens = this.countTokens(result.text);
       this.responseTokens += responseTokens;
-      
+
       // Log tool usage
       if (result.toolCalls && result.toolCalls.length > 0 && this.options.debug) {
         console.log(`[DEBUG] Tool was used: ${result.toolCalls.length} times`);
@@ -228,14 +228,14 @@ export class ProbeChat {
           console.log(`[DEBUG] Tool call ${index + 1}: ${call.name}`);
         });
       }
-      
+
       return result.text;
     } catch (error) {
       console.error('Error generating response:', error);
       throw error;
     }
   }
-  
+
   /**
    * Clear the chat history
    */
@@ -243,11 +243,11 @@ export class ProbeChat {
     this.history = [];
     this.sessionId = randomUUID();
     process.env.PROBE_SESSION_ID = this.sessionId;
-    
+
     if (this.options.debug) {
       console.log(`[DEBUG] Chat history cleared, new session ID: ${this.sessionId}`);
     }
-    
+
     return this.sessionId;
   }
 }

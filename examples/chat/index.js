@@ -67,7 +67,7 @@ export function main() {
   const pathArg = program.args[0];
 
   if (options.debug) {
-    process.env.DEBUG = '1';
+    process.env.DEBUG_CHAT = '1';
     console.log(chalk.yellow('Debug mode enabled'));
   }
   if (options.model) {

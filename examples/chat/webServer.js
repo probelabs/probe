@@ -22,6 +22,26 @@ import { registerRequest, cancelRequest, clearRequest, isRequestActive } from '.
 // Get the directory name of the current module
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+
+// Map to store chat instances by session ID
+const chatSessions = new Map();
+
+/**
+ * Retrieve or create a ProbeChat instance keyed by sessionId.
+ */
+function getOrCreateChat(sessionId) {
+	if (!sessionId) {
+		// Safety fallback: generate a random ID if missing
+		sessionId = crypto.randomUUID();
+	}
+	if (chatSessions.has(sessionId)) {
+		return chatSessions.get(sessionId);
+	}
+	const newChat = new ProbeChat({ sessionId });
+	chatSessions.set(sessionId, newChat);
+	return newChat;
+}
+
 /**
  * Start the web server
  * @param {string} version - The version of the application
@@ -78,18 +98,63 @@ export function startWebServer(version, hasApiKeys = true) {
 	 */
 	async function handleNonStreamingChatRequest(req, res, message, sessionId) {
 		try {
-			const DEBUG = process.env.DEBUG === '1';
+			const DEBUG = process.env.DEBUG_CHAT === '1';
 			if (DEBUG) {
 				console.log(`\n[DEBUG] ===== API Chat Request (non-streaming) =====`);
 				console.log(`[DEBUG] User message: "${message}"`);
+				console.log(`[DEBUG] Session ID: ${sessionId}`);
 			}
 
-			// Use the ProbeChat instance to get a response
-			// If a session ID was provided, use it to track the conversation
-			const responseText = await probeChat.chat(message, sessionId);
+			// Check if we have a chat instance for this session
+			let chatInstance = chatSessions.get(sessionId);
+
+			if (DEBUG) {
+				if (chatInstance) {
+					console.log(`[DEBUG] Found existing chat instance for session: ${sessionId} with history length: ${chatInstance.history.length}`);
+				} else {
+					console.log(`[DEBUG] No existing chat instance found for session: ${sessionId}, creating new one`);
+				}
+			}
+
+			// If no chat instance exists for this session, create one
+			if (!chatInstance) {
+				chatInstance = new ProbeChat({ sessionId });
+				chatSessions.set(sessionId, chatInstance);
+
+				if (DEBUG) {
+					console.log(`[DEBUG] Created new chat instance for session: ${sessionId}`);
+					console.log(`[DEBUG] Total chat sessions in memory: ${chatSessions.size}`);
+
+					// Log all active sessions
+					console.log(`[DEBUG] Active sessions:`);
+					for (const [sid, chat] of chatSessions.entries()) {
+						console.log(`[DEBUG]   - Session ${sid}: ${chat.history.length} messages in history`);
+					}
+				}
+			} else if (DEBUG) {
+				console.log(`[DEBUG] Using existing chat instance with ${chatInstance.history.length} messages in history`);
+			}
+
+			// Check if this is a special clear history message
+			if (message === '__clear_history__' || JSON.parse(body).clearHistory) {
+				console.log(`Clearing chat history for session: ${sessionId}`);
+				// Clear the history for this chat instance
+				if (typeof chatInstance.clearHistory === 'function') {
+					chatInstance.clearHistory();
+					res.writeHead(200, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({
+						response: 'Chat history cleared',
+						timestamp: new Date().toISOString()
+					}));
+					return;
+				}
+			}
+
+			// Use the chat instance to get a response
+			const responseText = await chatInstance.chat(message);
 
 			// Get token usage
-			const tokenUsage = probeChat.getTokenUsage();
+			const tokenUsage = chatInstance.getTokenUsage();
 			totalRequestTokens = tokenUsage.request;
 			totalResponseTokens = tokenUsage.response;
 
@@ -148,10 +213,11 @@ export function startWebServer(version, hasApiKeys = true) {
 	 */
 	async function handleStreamingChatRequest(req, res, message, sessionId) {
 		try {
-			const DEBUG = process.env.DEBUG === '1';
+			const DEBUG = process.env.DEBUG_CHAT === '1';
 			if (DEBUG) {
 				console.log(`\n[DEBUG] ===== API Chat Request (streaming) =====`);
 				console.log(`[DEBUG] User message: "${message}"`);
+				console.log(`[DEBUG] Session ID: ${sessionId}`);
 			}
 
 			res.writeHead(200, {
@@ -161,12 +227,53 @@ export function startWebServer(version, hasApiKeys = true) {
 				'Connection': 'keep-alive'
 			});
 
-			// Use the ProbeChat instance to get a response
-			// If a session ID was provided, use it to track the conversation
-			const responseText = await probeChat.chat(message, sessionId);
+			// Check if we have a chat instance for this session
+			let chatInstance = chatSessions.get(sessionId);
+
+			if (DEBUG) {
+				if (chatInstance) {
+					console.log(`[DEBUG] Found existing chat instance for session: ${sessionId} with history length: ${chatInstance.history.length}`);
+				} else {
+					console.log(`[DEBUG] No existing chat instance found for session: ${sessionId}, creating new one`);
+				}
+			}
+
+			// If no chat instance exists for this session, create one
+			if (!chatInstance) {
+				chatInstance = new ProbeChat({ sessionId });
+				chatSessions.set(sessionId, chatInstance);
+
+				if (DEBUG) {
+					console.log(`[DEBUG] Created new chat instance for session: ${sessionId}`);
+					console.log(`[DEBUG] Total chat sessions in memory: ${chatSessions.size}`);
+
+					// Log all active sessions
+					console.log(`[DEBUG] Active sessions:`);
+					for (const [sid, chat] of chatSessions.entries()) {
+						console.log(`[DEBUG]   - Session ${sid}: ${chat.history.length} messages in history`);
+					}
+				}
+			} else if (DEBUG) {
+				console.log(`[DEBUG] Using existing chat instance with ${chatInstance.history.length} messages in history`);
+			}
+
+			// Check if this is a special clear history message
+			if (message === '__clear_history__' || JSON.parse(body).clearHistory) {
+				console.log(`Clearing chat history for session: ${sessionId}`);
+				// Clear the history for this chat instance
+				if (typeof chatInstance.clearHistory === 'function') {
+					chatInstance.clearHistory();
+					res.write('Chat history cleared');
+					res.end();
+					return;
+				}
+			}
+
+			// Use the chat instance to get a response
+			const responseText = await chatInstance.chat(message);
 
 			// Get token usage
-			const tokenUsage = probeChat.getTokenUsage();
+			const tokenUsage = chatInstance.getTokenUsage();
 			totalRequestTokens = tokenUsage.request;
 			totalResponseTokens = tokenUsage.response;
 
@@ -215,7 +322,7 @@ export function startWebServer(version, hasApiKeys = true) {
 
 	// Helper function to send SSE data
 	function sendSSEData(res, data, eventType = 'message') {
-		const DEBUG = process.env.DEBUG === '1';
+		const DEBUG = process.env.DEBUG_CHAT === '1';
 		try {
 			if (DEBUG) {
 				console.log(`[DEBUG] Sending SSE data, event type: ${eventType}`);
@@ -231,7 +338,7 @@ export function startWebServer(version, hasApiKeys = true) {
 		}
 	}
 
-	// Map to store active chat instances by session ID
+	// Map to store active chat instances by session ID for cancellation purposes
 	const activeChatInstances = new Map();
 
 	const server = createServer(async (req, res) => {
@@ -311,12 +418,12 @@ export function startWebServer(version, hasApiKeys = true) {
 				try {
 					const url = new URL(req.url, `http://${req.headers.host}`);
 					sessionId = url.searchParams.get('sessionId');
-					const DEBUG = process.env.DEBUG === '1';
+					const DEBUG = process.env.DEBUG_CHAT === '1';
 					if (DEBUG) {
 						console.log(`[DEBUG] Parsed URL: ${url.toString()}, sessionId: ${sessionId}`);
 					}
 				} catch (error) {
-					const DEBUG = process.env.DEBUG === '1';
+					const DEBUG = process.env.DEBUG_CHAT === '1';
 					if (DEBUG) {
 						console.error(`[DEBUG] Error parsing URL: ${error.message}`);
 					}
@@ -330,7 +437,7 @@ export function startWebServer(version, hasApiKeys = true) {
 				}
 
 				if (!sessionId) {
-					if (process.env.DEBUG === '1') {
+					if (process.env.DEBUG_CHAT === '1') {
 						console.error(`[DEBUG] No sessionId found in request URL: ${req.url}`);
 					}
 					res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -338,7 +445,7 @@ export function startWebServer(version, hasApiKeys = true) {
 					return;
 				}
 
-				const DEBUG = process.env.DEBUG === '1';
+				const DEBUG = process.env.DEBUG_CHAT === '1';
 				if (DEBUG) {
 					console.log(`[DEBUG] Setting up SSE connection for session: ${sessionId}`);
 				}
@@ -378,7 +485,7 @@ export function startWebServer(version, hasApiKeys = true) {
 
 				// Send a test event to verify the connection is working
 				setTimeout(() => {
-					const DEBUG = process.env.DEBUG === '1';
+					const DEBUG = process.env.DEBUG_CHAT === '1';
 
 					if (DEBUG) {
 						console.log(`[DEBUG] Sending test event to session: ${sessionId}`);
@@ -424,7 +531,7 @@ export function startWebServer(version, hasApiKeys = true) {
 
 				// Function to handle tool call events for this session
 				const handleToolCall = (toolCall) => {
-					const DEBUG = process.env.DEBUG === '1';
+					const DEBUG = process.env.DEBUG_CHAT === '1';
 
 					if (DEBUG) {
 						console.log(`[DEBUG] Handling tool call for session ${sessionId}:`);
@@ -471,7 +578,7 @@ export function startWebServer(version, hasApiKeys = true) {
 				}
 
 				// Log the number of listeners
-				if (process.env.DEBUG === '1') {
+				if (process.env.DEBUG_CHAT === '1') {
 					const listenerCount = toolCallEmitter.listenerCount(eventName);
 					console.log(`[DEBUG] Current listener count for ${eventName}: ${listenerCount}`);
 				}
@@ -509,7 +616,7 @@ export function startWebServer(version, hasApiKeys = true) {
 							return;
 						}
 
-						const DEBUG = process.env.DEBUG === '1';
+						const DEBUG = process.env.DEBUG_CHAT === '1';
 						if (DEBUG) {
 							console.log(`\n[DEBUG] ===== Cancel Request =====`);
 							console.log(`[DEBUG] Session ID: ${sessionId}`);
@@ -582,7 +689,7 @@ export function startWebServer(version, hasApiKeys = true) {
 							return;
 						}
 
-						const DEBUG = process.env.DEBUG === '1';
+						const DEBUG = process.env.DEBUG_CHAT === '1';
 						if (DEBUG) {
 							console.log(`\n[DEBUG] ===== API Search Request =====`);
 							console.log(`[DEBUG] Keywords: "${keywords}"`);
@@ -678,7 +785,7 @@ export function startWebServer(version, hasApiKeys = true) {
 							return;
 						}
 
-						const DEBUG = process.env.DEBUG === '1';
+						const DEBUG = process.env.DEBUG_CHAT === '1';
 						if (DEBUG) {
 							console.log(`\n[DEBUG] ===== API Query Request =====`);
 							console.log(`[DEBUG] Pattern: "${pattern}"`);
@@ -777,7 +884,7 @@ export function startWebServer(version, hasApiKeys = true) {
 							return;
 						}
 
-						const DEBUG = process.env.DEBUG === '1';
+						const DEBUG = process.env.DEBUG_CHAT === '1';
 						if (DEBUG) {
 							console.log(`\n[DEBUG] ===== API Extract Request =====`);
 							console.log(`[DEBUG] File path: "${file_path}"`);
@@ -869,174 +976,118 @@ export function startWebServer(version, hasApiKeys = true) {
 				});
 			},
 
-			'POST /api/chat': async (req, res) => {
-				let body = '';
-				req.on('data', chunk => body += chunk);
-				req.on('end', async () => {
-					try {
-						const { message, stream, sessionId, apiProvider, apiKey, apiUrl } = JSON.parse(body);
-
-						if (!message) {
-							res.writeHead(400, { 'Content-Type': 'application/json' });
-							res.end(JSON.stringify({ error: 'Missing required parameter: message' }));
-							return;
-						}
-
-						// Use the provided session ID or the default one
-						const chatSessionId = sessionId || probeChat.getSessionId();
-
-						// Create a temporary environment for this request if API key is provided
-						let tempProbeChat = probeChat;
-						if (apiKey) {
-							const DEBUG = process.env.DEBUG === '1';
-							if (DEBUG) {
-								console.log(`[DEBUG] Using API key from request for provider: ${apiProvider}`);
-							}
-
-							// Create a new ProbeChat instance with the provided API key
-							try {
-								// Set temporary environment variables
-								const originalEnv = {
-									ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-									OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-									GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
-									ANTHROPIC_API_URL: process.env.ANTHROPIC_API_URL,
-									OPENAI_API_URL: process.env.OPENAI_API_URL,
-									GOOGLE_API_URL: process.env.GOOGLE_API_URL,
-									FORCE_PROVIDER: process.env.FORCE_PROVIDER
-								};
-
-								// Clear all API keys first
-								process.env.ANTHROPIC_API_KEY = '';
-								process.env.OPENAI_API_KEY = '';
-								process.env.GOOGLE_API_KEY = '';
-
-								// Set the provided API key
-								if (apiProvider === 'anthropic') {
-									process.env.ANTHROPIC_API_KEY = apiKey;
-									if (apiUrl) process.env.ANTHROPIC_API_URL = apiUrl;
-									process.env.FORCE_PROVIDER = 'anthropic';
-								} else if (apiProvider === 'openai') {
-									process.env.OPENAI_API_KEY = apiKey;
-									if (apiUrl) process.env.OPENAI_API_URL = apiUrl;
-									process.env.FORCE_PROVIDER = 'openai';
-								} else if (apiProvider === 'google') {
-									process.env.GOOGLE_API_KEY = apiKey;
-									if (apiUrl) process.env.GOOGLE_API_URL = apiUrl;
-									process.env.FORCE_PROVIDER = 'google';
-								}
-
-								// Create a new ProbeChat instance with the provided API key
-								tempProbeChat = new ProbeChat({
-									sessionId: chatSessionId
-								});
-
-								// Restore original environment variables after creating the instance
-								process.env.ANTHROPIC_API_KEY = originalEnv.ANTHROPIC_API_KEY;
-								process.env.OPENAI_API_KEY = originalEnv.OPENAI_API_KEY;
-								process.env.GOOGLE_API_KEY = originalEnv.GOOGLE_API_KEY;
-								process.env.ANTHROPIC_API_URL = originalEnv.ANTHROPIC_API_URL;
-								process.env.OPENAI_API_URL = originalEnv.OPENAI_API_URL;
-								process.env.GOOGLE_API_URL = originalEnv.GOOGLE_API_URL;
-								process.env.FORCE_PROVIDER = originalEnv.FORCE_PROVIDER;
-
-								if (DEBUG) {
-									console.log(`[DEBUG] Created temporary ProbeChat instance with ${apiProvider} API key`);
-								}
-							} catch (error) {
-								console.error('Error creating temporary ProbeChat instance:', error);
-								// Fall back to the original instance
-								tempProbeChat = probeChat;
-							}
-						}
-
-						// Handle streaming vs non-streaming response
-						const shouldStream = stream !== false; // Default to streaming
-
-						if (!shouldStream) {
-							// Non-streaming response (complete response as JSON)
-							if (tempProbeChat !== probeChat) {
-								// Use the temporary instance with the provided API key
-								try {
-									const responseText = await tempProbeChat.chat(message, chatSessionId);
-									const tokenUsage = tempProbeChat.getTokenUsage();
-
-									res.writeHead(200, { 'Content-Type': 'application/json' });
-									res.end(JSON.stringify({
-										response: responseText,
-										tokenUsage: tokenUsage,
-										timestamp: new Date().toISOString()
-									}));
-								} catch (error) {
-									console.error('Error generating response with provided API key:', error);
-									res.writeHead(500, { 'Content-Type': 'application/json' });
-									res.end(JSON.stringify({
-										error: 'Error generating response with provided API key',
-										message: error.message,
-										status: 500
-									}));
-								}
-							} else {
-								// Use the original instance
-								await handleNonStreamingChatRequest(req, res, message, chatSessionId);
-							}
-						} else {
-							// Streaming response (chunks of text)
-							if (tempProbeChat !== probeChat) {
-								// Use the temporary instance with the provided API key
-								try {
-									res.writeHead(200, {
-										'Content-Type': 'text/plain',
-										'Transfer-Encoding': 'chunked',
-										'Cache-Control': 'no-cache',
-										'Connection': 'keep-alive'
-									});
-
-									const responseText = await tempProbeChat.chat(message, chatSessionId);
-									res.write(responseText);
-									res.end();
-								} catch (error) {
-									console.error('Error streaming response with provided API key:', error);
-									res.writeHead(500, { 'Content-Type': 'text/plain' });
-									res.end(`Error: Error generating response with provided API key - ${error.message}`);
-								}
-							} else {
-								// Use the original instance
-								await handleStreamingChatRequest(req, res, message, chatSessionId);
-							}
-						}
-					} catch (error) {
-						console.error('Error parsing request body:', error);
-						res.writeHead(400, { 'Content-Type': 'application/json' });
-						res.end(JSON.stringify({ error: 'Invalid JSON in request body' }));
-					}
-				});
-			},
-
-			'POST /chat': (req, res) => {
+			'POST /chat': (req, res) => { // This is the route used by the frontend UI
 				let body = '';
 				req.on('data', chunk => body += chunk);
 				req.on('end', async () => {
 					try {
 						const requestData = JSON.parse(body);
-						const { message, sessionId, apiProvider, apiKey, apiUrl } = requestData;
+						const { message, sessionId, apiProvider, apiKey, apiUrl, clearHistory } = requestData; // Added clearHistory
 
-						const DEBUG = process.env.DEBUG === '1';
-						// Debug logs moved to conditional block below
-
+						const DEBUG = process.env.DEBUG_CHAT === '1';
 						if (DEBUG) {
 							console.log(`\n[DEBUG] ===== Chat Request =====`);
-							console.log(`[DEBUG] Full request data:`, requestData);
+							const safeRequestData = { ...requestData, apiKey: apiKey ? '******' : undefined };
+							console.log(`[DEBUG] Full request data:`, safeRequestData);
 							console.log(`[DEBUG] User message: "${message}"`);
-							console.log(`[DEBUG] Session ID: ${sessionId || 'not provided'}`);
-							if (sessionId) {
-								console.log(`[DEBUG] Session ID: ${sessionId}`);
-							}
-							if (apiKey) {
-								console.log(`[DEBUG] API key provided for provider: ${apiProvider}`);
-							}
+							console.log(`[DEBUG] Session ID from request: ${sessionId || 'not provided'}`);
+							if (apiKey) console.log(`[DEBUG] API key provided for provider: ${apiProvider}`);
+							if (clearHistory) console.log(`[DEBUG] Clear history flag set.`);
 						}
 
+						// --- Session and Instance Management (REVISED) ---
+						const chatSessionId = sessionId || randomUUID(); // Ensure we always have a session ID
+						if (DEBUG) console.log(`[DEBUG] Using session ID for chat: ${chatSessionId}`);
+
+						// 1. Try to get the existing instance
+						let chatInstance = chatSessions.get(chatSessionId);
+
+						// 2. If no instance exists, create a NEW one
+						if (!chatInstance) {
+							if (DEBUG) console.log(`[DEBUG] No existing chat instance found for session: ${chatSessionId}, creating new one.`);
+
+							// Temporarily set env vars IF apiKey is provided in the request for instance creation
+							const originalEnv = {};
+							let restoreEnv = false;
+							if (apiKey) {
+								restoreEnv = true;
+								// Store originals
+								originalEnv.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+								originalEnv.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+								originalEnv.GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+								originalEnv.ANTHROPIC_API_URL = process.env.ANTHROPIC_API_URL;
+								originalEnv.OPENAI_API_URL = process.env.OPENAI_API_URL;
+								originalEnv.GOOGLE_API_URL = process.env.GOOGLE_API_URL;
+								originalEnv.FORCE_PROVIDER = process.env.FORCE_PROVIDER;
+
+								// Clear server keys and set from request
+								process.env.ANTHROPIC_API_KEY = ''; process.env.OPENAI_API_KEY = ''; process.env.GOOGLE_API_KEY = '';
+								if (apiProvider === 'anthropic') { process.env.ANTHROPIC_API_KEY = apiKey; if (apiUrl) process.env.ANTHROPIC_API_URL = apiUrl; process.env.FORCE_PROVIDER = 'anthropic'; }
+								else if (apiProvider === 'openai') { process.env.OPENAI_API_KEY = apiKey; if (apiUrl) process.env.OPENAI_API_URL = apiUrl; process.env.FORCE_PROVIDER = 'openai'; }
+								else if (apiProvider === 'google') { process.env.GOOGLE_API_KEY = apiKey; if (apiUrl) process.env.GOOGLE_API_URL = apiUrl; process.env.FORCE_PROVIDER = 'google'; }
+								if (DEBUG) console.log(`[DEBUG] Temporarily set API key for provider: ${apiProvider} to create new instance.`);
+							} else if (DEBUG) {
+								console.log(`[DEBUG] Creating new instance with default/server-configured API key.`);
+							}
+
+							// Create the instance
+							try {
+								chatInstance = new ProbeChat({ sessionId: chatSessionId });
+								chatSessions.set(chatSessionId, chatInstance); // Store the new instance
+								if (DEBUG) console.log(`[DEBUG] Created and stored new chat instance for session: ${chatSessionId}. Total sessions: ${chatSessions.size}`);
+							} catch (error) {
+								console.error('Error creating new ProbeChat instance:', error);
+								// Restore env vars on error too
+								if (restoreEnv) {
+									process.env.ANTHROPIC_API_KEY = originalEnv.ANTHROPIC_API_KEY; process.env.OPENAI_API_KEY = originalEnv.OPENAI_API_KEY; process.env.GOOGLE_API_KEY = originalEnv.GOOGLE_API_KEY;
+									process.env.ANTHROPIC_API_URL = originalEnv.ANTHROPIC_API_URL; process.env.OPENAI_API_URL = originalEnv.OPENAI_API_URL; process.env.GOOGLE_API_URL = originalEnv.GOOGLE_API_URL;
+									process.env.FORCE_PROVIDER = originalEnv.FORCE_PROVIDER;
+								}
+								if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain' });
+								res.end(`Error: Failed to initialize chat session - ${error.message}`);
+								return;
+							}
+
+							// Restore original environment variables if they were temporarily changed
+							if (restoreEnv) {
+								process.env.ANTHROPIC_API_KEY = originalEnv.ANTHROPIC_API_KEY; process.env.OPENAI_API_KEY = originalEnv.OPENAI_API_KEY; process.env.GOOGLE_API_KEY = originalEnv.GOOGLE_API_KEY;
+								process.env.ANTHROPIC_API_URL = originalEnv.ANTHROPIC_API_URL; process.env.OPENAI_API_URL = originalEnv.OPENAI_API_URL; process.env.GOOGLE_API_URL = originalEnv.GOOGLE_API_URL;
+								process.env.FORCE_PROVIDER = originalEnv.FORCE_PROVIDER;
+								if (DEBUG) console.log(`[DEBUG] Restored original environment variables after instance creation.`);
+							}
+						}
+						// 3. If an instance WAS found, USE IT. Do NOT recreate.
+						else {
+							if (DEBUG) {
+								console.log(`[DEBUG] Using existing chat instance for session: ${chatSessionId}. History length: ${chatInstance.history.length}`);
+								// Optionally log history summary here if needed
+								if (chatInstance.history.length > 0) {
+									console.log(`[DEBUG] History summary for session ${chatSessionId}:`);
+									chatInstance.history.forEach((msg, idx) => {
+										const contentString = (typeof msg.content === 'string') ? msg.content : JSON.stringify(msg.content);
+										const preview = contentString.length > 30 ? `${contentString.substring(0, 30)}...` : contentString;
+										console.log(`[DEBUG]   ${idx + 1}. ${msg.role}: ${preview}`);
+									});
+								}
+							}
+							// NOTE: We explicitly DO NOTHING here regarding API keys from the request.
+							// The existing session uses the configuration it was created with.
+							// This prioritizes persistent history over per-request API key overrides.
+						}
+						// --- End Session and Instance Management (REVISED) ---
+
+						// Register this request as active for cancellation
+						registerRequest(chatSessionId, {
+							abort: () => {
+								if (chatInstance && typeof chatInstance.abort === 'function') {
+									chatInstance.abort();
+								}
+								console.log(`Abort triggered for request associated with session: ${chatSessionId}`);
+							}
+						});
+						if (DEBUG) console.log(`[DEBUG] Registered cancellable request for session: ${chatSessionId}`);
+
+						// Set streaming headers
 						res.writeHead(200, {
 							'Content-Type': 'text/plain',
 							'Transfer-Encoding': 'chunked',
@@ -1044,149 +1095,69 @@ export function startWebServer(version, hasApiKeys = true) {
 							'Connection': 'keep-alive'
 						});
 
-						// Use the provided session ID or the default one
-						const chatSessionId = sessionId || probeChat.getSessionId();
-
-						// Register this request as active
-						registerRequest(chatSessionId, {
-							abort: () => {
-								// This will be called when the request is cancelled
-								console.log(`Aborting request for session: ${chatSessionId}`);
-								// We'll add abort functionality to the ProbeChat class
-							}
-						});
-						if (DEBUG) {
-							console.log(`[DEBUG] Using session ID for chat: ${chatSessionId}`);
-						}
-
-						// Create a temporary environment for this request if API key is provided
-						let tempProbeChat = probeChat;
-						if (apiKey) {
-							if (DEBUG) {
-								console.log(`[DEBUG] Using API key from request for provider: ${apiProvider}`);
-							}
-
-							// Create a new ProbeChat instance with the provided API key
-							try {
-								// Set temporary environment variables
-								const originalEnv = {
-									ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-									OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-									GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
-									ANTHROPIC_API_URL: process.env.ANTHROPIC_API_URL,
-									OPENAI_API_URL: process.env.OPENAI_API_URL,
-									GOOGLE_API_URL: process.env.GOOGLE_API_URL,
-									FORCE_PROVIDER: process.env.FORCE_PROVIDER
-								};
-
-								// Clear all API keys first
-								process.env.ANTHROPIC_API_KEY = '';
-								process.env.OPENAI_API_KEY = '';
-								process.env.GOOGLE_API_KEY = '';
-
-								// Set the provided API key
-								if (apiProvider === 'anthropic') {
-									process.env.ANTHROPIC_API_KEY = apiKey;
-									if (apiUrl) process.env.ANTHROPIC_API_URL = apiUrl;
-									process.env.FORCE_PROVIDER = 'anthropic';
-								} else if (apiProvider === 'openai') {
-									process.env.OPENAI_API_KEY = apiKey;
-									if (apiUrl) process.env.OPENAI_API_URL = apiUrl;
-									process.env.FORCE_PROVIDER = 'openai';
-								} else if (apiProvider === 'google') {
-									process.env.GOOGLE_API_KEY = apiKey;
-									if (apiUrl) process.env.GOOGLE_API_URL = apiUrl;
-									process.env.FORCE_PROVIDER = 'google';
-								}
-
-								// Create a new ProbeChat instance with the provided API key
-								tempProbeChat = new ProbeChat({
-									sessionId: chatSessionId
-								});
-
-								// Restore original environment variables after creating the instance
-								process.env.ANTHROPIC_API_KEY = originalEnv.ANTHROPIC_API_KEY;
-								process.env.OPENAI_API_KEY = originalEnv.OPENAI_API_KEY;
-								process.env.GOOGLE_API_KEY = originalEnv.GOOGLE_API_KEY;
-								process.env.ANTHROPIC_API_URL = originalEnv.ANTHROPIC_API_URL;
-								process.env.OPENAI_API_URL = originalEnv.OPENAI_API_URL;
-								process.env.GOOGLE_API_URL = originalEnv.GOOGLE_API_URL;
-								process.env.FORCE_PROVIDER = originalEnv.FORCE_PROVIDER;
-
-								if (DEBUG) {
-									console.log(`[DEBUG] Created temporary ProbeChat instance with ${apiProvider} API key`);
-								}
-							} catch (error) {
-								console.error('Error creating temporary ProbeChat instance:', error);
-								// Fall back to the original instance
-								tempProbeChat = probeChat;
-							}
-						}
-
-						// Store the chat instance for potential cancellation
-						const chatInstance = tempProbeChat;
-						chatInstance.abort = () => {
-							console.log(`Aborting chat for session: ${chatSessionId}`);
-							// The actual abort functionality will be added to ProbeChat
-						};
+						// Store the instance reference for potential cancellation during the request
 						activeChatInstances.set(chatSessionId, chatInstance);
 
 						try {
-							// Use the appropriate ProbeChat instance to get a response
-							const responseText = await tempProbeChat.chat(message, chatSessionId);
-
-							// Write the response
-							res.write(responseText);
-							res.end();
-
-							// Get token usage
-							const tokenUsage = tempProbeChat.getTokenUsage();
-							totalRequestTokens = tokenUsage.request;
-							totalResponseTokens = tokenUsage.response;
-
-							// Clear the request from active requests
-							clearRequest(chatSessionId);
-							activeChatInstances.delete(chatSessionId);
-						} catch (error) {
-							// If the error is due to cancellation, handle it gracefully
-							if (error.message && error.message.includes('cancelled')) {
-								console.log(`Chat request was cancelled for session: ${chatSessionId}`);
-								res.write('\n\n*Request was cancelled by the user.*');
-								res.end();
-							} else {
-								// Re-throw other errors to be caught by the outer catch block
-								throw error;
+							// Handle clear history command
+							if (message === '__clear_history__' || clearHistory) { // Check flag from requestData
+								console.log(`Clearing chat history for session: ${chatSessionId}`);
+								if (chatInstance && typeof chatInstance.clearHistory === 'function') {
+									chatInstance.clearHistory();
+									res.write('Chat history cleared');
+								} else {
+									res.write('Error: Could not clear history.');
+									console.error(`[ERROR] Failed to clear history for session ${chatSessionId}. Instance: ${!!chatInstance}`);
+								}
+								// End response and perform cleanup
+								if (res.writable && !res.writableEnded) res.end();
+								clearRequest(chatSessionId);
+								activeChatInstances.delete(chatSessionId);
+								clearToolExecutionData(chatSessionId);
+								return; // Stop further processing
 							}
 
-							// Clear the request from active requests
+							// Process the actual chat message using the correct instance
+							const responseText = await chatInstance.chat(message, chatSessionId); // Pass session ID for logging consistency
+
+							// Check if cancelled *during* the chat call
+							if (isSessionCancelled(chatSessionId)) {
+								throw new Error('Request was cancelled by the user');
+							}
+
+							// Write the final response if not cancelled
+							res.write(responseText);
+							console.log('Finished streaming response for UI');
+
+						} catch (error) {
+							// Handle errors, including cancellation
+							if (error.message && error.message.includes('cancelled')) {
+								console.log(`Chat request processing was cancelled for session: ${chatSessionId}`);
+								if (res.writable && !res.writableEnded) {
+									res.write('\n\n*Request was cancelled by the user.*');
+								}
+							} else {
+								console.error(`Error processing chat for session ${chatSessionId}:`, error);
+								if (res.writable && !res.writableEnded) {
+									res.write(`\n\n*Error: ${error.message}*`);
+								}
+							}
+						} finally {
+							// Cleanup regardless of success, error, or cancellation
+							if (res.writable && !res.writableEnded) res.end();
 							clearRequest(chatSessionId);
 							activeChatInstances.delete(chatSessionId);
+							clearToolExecutionData(chatSessionId);
+							if (DEBUG) console.log(`[DEBUG] Cleaned up resources post-chat for session: ${chatSessionId}`);
 						}
 
-						console.log('Finished streaming response');
-
-						// Clear any tool execution data
-						clearToolExecutionData(chatSessionId);
-					} catch (error) {
-						console.error('Error processing chat request:', error);
-
-						// Determine the appropriate status code and error message
-						let statusCode = 500;
-						let errorMessage = 'Internal Server Error';
-
-						if (error instanceof SyntaxError) {
-							statusCode = 400;
-							errorMessage = 'Invalid JSON in request body';
-						} else if (error.code === 'EACCES') {
-							statusCode = 403;
-							errorMessage = 'Permission denied';
-						} else if (error.code === 'ENOENT') {
-							statusCode = 404;
-							errorMessage = 'Resource not found';
-						}
-
-						res.writeHead(statusCode, { 'Content-Type': 'text/plain' });
-						res.end(`${errorMessage}: ${error.message}`);
+					} catch (error) { // Catch outer errors (JSON parsing, initial setup)
+						console.error('Outer error processing chat request:', error);
+						let statusCode = 500; errorMessage = 'Internal Server Error';
+						if (error instanceof SyntaxError) { statusCode = 400; errorMessage = 'Invalid JSON in request body'; }
+						if (!res.headersSent) res.writeHead(statusCode, { 'Content-Type': 'text/plain' });
+						if (res.writable && !res.writableEnded) res.end(`${errorMessage}: ${error.message}`);
+						else console.error("[ERROR] Cannot send error response, stream already closed.");
 					}
 				});
 			}

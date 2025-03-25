@@ -48,14 +48,14 @@ export function clearToolExecutionData(sessionId) {
 // Generate a session ID
 const sessionId = randomUUID();
 // Only log session ID in debug mode
-if (process.env.DEBUG === '1') {
+if (process.env.DEBUG_CHAT === '1') {
 	console.log(`Generated session ID for search caching: ${sessionId}`);
 }
 
 // Create configured tools with the session ID
 const configOptions = {
 	sessionId,
-	debug: process.env.DEBUG === '1'
+	debug: process.env.DEBUG_CHAT === '1'
 };
 
 // Create the base tools
@@ -70,7 +70,7 @@ const wrapToolWithEmitter = (tool, toolName) => {
 	return {
 		...tool,
 		execute: async (params) => {
-			const debug = process.env.DEBUG === '1';
+			const debug = process.env.DEBUG_CHAT === '1';
 			if (debug) {
 				console.log(`[DEBUG] Executing ${toolName} with params:`, params);
 			}
@@ -194,7 +194,7 @@ export const probeTool = {
 		}
 	},
 	execute: async (params) => {
-		const debug = process.env.DEBUG === '1';
+		const debug = process.env.DEBUG_CHAT === '1';
 		if (debug) {
 			console.log(`[DEBUG] Executing probeTool with params:`, params);
 		}
