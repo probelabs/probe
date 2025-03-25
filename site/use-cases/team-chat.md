@@ -64,7 +64,7 @@ export AUTH_ENABLED=true
 export AUTH_USERNAME=team
 export AUTH_PASSWORD=secure_password
 
-npx -y @buger/probe-web
+npx -y @buger/probe-chat@latest --web
 ```
 
 Then share the local IP address with your team (e.g., `http://192.168.1.100:8080`).

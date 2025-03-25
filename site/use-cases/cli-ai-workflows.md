@@ -27,10 +27,10 @@ export ANTHROPIC_API_KEY=your_api_key
 # export OPENAI_API_KEY=your_api_key
 
 # Run directly with npx (no installation needed)
-npx -y @buger/probe-chat
+npx -y @buger/probe-chat@latest
 
 # Or specify a directory to search
-npx -y @buger/probe-chat /path/to/your/project
+npx -y @buger/probe-chat@latest /path/to/your/project
 ```
 
 ### Global Installation

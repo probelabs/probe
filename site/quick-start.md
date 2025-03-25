@@ -160,8 +160,8 @@ Use the built-in AI assistant with web interface for the best code search experi
 
 ```bash
 # Run directly with npx (no installation needed)
-npx -y @buger/probe-chat --web
-npx -y @buger/probe-chat
+npx -y @buger/probe-chat@latest --web
+npx -y @buger/probe-chat@latest
 
 # Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
@@ -169,7 +169,7 @@ export ANTHROPIC_API_KEY=your_api_key
 # export OPENAI_API_KEY=your_api_key
 
 # Specify a directory to search (optional)
-npx -y @buger/probe-chat /path/to/your/project
+npx -y @buger/probe-chat@latest /path/to/your/project
 ```
 
 Example questions you might ask:

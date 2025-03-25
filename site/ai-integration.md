@@ -64,7 +64,7 @@ The AI chat functionality is available as a standalone npm package that can be r
 
 ```bash
 # Run directly with npx (no installation needed)
-npx -y @buger/probe-chat
+npx -y @buger/probe-chat@latest
 
 # Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
@@ -74,7 +74,7 @@ export ANTHROPIC_API_KEY=your_api_key
 # export GOOGLE_API_KEY=your_api_key
 
 # Or specify a directory to search
-npx -y @buger/probe-chat /path/to/your/project
+npx -y @buger/probe-chat@latest /path/to/your/project
 ```
 
 #### Using the npm package

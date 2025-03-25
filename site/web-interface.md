@@ -22,10 +22,10 @@ The easiest way to use Probe's interface is through npx:
 
 ```bash
 # Run in CLI mode (default)
-npx -y @buger/probe-chat
+npx -y @buger/probe-chat@latest
 
 # Run in web interface mode
-npx -y @buger/probe-chat --web
+npx -y @buger/probe-chat@latest --web
 
 # Set your API key first (either Anthropic or OpenAI)
 export ANTHROPIC_API_KEY=your_api_key

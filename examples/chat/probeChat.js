@@ -287,7 +287,7 @@ If you don't know the answer or can't find relevant information, be honest about
       systemMessage += ` No specific folders are configured for code search, so the current directory will be used by default. You can omit the path parameter in your search calls, or use '.' to explicitly search in the current directory.`;
     }
 
-    systemMessage += '\n\nWhen appropriate add mermaid diagrams';
+    systemMessage += '\n\nWhen appropriate add mermaid diagrams - inside the [] blocks inside diagram wrap to quotes "]';
 
     // Add file list information if available
     try {
