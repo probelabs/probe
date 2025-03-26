@@ -780,16 +780,9 @@
 				console.error('Error in SVG to PNG conversion process:', error);
 			}
 		}
-
-		// Check if we have an existing session ID in localStorage, otherwise generate a new one
-		let sessionId = localStorage.getItem('probeSessionId');
-		if (!sessionId) {
-			sessionId = crypto.randomUUID();
-			localStorage.setItem('probeSessionId', sessionId);
-			console.log(`Generated new session ID: ${sessionId}`);
-		} else {
-			console.log(`Resuming session with ID: ${sessionId}`);
-		}
+		// Generate a new session ID on every page load, store only in memory
+		let sessionId = crypto.randomUUID();
+		console.log(`Initialized new session with ID: ${sessionId}`);
 		const messagesDiv = document.getElementById('messages');
 		const form = document.getElementById('input-form');
 		const searchSuggestionsDiv = document.querySelector('.search-suggestions');
@@ -1409,10 +1402,7 @@
 
 					// Generate a new session ID
 					sessionId = crypto.randomUUID();
-					console.log(`New chat triggered. New session ID: ${sessionId}`);
-
-					// Update localStorage with the new session ID
-					localStorage.setItem('probeSessionId', sessionId);
+					console.log(`New chat started in current window. New session ID: ${sessionId}`);
 
 					// Clear the messages
 					messagesDiv.innerHTML = '';
