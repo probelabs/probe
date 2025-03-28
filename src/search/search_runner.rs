@@ -16,6 +16,7 @@ use crate::search::{
     search_options::SearchOptions,
     timeout,
 };
+use probe::path_resolver::resolve_path;
 
 /// Struct to hold timing information for different stages of the search process
 pub struct SearchTimings {
@@ -458,9 +459,35 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             println!("DEBUG: Starting filename matching...");
         }
         // Find all files that match our patterns by filename, along with the terms that matched
+        // Resolve the path if it's a special format (e.g., "go:github.com/user/repo")
+        let resolved_path = if let Some(path_str) = path.to_str() {
+            match resolve_path(path_str) {
+                Ok(resolved_path) => {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Resolved path '{}' to '{}'",
+                            path_str,
+                            resolved_path.display()
+                        );
+                    }
+                    resolved_path
+                }
+                Err(err) => {
+                    if debug_mode {
+                        println!("DEBUG: Failed to resolve path '{}': {}", path_str, err);
+                    }
+                    // Fall back to the original path
+                    path.to_path_buf()
+                }
+            }
+        } else {
+            // If we can't convert the path to a string, use it as is
+            path.to_path_buf()
+        };
+
         let filename_matches: HashMap<PathBuf, HashSet<usize>> =
             file_list_cache::find_matching_filenames(
-                path,
+                &resolved_path,
                 queries,
                 &all_files,
                 custom_ignores,
@@ -1341,12 +1368,37 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 /// * `custom_ignores` - Custom ignore patterns
 /// * `allow_tests` - Whether to include test files
 pub fn search_with_structured_patterns(
-    root_path: &Path,
+    root_path_str: &Path,
     _plan: &QueryPlan,
     patterns: &[(String, HashSet<usize>)],
     custom_ignores: &[String],
     allow_tests: bool,
 ) -> Result<HashMap<PathBuf, HashMap<usize, HashSet<usize>>>> {
+    // Resolve the path if it's a special format (e.g., "go:github.com/user/repo")
+    let root_path = if let Some(path_str) = root_path_str.to_str() {
+        match resolve_path(path_str) {
+            Ok(resolved_path) => {
+                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                    println!(
+                        "DEBUG: Resolved path '{}' to '{}'",
+                        path_str,
+                        resolved_path.display()
+                    );
+                }
+                resolved_path
+            }
+            Err(err) => {
+                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                    println!("DEBUG: Failed to resolve path '{}': {}", path_str, err);
+                }
+                // Fall back to the original path
+                root_path_str.to_path_buf()
+            }
+        }
+    } else {
+        // If we can't convert the path to a string, use it as is
+        root_path_str.to_path_buf()
+    };
     use rayon::prelude::*;
     use regex::RegexSet;
     use std::sync::{Arc, Mutex};
@@ -1382,7 +1434,7 @@ pub fn search_with_structured_patterns(
 
     // Use file_list_cache to get a filtered list of files
     let file_list =
-        crate::search::file_list_cache::get_file_list(root_path, allow_tests, custom_ignores)?;
+        crate::search::file_list_cache::get_file_list(&root_path, allow_tests, custom_ignores)?;
 
     if debug_mode {
         println!("DEBUG: Got {} files from cache", file_list.files.len());

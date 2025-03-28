@@ -9,6 +9,7 @@ extern crate self as probe;
 pub mod extract;
 pub mod language;
 pub mod models;
+pub mod path_resolver;
 pub mod query;
 pub mod ranking;
 pub mod search;
@@ -18,6 +19,7 @@ pub use extract::{
     format_and_print_extraction_results, handle_extract, process_file_for_extraction,
 };
 pub use models::{CodeBlock, LimitedSearchResults, SearchLimits, SearchResult};
+pub use path_resolver::resolve_path;
 pub use query::{format_and_print_query_results, perform_query, AstMatch, QueryOptions};
 pub use search::perform_probe;
 

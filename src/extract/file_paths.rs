@@ -6,6 +6,7 @@
 use crate::language::is_test_file;
 use glob::glob;
 use ignore::WalkBuilder;
+use probe::path_resolver::resolve_path;
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -312,17 +313,41 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                 }
             }
         } else {
-            let path = PathBuf::from(file_path);
-            let is_test = is_test_file(&path);
-            if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
-                processed_paths.insert(file_path.to_string());
-                // Pass the symbol name directly instead of using environment variables
-                results.push((path, None, None, Some(symbol.to_string()), None));
-            } else if debug_mode {
-                if is_ignored_by_gitignore(&path) {
-                    println!("DEBUG: Skipping ignored file: {:?}", file_path);
-                } else if !allow_tests && is_test {
-                    println!("DEBUG: Skipping test file: {:?}", file_path);
+            // Check if the path needs special resolution
+            match resolve_path(file_path) {
+                Ok(resolved_path) => {
+                    let is_test = is_test_file(&resolved_path);
+                    if !is_ignored_by_gitignore(&resolved_path) && (allow_tests || !is_test) {
+                        processed_paths.insert(file_path.to_string());
+                        // Pass the symbol name directly instead of using environment variables
+                        results.push((resolved_path, None, None, Some(symbol.to_string()), None));
+                    } else if debug_mode {
+                        if is_ignored_by_gitignore(&resolved_path) {
+                            println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                        } else if !allow_tests && is_test {
+                            println!("DEBUG: Skipping test file: {:?}", file_path);
+                        }
+                    }
+                }
+                Err(err) => {
+                    if debug_mode {
+                        println!("DEBUG: Failed to resolve path '{}': {}", file_path, err);
+                    }
+
+                    // Fall back to the original path
+                    let path = PathBuf::from(file_path);
+                    let is_test = is_test_file(&path);
+                    if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                        processed_paths.insert(file_path.to_string());
+                        // Pass the symbol name directly instead of using environment variables
+                        results.push((path, None, None, Some(symbol.to_string()), None));
+                    } else if debug_mode {
+                        if is_ignored_by_gitignore(&path) {
+                            println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                        } else if !allow_tests && is_test {
+                            println!("DEBUG: Skipping test file: {:?}", file_path);
+                        }
+                    }
                 }
             }
         }
@@ -365,16 +390,39 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                     }
                 }
             } else {
-                let path = PathBuf::from(file_path);
-                let is_test = is_test_file(&path);
-                if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
-                    processed_paths.insert(file_path.to_string());
-                    results.push((path, Some(start), Some(end), None, None));
-                } else if debug_mode {
-                    if is_ignored_by_gitignore(&path) {
-                        println!("DEBUG: Skipping ignored file: {:?}", file_path);
-                    } else if !allow_tests && is_test {
-                        println!("DEBUG: Skipping test file: {:?}", file_path);
+                // Check if the path needs special resolution
+                match resolve_path(file_path) {
+                    Ok(resolved_path) => {
+                        let is_test = is_test_file(&resolved_path);
+                        if !is_ignored_by_gitignore(&resolved_path) && (allow_tests || !is_test) {
+                            processed_paths.insert(file_path.to_string());
+                            results.push((resolved_path, Some(start), Some(end), None, None));
+                        } else if debug_mode {
+                            if is_ignored_by_gitignore(&resolved_path) {
+                                println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                            } else if !allow_tests && is_test {
+                                println!("DEBUG: Skipping test file: {:?}", file_path);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        if debug_mode {
+                            println!("DEBUG: Failed to resolve path '{}': {}", file_path, err);
+                        }
+
+                        // Fall back to the original path
+                        let path = PathBuf::from(file_path);
+                        let is_test = is_test_file(&path);
+                        if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                            processed_paths.insert(file_path.to_string());
+                            results.push((path, Some(start), Some(end), None, None));
+                        } else if debug_mode {
+                            if is_ignored_by_gitignore(&path) {
+                                println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                            } else if !allow_tests && is_test {
+                                println!("DEBUG: Skipping test file: {:?}", file_path);
+                            }
+                        }
                     }
                 }
             }
@@ -420,16 +468,39 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                 }
             }
         } else {
-            let path = PathBuf::from(file_path);
-            let is_test = is_test_file(&path);
-            if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
-                processed_paths.insert(file_path.to_string());
-                results.push((path, line_num, None, None, None));
-            } else if debug_mode {
-                if is_ignored_by_gitignore(&path) {
-                    println!("DEBUG: Skipping ignored file: {:?}", file_path);
-                } else if !allow_tests && is_test {
-                    println!("DEBUG: Skipping test file: {:?}", file_path);
+            // Check if the path needs special resolution
+            match resolve_path(file_path) {
+                Ok(path) => {
+                    let is_test = is_test_file(&path);
+                    if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                        processed_paths.insert(file_path.to_string());
+                        results.push((path, line_num, None, None, None));
+                    } else if debug_mode {
+                        if is_ignored_by_gitignore(&path) {
+                            println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                        } else if !allow_tests && is_test {
+                            println!("DEBUG: Skipping test file: {:?}", file_path);
+                        }
+                    }
+                }
+                Err(err) => {
+                    if debug_mode {
+                        println!("DEBUG: Failed to resolve path '{}': {}", file_path, err);
+                    }
+
+                    // Fall back to the original path
+                    let path = PathBuf::from(file_path);
+                    let is_test = is_test_file(&path);
+                    if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                        processed_paths.insert(file_path.to_string());
+                        results.push((path, line_num, None, None, None));
+                    } else if debug_mode {
+                        if is_ignored_by_gitignore(&path) {
+                            println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                        } else if !allow_tests && is_test {
+                            println!("DEBUG: Skipping test file: {:?}", file_path);
+                        }
+                    }
                 }
             }
         }
@@ -469,16 +540,39 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                     }
                 }
             } else {
-                let path = PathBuf::from(file_path);
-                let is_test = is_test_file(&path);
-                if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
-                    results.push((path, None, None, None, None));
-                    processed_paths.insert(file_path.to_string());
-                } else if debug_mode {
-                    if is_ignored_by_gitignore(&path) {
-                        println!("DEBUG: Skipping ignored file: {:?}", file_path);
-                    } else if !allow_tests && is_test {
-                        println!("DEBUG: Skipping test file: {:?}", file_path);
+                // Check if the path needs special resolution
+                match resolve_path(file_path) {
+                    Ok(path) => {
+                        let is_test = is_test_file(&path);
+                        if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                            results.push((path, None, None, None, None));
+                            processed_paths.insert(file_path.to_string());
+                        } else if debug_mode {
+                            if is_ignored_by_gitignore(&path) {
+                                println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                            } else if !allow_tests && is_test {
+                                println!("DEBUG: Skipping test file: {:?}", file_path);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        if debug_mode {
+                            println!("DEBUG: Failed to resolve path '{}': {}", file_path, err);
+                        }
+
+                        // Fall back to the original path
+                        let path = PathBuf::from(file_path);
+                        let is_test = is_test_file(&path);
+                        if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                            results.push((path, None, None, None, None));
+                            processed_paths.insert(file_path.to_string());
+                        } else if debug_mode {
+                            if is_ignored_by_gitignore(&path) {
+                                println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                            } else if !allow_tests && is_test {
+                                println!("DEBUG: Skipping test file: {:?}", file_path);
+                            }
+                        }
                     }
                 }
             }
@@ -513,11 +607,27 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
     if let Some((file_part, symbol)) = cleaned_input.split_once('#') {
         // For symbol references, we don't have line numbers yet
         // We'll need to find the symbol in the file later
-        let path = PathBuf::from(file_part);
-        let is_test = is_test_file(&path);
-        if allow_tests || !is_test {
-            // Symbol can be a simple name or a dot-separated path (e.g., "Class.method")
-            results.push((path, None, None, Some(symbol.to_string()), None));
+        match resolve_path(file_part) {
+            Ok(path) => {
+                let is_test = is_test_file(&path);
+                if allow_tests || !is_test {
+                    // Symbol can be a simple name or a dot-separated path (e.g., "Class.method")
+                    results.push((path, None, None, Some(symbol.to_string()), None));
+                }
+            }
+            Err(err) => {
+                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                    println!("DEBUG: Failed to resolve path '{}': {}", file_part, err);
+                }
+
+                // Fall back to the original path
+                let path = PathBuf::from(file_part);
+                let is_test = is_test_file(&path);
+                if allow_tests || !is_test {
+                    // Symbol can be a simple name or a dot-separated path (e.g., "Class.method")
+                    results.push((path, None, None, Some(symbol.to_string()), None));
+                }
+            }
         }
         return results;
     } else if let Some((file_part, rest)) = cleaned_input.split_once(':') {
@@ -552,10 +662,26 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                         }
                     }
                 } else {
-                    let path = PathBuf::from(file_part);
-                    let is_test = is_test_file(&path);
-                    if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
-                        results.push((path, Some(start), Some(end), None, None));
+                    // Check if the path needs special resolution
+                    match resolve_path(file_part) {
+                        Ok(path) => {
+                            let is_test = is_test_file(&path);
+                            if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                                results.push((path, Some(start), Some(end), None, None));
+                            }
+                        }
+                        Err(err) => {
+                            if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                                println!("DEBUG: Failed to resolve path '{}': {}", file_part, err);
+                            }
+
+                            // Fall back to the original path
+                            let path = PathBuf::from(file_part);
+                            let is_test = is_test_file(&path);
+                            if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                                results.push((path, Some(start), Some(end), None, None));
+                            }
+                        }
                     }
                 }
             }
@@ -582,13 +708,32 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                         }
                     }
                 } else {
-                    let path = PathBuf::from(file_part);
-                    let is_test = is_test_file(&path);
-                    if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
-                        // Create a HashSet with just this line number
-                        let mut lines_set = HashSet::new();
-                        lines_set.insert(num);
-                        results.push((path, Some(num), None, None, Some(lines_set)));
+                    // Check if the path needs special resolution
+                    match resolve_path(file_part) {
+                        Ok(path) => {
+                            let is_test = is_test_file(&path);
+                            if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                                // Create a HashSet with just this line number
+                                let mut lines_set = HashSet::new();
+                                lines_set.insert(num);
+                                results.push((path, Some(num), None, None, Some(lines_set)));
+                            }
+                        }
+                        Err(err) => {
+                            if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                                println!("DEBUG: Failed to resolve path '{}': {}", file_part, err);
+                            }
+
+                            // Fall back to the original path
+                            let path = PathBuf::from(file_part);
+                            let is_test = is_test_file(&path);
+                            if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                                // Create a HashSet with just this line number
+                                let mut lines_set = HashSet::new();
+                                lines_set.insert(num);
+                                results.push((path, Some(num), None, None, Some(lines_set)));
+                            }
+                        }
                     }
                 }
             }
@@ -609,10 +754,27 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                 }
             }
         } else {
-            let path = PathBuf::from(cleaned_input);
-            let is_test = is_test_file(&path);
-            if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
-                results.push((path, None, None, None, None));
+            // Check if the path needs special resolution (e.g., go:github.com/user/repo)
+            match resolve_path(cleaned_input) {
+                Ok(path) => {
+                    let is_test = is_test_file(&path);
+                    if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                        results.push((path, None, None, None, None));
+                    }
+                }
+                Err(err) => {
+                    // If resolution fails, log the error and try with the original path
+                    if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                        println!("DEBUG: Failed to resolve path '{}': {}", cleaned_input, err);
+                    }
+
+                    // Fall back to the original path
+                    let path = PathBuf::from(cleaned_input);
+                    let is_test = is_test_file(&path);
+                    if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                        results.push((path, None, None, None, None));
+                    }
+                }
             }
         }
     }

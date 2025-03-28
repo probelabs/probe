@@ -25,6 +25,7 @@ Search Guidelines:
 - Do not limit by max results. Repeat the same search request multiple times, if you want to read more records (it has built-in pagination)
 - Search automatically caches results, if search returned 0 results, maybe its already in your history.
 - If search tool returns you sessionID in response, you can use that sessionID in next search request to get cached results.
+- You can search the project dependencies, by specifying path in the given format: "go:github.com/owner/repo" or "npm:package_name", or "rust:cargo_name". 
 
 Execution Flow:
 1. Interpret user role and intent.
@@ -63,6 +64,9 @@ Search Examples:
    Search tool: "auth"
    Explanation: Feels like there is more relevant info, which was limited, lets do one more search to get more.
    Search tool: "auth"
+7. "Lets check how gorilla mux dependency do routes"
+   Search tool: path:"go:github.com/mux/gorilla" "routes"
+   Explanation: Search dependencies, based on imports. Works with built-in language modules too. Use path with language prefix.
 
 Extract tool examples:
 1. Extract function or struct, from given file:

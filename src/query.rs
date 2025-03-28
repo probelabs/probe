@@ -3,6 +3,7 @@ use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use colored::*;
 use ignore::Walk;
+use probe::path_resolver::resolve_path;
 use rayon::prelude::*; // Added import
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -228,8 +229,34 @@ pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
         None
     };
 
+    // Resolve the path if it's a special format (e.g., "go:github.com/user/repo")
+    let resolved_path = if let Some(path_str) = options.path.to_str() {
+        match resolve_path(path_str) {
+            Ok(resolved_path) => {
+                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                    println!(
+                        "DEBUG: Resolved path '{}' to '{}'",
+                        path_str,
+                        resolved_path.display()
+                    );
+                }
+                resolved_path
+            }
+            Err(err) => {
+                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                    println!("DEBUG: Failed to resolve path '{}': {}", path_str, err);
+                }
+                // Fall back to the original path
+                options.path.to_path_buf()
+            }
+        }
+    } else {
+        // If we can't convert the path to a string, use it as is
+        options.path.to_path_buf()
+    };
+
     // Collect file paths
-    let file_paths: Vec<PathBuf> = Walk::new(options.path)
+    let file_paths: Vec<PathBuf> = Walk::new(&resolved_path)
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
         .filter(|entry| !should_ignore_file(entry.path(), options))
