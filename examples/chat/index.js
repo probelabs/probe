@@ -8,9 +8,8 @@ import { existsSync, realpathSync, readFileSync } from 'fs';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { ProbeChat } from './probeChat.js'; // Adjust path if needed
-
-// Import tool generators and utilities from @buger/probe (optional)
+import { ProbeChat } from './probeChat.js';
+import { TokenUsageDisplay } from './tokenUsageDisplay.js';
 import { DEFAULT_SYSTEM_MESSAGE } from '@buger/probe';
 
 /**
@@ -107,39 +106,15 @@ export function main() {
   const openaiApiKey = process.env.OPENAI_API_KEY;
   const googleApiKey = process.env.GOOGLE_API_KEY;
 
-  // Debug: Print which API keys are detected (without showing the actual keys)
-  console.log(chalk.blue('API Keys detected:'));
-  console.log(chalk.blue(`- Anthropic API Key: ${anthropicApiKey ? 'YES' : 'NO'}`));
-  console.log(chalk.blue(`- OpenAI API Key: ${openaiApiKey ? 'YES' : 'NO'}`));
-  console.log(chalk.blue(`- Google API Key: ${googleApiKey ? 'YES' : 'NO'}`));
-
   // Check if we have at least one API key
   const hasApiKeys = !!(anthropicApiKey || openaiApiKey || googleApiKey);
-  if (!hasApiKeys) {
-    console.warn(chalk.yellow('Warning: No API key provided. The web interface will show instructions on how to set up API keys.'));
-    // We'll continue execution for web mode, but CLI mode will exit
-  }
-
-  // Check if forced provider has a matching API key
-  if (process.env.FORCE_PROVIDER) {
-    const forceProvider = process.env.FORCE_PROVIDER.toLowerCase();
-    if (forceProvider === 'anthropic' && !anthropicApiKey) {
-      console.error(chalk.red('Error: Forced provider "anthropic" selected but ANTHROPIC_API_KEY is not set.'));
-      process.exit(1);
-    }
-    if (forceProvider === 'openai' && !openaiApiKey) {
-      console.error(chalk.red('Error: Forced provider "openai" selected but OPENAI_API_KEY is not set.'));
-      process.exit(1);
-    }
-    if (forceProvider === 'google' && !googleApiKey) {
-      console.error(chalk.red('Error: Forced provider "google" selected but GOOGLE_API_KEY is not set.'));
-      process.exit(1);
-    }
-  }
 
   // Determine whether to run in CLI or web mode
   if (options.web) {
-    // Run in web mode
+    if (!hasApiKeys) {
+      console.warn(chalk.yellow('Warning: No API key provided. The web interface will show instructions on how to set up API keys.'));
+    }
+    // Import and start web server
     import('./webServer.js')
       .then(module => {
         const { startWebServer } = module;
@@ -149,98 +124,111 @@ export function main() {
         console.error(chalk.red(`Error starting web server: ${error.message}`));
         process.exit(1);
       });
-  } else {
-    // In CLI mode, we need API keys to proceed
-    if (!hasApiKeys) {
-      console.error(chalk.red('Error: No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.'));
-      console.log(chalk.cyan('You can find these instructions in the .env.example file:'));
-      console.log(chalk.cyan('1. Create a .env file by copying .env.example'));
-      console.log(chalk.cyan('2. Add your API key to the .env file'));
-      console.log(chalk.cyan('3. Restart the application'));
-      process.exit(1);
-    }
-    // Run in CLI mode
-    // Initialize the ProbeChat
-    let chat;
-    try {
-      chat = new ProbeChat();
-
-      // Print which model is being used
-      if (chat.apiType === 'anthropic') {
-        console.log(chalk.green(`Using Anthropic API with model: ${chat.model}`));
-      } else if (chat.apiType === 'openai') {
-        console.log(chalk.green(`Using OpenAI API with model: ${chat.model}`));
-      } else if (chat.apiType === 'google') {
-        console.log(chalk.green(`Using Google API with model: ${chat.model}`));
-      }
-
-      console.log(chalk.blue(`Session ID: ${chat.getSessionId()}`));
-      console.log(chalk.cyan('Type "exit" or "quit" to end the chat'));
-      console.log(chalk.cyan('Type "usage" to see token usage statistics'));
-      console.log(chalk.cyan('Type "clear" to clear the chat history'));
-      console.log(chalk.cyan('-------------------------------------------'));
-    } catch (error) {
-      console.error(chalk.red(`Error initializing chat: ${error.message}`));
-      process.exit(1);
-    }
-
-    // Format AI response
-    function formatResponse(response) {
-      return response.replace(
-        /<tool_call>(.*?)<\/tool_call>/gs,
-        (match, toolCall) => chalk.magenta(`[Tool Call] ${toolCall}`)
-      );
-    }
-
-    // Main chat loop
-    async function startChat() {
-      while (true) {
-        const { message } = await inquirer.prompt([
-          {
-            type: 'input',
-            name: 'message',
-            message: chalk.blue('You:'),
-            prefix: '',
-          },
-        ]);
-
-        if (message.toLowerCase() === 'exit' || message.toLowerCase() === 'quit') {
-          console.log(chalk.yellow('Goodbye!'));
-          break;
-        } else if (message.toLowerCase() === 'usage') {
-          const usage = chat.getTokenUsage();
-          console.log(chalk.cyan('Token Usage:'));
-          console.log(chalk.cyan(`  Request tokens: ${usage.request}`));
-          console.log(chalk.cyan(`  Response tokens: ${usage.response}`));
-          console.log(chalk.cyan(`  Total tokens: ${usage.total}`));
-          continue;
-        } else if (message.toLowerCase() === 'clear') {
-          const newSessionId = chat.clearHistory();
-          console.log(chalk.yellow('Chat history cleared'));
-          console.log(chalk.blue(`New session ID: ${newSessionId}`));
-          continue;
-        }
-
-        const spinner = ora('Thinking...').start();
-        try {
-          const response = await chat.chat(message);
-          spinner.stop();
-
-          console.log(chalk.green('Assistant:'));
-          console.log(formatResponse(response));
-          console.log();
-        } catch (error) {
-          spinner.stop();
-          console.error(chalk.red(`Error: ${error.message}`));
-        }
-      }
-    }
-
-    startChat().catch((error) => {
-      console.error(chalk.red(`Fatal error: ${error.message}`));
-      process.exit(1);
-    });
+    return;
   }
+
+  // In CLI mode, we need API keys to proceed
+  if (!hasApiKeys) {
+    console.error(chalk.red('Error: No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.'));
+    console.log(chalk.cyan('You can find these instructions in the .env.example file:'));
+    console.log(chalk.cyan('1. Create a .env file by copying .env.example'));
+    console.log(chalk.cyan('2. Add your API key to the .env file'));
+    console.log(chalk.cyan('3. Restart the application'));
+    process.exit(1);
+  }
+
+  // Initialize ProbeChat for CLI mode
+  let chat;
+  try {
+    chat = new ProbeChat();
+
+    // Print which model is being used
+    if (chat.apiType === 'anthropic') {
+      console.log(chalk.green(`Using Anthropic API with model: ${chat.model}`));
+    } else if (chat.apiType === 'openai') {
+      console.log(chalk.green(`Using OpenAI API with model: ${chat.model}`));
+    } else if (chat.apiType === 'google') {
+      console.log(chalk.green(`Using Google API with model: ${chat.model}`));
+    }
+
+    console.log(chalk.blue(`Session ID: ${chat.getSessionId()}`));
+    console.log(chalk.cyan('Type "exit" or "quit" to end the chat'));
+    console.log(chalk.cyan('Type "usage" to see token usage statistics'));
+    console.log(chalk.cyan('Type "clear" to clear the chat history'));
+    console.log(chalk.cyan('-------------------------------------------'));
+  } catch (error) {
+    console.error(chalk.red(`Error initializing chat: ${error.message}`));
+    process.exit(1);
+  }
+
+  // Format AI response
+  function formatResponse(response) {
+    return response.replace(
+      /<tool_call>(.*?)<\/tool_call>/gs,
+      (match, toolCall) => chalk.magenta(`[Tool Call] ${toolCall}`)
+    );
+  }
+
+  // Main chat loop
+  async function startChat() {
+    while (true) {
+      const { message } = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'message',
+          message: chalk.blue('You:'),
+          prefix: '',
+        },
+      ]);
+
+      if (message.toLowerCase() === 'exit' || message.toLowerCase() === 'quit') {
+        console.log(chalk.yellow('Goodbye!'));
+        break;
+      } else if (message.toLowerCase() === 'usage') {
+        const usage = chat.getTokenUsage();
+        const display = new TokenUsageDisplay();
+        const formatted = display.format(usage);
+
+        // Current usage badge
+        console.log(chalk.blue('Current:', formatted.current.total));
+        // Context window
+        console.log(chalk.blue('Context:', formatted.contextWindow));
+        // Cache information
+        console.log(chalk.blue('Cache:',
+          `Read: ${formatted.current.cache.read},`,
+          `Write: ${formatted.current.cache.write},`,
+          `Total: ${formatted.current.cache.total}`));
+        // Total usage badge
+        console.log(chalk.blue('Total:', formatted.total.total));
+        // Show context window in terminal title
+        process.stdout.write('\x1B]0;Context: ' + formatted.contextWindow + '\x07');
+        continue;
+      } else if (message.toLowerCase() === 'clear') {
+        const newSessionId = chat.clearHistory();
+        console.log(chalk.yellow('Chat history cleared'));
+        console.log(chalk.blue(`New session ID: ${newSessionId}`));
+        continue;
+      }
+
+      const spinner = ora('Thinking...').start();
+      try {
+        const response = await chat.chat(message);
+        spinner.stop();
+
+        console.log(chalk.green('Assistant:'));
+        console.log(formatResponse(response));
+        console.log();
+      } catch (error) {
+        spinner.stop();
+        console.error(chalk.red(`Error: ${error.message}`));
+      }
+    }
+  }
+
+  startChat().catch((error) => {
+    console.error(chalk.red(`Fatal error: ${error.message}`));
+    process.exit(1);
+  });
 }
 
 // If this file is run directly, call main()

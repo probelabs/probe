@@ -6,6 +6,7 @@ import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { ProbeChat } from './probeChat.js';
+import { TokenUsageDisplay } from './tokenUsageDisplay.js';
 import { authMiddleware, withAuth } from './auth.js';
 import {
 	probeTool,
@@ -89,10 +90,6 @@ export function startWebServer(version, hasApiKeys = true) {
 	// Define the tools available to the AI (only if we have API keys)
 	const tools = noApiKeysMode ? [] : [probeTool, searchToolInstance, queryToolInstance, extractToolInstance];
 
-	// Track token usage for monitoring
-	let totalRequestTokens = 0;
-	let totalResponseTokens = 0;
-
 	/**
 	 * Handle non-streaming chat request (returns complete response as JSON)
 	 */
@@ -153,13 +150,33 @@ export function startWebServer(version, hasApiKeys = true) {
 			// Use the chat instance to get a response
 			const responseText = await chatInstance.chat(message);
 
-			// Get token usage
+			// Get token usage (now includes both current and total)
 			const tokenUsage = chatInstance.getTokenUsage();
-			totalRequestTokens = tokenUsage.request;
-			totalResponseTokens = tokenUsage.response;
 
-			// Return response as JSON
-			res.writeHead(200, { 'Content-Type': 'application/json' });
+			// Include token usage in response headers
+			const tokenUsageHeader = JSON.stringify(tokenUsage);
+
+			// Debug log for token usage
+			console.log(`[DEBUG] Including token usage in response headers: ${tokenUsageHeader}`);
+
+			// Log Anthropic cache token usage if available
+			if (tokenUsage.total.anthropic && tokenUsage.total.anthropic.cacheTotal > 0) {
+				console.log(`[DEBUG] Anthropic cache token usage: Creation=${tokenUsage.total.anthropic.cacheCreation}, Read=${tokenUsage.total.anthropic.cacheRead}, Total=${tokenUsage.total.anthropic.cacheTotal}`);
+			}
+
+			// Log OpenAI cached prompt tokens if available
+			if (tokenUsage.total.openai && tokenUsage.total.openai.cachedPrompt > 0) {
+				console.log(`[DEBUG] OpenAI cached prompt tokens: ${tokenUsage.total.openai.cachedPrompt}`);
+			}
+
+			// Return response as JSON with CORS headers
+			res.writeHead(200, {
+				'Content-Type': 'application/json',
+				'Access-Control-Allow-Origin': '*',
+				'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+				'Access-Control-Allow-Headers': 'Content-Type',
+				'Access-Control-Expose-Headers': 'X-Token-Usage'
+			});
 			res.end(JSON.stringify({
 				response: responseText,
 				tokenUsage: tokenUsage,
@@ -272,10 +289,33 @@ export function startWebServer(version, hasApiKeys = true) {
 			// Use the chat instance to get a response
 			const responseText = await chatInstance.chat(message);
 
-			// Get token usage
+			// Get token usage (now includes both current and total)
 			const tokenUsage = chatInstance.getTokenUsage();
-			totalRequestTokens = tokenUsage.request;
-			totalResponseTokens = tokenUsage.response;
+
+			// Include token usage in response headers
+			const display = new TokenUsageDisplay();
+			const formattedUsage = display.format(tokenUsage);
+			const tokenUsageHeader = JSON.stringify(formattedUsage);
+
+			// Debug log for token usage in streaming response
+			console.log(`[DEBUG] Including token usage in streaming response headers: ${tokenUsageHeader}`);
+
+			// Log Anthropic cache token usage if available
+			if (tokenUsage.total.anthropic && tokenUsage.total.anthropic.cacheTotal > 0) {
+				console.log(`[DEBUG] Anthropic cache token usage: Creation=${tokenUsage.total.anthropic.cacheCreation}, Read=${tokenUsage.total.anthropic.cacheRead}, Total=${tokenUsage.total.anthropic.cacheTotal}`);
+			}
+
+			// Log OpenAI cached prompt tokens if available
+			if (tokenUsage.total.openai && tokenUsage.total.openai.cachedPrompt > 0) {
+				console.log(`[DEBUG] OpenAI cached prompt tokens: ${tokenUsage.total.openai.cachedPrompt}`);
+			}
+
+			// Set token usage and CORS headers
+			res.setHeader('X-Token-Usage', tokenUsageHeader);
+			res.setHeader('Access-Control-Allow-Origin', '*');
+			res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+			res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+			res.setHeader('Access-Control-Expose-Headers', 'X-Token-Usage');
 
 			// Write the response as a single chunk
 			res.write(responseText);
@@ -353,6 +393,72 @@ export function startWebServer(version, hasApiKeys = true) {
 
 		// Define route handlers
 		const routes = {
+			// Handle OPTIONS requests for CORS preflight
+			'OPTIONS /api/token-usage': (req, res) => {
+				res.writeHead(200, {
+					'Access-Control-Allow-Origin': '*',
+					'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+					'Access-Control-Allow-Headers': 'Content-Type',
+					'Access-Control-Max-Age': '86400' // 24 hours
+				});
+				res.end();
+			},
+
+			// Handle OPTIONS requests for chat endpoint
+			'OPTIONS /chat': (req, res) => {
+				res.writeHead(200, {
+					'Access-Control-Allow-Origin': '*',
+					'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+					'Access-Control-Allow-Headers': 'Content-Type',
+					'Access-Control-Max-Age': '86400' // 24 hours
+				});
+				res.end();
+			},
+			// Token usage API endpoint
+			'GET /api/token-usage': (req, res) => {
+				// Parse session ID from query parameter
+				let sessionId;
+				try {
+					const url = new URL(req.url, `http://${req.headers.host}`);
+					sessionId = url.searchParams.get('sessionId');
+				} catch (error) {
+					// Fallback to manual parsing
+					const queryString = req.url.split('?')[1] || '';
+					const params = new URLSearchParams(queryString);
+					sessionId = params.get('sessionId');
+				}
+
+				if (!sessionId) {
+					res.writeHead(400, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: 'Missing sessionId parameter' }));
+					return;
+				}
+
+				// Get the chat instance for this session
+				const chatInstance = chatSessions.get(sessionId);
+				if (!chatInstance) {
+					res.writeHead(404, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: 'Session not found' }));
+					return;
+				}
+
+				// Get token usage
+				const tokenUsage = chatInstance.getTokenUsage();
+
+				// Format the usage data for UI
+				const display = new TokenUsageDisplay();
+				const formattedUsage = display.format(tokenUsage);
+
+				// Return formatted usage as JSON with CORS headers
+				res.writeHead(200, {
+					'Content-Type': 'application/json',
+					'Cache-Control': 'no-cache',
+					'Access-Control-Allow-Origin': '*',
+					'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+					'Access-Control-Allow-Headers': 'Content-Type'
+				});
+				res.end(JSON.stringify(formattedUsage));
+			},
 			// Static file routes
 			'GET /logo.png': (req, res) => {
 				const logoPath = join(__dirname, 'logo.png');

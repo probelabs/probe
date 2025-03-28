@@ -5,6 +5,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText } from 'ai';
 import { randomUUID } from 'crypto';
 import { TokenCounter } from './tokenCounter.js';
+import { TokenUsageDisplay } from './tokenUsageDisplay.js';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { existsSync } from 'fs';
@@ -52,8 +53,11 @@ export class ProbeChat {
     // Make allowedFolders accessible as a property of the class
     this.allowedFolders = allowedFolders;
 
-    // Initialize token counter
+    // Initialize token counter and display
     this.tokenCounter = new TokenCounter();
+    this.tokenDisplay = new TokenUsageDisplay({
+      maxTokens: 8192 // Will be updated based on model
+    });
 
     // Use provided session ID or generate a unique one
     this.sessionId = options.sessionId || randomUUID();
@@ -212,6 +216,9 @@ export class ProbeChat {
     this.provider = createAnthropic({
       apiKey: apiKey,
       baseURL: apiUrl,
+      headers: {
+        'anthropic-beta': 'token-efficient-tools-2025-02-19'
+      }
     });
     this.model = modelName || 'claude-3-7-sonnet-latest';
     this.apiType = 'anthropic';
@@ -442,6 +449,8 @@ If you don't know the answer or can't find relevant information, be honest about
           console.log(`[DEBUG] No previous history found for this session`);
         }
       }
+      // Reset current token counters for new turn
+      this.tokenCounter.startNewTurn();
 
       // Count tokens in the user message
       this.tokenCounter.addRequestTokens(message);
@@ -455,7 +464,11 @@ If you don't know the answer or can't find relevant information, be honest about
       // Prepare messages array
       const messages = [
         ...this.history,
-        { role: 'user', content: message }
+        {
+          role: 'user', content: message, providerOptions: {
+            anthropic: { cacheControl: { type: 'ephemeral' } }
+          }
+        }
       ];
 
       if (this.debug) {
@@ -500,11 +513,14 @@ If you don't know the answer or can't find relevant information, be honest about
         maxTokens = 8000;
       }
 
+      // Update token display with max tokens
+      this.tokenDisplay = new TokenUsageDisplay({ maxTokens });
+
       if (this.debug) {
         console.log(`[DEBUG] Using max tokens: ${maxTokens} for model: ${this.model}`);
       }
 
-      // Configure generateText options
+      // Configure generateOptions
       const generateOptions = {
         model: this.provider(this.model),
         messages: messages,
@@ -530,7 +546,7 @@ If you don't know the answer or can't find relevant information, be honest about
 
           const totalEstimatedTokens = systemTokens + messagesTokens;
 
-          // Write to probe-debug.txt in the current directory
+          // Write to probe-debug.txt
           const debugFilePath = join(process.cwd(), 'probe-debug.txt');
           writeFileSync(
             debugFilePath,
@@ -541,7 +557,7 @@ If you don't know the answer or can't find relevant information, be honest about
             `Estimated Tokens: ~${totalEstimatedTokens} (System: ~${systemTokens}, Messages: ~${messagesTokens})\n\n` +
             `=== SYSTEM MESSAGE ===\n${systemMessage}\n\n` +
             `=== MESSAGES SENT TO AI ===\n${JSON.stringify(messages, null, 2)}\n\n`,
-            { flag: 'w' } // 'w' flag overwrites the file each time
+            { flag: 'w' }
           );
 
           console.log(`[DEBUG] Wrote latest AI request to ${debugFilePath} (Est. tokens: ~${totalEstimatedTokens})`);
@@ -549,8 +565,6 @@ If you don't know the answer or can't find relevant information, be honest about
           console.error(`[DEBUG] Error writing debug file:`, error);
         }
       }
-
-      // console.log("Tools:", JSON.stringify(this.tools, null, 2));
 
       // Add API-specific options
       if (this.apiType === 'anthropic' && this.model.includes('3-7')) {
@@ -561,57 +575,221 @@ If you don't know the answer or can't find relevant information, be honest about
       }
 
       try {
-        // Check if the request has been cancelled before making the API call
         if (this.cancelled) {
           throw new Error('Request was cancelled by the user');
         }
 
-        // Generate response using AI model with tools
         const result = await generateText(generateOptions);
+
+        // Update token counter's history with complete message array
+        if (result.messages && Array.isArray(result.messages)) {
+          this.tokenCounter.updateHistory(result.messages);
+        }
 
         // Extract the text content from the response
         const responseText = result.text;
 
-        // Add the message and response to history
-        this.history.push({ role: 'user', content: message });
-        this.history.push({ role: 'assistant', content: responseText });
+        // Update ProbeChat's own history
+        if (result.messages && Array.isArray(result.messages)) {
+          if (this.debug) {
+            console.log(`[DEBUG] Updating history with complete message array from result.messages`);
+            console.log(`[DEBUG] Messages array length: ${result.messages.length}`);
+          }
 
-        // Count tokens in the response
-        this.tokenCounter.addResponseTokens(responseText);
+          // Replace the current history with the complete message array
+          this.history = result.messages.map(msg => {
+            // Add ephemeral cache control if missing
+            if (!msg.providerOptions?.anthropic?.cacheControl) {
+              return {
+                ...msg,
+                providerOptions: {
+                  ...(msg.providerOptions || {}),
+                  anthropic: {
+                    ...(msg.providerOptions?.anthropic || {}),
+                    cacheControl: { type: 'ephemeral' }
+                  }
+                }
+              };
+            }
+            return msg;
+          });
 
-        // Append the AI response to the debug file
+          // Ensure the history does not exceed the maximum length
+          if (this.history.length > MAX_HISTORY_MESSAGES) {
+            if (this.debug) {
+              console.log(`[DEBUG] History length (${this.history.length}) exceeds max (${MAX_HISTORY_MESSAGES}). Trimming...`);
+            }
+            this.history = this.history.slice(this.history.length - MAX_HISTORY_MESSAGES);
+            if (this.debug) {
+              console.log(`[DEBUG] History trimmed to ${this.history.length} messages.`);
+            }
+          }
+
+          // Log the structure of the last few messages for verification
+          if (this.debug) {
+            const historyTail = this.history.slice(-3);
+            console.log(`[DEBUG] Last ${historyTail.length} history messages:`, JSON.stringify(historyTail, null, 2));
+          }
+        } else {
+          // Fallback to the old method if result.messages is not available
+          if (this.debug) {
+            console.log(`[DEBUG] result.messages not available, falling back to manual history update`);
+          }
+          // Add user message
+          this.history.push({
+            role: 'user',
+            content: message,
+            providerOptions: {
+              anthropic: { cacheControl: { type: 'ephemeral' } }
+            }
+          });
+          // Add assistant message
+          this.history.push({
+            role: 'assistant',
+            content: responseText,
+            providerOptions: {
+              anthropic: { cacheControl: { type: 'ephemeral' } }
+            }
+          });
+
+          // IMPORTANT FIX: Update tokenCounter's history so calculateContextSize won't remain 100
+          this.tokenCounter.updateHistory(this.history);
+        }
+
+        // Use the token usage information from the result if available
+        if (result.usage) {
+          if (this.debug) {
+            console.log(`[DEBUG] Provider metadata:`, result.providerMetadata?.anthropic);
+            console.log(`[DEBUG] Usage:`, result.usage);
+          }
+
+          // Record usage with provider metadata
+          this.tokenCounter.recordUsage(result.usage, result.providerMetadata);
+
+          // Force context window calculation
+          this.tokenCounter.calculateContextSize();
+
+          // Ensure cache info is properly recorded
+          const cacheRead = (result.providerMetadata?.anthropic?.cacheReadInputTokens || 0) +
+            (result.providerMetadata?.openai?.cachedPromptTokens || 0);
+          const cacheWrite = result.providerMetadata?.anthropic?.cacheCreationInputTokens || 0;
+
+          if (this.debug) {
+            console.log(`[DEBUG] Token usage from result: Prompt=${result.usage.promptTokens}, Completion=${result.usage.completionTokens}, Total=${result.usage.totalTokens}`);
+            console.log(`[DEBUG] Accumulated usage: Request=${this.tokenCounter.requestTokens}, Response=${this.tokenCounter.responseTokens}`);
+            console.log(`[DEBUG] Context window size: ${this.tokenCounter.contextSize}`);
+            console.log(`[DEBUG] Cache token usage: Read=${cacheRead}, Write=${cacheWrite}, Total=${cacheRead + cacheWrite}`);
+          }
+
+          if (result.providerMetadata?.openai) {
+            const cachedPrompt = result.providerMetadata.openai.cachedPromptTokens || 0;
+            console.log(`[DEBUG] OpenAI cached prompt tokens: ${cachedPrompt}`);
+          }
+        } else {
+          // Fallback if result.usage is not available
+          if (this.debug) {
+            console.log(`[DEBUG] result.usage not available, falling back to manual token counting`);
+          }
+
+          // Force context window calculation
+          this.tokenCounter.calculateContextSize();
+
+          if (this.debug) {
+            console.log(`[DEBUG] Context window size (manual calculation): ${this.tokenCounter.contextSize}`);
+          }
+
+          const responseTokenCount = this.tokenCounter.countTokens(responseText);
+          this.tokenCounter.addResponseTokens(responseTokenCount);
+
+          if (this.debug) {
+            console.log(`[DEBUG] Estimated response tokens using tiktoken: ${responseTokenCount}`);
+            console.log(`[DEBUG] Context window size: ${this.tokenCounter.contextSize}`);
+          }
+        }
+
+        // Append final results to debug file
         if (this.debug) {
           try {
             const debugFilePath = join(process.cwd(), 'probe-debug.txt');
+            const finalResponseText = result.text || "[No final text response]";
+
+            let tokenInfo = "Token usage information not available.";
+            if (result.usage) {
+              tokenInfo =
+                `Prompt tokens: ${result.usage.promptTokens}\n` +
+                `Completion tokens: ${result.usage.completionTokens}\n` +
+                `Total tokens: ${result.usage.totalTokens}\n\n` +
+                `--- Accumulated Usage ---\n` +
+                `Request tokens: ${this.tokenCounter.requestTokens}\n` +
+                `Response tokens: ${this.tokenCounter.responseTokens}\n` +
+                `Total tokens: ${this.tokenCounter.requestTokens + this.tokenCounter.responseTokens}`;
+
+              if (result.providerMetadata?.anthropic) {
+                const cacheCreation = result.providerMetadata.anthropic.cacheCreationInputTokens || 0;
+                const cacheRead = result.providerMetadata.anthropic.cacheReadInputTokens || 0;
+
+                tokenInfo += `\n\n--- Anthropic Cache Token Usage ---\n` +
+                  `Cache creation tokens: ${cacheCreation}\n` +
+                  `Cache read tokens: ${cacheRead}\n` +
+                  `Total cache tokens: ${cacheCreation + cacheRead}`;
+              }
+            } else {
+              tokenInfo =
+                `Request tokens: ${this.tokenCounter.requestTokens}\n` +
+                `Response tokens: ${this.tokenCounter.responseTokens}\n` +
+                `Total tokens: ${this.tokenCounter.requestTokens + this.tokenCounter.responseTokens}`;
+
+              if (this.tokenCounter.cacheCreationTokens > 0 || this.tokenCounter.cacheReadTokens > 0) {
+                tokenInfo += `\n\n--- Anthropic Cache Token Usage ---\n` +
+                  `Cache creation tokens: ${this.tokenCounter.cacheCreationTokens}\n` +
+                  `Cache read tokens: ${this.tokenCounter.cacheReadTokens}\n` +
+                  `Total cache tokens: ${this.tokenCounter.cacheCreationTokens + this.tokenCounter.cacheReadTokens}`;
+              }
+
+              if (this.tokenCounter.cachedPromptTokens > 0) {
+                tokenInfo += `\n\n--- OpenAI Cache Token Usage ---\n` +
+                  `Cached prompt tokens: ${this.tokenCounter.cachedPromptTokens}`;
+              }
+            }
+
+            const toolRelatedMessages = result.messages ?
+              result.messages.filter(m => m.role === 'assistant' || m.role === 'tool') :
+              [];
+
             writeFileSync(
               debugFilePath,
-              `\n=== AI RESPONSE ===\n${responseText}\n\n` +
-              `=== TOKEN USAGE ===\n` +
-              `Request tokens: ${this.tokenCounter.requestTokens}\n` +
-              `Response tokens: ${this.tokenCounter.responseTokens}\n` +
-              `Total tokens: ${this.tokenCounter.requestTokens + this.tokenCounter.responseTokens
-              }\n`,
-              { flag: 'a' } // 'a' flag appends to the file
+              `\n=== AI RESPONSE (Final Text) ===\n${finalResponseText}\n\n` +
+              `=== RAW TOOL CALLS/RESULTS (From result.messages) ===\n` +
+              `${JSON.stringify(toolRelatedMessages, null, 2)}\n\n` +
+              `=== TOKEN USAGE (This Turn & Accumulated) ===\n` +
+              `${tokenInfo}\n`,
+              { flag: 'a' }
             );
 
-            // Also log final "raw message" that we're sending back to the UI (only if DEBUG_CHAT=1)
             writeFileSync(
               debugFilePath,
               `\n=== SENT TO UI (FINAL) ===\n${responseText}\n`,
               { flag: 'a' }
             );
 
-            console.log(`[DEBUG] Appended AI response to ${debugFilePath}`);
+            writeFileSync(
+              debugFilePath,
+              `\n=== CURRENT HISTORY STATE ===\n` +
+              `History length: ${this.history.length} messages\n` +
+              `First few messages: ${JSON.stringify(this.history.slice(0, 2), null, 2)}\n` +
+              `Last few messages: ${JSON.stringify(this.history.slice(-2), null, 2)}\n`,
+              { flag: 'a' }
+            );
+
+            console.log(`[DEBUG] Appended AI response and detailed information to ${debugFilePath}`);
           } catch (error) {
             console.error(`[DEBUG] Error appending to debug file:`, error);
           }
         }
 
-        // Log tool usage if available
         if (result.toolCalls && result.toolCalls.length > 0) {
           console.log(`Tool was used: ${result.toolCalls.length} times`);
 
-          // Process each tool call
           result.toolCalls.forEach((call, index) => {
             if (this.debug) {
               console.log(`[DEBUG] Tool call ${index + 1}: ${call.name}`);
@@ -619,7 +797,6 @@ If you don't know the answer or can't find relevant information, be honest about
                 console.log(`[DEBUG] Tool call ${index + 1} args:`, JSON.stringify(call.args, null, 2));
               }
 
-              // Calculate result size for debugging token limits
               let resultSize = 0;
               let resultPreview = '';
               if (call.result) {
@@ -634,7 +811,6 @@ If you don't know the answer or can't find relevant information, be honest about
                 console.log(`[DEBUG] Tool call ${index + 1} result preview: ${resultPreview}`);
               }
 
-              // Append tool call information to the debug file
               try {
                 const debugFilePath = join(process.cwd(), 'probe-debug.txt');
                 const toolCallInfo =
@@ -648,26 +824,24 @@ If you don't know the answer or can't find relevant information, be honest about
 
                 writeFileSync(debugFilePath, toolCallInfo, { flag: 'a' });
 
-                // After each tool call, also write the current conversation state to help debug token growth
                 const currentMessages = [
                   ...this.history,
                   { role: 'user', content: message }
                 ];
 
-                // Estimate total tokens in conversation after this tool call
                 let totalEstimatedTokens = 0;
                 currentMessages.forEach(m => {
                   totalEstimatedTokens += Math.ceil(m.content.length / 4);
                 });
 
-                // Add estimated tokens from tool calls
                 if (result.toolCalls) {
                   result.toolCalls.forEach((tc, i) => {
-                    if (i <= index) { // Only count up to current tool call
-                      const tcResult = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2);
+                    if (i <= index) {
+                      const tcResult = typeof tc.result === 'string'
+                        ? tc.result
+                        : JSON.stringify(tc.result, null, 2);
                       totalEstimatedTokens += Math.ceil(tcResult.length / 4);
 
-                      // Add args tokens
                       const tcArgs = JSON.stringify(tc.args, null, 2);
                       totalEstimatedTokens += Math.ceil(tcArgs.length / 4);
                     }
@@ -688,7 +862,6 @@ If you don't know the answer or can't find relevant information, be honest about
                 console.error(`[DEBUG] Error appending tool call to debug file:`, error);
               }
             }
-            // Note: We no longer need to emit events here as they're emitted directly from the tools
             if (this.debug) {
               console.log(`[DEBUG] Tool call completed: ${call.name}`);
             }
@@ -697,20 +870,16 @@ If you don't know the answer or can't find relevant information, be honest about
 
         return responseText;
       } catch (error) {
-        // Check if the error is due to cancellation
         if (error.name === 'AbortError' || (error.message && error.message.includes('cancelled'))) {
           console.log('Chat request was cancelled');
           this.cancelled = true;
           throw new Error('Request was cancelled by the user');
         }
-
-        // Re-throw other errors
         throw error;
       }
     } catch (error) {
       console.error('Error in chat:', error);
 
-      // If the error is due to cancellation, propagate it
       if (error.message && error.message.includes('cancelled')) {
         throw error;
       }
@@ -724,7 +893,12 @@ If you don't know the answer or can't find relevant information, be honest about
    * @returns {Object} - Object containing request, response, and total token counts
    */
   getTokenUsage() {
-    return this.tokenCounter.getTokenUsage();
+    // Get token usage from the counter
+    const usage = this.tokenCounter.getTokenUsage();
+
+    // Use the context size from the tokenCounter
+    const formattedUsage = this.tokenDisplay.format(usage);
+    return formattedUsage;
   }
 
   /**
@@ -750,29 +924,12 @@ If you don't know the answer or can't find relevant information, be honest about
     // Update the session ID in the config options
     this.configOptions.sessionId = this.sessionId;
 
-    // Create configured tool instances that emit SSE events
-    // We need to ensure the tools use the correct session ID
+    // Recreate tools with the new session ID
     this.tools = {
-      // probe: {
-      //   ...probeTool,
-      //   name: "searchTool",
-      //   execute: async (params) => {
-      //     // Ensure the session ID is passed to the tool
-      //     const enhancedParams = {
-      //       ...params,
-      //       sessionId: this.sessionId
-      //     };
-      //     if (this.debug) {
-      //       console.log(`[DEBUG] ProbeChat executing probeTool with sessionId: ${this.sessionId}`);
-      //     }
-      //     return await probeTool.execute(enhancedParams);
-      //   }
-      // },
       search: {
         ...searchToolInstance,
         name: "search",
         execute: async (params) => {
-          // Ensure the session ID is passed to the tool
           const enhancedParams = {
             ...params,
             sessionId: this.sessionId
@@ -787,7 +944,6 @@ If you don't know the answer or can't find relevant information, be honest about
         ...queryToolInstance,
         name: "query",
         execute: async (params) => {
-          // Ensure the session ID is passed to the tool
           const enhancedParams = {
             ...params,
             sessionId: this.sessionId
@@ -802,7 +958,6 @@ If you don't know the answer or can't find relevant information, be honest about
         ...extractToolInstance,
         name: "extract",
         execute: async (params) => {
-          // Ensure the session ID is passed to the tool
           const enhancedParams = {
             ...params,
             sessionId: this.sessionId

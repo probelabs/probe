@@ -494,6 +494,60 @@
 			max-width: 100%;
 			height: auto;
 		}
+
+		/* Token usage display styles */
+		.token-usage {
+			position: fixed;
+			bottom: 80px;
+			right: 20px;
+			background-color: rgba(255, 255, 255, 0.95);
+			border: 1px solid #ddd;
+			border-radius: 8px;
+			padding: 10px 14px;
+			font-size: 12px;
+			color: #666;
+			box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+			z-index: 100;
+			display: none;
+			/* Hidden by default, shown after first message */
+		}
+
+		.token-usage-content {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+		}
+
+		.token-usage-table {
+			display: table;
+			width: 100%;
+			border-collapse: collapse;
+		}
+
+		.token-usage-row {
+			display: table-row;
+		}
+
+		.token-label {
+			display: table-cell;
+			font-weight: bold;
+			color: #444;
+			padding-right: 10px;
+			text-align: left;
+			white-space: nowrap;
+		}
+
+		.token-value {
+			display: table-cell;
+			text-align: right;
+			white-space: nowrap;
+		}
+
+		.cache-info {
+			color: #888;
+			font-size: 11px;
+			margin-left: 5px;
+		}
 	</style>
 	<style>
 		/* Styles for the API key setup message */
@@ -708,11 +762,165 @@
 		</ul>
 		<div id="folder-info" class="folder-info"></div>
 	</div>
+	<div id="token-usage" class="token-usage">
+		<div class="token-usage-content">
+			<div class="token-usage-table">
+				<div class="token-usage-row">
+					<div class="token-label">Current:</div>
+					<div class="token-value">
+						<span id="current-request">0</span> req / <span id="current-response">0</span> resp
+					</div>
+				</div>
+				<div class="token-usage-row">
+					<div class="token-label">Cache:</div>
+					<div class="token-value">
+						<span id="current-cache-read">0</span> read / <span id="current-cache-write">0</span> write
+					</div>
+				</div>
+				<div class="token-usage-row">
+					<div class="token-label">Context:</div>
+					<div class="token-value">
+						<span id="context-window">0</span> tokens
+					</div>
+				</div>
+				<div class="token-usage-row">
+					<div class="token-label">Total Cache:</div>
+					<div class="token-value">
+						<span id="total-cache-read">0</span> read / <span id="total-cache-write">0</span> write
+					</div>
+				</div>
+				<div class="token-usage-row">
+					<div class="token-label">Total:</div>
+					<div class="token-value">
+						<span id="total-request">0</span> req / <span id="total-response">0</span> resp
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
 	<div class="footer">
 		Powered by <a href="https://probeai.dev/" target="_blank">Probe</a>
 	</div>
 	</div>
 	<script>
+		// Token Usage Display Functionality
+		// Function to update token usage display
+		function updateTokenUsageDisplay(tokenUsage) {
+			if (!tokenUsage) return;
+
+			console.log('[TokenUsage] Updating display with:', tokenUsage);
+
+			// Update current token usage
+			if (tokenUsage.current) {
+				document.getElementById('current-request').textContent = tokenUsage.current.request || 0;
+				document.getElementById('current-response').textContent = tokenUsage.current.response || 0;
+
+				// Update cache information in separate row
+				const cacheRead = tokenUsage.current.cacheRead || 0;
+				const cacheWrite = tokenUsage.current.cacheWrite || 0;
+				document.getElementById('current-cache-read').textContent = cacheRead;
+				document.getElementById('current-cache-write').textContent = cacheWrite;
+			}
+
+			// Update context window - force display even if 0
+			const contextWindow = tokenUsage.contextWindow || 0;
+			document.getElementById('context-window').textContent = contextWindow;
+
+			// Update total cache information
+			if (tokenUsage.total && tokenUsage.total.cache) {
+				const totalCacheRead = tokenUsage.total.cache.read || 0;
+				const totalCacheWrite = tokenUsage.total.cache.write || 0;
+				document.getElementById('total-cache-read').textContent = totalCacheRead;
+				document.getElementById('total-cache-write').textContent = totalCacheWrite;
+			} else if (tokenUsage.total) {
+				// Fallback to direct properties if cache object is not available
+				const totalCacheRead = tokenUsage.total.cacheRead || 0;
+				const totalCacheWrite = tokenUsage.total.cacheWrite || 0;
+				document.getElementById('total-cache-read').textContent = totalCacheRead;
+				document.getElementById('total-cache-write').textContent = totalCacheWrite;
+			}
+
+			// Update total token usage
+			if (tokenUsage.total) {
+				document.getElementById('total-request').textContent = tokenUsage.total.request || 0;
+				document.getElementById('total-response').textContent = tokenUsage.total.response || 0;
+			}
+
+			// Show token usage display
+			const tokenUsageElement = document.getElementById('token-usage');
+			if (tokenUsageElement) {
+				tokenUsageElement.style.display = 'block';
+			}
+		}
+
+		// Make token usage functions available globally
+		window.tokenUsageDisplay = {
+			update: updateTokenUsageDisplay,
+			fetch: function (sessionId) {
+				if (!sessionId) {
+					console.log('[TokenUsage] No session ID provided for fetchTokenUsage');
+					// Try to get session ID from window object
+					if (window.sessionId) {
+						console.log(`[TokenUsage] Using session ID from window object: ${window.sessionId}`);
+						sessionId = window.sessionId;
+					} else {
+						console.log('[TokenUsage] No session ID available, cannot fetch token usage');
+						return;
+					}
+				}
+
+				// Check if this session is still the current one
+				if (sessionId !== window.sessionId) {
+					console.log(`[TokenUsage] Session ID mismatch: ${sessionId} vs current ${window.sessionId}, skipping fetch`);
+					return;
+				}
+
+				console.log(`[TokenUsage] Fetching token usage for session: ${sessionId}`);
+				fetch(`/api/token-usage?sessionId=${sessionId}`)
+					.then(response => {
+						console.log(`[TokenUsage] Response status: ${response.status}`);
+
+						if (response.ok) {
+							return response.json();
+						}
+						throw new Error('Failed to fetch token usage');
+					})
+					.then(data => {
+						console.log('[TokenUsage] Received token usage data:', data);
+						updateTokenUsageDisplay(data);
+					})
+					.catch(error => {
+						console.error('[TokenUsage] Error fetching token usage:', error);
+						// Display a small error indicator in the token usage display
+						const tokenUsageElement = document.getElementById('token-usage');
+						if (tokenUsageElement && tokenUsageElement.style.display !== 'none') {
+							const errorIndicator = document.createElement('div');
+							errorIndicator.style.color = '#f44336';
+							errorIndicator.style.fontSize = '10px';
+							errorIndicator.style.marginTop = '5px';
+							errorIndicator.textContent = 'Error updating token usage';
+
+							// Remove any existing error indicators
+							const existingIndicators = tokenUsageElement.querySelectorAll('[data-error-indicator]');
+							existingIndicators.forEach(el => el.remove());
+
+							// Add the data attribute for future reference
+							errorIndicator.setAttribute('data-error-indicator', 'true');
+
+							// Add to the token usage display
+							tokenUsageElement.querySelector('.token-usage-content').appendChild(errorIndicator);
+
+							// Remove after 5 seconds
+							setTimeout(() => {
+								if (errorIndicator.parentNode) {
+									errorIndicator.parentNode.removeChild(errorIndicator);
+								}
+							}, 5000);
+						}
+					});
+			}
+		};
+
 		function convertSvgToPng(svgElement, containerDiv, index) {
 			if (!svgElement) {
 				console.error('No SVG found!');
@@ -783,6 +991,16 @@
 		// Generate a new session ID on every page load, store only in memory
 		let sessionId = crypto.randomUUID();
 		console.log(`Initialized new session with ID: ${sessionId}`);
+
+		// Make session ID available to other scripts
+		// We use both direct property assignment and event dispatch for compatibility
+		// Direct property is used by internal functions like tokenUsageDisplay.fetch
+		window.sessionId = sessionId;
+
+		// Dispatch an event with the session ID for any external scripts that may be listening
+		window.dispatchEvent(new MessageEvent('message', {
+			data: { sessionId: sessionId }
+		}));
 		const messagesDiv = document.getElementById('messages');
 		const form = document.getElementById('input-form');
 		const searchSuggestionsDiv = document.querySelector('.search-suggestions');
@@ -1404,12 +1622,33 @@
 					sessionId = crypto.randomUUID();
 					console.log(`New chat started in current window. New session ID: ${sessionId}`);
 
+					// Make session ID available to other scripts
+					// We use both direct property assignment and event dispatch for compatibility
+					window.sessionId = sessionId;
+
+					// Dispatch an event with the session ID for any external scripts that may be listening
+					window.dispatchEvent(new MessageEvent('message', {
+						data: { sessionId: sessionId }
+					}));
+
 					// Clear the messages
 					messagesDiv.innerHTML = '';
 
 					// Reset the UI
 					positionInputForm();
 					searchSuggestionsDiv.style.display = 'block';
+
+					// Hide and reset token usage display
+					const tokenUsageElement = document.getElementById('token-usage');
+					if (tokenUsageElement) {
+						tokenUsageElement.style.display = 'none';
+
+						// Reset token usage counters
+						document.getElementById('current-request').textContent = '0';
+						document.getElementById('current-response').textContent = '0';
+						document.getElementById('total-request').textContent = '0';
+						document.getElementById('total-response').textContent = '0';
+					}
 
 					// Close existing SSE connection and reconnect with new session ID
 					if (eventSource) {
@@ -1483,6 +1722,9 @@
 				if (isRequestInProgress) {
 					await cancelRequest(sessionId);
 					isRequestInProgress = false;
+
+					// Stop token usage polling when request is cancelled
+					stopTokenUsagePolling();
 				}
 
 				// Reset the button to "Search" and enable input
@@ -1516,6 +1758,15 @@
 					footer.style.display = 'none';
 				}
 
+				// Show token usage display
+				document.getElementById('token-usage').style.display = 'block';
+
+				// Show token usage display
+				const tokenUsageElement = document.getElementById('token-usage');
+				if (tokenUsageElement) {
+					tokenUsageElement.style.display = 'block';
+				}
+
 				// Keep the allowed folders section visible during chat
 				// This is the key change - we don't hide the folder information anymore
 			}
@@ -1541,6 +1792,9 @@
 
 			// Set request in progress flag
 			isRequestInProgress = true;
+
+			// Start token usage polling for long-running requests
+			startTokenUsagePolling();
 
 			// Send message to server
 			try {
@@ -1610,6 +1864,9 @@
 					input.disabled = false;
 					return;
 				}
+
+				// We'll rely on polling and final fetch for token usage updates
+				// No need to extract from headers as it's redundant
 
 				const reader = response.body.getReader();
 				const decoder = new TextDecoder();
@@ -1745,16 +2002,70 @@
 				errorMsg.textContent = 'Error occurred while processing your request.';
 				messagesDiv.appendChild(errorMsg);
 			} finally {
+				// Fetch and update token usage after each chat interaction
+				// Only if this is still the current session
+				if (window.sessionId === sessionId && window.tokenUsageDisplay && typeof window.tokenUsageDisplay.fetch === 'function') {
+					console.log('[TokenUsage] Fetching final token usage after request completion');
+					window.tokenUsageDisplay.fetch(sessionId);
+				}
+
 				// Reset button to "Search" and enable input
 				form.querySelector('button').textContent = 'Search';
 				form.querySelector('button').style.backgroundColor = '#44CDF3';
 				input.disabled = false;
 				currentController = null;
 				isRequestInProgress = false;
+
+				// Stop token usage polling when request is completed
+				stopTokenUsagePolling();
 			}
 
 			messagesDiv.scrollTop = messagesDiv.scrollHeight;
 		});
+
+		// Use the updateTokenUsageDisplay function defined at the beginning of the script
+
+		// Fetch token usage manually only for long-running requests
+		// This helps avoid redundant polling for quick responses
+		let tokenUsagePollingTimer = null;
+
+		// Function to start polling for token usage updates
+		function startTokenUsagePolling() {
+			// Clear any existing timer
+			if (tokenUsagePollingTimer) {
+				clearInterval(tokenUsagePollingTimer);
+			}
+
+			// Start polling immediately to show token usage as soon as possible
+			if (isRequestInProgress && sessionId && window.tokenUsageDisplay) {
+				console.log('[TokenUsage] Starting token usage polling for request...');
+
+				// Do an initial fetch right away
+				window.tokenUsageDisplay.fetch(sessionId);
+
+				// Poll every 3 seconds (reduced from 5 seconds for more responsive updates)
+				tokenUsagePollingTimer = setInterval(() => {
+					if (isRequestInProgress && sessionId && window.tokenUsageDisplay) {
+						console.log('[TokenUsage] Polling for token usage updates...');
+						window.tokenUsageDisplay.fetch(sessionId);
+					} else {
+						// Stop polling if request is no longer in progress
+						clearInterval(tokenUsagePollingTimer);
+						tokenUsagePollingTimer = null;
+						console.log('[TokenUsage] Stopped polling - request completed');
+					}
+				}, 3000);
+			}
+		}
+
+		// Function to stop polling
+		function stopTokenUsagePolling() {
+			if (tokenUsagePollingTimer) {
+				clearInterval(tokenUsagePollingTimer);
+				tokenUsagePollingTimer = null;
+				console.log('[TokenUsage] Stopped token usage polling');
+			}
+		}
 
 		const messageInput = document.getElementById('message-input');
 
