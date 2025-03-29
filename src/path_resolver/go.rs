@@ -26,10 +26,68 @@ impl PathResolver for GoPathResolver {
         "go:"
     }
 
-    fn resolve(&self, package_name: &str) -> Result<PathBuf, String> {
+    fn split_module_and_subpath(
+        &self,
+        full_path_after_prefix: &str,
+    ) -> Result<(String, Option<String>), String> {
+        if full_path_after_prefix.is_empty() {
+            return Err("Go path cannot be empty".to_string());
+        }
+        if full_path_after_prefix.contains("..") {
+            return Err("Go path cannot contain '..'".to_string());
+        }
+
+        // Trim potential trailing slash
+        let path = full_path_after_prefix.trim_end_matches('/');
+
+        // Common external host heuristic
+        let parts: Vec<&str> = path.split('/').collect();
+        let is_common_external = parts.len() >= 3
+            && (parts[0] == "github.com"
+                || parts[0] == "gitlab.com"
+                || parts[0] == "bitbucket.org"
+                || (parts[0] == "golang.org" && parts[1] == "x"));
+
+        if is_common_external {
+            // Assume module is host/user_or_x/repo_or_pkg (first 3 parts)
+            let module_name = parts[..3].join("/");
+            let subpath = if parts.len() > 3 {
+                Some(parts[3..].join("/")).filter(|s| !s.is_empty()) // Ensure subpath isn't just ""
+            } else {
+                None
+            };
+            Ok((module_name, subpath))
+        } else {
+            // For standard library packages, we need to handle file paths specially
+            // Check if the last part looks like a file (has an extension)
+            if parts.len() > 1 && parts.last().unwrap().contains('.') {
+                // Assume the last part is a file and everything before is the module
+                let file_part = parts.last().unwrap();
+                let module_parts = &parts[..parts.len() - 1];
+                let module_name = module_parts.join("/");
+                Ok((module_name, Some(file_part.to_string())))
+            } else {
+                // Fallback: Assume the *entire* path is the module identifier
+                // This covers:
+                // - Simple stdlib ("fmt")
+                // - Stdlib with slashes ("net/http", "net/http/pprof")
+                // - Less common external paths ("mycorp.com/internal/pkg")
+                Ok((path.to_string(), None))
+            }
+        }
+    }
+
+    fn resolve(&self, module_name: &str) -> Result<PathBuf, String> {
+        // Check if Go is installed before trying to run it
+        if Command::new("go").arg("version").output().is_err() {
+            return Err(
+                "Go command not found. Please ensure Go is installed and in your PATH.".to_string(),
+            );
+        }
+
         // Run `go list -json <import-path>`
         let output = Command::new("go")
-            .args(["list", "-json", package_name])
+            .args(["list", "-json", module_name])
             .output()
             .map_err(|e| format!("Failed to execute 'go list': {}", e))?;
 
@@ -50,7 +108,7 @@ impl PathResolver for GoPathResolver {
         } else {
             Err(format!(
                 "No directory found for Go package: {}",
-                package_name
+                module_name
             ))
         }
     }

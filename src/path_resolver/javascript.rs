@@ -108,9 +108,76 @@ impl PathResolver for JavaScriptPathResolver {
         "js:"
     }
 
-    fn resolve(&self, package_name: &str) -> Result<PathBuf, String> {
+    fn split_module_and_subpath(
+        &self,
+        full_path_after_prefix: &str,
+    ) -> Result<(String, Option<String>), String> {
+        if full_path_after_prefix.is_empty() {
+            return Err("JavaScript path cannot be empty".to_string());
+        }
+        if full_path_after_prefix.contains("..") {
+            return Err("JavaScript path cannot contain '..'".to_string());
+        }
+
+        // Trim potential trailing slash
+        let path = full_path_after_prefix.trim_end_matches('/');
+
+        if path.starts_with('@') {
+            // Scoped: @scope/package/maybe/subpath
+            let parts: Vec<&str> = path.splitn(3, '/').collect();
+            match parts.len() {
+                1 => Err(format!(
+                    "Invalid scoped package format (missing package name): {}",
+                    path
+                )), // e.g., "@scope"
+                2 => {
+                    // e.g., "@scope/package"
+                    let scope = parts[0];
+                    let pkg = parts[1];
+                    if scope.len() <= 1 || pkg.is_empty() || pkg.contains('/') {
+                        Err(format!("Invalid scoped package format: {}", path))
+                    } else {
+                        let module_name = format!("{}/{}", scope, pkg);
+                        Ok((module_name, None))
+                    }
+                }
+                3 => {
+                    // e.g., "@scope/package/subpath" or "@scope/package/"
+                    let scope = parts[0];
+                    let pkg = parts[1];
+                    let sub = parts[2];
+                    if scope.len() <= 1 || pkg.is_empty() || pkg.contains('/') {
+                        Err(format!("Invalid scoped package format: {}", path))
+                    } else {
+                        let module_name = format!("{}/{}", scope, pkg);
+                        // Handle trailing slash case "@scope/pkg/" -> subpath should be None
+                        let subpath_opt = if sub.is_empty() {
+                            None
+                        } else {
+                            Some(sub.to_string())
+                        };
+                        Ok((module_name, subpath_opt))
+                    }
+                }
+                _ => unreachable!("splitn(3) limits len to 3"),
+            }
+        } else {
+            // Regular: package/maybe/subpath
+            let mut parts = path.splitn(2, '/');
+            let module_name = parts.next().unwrap().to_string(); // Cannot fail on non-empty string
+            if module_name.is_empty() || module_name.starts_with('/') {
+                // Basic validation
+                Err(format!("Invalid package format: {}", path))
+            } else {
+                let subpath_opt = parts.next().filter(|s| !s.is_empty()).map(String::from); // Handle trailing slash "pkg/"
+                Ok((module_name, subpath_opt))
+            }
+        }
+    }
+
+    fn resolve(&self, module_name: &str) -> Result<PathBuf, String> {
         // First, check if this is a path to a package.json file
-        let path = PathBuf::from(package_name);
+        let path = PathBuf::from(module_name);
         if path.exists()
             && path.is_file()
             && path.file_name().is_some_and(|name| name == "package.json")
@@ -123,14 +190,14 @@ impl PathResolver for JavaScriptPathResolver {
         }
 
         // If it's a directory containing package.json, return the directory
-        let package_dir = PathBuf::from(package_name);
+        let package_dir = PathBuf::from(module_name);
         let package_json = package_dir.join("package.json");
         if package_dir.exists() && package_dir.is_dir() && package_json.exists() {
             return Ok(package_dir);
         }
 
         // Otherwise, try to resolve it as a package name
-        self.resolve_with_npm(package_name)
+        self.resolve_with_npm(module_name)
     }
 }
 

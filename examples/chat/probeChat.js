@@ -280,29 +280,27 @@ export class ProbeChat {
    */
   async getSystemMessage() {
     // Use the default system message from the probe package as a base
-    let systemMessage = DEFAULT_SYSTEM_MESSAGE || `You are a helpful AI assistant that can search and analyze code repositories using the Probe tool.
-You have access to a code search tool that can help you find relevant code snippets.
-Always use the search tool first before attempting to answer questions about the codebase.
-When responding to questions about code, make sure to include relevant code snippets and explain them clearly.
-If you don't know the answer or can't find relevant information, be honest about it.`;
+    let systemMessage = DEFAULT_SYSTEM_MESSAGE;
+
+    const searchDirectory = allowedFolders.length > 0 ? allowedFolders[0] : process.cwd();
+    if (this.debug) {
+      console.log(`[DEBUG] Generating file list for ${searchDirectory}...`);
+    }
 
     // Add folder information
     if (allowedFolders.length > 0) {
       const folderList = allowedFolders.map(f => `"${f}"`).join(', ');
-      systemMessage += ` The following folders are configured for code search: ${folderList}. When using searchCode, specify one of these folders in the folder argument.`;
+      systemMessage += `\n\nThe following folders are configured for code search: ${folderList}. When using searchCode, specify one of these folders in the folder argument.`;
     } else {
-      systemMessage += ` No specific folders are configured for code search, so the current directory will be used by default. You can omit the path parameter in your search calls, or use '.' to explicitly search in the current directory.`;
+      systemMessage += `\n\nCurrent folder: ${searchDirectory}. You should specify it as path, or subpaths inside it. If you need to search inside the dependecies code, you should use special syntax for path: "go:github.com/user/repo" or "js:user/repo" or "rust:crate_name|.`;
     }
 
     systemMessage += '\n\nWhen appropriate add mermaid diagrams - inside the [] blocks inside diagram wrap to quotes "]';
 
+    console.log(`[DEBUG] System message: ${systemMessage}`);
+
     // Add file list information if available
     try {
-      const searchDirectory = allowedFolders.length > 0 ? allowedFolders[0] : process.cwd();
-      if (this.debug) {
-        console.log(`[DEBUG] Generating file list for ${searchDirectory}...`);
-      }
-
       let files = await listFilesByLevel({
         directory: searchDirectory,
         maxFiles: 100,
@@ -526,7 +524,7 @@ If you don't know the answer or can't find relevant information, be honest about
         messages: messages,
         system: await this.getSystemMessage(),
         tools: this.tools,
-        maxSteps: 10, // Reduced from 15 to help prevent token limit issues
+        maxSteps: 20,
         temperature: 0.7,
         maxTokens: maxTokens,
         signal: this.abortController.signal
@@ -579,7 +577,34 @@ If you don't know the answer or can't find relevant information, be honest about
           throw new Error('Request was cancelled by the user');
         }
 
-        const result = await generateText(generateOptions);
+        // Retry wrapper function for generateText with exponential backoff
+        const retryGenerateText = async (options, maxRetries = 3) => {
+          let lastError;
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              if (this.debug) {
+                console.log(`[DEBUG] generateText attempt ${attempt}/${maxRetries}`);
+              }
+              return await generateText(options);
+            } catch (error) {
+              lastError = error;
+              console.error(`Error in generateText (attempt ${attempt}/${maxRetries}):`, error.message);
+
+              if (attempt < maxRetries) {
+                // Wait for 1 second before retrying (could be made exponential if needed)
+                const delayMs = 1000;
+                if (this.debug) {
+                  console.log(`[DEBUG] Retrying in ${delayMs}ms...`);
+                }
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+              }
+            }
+          }
+          // If we've exhausted all retries, throw the last error
+          throw lastError;
+        };
+
+        const result = await retryGenerateText(generateOptions);
 
         // Update token counter's history with complete message array
         if (result.messages && Array.isArray(result.messages)) {

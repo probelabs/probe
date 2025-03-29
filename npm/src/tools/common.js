@@ -8,7 +8,7 @@ import { z } from 'zod';
 // Common schemas for tool parameters
 export const searchSchema = z.object({
 	query: z.string().describe('Search query with Elasticsearch syntax. Use + for important terms.'),
-	path: z.string().optional().default('.').describe('Path to search in'),
+	path: z.string().optional().default('.').describe('Path to search in. For dependencies use "go:github.com/owner/repo", "js:package_name", or "rust:cargo_name" etc.'),
 	allow_tests: z.boolean().optional().default(false).describe('Allow test files in search results'),
 	maxResults: z.number().optional().describe('Maximum number of results to return'),
 	maxTokens: z.number().optional().default(10000).describe('Maximum number of tokens to return')

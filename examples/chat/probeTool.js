@@ -90,6 +90,8 @@ const wrapToolWithEmitter = (tool, toolName) => {
 				throw new Error(`Tool execution cancelled for session ${toolSessionId}`);
 			}
 
+			console.log(`Executing ${toolName} with params:`, params);
+
 			try {
 				// Emit a tool call start event
 				const toolCallStartData = {

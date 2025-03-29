@@ -154,6 +154,19 @@ impl PathResolver for RustPathResolver {
         "rust:"
     }
 
+    fn split_module_and_subpath(
+        &self,
+        full_path_after_prefix: &str,
+    ) -> Result<(String, Option<String>), String> {
+        if full_path_after_prefix.is_empty() {
+            return Err("Rust path (to Cargo.toml) cannot be empty".to_string());
+        }
+
+        // For Rust, the entire path is treated as the module identifier
+        // We don't split into module/subpath for Rust paths
+        Ok((full_path_after_prefix.to_string(), None))
+    }
+
     fn resolve(&self, crate_name: &str) -> Result<PathBuf, String> {
         // First, check if this is a path to a Cargo.toml file
         let path = PathBuf::from(crate_name);

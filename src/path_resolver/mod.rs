@@ -7,7 +7,7 @@ mod go;
 mod javascript;
 mod rust;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use go::GoPathResolver;
 pub use javascript::JavaScriptPathResolver;
@@ -21,17 +21,43 @@ pub trait PathResolver {
     /// The prefix used to identify paths for this resolver (e.g., "go:", "js:", "rust:").
     fn prefix(&self) -> &'static str;
 
+    /// Splits the path string (after the prefix) into the core module/package
+    /// identifier and an optional subpath.
+    ///
+    /// For example, for Go:
+    /// - "fmt" -> Ok(("fmt", None))
+    /// - "net/http" -> Ok(("net/http", None)) // Stdlib multi-segment
+    /// - "github.com/gin-gonic/gin" -> Ok(("github.com/gin-gonic/gin", None))
+    /// - "github.com/gin-gonic/gin/examples/basic" -> Ok(("github.com/gin-gonic/gin", Some("examples/basic")))
+    ///
+    /// For JavaScript:
+    /// - "lodash" -> Ok(("lodash", None))
+    /// - "lodash/get" -> Ok(("lodash", Some("get")))
+    /// - "@types/node" -> Ok(("@types/node", None))
+    /// - "@types/node/fs" -> Ok(("@types/node", Some("fs")))
+    ///
+    /// # Arguments
+    /// * `full_path_after_prefix` - The portion of the input path string that comes *after* the resolver's prefix.
+    ///
+    /// # Returns
+    /// * `Ok((String, Option<String>))` - A tuple containing the resolved module name and an optional subpath string.
+    /// * `Err(String)` - An error message if the path format is invalid for this resolver.
+    fn split_module_and_subpath(
+        &self,
+        full_path_after_prefix: &str,
+    ) -> Result<(String, Option<String>), String>;
+
     /// Resolves a package/module name to its filesystem location.
     ///
     /// # Arguments
     ///
-    /// * `package_name` - The package/module name to resolve (without the prefix)
+    /// * `module_name` - The package/module name to resolve (without any subpath)
     ///
     /// # Returns
     ///
     /// * `Ok(PathBuf)` - The filesystem path where the package is located
     /// * `Err(String)` - An error message if resolution fails
-    fn resolve(&self, package_name: &str) -> Result<PathBuf, String>;
+    fn resolve(&self, module_name: &str) -> Result<PathBuf, String>;
 }
 
 /// Resolves a path that might contain special prefixes to an actual filesystem path.
@@ -60,9 +86,47 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
     // Find the appropriate resolver based on the path prefix
     for resolver in resolvers {
         let prefix = resolver.prefix();
-        if let Some(package_name) = path.strip_prefix(prefix) {
-            // Extract the package name (without the prefix)
-            return resolver.resolve(package_name);
+        if !prefix.ends_with(':') {
+            // Internal sanity check
+            eprintln!(
+                "Warning: PathResolver prefix '{}' does not end with ':'",
+                prefix
+            );
+            continue;
+        }
+
+        if let Some(full_path_after_prefix) = path.strip_prefix(prefix) {
+            // 1. Split the path into module name and optional subpath
+            let (module_name, subpath_opt) = resolver
+                .split_module_and_subpath(full_path_after_prefix)
+                .map_err(|e| {
+                    format!(
+                        "Failed to parse path '{}' for prefix '{}': {}",
+                        full_path_after_prefix, prefix, e
+                    )
+                })?;
+
+            // 2. Resolve the base directory of the module
+            let module_base_path = resolver.resolve(&module_name).map_err(|e| {
+                format!(
+                    "Failed to resolve module '{}' for prefix '{}': {}",
+                    module_name, prefix, e
+                )
+            })?;
+
+            // 3. Combine base path with subpath if it exists
+            let final_path = match subpath_opt {
+                Some(sub) if !sub.is_empty() => {
+                    // Ensure subpath is treated as relative
+                    let relative_subpath = Path::new(&sub)
+                        .strip_prefix("/")
+                        .unwrap_or_else(|_| Path::new(&sub));
+                    module_base_path.join(relative_subpath)
+                }
+                _ => module_base_path, // No subpath or empty subpath
+            };
+
+            return Ok(final_path);
         }
     }
 
