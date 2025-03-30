@@ -44,24 +44,55 @@ export const attemptCompletionSchema = z.object({
 
 export const searchToolDefinition = `
 ## search
-Description: Search code in the repository using Elasticsearch-like query syntax. Use this tool first for any code-related questions.
-You need to focus on main keywords when constructing the query, and use elastic search syntax like OR AND and brackets to group keywords.
+Description: Search code in the repository using Elasticsearch query syntax (except field based queries, e.g. "filename:..." NOT supported).
+
+You need to focus on main keywords when constructing the query, and always use elastic search syntax like OR AND and brackets to group keywords.
 Parameters:
 - query: (required) Search query with Elasticsearch syntax. You can use + for important terms, and - for negation.
-- path: (optional, default: '.') Path to search in. All dependencies located in /dep folder, under language sub folders, like this: "/dep/go/github.com/owner/repo", "/dep/js/package_name", or "/dep/rust/cargo_name" etc.
+- path: (required) Path to search in. All dependencies located in /dep folder, under language sub folders, like this: "/dep/go/github.com/owner/repo", "/dep/js/package_name", or "/dep/rust/cargo_name" etc. YOU SHOULD ALWAYS provide FULL PATH when searching dependencies, including depency name.
 - allow_tests: (optional, default: false) Allow test files in search results (true/false).
 - exact: (optional, default: false) Perform exact pricise search. Use it when you already know function or struct name, or some other code block, and want exact match.
 - maxResults: (optional) Maximum number of results to return (number).
 - maxTokens: (optional, default: 10000) Maximum number of tokens to return (number).
-- language: (optional) Limit search to files of a specific programming language (e.g., 'rust', 'javascript', 'python', etc.).
+- language: (optional) Limit search to files of a specific programming language (e.g., 'rust', 'js', 'python', 'go' etc.).
+
+
 Usage Example:
+
+<examples>
+
+User: How to calculate the total amount in the payments module?
 <search>
-<query>+important +calculate</query>
+<query>calculate AND payment</query>
 <path>src/utils</path>
 <allow_tests>false</allow_tests>
-<exact>true</exact>
-<language>javascript</language>
 </search>
+
+User: How do the user authentication and authorization work?
+<search>
+<query>+user and (authentification OR authroization OR authz)</query>
+<path>.</path>
+<allow_tests>true</allow_tests>
+<language>go</language>
+</search>
+
+User: Find all react imports in the project.
+<search>
+<query>import { react }</query>
+<path>.</path>
+<exact>true</exact>
+<language>js</language>
+</search>
+
+
+User: Find how decompoud library works?
+<search>
+<query>import { react }</query>
+<path>/dep/rust/decompound</path>
+<language>rust</language>
+</search>
+
+</examples>
 `;
 
 export const queryToolDefinition = `
@@ -73,25 +104,56 @@ Parameters:
 - language: (optional, default: 'rust') Programming language to use for parsing.
 - allow_tests: (optional, default: false) Allow test files in search results (true/false).
 Usage Example:
+
+<examples>
+
 <query>
 <pattern>function $FUNC($$$PARAMS) { $$$BODY }</pattern>
 <path>src/parser</path>
-<language>javascript</language>
+<language>js</language>
 </query>
+
+</examples>
 `;
 
 export const extractToolDefinition = `
 ## extract
-Description: Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files. It can be used to read full files as well.
+Description: Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files. It can be used to read full files as well. 
+Full file extraction should be the LAST RESORT! Always prefer search.
+
 Parameters:
 - file_path: (required) Path to the file to extract from. Can include line numbers or symbol names (e.g., 'src/main.rs:10-20', 'src/utils.js#myFunction').
 - line: (optional) Start line number to extract a specific code block. Use with end_line for ranges.
 - end_line: (optional) End line number for extracting a range of lines.
 - allow_tests: (optional, default: false) Allow test files and test code blocks (true/false).
 Usage Example:
+
+<examples>
+
+User: How RankManager works
 <extract>
 <file_path>src/search/ranking.rs#RankManager</file_path>
 </extract>
+
+User: Lets read the whole file
+<extract>
+<file_path>src/search/ranking.rs</file_path>
+</extract>
+
+User: Read the first 10 lines of the file
+<extract>
+<file_path>src/search/ranking.rs</file_path>
+<line>1</line>
+<end_line>10</end_line>
+</extract>
+
+User: Read file inside the dependency
+<extract>
+<file_path>/dep/go/github.com/gorilla/mux/router.go</file_path>
+</extract>
+
+
+</examples>
 `;
 
 export const attemptCompletionToolDefinition = `

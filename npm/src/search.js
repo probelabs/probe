@@ -91,6 +91,22 @@ export async function search(options) {
 		cliArgs.push('--timeout', '30');
 	}
 
+	// Ensure language is properly passed if provided
+	if (options.language) {
+		// Ensure language flag is in cliArgs
+		if (!cliArgs.includes('--language')) {
+			cliArgs.push('--language', options.language);
+		}
+	}
+
+	// Ensure exact search is properly passed if enabled
+	if (options.exact) {
+		// Ensure exact flag is in cliArgs
+		if (!cliArgs.includes('--exact')) {
+			cliArgs.push('--exact');
+		}
+	}
+
 	// Add session ID from environment variable if not provided in options
 	if (!options.session && process.env.PROBE_SESSION_ID) {
 		options.session = process.env.PROBE_SESSION_ID;
@@ -106,6 +122,7 @@ export async function search(options) {
 	logMessage += ` timeout=${options.timeout}`;
 	if (options.allowTests) logMessage += " allowTests=true";
 	if (options.language) logMessage += ` language=${options.language}`;
+	if (options.exact) logMessage += " exact=true";
 	if (options.session) logMessage += ` session=${options.session}`;
 	console.error(logMessage);
 	// Create positional arguments array separate from flags

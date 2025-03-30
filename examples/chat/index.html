@@ -30,7 +30,8 @@
 			margin: 0 auto;
 			display: flex;
 			flex-direction: column;
-			height: 100vh;
+			min-height: 100vh;
+			/* Changed from height to min-height to allow expansion */
 			position: relative;
 			box-sizing: border-box;
 		}
@@ -76,8 +77,9 @@
 		#messages {
 			flex: 1;
 			background-color: #fff;
-			overflow-y: auto;
+			/* Removed overflow-y: auto to let the page handle scrolling */
 			margin-bottom: 80px;
+			/* Keep margin for fixed input form */
 			margin-top: 20px;
 			/* Space for fixed input form */
 		}
@@ -488,11 +490,117 @@
 			margin: 16px 0;
 			overflow-x: auto;
 			text-align: center;
+			position: relative;
 		}
 
-		.mermaid svg {
+		.mermaid svg,
+		.mermaid-png {
 			max-width: 100%;
 			height: auto;
+			transition: transform 0.2s ease;
+		}
+
+		/* Zoom icon overlay */
+		.mermaid-container {
+			position: relative;
+			display: inline-block;
+		}
+
+		.zoom-icon {
+			position: absolute;
+			top: 10px;
+			right: 10px;
+			background-color: rgba(255, 255, 255, 0.8);
+			border-radius: 50%;
+			width: 32px;
+			height: 32px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			cursor: pointer;
+			opacity: 0;
+			transition: opacity 0.2s ease;
+			box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+			z-index: 10;
+		}
+
+		.mermaid-container:hover .zoom-icon {
+			opacity: 1;
+		}
+
+		.zoom-icon svg {
+			width: 18px;
+			height: 18px;
+		}
+
+		/* Fullscreen dialog */
+		.diagram-dialog {
+			position: fixed;
+			top: 0;
+			left: 0;
+			width: 100%;
+			height: 100%;
+			background-color: rgba(0, 0, 0, 0.85);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			z-index: 1000;
+			padding: 40px;
+			box-sizing: border-box;
+			opacity: 0;
+			pointer-events: none;
+			transition: opacity 0.3s ease;
+			overflow: hidden;
+			/* Prevent any scrolling */
+		}
+
+		.diagram-dialog.active {
+			opacity: 1;
+			pointer-events: auto;
+		}
+
+		.diagram-dialog-content {
+			max-width: 90%;
+			max-height: 90%;
+			background-color: white;
+			border-radius: 8px;
+			padding: 20px;
+			position: relative;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			overflow: hidden;
+			/* Prevent scrollbars */
+		}
+
+		.diagram-dialog img,
+		.diagram-dialog svg {
+			max-width: 100%;
+			max-height: 100%;
+			object-fit: contain;
+			/* Ensure image fits while maintaining aspect ratio */
+			display: block;
+		}
+
+		.close-dialog {
+			position: absolute;
+			top: 10px;
+			right: 10px;
+			background-color: rgba(255, 255, 255, 0.8);
+			border-radius: 50%;
+			width: 36px;
+			height: 36px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			cursor: pointer;
+			box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+			z-index: 1001;
+		}
+
+		.close-dialog svg {
+			width: 20px;
+			height: 20px;
 		}
 
 		/* Token usage display styles */
@@ -746,9 +854,9 @@
 		</div>
 		<div id="messages" class="message-container"></div>
 	</div>
-	<form id="input-form">
+	<form id="input-form" onsubmit="return false;">
 		<textarea id="message-input" placeholder="Ask about code..." required rows="1"></textarea>
-		<button type="submit">Search</button>
+		<button type="button" id="search-button">Search</button>
 	</form>
 	<div class="search-suggestions">
 		<ul>
@@ -876,7 +984,16 @@
 				}
 
 				console.log(`[TokenUsage] Fetching token usage for session: ${sessionId}`);
-				fetch(`/api/token-usage?sessionId=${sessionId}`)
+				// Use a more reliable fetch with keepalive for Firefox
+				fetch(`/api/token-usage?sessionId=${sessionId}`, {
+					method: 'GET',
+					cache: 'no-store',
+					keepalive: true,
+					headers: {
+						'Cache-Control': 'no-cache',
+						'Pragma': 'no-cache'
+					}
+				})
 					.then(response => {
 						console.log(`[TokenUsage] Response status: ${response.status}`);
 
@@ -935,7 +1052,7 @@
 				console.log(`SVG rendered size: ${svgWidth}x${svgHeight}`);
 
 				// Define scale factor for higher resolution (increase for more clarity)
-				const scale = 2; // Try 3 or 4 if still blurry
+				const scale = 6; // Try 3 or 4 if still blurry
 
 				// Create canvas with scaled dimensions
 				const canvasWidth = svgWidth * scale;
@@ -968,15 +1085,33 @@
 					pngImage.height = svgHeight;
 					pngImage.alt = 'Diagram as PNG';
 					pngImage.className = 'mermaid-png';
+					pngImage.setAttribute('data-full-size', pngDataUrl); // Store full-size image URL for zoom
 
 					// Log PNG natural size to verify resolution
 					pngImage.onload = function () {
 						console.log(`PNG natural size: ${this.naturalWidth}x${this.naturalHeight}`);
 					};
 
-					// Replace the SVG with the PNG image
+					// Create a container for the image with zoom functionality
+					const container = document.createElement('div');
+					container.className = 'mermaid-container';
+
+					// Create zoom icon
+					const zoomIcon = document.createElement('div');
+					zoomIcon.className = 'zoom-icon';
+					zoomIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>';
+
+					// Add click event to zoom icon
+					zoomIcon.addEventListener('click', function (e) {
+						e.stopPropagation();
+						showDiagramDialog(pngDataUrl);
+					});
+
+					// Replace the SVG with the PNG image in the container
 					svgElement.style.display = 'none';
-					svgElement.insertAdjacentElement('afterend', pngImage);
+					container.appendChild(pngImage);
+					container.appendChild(zoomIcon);
+					svgElement.insertAdjacentElement('afterend', container);
 
 					console.log(`Replaced SVG with PNG image (index: ${index || 0})`);
 				};
@@ -987,6 +1122,70 @@
 			} catch (error) {
 				console.error('Error in SVG to PNG conversion process:', error);
 			}
+		}
+
+		// Function to show diagram in fullscreen dialog
+		function showDiagramDialog(imageUrl) {
+			// Create dialog if it doesn't exist
+			let dialog = document.getElementById('diagram-dialog');
+			if (!dialog) {
+				dialog = document.createElement('div');
+				dialog.id = 'diagram-dialog';
+				dialog.className = 'diagram-dialog';
+
+				const dialogContent = document.createElement('div');
+				dialogContent.className = 'diagram-dialog-content';
+
+				const closeButton = document.createElement('div');
+				closeButton.className = 'close-dialog';
+				closeButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+				closeButton.addEventListener('click', function () {
+					dialog.classList.remove('active');
+				});
+
+				dialog.appendChild(dialogContent);
+				dialog.appendChild(closeButton);
+				document.body.appendChild(dialog);
+
+				// Close dialog when clicking outside content
+				dialog.addEventListener('click', function (e) {
+					if (e.target === dialog) {
+						dialog.classList.remove('active');
+					}
+				});
+
+				// Close dialog with Escape key
+				document.addEventListener('keydown', function (e) {
+					if (e.key === 'Escape' && dialog.classList.contains('active')) {
+						dialog.classList.remove('active');
+					}
+				});
+			}
+
+			// Update dialog content with the image
+			const dialogContent = dialog.querySelector('.diagram-dialog-content');
+			dialogContent.innerHTML = '';
+
+			const img = document.createElement('img');
+			img.src = imageUrl;
+			img.alt = 'Diagram (Full Size)';
+
+			// Ensure image fits screen by checking dimensions after loading
+			img.onload = function () {
+				// Image is now loaded, ensure it fits within the dialog content
+				const viewportWidth = window.innerWidth * 0.9 - 40; // 90% of viewport minus padding
+				const viewportHeight = window.innerHeight * 0.9 - 40; // 90% of viewport minus padding
+
+				console.log(`Image natural size: ${img.naturalWidth}x${img.naturalHeight}`);
+				console.log(`Available viewport space: ${viewportWidth}x${viewportHeight}`);
+
+				// Image will be constrained by CSS max-width/max-height and object-fit
+			};
+
+			dialogContent.appendChild(img);
+
+			// Show dialog
+			dialog.classList.add('active');
 		}
 		// Generate a new session ID on every page load, store only in memory
 		let sessionId = crypto.randomUUID();
@@ -1364,7 +1563,10 @@
 			// Connect to SSE endpoint with session ID
 			const sseUrl = `/api/tool-events?sessionId=${sessionId}`;
 			console.log('SSE URL:', sseUrl);
-			eventSource = new EventSource(sseUrl);
+
+			// Add a timestamp to prevent caching in Firefox
+			const nocacheUrl = `${sseUrl}&_nocache=${Date.now()}`;
+			eventSource = new EventSource(nocacheUrl);
 
 			// Handle connection event
 			eventSource.addEventListener('connection', (event) => {
@@ -1473,7 +1675,14 @@
 					// Format the tool call description for display
 					let toolDescription = '';
 					if (toolCall.name === 'searchCode' || toolCall.name === 'search') {
-						toolDescription = `Searching code with "${query}"${path === '.' ? '' : ` in ${path}`}`;
+						const language = toolCall.args.language;
+						const exact = toolCall.args.exact;
+
+						let locationInfo = path !== '.' ? ` in ${path}` : '';
+						let languageInfo = language ? ` (language: ${language})` : '';
+						let exactInfo = exact === true ? ` (exact match)` : '';
+
+						toolDescription = `Searching code with "${query}"${locationInfo}${languageInfo}${exactInfo}`;
 					} else if (toolCall.name === 'queryCode' || toolCall.name === 'query') {
 						toolDescription = `Querying code with pattern "${query}"${path === '.' ? '' : ` in ${path}`}`;
 					} else if (toolCall.name === 'extractCode' || toolCall.name === 'extract') {
@@ -1481,13 +1690,14 @@
 						const line = toolCall.args.line;
 						const endLine = toolCall.args.end_line;
 
+						let lineInfo = '';
 						if (line && endLine) {
-							toolDescription = `Extracting code from ${filePath} (lines ${line}-${endLine})`;
+							lineInfo = ` (lines ${line}-${endLine})`;
 						} else if (line) {
-							toolDescription = `Extracting code from ${filePath} (from line ${line})`;
-						} else {
-							toolDescription = `Extracting code from ${filePath}`;
+							lineInfo = ` (from line ${line})`;
 						}
+
+						toolDescription = `Extracting code from ${filePath}${lineInfo}`;
 					} else {
 						toolDescription = `Using ${toolCall.name} tool`;
 					}
@@ -1549,46 +1759,49 @@
 			console.log('%c Adding tool call to message:', 'background: #4CAF50; color: white; padding: 2px 5px; border-radius: 2px;', toolCall);
 
 			try {
-				// Only display the search query as a simple paragraph
+				// Format the tool call description for display
+				let toolDescription = '';
 				if (toolCall.name === 'searchCode' || toolCall.name === 'search') {
 					const query = toolCall.args.query || toolCall.args.keywords || '';
+					const path = toolCall.args.path || toolCall.args.folder || '.';
+					const language = toolCall.args.language;
+					const exact = toolCall.args.exact;
 
-					// Create a simple paragraph element
-					const paragraph = document.createElement('p');
-					paragraph.textContent = `Searching code with "${query}"`;
-					paragraph.style.fontStyle = 'italic';
-					paragraph.style.color = '#555';
-					paragraph.style.margin = '8px 0';
+					let locationInfo = path !== '.' ? ` in ${path}` : '';
+					let languageInfo = language ? ` (language: ${language})` : '';
+					let exactInfo = exact === true ? ` (exact match)` : '';
 
-					// Add the paragraph to the message div
-					messageDiv.appendChild(paragraph);
-				}
-				else if (toolCall.name === 'queryCode' || toolCall.name === 'query') {
-					const pattern = toolCall.args.pattern || '';
-
-					// Create a simple paragraph element
-					const paragraph = document.createElement('p');
-					paragraph.textContent = `Querying code with pattern "${pattern}"`;
-					paragraph.style.fontStyle = 'italic';
-					paragraph.style.color = '#555';
-					paragraph.style.margin = '8px 0';
-
-					// Add the paragraph to the message div
-					messageDiv.appendChild(paragraph);
-				}
-				else if (toolCall.name === 'extractCode' || toolCall.name === 'extract') {
+					toolDescription = `Searching code with "${query}"${locationInfo}${languageInfo}${exactInfo}`;
+				} else if (toolCall.name === 'queryCode' || toolCall.name === 'query') {
+					const query = toolCall.args.query || toolCall.args.pattern || '';
+					const path = toolCall.args.path || toolCall.args.folder || '.';
+					toolDescription = `Querying code with pattern "${query}"${path === '.' ? '' : ` in ${path}`}`;
+				} else if (toolCall.name === 'extractCode' || toolCall.name === 'extract') {
 					const filePath = toolCall.args.file_path || '';
+					const line = toolCall.args.line;
+					const endLine = toolCall.args.end_line;
 
-					// Create a simple paragraph element
-					const paragraph = document.createElement('p');
-					paragraph.textContent = `Extracting code from ${filePath}`;
-					paragraph.style.fontStyle = 'italic';
-					paragraph.style.color = '#555';
-					paragraph.style.margin = '8px 0';
+					let lineInfo = '';
+					if (line && endLine) {
+						lineInfo = ` (lines ${line}-${endLine})`;
+					} else if (line) {
+						lineInfo = ` (from line ${line})`;
+					}
 
-					// Add the paragraph to the message div
-					messageDiv.appendChild(paragraph);
+					toolDescription = `Extracting code from ${filePath}${lineInfo}`;
+				} else {
+					toolDescription = `Using ${toolCall.name} tool`;
 				}
+
+				// Create a simple paragraph element with the formatted description
+				const paragraph = document.createElement('p');
+				paragraph.textContent = toolDescription;
+				paragraph.style.fontStyle = 'italic';
+				paragraph.style.color = '#555';
+				paragraph.style.margin = '8px 0';
+
+				// Add the paragraph to the message div
+				messageDiv.appendChild(paragraph);
 
 				// Scroll to the bottom
 				messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -1674,11 +1887,20 @@
 		window.addEventListener('beforeunload', () => {
 			// If we have a sessionId that's about to become invalid, cancel it
 			if (sessionId) {
-				fetch('/cancel-request', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ sessionId })
-				}).catch((err) => console.error('Error cancelling session on unload:', err));
+				// Use navigator.sendBeacon for more reliable delivery during page unload
+				const data = JSON.stringify({ sessionId });
+				if (navigator.sendBeacon) {
+					navigator.sendBeacon('/cancel-request', data);
+				} else {
+					// Fallback to fetch for older browsers
+					fetch('/cancel-request', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: data,
+						// Use keepalive to ensure the request completes even if the page is unloading
+						keepalive: true
+					}).catch((err) => console.error('Error cancelling session on unload:', err));
+				}
 			}
 		});
 
@@ -1707,11 +1929,13 @@
 		}
 
 		// Handle form submission
-		form.addEventListener('submit', async (e) => {
+		// Use the button click event instead of form submit to avoid potential form submission issues
+		const searchButton = document.getElementById('search-button');
+		searchButton.addEventListener('click', async (e) => {
 			e.preventDefault();
 
 			// If this is a stop action
-			if (form.querySelector('button').textContent === 'Stop') {
+			if (searchButton.textContent === 'Stop') {
 				// Abort the current fetch request
 				if (currentController) {
 					currentController.abort();
@@ -1728,8 +1952,8 @@
 				}
 
 				// Reset the button to "Search" and enable input
-				form.querySelector('button').textContent = 'Search';
-				form.querySelector('button').style.backgroundColor = '#44CDF3';
+				searchButton.textContent = 'Search';
+				searchButton.style.backgroundColor = '#44CDF3';
 				input.disabled = false;
 				return;
 			}
@@ -1786,9 +2010,8 @@
 
 			// Disable input and change button to "Stop"
 			input.disabled = true;
-			const submitButton = form.querySelector('button');
-			submitButton.textContent = 'Stop';
-			submitButton.style.backgroundColor = '#f44336';
+			searchButton.textContent = 'Stop';
+			searchButton.style.backgroundColor = '#f44336';
 
 			// Set request in progress flag
 			isRequestInProgress = true;
@@ -1844,7 +2067,12 @@
 
 				const response = await fetch('/chat', {
 					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
+					headers: {
+						'Content-Type': 'application/json',
+						'Cache-Control': 'no-cache',
+						'Pragma': 'no-cache'
+					},
+					cache: 'no-store',
 					body: JSON.stringify(requestData),
 					signal: signal
 				}).catch(error => {
@@ -1977,6 +2205,34 @@
 										convertSvgToPng(svg, aiMsgDiv, index);
 									});
 								}
+
+								// Also add zoom functionality to any existing PNG images
+								setTimeout(() => {
+									const existingPngs = aiMsgDiv.querySelectorAll('.mermaid-png:not(.zoom-enabled)');
+									if (existingPngs.length > 0) {
+										console.log(`Adding zoom functionality to ${existingPngs.length} existing PNG images`);
+										existingPngs.forEach((png) => {
+											if (!png.parentElement.classList.contains('mermaid-container')) {
+												const container = document.createElement('div');
+												container.className = 'mermaid-container';
+
+												const zoomIcon = document.createElement('div');
+												zoomIcon.className = 'zoom-icon';
+												zoomIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>';
+
+												zoomIcon.addEventListener('click', function (e) {
+													e.stopPropagation();
+													showDiagramDialog(png.src);
+												});
+
+												png.parentNode.insertBefore(container, png);
+												container.appendChild(png);
+												container.appendChild(zoomIcon);
+												png.classList.add('zoom-enabled');
+											}
+										});
+									}
+								}, 200);
 							}, 100);
 						} else {
 							console.log('No mermaid diagrams found in current message');
@@ -2046,8 +2302,8 @@
 				}
 
 				// Reset button to "Search" and enable input
-				form.querySelector('button').textContent = 'Search';
-				form.querySelector('button').style.backgroundColor = '#44CDF3';
+				searchButton.textContent = 'Search';
+				searchButton.style.backgroundColor = '#44CDF3';
 				input.disabled = false;
 				currentController = null;
 				isRequestInProgress = false;
@@ -2064,9 +2320,13 @@
 		// Fetch token usage manually only for long-running requests
 		// This helps avoid redundant polling for quick responses
 		let tokenUsagePollingTimer = null;
+		let pollingAttempts = 0;
+		const MAX_POLLING_ATTEMPTS = 10;
 
 		// Function to start polling for token usage updates
 		function startTokenUsagePolling() {
+			// Reset attempts counter
+			pollingAttempts = 0;
 			// Clear any existing timer
 			if (tokenUsagePollingTimer) {
 				clearInterval(tokenUsagePollingTimer);
@@ -2084,6 +2344,25 @@
 					if (isRequestInProgress && sessionId && window.tokenUsageDisplay) {
 						console.log('[TokenUsage] Polling for token usage updates...');
 						window.tokenUsageDisplay.fetch(sessionId);
+
+						// Increment attempts counter
+						pollingAttempts++;
+
+						// If we've reached the maximum number of attempts, slow down polling
+						if (pollingAttempts >= MAX_POLLING_ATTEMPTS) {
+							console.log('[TokenUsage] Reached maximum polling attempts, slowing down polling');
+							clearInterval(tokenUsagePollingTimer);
+							tokenUsagePollingTimer = setInterval(() => {
+								if (isRequestInProgress && sessionId && window.tokenUsageDisplay) {
+									console.log('[TokenUsage] Slow polling for token usage updates...');
+									window.tokenUsageDisplay.fetch(sessionId);
+								} else {
+									clearInterval(tokenUsagePollingTimer);
+									tokenUsagePollingTimer = null;
+									console.log('[TokenUsage] Stopped slow polling - request completed');
+								}
+							}, 10000); // Slow down to every 10 seconds
+						}
 					} else {
 						// Stop polling if request is no longer in progress
 						clearInterval(tokenUsagePollingTimer);
@@ -2126,9 +2405,9 @@
 					// Allow new line with Shift+Enter and resize
 					setTimeout(autoResizeTextarea, 0);
 				} else {
-					// Submit form on Enter without Shift
+					// Trigger search button click on Enter without Shift
 					e.preventDefault();
-					form.dispatchEvent(new Event('submit'));
+					searchButton.click();
 				}
 			}
 		});

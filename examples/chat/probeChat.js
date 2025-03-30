@@ -282,11 +282,13 @@ Follow these instructions carefully:
 1.  Analyze the user's request.
 2.  Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool for each step.
 3.  Use the available tools step-by-step to fulfill the request.
-4.  You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
-5.  Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
-6.  Once the task is fully completed, and you have confirmed the success of all steps, use the '<attempt_completion>' tool to provide the final result. This is the ONLY way to signal completion.
-7.  Be concise and focus on using tools effectively. Avoid conversational filler.
-8.  Use mermaid diagrams where appropriate to illustrate complex code structures or workflows. Ensure to wrap [] content inside diagram to quotes.
+4.  Ensure to get really deep and understand the full picture before answerring. Ensure to check dependencies where required.
+5.  You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
+6.  Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
+7.  Once the task is fully completed, and you have confirmed the success of all steps, use the '<attempt_completion>' tool to provide the final result. This is the ONLY way to signal completion.
+8.  Be concise and focus on using tools effectively. Avoid conversational filler.
+9.  Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results. Avoid reading files in full, only when absolutely necessary.
+10.  Show mermaid diagrams to illustrate complex code structures or workflows. Ensure to wrap content inside  [] diagram to quotes.
 `;
 
     let systemMessage = baseSystemMessage;
