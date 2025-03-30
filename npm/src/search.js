@@ -19,6 +19,7 @@ const SEARCH_FLAG_MAP = {
 	excludeFilenames: '--exclude-filenames',
 	reranker: '--reranker',
 	frequencySearch: '--frequency',
+	exact: '--exact',
 	maxResults: '--max-results',
 	maxBytes: '--max-bytes',
 	maxTokens: '--max-tokens',
@@ -26,7 +27,8 @@ const SEARCH_FLAG_MAP = {
 	noMerge: '--no-merge',
 	mergeThreshold: '--merge-threshold',
 	session: '--session',
-	timeout: '--timeout'
+	timeout: '--timeout',
+	language: '--language'
 };
 
 /**
@@ -40,6 +42,7 @@ const SEARCH_FLAG_MAP = {
  * @param {boolean} [options.excludeFilenames] - Exclude filenames from search
  * @param {string} [options.reranker] - Reranking method ('hybrid', 'hybrid2', 'bm25', 'tfidf')
  * @param {boolean} [options.frequencySearch] - Use frequency-based search
+ * @param {boolean} [options.exact] - Perform exact search without tokenization (case-insensitive)
  * @param {number} [options.maxResults] - Maximum number of results
  * @param {number} [options.maxBytes] - Maximum bytes to return
  * @param {number} [options.maxTokens] - Maximum tokens to return
@@ -48,6 +51,7 @@ const SEARCH_FLAG_MAP = {
  * @param {number} [options.mergeThreshold] - Merge threshold
  * @param {string} [options.session] - Session ID for caching results
  * @param {number} [options.timeout] - Timeout in seconds (default: 30)
+ * @param {string} [options.language] - Limit search to files of a specific programming language
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists
  * @param {string} [options.binaryOptions.version] - Specific version to download
@@ -101,6 +105,7 @@ export async function search(options) {
 	logMessage += ` maxTokens=${options.maxTokens}`;
 	logMessage += ` timeout=${options.timeout}`;
 	if (options.allowTests) logMessage += " allowTests=true";
+	if (options.language) logMessage += ` language=${options.language}`;
 	if (options.session) logMessage += ` session=${options.session}`;
 	console.error(logMessage);
 	// Create positional arguments array separate from flags

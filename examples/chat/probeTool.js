@@ -32,6 +32,9 @@ function registerToolExecution(sessionId) {
 
 	if (!activeToolExecutions.has(sessionId)) {
 		activeToolExecutions.set(sessionId, { cancelled: false });
+	} else {
+		// Reset cancelled flag if session already exists for a new execution
+		activeToolExecutions.get(sessionId).cancelled = false;
 	}
 }
 
@@ -45,254 +48,222 @@ export function clearToolExecutionData(sessionId) {
 	}
 }
 
-// Generate a session ID
-const sessionId = randomUUID();
+// Generate a default session ID (less relevant now, session is managed per-chat)
+const defaultSessionId = randomUUID();
 // Only log session ID in debug mode
 if (process.env.DEBUG_CHAT === '1') {
-	console.log(`Generated session ID for search caching: ${sessionId}`);
+	console.log(`Generated default session ID (probeTool.js): ${defaultSessionId}`);
 }
 
 // Create configured tools with the session ID
+// Note: These configOptions are less critical now as sessionId is passed explicitly
 const configOptions = {
-	sessionId,
+	sessionId: defaultSessionId,
 	debug: process.env.DEBUG_CHAT === '1'
 };
 
-// Create the base tools
-const baseTools = {
-	searchTool: searchTool(configOptions),
-	queryTool: queryTool(configOptions),
-	extractTool: extractTool(configOptions)
-};
+// Create the base tools using the imported generators
+const baseSearchTool = searchTool(configOptions);
+const baseQueryTool = queryTool(configOptions);
+const baseExtractTool = extractTool(configOptions);
 
-// Wrap the tools to emit events when they're called
-const wrapToolWithEmitter = (tool, toolName) => {
+
+// Wrap the tools to emit events and handle cancellation
+const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
 	return {
-		...tool,
-		execute: async (params) => {
+		...tool, // Spread schema, description etc.
+		execute: async (params) => { // The execute function now receives parsed params
 			const debug = process.env.DEBUG_CHAT === '1';
+			// Get the session ID from params (passed down from probeChat.js)
+			const toolSessionId = params.sessionId || defaultSessionId; // Fallback, but should always have sessionId
+
 			if (debug) {
-				console.log(`[DEBUG] Executing ${toolName} with params:`, params);
+				console.log(`[DEBUG] probeTool: Executing ${toolName} for session ${toolSessionId}`);
+				console.log(`[DEBUG] probeTool: Received params:`, params);
 			}
 
-			// Get the session ID from params or use the default
-			const toolSessionId = params.sessionId || sessionId;
-			if (debug) {
-				console.log(`[DEBUG] Using session ID for tool call: ${toolSessionId}`);
-			}
 
-			// Register this tool execution
+			// Register this tool execution (and reset cancel flag if needed)
 			registerToolExecution(toolSessionId);
 
-			// Check if this session has been cancelled
+			// Check if this session has been cancelled *before* execution
 			if (isSessionCancelled(toolSessionId)) {
-				console.log(`Tool execution cancelled for session ${toolSessionId}`);
+				console.log(`Tool execution cancelled BEFORE starting for session ${toolSessionId}`);
 				throw new Error(`Tool execution cancelled for session ${toolSessionId}`);
 			}
 
-			console.log(`Executing ${toolName} with params:`, params);
+			console.log(`Executing ${toolName} for session ${toolSessionId}`); // Simplified log
+
+			// Remove sessionId from params before passing to base tool if it expects only schema params
+			const { sessionId, ...toolParams } = params;
 
 			try {
 				// Emit a tool call start event
 				const toolCallStartData = {
 					timestamp: new Date().toISOString(),
 					name: toolName,
-					args: params,
+					args: toolParams, // Log schema params
 					status: 'started'
 				};
 				if (debug) {
-					console.log(`[DEBUG] Emitting tool call start event for session ${toolSessionId}`);
+					console.log(`[DEBUG] probeTool: Emitting toolCallStart:${toolSessionId}`);
 				}
 				toolCallEmitter.emit(`toolCall:${toolSessionId}`, toolCallStartData);
 
-				// Execute the original tool with periodic cancellation checks
-				const executionPromise = tool.execute(params);
+				// Execute the original tool's execute function with schema params
+				// Use a promise-based approach with cancellation check
+				let result = null;
+				let executionError = null;
 
-				// Create a polling mechanism to check for cancellation
-				const cancellationCheckInterval = setInterval(() => {
+				const executionPromise = baseExecute(toolParams).catch(err => {
+					executionError = err; // Capture error
+				});
+
+				const checkInterval = 50; // Check every 50ms
+				while (result === null && executionError === null) {
 					if (isSessionCancelled(toolSessionId)) {
-						clearInterval(cancellationCheckInterval);
-						console.log(`Detected cancellation during tool execution for session ${toolSessionId}`);
-						// We can't actually cancel the tool execution once it's started,
-						// but we can mark it as cancelled so we don't process the result
+						console.log(`Tool execution cancelled DURING execution for session ${toolSessionId}`);
+						// Attempt to signal cancellation if the underlying tool supports it (future enhancement)
+						// For now, just throw the cancellation error
+						throw new Error(`Tool execution cancelled for session ${toolSessionId}`);
 					}
-				}, 100);
+					// Check if promise is resolved or rejected
+					const status = await Promise.race([
+						executionPromise.then(() => 'resolved').catch(() => 'rejected'),
+						new Promise(resolve => setTimeout(() => resolve('pending'), checkInterval))
+					]);
 
-				// Wait for the execution to complete
-				const result = await executionPromise;
+					if (status === 'resolved') {
+						result = await executionPromise; // Get the result
+					} else if (status === 'rejected') {
+						// Error already captured by the catch block on executionPromise
+						break;
+					}
+					// If 'pending', continue loop
+				}
 
-				// Clear the cancellation check interval
-				clearInterval(cancellationCheckInterval);
+				// If loop exited due to error
+				if (executionError) {
+					throw executionError;
+				}
 
-				// Check again if the session was cancelled during execution
+				// If loop exited due to cancellation within the loop
 				if (isSessionCancelled(toolSessionId)) {
-					console.log(`Tool execution was cancelled for session ${toolSessionId}`);
+					console.log(`Tool execution finished but session was cancelled for ${toolSessionId}`);
 					throw new Error(`Tool execution cancelled for session ${toolSessionId}`);
 				}
 
-				// Emit the tool call event
+
+				// Emit the tool call completion event
 				const toolCallData = {
 					timestamp: new Date().toISOString(),
 					name: toolName,
-					args: params,
+					args: toolParams,
+					// Safely preview result
 					resultPreview: typeof result === 'string'
-						? (result.length > 200 ? result.substring(0, 200) + '... (truncated)' : result)
-						: JSON.stringify(result, null, 2).substring(0, 200) + '... (truncated)',
+						? (result.length > 200 ? result.substring(0, 200) + '...' : result)
+						: (result ? JSON.stringify(result).substring(0, 200) + '...' : 'No Result'),
 					status: 'completed'
 				};
 				if (debug) {
-					console.log(`[DEBUG] Emitting tool call event for session ${toolSessionId}:`, toolCallData);
+					console.log(`[DEBUG] probeTool: Emitting toolCall:${toolSessionId} (completed)`);
 				}
 				toolCallEmitter.emit(`toolCall:${toolSessionId}`, toolCallData);
 
 				return result;
 			} catch (error) {
+				// If it's a cancellation error, re-throw it directly
+				if (error.message.includes('cancelled for session')) {
+					console.log(`Caught cancellation error for ${toolName} in session ${toolSessionId}`);
+					// Emit cancellation event? Or let the caller handle it? Let caller handle.
+					throw error;
+				}
+
+				// Handle other execution errors
 				if (debug) {
-					console.error(`[DEBUG] Error executing ${toolName}:`, error);
+					console.error(`[DEBUG] probeTool: Error executing ${toolName}:`, error);
 				}
 
 				// Emit a tool call error event
 				const toolCallErrorData = {
 					timestamp: new Date().toISOString(),
 					name: toolName,
-					args: params,
-					error: error.message,
+					args: toolParams,
+					error: error.message || 'Unknown error',
 					status: 'error'
 				};
+				if (debug) {
+					console.log(`[DEBUG] probeTool: Emitting toolCall:${toolSessionId} (error)`);
+				}
 				toolCallEmitter.emit(`toolCall:${toolSessionId}`, toolCallErrorData);
 
-				throw error;
+				throw error; // Re-throw the error to be caught by probeChat.js loop
 			}
 		}
 	};
 };
 
-// Export the wrapped tools
-export const tools = {
-	searchTool: wrapToolWithEmitter(baseTools.searchTool, 'search'),
-	queryTool: wrapToolWithEmitter(baseTools.queryTool, 'query'),
-	extractTool: wrapToolWithEmitter(baseTools.extractTool, 'extract')
-};
+// Export the wrapped tool instances
+export const searchToolInstance = wrapToolWithEmitter(baseSearchTool, 'search', baseSearchTool.execute);
+export const queryToolInstance = wrapToolWithEmitter(baseQueryTool, 'query', baseQueryTool.execute);
+export const extractToolInstance = wrapToolWithEmitter(baseExtractTool, 'extract', baseExtractTool.execute);
 
-// Export individual tools for direct use
-export { DEFAULT_SYSTEM_MESSAGE };
-export const { searchTool: searchToolInstance, queryTool: queryToolInstance, extractTool: extractToolInstance } = tools;
-// Export the tool generators for direct use
-export { searchTool, queryTool, extractTool, listFilesByLevel };
-
-// For backward compatibility, export the probeTool that maps to searchTool
+// --- Backward Compatibility Layer (probeTool mapping to searchToolInstance) ---
+// This might be less relevant if the AI is strictly using the new XML format,
+// but keep it for potential direct API calls or older UI elements.
 export const probeTool = {
-	...searchToolInstance,
-	parameters: {
-		...searchToolInstance.parameters,
-		// Map the old parameter names to the new ones
-		parse: (params) => {
-			const { keywords, folder, ...rest } = params;
-			return {
-				query: keywords,
-				path: folder,
-				...rest
-			};
-		}
-	},
-	execute: async (params) => {
+	...searchToolInstance, // Inherit schema description etc. from the wrapped search tool
+	name: "search", // Explicitly set name
+	description: 'DEPRECATED: Use <search> tool instead. Search code using keywords.',
+	// parameters: searchSchema, // Use the imported schema
+	execute: async (params) => { // Expects { keywords, folder, ..., sessionId }
 		const debug = process.env.DEBUG_CHAT === '1';
 		if (debug) {
-			console.log(`[DEBUG] Executing probeTool with params:`, params);
+			console.log(`[DEBUG] probeTool (Compatibility Layer) executing for session ${params.sessionId}`);
 		}
 
-		// Get the session ID from params or use the default
-		const toolSessionId = params.sessionId || sessionId;
+		// Map old params ('keywords', 'folder') to new ones ('query', 'path')
+		const { keywords, folder, sessionId, ...rest } = params;
+		const mappedParams = {
+			query: keywords,
+			path: folder || '.', // Default path if folder is missing
+			sessionId: sessionId, // Pass session ID through
+			...rest // Pass other params like allow_tests, maxResults etc.
+		};
+
 		if (debug) {
-			console.log(`[DEBUG] Using session ID for probeTool call: ${toolSessionId}`);
+			console.log("[DEBUG] probeTool mapped params: ", mappedParams);
 		}
 
-		// Register this tool execution
-		registerToolExecution(toolSessionId);
-
-		// Check if this session has been cancelled
-		if (isSessionCancelled(toolSessionId)) {
-			console.log(`Tool execution cancelled for session ${toolSessionId}`);
-			throw new Error(`Tool execution cancelled for session ${toolSessionId}`);
-		}
-
+		// Call the *wrapped* searchToolInstance execute function
+		// It will handle cancellation checks and event emitting internally
 		try {
-			// Emit a tool call start event
-			const toolCallStartData = {
-				timestamp: new Date().toISOString(),
-				name: 'searchCode',
-				args: params,
-				status: 'started'
-			};
-			if (debug) {
-				console.log(`[DEBUG] Emitting probeTool call start event for session ${toolSessionId}`);
-			}
-			toolCallEmitter.emit(`toolCall:${toolSessionId}`, toolCallStartData);
+			// Note: The name emitted by searchToolInstance will be 'search', not 'probeTool' or 'searchCode'
+			const result = await searchToolInstance.execute(mappedParams);
 
-			// Map the old parameter names to the new ones
-			const { keywords, folder, ...rest } = params;
-
-			// Create a polling mechanism to check for cancellation
-			const cancellationCheckInterval = setInterval(() => {
-				if (isSessionCancelled(toolSessionId)) {
-					clearInterval(cancellationCheckInterval);
-					console.log(`Detected cancellation during probeTool execution for session ${toolSessionId}`);
-				}
-			}, 100);
-
-			// Execute the search
-			const result = await searchToolInstance.execute({
-				query: keywords,
-				path: folder || '.',  // Default to current directory if folder is not specified
-				...rest
-			});
-
-			// Clear the cancellation check interval
-			clearInterval(cancellationCheckInterval);
-
-			// Check again if the session was cancelled during execution
-			if (isSessionCancelled(toolSessionId)) {
-				console.log(`ProbeTool execution was cancelled for session ${toolSessionId}`);
-				throw new Error(`Tool execution cancelled for session ${toolSessionId}`);
-			}
-
-			// Format the result to match the old format
+			// Format the result for backward compatibility if needed by caller
+			// The raw result from searchToolInstance is likely just the search results array/string
 			const formattedResult = {
-				results: result,
-				command: `probe ${keywords} ${folder || '.'}`,
+				results: result, // Assuming result is the direct data
+				command: `probe search --query "${keywords}" --path "${folder || '.'}"`, // Reconstruct approx command
 				timestamp: new Date().toISOString()
 			};
-
-			// Emit the tool call event
-			const toolCallData = {
-				timestamp: new Date().toISOString(),
-				name: 'searchCode',
-				args: params,
-				resultPreview: JSON.stringify(formattedResult).substring(0, 200) + '... (truncated)',
-				status: 'completed'
-			};
 			if (debug) {
-				console.log(`[DEBUG] Emitting probeTool call event for session ${toolSessionId}:`, toolCallData);
+				console.log("[DEBUG] probeTool compatibility layer returning formatted result.");
 			}
-			toolCallEmitter.emit(`toolCall:${toolSessionId}`, toolCallData);
-
 			return formattedResult;
+
 		} catch (error) {
 			if (debug) {
-				console.error(`[DEBUG] Error executing probeTool:`, error);
+				console.error(`[DEBUG] Error in probeTool compatibility layer:`, error);
 			}
-
-			// Emit a tool call error event
-			const toolCallErrorData = {
-				timestamp: new Date().toISOString(),
-				name: 'searchCode',
-				args: params,
-				error: error.message,
-				status: 'error'
-			};
-			toolCallEmitter.emit(`toolCall:${toolSessionId}`, toolCallErrorData);
-
+			// Error is already emitted by the wrapped searchToolInstance, just re-throw
 			throw error;
 		}
 	}
 };
+
+// Export necessary items
+export { DEFAULT_SYSTEM_MESSAGE, listFilesByLevel };
+// Export the tool generator functions if needed elsewhere
+export { searchTool, queryTool, extractTool };

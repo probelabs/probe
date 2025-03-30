@@ -25,7 +25,7 @@ export const searchTool = (options = {}) => {
 		name: 'search',
 		description: searchDescription,
 		parameters: searchSchema,
-		execute: async ({ query: searchQuery, path, allow_tests, maxTokens: paramMaxTokens }) => {
+		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language }) => {
 			try {
 				// Use parameter maxTokens if provided, otherwise use the default
 				const effectiveMaxTokens = paramMaxTokens || maxTokens;
@@ -42,16 +42,18 @@ export const searchTool = (options = {}) => {
 				}
 
 				if (debug) {
-					console.error(`Executing search with query: "${searchQuery}", path: "${searchPath}", session: ${sessionId || 'none'}`);
+					console.error(`Executing search with query: "${searchQuery}", path: "${searchPath}", exact: ${exact ? 'true' : 'false'}, language: ${language || 'all'}, session: ${sessionId || 'none'}`);
 				}
 
 				const results = await search({
 					query: searchQuery,
 					path: searchPath,
 					allow_tests,
+					exact,
 					json: false,
 					maxTokens: effectiveMaxTokens,
-					session: sessionId // Pass session ID if provided
+					session: sessionId, // Pass session ID if provided
+					language // Pass language parameter if provided
 				});
 
 				return results;

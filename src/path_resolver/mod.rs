@@ -66,6 +66,9 @@ pub trait PathResolver {
 /// - "go:github.com/user/repo" - Resolves to the Go module's filesystem path
 /// - "js:express" - Resolves to the JavaScript/Node.js package's filesystem path
 /// - "rust:serde" - Resolves to the Rust crate's filesystem path
+/// - "/dep/go/fmt" - Alternative notation for "go:fmt"
+/// - "/dep/js/express" - Alternative notation for "js:express"
+/// - "/dep/rust/serde" - Alternative notation for "rust:serde"
 ///
 /// # Arguments
 ///
@@ -82,6 +85,70 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
         Box::new(JavaScriptPathResolver::new()),
         Box::new(RustPathResolver::new()),
     ];
+
+    // Check for /dep/ prefix notation
+    if let Some(dep_path) = path.strip_prefix("/dep/") {
+        // Extract the language identifier (e.g., "go", "js", "rust")
+        let parts: Vec<&str> = dep_path.splitn(2, '/').collect();
+        if parts.is_empty() {
+            return Err("Invalid /dep/ path: missing language identifier".to_string());
+        }
+
+        let lang_id = parts[0];
+        let remainder = parts.get(1).unwrap_or(&"");
+
+        // Map language identifier to resolver prefix
+        let prefix = match lang_id {
+            "go" => "go:",
+            "js" => "js:",
+            "rust" => "rust:",
+            _ => {
+                return Err(format!(
+                    "Unknown language identifier in /dep/ path: {}",
+                    lang_id
+                ))
+            }
+        };
+
+        // Find the appropriate resolver
+        for resolver in &resolvers {
+            if resolver.prefix() == prefix {
+                // 1. Split the path into module name and optional subpath
+                let (module_name, subpath_opt) =
+                    resolver.split_module_and_subpath(remainder).map_err(|e| {
+                        format!(
+                            "Failed to parse path '{}' for prefix '{}': {}",
+                            remainder, prefix, e
+                        )
+                    })?;
+
+                // 2. Resolve the base directory of the module
+                let module_base_path = resolver.resolve(&module_name).map_err(|e| {
+                    format!(
+                        "Failed to resolve module '{}' for prefix '{}': {}",
+                        module_name, prefix, e
+                    )
+                })?;
+
+                // 3. Combine base path with subpath if it exists
+                let final_path = match subpath_opt {
+                    Some(sub) if !sub.is_empty() => {
+                        // Ensure subpath is treated as relative
+                        let relative_subpath = Path::new(&sub)
+                            .strip_prefix("/")
+                            .unwrap_or_else(|_| Path::new(&sub));
+                        module_base_path.join(relative_subpath)
+                    }
+                    _ => module_base_path, // No subpath or empty subpath
+                };
+
+                return Ok(final_path);
+            }
+        }
+
+        // This should not happen if all language identifiers are properly mapped
+        return Err(format!("No resolver found for language: {}", lang_id));
+    }
 
     // Find the appropriate resolver based on the path prefix
     for resolver in resolvers {
@@ -137,6 +204,7 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn test_resolve_path_regular() {
@@ -144,5 +212,45 @@ mod tests {
         let result = resolve_path(path);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), PathBuf::from(path));
+    }
+
+    #[test]
+    fn test_resolve_path_dep_prefix() {
+        // Skip this test if go is not installed
+        if Command::new("go").arg("version").output().is_err() {
+            println!("Skipping test_resolve_path_dep_prefix: Go is not installed");
+            return;
+        }
+
+        // Test with standard library package using /dep/go prefix
+        let result = resolve_path("/dep/go/fmt");
+
+        // Compare with traditional go: prefix
+        let traditional_result = resolve_path("go:fmt");
+
+        assert!(
+            result.is_ok(),
+            "Failed to resolve '/dep/go/fmt': {:?}",
+            result
+        );
+        assert!(
+            traditional_result.is_ok(),
+            "Failed to resolve 'go:fmt': {:?}",
+            traditional_result
+        );
+
+        // Both paths should resolve to the same location
+        assert_eq!(result.unwrap(), traditional_result.unwrap());
+    }
+
+    #[test]
+    fn test_invalid_dep_path() {
+        // Test with invalid /dep/ path (missing language identifier)
+        let result = resolve_path("/dep/");
+        assert!(result.is_err());
+
+        // Test with unknown language identifier
+        let result = resolve_path("/dep/unknown/package");
+        assert!(result.is_err());
     }
 }

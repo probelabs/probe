@@ -139,6 +139,7 @@ fn test_search_single_term() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -150,6 +151,7 @@ fn test_search_single_term() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Search for a single term
@@ -201,6 +203,7 @@ fn test_search_multiple_terms() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -212,6 +215,7 @@ fn test_search_multiple_terms() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Search for multiple terms
@@ -245,6 +249,7 @@ fn test_search_files_only() {
         files_only: true,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -256,6 +261,7 @@ fn test_search_files_only() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Search for files only
@@ -318,6 +324,7 @@ fn test_search_include_filenames() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -329,6 +336,7 @@ fn test_search_include_filenames() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Search with filename matching enabled
@@ -372,6 +380,7 @@ fn test_search_with_limits() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: Some(2), // limit to 2 results
@@ -383,6 +392,7 @@ fn test_search_with_limits() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Search with limits
@@ -420,6 +430,7 @@ fn test_frequency_search() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        language: None,
         reranker: "hybrid",
         frequency_search: true,
         max_results: None,
@@ -431,6 +442,7 @@ fn test_frequency_search() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Search using frequency-based search
@@ -475,6 +487,7 @@ func main() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false, // filename matching is enabled by default
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -487,6 +500,7 @@ func main() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Search for both terms in "all terms" mode
@@ -515,6 +529,7 @@ fn test_search_with_custom_ignores() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -526,6 +541,7 @@ fn test_search_with_custom_ignores() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Search with custom ignore patterns
@@ -630,6 +646,7 @@ fn calculate_product(a: i32, b: i32) -> i32 {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        language: None,
         reranker: "combined",
         frequency_search: false,
         max_results: None,
@@ -641,6 +658,7 @@ fn calculate_product(a: i32, b: i32) -> i32 {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Perform search

@@ -90,7 +90,15 @@ jobs:
 
       # Build the Rust project
       - name: Build Release
-        run: cargo build --release --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
+            # For Windows, use static linking of the C++ runtime
+            RUSTFLAGS="-C target-feature=+crt-static -C link-args=/DEBUG:NONE /NOLOGO" cargo build --release --target ${{ matrix.target }}
+          else
+            # For other platforms, use the default build
+            cargo build --release --target ${{ matrix.target }}
+          fi
 
       # Install zip on Windows
       - name: Install zip on Windows
@@ -310,6 +318,5 @@ jobs:
         run: cd examples/chat && npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
 # The publish-probe-web-package job has been removed as the web functionality
 # has been merged into the probe-chat package

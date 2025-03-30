@@ -24,6 +24,7 @@ fn test_multi_keyword_pattern_generation() {
         ast,
         term_indices,
         excluded_terms: HashSet::new(),
+        exact: false,
     };
 
     // Generate patterns
@@ -84,6 +85,7 @@ fn test_excluded_term_pattern_generation() {
         ast,
         term_indices,
         excluded_terms,
+        exact: false,
     };
 
     // Generate patterns
@@ -127,6 +129,7 @@ fn test_and_expression_pattern_generation() {
         ast,
         term_indices,
         excluded_terms: HashSet::new(),
+        exact: false,
     };
 
     // Generate patterns
@@ -185,6 +188,7 @@ fn test_or_expression_pattern_generation() {
         ast,
         term_indices,
         excluded_terms: HashSet::new(),
+        exact: false,
     };
 
     // Generate patterns
@@ -265,6 +269,7 @@ fn test_complex_expression_pattern_generation() {
         ast,
         term_indices,
         excluded_terms: HashSet::new(),
+        exact: false,
     };
 
     // Generate patterns
@@ -342,6 +347,7 @@ fn test_pattern_deduplication() {
         ast,
         term_indices,
         excluded_terms: HashSet::new(),
+        exact: false,
     };
 
     // Generate patterns

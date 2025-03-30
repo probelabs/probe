@@ -74,6 +74,7 @@ fn test_quoted_term_with_negative_keyword() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -85,6 +86,7 @@ fn test_quoted_term_with_negative_keyword() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Print the query for debugging
@@ -153,6 +155,7 @@ fn test_negative_quoted_term() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -164,6 +167,7 @@ fn test_negative_quoted_term() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Print the query for debugging

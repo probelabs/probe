@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-use probe::search::elastic_query::parse_query;
+use probe::search::elastic_query::parse_query_test as parse_query;
 use probe::search::file_processing::filter_code_block_with_ast;
 use probe::search::query::create_query_plan;
 use probe::search::{perform_probe, SearchOptions};
@@ -87,6 +87,7 @@ fn test_stemming_with_and_query(temp_path: &Path) {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: true,
         max_results: None,
@@ -98,6 +99,7 @@ fn test_stemming_with_and_query(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run the search
@@ -164,6 +166,7 @@ fn test_stemming_with_or_query(temp_path: &Path) {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: true,
         max_results: None,
@@ -176,6 +179,7 @@ fn test_stemming_with_or_query(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run the search
@@ -365,6 +369,7 @@ fn test_compound_word_splitting(temp_path: &Path) {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: true,
         max_results: None,
@@ -376,6 +381,7 @@ fn test_compound_word_splitting(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run the search
@@ -407,6 +413,7 @@ fn test_compound_word_splitting(temp_path: &Path) {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: true,
         max_results: None,
@@ -419,6 +426,7 @@ fn test_compound_word_splitting(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run the search
@@ -463,6 +471,7 @@ fn test_negative_compound_word_in_existing_tests(temp_path: &Path) {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: true,
         max_results: None,
@@ -474,6 +483,7 @@ fn test_negative_compound_word_in_existing_tests(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run the search

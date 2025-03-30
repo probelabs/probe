@@ -105,6 +105,7 @@ fn test_required_term_query() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -116,6 +117,7 @@ fn test_required_term_query() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Print the temp_path for debugging
@@ -211,6 +213,7 @@ fn test_excluded_term_query() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -222,6 +225,7 @@ fn test_excluded_term_query() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Print the query for debugging
@@ -301,6 +305,7 @@ fn test_or_query() {
         files_only: true, // Use files_only to ensure we find all matching files
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: true, // Enable frequency search to improve matching
         max_results: None,
@@ -312,6 +317,7 @@ fn test_or_query() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Print the test files for debugging
@@ -399,6 +405,7 @@ fn test_complex_query_or() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: true, // Enable frequency search to improve matching
         max_results: None,
@@ -410,6 +417,7 @@ fn test_complex_query_or() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Print the test files for debugging
@@ -495,6 +503,7 @@ fn test_complex_query_exclusion() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -506,6 +515,7 @@ fn test_complex_query_exclusion() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Print the query for debugging
@@ -592,6 +602,7 @@ fn test_function() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None,
@@ -603,6 +614,7 @@ fn test_function() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run the search
@@ -683,6 +695,7 @@ fn test_filter_code_block_with_ast() {
             set.insert("keywordBeta".to_string());
             set
         },
+        exact: false,
     };
 
     // Create term matches for a block
@@ -758,6 +771,7 @@ fn test_filter_tokenized_block() {
             set.insert("keywordBeta".to_string());
             set
         },
+        exact: false,
     };
 
     // Import the function from probe crate
@@ -829,6 +843,7 @@ fn test_filter_tokenized_block() {
         ast: ast_or,
         term_indices: term_indices_or.clone(),
         excluded_terms: HashSet::new(),
+        exact: false,
     };
 
     // Test with only keywordGamma

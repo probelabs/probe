@@ -213,6 +213,8 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         exclude_filenames,
         reranker,
         frequency_search: _,
+        exact,
+        language,
         max_results,
         max_bytes,
         max_tokens,
@@ -348,9 +350,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let parse_res = if queries.len() > 1 {
         // Join multiple queries with AND
         let combined_query = queries.join(" AND ");
-        create_query_plan(&combined_query, false)
+        create_query_plan(&combined_query, *exact)
     } else {
-        create_query_plan(&queries[0], false)
+        create_query_plan(&queries[0], *exact)
     };
 
     let qp_duration = qp_start.elapsed();
@@ -419,12 +421,16 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
       likely culprit.
     */
 
+    // Convert Option<&str> to Option<&str> by cloning the reference
+    let lang_param = language.as_ref().map(|lang| *lang);
+
     let mut file_term_map = search_with_structured_patterns(
         path,
         &plan,
         &structured_patterns,
         custom_ignores,
         *allow_tests,
+        lang_param,
     )?;
 
     let fs_duration = fs_start.elapsed();
@@ -454,7 +460,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     // Add filename matches if enabled
     let fm_start = Instant::now();
-    if include_filenames {
+    if include_filenames && !exact {
         if debug_mode {
             println!("DEBUG: Starting filename matching...");
         }
@@ -493,6 +499,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 custom_ignores,
                 *allow_tests,
                 &plan.term_indices,
+                lang_param,
             )?;
 
         if debug_mode {
@@ -1144,23 +1151,36 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             format_duration(remaining_time)
         );
     }
-
-    // Rank results
+    // Rank results (skip if exact flag is set)
     let rr_start = Instant::now();
     if debug_mode {
-        println!("DEBUG: Starting result ranking...");
+        if *exact {
+            println!("DEBUG: Skipping result ranking due to exact flag being set");
+        } else {
+            println!("DEBUG: Starting result ranking...");
+        }
     }
 
-    rank_search_results(&mut final_results, queries, reranker);
+    if !*exact {
+        // Only perform ranking if exact flag is not set
+        rank_search_results(&mut final_results, queries, reranker);
+    }
 
     let rr_duration = rr_start.elapsed();
     timings.result_ranking = Some(rr_duration);
 
     if debug_mode {
-        println!(
-            "DEBUG: Result ranking completed in {}",
-            format_duration(rr_duration)
-        );
+        if *exact {
+            println!(
+                "DEBUG: Result ranking skipped in {}",
+                format_duration(rr_duration)
+            );
+        } else {
+            println!(
+                "DEBUG: Result ranking completed in {}",
+                format_duration(rr_duration)
+            );
+        }
     }
 
     // We'll move the caching step AFTER limiting results
@@ -1373,6 +1393,7 @@ pub fn search_with_structured_patterns(
     patterns: &[(String, HashSet<usize>)],
     custom_ignores: &[String],
     allow_tests: bool,
+    language: Option<&str>,
 ) -> Result<HashMap<PathBuf, HashMap<usize, HashSet<usize>>>> {
     // Resolve the path if it's a special format (e.g., "go:github.com/user/repo")
     let root_path = if let Some(path_str) = root_path_str.to_str() {
@@ -1432,9 +1453,13 @@ pub fn search_with_structured_patterns(
         println!("DEBUG: Custom ignore patterns: {:?}", custom_ignores);
     }
 
-    // Use file_list_cache to get a filtered list of files
-    let file_list =
-        crate::search::file_list_cache::get_file_list(&root_path, allow_tests, custom_ignores)?;
+    // Use file_list_cache to get a filtered list of files, with language filtering if specified
+    let file_list = crate::search::file_list_cache::get_file_list_by_language(
+        &root_path,
+        allow_tests,
+        custom_ignores,
+        language,
+    )?;
 
     if debug_mode {
         println!("DEBUG: Got {} files from cache", file_list.files.len());

@@ -23,6 +23,8 @@ struct SearchParams {
     exclude_filenames: bool,
     reranker: String,
     frequency_search: bool,
+    exact: bool,
+    language: Option<String>,
     max_results: Option<usize>,
     max_bytes: Option<usize>,
     max_tokens: Option<usize>,
@@ -58,6 +60,9 @@ fn handle_search(params: SearchParams) -> Result<()> {
     }
     if !use_frequency {
         advanced_options.push("Frequency search disabled".to_string());
+    }
+    if let Some(lang) = &params.language {
+        advanced_options.push(format!("Language: {}", lang));
     }
     if params.allow_tests {
         advanced_options.push("Including tests".to_string());
@@ -101,6 +106,8 @@ fn handle_search(params: SearchParams) -> Result<()> {
         exclude_filenames: params.exclude_filenames,
         reranker: &params.reranker,
         frequency_search: use_frequency,
+        exact: params.exact,
+        language: params.language.as_deref(),
         max_results: params.max_results,
         max_bytes: params.max_bytes,
         max_tokens: params.max_tokens,
@@ -223,6 +230,8 @@ async fn main() -> Result<()> {
                 exclude_filenames: args.exclude_filenames,
                 reranker: args.reranker,
                 frequency_search: args.frequency_search,
+                exact: args.exact,
+                language: None, // Default to None for the no-subcommand case
                 max_results: args.max_results,
                 max_bytes: args.max_bytes,
                 max_tokens: args.max_tokens,
@@ -243,6 +252,8 @@ async fn main() -> Result<()> {
             exclude_filenames,
             reranker,
             frequency_search,
+            exact,
+            language,
             max_results,
             max_bytes,
             max_tokens,
@@ -261,6 +272,8 @@ async fn main() -> Result<()> {
             exclude_filenames,
             reranker,
             frequency_search,
+            exact,
+            language,
             max_results,
             max_bytes,
             max_tokens,

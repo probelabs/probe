@@ -1,4 +1,4 @@
-use probe::search::elastic_query::{self, parse_query};
+use probe::search::elastic_query::{self, parse_query_test as parse_query};
 use probe::search::file_processing::filter_code_block_with_ast;
 use probe::search::query::create_query_plan;
 use std::collections::{HashMap, HashSet};
@@ -432,6 +432,7 @@ fn test_required_terms_query() {
         ast: ast.clone(),
         term_indices: indices.clone(),
         excluded_terms: HashSet::new(),
+        exact: false,
     };
 
     // Use the term indices directly

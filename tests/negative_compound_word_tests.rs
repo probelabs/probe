@@ -92,6 +92,7 @@ fn test_basic_negative_compound_word(temp_path: &Path) {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: true,
         max_results: None,
@@ -103,6 +104,7 @@ fn test_basic_negative_compound_word(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run the search
@@ -155,6 +157,7 @@ fn test_complex_negative_compound_word(temp_path: &Path) {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: true,
         max_results: None,
@@ -167,6 +170,7 @@ fn test_complex_negative_compound_word(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run the search

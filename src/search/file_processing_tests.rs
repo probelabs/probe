@@ -36,6 +36,7 @@ pub fn create_test_query_plan(terms: &[&str]) -> QueryPlan {
         ast,
         term_indices,
         excluded_terms: HashSet::new(),
+        exact: false,
     }
 }
 

@@ -71,6 +71,7 @@ fn test_parallel_file_search() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: Some(100),
@@ -82,6 +83,7 @@ fn test_parallel_file_search() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Measure search time
@@ -131,8 +133,14 @@ fn test_structured_patterns_search() {
 
     // Measure search time
     let start_time = Instant::now();
-    let result =
-        search_with_structured_patterns(base_path, &query_plan, &patterns, &custom_ignores, true);
+    let result = search_with_structured_patterns(
+        base_path,
+        &query_plan,
+        &patterns,
+        &custom_ignores,
+        true,
+        None,
+    );
     let duration = start_time.elapsed();
 
     // Verify search results
@@ -195,6 +203,7 @@ fn function_{}() {{
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: Some(100),
@@ -206,6 +215,7 @@ fn function_{}() {{
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Measure search time
@@ -296,6 +306,7 @@ fn function_with_blocks_{}() {{
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: Some(100),
@@ -307,6 +318,7 @@ fn function_with_blocks_{}() {{
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Measure search time

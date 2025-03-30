@@ -583,7 +583,6 @@ pub fn process_file_with_results(
 
                 // Start measuring filtering time
                 let filtering_start = Instant::now();
-
                 // Early filtering using tokenized content
                 let should_include = {
                     if debug_mode {
@@ -592,22 +591,36 @@ pub fn process_file_with_results(
                             final_start_line, final_end_line
                         );
                     }
-                    // Use the AST evaluation directly to ensure correct handling of complex queries
-                    let result = filter_tokenized_block(
-                        &block_terms,
-                        &params.query_plan.term_indices,
-                        params.query_plan,
-                        debug_mode,
-                    );
 
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Block {}-{} filter result: {}",
-                            final_start_line, final_end_line, result
+                    // Skip tokenization and evaluation when exact flag is enabled
+                    if params.query_plan.exact {
+                        // In exact mode, we already matched the lines in the file
+                        // so we should include this block without re-evaluating
+                        if debug_mode {
+                            println!(
+                                "DEBUG: Exact mode enabled, skipping tokenization and evaluation for block {}-{}",
+                                final_start_line, final_end_line
+                            );
+                        }
+                        true
+                    } else {
+                        // Use the AST evaluation directly to ensure correct handling of complex queries
+                        let result = filter_tokenized_block(
+                            &block_terms,
+                            &params.query_plan.term_indices,
+                            params.query_plan,
+                            debug_mode,
                         );
-                    }
 
-                    result
+                        if debug_mode {
+                            println!(
+                                "DEBUG: Block {}-{} filter result: {}",
+                                final_start_line, final_end_line, result
+                            );
+                        }
+
+                        result
+                    }
                 };
 
                 // End filtering time measurement
@@ -1002,12 +1015,26 @@ pub fn process_file_with_results(
                     context_start, context_end
                 );
             }
-            filter_tokenized_block(
-                &context_terms,
-                &params.query_plan.term_indices,
-                params.query_plan,
-                debug_mode,
-            )
+
+            // Skip tokenization and evaluation when exact flag is enabled
+            if params.query_plan.exact {
+                // In exact mode, we already matched the lines in the file
+                // so we should include this block without re-evaluating
+                if debug_mode {
+                    println!(
+                        "DEBUG: Exact mode enabled, skipping tokenization and evaluation for fallback context {}-{}",
+                        context_start, context_end
+                    );
+                }
+                true
+            } else {
+                filter_tokenized_block(
+                    &context_terms,
+                    &params.query_plan.term_indices,
+                    params.query_plan,
+                    debug_mode,
+                )
+            }
         };
 
         // We don't add this to any timing since filtering is not part of result building

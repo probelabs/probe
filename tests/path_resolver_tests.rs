@@ -487,6 +487,129 @@ fn test_rust_path_is_not_toml() {
     );
 }
 
+// --- Dep Prefix Tests ---
+
+#[test]
+fn test_dep_go_resolution() {
+    if !check_go_module("fmt") {
+        println!("Skipping test_dep_go_resolution: Go or 'fmt' module not available");
+        return;
+    }
+
+    // Test with standard library package using /dep/go prefix
+    let result = resolve_path("/dep/go/fmt");
+
+    // Compare with traditional go: prefix
+    let traditional_result = resolve_path("go:fmt");
+
+    assert!(
+        result.is_ok(),
+        "Failed to resolve '/dep/go/fmt': {:?}",
+        result
+    );
+    assert!(
+        traditional_result.is_ok(),
+        "Failed to resolve 'go:fmt': {:?}",
+        traditional_result
+    );
+
+    // Both paths should resolve to the same location
+    assert_eq!(result.unwrap(), traditional_result.unwrap());
+}
+
+#[test]
+fn test_dep_js_resolution() {
+    let module = "npm"; // Or change to a dev dep of *this* project if available
+    if !check_js_module(module) {
+        println!(
+            "Skipping test_dep_js_resolution: Node or '{}' module not available",
+            module
+        );
+        return;
+    }
+
+    // Test with npm package using /dep/js prefix
+    let result = resolve_path(&format!("/dep/js/{}", module));
+
+    // Compare with traditional js: prefix
+    let traditional_result = resolve_path(&format!("js:{}", module));
+
+    assert!(
+        result.is_ok(),
+        "Failed to resolve '/dep/js/{}': {:?}",
+        module,
+        result
+    );
+    assert!(
+        traditional_result.is_ok(),
+        "Failed to resolve 'js:{}': {:?}",
+        module,
+        traditional_result
+    );
+
+    // Both paths should resolve to the same location
+    assert_eq!(result.unwrap(), traditional_result.unwrap());
+}
+
+#[test]
+fn test_dep_rust_resolution() {
+    // Create a temporary directory with a Cargo.toml file
+    let temp_dir = tempfile::tempdir().unwrap();
+    let crate_root = temp_dir.path();
+    let cargo_toml_path = crate_root.join("Cargo.toml");
+
+    // Write a minimal Cargo.toml
+    fs::write(
+        &cargo_toml_path,
+        r#"[package]
+name = "test-crate"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .expect("Failed to write Cargo.toml");
+
+    // Use canonicalize to handle potential relative path issues in tests
+    let canonical_toml_path = fs::canonicalize(&cargo_toml_path).unwrap();
+
+    // Test with /dep/rust prefix
+    let dep_path_str = format!("/dep/rust/{}", canonical_toml_path.to_str().unwrap());
+    let result = resolve_path(&dep_path_str);
+
+    // Compare with traditional rust: prefix
+    let traditional_path_str = format!("rust:{}", canonical_toml_path.to_str().unwrap());
+    let traditional_result = resolve_path(&traditional_path_str);
+
+    assert!(
+        result.is_ok(),
+        "Failed to resolve /dep/rust path: {:?}",
+        result
+    );
+    assert!(
+        traditional_result.is_ok(),
+        "Failed to resolve rust: path: {:?}",
+        traditional_result
+    );
+
+    // Both paths should resolve to the same location
+    assert_eq!(result.unwrap(), traditional_result.unwrap());
+}
+
+#[test]
+fn test_invalid_dep_paths() {
+    // Test with invalid /dep/ path (missing language identifier)
+    let result = resolve_path("/dep/");
+    assert!(result.is_err());
+
+    // Test with unknown language identifier
+    let result = resolve_path("/dep/unknown/package");
+    assert!(result.is_err());
+
+    // Test with empty path after language identifier
+    let result = resolve_path("/dep/go/");
+    assert!(result.is_err());
+}
+
 // --- General/Error Tests ---
 #[test]
 fn test_invalid_prefix() {

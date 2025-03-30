@@ -1,5 +1,14 @@
 # Makefile for probe Rust project
 
+# Detect operating system
+ifeq ($(OS),Windows_NT)
+    # Windows - use cmd.exe to set environment variables
+    SET_ENV := cmd.exe /c "set RUST_BACKTRACE=1 &&"
+else
+    # Unix-like systems (Linux, macOS)
+    SET_ENV := RUST_BACKTRACE=1
+endif
+
 # Configuration
 VERSION ?= v0.1.0
 CARGO := cargo
@@ -90,23 +99,23 @@ test: test-unit test-integration test-property test-cli
 
 .PHONY: test-unit
 test-unit:
-	RUST_BACKTRACE=1 $(CARGO) test --lib
+	$(SET_ENV) $(CARGO) test --lib
 
 .PHONY: test-integration
 test-integration:
-	RUST_BACKTRACE=1 $(CARGO) test --test integration_tests
+	$(SET_ENV) $(CARGO) test --test integration_tests
 
 .PHONY: test-property
 test-property:
-	RUST_BACKTRACE=1 $(CARGO) test --test property_tests
+	$(SET_ENV) $(CARGO) test --test property_tests
 
 .PHONY: test-cli
 test-cli:
-	RUST_BACKTRACE=1 $(CARGO) test --test cli_tests
+	$(SET_ENV) $(CARGO) test --test cli_tests
 
 .PHONY: test-all
 test-all:
-	RUST_BACKTRACE=1 $(CARGO) test
+	$(SET_ENV) $(CARGO) test
 
 # Code quality targets
 .PHONY: lint

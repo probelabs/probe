@@ -10,7 +10,13 @@ export { searchTool, queryTool, extractTool } from './vercel.js';
 export { createSearchTool, createQueryTool, createExtractTool } from './langchain.js';
 
 // Export common schemas
-export { searchSchema, querySchema, extractSchema } from './common.js';
+export {
+	searchSchema,
+	querySchema,
+	extractSchema,
+	attemptCompletionSchema,
+	attemptCompletionToolDefinition
+} from './common.js';
 
 // Export system message
 export { DEFAULT_SYSTEM_MESSAGE } from './system-message.js';

@@ -14,6 +14,17 @@ import { getBinaryPath, setBinaryPath } from './utils.js';
 import * as tools from './tools/index.js';
 import { listFilesByLevel } from './utils/file-lister.js';
 import { DEFAULT_SYSTEM_MESSAGE } from './tools/system-message.js';
+import {
+	searchSchema,
+	querySchema,
+	extractSchema,
+	attemptCompletionSchema,
+	searchToolDefinition,
+	queryToolDefinition,
+	extractToolDefinition,
+	attemptCompletionToolDefinition,
+	parseXmlToolCall
+} from './tools/common.js';
 import { searchTool, queryTool, extractTool } from './tools/vercel.js';
 
 export {
@@ -28,5 +39,17 @@ export {
 	// Export tool generators directly
 	searchTool,
 	queryTool,
-	extractTool
+	extractTool,
+	// Export schemas
+	searchSchema,
+	querySchema,
+	extractSchema,
+	attemptCompletionSchema,
+	// Export tool definitions
+	searchToolDefinition,
+	queryToolDefinition,
+	extractToolDefinition,
+	attemptCompletionToolDefinition,
+	// Export parser function
+	parseXmlToolCall
 };

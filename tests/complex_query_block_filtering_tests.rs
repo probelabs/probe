@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-use probe::search::elastic_query::parse_query;
+use probe::search::elastic_query::parse_query_test as parse_query;
 use probe::search::file_processing::filter_code_block_with_ast;
 use probe::search::query::create_query_plan;
 use probe::search::{perform_probe, SearchOptions};
@@ -297,6 +297,7 @@ func (i *IPWhiteListMiddleware) Process() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "hybrid",
         frequency_search: true,
         max_results: None,
@@ -308,6 +309,7 @@ func (i *IPWhiteListMiddleware) Process() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run the search
@@ -374,6 +376,7 @@ func Process() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false, // Include filenames in search
+        language: None,
         reranker: "hybrid",
         frequency_search: true,
         max_results: None,
@@ -385,6 +388,7 @@ func Process() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run the search

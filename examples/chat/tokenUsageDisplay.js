@@ -18,10 +18,10 @@ export class TokenUsageDisplay {
 	 * @param {Object} tokens Token data
 	 * @returns {Object} Formatted cache data
 	 */
-	formatCacheTokens(tokens) {
+	formatCacheTokens(tokens = {}) {
 		// Calculate total cache tokens from all providers
-		const totalCacheRead = tokens.cacheRead !== undefined ? tokens.cacheRead : ((tokens.anthropic?.cacheRead || 0) + (tokens.openai?.cachedPrompt || 0));
-		const totalCacheWrite = tokens.cacheWrite !== undefined ? tokens.cacheWrite : (tokens.anthropic?.cacheCreation || 0);
+		const totalCacheRead = tokens.cacheRead !== undefined ? tokens.cacheRead : (((tokens.anthropic || {}).cacheRead || 0) + ((tokens.openai || {}).cachedPrompt || 0));
+		const totalCacheWrite = tokens.cacheWrite !== undefined ? tokens.cacheWrite : ((tokens.anthropic || {}).cacheCreation || 0);
 		const totalCache = tokens.cacheTotal !== undefined ? tokens.cacheTotal : (totalCacheRead + totalCacheWrite);
 
 		// Return consolidated cache data
@@ -41,24 +41,27 @@ export class TokenUsageDisplay {
 		// Ensure we have a valid context window value
 		const contextWindow = usage.contextWindow || 100;
 
+		// Ensure usage.current exists
+		const current = usage.current || {};
+
 		// Format the usage data for display
 		const formatted = {
 			contextWindow: this.formatNumber(contextWindow),
 			current: {
-				request: this.formatNumber(usage.current.request || 0),
-				response: this.formatNumber(usage.current.response || 0),
-				total: this.formatNumber(usage.current.total || 0),
-				cacheRead: this.formatNumber(usage.current.cacheRead || 0),
-				cacheWrite: this.formatNumber(usage.current.cacheWrite || 0),
-				cache: this.formatCacheTokens(usage.current)
+				request: this.formatNumber(current.request || 0),
+				response: this.formatNumber(current.response || 0),
+				total: this.formatNumber(current.total || 0),
+				cacheRead: this.formatNumber(current.cacheRead || 0),
+				cacheWrite: this.formatNumber(current.cacheWrite || 0),
+				cache: this.formatCacheTokens(current)
 			},
 			total: {
-				request: this.formatNumber(usage.total.request || 0),
-				response: this.formatNumber(usage.total.response || 0),
-				total: this.formatNumber(usage.total.total || 0),
-				cacheRead: this.formatNumber(usage.total.cacheRead || 0),
-				cacheWrite: this.formatNumber(usage.total.cacheWrite || 0),
-				cache: this.formatCacheTokens(usage.total)
+				request: this.formatNumber((usage.total || {}).request || 0),
+				response: this.formatNumber((usage.total || {}).response || 0),
+				total: this.formatNumber((usage.total || {}).total || 0),
+				cacheRead: this.formatNumber((usage.total || {}).cacheRead || 0),
+				cacheWrite: this.formatNumber((usage.total || {}).cacheWrite || 0),
+				cache: this.formatCacheTokens(usage.total || {})
 			}
 		};
 

@@ -163,6 +163,19 @@ export function main() {
 
   // Format AI response
   function formatResponse(response) {
+    // Check if response is a structured object with response and tokenUsage properties
+    if (response && typeof response === 'object' && 'response' in response) {
+      // Extract the text response
+      const textResponse = response.response;
+
+      // Format the text response
+      return textResponse.replace(
+        /<tool_call>(.*?)<\/tool_call>/gs,
+        (match, toolCall) => chalk.magenta(`[Tool Call] ${toolCall}`)
+      );
+    }
+
+    // Fallback for legacy format (plain string)
     return response.replace(
       /<tool_call>(.*?)<\/tool_call>/gs,
       (match, toolCall) => chalk.magenta(`[Tool Call] ${toolCall}`)
@@ -212,12 +225,17 @@ export function main() {
 
       const spinner = ora('Thinking...').start();
       try {
-        const response = await chat.chat(message);
+        const result = await chat.chat(message);
         spinner.stop();
 
         console.log(chalk.green('Assistant:'));
-        console.log(formatResponse(response));
+        console.log(formatResponse(result));
         console.log();
+
+        // If we have token usage data in the response, update the terminal title with context window size
+        if (result && typeof result === 'object' && result.tokenUsage && result.tokenUsage.contextWindow) {
+          process.stdout.write('\x1B]0;Context: ' + result.tokenUsage.contextWindow + '\x07');
+        }
       } catch (error) {
         spinner.stop();
         console.error(chalk.red(`Error: ${error.message}`));

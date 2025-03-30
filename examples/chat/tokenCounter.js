@@ -15,26 +15,24 @@ export class TokenCounter {
       this.history = []; // Store message history for context calculation
 
       // Token counters
-      this.requestTokens = 0;
-      this.responseTokens = 0;
-      this.currentRequestTokens = 0;
-      this.currentResponseTokens = 0;
+      this.requestTokens = 0; // Total prompt tokens over session
+      this.responseTokens = 0; // Total completion tokens over session
+      this.currentRequestTokens = 0; // Prompt tokens for the current LLM call
+      this.currentResponseTokens = 0; // Completion tokens for the current LLM call
 
       // Cache token tracking
-      this.cacheCreationTokens = 0;
-      this.cacheReadTokens = 0;
-      this.currentCacheCreationTokens = 0;
-      this.currentCacheReadTokens = 0;
-      this.cachedPromptTokens = 0;
-      this.currentCachedPromptTokens = 0;
+      this.cacheCreationTokens = 0; // Total Anthropic cache creation tokens
+      this.cacheReadTokens = 0; // Total Anthropic cache read tokens
+      this.currentCacheCreationTokens = 0; // Anthropic cache creation for current call
+      this.currentCacheReadTokens = 0; // Anthropic cache read for current call
+      this.cachedPromptTokens = 0; // Total OpenAI cached prompt tokens
+      this.currentCachedPromptTokens = 0; // OpenAI cached prompt for current call
+
     } catch (error) {
       console.error('Error initializing tokenizer:', error);
       // Fallback to a simple token counting method if tiktoken fails
       this.tokenizer = null;
       this.contextSize = 0;
-      // Note: maxContextSize was previously defined here in fallback, but seems better managed elsewhere.
-      // Consider adding it back if needed, or confirming it's handled by probeChat.js
-      // this.maxContextSize = 8192;
       this.requestTokens = 0;
       this.responseTokens = 0;
       this.currentRequestTokens = 0;
@@ -45,7 +43,9 @@ export class TokenCounter {
       this.currentCacheReadTokens = 0;
       this.cachedPromptTokens = 0;
       this.currentCachedPromptTokens = 0;
+      this.history = [];
     }
+    this.debug = process.env.DEBUG_CHAT === '1';
   }
 
   /**
@@ -54,31 +54,32 @@ export class TokenCounter {
    * @returns {number} - The number of tokens
    */
   countTokens(text) {
+    if (typeof text !== 'string') {
+      text = String(text); // Ensure text is a string
+    }
+
     if (this.tokenizer) {
       try {
-        // Ensure text is a string before encoding
-        const textToEncode = typeof text === 'string' ? text : String(text);
-        const tokens = this.tokenizer.encode(textToEncode);
+        const tokens = this.tokenizer.encode(text);
         return tokens.length;
       } catch (error) {
-        console.warn('Error counting tokens, using fallback method:', error);
+        // Log only once per session or use a flag? For now, log each time.
+        // console.warn('Error counting tokens with tiktoken, using fallback method:', error.message);
         // Fallback to a simple approximation (1 token ≈ 4 characters)
-        const textLength = typeof text === 'string' ? text.length : String(text).length;
-        return Math.ceil(textLength / 4);
+        return Math.ceil(text.length / 4);
       }
     } else {
       // Fallback to a simple approximation (1 token ≈ 4 characters)
-      const textLength = typeof text === 'string' ? text.length : String(text).length;
-      return Math.ceil(textLength / 4);
+      return Math.ceil(text.length / 4);
     }
   }
 
   /**
-   * Add to request token count
+   * Add to request token count (manual counting, less used now with recordUsage)
    * @param {string|number} input - The text to count tokens for or the token count directly
    */
   addRequestTokens(input) {
-    let tokenCount;
+    let tokenCount = 0;
 
     if (typeof input === 'number') {
       tokenCount = input;
@@ -89,27 +90,26 @@ export class TokenCounter {
       return;
     }
 
+    // This method primarily updates the *total* count historically.
+    // `recordUsage` is preferred for setting current/total based on LLM response.
     this.requestTokens += tokenCount;
-    this.currentRequestTokens = tokenCount; // Set current request tokens
+    // Setting `currentRequestTokens` here might be misleading if `recordUsage` is called later.
+    // Let's make this method mainly for historical accumulation if needed,
+    // or ensure it's only called when `recordUsage` isn't available.
+    // For now, we'll update current as well, assuming it's for the *start* of a turn.
+    this.currentRequestTokens = tokenCount;
 
-    const debug = process.env.DEBUG_CHAT === '1';
-    if (debug) {
-      if (typeof input === 'string') {
-        console.log(
-          `[DEBUG] Added ${tokenCount} request tokens for text of length ${input.length}`
-        );
-      } else {
-        console.log(`[DEBUG] Added ${tokenCount} request tokens directly`);
-      }
+    if (this.debug) {
+      console.log(`[DEBUG] (Manual) Added ${tokenCount} request tokens. Total: ${this.requestTokens}, Current: ${this.currentRequestTokens}`);
     }
   }
 
   /**
-   * Add to response token count
+   * Add to response token count (manual counting, less used now with recordUsage)
    * @param {string|number} input - The text to count tokens for or the token count directly
    */
   addResponseTokens(input) {
-    let tokenCount;
+    let tokenCount = 0;
 
     if (typeof input === 'number') {
       tokenCount = input;
@@ -121,223 +121,187 @@ export class TokenCounter {
     }
 
     this.responseTokens += tokenCount;
-    this.currentResponseTokens = tokenCount; // Set current response tokens
+    // Update current response tokens, assuming this is called when usage info is missing.
+    this.currentResponseTokens = tokenCount;
 
-    const debug = process.env.DEBUG_CHAT === '1';
-    if (debug) {
-      if (typeof input === 'string') {
-        console.log(
-          `[DEBUG] Added ${tokenCount} response tokens for text of length ${input.length}`
-        );
-      } else {
-        console.log(`[DEBUG] Added ${tokenCount} response tokens directly`);
-      }
+    if (this.debug) {
+      console.log(`[DEBUG] (Manual) Added ${tokenCount} response tokens. Total: ${this.responseTokens}, Current: ${this.currentResponseTokens}`);
     }
   }
 
   /**
-   * Record token usage from the AI SDK's result
-   * @param {Object} usage - The usage object from the AI SDK's result
-   * @param {Object} providerMetadata - The provider metadata from the AI SDK's result
+   * Record token usage from the AI SDK's result for a single LLM call.
+   * This resets 'current' counters and updates totals.
+   * @param {Object} usage - The usage object { promptTokens, completionTokens, totalTokens }
+   * @param {Object} providerMetadata - Metadata possibly containing cache info
    */
   recordUsage(usage, providerMetadata) {
     if (!usage) {
       console.warn('[WARN] No usage information provided to recordUsage');
+      // If usage is missing, maybe fall back to manual counting?
+      // For now, just return and rely on manual calls if needed.
       return;
     }
 
-    // Reset current tokens before recording new usage
+    // --- Reset CURRENT counters for this specific API call ---
     this.currentRequestTokens = 0;
     this.currentResponseTokens = 0;
     this.currentCacheCreationTokens = 0;
     this.currentCacheReadTokens = 0;
     this.currentCachedPromptTokens = 0;
 
-    // Check if debug mode is enabled
-    const isDebugMode = process.env.DEBUG_CHAT === '1';
-
-    // Convert to numbers and add to totals
+    // --- Process usage data ---
     const promptTokens = Number(usage.promptTokens) || 0;
     const completionTokens = Number(usage.completionTokens) || 0;
 
-    this.requestTokens += promptTokens;
+    // Update CURRENT tokens for this call
     this.currentRequestTokens = promptTokens;
-
-    this.responseTokens += completionTokens;
     this.currentResponseTokens = completionTokens;
 
-    // Record Anthropic cache tokens if available in provider metadata
+    // Update TOTAL tokens accumulated over the session
+    this.requestTokens += promptTokens;
+    this.responseTokens += completionTokens;
+
+    // --- Process Provider Metadata for Cache Info ---
     if (providerMetadata?.anthropic) {
       const cacheCreation = Number(providerMetadata.anthropic.cacheCreationInputTokens) || 0;
       const cacheRead = Number(providerMetadata.anthropic.cacheReadInputTokens) || 0;
 
-      this.cacheCreationTokens += cacheCreation;
       this.currentCacheCreationTokens = cacheCreation;
-
-      this.cacheReadTokens += cacheRead;
       this.currentCacheReadTokens = cacheRead;
 
-      if (isDebugMode) {
-        console.log(`[DEBUG] Anthropic cache tokens: creation=${cacheCreation}, read=${cacheRead}`);
+      this.cacheCreationTokens += cacheCreation;
+      this.cacheReadTokens += cacheRead;
+
+      if (this.debug) {
+        console.log(`[DEBUG] Anthropic cache tokens (current): creation=${cacheCreation}, read=${cacheRead}`);
       }
     }
 
-    // Record OpenAI cached prompt tokens if available
     if (providerMetadata?.openai) {
       const cachedPrompt = Number(providerMetadata.openai.cachedPromptTokens) || 0;
 
-      this.cachedPromptTokens += cachedPrompt;
       this.currentCachedPromptTokens = cachedPrompt;
+      this.cachedPromptTokens += cachedPrompt;
 
-      if (isDebugMode) {
-        console.log(`[DEBUG] OpenAI cached prompt tokens: ${cachedPrompt}`);
+      if (this.debug) {
+        console.log(`[DEBUG] OpenAI cached prompt tokens (current): ${cachedPrompt}`);
       }
     }
 
-    // Force a context window calculation after recording usage
-    this.calculateContextSize();
+    // Note: We don't force context recalculation here.
+    // It should be done explicitly after history is updated.
 
-    if (isDebugMode) {
+    if (this.debug) {
       console.log(
-        `[DEBUG] Recorded usage: prompt=${usage.promptTokens || 0}, completion=${usage.completionTokens || 0}, total=${usage.totalTokens || 0}`
+        `[DEBUG] Recorded usage: current(req=${this.currentRequestTokens}, resp=${this.currentResponseTokens}), total(req=${this.requestTokens}, resp=${this.responseTokens})`
       );
-      console.log(
-        `[DEBUG] Current tokens: request=${this.currentRequestTokens}, response=${this.currentResponseTokens}`
-      );
-      console.log(
-        `[DEBUG] Total tokens: request=${this.requestTokens}, response=${this.responseTokens}`
-      );
-
-      // Log Anthropic cache tokens if available
-      if (providerMetadata?.anthropic) {
-        console.log(
-          `[DEBUG] Anthropic cache tokens: creation=${this.currentCacheCreationTokens}, read=${this.currentCacheReadTokens}, total=${this.currentCacheCreationTokens + this.currentCacheReadTokens}`
-        );
-      }
-
-      // Log OpenAI cached prompt tokens if available
-      if (providerMetadata?.openai) {
-        console.log(
-          `[DEBUG] OpenAI cached prompt tokens: ${this.currentCachedPromptTokens}`
-        );
-      }
-      // Log calculated context size
-      console.log(`[DEBUG] Context size after usage record: ${this.contextSize}`);
+      // Log cache totals
+      console.log(`[DEBUG] Total cache tokens: Anthropic(create=${this.cacheCreationTokens}, read=${this.cacheReadTokens}), OpenAI(prompt=${this.cachedPromptTokens})`);
     }
   }
 
   /**
-   * Calculate the current context window size based on history
-   * @param {Array} messages - Optional messages to use instead of stored history
-   * @returns {number} - Total tokens in context window
+   * Calculate the current context window size based on provided messages or internal history.
+   * @param {Array|null} messages - Optional messages array to use for calculation. If null, uses internal this.history.
+   * @returns {number} - Total tokens estimated in the context window.
    */
   calculateContextSize(messages = null) {
-    const msgsToCount = messages || this.history;
+    const msgsToCount = messages !== null ? messages : this.history;
     let totalTokens = 0;
 
-    // Removed: Early return for empty history. Loop handles this.
-    // if (msgsToCount.length === 0) {
-    //   this.contextSize = 100;
-    //   return 100;
-    // }
-
-    // Check if debug mode is enabled
-    const isDebugMode = process.env.DEBUG_CHAT === '1';
+    if (this.debug && messages === null) {
+      // Log only when using internal history to avoid spamming during loops using local messages array
+      console.log(`[DEBUG] Calculating context size from internal history (${this.history.length} messages)`);
+    }
 
     for (const msg of msgsToCount) {
-      // Count tokens in the message content
+      let messageTokens = 0;
+      // Add tokens for role overhead (approximate)
+      // Vercel SDK adds ~4 tokens per message for role/structure.
+      // Anthropic might be slightly different. Let's stick with 4 as an estimate.
+      messageTokens += 4;
+
+      // Content tokens
       if (typeof msg.content === 'string') {
-        const contentTokens = this.countTokens(msg.content);
-        totalTokens += contentTokens;
-        if (isDebugMode) {
-          console.log(`[DEBUG] Message content tokens: ${contentTokens} for ${msg.role}`);
-        }
+        messageTokens += this.countTokens(msg.content);
       } else if (Array.isArray(msg.content)) {
-        // Handle Vercel AI SDK tool usage where content is an array
-        for (const contentItem of msg.content) {
-          if (contentItem.type === 'text') {
-            const textTokens = this.countTokens(contentItem.text);
-            totalTokens += textTokens;
-            if (isDebugMode) {
-              console.log(`[DEBUG] Multi-content text tokens: ${textTokens} for ${msg.role}`);
-            }
-          } else if (contentItem.type === 'tool_use') {
-            // Approx tokens for tool use block structure itself, plus content
-            const toolUseTokens = this.countTokens(JSON.stringify(contentItem));
-            totalTokens += toolUseTokens;
-            if (isDebugMode) {
-              console.log(`[DEBUG] Multi-content tool use tokens: ${toolUseTokens} for ${msg.role}`);
-            }
+        // Handle array content (e.g., Vercel AI SDK tool usage format)
+        for (const item of msg.content) {
+          if (item.type === 'text' && typeof item.text === 'string') {
+            messageTokens += this.countTokens(item.text);
+          } else {
+            // Estimate tokens for non-text parts (tool calls/results embedded)
+            messageTokens += this.countTokens(JSON.stringify(item));
           }
-          // Add other content types here if needed
         }
       } else if (msg.content) {
-        // Handle structured content by converting to string (fallback)
-        const structuredTokens = this.countTokens(JSON.stringify(msg.content));
-        totalTokens += structuredTokens;
-        if (isDebugMode) {
-          console.log(`[DEBUG] Structured content tokens: ${structuredTokens} for ${msg.role}`);
-        }
+        // Fallback for other content types
+        messageTokens += this.countTokens(JSON.stringify(msg.content));
       }
 
-      // Count tokens in role (approximately 4 tokens)
-      // Only add role tokens if there's content or tool activity
-      if (msg.content || msg.toolCalls || msg.toolCallResults || msg.tool_use_id) {
-        totalTokens += 4;
-      }
-
-
-      // Count tokens in tool calls and results (Vercel AI SDK structure)
+      // --- Add tokens for tool calls/results if present (Vercel SDK format) ---
+      // These might exist in 'assistant' or 'tool' messages depending on SDK version/usage
       if (msg.toolCalls) {
-        const toolCallTokens = this.countTokens(JSON.stringify(msg.toolCalls));
-        totalTokens += toolCallTokens;
-        if (isDebugMode) {
-          console.log(`[DEBUG] Tool call tokens: ${toolCallTokens}`);
-        }
+        messageTokens += this.countTokens(JSON.stringify(msg.toolCalls));
+        messageTokens += 5; // Approx overhead for tool_calls structure
       }
-
-      // Count tokens for tool results (now typically role: 'tool')
-      if (msg.role === 'tool') {
-        // Add tokens for tool_call_id, tool_use_id structure (approx)
-        totalTokens += 5; // Rough estimate for {"role":"tool", "tool_call_id": "...", "content": ...} overhead
-        // Content is handled by the main content checks above
-        if (isDebugMode) {
-          console.log(`[DEBUG] Added ~5 tokens for tool role structure`);
-        }
+      // For 'tool' role messages (results)
+      if (msg.role === 'tool' && msg.toolCallId) {
+        messageTokens += this.countTokens(msg.toolCallId); // Add tokens for the ID
+        messageTokens += 5; // Approx overhead for tool role structure
+        // Content is already counted above
       }
-
-      // Deprecated? Keep for compatibility if old history format exists
+      // Deprecated? Check if toolCallResults is still used
       if (msg.toolCallResults) {
-        const resultTokens = this.countTokens(JSON.stringify(msg.toolCallResults));
-        totalTokens += resultTokens;
-        if (isDebugMode) {
-          console.log(`[DEBUG] (Deprecated?) Tool result tokens: ${resultTokens}`);
-        }
+        messageTokens += this.countTokens(JSON.stringify(msg.toolCallResults));
+        messageTokens += 5; // Approx overhead
+      }
+      // --- End Vercel SDK specific ---
+
+
+      totalTokens += messageTokens;
+
+      //   if (this.debug) {
+      //      // This log can be very noisy, disable for now
+      //     // console.log(`[DEBUG]   Msg (${msg.role}): ~${messageTokens} tokens`);
+      //   }
+    }
+
+    // Update the instance property *only* if calculating based on internal history
+    if (messages === null) {
+      this.contextSize = totalTokens;
+      if (this.debug) {
+        console.log(`[DEBUG] Updated internal context size: ${this.contextSize} tokens`);
       }
     }
 
-    // Removed: Ensure we never return 0 by using a minimum of 100 tokens
-    // totalTokens = Math.max(totalTokens, 100);
-    this.contextSize = totalTokens; // Update the instance property
 
-    if (isDebugMode) {
-      console.log(`[DEBUG] Calculated context size: ${totalTokens} tokens from ${msgsToCount.length} messages`);
-    }
-
-    return totalTokens; // Return the actual calculated size
+    return totalTokens;
   }
 
   /**
-   * Update history and recalculate context window size
-   * @param {Array} messages - New message history
+   * Update internal history and recalculate internal context window size.
+   * @param {Array} messages - New message history array.
    */
   updateHistory(messages) {
-    this.history = messages;
-    this.calculateContextSize(); // Recalculate context size based on new history
+    // Ensure messages is an array
+    if (!Array.isArray(messages)) {
+      console.warn("[WARN] updateHistory called with non-array:", messages);
+      this.history = [];
+    } else {
+      // Create a shallow copy to avoid external modifications
+      this.history = [...messages];
+    }
+    // Recalculate context size based on the new internal history
+    this.calculateContextSize(); // This updates this.contextSize
+    if (this.debug) {
+      console.log(`[DEBUG] History updated (${this.history.length} messages). Recalculated context size: ${this.contextSize}`);
+    }
   }
 
   /**
-   * Clear all counters and history
+   * Clear all counters and internal history. Reset context size.
    */
   clear() {
     // Reset counters
@@ -356,14 +320,14 @@ export class TokenCounter {
     this.history = [];
     this.contextSize = 0; // Reset calculated context size
 
-    const isDebugMode = process.env.DEBUG_CHAT === '1';
-    if (isDebugMode) {
-      console.log('[DEBUG] Token usage, history and context window reset');
+    if (this.debug) {
+      console.log('[DEBUG] TokenCounter cleared: usage, history, and context size reset.');
     }
   }
 
   /**
-   * Start a new conversation turn - reset current token counters
+   * Start a new conversation turn - reset CURRENT token counters.
+   * Calculates context size based on history *before* the new turn.
    */
   startNewTurn() {
     this.currentRequestTokens = 0;
@@ -372,106 +336,70 @@ export class TokenCounter {
     this.currentCacheReadTokens = 0;
     this.currentCachedPromptTokens = 0;
 
-    // Calculate context size based on current history before the new turn starts
-    this.calculateContextSize();
+    // Calculate context size based on current history *before* new messages are added
+    this.calculateContextSize(); // Updates this.contextSize
 
-    const isDebugMode = process.env.DEBUG_CHAT === '1';
-    if (isDebugMode) {
-      console.log('[DEBUG] Current token counters reset for new turn');
-      // Note: maxContextSize is not defined in this class, removing the reference
-      // console.log(`[DEBUG] Context window size at start of turn: ${this.contextSize} tokens`);
-      console.log(`[DEBUG] Context window size at start of turn: ${this.contextSize} tokens`);
+    if (this.debug) {
+      console.log('[DEBUG] TokenCounter: New turn started. Current counters reset.');
+      console.log(`[DEBUG] Context size at start of turn: ${this.contextSize} tokens`);
     }
   }
 
-  /**
-   * Update the context window size (DEPRECATED? Prefer calculateContextSize)
-   * This method seems redundant if calculateContextSize is always used.
-   * Kept for potential compatibility, but marked as possibly deprecated.
-   * @param {number} size - Current context size in tokens
-   * @param {number} [maxSize] - Maximum context size (optional, not used internally)
-   */
-  updateContextWindow(size, maxSize) {
-    console.warn('[WARN] updateContextWindow called. Prefer relying on calculateContextSize from history.');
-    // If size is 0, calculate it from history instead
-    if (size === 0 && this.history.length > 0) {
-      this.calculateContextSize();
-    } else {
-      // Directly set the context size, overriding calculation
-      this.contextSize = size;
-    }
-
-    // Note: maxContextSize is not stored/managed in this class.
-    // if (maxSize) {
-    //   this.maxContextSize = maxSize;
-    // }
-
-    const isDebugMode = process.env.DEBUG_CHAT === '1';
-    if (isDebugMode) {
-      console.log(
-        `[DEBUG] Context window explicitly updated: ${this.contextSize} tokens`
-        // ` (${Math.round((size / this.maxContextSize) * 100)}%)` - removed as maxContextSize is not tracked here
-      );
-    }
-  }
 
   /**
-   * Get the current token usage
-   * @returns {Object} - Object containing current and total token counts
+   * Get the current token usage state including context size.
+   * Recalculates context size from internal history before returning.
+   * @returns {Object} - Object containing current turn, total session, and context window usage.
    */
   getTokenUsage() {
-    // Always calculate context window size from history right before returning usage
-    const currentContextSize = this.calculateContextSize();
+    // Always calculate context window size from internal history right before returning usage
+    const currentContextSize = this.calculateContextSize(); // Recalculates and updates this.contextSize
 
-    // Consolidate cache information
+    // Consolidate cache info for simpler reporting
     const currentCacheRead = this.currentCacheReadTokens + this.currentCachedPromptTokens;
     const currentCacheWrite = this.currentCacheCreationTokens;
     const totalCacheRead = this.cacheReadTokens + this.cachedPromptTokens;
     const totalCacheWrite = this.cacheCreationTokens;
 
-    const isDebugMode = process.env.DEBUG_CHAT === '1';
-    if (isDebugMode) {
-      console.log(`[DEBUG] Getting token usage. Context size: ${currentContextSize}, Current Cache read: ${currentCacheRead}, Current Cache write: ${currentCacheWrite}`);
-    }
-
     const usageData = {
       contextWindow: currentContextSize, // Use the freshly calculated value
-      current: {
+      current: { // Usage for the *last* LLM call recorded
         request: this.currentRequestTokens,
         response: this.currentResponseTokens,
-        anthropic: {
-          cacheCreation: this.currentCacheCreationTokens,
-          cacheRead: this.currentCacheReadTokens,
-          cacheTotal: this.currentCacheCreationTokens + this.currentCacheReadTokens
-        },
-        openai: {
-          cachedPrompt: this.currentCachedPromptTokens
-        },
+        total: this.currentRequestTokens + this.currentResponseTokens,
         cacheRead: currentCacheRead,
         cacheWrite: currentCacheWrite,
         cacheTotal: currentCacheRead + currentCacheWrite,
-        total: this.currentRequestTokens + this.currentResponseTokens
-      },
-      total: {
-        request: this.requestTokens,
-        response: this.responseTokens,
+        // Keep detailed breakdown if needed
         anthropic: {
-          cacheCreation: this.cacheCreationTokens,
-          cacheRead: this.cacheReadTokens,
-          cacheTotal: this.cacheCreationTokens + this.cacheReadTokens
+          cacheCreation: this.currentCacheCreationTokens,
+          cacheRead: this.currentCacheReadTokens,
         },
         openai: {
-          cachedPrompt: this.cachedPromptTokens
-        },
+          cachedPrompt: this.currentCachedPromptTokens
+        }
+      },
+      total: { // Accumulated usage over the session
+        request: this.requestTokens,
+        response: this.responseTokens,
+        total: this.requestTokens + this.responseTokens,
         cacheRead: totalCacheRead,
         cacheWrite: totalCacheWrite,
         cacheTotal: totalCacheRead + totalCacheWrite,
-        total: this.requestTokens + this.responseTokens
+        // Keep detailed breakdown if needed
+        anthropic: {
+          cacheCreation: this.cacheCreationTokens,
+          cacheRead: this.cacheReadTokens,
+        },
+        openai: {
+          cachedPrompt: this.cachedPromptTokens
+        }
       }
     };
 
-    if (isDebugMode) {
-      console.log(`[DEBUG] Token usage data prepared:`, JSON.stringify(usageData, null, 2));
+    if (this.debug) {
+      // Log less frequently or only when values change significantly?
+      // console.log(`[DEBUG] getTokenUsage() called. Returning data:`, JSON.stringify(usageData, null, 2));
     }
 
     return usageData;

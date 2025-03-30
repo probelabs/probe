@@ -221,7 +221,7 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
 
     // 1) Parse the user query into an AST (Expr)
     //    If your code uses parse_query(...) from `elastic_query.rs`, do:
-    let parsed_expr = match crate::search::elastic_query::parse_query(params.query) {
+    let parsed_expr = match crate::search::elastic_query::parse_query(params.query, false) {
         Ok(expr) => expr,
         Err(e) => {
             if debug_mode {

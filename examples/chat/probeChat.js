@@ -2,19 +2,89 @@ import 'dotenv/config';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { generateText } from 'ai';
+import { generateText } from 'ai'; // Removed 'tool' import as it's not used directly here
 import { randomUUID } from 'crypto';
 import { TokenCounter } from './tokenCounter.js';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
-import { writeFileSync } from 'fs';
+import { writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import { existsSync } from 'fs';
 // Import the tools that emit events and the listFilesByLevel utility
-import { DEFAULT_SYSTEM_MESSAGE, searchTool, queryTool, extractTool, listFilesByLevel } from '@buger/probe';
-import { probeTool, searchToolInstance, queryToolInstance, extractToolInstance } from './probeTool.js';
+import { listFilesByLevel } from '@buger/probe';
+// Import schemas and parser from common (assuming tools.js)
+import {
+  searchSchema, querySchema, extractSchema, attemptCompletionSchema,
+  searchToolDefinition, queryToolDefinition, extractToolDefinition, attemptCompletionToolDefinition,
+  parseXmlToolCallWithThinking
+} from './tools.js'; // Assuming common.js is moved to tools/
+// Import tool *instances* for execution
+import { searchToolInstance, queryToolInstance, extractToolInstance } from './probeTool.js'; // Removed probeTool import
 
 // Maximum number of messages to keep in history
-const MAX_HISTORY_MESSAGES = 20;
+const MAX_HISTORY_MESSAGES = 100;
+// Maximum iterations for the tool loop
+const MAX_TOOL_ITERATIONS = 20;
+
+// --- XML Tool Definitions for System Prompt ---
+const TOOL_DEFINITIONS = `
+${searchToolDefinition}
+${queryToolDefinition}
+${extractToolDefinition}
+${attemptCompletionToolDefinition}
+`;
+
+const XML_TOOL_GUIDELINES = `
+# Tool Use Formatting
+
+Tool use MUST be formatted using XML-style tags. The tool name is enclosed in opening and closing tags, and each parameter is similarly enclosed within its own set of tags. You MUST use exactly ONE tool call per message until you are ready to complete the task.
+
+Structure:
+<tool_name>
+<parameter1_name>value1</parameter1_name>
+<parameter2_name>value2</parameter2_name>
+...
+</tool_name>
+
+Example:
+<search>
+<query>error handling</query>
+<path>src/search</path>
+</search>
+
+# Thinking Process
+
+Before using a tool, analyze the situation within <thinking></thinking> tags. This helps you organize your thoughts and make better decisions. Your thinking process should include:
+
+1. Analyze what information you already have and what information you need to proceed with the task.
+2. Determine which of the available tools would be most effective for gathering this information or accomplishing the current step.
+3. Check if all required parameters for the tool are available or can be inferred from the context.
+4. If all parameters are available, proceed with the tool use.
+5. If parameters are missing, explain what's missing and why it's needed.
+
+Example:
+<thinking>
+I need to find code related to error handling in the search module. The most appropriate tool for this is the search tool, which requires a query parameter and a path parameter. I have both the query ("error handling") and the path ("src/search"), so I can proceed with the search.
+</thinking>
+
+# Tool Use Guidelines
+
+1.  Think step-by-step about how to achieve the user's goal.
+2.  Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool.
+3.  Choose **one** tool that helps achieve the current step.
+4.  Format the tool call using the specified XML format. Ensure all required parameters are included.
+5.  **You MUST respond with exactly one tool call in the specified XML format in each turn.**
+6.  Wait for the tool execution result, which will be provided in the next message (within a <tool_result> block).
+7.  Analyze the tool result and decide the next step. If more tool calls are needed, repeat steps 2-6.
+8.  If the task is fully complete and all previous steps were successful, use the \`<attempt_completion>\` tool to provide the final answer. This is the ONLY way to finish the task.
+9.  If you cannot proceed (e.g., missing information, invalid request), explain the issue clearly before using \`<attempt_completion>\` with an appropriate message in the \`<result>\` tag.
+
+Available Tools:
+- search: Search code using keyword queries.
+- query: Search code using structural AST patterns.
+- extract: Extract specific code blocks or lines from files.
+- attempt_completion: Finalize the task and provide the result to the user.
+`;
+// --- End XML Tool Definitions ---
+
 
 // Parse and validate allowed folders from environment variable
 const allowedFolders = process.env.ALLOWED_FOLDERS
@@ -23,17 +93,18 @@ const allowedFolders = process.env.ALLOWED_FOLDERS
 
 // Validate folders exist on startup
 console.log('Configured search folders:');
-for (const folder of allowedFolders) {
-  const exists = existsSync(folder);
-  console.log(`- ${folder} ${exists ? '✓' : '✗ (not found)'}`);
-  if (!exists) {
-    console.warn(`Warning: Folder "${folder}" does not exist or is not accessible`);
+if (allowedFolders.length > 0) {
+  for (const folder of allowedFolders) {
+    const exists = existsSync(folder);
+    console.log(`- ${folder} ${exists ? '✓' : '✗ (not found)'}`);
+    if (!exists) {
+      console.warn(`Warning: Folder "${folder}" does not exist or is not accessible`);
+    }
   }
+} else {
+  console.warn('No folders configured via ALLOWED_FOLDERS. Tools might default to current directory or require explicit paths.');
 }
 
-if (allowedFolders.length === 0) {
-  console.warn('No folders configured. Set ALLOWED_FOLDERS in .env file or the current directory will be used by default.');
-}
 
 /**
  * ProbeChat class to handle chat interactions with AI models
@@ -42,7 +113,8 @@ export class ProbeChat {
   /**
    * Create a new ProbeChat instance
    * @param {Object} options - Configuration options
-   * @param {Function} options.toolCallCallback - Callback function for tool calls (sessionId, toolCallData)
+   * @param {string} [options.sessionId] - Optional session ID
+   * @param {Function} [options.toolCallCallback] - Callback function for tool calls (sessionId, toolCallData) - *Note: Callback may need adjustment for XML flow*
    */
   constructor(options = {}) {
     // Flag to track if a request has been cancelled
@@ -69,71 +141,13 @@ export class ProbeChat {
       console.log(`[DEBUG] Generated session ID for chat: ${this.sessionId}`);
     }
 
-    // Configure tools with the session ID
-    this.configOptions = {
-      sessionId: this.sessionId,
-      debug: this.debug
-    };
-
-    // Create configured tool instances that emit SSE events
-    // We need to ensure the tools use the correct session ID
-    this.tools = {
-      probe: {
-        ...probeTool,
-        execute: async (params) => {
-          // Ensure the session ID is passed to the tool
-          const enhancedParams = {
-            ...params,
-            sessionId: this.sessionId
-          };
-          if (this.debug) {
-            console.log(`[DEBUG] ProbeChat executing probeTool with sessionId: ${this.sessionId}`);
-          }
-          return await probeTool.execute(enhancedParams);
-        }
-      },
-      search: {
-        ...searchToolInstance,
-        execute: async (params) => {
-          // Ensure the session ID is passed to the tool
-          const enhancedParams = {
-            ...params,
-            sessionId: this.sessionId
-          };
-          if (this.debug) {
-            console.log(`[DEBUG] ProbeChat executing searchToolInstance with sessionId: ${this.sessionId}`);
-          }
-          return await searchToolInstance.execute(enhancedParams);
-        }
-      },
-      query: {
-        ...queryToolInstance,
-        execute: async (params) => {
-          // Ensure the session ID is passed to the tool
-          const enhancedParams = {
-            ...params,
-            sessionId: this.sessionId
-          };
-          if (this.debug) {
-            console.log(`[DEBUG] ProbeChat executing queryToolInstance with sessionId: ${this.sessionId}`);
-          }
-          return await queryToolInstance.execute(enhancedParams);
-        }
-      },
-      extract: {
-        ...extractToolInstance,
-        execute: async (params) => {
-          // Ensure the session ID is passed to the tool
-          const enhancedParams = {
-            ...params,
-            sessionId: this.sessionId
-          };
-          if (this.debug) {
-            console.log(`[DEBUG] ProbeChat executing extractToolInstance with sessionId: ${this.sessionId}`);
-          }
-          return await extractToolInstance.execute(enhancedParams);
-        }
-      }
+    // Store tool instances for execution
+    // These are the actual functions/objects that perform the actions
+    this.toolImplementations = {
+      search: searchToolInstance,
+      query: queryToolInstance,
+      extract: extractToolInstance,
+      // attempt_completion is handled specially in the loop, no direct implementation needed here
     };
 
     // Initialize the chat model
@@ -153,9 +167,9 @@ export class ProbeChat {
     const googleApiKey = process.env.GOOGLE_API_KEY;
 
     // Get custom API URLs if provided
-    const anthropicApiUrl = process.env.ANTHROPIC_API_URL || 'https://api.anthropic.com/v1';
-    const openaiApiUrl = process.env.OPENAI_API_URL || 'https://api.openai.com/v1';
-    const googleApiUrl = process.env.GOOGLE_API_URL || 'https://generativelanguage.googleapis.com/v1beta';
+    const anthropicApiUrl = process.env.ANTHROPIC_API_URL; // Let createAnthropic handle default
+    const openaiApiUrl = process.env.OPENAI_API_URL;       // Let createOpenAI handle default
+    const googleApiUrl = process.env.GOOGLE_API_URL;       // Let createGoogle handle default
 
     // Get model override if provided
     const modelName = process.env.MODEL_NAME;
@@ -166,6 +180,10 @@ export class ProbeChat {
     if (this.debug) {
       console.log(`[DEBUG] Available API keys: Anthropic=${!!anthropicApiKey}, OpenAI=${!!openaiApiKey}, Google=${!!googleApiKey}`);
       console.log(`[DEBUG] Force provider: ${forceProvider || '(not set)'}`);
+      if (anthropicApiUrl) console.log(`[DEBUG] Custom Anthropic URL: ${anthropicApiUrl}`);
+      if (openaiApiUrl) console.log(`[DEBUG] Custom OpenAI URL: ${openaiApiUrl}`);
+      if (googleApiUrl) console.log(`[DEBUG] Custom Google URL: ${googleApiUrl}`);
+      if (modelName) console.log(`[DEBUG] Model override: ${modelName}`);
     }
 
     // Check if a specific provider is forced
@@ -183,10 +201,10 @@ export class ProbeChat {
         return;
       }
 
-      console.warn(`WARNING: Forced provider "${forceProvider}" selected but API key is missing!`);
+      console.warn(`WARNING: Forced provider "${forceProvider}" selected but required API key is missing or invalid! Falling back to auto-detection.`);
     }
 
-    // If no provider is forced, use the first available API key
+    // If no provider is forced or forced provider failed, use the first available API key
     if (anthropicApiKey) {
       this.initializeAnthropicModel(anthropicApiKey, anthropicApiUrl, modelName);
     } else if (openaiApiKey) {
@@ -194,131 +212,156 @@ export class ProbeChat {
     } else if (googleApiKey) {
       this.initializeGoogleModel(googleApiKey, googleApiUrl, modelName);
     } else {
-      console.warn('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.');
-      // Instead of throwing an error, we'll set a flag indicating we're in no API keys mode
-      this.noApiKeysMode = true;
-      // Set default values for properties that would normally be set in the initialize methods
+      console.error('FATAL: No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.');
+      this.noApiKeysMode = true; // Use flag for potential UI handling
       this.model = 'none';
       this.apiType = 'none';
-      console.log('Running in NO API KEYS MODE - setup instructions will be shown to users');
-      console.log('Note: For debugging, set DEBUG_CHAT=1 environment variable');
+      console.log('ProbeChat cannot function without an API key.');
+      // Consider throwing an error here in a real application to prevent execution
+      // throw new Error('No API key configured for AI provider.');
     }
   }
 
   /**
    * Initialize Anthropic model
    * @param {string} apiKey - Anthropic API key
-   * @param {string} apiUrl - Anthropic API URL
-   * @param {string} modelName - Optional model name override
+   * @param {string} [apiUrl] - Optional Anthropic API URL override
+   * @param {string} [modelName] - Optional model name override
    */
   initializeAnthropicModel(apiKey, apiUrl, modelName) {
-    // Initialize Anthropic provider
     this.provider = createAnthropic({
       apiKey: apiKey,
-      baseURL: apiUrl,
-      headers: {
-        'anthropic-beta': 'token-efficient-tools-2025-02-19'
-      }
+      ...(apiUrl && { baseURL: apiUrl }), // Conditionally add baseURL
     });
-    this.model = modelName || 'claude-3-7-sonnet-latest';
+    this.model = modelName || 'claude-3-7-sonnet-20250219';
     this.apiType = 'anthropic';
-
-    console.log(`Using Anthropic API with model: ${this.model}`);
-
-    if (this.debug) {
-      console.log(`[DEBUG] Anthropic API URL: ${apiUrl}`);
-    }
+    console.log(`Using Anthropic API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
   }
 
   /**
    * Initialize OpenAI model
    * @param {string} apiKey - OpenAI API key
-   * @param {string} apiUrl - OpenAI API URL
-   * @param {string} modelName - Optional model name override
+   * @param {string} [apiUrl] - Optional OpenAI API URL override
+   * @param {string} [modelName] - Optional model name override
    */
   initializeOpenAIModel(apiKey, apiUrl, modelName) {
-    // Initialize OpenAI provider
     this.provider = createOpenAI({
       apiKey: apiKey,
-      baseURL: apiUrl,
+      ...(apiUrl && { baseURL: apiUrl }), // Conditionally add baseURL
     });
-    this.model = modelName || 'gpt-4o-2024-05-13';
+    this.model = modelName || 'gpt-4o';
     this.apiType = 'openai';
-
-    console.log(`Using OpenAI API with model: ${this.model}`);
-
-    if (this.debug) {
-      console.log(`[DEBUG] OpenAI API URL: ${apiUrl}`);
-    }
+    console.log(`Using OpenAI API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
   }
 
   /**
    * Initialize Google model
    * @param {string} apiKey - Google API key
-   * @param {string} apiUrl - Google API URL
-   * @param {string} modelName - Optional model name override
+   * @param {string} [apiUrl] - Optional Google API URL override
+   * @param {string} [modelName] - Optional model name override
    */
   initializeGoogleModel(apiKey, apiUrl, modelName) {
-    // Initialize Google provider
     this.provider = createGoogleGenerativeAI({
       apiKey: apiKey,
-      baseURL: apiUrl,
+      ...(apiUrl && { baseURL: apiUrl }), // Conditionally add baseURL
     });
-    this.model = modelName || 'gemini-2.0-flash';
+    this.model = modelName || 'gemini-1.5-flash-latest';
     this.apiType = 'google';
-
-    console.log(`Using Google API with model: ${this.model}`);
-
-    if (this.debug) {
-      console.log(`[DEBUG] Google API URL: ${apiUrl}`);
-    }
+    console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
+    // Note: Google's tool support might differ. Ensure XML approach works reliably.
   }
 
   /**
-   * Get the system message with instructions for the AI
-   * @returns {Promise<string>} - The system message
-   */
+    * Get the system message with instructions for the AI (XML Tool Format)
+    * @returns {Promise<string>} - The system message
+    */
   async getSystemMessage() {
-    // Use the default system message from the probe package as a base
-    let systemMessage = DEFAULT_SYSTEM_MESSAGE;
+    const baseSystemMessage = `You are ProbeChat, a specialized AI assistant integrated with code analysis tools. Your primary function is to help users understand, navigate codebases using the provided tools. You need to provide detailed and accurate responses to user queries, using the tools available to you. Adopt for conversation style, based on first message.
 
-    const searchDirectory = allowedFolders.length > 0 ? allowedFolders[0] : process.cwd();
+Follow these instructions carefully:
+1.  Analyze the user's request.
+2.  Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool for each step.
+3.  Use the available tools step-by-step to fulfill the request.
+4.  You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
+5.  Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
+6.  Once the task is fully completed, and you have confirmed the success of all steps, use the '<attempt_completion>' tool to provide the final result. This is the ONLY way to signal completion.
+7.  Be concise and focus on using tools effectively. Avoid conversational filler.
+8.  Use mermaid diagrams where appropriate to illustrate complex code structures or workflows. Ensure to wrap [] content inside diagram to quotes.
+`;
+
+    let systemMessage = baseSystemMessage;
+
+    // Add XML Tool Guidelines
+    systemMessage += `\n${XML_TOOL_GUIDELINES}\n`;
+
+    // Add Tool Definitions
+    systemMessage += `\n# Tools Available\n${TOOL_DEFINITIONS}\n`;
+
+
+    const searchDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
     if (this.debug) {
-      console.log(`[DEBUG] Generating file list for ${searchDirectory}...`);
+      console.log(`[DEBUG] Generating file list for base directory: ${searchDirectory}...`);
     }
 
     // Add folder information
-    if (allowedFolders.length > 0) {
-      const folderList = allowedFolders.map(f => `"${f}"`).join(', ');
-      systemMessage += `\n\nThe following folders are configured for code search: ${folderList}. When using searchCode, specify one of these folders in the folder argument.`;
+    if (this.allowedFolders.length > 0) {
+      const folderList = this.allowedFolders.map(f => `"${f}"`).join(', ');
+      systemMessage += `\n\nYou are configured to primarily operate within these folders: ${folderList}. When using tools like 'search' or 'query', the 'path' parameter should generally refer to these folders or subpaths within them. The root for relative paths is considered the project base.`;
     } else {
-      systemMessage += `\n\nCurrent folder: ${searchDirectory}. You should specify it as path, or subpaths inside it. If you need to search inside the dependecies code, you should use special syntax for path: "go:github.com/user/repo" or "js:user/repo" or "rust:crate_name|.`;
+      systemMessage += `\n\nCurrent path: ${searchDirectory}. When using tools, specify paths like '.' for the current directory, 'src/utils', etc., within the 'path' parameter. Dependencies are located in /dep folder: "/dep/go/github.com/user/repo", "/dep/js/<package>", "/dep/rust/crate_name".`;
     }
 
-    systemMessage += '\n\nWhen appropriate add mermaid diagrams - inside the [] blocks inside diagram wrap to quotes "]';
+    // Add Rules/Capabilities section
+    systemMessage += `\n\n# Capabilities & Rules\n- Search code with keywords (\`search\`) or structural patterns (\`query\`).\n- Extract specific code blocks or full files using (\`extract\`).\n- File paths are relative to the project base unless using dependency syntax.\n- Always wait for tool results (\`<tool_result>...\`) before proceeding.\n- Use \`attempt_completion\` ONLY when the entire task is finished.\n- Be direct and technical. Use exactly ONE tool call per response in the specified XML format.\n`;
 
-    console.log(`[DEBUG] System message: ${systemMessage}`);
+    if (this.debug) {
+      console.log(`[DEBUG] Base system message length (pre-file list): ${systemMessage.length}`);
+    }
 
     // Add file list information if available
     try {
       let files = await listFilesByLevel({
-        directory: searchDirectory,
-        maxFiles: 100,
+        directory: searchDirectory, // Use the determined search directory
+        maxFiles: 100, // Keep it reasonable
         respectGitignore: true
       });
 
-      // Exclude debug file(s) and node_modules in debug mode to prevent clutter or accidental large listing
+      // Exclude debug file(s) and common large directories
       files = files.filter((file) => {
         const lower = file.toLowerCase();
-        return !lower.includes('probe-debug.txt') && !lower.includes('node_modules');
+        return !lower.includes('probe-debug.txt') && !lower.includes('node_modules') && !lower.includes('/.git/');
       });
 
       if (files.length > 0) {
-        systemMessage += `\n\nHere is a list of up to ${files.length} files in the codebase (organized by directory depth):\n\n`;
-        systemMessage += files.map(file => `- ${file}`).join('\n');
+        const fileListHeader = `\n\n# Project Files (Sample of up to ${files.length} files in ${searchDirectory}):\n`;
+        const fileListContent = files.map(file => `- ${file}`).join('\n');
+        systemMessage += fileListHeader + fileListContent;
+        if (this.debug) {
+          console.log(`[DEBUG] Added ${files.length} files to system message. Total length: ${systemMessage.length}`);
+        }
+      } else {
+        if (this.debug) {
+          console.log(`[DEBUG] No files found or listed for the project directory: ${searchDirectory}.`);
+        }
+        systemMessage += `\n\n# Project Files\nNo files listed for the primary directory (${searchDirectory}). You may need to use tools like 'search' or 'query' with broad paths initially if the user's request requires file exploration.`;
       }
     } catch (error) {
-      console.warn(`Warning: Could not generate file list: ${error.message}`);
+      console.warn(`Warning: Could not generate file list for directory "${searchDirectory}": ${error.message}`);
+      systemMessage += `\n\n# Project Files\nCould not retrieve file listing. Proceed based on user instructions and tool capabilities.`;
+    }
+
+    if (this.debug) {
+      console.log(`[DEBUG] Final system message length: ${systemMessage.length}`);
+      // Log first/last parts for verification
+      const debugFilePath = join(process.cwd(), 'probe-debug-system-prompt.txt');
+      try {
+        writeFileSync(debugFilePath, systemMessage);
+        console.log(`[DEBUG] Full system prompt saved to ${debugFilePath}`);
+      } catch (e) {
+        console.error(`[DEBUG] Failed to write full system prompt: ${e.message}`);
+        console.log(`[DEBUG] System message START:\n${systemMessage.substring(0, 300)}...`);
+        console.log(`[DEBUG] System message END:\n...${systemMessage.substring(systemMessage.length - 300)}`);
+      }
     }
 
     return systemMessage;
@@ -334,9 +377,12 @@ export class ProbeChat {
     // Abort any fetch requests
     if (this.abortController) {
       try {
-        this.abortController.abort();
+        this.abortController.abort('User cancelled request'); // Pass reason
       } catch (error) {
-        console.error('Error aborting fetch request:', error);
+        // Ignore errors if already aborted or controller is in an unexpected state
+        if (error.name !== 'AbortError') {
+          console.error('Error aborting fetch request:', error);
+        }
       }
     }
   }
@@ -348,582 +394,476 @@ export class ProbeChat {
    * @returns {Promise<string>} - The AI response
    */
   async chat(message, sessionId) {
-    // Reset cancelled flag
+    // Handle no API keys mode gracefully
+    if (this.noApiKeysMode) {
+      console.error("Cannot process chat: No API keys configured.");
+      // Return structured response even for API key errors
+      return {
+        response: "Error: ProbeChat is not configured with an AI provider API key. Please set the appropriate environment variable (e.g., ANTHROPIC_API_KEY, OPENAI_API_KEY).",
+        tokenUsage: { contextWindow: 0, current: {}, total: {} }
+      };
+    }
+
+    // Reset cancelled flag for the new request
     this.cancelled = false;
 
-    // Create a new AbortController
+    // Create a new AbortController for this specific request
+    // This ensures previous cancellations don't affect new requests
     this.abortController = new AbortController();
+
     // If a session ID is provided and it's different from the current one, update it
     if (sessionId && sessionId !== this.sessionId) {
       if (this.debug) {
-        console.log(`[DEBUG] Using provided session ID: ${sessionId} (instead of ${this.sessionId})`);
+        console.log(`[DEBUG] Switching session ID from ${this.sessionId} to ${sessionId}`);
       }
-      // Update the session ID permanently
+      // Update the session ID for this instance
       this.sessionId = sessionId;
-      // Update tool configurations with the new session ID
-      this.configOptions.sessionId = sessionId;
-
-      // Only recreate tools if the session ID has changed
-      // Create configured tool instances that emit SSE events
-      // We need to ensure the tools use the correct session ID
-      this.tools = {
-        search: {
-          ...searchToolInstance,
-          execute: async (params) => {
-            // Ensure the session ID is passed to the tool
-            const enhancedParams = {
-              ...params,
-              sessionId: this.sessionId
-            };
-            if (this.debug) {
-              console.log(`[DEBUG] ProbeChat executing searchToolInstance with sessionId: ${this.sessionId}`);
-            }
-            return await searchToolInstance.execute(enhancedParams);
-          }
-        },
-        query: {
-          ...queryToolInstance,
-          execute: async (params) => {
-            // Ensure the session ID is passed to the tool
-            const enhancedParams = {
-              ...params,
-              sessionId: this.sessionId
-            };
-            if (this.debug) {
-              console.log(`[DEBUG] ProbeChat executing queryToolInstance with sessionId: ${this.sessionId}`);
-            }
-            return await queryToolInstance.execute(enhancedParams);
-          }
-        },
-        extract: {
-          ...extractToolInstance,
-          execute: async (params) => {
-            // Ensure the session ID is passed to the tool
-            const enhancedParams = {
-              ...params,
-              sessionId: this.sessionId
-            };
-            if (this.debug) {
-              console.log(`[DEBUG] ProbeChat executing extractToolInstance with sessionId: ${this.sessionId}`);
-            }
-            return await extractToolInstance.execute(enhancedParams);
-          }
-        }
-      };
-
-      if (this.debug) {
-        console.log(`[DEBUG] Recreated tools with new session ID: ${this.sessionId}`);
-      }
-
-      // Process the message with the new session ID
-      return await this._processChat(message);
-    } else {
-      // Use the default session ID
-      return await this._processChat(message);
+      // NOTE: History is NOT cleared automatically when session ID changes this way.
+      // Call clearHistory() explicitly if a new session should start fresh.
     }
+
+    // Process the message using the potentially updated session ID
+    return await this._processChat(message);
   }
 
   /**
-   * Internal method to process a chat message
+   * Internal method to process a chat message using the XML tool loop
    * @param {string} message - The user message
-   * @returns {Promise<string>} - The AI response
+   * @returns {Promise<string>} - The final AI response after loop completion
    * @private
    */
   async _processChat(message) {
+    let currentIteration = 0;
+    let completionAttempted = false;
+    let finalResult = `Error: Max tool iterations (${MAX_TOOL_ITERATIONS}) reached without completion.`; // Default error
+
+    // Ensure AbortController is fresh for this chat turn (redundant but safe)
+    this.abortController = new AbortController();
+    const debugFilePath = join(process.cwd(), 'probe-debug.txt');
+
     try {
       if (this.debug) {
+        console.log(`[DEBUG] ===== Starting XML Tool Chat Loop (Session: ${this.sessionId}) =====`);
         console.log(`[DEBUG] Received user message: ${message}`);
-        console.log(`[DEBUG] Current history length before adding new message: ${this.history.length}`);
-
-        // Log the current history content
-        if (this.history.length > 0) {
-          console.log(`[DEBUG] Current history content:`);
-          this.history.forEach((msg, index) => {
-            const preview = msg.content.length > 50 ?
-              `${msg.content.substring(0, 50)}...` : msg.content;
-            console.log(`[DEBUG]   ${index + 1}. ${msg.role}: ${preview}`);
-          });
-        } else {
-          console.log(`[DEBUG] No previous history found for this session`);
-        }
+        console.log(`[DEBUG] Initial history length: ${this.history.length}`);
       }
+
       // Reset current token counters for new turn
       this.tokenCounter.startNewTurn();
 
-      // Count tokens in the user message
-      this.tokenCounter.addRequestTokens(message);
+      // Count tokens in the initial user message (approx)
+      this.tokenCounter.addRequestTokens(this.tokenCounter.countTokens(message));
 
-      // Limit history to prevent token overflow when DEBUG_CHAT=1
+      // --- Prepare messages for the first LLM call ---
+      // Limit history *before* adding the new message
       if (this.history.length > MAX_HISTORY_MESSAGES) {
-        const historyStart = this.history.length - MAX_HISTORY_MESSAGES;
-        this.history = this.history.slice(historyStart);
+        const removedCount = this.history.length - MAX_HISTORY_MESSAGES;
+        this.history = this.history.slice(removedCount);
+        if (this.debug) console.log(`[DEBUG] Trimmed history to ${this.history.length} messages (removed ${removedCount}).`);
       }
 
-      // Prepare messages array
-      const messages = [
+      // Add user message to the *local* messages array for this turn
+      // Use structured content if needed, but simple string is fine here
+      let currentMessages = [
         ...this.history,
-        {
-          role: 'user', content: message, providerOptions: {
-            anthropic: { cacheControl: { type: 'ephemeral' } }
-          }
-        }
+        { role: 'user', content: message }
       ];
 
+      // Get the potentially large system message (can be async)
+      const systemPrompt = await this.getSystemMessage();
       if (this.debug) {
-        console.log(`[DEBUG] Sending ${messages.length} messages to model`);
-        console.log(`[DEBUG] Message breakdown:`);
-        console.log(`[DEBUG]   - ${this.history.length} messages from history`);
-        console.log(`[DEBUG]   - 1 new user message`);
-
-        // Calculate approximate token count for the conversation
-        let totalTokens = 0;
-        messages.forEach((msg) => {
-          // Rough estimate: 1 token per 4 characters
-          const estimatedTokens = Math.ceil(msg.content.length / 4);
-          totalTokens += estimatedTokens;
-        });
-
-        console.log(`[DEBUG] Estimated total tokens for conversation: ~${totalTokens}`);
-        console.log(`[DEBUG] Messages being sent to model:`);
-
-        messages.forEach((msg, index) => {
-          const preview = msg.content.length > 50 ?
-            `${msg.content.substring(0, 50)}...` : msg.content;
-          console.log(`[DEBUG]   ${index + 1}. ${msg.role}: ${preview}`);
-        });
+        const systemTokens = this.tokenCounter.countTokens(systemPrompt);
+        this.tokenCounter.addRequestTokens(systemTokens); // Count system prompt towards request
+        console.log(`[DEBUG] System prompt estimated tokens: ${systemTokens}`);
       }
 
-      // Check if the request has been cancelled
-      if (this.cancelled) {
-        throw new Error('Request was cancelled by the user');
-      }
+      // --- Tool Execution Loop ---
+      while (currentIteration < MAX_TOOL_ITERATIONS && !completionAttempted) {
+        currentIteration++;
+        if (this.cancelled) throw new Error('Request was cancelled by the user'); // Check at start of iteration
 
-      // Determine max tokens based on model name
-      let maxTokens = 4096; // Default value
-
-      // If model starts with gpt-4o, set to 4096
-      if (this.model.startsWith('gpt-4o')) {
-        maxTokens = 4096;
-      }
-      // If model is claude-3-5, claude-3-7, gemini, or o3-mini, set to 8000
-      else if (this.model.includes('claude-3-5') || this.model.includes('claude-3-7') ||
-        this.model.includes('gemini') || this.model.includes('o3-mini')) {
-        maxTokens = 8000;
-      }
-
-      // Update token display with max tokens
-      this.tokenDisplay = new TokenUsageDisplay({ maxTokens });
-
-      if (this.debug) {
-        console.log(`[DEBUG] Using max tokens: ${maxTokens} for model: ${this.model}`);
-      }
-
-      // Configure generateOptions
-      const generateOptions = {
-        model: this.provider(this.model),
-        messages: messages,
-        system: await this.getSystemMessage(),
-        tools: this.tools,
-        maxSteps: 20,
-        temperature: 0.7,
-        maxTokens: maxTokens,
-        signal: this.abortController.signal
-      };
-
-      // Write debug information to file if in debug mode (DEBUG_CHAT=1)
-      if (this.debug) {
-        try {
-          const systemMessage = await this.getSystemMessage();
-
-          // Estimate token counts for better debugging
-          const systemTokens = Math.ceil(systemMessage.length / 4);
-          let messagesTokens = 0;
-          messages.forEach(m => {
-            messagesTokens += Math.ceil(m.content.length / 4);
+        if (this.debug) {
+          console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${MAX_TOOL_ITERATIONS} ---`);
+          console.log(`[DEBUG] Current messages count for AI call: ${currentMessages.length}`);
+          // Log last few messages concisely
+          currentMessages.slice(-3).forEach((msg, idx) => {
+            const contentPreview = (typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)).substring(0, 80).replace(/\n/g, ' ');
+            console.log(`[DEBUG]   Msg[${currentMessages.length - 3 + idx}]: ${msg.role}: ${contentPreview}...`);
           });
-
-          const totalEstimatedTokens = systemTokens + messagesTokens;
-
-          // Write to probe-debug.txt
-          const debugFilePath = join(process.cwd(), 'probe-debug.txt');
-          writeFileSync(
-            debugFilePath,
-            `=== LATEST AI REQUEST (${new Date().toISOString()}) ===\n\n` +
-            `Session ID: ${this.sessionId}\n` +
-            `Model: ${this.model} (${this.apiType})\n` +
-            `History Length: ${this.history.length} messages\n` +
-            `Estimated Tokens: ~${totalEstimatedTokens} (System: ~${systemTokens}, Messages: ~${messagesTokens})\n\n` +
-            `=== SYSTEM MESSAGE ===\n${systemMessage}\n\n` +
-            `=== MESSAGES SENT TO AI ===\n${JSON.stringify(messages, null, 2)}\n\n`,
-            { flag: 'w' }
-          );
-
-          console.log(`[DEBUG] Wrote latest AI request to ${debugFilePath} (Est. tokens: ~${totalEstimatedTokens})`);
-        } catch (error) {
-          console.error(`[DEBUG] Error writing debug file:`, error);
-        }
-      }
-
-      // Add API-specific options
-      if (this.apiType === 'anthropic' && this.model.includes('3-7')) {
-        generateOptions.experimental_thinking = {
-          enabled: true,
-          budget: 8000
-        };
-      }
-
-      try {
-        if (this.cancelled) {
-          throw new Error('Request was cancelled by the user');
         }
 
-        // Retry wrapper function for generateText with exponential backoff
-        const retryGenerateText = async (options, maxRetries = 3) => {
-          let lastError;
-          for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-              if (this.debug) {
-                console.log(`[DEBUG] generateText attempt ${attempt}/${maxRetries}`);
-              }
-              return await generateText(options);
-            } catch (error) {
-              lastError = error;
-              console.error(`Error in generateText (attempt ${attempt}/${maxRetries}):`, error.message);
 
-              if (attempt < maxRetries) {
-                // Wait for 1 second before retrying (could be made exponential if needed)
-                const delayMs = 1000;
-                if (this.debug) {
-                  console.log(`[DEBUG] Retrying in ${delayMs}ms...`);
-                }
-                await new Promise(resolve => setTimeout(resolve, delayMs));
-              }
-            }
-          }
-          // If we've exhausted all retries, throw the last error
-          throw lastError;
-        };
+        // Estimate current context size before calling LLM
+        this.tokenCounter.calculateContextSize(currentMessages); // Includes history + current turn messages
+        if (this.debug) console.log(`[DEBUG] Estimated context tokens BEFORE LLM call (Iter ${currentIteration}): ${this.tokenCounter.contextSize}`);
 
-        const result = await retryGenerateText(generateOptions);
 
-        // Update token counter's history with complete message array
-        if (result.messages && Array.isArray(result.messages)) {
-          this.tokenCounter.updateHistory(result.messages);
+        // Determine max response tokens based on model (adjust as needed)
+        // This is a rough guideline, the actual context limit is handled by the provider/model
+        let maxResponseTokens = 4000; // Default generous limit
+        if (this.model.includes('claude-3-opus') || this.model.startsWith('gpt-4-')) {
+          maxResponseTokens = 4096; // Some models have fixed output limits
+        } else if (this.model.includes('claude-3-5-sonnet') || this.model.startsWith('gpt-4o') || this.model.startsWith('gemini-1.5')) {
+          maxResponseTokens = 8000; // Models with larger output capabilities
         }
+        this.tokenDisplay = new TokenUsageDisplay({ maxTokens: maxResponseTokens }); // Update display
 
-        // Extract the text content from the response
-        const responseText = result.text;
 
-        // Update ProbeChat's own history
-        if (result.messages && Array.isArray(result.messages)) {
-          if (this.debug) {
-            console.log(`[DEBUG] Updating history with complete message array from result.messages`);
-            console.log(`[DEBUG] Messages array length: ${result.messages.length}`);
-          }
+        // Find user message indices for caching
+        const userMsgIndices = currentMessages.reduce(
+          (acc, msg, index) => (msg.role === 'user' ? [...acc, index] : acc),
+          []
+        );
+        const lastUserMsgIndex = userMsgIndices[userMsgIndices.length - 1] ?? -1;
+        const secondLastUserMsgIndex = userMsgIndices[userMsgIndices.length - 2] ?? -1;
 
-          // Replace the current history with the complete message array
-          this.history = result.messages.map(msg => {
-            // Add ephemeral cache control if missing
-            if (!msg.providerOptions?.anthropic?.cacheControl) {
+        // Configure generateOptions for this iteration
+        let transformedMessages = currentMessages;
+
+        // Apply cache control for Anthropic models
+        if (this.apiType === 'anthropic') {
+          // Transform ALL user messages to include cache control
+          // Keep system prompt as a string
+          transformedMessages = currentMessages.map((message, index) => {
+            if (message.role === 'user' && (index === lastUserMsgIndex || index === secondLastUserMsgIndex)) {
+              // Only apply cache control to the last and second-to-last user messages
               return {
-                ...msg,
-                providerOptions: {
-                  ...(msg.providerOptions || {}),
-                  anthropic: {
-                    ...(msg.providerOptions?.anthropic || {}),
-                    cacheControl: { type: 'ephemeral' }
-                  }
-                }
+                ...message,
+                content: typeof message.content === 'string'
+                  ? [
+                    {
+                      type: "text",
+                      text: message.content,
+                      providerOptions: {
+                        anthropic: { cacheControl: { type: 'ephemeral' } },
+                      },
+                    }
+                  ]
+                  : message.content.map(content => ({
+                    ...content,
+                    providerOptions: {
+                      anthropic: { cacheControl: { type: 'ephemeral' } },
+                    },
+                  }))
               };
             }
-            return msg;
+            return message;
           });
 
-          // Ensure the history does not exceed the maximum length
-          if (this.history.length > MAX_HISTORY_MESSAGES) {
-            if (this.debug) {
-              console.log(`[DEBUG] History length (${this.history.length}) exceeds max (${MAX_HISTORY_MESSAGES}). Trimming...`);
-            }
-            this.history = this.history.slice(this.history.length - MAX_HISTORY_MESSAGES);
-            if (this.debug) {
-              console.log(`[DEBUG] History trimmed to ${this.history.length} messages.`);
-            }
-          }
-
-          // Log the structure of the last few messages for verification
           if (this.debug) {
-            const historyTail = this.history.slice(-3);
-            console.log(`[DEBUG] Last ${historyTail.length} history messages:`, JSON.stringify(historyTail, null, 2));
+            const cachedUserMsgs = transformedMessages.filter(msg =>
+              msg.role === 'user' &&
+              msg.content &&
+              Array.isArray(msg.content) &&
+              msg.content.some(c => c.cache_control && c.cache_control.type === 'ephemeral')
+            ).length;
+
+            console.log(`[DEBUG] Applied cache control to ${cachedUserMsgs} user messages out of ${userMsgIndices.length} total user messages`);
           }
-        } else {
-          // Fallback to the old method if result.messages is not available
-          if (this.debug) {
-            console.log(`[DEBUG] result.messages not available, falling back to manual history update`);
-          }
-          // Add user message
-          this.history.push({
-            role: 'user',
-            content: message,
-            providerOptions: {
-              anthropic: { cacheControl: { type: 'ephemeral' } }
-            }
-          });
-          // Add assistant message
-          this.history.push({
-            role: 'assistant',
-            content: responseText,
-            providerOptions: {
-              anthropic: { cacheControl: { type: 'ephemeral' } }
-            }
-          });
-
-          // IMPORTANT FIX: Update tokenCounter's history so calculateContextSize won't remain 100
-          this.tokenCounter.updateHistory(this.history);
-        }
-
-        // Use the token usage information from the result if available
-        if (result.usage) {
-          if (this.debug) {
-            console.log(`[DEBUG] Provider metadata:`, result.providerMetadata?.anthropic);
-            console.log(`[DEBUG] Usage:`, result.usage);
-          }
-
-          // Record usage with provider metadata
-          this.tokenCounter.recordUsage(result.usage, result.providerMetadata);
-
-          // Force context window calculation
-          this.tokenCounter.calculateContextSize();
-
-          // Ensure cache info is properly recorded
-          const cacheRead = (result.providerMetadata?.anthropic?.cacheReadInputTokens || 0) +
-            (result.providerMetadata?.openai?.cachedPromptTokens || 0);
-          const cacheWrite = result.providerMetadata?.anthropic?.cacheCreationInputTokens || 0;
 
           if (this.debug) {
-            console.log(`[DEBUG] Token usage from result: Prompt=${result.usage.promptTokens}, Completion=${result.usage.completionTokens}, Total=${result.usage.totalTokens}`);
-            console.log(`[DEBUG] Accumulated usage: Request=${this.tokenCounter.requestTokens}, Response=${this.tokenCounter.responseTokens}`);
-            console.log(`[DEBUG] Context window size: ${this.tokenCounter.contextSize}`);
-            console.log(`[DEBUG] Cache token usage: Read=${cacheRead}, Write=${cacheWrite}, Total=${cacheRead + cacheWrite}`);
-          }
-
-          if (result.providerMetadata?.openai) {
-            const cachedPrompt = result.providerMetadata.openai.cachedPromptTokens || 0;
-            console.log(`[DEBUG] OpenAI cached prompt tokens: ${cachedPrompt}`);
-          }
-        } else {
-          // Fallback if result.usage is not available
-          if (this.debug) {
-            console.log(`[DEBUG] result.usage not available, falling back to manual token counting`);
-          }
-
-          // Force context window calculation
-          this.tokenCounter.calculateContextSize();
-
-          if (this.debug) {
-            console.log(`[DEBUG] Context window size (manual calculation): ${this.tokenCounter.contextSize}`);
-          }
-
-          const responseTokenCount = this.tokenCounter.countTokens(responseText);
-          this.tokenCounter.addResponseTokens(responseTokenCount);
-
-          if (this.debug) {
-            console.log(`[DEBUG] Estimated response tokens using tiktoken: ${responseTokenCount}`);
-            console.log(`[DEBUG] Context window size: ${this.tokenCounter.contextSize}`);
+            console.log(`[DEBUG] Applied cache control to all user messages for Anthropic API`);
           }
         }
 
-        // Append final results to debug file
-        if (this.debug) {
-          try {
-            const debugFilePath = join(process.cwd(), 'probe-debug.txt');
-            const finalResponseText = result.text || "[No final text response]";
+        const generateOptions = {
+          model: this.provider(this.model),
+          messages: transformedMessages,
+          system: systemPrompt, // Keep system as a string
+          // No 'tools' or 'toolChoice' for XML approach
+          temperature: 0.3, // Lower temp for more deterministic tool use
+          maxTokens: maxResponseTokens, // Max tokens for the *response*
+          stopSequences: ['</tool_result>'], // Might help prevent hallucinating after tool result in some cases? Test this.
+          signal: this.abortController.signal,
+        };
 
-            let tokenInfo = "Token usage information not available.";
-            if (result.usage) {
-              tokenInfo =
-                `Prompt tokens: ${result.usage.promptTokens}\n` +
-                `Completion tokens: ${result.usage.completionTokens}\n` +
-                `Total tokens: ${result.usage.totalTokens}\n\n` +
-                `--- Accumulated Usage ---\n` +
-                `Request tokens: ${this.tokenCounter.requestTokens}\n` +
-                `Response tokens: ${this.tokenCounter.responseTokens}\n` +
-                `Total tokens: ${this.tokenCounter.requestTokens + this.tokenCounter.responseTokens}`;
+        // --- Call LLM ---
+        let result;
+        let assistantResponseContent = '';
+        try {
+          if (this.debug) console.log(`[DEBUG] Calling generateText with model ${this.model}...`);
+          result = await generateText(generateOptions);
+          assistantResponseContent = result.text?.trim() || ''; // Ensure we have a trimmed string
 
-              if (result.providerMetadata?.anthropic) {
-                const cacheCreation = result.providerMetadata.anthropic.cacheCreationInputTokens || 0;
-                const cacheRead = result.providerMetadata.anthropic.cacheReadInputTokens || 0;
+          if (this.debug) {
+            console.log(`[DEBUG] Received AI response (Iter ${currentIteration}). Length: ${assistantResponseContent.length}`);
+          }
 
-                tokenInfo += `\n\n--- Anthropic Cache Token Usage ---\n` +
-                  `Cache creation tokens: ${cacheCreation}\n` +
-                  `Cache read tokens: ${cacheRead}\n` +
-                  `Total cache tokens: ${cacheCreation + cacheRead}`;
-              }
+          // Add assistant's raw response to history for the next turn (or final history)
+          currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+
+          // --- Token Counting (Post-LLM Call) ---
+          if (result.usage) {
+            if (this.debug) console.log(`[DEBUG] Usage reported (Iter ${currentIteration}):`, result.usage);
+            // Pass system prompt tokens calculated earlier if needed by counter logic
+            this.tokenCounter.recordUsage(result.usage, result.providerMetadata);
+          } else {
+            const responseTokenCount = this.tokenCounter.countTokens(assistantResponseContent);
+            if (this.debug) console.log(`[DEBUG] result.usage not available, estimating response tokens (Iter ${currentIteration}): ${responseTokenCount}`);
+            this.tokenCounter.addResponseTokens(responseTokenCount);
+            // Need to add request tokens based on messages if not provided
+            // This is tricky without accurate prompt_tokens, relying on context calc might be better
+          }
+          // Recalculate context *after* adding assistant message & recording usage
+          this.tokenCounter.calculateContextSize(currentMessages);
+          if (this.debug) console.log(`[DEBUG] Context size AFTER LLM response (Iter ${currentIteration}): ${this.tokenCounter.contextSize}`);
+
+        } catch (error) {
+          if (this.cancelled || error.name === 'AbortError' || (error.message && error.message.includes('cancelled'))) {
+            console.log(`Chat request cancelled during LLM call (Iter ${currentIteration})`);
+            this.cancelled = true; // Ensure flag is set
+            throw new Error('Request was cancelled by the user');
+          }
+          console.error(`Error during generateText (Iter ${currentIteration}):`, error);
+
+          // Add error message to history? Maybe not, let the caller handle the thrown error.
+          // currentMessages.push({ role: 'user', content: `System Error: Failed to get response from AI model. Error: ${error.message}` });
+
+          finalResult = `Error: Failed to get response from AI model during iteration ${currentIteration}. ${error.message}`;
+          // Decide whether to break or throw. Throwing might be cleaner.
+          throw new Error(finalResult); // Throw the error to be caught by the outer catch block
+          // break; // Exit loop on generation error - Replaced by throw
+        }
+
+        // --- Parse Assistant Response for Tool Call ---
+        const parsedTool = parseXmlToolCallWithThinking(assistantResponseContent);
+
+        if (parsedTool) {
+          const { toolName, params } = parsedTool;
+          if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
+
+
+          if (toolName === 'attempt_completion') {
+            // --- Handle Completion ---
+            completionAttempted = true;
+            const validation = attemptCompletionSchema.safeParse(params);
+            if (!validation.success) {
+              finalResult = `Error: AI attempted completion with invalid parameters: ${JSON.stringify(validation.error.issues)}`;
+              console.warn(`[WARN] Invalid attempt_completion parameters:`, validation.error.issues);
+              // We don't add an error message back to the AI here, we just stop and return the error result.
             } else {
-              tokenInfo =
-                `Request tokens: ${this.tokenCounter.requestTokens}\n` +
-                `Response tokens: ${this.tokenCounter.responseTokens}\n` +
-                `Total tokens: ${this.tokenCounter.requestTokens + this.tokenCounter.responseTokens}`;
-
-              if (this.tokenCounter.cacheCreationTokens > 0 || this.tokenCounter.cacheReadTokens > 0) {
-                tokenInfo += `\n\n--- Anthropic Cache Token Usage ---\n` +
-                  `Cache creation tokens: ${this.tokenCounter.cacheCreationTokens}\n` +
-                  `Cache read tokens: ${this.tokenCounter.cacheReadTokens}\n` +
-                  `Total cache tokens: ${this.tokenCounter.cacheCreationTokens + this.tokenCounter.cacheReadTokens}`;
+              finalResult = validation.data.result; // Extract the final result text
+              if (this.debug) {
+                console.log(`[DEBUG] Completion attempted successfully. Final Result captured.`);
+                if (validation.data.command) {
+                  console.log(`[DEBUG] Completion included command: "${validation.data.command}"`);
+                }
               }
 
-              if (this.tokenCounter.cachedPromptTokens > 0) {
-                tokenInfo += `\n\n--- OpenAI Cache Token Usage ---\n` +
-                  `Cached prompt tokens: ${this.tokenCounter.cachedPromptTokens}`;
-              }
-            }
-
-            const toolRelatedMessages = result.messages ?
-              result.messages.filter(m => m.role === 'assistant' || m.role === 'tool') :
-              [];
-
-            writeFileSync(
-              debugFilePath,
-              `\n=== AI RESPONSE (Final Text) ===\n${finalResponseText}\n\n` +
-              `=== RAW TOOL CALLS/RESULTS (From result.messages) ===\n` +
-              `${JSON.stringify(toolRelatedMessages, null, 2)}\n\n` +
-              `=== TOKEN USAGE (This Turn & Accumulated) ===\n` +
-              `${tokenInfo}\n`,
-              { flag: 'a' }
-            );
-
-            writeFileSync(
-              debugFilePath,
-              `\n=== SENT TO UI (FINAL) ===\n${responseText}\n`,
-              { flag: 'a' }
-            );
-
-            writeFileSync(
-              debugFilePath,
-              `\n=== CURRENT HISTORY STATE ===\n` +
-              `History length: ${this.history.length} messages\n` +
-              `First few messages: ${JSON.stringify(this.history.slice(0, 2), null, 2)}\n` +
-              `Last few messages: ${JSON.stringify(this.history.slice(-2), null, 2)}\n`,
-              { flag: 'a' }
-            );
-
-            console.log(`[DEBUG] Appended AI response and detailed information to ${debugFilePath}`);
-          } catch (error) {
-            console.error(`[DEBUG] Error appending to debug file:`, error);
-          }
-        }
-
-        if (result.toolCalls && result.toolCalls.length > 0) {
-          console.log(`Tool was used: ${result.toolCalls.length} times`);
-
-          result.toolCalls.forEach((call, index) => {
-            if (this.debug) {
-              console.log(`[DEBUG] Tool call ${index + 1}: ${call.name}`);
-              if (call.args) {
-                console.log(`[DEBUG] Tool call ${index + 1} args:`, JSON.stringify(call.args, null, 2));
-              }
-
-              let resultSize = 0;
-              let resultPreview = '';
-              if (call.result) {
-                const resultStr = typeof call.result === 'string'
-                  ? call.result
-                  : JSON.stringify(call.result, null, 2);
-                resultSize = resultStr.length;
-                resultPreview = resultStr.length > 100
-                  ? resultStr.substring(0, 100) + '... (truncated)'
-                  : resultStr;
-                console.log(`[DEBUG] Tool call ${index + 1} result size: ~${Math.ceil(resultSize / 4)} tokens (${resultSize} chars)`);
-                console.log(`[DEBUG] Tool call ${index + 1} result preview: ${resultPreview}`);
-              }
-
+              // Write the entire history to probe-debug.txt in a nice text format
               try {
-                const debugFilePath = join(process.cwd(), 'probe-debug.txt');
-                const toolCallInfo =
-                  `\n=== TOOL CALL ${index + 1} ===\n` +
-                  `Name: ${call.name}\n` +
-                  `Args: ${JSON.stringify(call.args, null, 2)}\n\n` +
-                  `Result Size: ~${Math.ceil(resultSize / 4)} tokens (${resultSize} chars)\n` +
-                  `Result: ${typeof call.result === 'string'
-                    ? call.result
-                    : JSON.stringify(call.result, null, 2)}\n`;
+                // Get the system message
+                const systemPrompt = await this.getSystemMessage();
 
-                writeFileSync(debugFilePath, toolCallInfo, { flag: 'a' });
+                // Start with the system message
+                let debugContent = `system: ${systemPrompt}\n\n`;
 
-                const currentMessages = [
-                  ...this.history,
-                  { role: 'user', content: message }
-                ];
-
-                let totalEstimatedTokens = 0;
-                currentMessages.forEach(m => {
-                  totalEstimatedTokens += Math.ceil(m.content.length / 4);
-                });
-
-                if (result.toolCalls) {
-                  result.toolCalls.forEach((tc, i) => {
-                    if (i <= index) {
-                      const tcResult = typeof tc.result === 'string'
-                        ? tc.result
-                        : JSON.stringify(tc.result, null, 2);
-                      totalEstimatedTokens += Math.ceil(tcResult.length / 4);
-
-                      const tcArgs = JSON.stringify(tc.args, null, 2);
-                      totalEstimatedTokens += Math.ceil(tcArgs.length / 4);
-                    }
-                  });
+                // Add each message from currentMessages (which includes all messages for this chat turn)
+                for (const msg of currentMessages) {
+                  if (msg.role === 'user' || msg.role === 'assistant') {
+                    debugContent += `${msg.role}: ${msg.content}\n\n`;
+                  }
                 }
 
-                writeFileSync(
-                  debugFilePath,
-                  `\n=== CONVERSATION STATE AFTER TOOL CALL ${index + 1} ===\n` +
-                  `Current estimated tokens: ~${totalEstimatedTokens}\n` +
-                  `History messages: ${this.history.length}\n` +
-                  `Tool calls so far: ${index + 1} of ${result.toolCalls.length}\n`,
-                  { flag: 'a' }
-                );
+                // Add the final result as the last assistant message if it's not already included
+                if (completionAttempted) {
+                  debugContent += `assistant (final result): ${finalResult}\n\n`;
+                }
 
-                console.log(`[DEBUG] Appended tool call ${index + 1} and conversation state to ${debugFilePath}`);
+                // Write to file
+                writeFileSync(debugFilePath, debugContent, { flag: 'w' });
+                if (this.debug) {
+                  console.log(`[DEBUG] Wrote complete chat history to ${debugFilePath}`);
+                }
               } catch (error) {
-                console.error(`[DEBUG] Error appending tool call to debug file:`, error);
+                console.error(`Error writing chat history to debug file: ${error.message}`);
               }
             }
-            if (this.debug) {
-              console.log(`[DEBUG] Tool call completed: ${call.name}`);
+            break; // Exit the loop on successful or failed completion attempt
+
+          } else if (this.toolImplementations[toolName]) {
+            // --- Execute Tool ---
+            const toolInstance = this.toolImplementations[toolName];
+            let toolResultContent = ''; // Will be wrapped in <tool_result>
+            let toolExecutionError = false;
+            try {
+              // Add sessionId to params for the tool execution context if needed by the tool impl
+              const enhancedParams = {
+                ...params,
+                sessionId: this.sessionId // Pass session ID automatically
+              };
+              if (this.debug) console.log(`[DEBUG] Executing tool '${toolName}' with params:`, enhancedParams);
+
+              // Execute the actual tool function/method
+              const executionResult = await toolInstance.execute(enhancedParams);
+
+              // Format result for LLM (usually string or JSON string)
+              toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2); // Pretty print JSON slightly
+
+              if (this.debug) {
+                const preview = toolResultContent.substring(0, 200).replace(/\n/g, ' ') + (toolResultContent.length > 200 ? '...' : '');
+                console.log(`[DEBUG] Tool '${toolName}' executed successfully. Result preview: ${preview}`);
+              }
+
+            } catch (error) {
+              toolExecutionError = true;
+              console.error(`Error executing tool ${toolName}:`, error);
+              toolResultContent = `Error executing tool ${toolName}: ${error.message}`; // Provide error message back to AI
+              if (this.debug) {
+                console.log(`[DEBUG] Tool '${toolName}' execution FAILED.`);
+              }
             }
-          });
+
+            // Add tool result (or error) message to history for the next iteration
+            // Wrap the result in the expected tags
+            const toolResultMessage = `<tool_result>\n${toolResultContent}\n</tool_result>`;
+            currentMessages.push({ role: 'user', content: toolResultMessage }); // Use 'user' role for tool results
+
+            // Recalculate context after adding tool result
+            this.tokenCounter.calculateContextSize(currentMessages);
+            if (this.debug) console.log(`[DEBUG] Context size after adding tool result for '${toolName}': ${this.tokenCounter.contextSize}`);
+
+          } else {
+            // --- Handle Invalid Tool Name ---
+            if (this.debug) console.log(`[DEBUG] Assistant used invalid tool name: ${toolName}`);
+            const errorContent = `<tool_result>\nError: Invalid tool name specified: '${toolName}'. Please use one of: search, query, extract, attempt_completion.\n</tool_result>`;
+            // Provide feedback as if it were a tool result (using 'user' role)
+            currentMessages.push({ role: 'user', content: errorContent });
+            this.tokenCounter.calculateContextSize(currentMessages);
+          }
+
+        } else {
+          // --- Handle No Tool Call ---
+          if (this.debug) console.log(`[DEBUG] Assistant response did not contain a valid XML tool call.`);
+          const forceToolContent = `Your response did not contain a valid tool call in the required XML format. You MUST respond with exactly one tool call (e.g., <search>...</search> or <attempt_completion>...</attempt_completion>) based on the previous steps and the user's goal. Analyze the situation and choose the appropriate next tool.`;
+          // Add feedback/instruction message to history, using 'user' role might be most effective
+          currentMessages.push({ role: 'user', content: forceToolContent });
+          this.tokenCounter.calculateContextSize(currentMessages);
+          // Loop continues, giving AI another chance with the guidance.
         }
 
-        return responseText;
-      } catch (error) {
-        if (error.name === 'AbortError' || (error.message && error.message.includes('cancelled'))) {
-          console.log('Chat request was cancelled');
-          this.cancelled = true;
-          throw new Error('Request was cancelled by the user');
+        // --- History Trimming within the loop ---
+        // Check if message array exceeds max *plus a buffer* (e.g., sys, user, asst, tool_result)
+        if (currentMessages.length > MAX_HISTORY_MESSAGES + 3) {
+          const removeCount = currentMessages.length - MAX_HISTORY_MESSAGES;
+          // Be careful not to remove the system prompt if it was implicitly included
+          // Assuming system prompt is handled separately by generateText, only trim messages
+          currentMessages = currentMessages.slice(removeCount);
+          if (this.debug) {
+            console.log(`[DEBUG] Trimmed 'currentMessages' within loop to ${currentMessages.length} (removed ${removeCount}).`);
+          }
+          this.tokenCounter.calculateContextSize(currentMessages); // Recalc after trimming
         }
-        throw error;
+
+      } // --- End While Loop ---
+
+      if (currentIteration >= MAX_TOOL_ITERATIONS && !completionAttempted) {
+        console.warn(`[WARN] Max tool iterations (${MAX_TOOL_ITERATIONS}) reached for session ${this.sessionId}. Returning current error state.`);
+        // finalResult is already set to the error message
       }
+
+      // --- Final History Update ---
+      // Update the main instance history *after* the loop finishes successfully or hits limit
+      this.history = currentMessages.map(msg => ({ ...msg })); // Create copies
+
+      // Ensure final history does not exceed max length *strictly*
+      if (this.history.length > MAX_HISTORY_MESSAGES) {
+        const finalRemoveCount = this.history.length - MAX_HISTORY_MESSAGES;
+        this.history = this.history.slice(finalRemoveCount);
+        if (this.debug) console.log(`[DEBUG] Final history trim applied. Length: ${this.history.length} (removed ${finalRemoveCount})`);
+      }
+
+      // Update the tokenCounter's history with the chat history
+      // This is critical for context window size calculation
+      this.tokenCounter.updateHistory(this.history);
+      if (this.debug) {
+        console.log(`[DEBUG] Updated tokenCounter history with ${this.history.length} messages`);
+        console.log(`[DEBUG] Context size after history update: ${this.tokenCounter.contextSize}`);
+      }
+
+      if (this.debug) {
+        console.log(`[DEBUG] ===== Ending XML Tool Chat Loop =====`);
+        console.log(`[DEBUG] Loop finished after ${currentIteration} iterations.`);
+        console.log(`[DEBUG] Completion attempted: ${completionAttempted}`);
+        console.log(`[DEBUG] Final history length: ${this.history.length}`);
+        const resultPreview = (typeof finalResult === 'string' ? finalResult : JSON.stringify(finalResult)).substring(0, 200).replace(/\n/g, ' ');
+        console.log(`[DEBUG] Returning final result: "${resultPreview}..."`);
+      }
+
+      // Get token usage data
+      const tokenUsage = this.tokenCounter.getTokenUsage();
+
+      // Force recalculation of context window size
+      this.tokenCounter.calculateContextSize(this.history);
+
+      // Get updated token usage data after recalculation
+      const updatedTokenUsage = this.tokenCounter.getTokenUsage();
+
+      if (this.debug) {
+        console.log(`[DEBUG] Final context window size: ${updatedTokenUsage.contextWindow}`);
+        console.log(`[DEBUG] Cache metrics - Read: ${updatedTokenUsage.current.cacheRead}, Write: ${updatedTokenUsage.current.cacheWrite}`);
+      }
+
+      // Return a structured response with both the final result and token usage data
+      return {
+        response: finalResult, // The content from attempt_completion or the error message
+        tokenUsage: updatedTokenUsage // Include token usage metrics for the frontend
+      };
+
     } catch (error) {
-      console.error('Error in chat:', error);
-
-      if (error.message && error.message.includes('cancelled')) {
-        throw error;
+      console.error('Error in chat processing loop:', error);
+      if (this.debug) {
+        console.error('Error in chat processing loop:', error);
       }
 
-      return `Error: ${error.message}`;
+      // Update the tokenCounter's history with the chat history
+      // This is critical for context window size calculation
+      this.tokenCounter.updateHistory(this.history);
+      if (this.debug) {
+        console.log(`[DEBUG] Error case - Updated tokenCounter history with ${this.history.length} messages`);
+      }
+
+      // Force recalculation of context window size even in error cases
+      this.tokenCounter.calculateContextSize(this.history);
+
+      // Get updated token usage data after recalculation
+      const updatedTokenUsage = this.tokenCounter.getTokenUsage();
+
+      if (this.debug) {
+        console.log(`[DEBUG] Error case - Final context window size: ${updatedTokenUsage.contextWindow}`);
+        console.log(`[DEBUG] Error case - Cache metrics - Read: ${updatedTokenUsage.current.cacheRead}, Write: ${updatedTokenUsage.current.cacheWrite}`);
+      }
+
+      if (this.cancelled || (error.message && error.message.includes('cancelled'))) {
+        // Don't return generic message for cancellation, re-throw or return specific status
+        return {
+          response: "Request cancelled.",
+          tokenUsage: updatedTokenUsage
+        }; // Or throw error for caller to handle
+      }
+      // Return a user-friendly error message for other errors
+      return {
+        response: `Error during chat processing: ${error.message || 'An unexpected error occurred.'}`,
+        tokenUsage: updatedTokenUsage
+      };
+    } finally {
+      // Clean up abort controller if needed, though creating a new one per `chat` call is safer
+      this.abortController = null; // Indicate no active request
     }
   }
 
+
   /**
-   * Get the current token usage
-   * @returns {Object} - Object containing request, response, and total token counts
+   * Get the current token usage summary
+   * @returns {Object} - Raw token usage data for UI display
    */
   getTokenUsage() {
-    // Get token usage from the counter
+    // Get raw token usage from the counter
     const usage = this.tokenCounter.getTokenUsage();
 
-    // Use the context size from the tokenCounter
-    const formattedUsage = this.tokenDisplay.format(usage);
-    return formattedUsage;
+    // Return the raw usage data directly
+    // This allows the web interface to format it as needed
+    return usage;
   }
 
   /**
@@ -935,71 +875,39 @@ export class ProbeChat {
     const oldSessionId = this.sessionId;
 
     this.history = [];
-    this.sessionId = randomUUID();
+    this.sessionId = randomUUID(); // Generate a new session ID
+
+    // Clear the tokenCounter - this resets all counters and the internal history
     this.tokenCounter.clear();
 
+    // Double-check that the tokenCounter's history is empty
+    if (this.tokenCounter.history && this.tokenCounter.history.length > 0) {
+      this.tokenCounter.history = [];
+      if (this.debug) {
+        console.log(`[DEBUG] Explicitly cleared tokenCounter history after clear() call`);
+      }
+    }
+
+    this.cancelled = false; // Reset cancellation flag
+    if (this.abortController) {
+      // Ensure any lingering abort signal is cleared (though should be handled by `chat`)
+      try { this.abortController.abort('History cleared'); } catch (e) { /* ignore */ }
+      this.abortController = null;
+    }
+
+
     if (this.debug) {
-      console.log(`[DEBUG] ===== CLEARING CHAT HISTORY =====`);
+      console.log(`[DEBUG] ===== CLEARING CHAT HISTORY & STATE =====`);
       console.log(`[DEBUG] Cleared ${oldHistoryLength} messages from history`);
       console.log(`[DEBUG] Old session ID: ${oldSessionId}`);
       console.log(`[DEBUG] New session ID: ${this.sessionId}`);
-      console.log(`[DEBUG] Token counter reset to zero`);
+      console.log(`[DEBUG] Token counter reset.`);
+      console.log(`[DEBUG] Cancellation flag reset.`);
     }
 
-    // Update the session ID in the config options
-    this.configOptions.sessionId = this.sessionId;
+    // Tool implementations are instance properties, they persist. Session ID is passed during execution.
 
-    // Recreate tools with the new session ID
-    this.tools = {
-      search: {
-        ...searchToolInstance,
-        name: "search",
-        execute: async (params) => {
-          const enhancedParams = {
-            ...params,
-            sessionId: this.sessionId
-          };
-          if (this.debug) {
-            console.log(`[DEBUG] ProbeChat executing searchToolInstance with sessionId: ${this.sessionId}`);
-          }
-          return await searchToolInstance.execute(enhancedParams);
-        }
-      },
-      query: {
-        ...queryToolInstance,
-        name: "query",
-        execute: async (params) => {
-          const enhancedParams = {
-            ...params,
-            sessionId: this.sessionId
-          };
-          if (this.debug) {
-            console.log(`[DEBUG] ProbeChat executing queryToolInstance with sessionId: ${this.sessionId}`);
-          }
-          return await queryToolInstance.execute(enhancedParams);
-        }
-      },
-      extract: {
-        ...extractToolInstance,
-        name: "extract",
-        execute: async (params) => {
-          const enhancedParams = {
-            ...params,
-            sessionId: this.sessionId
-          };
-          if (this.debug) {
-            console.log(`[DEBUG] ProbeChat executing extractToolInstance with sessionId: ${this.sessionId}`);
-          }
-          return await extractToolInstance.execute(enhancedParams);
-        }
-      }
-    };
-
-    if (this.debug) {
-      console.log(`[DEBUG] Recreated tools with new session ID: ${this.sessionId}`);
-    }
-
-    return this.sessionId;
+    return this.sessionId; // Return the newly generated session ID
   }
 
   /**

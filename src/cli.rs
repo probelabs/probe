@@ -39,6 +39,10 @@ pub struct Args {
     #[arg(short = 's', long = "frequency", default_value = "true")]
     pub frequency_search: bool,
 
+    /// Perform exact search without tokenization (case-insensitive)
+    #[arg(short = 'e', long = "exact")]
+    pub exact: bool,
+
     /// Maximum number of results to return
     #[arg(long = "max-results")]
     pub max_results: Option<usize>,
@@ -120,6 +124,17 @@ pub enum Commands {
         /// Use frequency-based search with stemming and stopword removal (enabled by default)
         #[arg(short = 's', long = "frequency", default_value = "true")]
         frequency_search: bool,
+
+        /// Perform exact search without tokenization (case-insensitive)
+        #[arg(short = 'e', long = "exact")]
+        exact: bool,
+
+        /// Programming language to limit search to specific file extensions
+        #[arg(short = 'l', long = "language", value_parser = [
+            "rust", "javascript", "typescript", "python", "go",
+            "c", "cpp", "java", "ruby", "php", "swift", "csharp"
+        ])]
+        language: Option<String>,
 
         /// Maximum number of results to return
         #[arg(long = "max-results")]

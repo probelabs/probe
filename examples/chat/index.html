@@ -1878,12 +1878,16 @@
 					const chunk = decoder.decode(value, { stream: true });
 					aiResponse += chunk;
 
-					// Update the original markdown attribute
-					aiMsgDiv.setAttribute('data-original-markdown', aiResponse);
-
 					try {
+						// Parse the JSON response to extract the "response" field
+						const jsonResponse = JSON.parse(aiResponse);
+						const markdownContent = jsonResponse.response;
+
+						// Update the original markdown attribute with just the markdown content
+						aiMsgDiv.setAttribute('data-original-markdown', markdownContent);
+
 						// Render markdown content
-						aiMsgDiv.innerHTML = renderMarkdown(aiResponse);
+						aiMsgDiv.innerHTML = renderMarkdown(markdownContent);
 
 						// Apply syntax highlighting to code blocks
 						aiMsgDiv.querySelectorAll('pre code').forEach((block) => {
@@ -1896,14 +1900,45 @@
 						messagesDiv.scrollTop = messagesDiv.scrollHeight;
 					} catch (error) {
 						console.error('Error processing response chunk:', error);
-						// If there's an error with markdown parsing, just show the raw text
-						aiMsgDiv.textContent = aiResponse;
+
+						// Check if it's a JSON parsing error or a markdown rendering error
+						if (error instanceof SyntaxError) {
+							// If it's a JSON parsing error, show a message about incomplete response
+							aiMsgDiv.innerHTML = '<p><em>Receiving response...</em></p>';
+						} else {
+							// If it's a markdown rendering error, try to parse JSON but show raw content
+							try {
+								const jsonResponse = JSON.parse(aiResponse);
+								aiMsgDiv.textContent = jsonResponse.response || aiResponse;
+							} catch (jsonError) {
+								// If JSON parsing fails, show the raw text
+								aiMsgDiv.textContent = aiResponse;
+							}
+						}
 					}
 				}
 
 				// Final render after all content is received
 				setTimeout(() => {
 					try {
+						// Parse the complete JSON response
+						const jsonResponse = JSON.parse(aiResponse);
+						const markdownContent = jsonResponse.response;
+
+						// Update token usage if available
+						if (jsonResponse.tokenUsage && window.tokenUsageDisplay) {
+							window.tokenUsageDisplay.update(jsonResponse.tokenUsage);
+						}
+
+						// Make sure the final content is set correctly
+						aiMsgDiv.setAttribute('data-original-markdown', markdownContent);
+						aiMsgDiv.innerHTML = renderMarkdown(markdownContent);
+
+						// Apply syntax highlighting to code blocks
+						aiMsgDiv.querySelectorAll('pre code').forEach((block) => {
+							hljs.highlightElement(block);
+						});
+
 						// Specifically target mermaid diagrams in the current message
 						const finalMermaidDivs = aiMsgDiv.querySelectorAll('.language-mermaid');
 
@@ -1966,6 +2001,7 @@
 						copyButton.addEventListener('click', function () {
 							const markdown = aiMsgDiv.getAttribute('data-original-markdown');
 							if (markdown) {
+								// Copy just the markdown content, not the raw JSON
 								navigator.clipboard.writeText(markdown).then(() => {
 									// Visual feedback
 									copyButton.textContent = 'Copied!';

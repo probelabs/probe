@@ -10,6 +10,8 @@ pub struct SearchOptions<'a> {
     pub reranker: &'a str,
     #[allow(dead_code)]
     pub frequency_search: bool,
+    pub exact: bool,
+    pub language: Option<&'a str>,
     pub max_results: Option<usize>,
     pub max_bytes: Option<usize>,
     pub max_tokens: Option<usize>,

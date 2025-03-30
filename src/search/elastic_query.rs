@@ -739,11 +739,25 @@ impl Parser {
 }
 
 /// Parse the query string into an AST
-pub fn parse_query(input: &str) -> Result<Expr, ParseError> {
+pub fn parse_query(input: &str, exact: bool) -> Result<Expr, ParseError> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: parse_query('{}')", input);
+        println!("DEBUG: parse_query('{}', exact={})", input, exact);
+    }
+
+    // If exact search is enabled, treat the entire query as a single term
+    if exact {
+        if debug_mode {
+            println!("DEBUG: Exact search enabled, treating query as a single term");
+        }
+        return Ok(Expr::Term {
+            keywords: vec![input.to_string()],
+            field: None,
+            required: false,
+            excluded: false,
+            exact: true,
+        });
     }
 
     // Tokenize
@@ -812,12 +826,13 @@ pub fn parse_query(input: &str) -> Result<Expr, ParseError> {
 /// Backward compatibility wrapper for parse_query
 #[allow(dead_code)]
 pub fn parse_query_compat(input: &str) -> Result<Expr, ParseError> {
-    parse_query(input)
+    parse_query(input, false)
 }
 
-#[cfg(test)]
+// Make parse_query_test available for tests in other modules
+#[allow(dead_code)]
 pub fn parse_query_test(input: &str) -> Result<Expr, ParseError> {
-    parse_query(input)
+    parse_query(input, false)
 }
 
 #[cfg(test)]

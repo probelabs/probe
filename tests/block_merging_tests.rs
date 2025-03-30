@@ -179,6 +179,7 @@ fn test_integration_with_search_flow() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "combined",
         frequency_search: false,
         max_results: None,
@@ -190,6 +191,7 @@ fn test_integration_with_search_flow() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run a search that should produce multiple overlapping blocks
@@ -290,6 +292,7 @@ fn test_no_merge_flag() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "combined",
         frequency_search: false,
         max_results: None,
@@ -301,6 +304,7 @@ fn test_no_merge_flag() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run a search that should produce merged blocks
@@ -313,6 +317,7 @@ fn test_no_merge_flag() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
+        language: None,
         reranker: "combined",
         frequency_search: false,
         max_results: None,
@@ -324,6 +329,7 @@ fn test_no_merge_flag() {
         dry_run: false,
         session: None,
         timeout: 30,
+        exact: false,
     };
 
     // Run a search that should not merge blocks

@@ -327,6 +327,7 @@ pub fn find_matching_filenames(
     custom_ignores: &[String],
     allow_tests: bool,
     term_indices: &HashMap<String, usize>,
+    language: Option<&str>,
 ) -> Result<HashMap<PathBuf, HashSet<usize>>> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
@@ -341,8 +342,8 @@ pub fn find_matching_filenames(
         println!("DEBUG: Term indices: {:?}", term_indices);
     }
 
-    // Get the cached file list
-    let file_list = get_file_list(path, allow_tests, custom_ignores)?;
+    // Get the cached file list, with language filtering if specified
+    let file_list = get_file_list_by_language(path, allow_tests, custom_ignores, language)?;
 
     if debug_mode {
         println!(
@@ -426,4 +427,99 @@ pub fn find_matching_filenames(
     }
 
     Ok(matching_files)
+}
+
+/// Get a list of file extensions for a specific programming language
+fn get_language_extensions(language: &str) -> Vec<String> {
+    match language.to_lowercase().as_str() {
+        "rust" => vec![".rs".to_string()],
+        "javascript" => vec![".js".to_string(), ".jsx".to_string(), ".mjs".to_string()],
+        "typescript" => vec![".ts".to_string(), ".tsx".to_string()],
+        "python" => vec![".py".to_string(), ".pyw".to_string(), ".pyi".to_string()],
+        "go" => vec![".go".to_string()],
+        "c" => vec![".c".to_string(), ".h".to_string()],
+        "cpp" => vec![
+            ".cpp".to_string(),
+            ".cc".to_string(),
+            ".cxx".to_string(),
+            ".hpp".to_string(),
+            ".hxx".to_string(),
+            ".h".to_string(),
+        ],
+        "java" => vec![".java".to_string()],
+        "ruby" => vec![".rb".to_string(), ".rake".to_string()],
+        "php" => vec![".php".to_string()],
+        "swift" => vec![".swift".to_string()],
+        "csharp" => vec![".cs".to_string()],
+        _ => vec![], // Return empty vector for unknown languages
+    }
+}
+
+/// Get a list of files in a directory, filtered by language if specified
+pub fn get_file_list_by_language(
+    path: &Path,
+    allow_tests: bool,
+    custom_ignores: &[String],
+    language: Option<&str>,
+) -> Result<Arc<FileList>> {
+    // If no language is specified, use the regular get_file_list function
+    if language.is_none() {
+        return get_file_list(path, allow_tests, custom_ignores);
+    }
+
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let start_time = Instant::now();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Getting file list for path: {:?} with language filter: {:?}",
+            path, language
+        );
+    }
+
+    // Get the full file list first
+    let full_file_list = get_file_list(path, allow_tests, custom_ignores)?;
+
+    // Get the extensions for the specified language
+    let extensions = get_language_extensions(language.unwrap());
+
+    if debug_mode {
+        println!("DEBUG: Filtering files by extensions: {:?}", extensions);
+    }
+
+    // Filter the files by extension
+    let filtered_files = if extensions.is_empty() {
+        // If no extensions are defined for this language, return the full list
+        full_file_list.files.clone()
+    } else {
+        full_file_list
+            .files
+            .iter()
+            .filter(|file| {
+                if let Some(ext) = file.extension() {
+                    let ext_str = format!(".{}", ext.to_string_lossy());
+                    extensions.iter().any(|e| e == &ext_str)
+                } else {
+                    false
+                }
+            })
+            .cloned()
+            .collect()
+    };
+
+    let elapsed = start_time.elapsed();
+    if debug_mode {
+        println!(
+            "DEBUG: Filtered file list by language in {} - Found {} files out of {}",
+            format_duration(elapsed),
+            filtered_files.len(),
+            full_file_list.files.len()
+        );
+    }
+
+    // Create a new FileList with the filtered files
+    Ok(Arc::new(FileList {
+        files: filtered_files,
+        created_at: Instant::now(),
+    }))
 }

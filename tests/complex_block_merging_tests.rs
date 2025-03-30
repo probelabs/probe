@@ -412,6 +412,7 @@ fn third_function() {
             files_only: false,
             custom_ignores: &custom_ignores,
             exclude_filenames: true,
+            language: None,
             reranker: "combined",
             frequency_search: false,
             max_results: None,
@@ -423,6 +424,7 @@ fn third_function() {
             dry_run: false,
             session: None,
             timeout: 30,
+            exact: false,
         };
 
         // Run the search

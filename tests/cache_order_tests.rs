@@ -69,6 +69,7 @@ fn test_cache_after_limit() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: Some(5), // Limit to only 5 results
@@ -80,6 +81,7 @@ fn test_cache_after_limit() {
         dry_run: false,
         session: Some(&session_id), // Use our session ID
         timeout: 30,
+        exact: false,
     };
 
     // Perform the first search with limited results
@@ -99,6 +101,7 @@ fn test_cache_after_limit() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: None, // No limit this time
@@ -110,6 +113,7 @@ fn test_cache_after_limit() {
         dry_run: false,
         session: Some(&session_id), // Same session ID
         timeout: 30,
+        exact: false,
     };
 
     // Perform the second search with no limits
@@ -147,6 +151,7 @@ fn test_cache_updates() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        language: None,
         reranker: "hybrid",
         frequency_search: false,
         max_results: Some(10), // Limit to 10 results
@@ -158,6 +163,7 @@ fn test_cache_updates() {
         dry_run: false,
         session: Some(&session_id), // Use our session ID
         timeout: 30,
+        exact: false,
     };
 
     // Perform the first search with limited results

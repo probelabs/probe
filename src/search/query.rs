@@ -31,6 +31,7 @@ pub struct QueryPlan {
     pub ast: elastic_query::Expr,
     pub term_indices: HashMap<String, usize>,
     pub excluded_terms: HashSet<String>,
+    pub exact: bool,
 }
 
 /// Helper function to format duration in a human-readable way
@@ -44,10 +45,7 @@ fn format_duration(duration: std::time::Duration) -> String {
 
 /// Create a QueryPlan from a raw query string. This fully parses the query into an AST,
 /// then extracts all terms (including excluded), and prepares a term-index map.
-pub fn create_query_plan(
-    query: &str,
-    _exact: bool,
-) -> Result<QueryPlan, elastic_query::ParseError> {
+pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_query::ParseError> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 
@@ -59,12 +57,20 @@ pub fn create_query_plan(
     let parsing_start = Instant::now();
 
     if debug_mode {
-        println!("DEBUG: Starting AST parsing for query: '{}'", query);
+        println!(
+            "DEBUG: Starting AST parsing for query: '{}', exact={}",
+            query, exact
+        );
     }
 
     // Parse the query into an AST with processed terms
     // We use standard Elasticsearch behavior (AND for implicit combinations)
-    let ast = elastic_query::parse_query(query)?;
+    let mut ast = elastic_query::parse_query(query, exact)?;
+
+    // If exact search is enabled, update the AST to mark all terms as exact
+    if exact {
+        update_ast_exact(&mut ast);
+    }
 
     let parsing_duration = parsing_start.elapsed();
 
@@ -131,7 +137,35 @@ pub fn create_query_plan(
         ast,
         term_indices,
         excluded_terms,
+        exact,
     })
+}
+
+/// Recursively update the AST to mark all terms as exact
+fn update_ast_exact(expr: &mut elastic_query::Expr) {
+    match expr {
+        elastic_query::Expr::Term { exact, .. } => {
+            // Set exact to true for all terms
+            *exact = true;
+        }
+        elastic_query::Expr::And(left, right) => {
+            update_ast_exact(left);
+            update_ast_exact(right);
+        }
+        elastic_query::Expr::Or(left, right) => {
+            update_ast_exact(left);
+            update_ast_exact(right);
+        }
+    }
+}
+
+/// Helper function to check if the AST represents an exact search
+fn is_exact_search(expr: &elastic_query::Expr) -> bool {
+    match expr {
+        elastic_query::Expr::Term { exact, .. } => *exact,
+        elastic_query::Expr::And(left, right) => is_exact_search(left) && is_exact_search(right),
+        elastic_query::Expr::Or(left, right) => is_exact_search(left) && is_exact_search(right),
+    }
 }
 
 /// Recursively collect all terms from the AST, storing them in `all_terms`.
@@ -438,26 +472,38 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 
                             results.push((pattern, HashSet::from([idx])));
 
-                            // Generate patterns for each token of the term to match AST tokenization
-                            let tokens = crate::search::tokenization::tokenize_and_stem(keyword);
+                            // Only tokenize if not exact
+                            if !*exact {
+                                // Generate patterns for each token of the term to match AST tokenization
+                                let tokens =
+                                    crate::search::tokenization::tokenize_and_stem(keyword);
 
-                            if debug_mode && tokens.len() > 1 {
-                                println!("DEBUG: Term '{}' tokenized into: {:?}", keyword, tokens);
-                            }
-
-                            // Generate a pattern for each token with the same term index
-                            for token in tokens {
-                                let token_pattern = regex_escape(&token);
-                                let pattern = format!("({})", token_pattern);
-
-                                if debug_mode {
+                                if debug_mode && tokens.len() > 1 {
                                     println!(
-                                        "DEBUG: Created pattern for token '{}' from term '{}': '{}'",
-                                        token, keyword, pattern
+                                        "DEBUG: Term '{}' tokenized into: {:?}",
+                                        keyword, tokens
                                     );
                                 }
 
-                                results.push((pattern, HashSet::from([idx])));
+                                // Generate a pattern for each token with the same term index
+                                for token in tokens {
+                                    let token_pattern = regex_escape(&token);
+                                    let pattern = format!("({})", token_pattern);
+
+                                    if debug_mode {
+                                        println!(
+                                            "DEBUG: Created pattern for token '{}' from term '{}': '{}'",
+                                            token, keyword, pattern
+                                        );
+                                    }
+
+                                    results.push((pattern, HashSet::from([idx])));
+                                }
+                            } else if debug_mode {
+                                println!(
+                                    "DEBUG: Skipping tokenization for exact term '{}'",
+                                    keyword
+                                );
                             }
                         }
                     }
@@ -537,7 +583,11 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
         // Process all terms from the term_indices map
         for (keyword, &idx) in &plan.term_indices {
             // Process compound words - either camelCase or those in the vocabulary
-            if !plan.excluded_terms.contains(keyword) && keyword.len() > 3 {
+            // Skip compound word processing if exact search is enabled
+            if !plan.excluded_terms.contains(keyword)
+                && keyword.len() > 3
+                && !is_exact_search(&plan.ast)
+            {
                 // Check if it's a camelCase word or a known compound word from vocabulary
                 let camel_parts = crate::search::tokenization::split_camel_case(keyword);
                 let compound_parts = if camel_parts.len() <= 1 {
@@ -571,6 +621,11 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                         }
                     }
                 }
+            } else if debug_mode && is_exact_search(&plan.ast) {
+                println!(
+                    "DEBUG: Skipping compound word processing for exact search term: '{}'",
+                    keyword
+                );
             }
         }
 
