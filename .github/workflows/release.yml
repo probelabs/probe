@@ -94,7 +94,8 @@ jobs:
         run: |
           if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
             # For Windows, use static linking of the C++ runtime
-            RUSTFLAGS="-C target-feature=+crt-static -C link-args=/DEBUG:NONE -C link-args=/NOLOGO" cargo build --release --target ${{ matrix.target }}
+            export RUSTFLAGS="-C target-feature=+crt-static -C link-args=/DEBUG:NONE /NOLOGO"
+            cargo build --release --target ${{ matrix.target }}
           else
             # For other platforms, use the default build
             cargo build --release --target ${{ matrix.target }}
