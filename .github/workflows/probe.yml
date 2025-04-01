@@ -1,0 +1,200 @@
+name: Probe chat Github Action
+
+on:
+  workflow_call:
+    inputs:
+      command_prefix:
+        description: "The prefix required on comments to trigger the AI (e.g., /probe-chat)"
+        default: "/probe"
+        required: true
+        type: string
+      default_probe_chat_command:
+        description: "The default probe-chat command if PROBE_CHAT_COMMAND secret is not set"
+        required: false
+        default: "npx -y @buger/probe-chat@latest"
+        type: string
+      # Note: The actual probe-chat command to run will prioritize the PROBE_CHAT_COMMAND secret
+      # passed by the caller via "secrets: inherit", then fall back to inputs.default_probe_chat_command.
+    secrets:
+      # We expect the caller to pass secrets using "secrets: inherit"
+      # Define expected secrets for clarity, though 'inherit' covers all.
+      GITHUB_TOKEN: # Required for gh CLI and posting comments
+        required: true
+      PROBE_CHAT_COMMAND: # Optional: If set by caller, overrides default_probe_chat_command
+        required: false
+      # Implicitly expect API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) via inherit
+
+# Permissions required by the jobs within THIS reusable workflow
+permissions:
+  pull-requests: write # Need read for context/diff, write for posting comments
+  issues: write # Need read for context, write for posting comments
+  contents: read # Potentially needed by gh or probe-chat
+
+jobs:
+  # Job 1: Check trigger, process context, run AI
+  process_comment:
+    # Only run if the comment starts with the provided prefix
+    # Accessing github.event context is possible within a reusable workflow called by a trigger
+    if: startsWith(github.event.comment.body, inputs.command_prefix)
+    runs-on: ubuntu-latest
+    outputs:
+      response_body: ${{ steps.read_response.outputs.response }}
+      issue_number: ${{ github.event.issue.number }}
+      should_post: ${{ steps.probe.outcome == 'success' }} # Signal if posting should happen
+
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install jq (if needed) and Verify gh
+        run: |
+          # jq is usually pre-installed on ubuntu-latest, but ensure it is present
+          sudo apt-get update && sudo apt-get install -y jq --no-install-recommends
+          # Verify gh is available
+          gh --version
+
+      - name: Determine Context and Format Input
+        id: format
+        env:
+          SHELLOPTS: extglob
+          # Use the GITHUB_TOKEN secret passed from the caller
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMAND_PREFIX: ${{ inputs.command_prefix }} # Make prefix available
+        run: |
+          ISSUE_OR_PR_NUMBER=${{ github.event.issue.number }}
+          RAW_COMMENT_BODY="${{ github.event.comment.body }}"
+
+          # Extract user request (remove prefix, trim)
+          USER_REQUEST_BODY=$(echo "$RAW_COMMENT_BODY" | sed "s|^$COMMAND_PREFIX *||" | xargs)
+          echo "User request extracted."
+
+          # Determine context type
+          CONTEXT_TYPE="issue"
+          if [ -n "${{ github.event.issue.pull_request }}" ]; then
+            CONTEXT_TYPE="pr"
+          fi
+          echo "Context type: $CONTEXT_TYPE"
+
+          # --- Fetch Common Data: Comments ---
+          echo "Fetching comments for $CONTEXT_TYPE #$ISSUE_OR_PR_NUMBER..."
+          COMMENTS_JSON=$(gh api -H "Accept: application/vnd.github+json" /repos/${{ github.repository }}/issues/$ISSUE_OR_PR_NUMBER/comments --jq '.')
+          COMMENTS_XML=""
+          echo "$COMMENTS_JSON" | jq -c '.[] | {login: .user.login, created_at: .created_at, body: .body}' | while IFS= read -r comment_json; do
+            local login=$(echo "$comment_json" | jq -r .login)
+            local created_at=$(echo "$comment_json" | jq -r .created_at)
+            local body=$(echo "$comment_json" | jq -r .body)
+            COMMENTS_XML+=$(cat <<EOF
+                  <comment><author>$(echo "$login")</author><timestamp>$created_at</timestamp><content>$body</content></comment>
+          EOF
+          )
+          done
+          echo "Comments fetched."
+
+          # --- Fetch Context-Specific Data & Build XML ---
+          CONTEXT_DETAILS_XML=""
+          DIFF_XML=""
+          PROMPT_INSTRUCTION=""
+
+          if [[ "$CONTEXT_TYPE" == "pr" ]]; then
+            echo "Fetching PR details and diff..."
+            PR_DATA=$(gh pr view $ISSUE_OR_PR_NUMBER --json title,body)
+            PR_TITLE=$(echo "$PR_DATA" | jq -r .title)
+            PR_BODY=$(echo "$PR_DATA" | jq -r .body)
+            # Use full repo ref for robustness
+            PR_DIFF=$(gh pr diff $ISSUE_OR_PR_NUMBER --repo ${{ github.repository }} || echo "<!-- Error fetching diff -->")
+
+            CONTEXT_DETAILS_XML="<details><title>$PR_TITLE</title><body>$PR_BODY</body></details>"
+            DIFF_XML="<diff>$PR_DIFF</diff>" 
+            PROMPT_INSTRUCTION="Based *only* on the information provided within the <github_context> XML structure (including PR details, diff, and comments), please provide a response to the <user_request>."
+            echo "PR details and diff fetched."
+
+          elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
+            echo "Fetching Issue details..."
+            ISSUE_DATA=$(gh issue view $ISSUE_OR_PR_NUMBER --json title,body)
+            ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title)
+            ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body)
+
+            CONTEXT_DETAILS_XML="<details><title>$ISSUE_TITLE</title><body>$ISSUE_BODY</body></details>"
+            PROMPT_INSTRUCTION="Based *only* on the information provided within the <github_context> XML structure (including issue details and comments), please provide a response to the <user_request>."
+            echo "Issue details fetched."
+          fi
+
+          # --- Assemble Final Prompt ---
+          read -r -d '' FORMATTED_PROMPT <<EOF || true
+          <github_context type="$CONTEXT_TYPE" number="$ISSUE_OR_PR_NUMBER">
+          $CONTEXT_DETAILS_XML
+          $DIFF_XML
+            <comments>
+          $COMMENTS_XML
+            </comments>
+            <user_request>
+          $USER_REQUEST_BODY
+            </user_request>
+          </github_context>
+
+          $PROMPT_INSTRUCTION
+          EOF
+
+          echo "Final prompt assembled."
+          echo "formatted_prompt<<EOF" >> $GITHUB_OUTPUT
+          echo "$FORMATTED_PROMPT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Determine probe-chat Command
+        id: determine_command
+        # Use PROBE_CHAT_COMMAND secret if passed by caller and non-empty, else use the default input
+        run: |
+          CMD="${{ secrets.PROBE_CHAT_COMMAND }}"
+          if [[ -z "$CMD" ]]; then
+            CMD="${{ inputs.default_probe_chat_command }}"
+          fi
+          echo "Final command: $CMD"
+          echo "command=$CMD" >> $GITHUB_OUTPUT
+
+      - name: Run probe-chat
+        id: probe
+        # Use all environment variables passed from caller (secrets + vars)
+        env:
+          # Ensure API keys etc passed via `secrets: inherit` are available
+          # GITHUB_TOKEN is explicitly passed to gh above, no need to re-list here usually
+          pass:
+        run: |
+          PROMPT='${{ steps.format.outputs.formatted_prompt }}'
+          COMMAND_TO_RUN='${{ steps.determine_command.outputs.command }}'
+
+          echo "Running probe-chat..."
+          # Log prompt for debugging? Be careful with sensitive data.
+          # echo "--- Start AI Prompt ---"; echo "$PROMPT"; echo "--- End AI Prompt ---"
+
+          echo "$PROMPT" | $COMMAND_TO_RUN > response.txt || echo "Error: probe-chat command failed." > response.txt
+          touch response.txt # Ensure file exists
+          echo "probe-chat finished."
+
+      - name: Read Response
+        id: read_response
+        run: |
+          RESPONSE=$(cat response.txt)
+          if [[ -z "$RESPONSE" ]]; then
+            RESPONSE="🤖 Processing failed or no response generated."
+          fi
+          echo "Response captured."
+          echo "response<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESPONSE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  # Job 2: Post the response back to GitHub
+  post_response:
+    # Run only if the first job should have posted (i.e., it ran and succeeded)
+    if: needs.process_comment.outputs.should_post == 'true'
+    runs-on: ubuntu-latest
+    needs: [process_comment] # Depends on the first job
+    # Permissions are defined at the workflow level, no need to repeat here
+    steps:
+      - name: Post Response Comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }} # Use the token passed from the caller
+          issue-number: ${{ needs.process_comment.outputs.issue_number }}
+          body: ${{ needs.process_comment.outputs.response_body }}
