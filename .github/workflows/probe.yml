@@ -150,18 +150,20 @@ jobs:
 
       - name: Run probe-chat
         id: probe
-        # Use all environment variables passed from caller (secrets + vars)
-        env:
-          # Ensure API keys etc passed via `secrets: inherit` are available
-          # GITHUB_TOKEN is explicitly passed to gh above, no need to re-list here usually
-          pass:
         run: |
           PROMPT='${{ steps.format.outputs.formatted_prompt }}'
           COMMAND_TO_RUN='${{ steps.determine_command.outputs.command }}'
 
           echo "Running probe-chat..."
-          # Log prompt for debugging? Be careful with sensitive data.
-          # echo "--- Start AI Prompt ---"; echo "$PROMPT"; echo "--- End AI Prompt ---"
+          echo "--- Start AI Prompt ---"
+          echo "$PROMPT"
+          echo "--- End AI Prompt ---"
+          echo "Command to run: $COMMAND_TO_RUN"
+          
+          echo "$PROMPT" | $COMMAND_TO_RUN > response.txt 2> error.txt || (
+            echo "Error: probe-chat command failed. See error details below:" > response.txt
+            cat error.txt >> response.txt
+          )
 
           echo "$PROMPT" | $COMMAND_TO_RUN > response.txt || echo "Error: probe-chat command failed." > response.txt
           touch response.txt # Ensure file exists
