@@ -3,6 +3,11 @@ name: AI Comment Handler
 on:
   issue_comment:
     types: [created]
+    
+# Define permissions needed for the workflow
+permissions:
+  issues: write
+  pull-requests: write
 
 jobs:
   trigger_probe_chat:
