@@ -15,14 +15,6 @@ on:
         type: string
       # Note: The actual probe-chat command to run will prioritize the PROBE_CHAT_COMMAND secret
       # passed by the caller via "secrets: inherit", then fall back to inputs.default_probe_chat_command.
-    secrets:
-      # We expect the caller to pass secrets using "secrets: inherit"
-      # Define expected secrets for clarity, though 'inherit' covers all.
-      GITHUB_TOKEN: # Required for gh CLI and posting comments
-        required: true
-      PROBE_CHAT_COMMAND: # Optional: If set by caller, overrides default_probe_chat_command
-        required: false
-      # Implicitly expect API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) via inherit
 
 # Permissions required by the jobs within THIS reusable workflow
 permissions:
