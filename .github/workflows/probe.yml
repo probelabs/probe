@@ -1,11 +1,11 @@
-# <gh> tag removed for standard YAML formatting
+# <gh>
 name: Probe chat Github Action
 
 on:
   workflow_call:
     inputs:
       command_prefix:
-        description: "The prefix required on comments to trigger the AI (e.g., /probe)"
+        description: "The prefix required on comments to trigger the AI (e.g., /probe-chat)"
         default: "/probe"
         required: true
         type: string
@@ -20,8 +20,8 @@ on:
 # Permissions required by the jobs within THIS reusable workflow
 permissions:
   pull-requests: write # Need read for context/diff, write for posting comments
-  issues: write        # Need read for context, write for posting comments
-  contents: read       # Potentially needed by gh (diff) or probe-chat
+  issues: write # Need read for context, write for posting comments
+  contents: read # Potentially needed by gh or probe-chat
 
 jobs:
   # Job 1: Check trigger, process context, run AI
@@ -32,15 +32,12 @@ jobs:
     outputs:
       response_body: ${{ steps.read_response.outputs.response }}
       issue_number: ${{ github.event.issue.number }}
-      # No 'should_post' output needed, we'll use job result status
+      # This will now correctly reflect if the probe step succeeded or failed
+      should_post: ${{ steps.probe.outcome == 'success' }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        # Fetch depth 0 if diffs across the whole history might be needed by probe-chat,
-        # otherwise default is fine. Let's assume default is okay for now.
-        # with:
-        #   fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -50,15 +47,8 @@ jobs:
       - name: Install jq (if needed) and Verify gh
         run: |
           # jq is usually pre-installed on ubuntu-latest, but ensure it is present
-          # Using --no-install-recommends to speed up slightly
-          if ! command -v jq &> /dev/null; then
-            echo "jq not found, installing..."
-            sudo apt-get update && sudo apt-get install -y jq --no-install-recommends
-          else
-            echo "jq is already installed."
-          fi
+          sudo apt-get update && sudo apt-get install -y jq --no-install-recommends
           # Verify gh is available
-          echo "Verifying gh CLI..."
           gh --version
 
       - name: Determine Context and Format Input
@@ -68,65 +58,45 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMAND_PREFIX: ${{ inputs.command_prefix }} # Make prefix available
         run: |
-          # Exit script immediately if a command exits with a non-zero status.
-          # Treat unset variables as an error when substituting.
-          # Pipeline return status is the value of the last command to exit with a non-zero status,
-          # or zero if no command exited with a non-zero status
-          set -euo pipefail
-
-          # Function to escape XML special characters
-          escape_xml() {
-            sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g'
-          }
+          # Using SHELLOPTS=extglob in env is possible but less common; setting inside script is clearer
+          shopt -s extglob
+          set -e # Exit on error
 
           ISSUE_OR_PR_NUMBER=${{ github.event.issue.number }}
           RAW_COMMENT_BODY="${{ github.event.comment.body }}"
-          REPO="${{ github.repository }}"
 
-          echo "Processing comment on $REPO#$ISSUE_OR_PR_NUMBER"
-
-          # Extract user request (remove prefix, trim leading/trailing whitespace)
-          # Using parameter expansion for potentially simpler/safer handling than sed+xargs
-          TEMP_BODY="${RAW_COMMENT_BODY#${COMMAND_PREFIX}}" # Remove prefix from start
-          USER_REQUEST_BODY="$(echo "${TEMP_BODY}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" # Trim whitespace
-          if [[ -z "$USER_REQUEST_BODY" ]]; then
-            echo "::error::User request body is empty after removing prefix."
-            exit 1
-          fi
-          echo "User request extracted: '${USER_REQUEST_BODY}'"
+          # Extract user request (remove prefix, trim whitespace)
+          # Using parameter expansion for robustness and avoiding external commands like sed/xargs if simple
+          USER_REQUEST_BODY="${RAW_COMMENT_BODY#${COMMAND_PREFIX}}" # Remove prefix
+          USER_REQUEST_BODY="${USER_REQUEST_BODY##*( )}" # Trim leading spaces (requires extglob)
+          USER_REQUEST_BODY="${USER_REQUEST_BODY%%*( )}" # Trim trailing spaces (requires extglob)
+          echo "User request extracted."
 
           # Determine context type
           CONTEXT_TYPE="issue"
-          # Check if the issue object has a pull_request key (means it's a PR)
-          if gh api "/repos/$REPO/issues/$ISSUE_OR_PR_NUMBER" --jq '.pull_request' | grep -q url; then
+          # Check if the issue context has pull_request data associated
+          if gh api "repos/${{ github.repository }}/issues/$ISSUE_OR_PR_NUMBER" --jq '.pull_request' | grep -q 'url'; then
              CONTEXT_TYPE="pr"
           fi
-          echo "Context type determined: $CONTEXT_TYPE"
+          echo "Context type: $CONTEXT_TYPE"
 
           # --- Fetch Common Data: Comments ---
           echo "Fetching comments for $CONTEXT_TYPE #$ISSUE_OR_PR_NUMBER..."
-          # Fetch comments, handle potential errors during fetch
-          COMMENTS_JSON=$(gh api -H "Accept: application/vnd.github+json" "/repos/$REPO/issues/$ISSUE_OR_PR_NUMBER/comments" --jq '.' || echo "[]") # Default to empty array on error
-          if ! echo "$COMMENTS_JSON" | jq empty; then
-             echo "::warning::Failed to parse comments JSON or fetch failed. Proceeding without comments."
-             COMMENTS_JSON="[]"
-          fi
-
+          # Fetch comments, handling potential errors during fetch
+          COMMENTS_JSON=$(gh api -H "Accept: application/vnd.github+json" /repos/${{ github.repository }}/issues/$ISSUE_OR_PR_NUMBER/comments --jq '.' || echo "[]") # Default to empty array on error
           COMMENTS_XML=""
-          # Process comments using jq for safer parsing and escaping
+          # NOTE: Parsing arbitrary comment bodies into XML can be fragile. Consider base64 encoding or CDATA if issues arise.
           echo "$COMMENTS_JSON" | jq -c '.[] | {login: .user.login, created_at: .created_at, body: .body}' | while IFS= read -r comment_json; do
-            # Use JQ to extract and ensure values are treated as strings
-            login=$(echo "$comment_json" | jq -r .login | escape_xml)
-            created_at=$(echo "$comment_json" | jq -r .created_at) # Timestamp likely doesn't need escaping
-            body=$(echo "$comment_json" | jq -r .body | escape_xml)
-
-            # Append safely escaped data to XML string
+            export login=$(echo "$comment_json" | jq -r .login)
+            export created_at=$(echo "$comment_json" | jq -r .created_at)
+            # Basic XML escaping for body to handle simple cases
+            export body=$(echo "$comment_json" | jq -r .body | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g;')
             COMMENTS_XML+=$(cat <<EOF
-                  <comment><author>$login</author><timestamp>$created_at</timestamp><content>$body</content></comment>
+                  <comment><author>$(echo "$login" | sed 's/&/\&/g; s/</\</g; s/>/\>/g')</author><timestamp>$created_at</timestamp><content>$body</content></comment>
           EOF
-            )
+          )
           done
-          echo "Comments processed."
+          echo "Comments fetched."
 
           # --- Fetch Context-Specific Data & Build XML ---
           CONTEXT_DETAILS_XML=""
@@ -135,137 +105,145 @@ jobs:
 
           if [[ "$CONTEXT_TYPE" == "pr" ]]; then
             echo "Fetching PR details and diff..."
-            # Fetch PR data in one go
-            PR_DATA_JSON=$(gh pr view $ISSUE_OR_PR_NUMBER --json title,body --repo "$REPO")
-            PR_TITLE=$(echo "$PR_DATA_JSON" | jq -r .title | escape_xml)
-            PR_BODY=$(echo "$PR_DATA_JSON" | jq -r .body | escape_xml)
-
-            # Fetch PR diff, handle potential errors
-            PR_DIFF_RAW=$(gh pr diff $ISSUE_OR_PR_NUMBER --repo "$REPO" || echo "<!-- Error fetching diff -->")
-            PR_DIFF=$(echo "$PR_DIFF_RAW" | escape_xml) # Escape the diff content
+            # Fetch PR data, handle potential errors
+            PR_DATA=$(gh pr view $ISSUE_OR_PR_NUMBER --json title,body --repo ${{ github.repository }} || echo '{"title": "Error fetching title", "body": "Error fetching body"}')
+            # Basic XML escaping for title and body
+            PR_TITLE=$(echo "$PR_DATA" | jq -r .title | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
+            PR_BODY=$(echo "$PR_DATA" | jq -r .body | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
+            # Fetch diff, handle potential errors and escape
+            PR_DIFF=$(gh pr diff $ISSUE_OR_PR_NUMBER --repo ${{ github.repository }} 2>/dev/null | sed 's/&/\&/g; s/</\</g; s/>/\>/g' || echo "<!-- Error fetching diff -->")
 
             CONTEXT_DETAILS_XML="<details><title>$PR_TITLE</title><body>$PR_BODY</body></details>"
-            DIFF_XML="<diff>$PR_DIFF</diff>"
+            # Wrap diff in CDATA for better handling of special characters
+            DIFF_XML="<diff><![CDATA[\n$(echo "$PR_DIFF" | sed 's/]]>/]]>/g')\n]]></diff>" # Escape CDATA terminators if present in diff
             PROMPT_INSTRUCTION="Based *only* on the information provided within the <github_context> XML structure (including PR details, diff, and comments), please provide a response to the <user_request>."
             echo "PR details and diff fetched."
 
           elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
             echo "Fetching Issue details..."
-            # Fetch Issue data in one go
-            ISSUE_DATA_JSON=$(gh issue view $ISSUE_OR_PR_NUMBER --json title,body --repo "$REPO")
-            ISSUE_TITLE=$(echo "$ISSUE_DATA_JSON" | jq -r .title | escape_xml)
-            ISSUE_BODY=$(echo "$ISSUE_DATA_JSON" | jq -r .body | escape_xml)
+             # Fetch Issue data, handle potential errors
+            ISSUE_DATA=$(gh issue view $ISSUE_OR_PR_NUMBER --json title,body --repo ${{ github.repository }} || echo '{"title": "Error fetching title", "body": "Error fetching body"}')
+             # Basic XML escaping for title and body
+            ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
+            ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
 
             CONTEXT_DETAILS_XML="<details><title>$ISSUE_TITLE</title><body>$ISSUE_BODY</body></details>"
             PROMPT_INSTRUCTION="Based *only* on the information provided within the <github_context> XML structure (including issue details and comments), please provide a response to the <user_request>."
             echo "Issue details fetched."
           fi
 
-          # --- Escape User Request ---
-          ESCAPED_USER_REQUEST_BODY=$(echo "$USER_REQUEST_BODY" | escape_xml)
-
           # --- Assemble Final Prompt ---
-          # Using printf for potentially safer formatting than heredoc with variables
-          FORMATTED_PROMPT=$(printf '%s\n' \
-            "<github_context type=\"$CONTEXT_TYPE\" number=\"$ISSUE_OR_PR_NUMBER\">" \
-            "$CONTEXT_DETAILS_XML" \
-            "$DIFF_XML" \
-            "  <comments>" \
-            "$COMMENTS_XML" \
-            "  </comments>" \
-            "  <user_request>" \
-            "$ESCAPED_USER_REQUEST_BODY" \
-            "  </user_request>" \
-            "</github_context>" \
-            "" \
-            "$PROMPT_INSTRUCTION")
+          # Ensure user request is also escaped
+          USER_REQUEST_ESCAPED=$(echo "$USER_REQUEST_BODY" | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
+          read -r -d '' FORMATTED_PROMPT <<EOF || true
+          <github_context type="$CONTEXT_TYPE" number="$ISSUE_OR_PR_NUMBER">
+          $CONTEXT_DETAILS_XML
+          $DIFF_XML
+            <comments>
+          $COMMENTS_XML
+            </comments>
+            <user_request>
+          $USER_REQUEST_ESCAPED
+            </user_request>
+          </github_context>
+
+          $PROMPT_INSTRUCTION
+          EOF
 
           echo "Final prompt assembled."
-          # Save the potentially large prompt to a file instead of directly using it in GITHUB_OUTPUT
-          # to avoid issues with size limits and special characters in the output mechanism itself.
-          echo "$FORMATTED_PROMPT" > prompt.txt
-          echo "Prompt saved to prompt.txt"
-          # Set a flag indicating the prompt file path
-          echo "prompt_file=prompt.txt" >> $GITHUB_OUTPUT
+          # Output the potentially large prompt securely
+          echo "formatted_prompt<<EOF_PROMPT_MARKER" >> $GITHUB_OUTPUT
+          echo "$FORMATTED_PROMPT" >> $GITHUB_OUTPUT
+          echo "EOF_PROMPT_MARKER" >> $GITHUB_OUTPUT
+
 
       - name: Determine probe-chat Command
         id: determine_command
+        # Use PROBE_CHAT_COMMAND secret if passed by caller and non-empty, else use the default input
         run: |
-          # Prioritize secret if non-empty, otherwise use input default
           CMD="${{ secrets.PROBE_CHAT_COMMAND }}"
           if [[ -z "$CMD" ]]; then
-            echo "Using default probe-chat command from input."
             CMD="${{ inputs.default_probe_chat_command }}"
+            echo "Using default probe-chat command."
           else
             echo "Using probe-chat command from PROBE_CHAT_COMMAND secret."
           fi
-          echo "Final command determined: $CMD"
+          echo "Final command: $CMD"
           echo "command=$CMD" >> $GITHUB_OUTPUT
 
       - name: Run probe-chat
         id: probe
-        # This step will now FAIL if the probe-chat command exits with non-zero status
+        # Use bash for pipefail and better error handling
+        shell: bash
         run: |
-          set -eo pipefail # Ensure failure bubbles up
+          # Exit script if any command fails, and ensure pipeline failures are caught
+          set -e
+          set -o pipefail
 
-          PROMPT_FILE="${{ steps.format.outputs.prompt_file }}"
-          COMMAND_TO_RUN="${{ steps.determine_command.outputs.command }}"
+          PROMPT='${{ steps.format.outputs.formatted_prompt }}'
+          COMMAND_TO_RUN='${{ steps.determine_command.outputs.command }}'
+          RESPONSE_FILE="response.txt"
+          ERROR_LOG="error.log"
 
           echo "Running probe-chat..."
-          echo "Command: $COMMAND_TO_RUN"
-          echo "Prompt content:"
-          echo "--- Start AI Prompt ---"
-          cat "$PROMPT_FILE" # Display the prompt from the file
-          echo "--- End AI Prompt ---"
+          echo "--- Start AI Prompt (first 500 chars) ---"
+          echo "${PROMPT:0:500}..." # Log only beginning of potentially large prompt
+          echo "--- End AI Prompt Snippet ---"
+          echo "Command to run: $COMMAND_TO_RUN"
 
-          # Execute the command, piping the prompt file content as stdin
-          # Redirect stdout to response.txt
-          # Stderr will go to the GitHub Actions logs if the command fails
-          cat "$PROMPT_FILE" | $COMMAND_TO_RUN > response.txt
+          # Execute the command, capturing stdout and stderr
+          # The command's exit code determines success/failure due to set -e and pipefail
+          echo "$PROMPT" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> "$ERROR_LOG"
 
-          # Check if response.txt was created and is non-empty AFTER successful command execution
-          if [[ ! -s response.txt ]]; then
-             echo "::warning:: probe-chat command succeeded but produced no output."
-             # Decide if you want to post an empty message or a default one
-             echo "🤖 Probe-chat ran successfully but generated no response." > response.txt
-          fi
+          # If we reach here, the command succeeded (exit code 0)
+          echo "probe-chat command finished successfully."
 
-          echo "probe-chat finished successfully."
-          # Save the response file path to output for the next step
-          echo "response_file=response.txt" >> $GITHUB_OUTPUT
-
-      - name: Read Response
-        id: read_response
+        # Define a separate step that runs *only* if the 'probe' step fails
+        # This step will prepare the error message for the comment
+      - name: Handle probe-chat Failure
+        if: failure() && steps.probe.outcome == 'failure' # Run only if the previous step failed
         run: |
-          # Read the response from the file generated by the previous step
-          RESPONSE_FILE="${{ steps.probe.outputs.response_file }}"
-          RESPONSE=$(cat "$RESPONSE_FILE")
+          echo "Error: probe-chat command failed." > response.txt
+          echo "Stderr output:" >> response.txt
+          echo '```' >> response.txt
+          cat error.log >> response.txt || echo "(no stderr output captured)" >> response.txt
+          echo '```' >> response.txt
+          echo "Check the Action logs for more details." >> response.txt
+          echo "Error details logged to response.txt"
 
-          # No need for empty check here if the previous step handles it,
-          # but keep it as a safeguard maybe.
-          if [[ -z "$RESPONSE" ]]; then
-            RESPONSE="🤖 Processing completed, but response is unexpectedly empty."
+      - name: Read Response or Error
+        id: read_response
+        # This step runs regardless of probe success/failure now
+        # It reads response.txt which contains either the AI output or the error message
+        run: |
+          RESPONSE=$(cat response.txt)
+          # Check if RESPONSE is empty or contains only whitespace
+          if [[ -z "${RESPONSE// }" ]]; then
+            RESPONSE="🤖 Processing failed or no response generated. Check Action logs."
           fi
-          echo "Response captured from $RESPONSE_FILE."
-
-          # Use GITHUB_OUTPUT for the response body
-          echo "response<<EOF" >> $GITHUB_OUTPUT
+          echo "Response content captured."
+          # Use EOF markers for multiline output
+          echo "response<<EOF_RESPONSE_MARKER" >> $GITHUB_OUTPUT
           echo "$RESPONSE" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "EOF_RESPONSE_MARKER" >> $GITHUB_OUTPUT
 
 
   # Job 2: Post the response back to GitHub
   post_response:
-    # Run only if the process_comment job succeeded
-    if: needs.process_comment.result == 'success'
+    # Run only if the triggering comment was valid AND the probe command succeeded
+    # Note: If probe failed, process_comment still "succeeds" overall, but `should_post` is false.
+    # We want to post the error message generated by 'Handle probe-chat Failure' step.
+    # Therefore, we just check if the process_comment job finished (regardless of outcome)
+    # and rely on the response_body containing either success or error message.
+    if: needs.process_comment.result != 'skipped' # Post if the process_comment job ran (wasn't skipped by its own 'if')
     runs-on: ubuntu-latest
-    needs: [process_comment] # Depends on the first job's success
+    needs: [process_comment] # Depends on the first job
     # Permissions are defined at the workflow level
     steps:
       - name: Post Response Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }} # Use the token passed from the caller
-          repository: ${{ github.repository }} # Explicitly specify repository
+          repository: ${{ github.repository }} # Explicitly provide repo context
           issue-number: ${{ needs.process_comment.outputs.issue_number }}
           body: ${{ needs.process_comment.outputs.response_body }}
