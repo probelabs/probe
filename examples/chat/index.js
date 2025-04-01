@@ -1,4 +1,18 @@
 #!/usr/bin/env node
+
+// Check for non-interactive mode flag early, before any imports
+// This ensures the environment variable is set before any module code runs
+if (process.argv.includes('-m') || process.argv.includes('--message')) {
+  process.env.PROBE_NON_INTERACTIVE = '1';
+}
+
+// Check if stdin is connected to a pipe (not a TTY)
+// This allows for usage like: echo "query" | probe-chat
+if (!process.stdin.isTTY) {
+  process.env.PROBE_NON_INTERACTIVE = '1';
+  process.env.PROBE_STDIN_PIPED = '1';
+}
+
 import 'dotenv/config';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
@@ -26,25 +40,8 @@ export function main() {
     const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
     version = packageJson.version || version;
   } catch (error) {
-    console.warn(`Warning: Could not read version from package.json: ${error.message}`);
-  }
-
-  // Parse and validate allowed folders from environment variable
-  const allowedFolders = process.env.ALLOWED_FOLDERS
-    ? process.env.ALLOWED_FOLDERS.split(',').map(folder => folder.trim()).filter(Boolean)
-    : [];
-
-  console.log('Configured search folders:');
-  for (const folder of allowedFolders) {
-    const exists = existsSync(folder);
-    console.log(`- ${folder} ${exists ? '✓' : '✗ (not found)'}`);
-    if (!exists) {
-      console.warn(`Warning: Folder "${folder}" does not exist or is not accessible`);
-    }
-  }
-
-  if (allowedFolders.length === 0) {
-    console.warn('No folders configured. Set ALLOWED_FOLDERS in .env file or provide a path argument.');
+    // Non-critical, suppress in non-interactive unless debug
+    // console.warn(`Warning: Could not read version from package.json: ${error.message}`);
   }
 
   // Create a new instance of the program
@@ -55,33 +52,84 @@ export function main() {
     .description('CLI chat interface for Probe code search')
     .version(version)
     .option('-d, --debug', 'Enable debug mode')
-    .option('-m, --model <model>', 'Specify the model to use')
+    .option('--model-name <model>', 'Specify the model to use') // Renamed from --model
     .option('-f, --force-provider <provider>', 'Force a specific provider (options: anthropic, openai, google)')
     .option('-w, --web', 'Run in web interface mode')
     .option('-p, --port <port>', 'Port to run web server on (default: 8080)')
+    .option('-m, --message <message>', 'Send a single message and exit (non-interactive mode)')
+    .option('-s, --session-id <sessionId>', 'Specify a session ID for the chat (optional)')
+    .option('--json', 'Output the response as JSON in non-interactive mode')
     .argument('[path]', 'Path to the codebase to search (overrides ALLOWED_FOLDERS)')
     .parse(process.argv);
 
   const options = program.opts();
   const pathArg = program.args[0];
 
+  // --- Logging Configuration ---
+  const isPipedInput = process.env.PROBE_STDIN_PIPED === '1';
+  const isNonInteractive = !!options.message || isPipedInput;
+
+  // Environment variable is already set at the top of the file
+  // This is just for code clarity
+  if (isNonInteractive && process.env.PROBE_NON_INTERACTIVE !== '1') {
+    process.env.PROBE_NON_INTERACTIVE = '1';
+  }
+
+  // Raw logging for non-interactive output
+  const rawLog = (...args) => console.log(...args);
+  const rawError = (...args) => console.error(...args);
+
+  // Disable color/formatting in raw non-interactive mode
+  if (isNonInteractive && !options.json && !options.debug) {
+    chalk.level = 0;
+  }
+
+  // Conditional logging helpers
+  const logInfo = (...args) => {
+    if (!isNonInteractive || options.debug) {
+      console.log(...args);
+    }
+  };
+  const logWarn = (...args) => {
+    if (!isNonInteractive || options.debug) {
+      console.warn(...args);
+    } else if (isNonInteractive) {
+      // Optionally log warnings to stderr in non-interactive mode even without debug
+      // rawError('Warning:', ...args);
+    }
+  };
+  const logError = (...args) => {
+    // Always log errors, but use rawError in non-interactive mode
+    if (isNonInteractive) {
+      rawError('Error:', ...args); // Prefix with Error: for clarity on stderr
+    } else {
+      console.error(...args);
+    }
+  };
+  // --- End Logging Configuration ---
+
   if (options.debug) {
     process.env.DEBUG_CHAT = '1';
-    console.log(chalk.yellow('Debug mode enabled'));
+    logInfo(chalk.yellow('Debug mode enabled'));
   }
-  if (options.model) {
-    process.env.MODEL_NAME = options.model;
-    console.log(chalk.blue(`Using model: ${options.model}`));
+  if (options.modelName) { // Use renamed option
+    process.env.MODEL_NAME = options.modelName;
+    logInfo(chalk.blue(`Using model: ${options.modelName}`));
   }
   if (options.forceProvider) {
     const provider = options.forceProvider.toLowerCase();
     if (!['anthropic', 'openai', 'google'].includes(provider)) {
-      console.error(chalk.red(`Error: Invalid provider "${provider}". Must be one of: anthropic, openai, google`));
+      logError(chalk.red(`Invalid provider "${provider}". Must be one of: anthropic, openai, google`));
       process.exit(1);
     }
     process.env.FORCE_PROVIDER = provider;
-    console.log(chalk.blue(`Forcing provider: ${provider}`));
+    logInfo(chalk.blue(`Forcing provider: ${provider}`));
   }
+
+  // Parse and validate allowed folders from environment variable
+  const allowedFolders = process.env.ALLOWED_FOLDERS
+    ? process.env.ALLOWED_FOLDERS.split(',').map(folder => folder.trim()).filter(Boolean)
+    : [];
 
   // Resolve path argument to override ALLOWED_FOLDERS
   if (pathArg) {
@@ -89,12 +137,29 @@ export function main() {
     if (existsSync(resolvedPath)) {
       const realPath = realpathSync(resolvedPath);
       process.env.ALLOWED_FOLDERS = realPath;
-      console.log(chalk.blue(`Using codebase path: ${realPath}`));
+      logInfo(chalk.blue(`Using codebase path: ${realPath}`));
+      // Clear allowedFolders if pathArg overrides it
+      allowedFolders.length = 0;
+      allowedFolders.push(realPath);
     } else {
-      console.error(chalk.red(`Error: Path does not exist: ${resolvedPath}`));
+      logError(chalk.red(`Path does not exist: ${resolvedPath}`));
       process.exit(1);
     }
+  } else {
+    // Log allowed folders only if interactive or debug
+    logInfo('Configured search folders:');
+    for (const folder of allowedFolders) {
+      const exists = existsSync(folder);
+      logInfo(`- ${folder} ${exists ? '✓' : '✗ (not found)'}`);
+      if (!exists) {
+        logWarn(chalk.yellow(`Warning: Folder "${folder}" does not exist or is not accessible`));
+      }
+    }
+    if (allowedFolders.length === 0 && !isNonInteractive) { // Only warn if interactive
+      logWarn(chalk.yellow('No folders configured. Set ALLOWED_FOLDERS in .env file or provide a path argument.'));
+    }
   }
+
 
   // Set port for web server if specified
   if (options.port) {
@@ -105,31 +170,132 @@ export function main() {
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   const openaiApiKey = process.env.OPENAI_API_KEY;
   const googleApiKey = process.env.GOOGLE_API_KEY;
-
-  // Check if we have at least one API key
   const hasApiKeys = !!(anthropicApiKey || openaiApiKey || googleApiKey);
 
-  // Determine whether to run in CLI or web mode
+  // --- Non-Interactive Mode ---
+  if (isNonInteractive) {
+    if (!hasApiKeys) {
+      logError(chalk.red('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.'));
+      process.exit(1);
+    }
+
+    let chat;
+    try {
+      // Pass session ID if provided, ProbeChat generates one otherwise
+      chat = new ProbeChat({ sessionId: options.sessionId, isNonInteractive: true });
+      // Model/Provider info is logged via logInfo above if debug enabled
+      logInfo(chalk.blue(`Using Session ID: ${chat.getSessionId()}`)); // Log the actual session ID being used
+    } catch (error) {
+      logError(chalk.red(`Initializing chat failed: ${error.message}`));
+      process.exit(1);
+    }
+
+    // Function to read from stdin
+    const readFromStdin = () => {
+      return new Promise((resolve) => {
+        let data = '';
+        process.stdin.on('data', (chunk) => {
+          data += chunk;
+        });
+        process.stdin.on('end', () => {
+          resolve(data.trim());
+        });
+      });
+    };
+
+    // Async function to handle the single chat request
+    const runNonInteractiveChat = async () => {
+      try {
+        // Get message from command line argument or stdin
+        let message = options.message;
+
+        // If no message argument but stdin is piped, read from stdin
+        if (!message && isPipedInput) {
+          logInfo('Reading message from stdin...'); // Log only if debug
+          message = await readFromStdin();
+        }
+
+        if (!message) {
+          logError('No message provided. Use --message option or pipe input to stdin.');
+          process.exit(1);
+        }
+
+        logInfo('Sending message...'); // Log only if debug
+        const result = await chat.chat(message, chat.getSessionId()); // Use the chat's current session ID
+
+        if (result && typeof result === 'object' && result.response !== undefined) {
+          if (options.json) {
+            const outputData = {
+              response: result.response,
+              sessionId: chat.getSessionId(),
+              tokenUsage: result.tokenUsage || null // Include usage if available
+            };
+            // Output JSON to stdout
+            rawLog(JSON.stringify(outputData, null, 2));
+          } else {
+            // Output raw response text to stdout
+            rawLog(result.response);
+          }
+          process.exit(0); // Success
+        } else if (typeof result === 'string') { // Handle simple string responses (e.g., cancellation message)
+          if (options.json) {
+            rawLog(JSON.stringify({ response: result, sessionId: chat.getSessionId(), tokenUsage: null }, null, 2));
+          } else {
+            rawLog(result);
+          }
+          process.exit(0); // Exit cleanly
+        }
+        else {
+          logError('Received an unexpected or empty response structure from chat.');
+          if (options.json) {
+            rawError(JSON.stringify({ error: 'Unexpected response structure', response: result, sessionId: chat.getSessionId() }, null, 2));
+          }
+          process.exit(1); // Error exit code
+        }
+      } catch (error) {
+        logError(`Chat request failed: ${error.message}`);
+        if (options.json) {
+          // Output JSON error to stderr
+          rawError(JSON.stringify({ error: error.message, sessionId: chat.getSessionId() }, null, 2));
+        }
+        process.exit(1); // Error exit code
+      }
+    };
+
+    runNonInteractiveChat();
+    return; // Exit main function, prevent interactive/web mode
+  }
+  // --- End Non-Interactive Mode ---
+
+
+  // --- Web Mode ---
   if (options.web) {
     if (!hasApiKeys) {
-      console.warn(chalk.yellow('Warning: No API key provided. The web interface will show instructions on how to set up API keys.'));
+      // Use logWarn for web mode warning
+      logWarn(chalk.yellow('Warning: No API key provided. The web interface will show instructions on how to set up API keys.'));
     }
     // Import and start web server
     import('./webServer.js')
       .then(module => {
         const { startWebServer } = module;
+        logInfo(`Starting web server on port ${process.env.PORT || 8080}...`);
         startWebServer(version, hasApiKeys);
       })
       .catch(error => {
-        console.error(chalk.red(`Error starting web server: ${error.message}`));
+        logError(chalk.red(`Error starting web server: ${error.message}`));
         process.exit(1);
       });
-    return;
+    return; // Exit main function
   }
+  // --- End Web Mode ---
 
-  // In CLI mode, we need API keys to proceed
+
+  // --- Interactive CLI Mode ---
+  // (This block only runs if not non-interactive and not web mode)
+
   if (!hasApiKeys) {
-    console.error(chalk.red('Error: No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.'));
+    // Use logError and standard console.log for setup instructions
+    logError(chalk.red('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.'));
     console.log(chalk.cyan('You can find these instructions in the .env.example file:'));
     console.log(chalk.cyan('1. Create a .env file by copying .env.example'));
     console.log(chalk.cyan('2. Add your API key to the .env file'));
@@ -140,49 +306,49 @@ export function main() {
   // Initialize ProbeChat for CLI mode
   let chat;
   try {
-    chat = new ProbeChat();
+    // Pass session ID if provided (though less common for interactive start)
+    chat = new ProbeChat({ sessionId: options.sessionId, isNonInteractive: false });
 
-    // Print which model is being used
+    // Log model/provider info using logInfo
     if (chat.apiType === 'anthropic') {
-      console.log(chalk.green(`Using Anthropic API with model: ${chat.model}`));
+      logInfo(chalk.green(`Using Anthropic API with model: ${chat.model}`));
     } else if (chat.apiType === 'openai') {
-      console.log(chalk.green(`Using OpenAI API with model: ${chat.model}`));
+      logInfo(chalk.green(`Using OpenAI API with model: ${chat.model}`));
     } else if (chat.apiType === 'google') {
-      console.log(chalk.green(`Using Google API with model: ${chat.model}`));
+      logInfo(chalk.green(`Using Google API with model: ${chat.model}`));
     }
 
-    console.log(chalk.blue(`Session ID: ${chat.getSessionId()}`));
-    console.log(chalk.cyan('Type "exit" or "quit" to end the chat'));
-    console.log(chalk.cyan('Type "usage" to see token usage statistics'));
-    console.log(chalk.cyan('Type "clear" to clear the chat history'));
-    console.log(chalk.cyan('-------------------------------------------'));
+    logInfo(chalk.blue(`Session ID: ${chat.getSessionId()}`));
+    logInfo(chalk.cyan('Type "exit" or "quit" to end the chat'));
+    logInfo(chalk.cyan('Type "usage" to see token usage statistics'));
+    logInfo(chalk.cyan('Type "clear" to clear the chat history'));
+    logInfo(chalk.cyan('-------------------------------------------'));
   } catch (error) {
-    console.error(chalk.red(`Error initializing chat: ${error.message}`));
+    logError(chalk.red(`Error initializing chat: ${error.message}`));
     process.exit(1);
   }
 
-  // Format AI response
-  function formatResponse(response) {
+  // Format AI response for interactive mode
+  function formatResponseInteractive(response) {
     // Check if response is a structured object with response and tokenUsage properties
+    let textResponse = '';
     if (response && typeof response === 'object' && 'response' in response) {
-      // Extract the text response
-      const textResponse = response.response;
-
-      // Format the text response
-      return textResponse.replace(
-        /<tool_call>(.*?)<\/tool_call>/gs,
-        (match, toolCall) => chalk.magenta(`[Tool Call] ${toolCall}`)
-      );
+      textResponse = response.response;
+    } else if (typeof response === 'string') {
+      // Fallback for legacy format or simple string response
+      textResponse = response;
+    } else {
+      return chalk.red('[Error: Invalid response format]');
     }
 
-    // Fallback for legacy format (plain string)
-    return response.replace(
+    // Apply formatting (e.g., highlighting tool calls)
+    return textResponse.replace(
       /<tool_call>(.*?)<\/tool_call>/gs,
       (match, toolCall) => chalk.magenta(`[Tool Call] ${toolCall}`)
     );
   }
 
-  // Main chat loop
+  // Main interactive chat loop
   async function startChat() {
     while (true) {
       const { message } = await inquirer.prompt([
@@ -195,61 +361,60 @@ export function main() {
       ]);
 
       if (message.toLowerCase() === 'exit' || message.toLowerCase() === 'quit') {
-        console.log(chalk.yellow('Goodbye!'));
+        logInfo(chalk.yellow('Goodbye!'));
         break;
       } else if (message.toLowerCase() === 'usage') {
         const usage = chat.getTokenUsage();
         const display = new TokenUsageDisplay();
         const formatted = display.format(usage);
 
-        // Current usage badge
-        console.log(chalk.blue('Current:', formatted.current.total));
-        // Context window
-        console.log(chalk.blue('Context:', formatted.contextWindow));
-        // Cache information
-        console.log(chalk.blue('Cache:',
+        // Use logInfo for usage details
+        logInfo(chalk.blue('Current:', formatted.current.total));
+        logInfo(chalk.blue('Context:', formatted.contextWindow));
+        logInfo(chalk.blue('Cache:',
           `Read: ${formatted.current.cache.read},`,
           `Write: ${formatted.current.cache.write},`,
           `Total: ${formatted.current.cache.total}`));
-        // Total usage badge
-        console.log(chalk.blue('Total:', formatted.total.total));
-        // Show context window in terminal title
+        logInfo(chalk.blue('Total:', formatted.total.total));
+
+        // Show context window in terminal title (only relevant for interactive)
         process.stdout.write('\x1B]0;Context: ' + formatted.contextWindow + '\x07');
         continue;
       } else if (message.toLowerCase() === 'clear') {
         const newSessionId = chat.clearHistory();
-        console.log(chalk.yellow('Chat history cleared'));
-        console.log(chalk.blue(`New session ID: ${newSessionId}`));
+        logInfo(chalk.yellow('Chat history cleared'));
+        logInfo(chalk.blue(`New session ID: ${newSessionId}`));
         continue;
       }
 
-      const spinner = ora('Thinking...').start();
+      const spinner = ora('Thinking...').start(); // Spinner is ok for interactive mode
       try {
-        const result = await chat.chat(message);
+        const result = await chat.chat(message); // Uses internal session ID
         spinner.stop();
 
-        console.log(chalk.green('Assistant:'));
-        console.log(formatResponse(result));
-        console.log();
+        logInfo(chalk.green('Assistant:'));
+        console.log(formatResponseInteractive(result)); // Use standard console.log for the actual response content
+        console.log(); // Add a newline for readability
 
-        // If we have token usage data in the response, update the terminal title with context window size
+        // Update terminal title with context window size if available
         if (result && typeof result === 'object' && result.tokenUsage && result.tokenUsage.contextWindow) {
           process.stdout.write('\x1B]0;Context: ' + result.tokenUsage.contextWindow + '\x07');
         }
       } catch (error) {
         spinner.stop();
-        console.error(chalk.red(`Error: ${error.message}`));
+        logError(chalk.red(`Error: ${error.message}`)); // Use logError
       }
     }
   }
 
   startChat().catch((error) => {
-    console.error(chalk.red(`Fatal error: ${error.message}`));
+    logError(chalk.red(`Fatal error in interactive chat: ${error.message}`));
     process.exit(1);
   });
+  // --- End Interactive CLI Mode ---
 }
 
 // If this file is run directly, call main()
-if (import.meta.url === import.meta.main) {
+if (import.meta.url.startsWith('file:') && process.argv[1] === fileURLToPath(import.meta.url)) {
   main();
 }

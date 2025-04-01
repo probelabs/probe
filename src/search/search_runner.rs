@@ -421,8 +421,8 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
       likely culprit.
     */
 
-    // Convert Option<&str> to Option<&str> by cloning the reference
-    let lang_param = language.as_ref().map(|lang| *lang);
+    // Normalize language parameter to handle aliases
+    let lang_param = language.as_ref().map(|lang| normalize_language_alias(lang));
 
     let mut file_term_map = search_with_structured_patterns(
         path,
@@ -1644,4 +1644,20 @@ fn search_file_with_regex_set(
     }
 
     Ok(term_map)
+}
+
+/// Normalize language aliases to their canonical names
+/// This function maps language aliases like "ts" to their canonical names like "typescript"
+fn normalize_language_alias(lang: &str) -> &str {
+    match lang.to_lowercase().as_str() {
+        "rs" => "rust",
+        "js" | "jsx" => "javascript",
+        "ts" | "tsx" => "typescript",
+        "py" => "python",
+        "h" => "c",
+        "cc" | "cxx" | "hpp" | "hxx" => "cpp",
+        "rb" => "ruby",
+        "cs" => "csharp",
+        _ => lang, // Return the original language if no alias is found
+    }
 }

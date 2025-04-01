@@ -51,6 +51,14 @@ DEBUG=false
 # For OpenAI: MODEL_NAME=gpt-4o-2024-05-13
 # For Google: MODEL_NAME=gemini-2.0-flash
 
+# API URL configuration (optional)
+# Generic base URL for all providers (if provider-specific URL not set)
+# LLM_BASE_URL=https://your-custom-endpoint.com
+# Provider-specific URLs (override LLM_BASE_URL)
+# ANTHROPIC_API_URL=https://your-anthropic-endpoint.com
+# OPENAI_API_URL=https://your-openai-endpoint.com
+# GOOGLE_API_URL=https://your-google-endpoint.com
+
 # Folders to search (comma-separated list of paths)
 # If not specified, the current directory will be used by default
 # ALLOWED_FOLDERS=/path/to/folder1,/path/to/folder2
@@ -203,6 +211,26 @@ You can specify which model to use for each provider:
    ```
 
 Note that the model must be compatible with the selected provider. If you force a specific provider and specify a model, the model must be available for that provider.
+
+### Custom API Endpoints
+
+You can configure custom API endpoints for each provider:
+
+1. **Generic endpoint for all providers**:
+   ```
+   LLM_BASE_URL=https://your-custom-endpoint.com
+   ```
+   This will be used for all providers unless a provider-specific URL is set.
+
+2. **Provider-specific endpoints**:
+   ```
+   ANTHROPIC_API_URL=https://your-anthropic-endpoint.com
+   OPENAI_API_URL=https://your-openai-endpoint.com
+   GOOGLE_API_URL=https://your-google-endpoint.com
+   ```
+   These override the generic LLM_BASE_URL for their respective providers.
+
+Provider-specific URLs always take precedence over the generic LLM_BASE_URL.
 
 ## Example Queries
 

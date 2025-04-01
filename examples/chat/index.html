@@ -1970,6 +1970,7 @@
 			userMsgDiv.textContent = message;
 			messagesDiv.appendChild(userMsgDiv);
 			input.value = '';
+			autoResizeTextarea(); // Reset textarea height after clearing content
 
 			// If this is the first message, move the input form to the bottom and hide UI elements
 			if (isFirstMessage) {

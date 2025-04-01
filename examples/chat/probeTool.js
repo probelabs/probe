@@ -16,11 +16,17 @@ export function isSessionCancelled(sessionId) {
 
 // Function to cancel all tool executions for a session
 export function cancelToolExecutions(sessionId) {
-	console.log(`Cancelling tool executions for session: ${sessionId}`);
+	// Only log if not in non-interactive mode or if in debug mode
+	if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+		console.log(`Cancelling tool executions for session: ${sessionId}`);
+	}
 	const sessionData = activeToolExecutions.get(sessionId);
 	if (sessionData) {
 		sessionData.cancelled = true;
-		console.log(`Session ${sessionId} marked as cancelled`);
+		// Only log if not in non-interactive mode or if in debug mode
+		if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+			console.log(`Session ${sessionId} marked as cancelled`);
+		}
 		return true;
 	}
 	return false;
@@ -44,7 +50,10 @@ export function clearToolExecutionData(sessionId) {
 
 	if (activeToolExecutions.has(sessionId)) {
 		activeToolExecutions.delete(sessionId);
-		console.log(`Cleared tool execution data for session: ${sessionId}`);
+		// Only log if not in non-interactive mode or if in debug mode
+		if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+			console.log(`Cleared tool execution data for session: ${sessionId}`);
+		}
 	}
 }
 
@@ -82,17 +91,17 @@ const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
 				console.log(`[DEBUG] probeTool: Received params:`, params);
 			}
 
-
 			// Register this tool execution (and reset cancel flag if needed)
 			registerToolExecution(toolSessionId);
 
 			// Check if this session has been cancelled *before* execution
 			if (isSessionCancelled(toolSessionId)) {
-				console.log(`Tool execution cancelled BEFORE starting for session ${toolSessionId}`);
+				// Only log if not in non-interactive mode or if in debug mode
+				console.error(`Tool execution cancelled BEFORE starting for session ${toolSessionId}`);
 				throw new Error(`Tool execution cancelled for session ${toolSessionId}`);
 			}
-
-			console.log(`Executing ${toolName} for session ${toolSessionId}`); // Simplified log
+			// Only log if not in non-interactive mode or if in debug mode
+			console.error(`Executing ${toolName} for session ${toolSessionId}`); // Simplified log
 
 			// Remove sessionId from params before passing to base tool if it expects only schema params
 			const { sessionId, ...toolParams } = params;
@@ -122,7 +131,7 @@ const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
 				const checkInterval = 50; // Check every 50ms
 				while (result === null && executionError === null) {
 					if (isSessionCancelled(toolSessionId)) {
-						console.log(`Tool execution cancelled DURING execution for session ${toolSessionId}`);
+						console.error(`Tool execution cancelled DURING execution for session ${toolSessionId}`);
 						// Attempt to signal cancellation if the underlying tool supports it (future enhancement)
 						// For now, just throw the cancellation error
 						throw new Error(`Tool execution cancelled for session ${toolSessionId}`);
@@ -149,7 +158,10 @@ const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
 
 				// If loop exited due to cancellation within the loop
 				if (isSessionCancelled(toolSessionId)) {
-					console.log(`Tool execution finished but session was cancelled for ${toolSessionId}`);
+					// Only log if not in non-interactive mode or if in debug mode
+					if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+						console.log(`Tool execution finished but session was cancelled for ${toolSessionId}`);
+					}
 					throw new Error(`Tool execution cancelled for session ${toolSessionId}`);
 				}
 
@@ -174,7 +186,10 @@ const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
 			} catch (error) {
 				// If it's a cancellation error, re-throw it directly
 				if (error.message.includes('cancelled for session')) {
-					console.log(`Caught cancellation error for ${toolName} in session ${toolSessionId}`);
+					// Only log if not in non-interactive mode or if in debug mode
+					if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+						console.log(`Caught cancellation error for ${toolName} in session ${toolSessionId}`);
+					}
 					// Emit cancellation event? Or let the caller handle it? Let caller handle.
 					throw error;
 				}

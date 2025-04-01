@@ -131,8 +131,18 @@ pub enum Commands {
 
         /// Programming language to limit search to specific file extensions
         #[arg(short = 'l', long = "language", value_parser = [
-            "rust", "javascript", "typescript", "python", "go",
-            "c", "cpp", "java", "ruby", "php", "swift", "csharp"
+            "rust", "rs",
+            "javascript", "js", "jsx",
+            "typescript", "ts", "tsx",
+            "python", "py",
+            "go",
+            "c", "h",
+            "cpp", "cc", "cxx", "hpp", "hxx",
+            "java",
+            "ruby", "rb",
+            "php",
+            "swift",
+            "csharp", "cs"
         ])]
         language: Option<String>,
 
@@ -257,8 +267,18 @@ pub enum Commands {
 
         /// Programming language to use for parsing (auto-detected if not specified)
         #[arg(short = 'l', long = "language", value_parser = [
-            "rust", "javascript", "typescript", "python", "go",
-            "c", "cpp", "java", "ruby", "php", "swift", "csharp"
+            "rust", "rs",
+            "javascript", "js", "jsx",
+            "typescript", "ts", "tsx",
+            "python", "py",
+            "go",
+            "c", "h",
+            "cpp", "cc", "cxx", "hpp", "hxx",
+            "java",
+            "ruby", "rb",
+            "php",
+            "swift",
+            "csharp", "cs"
         ])]
         language: Option<String>,
 

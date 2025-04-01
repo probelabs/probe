@@ -25,7 +25,7 @@ import { randomUUID } from 'crypto';
 
 // Generate a session ID
 const sessionId = process.env.PROBE_SESSION_ID || randomUUID();
-console.log(`Generated session ID for search caching: ${sessionId}`);
+console.error(`Generated session ID for search caching: ${sessionId}`);
 
 // Debug mode
 const debug = process.env.DEBUG_CHAT === '1';

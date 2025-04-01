@@ -330,7 +330,20 @@ async fn main() -> Result<()> {
         }) => query::handle_query(
             &pattern,
             &path,
-            language.as_deref(),
+            language.as_deref().map(|lang| {
+                // Normalize language aliases
+                match lang.to_lowercase().as_str() {
+                    "rs" => "rust",
+                    "js" | "jsx" => "javascript",
+                    "ts" | "tsx" => "typescript",
+                    "py" => "python",
+                    "h" => "c",
+                    "cc" | "cxx" | "hpp" | "hxx" => "cpp",
+                    "rb" => "ruby",
+                    "cs" => "csharp",
+                    _ => lang, // Return the original language if no alias is found
+                }
+            }),
             &ignore,
             allow_tests,
             max_results,

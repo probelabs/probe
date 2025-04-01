@@ -91,18 +91,31 @@ const allowedFolders = process.env.ALLOWED_FOLDERS
   ? process.env.ALLOWED_FOLDERS.split(',').map(folder => folder.trim()).filter(Boolean)
   : [];
 
-// Validate folders exist on startup
-console.log('Configured search folders:');
-if (allowedFolders.length > 0) {
-  for (const folder of allowedFolders) {
-    const exists = existsSync(folder);
-    console.log(`- ${folder} ${exists ? '✓' : '✗ (not found)'}`);
-    if (!exists) {
-      console.warn(`Warning: Folder "${folder}" does not exist or is not accessible`);
+// Validate folders exist on startup - will be handled by index.js in non-interactive mode
+// This is kept for backward compatibility with direct ProbeChat usage
+const validateFolders = () => {
+  if (allowedFolders.length > 0) {
+    for (const folder of allowedFolders) {
+      const exists = existsSync(folder);
+      // Only log if not in non-interactive mode or if in debug mode
+      if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+        console.log(`- ${folder} ${exists ? '✓' : '✗ (not found)'}`);
+        if (!exists) {
+          console.warn(`Warning: Folder "${folder}" does not exist or is not accessible`);
+        }
+      }
+    }
+  } else {
+    // Only log if not in non-interactive mode or if in debug mode
+    if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+      console.warn('No folders configured via ALLOWED_FOLDERS. Tools might default to current directory or require explicit paths.');
     }
   }
-} else {
-  console.warn('No folders configured via ALLOWED_FOLDERS. Tools might default to current directory or require explicit paths.');
+};
+
+// Only validate folders on startup if not in non-interactive mode
+if (typeof process !== 'undefined' && !process.env.PROBE_CHAT_SKIP_FOLDER_VALIDATION) {
+  validateFolders();
 }
 
 
@@ -114,9 +127,12 @@ export class ProbeChat {
    * Create a new ProbeChat instance
    * @param {Object} options - Configuration options
    * @param {string} [options.sessionId] - Optional session ID
+   * @param {boolean} [options.isNonInteractive=false] - Suppress internal logs if true
    * @param {Function} [options.toolCallCallback] - Callback function for tool calls (sessionId, toolCallData) - *Note: Callback may need adjustment for XML flow*
    */
   constructor(options = {}) {
+    // Suppress internal logs if in non-interactive mode
+    this.isNonInteractive = !!options.isNonInteractive;
     // Flag to track if a request has been cancelled
     this.cancelled = false;
 
@@ -167,9 +183,10 @@ export class ProbeChat {
     const googleApiKey = process.env.GOOGLE_API_KEY;
 
     // Get custom API URLs if provided
-    const anthropicApiUrl = process.env.ANTHROPIC_API_URL; // Let createAnthropic handle default
-    const openaiApiUrl = process.env.OPENAI_API_URL;       // Let createOpenAI handle default
-    const googleApiUrl = process.env.GOOGLE_API_URL;       // Let createGoogle handle default
+    const llmBaseUrl = process.env.LLM_BASE_URL;           // Generic base URL for all providers
+    const anthropicApiUrl = process.env.ANTHROPIC_API_URL || llmBaseUrl; // Provider-specific URL takes precedence
+    const openaiApiUrl = process.env.OPENAI_API_URL || llmBaseUrl;       // Provider-specific URL takes precedence
+    const googleApiUrl = process.env.GOOGLE_API_URL || llmBaseUrl;       // Provider-specific URL takes precedence
 
     // Get model override if provided
     const modelName = process.env.MODEL_NAME;
@@ -180,15 +197,18 @@ export class ProbeChat {
     if (this.debug) {
       console.log(`[DEBUG] Available API keys: Anthropic=${!!anthropicApiKey}, OpenAI=${!!openaiApiKey}, Google=${!!googleApiKey}`);
       console.log(`[DEBUG] Force provider: ${forceProvider || '(not set)'}`);
-      if (anthropicApiUrl) console.log(`[DEBUG] Custom Anthropic URL: ${anthropicApiUrl}`);
-      if (openaiApiUrl) console.log(`[DEBUG] Custom OpenAI URL: ${openaiApiUrl}`);
-      if (googleApiUrl) console.log(`[DEBUG] Custom Google URL: ${googleApiUrl}`);
+      if (llmBaseUrl) console.log(`[DEBUG] Generic LLM Base URL: ${llmBaseUrl}`);
+      if (process.env.ANTHROPIC_API_URL) console.log(`[DEBUG] Custom Anthropic URL: ${anthropicApiUrl}`);
+      if (process.env.OPENAI_API_URL) console.log(`[DEBUG] Custom OpenAI URL: ${openaiApiUrl}`);
+      if (process.env.GOOGLE_API_URL) console.log(`[DEBUG] Custom Google URL: ${googleApiUrl}`);
       if (modelName) console.log(`[DEBUG] Model override: ${modelName}`);
     }
 
     // Check if a specific provider is forced
     if (forceProvider) {
-      console.log(`Provider forced to: ${forceProvider}`);
+      if (!this.isNonInteractive || this.debug) {
+        console.log(`Provider forced to: ${forceProvider}`);
+      }
 
       if (forceProvider === 'anthropic' && anthropicApiKey) {
         this.initializeAnthropicModel(anthropicApiKey, anthropicApiUrl, modelName);
@@ -235,7 +255,11 @@ export class ProbeChat {
     });
     this.model = modelName || 'claude-3-7-sonnet-20250219';
     this.apiType = 'anthropic';
-    console.log(`Using Anthropic API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
+    if (!this.isNonInteractive || this.debug) {
+      const urlSource = process.env.ANTHROPIC_API_URL ? 'ANTHROPIC_API_URL' :
+        (process.env.LLM_BASE_URL ? 'LLM_BASE_URL' : 'default');
+      console.log(`Using Anthropic API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl}, from: ${urlSource})` : ''}`);
+    }
   }
 
   /**
@@ -251,7 +275,11 @@ export class ProbeChat {
     });
     this.model = modelName || 'gpt-4o';
     this.apiType = 'openai';
-    console.log(`Using OpenAI API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
+    if (!this.isNonInteractive || this.debug) {
+      const urlSource = process.env.OPENAI_API_URL ? 'OPENAI_API_URL' :
+        (process.env.LLM_BASE_URL ? 'LLM_BASE_URL' : 'default');
+      console.log(`Using OpenAI API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl}, from: ${urlSource})` : ''}`);
+    }
   }
 
   /**
@@ -267,7 +295,11 @@ export class ProbeChat {
     });
     this.model = modelName || 'gemini-1.5-flash-latest';
     this.apiType = 'google';
-    console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
+    if (!this.isNonInteractive || this.debug) {
+      const urlSource = process.env.GOOGLE_API_URL ? 'GOOGLE_API_URL' :
+        (process.env.LLM_BASE_URL ? 'LLM_BASE_URL' : 'default');
+      console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl}, from: ${urlSource})` : ''}`);
+    }
     // Note: Google's tool support might differ. Ensure XML approach works reliably.
   }
 
@@ -373,7 +405,9 @@ Follow these instructions carefully:
    * Abort the current chat request
    */
   abort() {
-    console.log(`Aborting chat for session: ${this.sessionId}`);
+    if (!this.isNonInteractive || this.debug) {
+      console.log(`Aborting chat for session: ${this.sessionId}`);
+    }
     this.cancelled = true;
 
     // Abort any fetch requests
