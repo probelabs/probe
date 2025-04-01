@@ -74,9 +74,9 @@ jobs:
           COMMENTS_JSON=$(gh api -H "Accept: application/vnd.github+json" /repos/${{ github.repository }}/issues/$ISSUE_OR_PR_NUMBER/comments --jq '.')
           COMMENTS_XML=""
           echo "$COMMENTS_JSON" | jq -c '.[] | {login: .user.login, created_at: .created_at, body: .body}' | while IFS= read -r comment_json; do
-            local login=$(echo "$comment_json" | jq -r .login)
-            local created_at=$(echo "$comment_json" | jq -r .created_at)
-            local body=$(echo "$comment_json" | jq -r .body)
+            export login=$(echo "$comment_json" | jq -r .login)
+            export created_at=$(echo "$comment_json" | jq -r .created_at)
+            export body=$(echo "$comment_json" | jq -r .body)
             COMMENTS_XML+=$(cat <<EOF
                   <comment><author>$(echo "$login")</author><timestamp>$created_at</timestamp><content>$body</content></comment>
           EOF
