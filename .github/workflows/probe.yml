@@ -16,13 +16,6 @@ on:
         type: string
       # Note: The actual probe-chat command to run will prioritize the PROBE_CHAT_COMMAND secret
       # passed by the caller via "secrets: inherit", then fall back to inputs.default_probe_chat_command.
-    secrets:
-      GITHUB_TOKEN:
-        description: 'GitHub token passed from the caller workflow. Must have write permissions for PRs/Issues.'
-        required: true
-      PROBE_CHAT_COMMAND:
-        description: 'Optional override for the probe-chat command executable string.'
-        required: false
 
 # Permissions required by the jobs within THIS reusable workflow
 permissions:
