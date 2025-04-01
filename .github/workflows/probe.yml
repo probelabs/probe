@@ -133,17 +133,17 @@ jobs:
 
           # Construct the prompt string directly - avoids read/heredoc issues
           FORMATTED_PROMPT="<github_context type=\"$CONTEXT_TYPE\" number=\"$ISSUE_OR_PR_NUMBER\">
-${CONTEXT_DETAILS_XML}
-${DIFF_XML}
-<comments>
-${COMMENTS_XML}
-</comments>
-<user_request>
-${USER_REQUEST_BODY}
-</user_request>
-</github_context>
-
-${PROMPT_INSTRUCTION}"
+            ${CONTEXT_DETAILS_XML}
+            ${DIFF_XML}
+            <comments>
+            ${COMMENTS_XML}
+            </comments>
+            <user_request>
+            ${USER_REQUEST_BODY}
+            </user_request>
+            </github_context>
+            
+            ${PROMPT_INSTRUCTION}"
 
           # Check if the prompt variable was somehow clobbered or empty after assembly
           if [ -z "$FORMATTED_PROMPT" ]; then
