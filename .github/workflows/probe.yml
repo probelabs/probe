@@ -333,29 +333,51 @@ jobs:
           COMMAND_TO_RUN='${{ steps.determine_command.outputs.command }}'
           RESPONSE_FILE="response.txt"
           ERROR_LOG="error.log"
-
+      
+          # Verify prompt is not empty
           if [ -z "$PROMPT" ]; then
             echo "::error::Prompt env var empty." >&2
             echo "🤖 **Error:** Internal error - prompt empty." > "$RESPONSE_FILE"
             exit 1
           fi
-
+          echo "Prompt length: ${#PROMPT}"
+      
+          # Verify command
+          echo "Command to run: $COMMAND_TO_RUN"
+      
+          # Test if npx is available
+          npx --version || { echo "::error::npx not found or failed"; exit 1; }
+      
           echo "Running probe-chat..."
           bash -c "echo \"\$PROMPT\" | $COMMAND_TO_RUN" > "$RESPONSE_FILE" 2> "$ERROR_LOG"
           EXIT_CODE=$?
-          if [ $EXIT_CODE -ne 0 ]; then
-             echo "::error::probe-chat failed ($EXIT_CODE)." >&2
-             if [ -s "$ERROR_LOG" ]; then
-               echo "--- stderr ---" >&2
-               cat "$ERROR_LOG" >&2
-               echo "--- end stderr ---" >&2
-             fi
-             if [ ! -s "$RESPONSE_FILE" ]; then
-               echo "🤖 **Error:** AI command failed (Exit code: $EXIT_CODE)." > "$RESPONSE_FILE"
-             fi
-             exit $EXIT_CODE
+      
+          # Always print debugging info
+          echo "Exit code: $EXIT_CODE"
+          if [ -s "$ERROR_LOG" ]; then
+            echo "--- stderr ---"
+            cat "$ERROR_LOG"
+            echo "--- end stderr ---"
+          else
+            echo "No stderr output from probe-chat."
           fi
-
+          if [ -s "$RESPONSE_FILE" ]; then
+            echo "--- response ---"
+            cat "$RESPONSE_FILE"
+            echo "--- end response ---"
+          else
+            echo "Response file is empty."
+          fi
+      
+          # Handle failure
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::probe-chat failed with exit code $EXIT_CODE."
+            if [ ! -s "$RESPONSE_FILE" ]; then
+              echo "🤖 **Error:** AI command failed (Exit code: $EXIT_CODE)." > "$RESPONSE_FILE"
+            fi
+            exit $EXIT_CODE
+          fi
+      
           echo "probe-chat finished successfully."
           if [ ! -s "$RESPONSE_FILE" ]; then
             echo "::warning::probe-chat produced empty response."
