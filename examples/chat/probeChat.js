@@ -501,9 +501,13 @@ Follow these instructions carefully:
 
       // Add user message to the *local* messages array for this turn
       // Use structured content if needed, but simple string is fine here
+      // If this is the first message in a conversation (empty history), wrap it in <task> tags
+      const isFirstMessage = this.history.length === 0;
+      const wrappedMessage = isFirstMessage ? `<task>\n${message}\n</task>` : message;
+
       let currentMessages = [
         ...this.history,
-        { role: 'user', content: message }
+        { role: 'user', content: wrappedMessage }
       ];
 
       // Get the potentially large system message (can be async)
