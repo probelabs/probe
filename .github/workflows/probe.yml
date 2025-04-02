@@ -78,7 +78,6 @@ jobs:
         run: |
           # --- Initialization ---
           echo "::group::Initialization and User Request Extraction"
-          # FIX: Separated shopt and set
           shopt -s extglob
           set -e
           ISSUE_OR_PR_NUMBER=${{ steps.set_context_ids.outputs.issue_number }}
@@ -86,7 +85,6 @@ jobs:
           GITHUB_API_ARGS_VERBOSE=(-H "Accept: application/vnd.github+json")
           escape_xml() { perl -pe 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g;'; }
           USER_REQUEST_BODY_RAW="${RAW_COMMENT_BODY#${COMMAND_PREFIX}}"
-          # FIX: Separated parameter expansions for clarity/safety
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW##*( )}"
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW%%*( )}"
           USER_REQUEST_BODY=$(echo "$USER_REQUEST_BODY_RAW" | escape_xml)
@@ -99,11 +97,9 @@ jobs:
           CONTEXT_TYPE="issue"
           echo "Detecting context for #$ISSUE_OR_PR_NUMBER in $REPO"
           if gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER" --jq .url > /dev/null 2>&1; then
-             # FIX: Separated assignment and echo
              CONTEXT_TYPE="pr"
              echo "Context: PR"
           else
-             # FIX: Separated assignment and echo
              EXIT_CODE=$?
              echo "PR API check failed ($EXIT_CODE). Assuming: Issue"
              if ! gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER" --jq .url > /dev/null 2>&1; then echo "::warning::Issue API check also failed ($?). Check permissions/number."; fi
@@ -156,7 +152,6 @@ jobs:
           CONTEXT_DETAILS_XML="" && DIFF_XML="" && PROMPT_INSTRUCTION=""
           if [[ "$FINAL_CONTEXT_TYPE" == "pr" ]]; then
             echo "Fetching PR specific data..."
-            # (Fetch PR details and diff as before)
             PR_DATA=$(gh pr view $ISSUE_OR_PR_NUMBER --json title,body --repo ${REPO} 2>/dev/null || echo 'FETCH_FAILED')
             if [[ "$PR_DATA" == "FETCH_FAILED" ]]; then echo "::warning::Failed PR details fetch."; PR_TITLE="Error"; PR_BODY="Error"; else PR_TITLE=$(echo "$PR_DATA" | jq -r .title | escape_xml) && PR_BODY=$(echo "$PR_DATA" | jq -r .body | escape_xml); fi
             PR_DIFF=$(gh pr diff $ISSUE_OR_PR_NUMBER --repo ${REPO} 2>/dev/null || echo "FETCH_FAILED")
@@ -231,12 +226,12 @@ jobs:
 
           elif [[ "$FINAL_CONTEXT_TYPE" == "issue" ]]; then
             echo "Fetching Issue specific data..."
-            # (Fetch Issue details as before)
             ISSUE_DATA=$(gh issue view $ISSUE_OR_PR_NUMBER --json title,body --repo ${REPO} 2>/dev/null || echo 'FETCH_FAILED')
              if [[ "$ISSUE_DATA" == "FETCH_FAILED" ]]; then echo "::warning::Failed Issue details fetch."; ISSUE_TITLE="Error"; ISSUE_BODY="Error"; else ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title | escape_xml) && ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body | escape_xml); fi
             CONTEXT_DETAILS_XML="<details><title>$ISSUE_TITLE</title><body>$ISSUE_BODY</body></details>"
             DIFF_XML=""
             PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue..." # (Shortened)
+          # FIX: Moved the 'fi' here to correctly close the if/elif block
           fi
           echo "::endgroup::" # End Fetch Comments group
 
