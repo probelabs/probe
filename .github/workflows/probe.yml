@@ -140,16 +140,19 @@ jobs:
                       fi
                   else
                       echo "::warning::jq failed processing standard comments (exit code $JQ_EXIT_CODE). Error log:" && cat jq_std_error.log
-                  fi
+                  fi # End JQ_EXIT_CODE check
               else
                   # It wasn't FETCH_FAILED/empty, but jq check failed - not a valid array
                   echo "::warning::Fetched standard comments data is not a valid JSON array. jq check exit code: $IS_JSON_ARRAY_EXIT_CODE. Data (first 500): $(echo "$STD_COMMENTS_JSON" | head -c 500)"
-              fi
+              fi # End IS_JSON_ARRAY_EXIT_CODE check
           fi # End of standard comments processing
           echo "Standard comments processed. Current XML length: ${#COMMENTS_XML}"
 
           # --- Context Specific ---
-          CONTEXT_DETAILS_XML="" && DIFF_XML="" && PROMPT_INSTRUCTION=""
+          # FIX: Split the chained assignments onto separate lines
+          CONTEXT_DETAILS_XML=""
+          DIFF_XML=""
+          PROMPT_INSTRUCTION=""
           if [[ "$FINAL_CONTEXT_TYPE" == "pr" ]]; then
             echo "Fetching PR specific data..."
             PR_DATA=$(gh pr view $ISSUE_OR_PR_NUMBER --json title,body --repo ${REPO} 2>/dev/null || echo 'FETCH_FAILED')
@@ -231,8 +234,7 @@ jobs:
             CONTEXT_DETAILS_XML="<details><title>$ISSUE_TITLE</title><body>$ISSUE_BODY</body></details>"
             DIFF_XML=""
             PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue..." # (Shortened)
-          # FIX: Moved the 'fi' here to correctly close the if/elif block
-          fi
+          fi # End context specific if/elif
           echo "::endgroup::" # End Fetch Comments group
 
           # --- Assemble Final Prompt ---
