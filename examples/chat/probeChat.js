@@ -618,12 +618,48 @@ Follow these instructions carefully:
           signal: this.abortController.signal,
         };
 
-        // --- Call LLM ---
+        // --- Call LLM with retry mechanism ---
         let result;
         let assistantResponseContent = '';
         try {
           if (this.debug) console.log(`[DEBUG] Calling generateText with model ${this.model}...`);
-          result = await generateText(generateOptions);
+
+          // Retry mechanism - attempt up to 3 times with 1 second delay between retries
+          const MAX_RETRIES = 3;
+          let retryCount = 0;
+          let lastError = null;
+
+          while (retryCount < MAX_RETRIES) {
+            try {
+              if (retryCount > 0 && this.debug) {
+                console.log(`[DEBUG] Retry attempt ${retryCount}/${MAX_RETRIES} for generateText...`);
+              }
+
+              result = await generateText(generateOptions);
+              // If successful, break out of the retry loop
+              break;
+            } catch (err) {
+              // Don't retry if the request was cancelled
+              if (this.cancelled || err.name === 'AbortError' || (err.message && err.message.includes('cancelled'))) {
+                console.log(`Chat request cancelled during LLM call (Iter ${currentIteration})`);
+                this.cancelled = true; // Ensure flag is set
+                throw new Error('Request was cancelled by the user');
+              }
+
+              lastError = err;
+              retryCount++;
+
+              if (retryCount < MAX_RETRIES) {
+                if (this.debug) console.log(`[DEBUG] generateText failed, will retry in 1 second. Error: ${err.message}`);
+                // Wait for 1 second before retrying
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              } else {
+                // Max retries reached, throw the last error
+                throw lastError;
+              }
+            }
+          }
+
           assistantResponseContent = result.text?.trim() || ''; // Ensure we have a trimmed string
 
           if (this.debug) {
@@ -655,7 +691,7 @@ Follow these instructions carefully:
             this.cancelled = true; // Ensure flag is set
             throw new Error('Request was cancelled by the user');
           }
-          console.error(`Error during generateText (Iter ${currentIteration}):`, error);
+          console.error(`Error during generateText after all retries (Iter ${currentIteration}):`, error);
 
           // Add error message to history? Maybe not, let the caller handle the thrown error.
           // currentMessages.push({ role: 'user', content: `System Error: Failed to get response from AI model. Error: ${error.message}` });
