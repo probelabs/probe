@@ -200,15 +200,15 @@ jobs:
           echo "Assembling final prompt..."
           # Ensure proper XML structure and include the final user request
           FORMATTED_PROMPT="<github_context type=\"$CONTEXT_TYPE\" number=\"$ISSUE_OR_PR_NUMBER\">
-${CONTEXT_DETAILS_XML}
-${DIFF_XML}
-<comments>
-${COMMENTS_XML}
-</comments>
-<user_request author=\"${{ github.event.comment.user.login }}\" timestamp=\"${{ github.event.comment.created_at }}\">${USER_REQUEST_BODY}</user_request>
-</github_context>
-
-${PROMPT_INSTRUCTION}"
+            ${CONTEXT_DETAILS_XML}
+            ${DIFF_XML}
+            <comments>
+            ${COMMENTS_XML}
+            </comments>
+            <user_request author=\"${{ github.event.comment.user.login }}\" timestamp=\"${{ github.event.comment.created_at }}\">${USER_REQUEST_BODY}</user_request>
+            </github_context>
+            
+            ${PROMPT_INSTRUCTION}"
 
           if [ -z "$FORMATTED_PROMPT" ]; then
              echo "::error::Formatted prompt became empty after assembly. Check preceding logs and variable contents."
