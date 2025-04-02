@@ -22,7 +22,6 @@ permissions:
   pull-requests: write # Needed for reading PR data/comments/reviews, posting comments, adding reactions
   issues: write        # Needed for reading issue data/comments, posting comments, adding reactions
   contents: read
-  reactions: write     # Explicitly required for gh api reaction POST
 
 jobs:
   process_comment:
