@@ -317,56 +317,49 @@ jobs:
       - name: Run probe-chat
         id: probe
         env:
-          PROBE_PROMPT: ${{ steps.read_prompt_file.outputs.formatted_prompt }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROBE_PROMPT: ${{ steps.read_prompt_file.outputs.formatted_prompt }} # Assuming this is how PROMPT is sourced
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} # Required by probe-chat, presumably
         run: |
-          set +e  # Disable set -e to prevent premature exit
-          set -o pipefail
+          set -o pipefail # Fail if any command in the pipe fails
           PROMPT="$PROBE_PROMPT"
-          COMMAND_TO_RUN='${{ steps.determine_command.outputs.command }}'
+          COMMAND_TO_RUN="npx -y @buger/probe-chat@latest"
           RESPONSE_FILE="response.txt"
           ERROR_LOG="error.log"
       
+          # Check if PROMPT is empty
           if [ -z "$PROMPT" ]; then
             echo "::error::Prompt env var empty." >&2
             echo "🤖 **Error:** Internal error - prompt empty." > "$RESPONSE_FILE"
             exit 1
           fi
       
+          # Debug the PROMPT content
           echo "Prompt length: ${#PROMPT}"
+          echo "First 100 chars of PROMPT: ${PROMPT:0:100}"
           echo "Command to run: $COMMAND_TO_RUN"
           echo "Running probe-chat..."
-          bash -c "echo \"\$PROMPT\" | $COMMAND_TO_RUN" > "$RESPONSE_FILE" 2> "$ERROR_LOG"
+      
+          # Pipe the PROMPT directly to the command
+          echo "$PROMPT" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> "$ERROR_LOG"
           EXIT_CODE=$?
       
-          # Debugging output
-          echo "Exit code: $EXIT_CODE"
-          if [ -s "$ERROR_LOG" ]; then
-            echo "--- stderr ---" >&2
-            cat "$ERROR_LOG" >&2
-            echo "--- end stderr ---" >&2
-          else
-            echo "No stderr output from probe-chat." >&2
-          fi
-          if [ -s "$RESPONSE_FILE" ]; then
-            echo "--- response ---" >&2
-            cat "$RESPONSE_FILE" >&2
-            echo "--- end response ---" >&2
-          else
-            echo "Response file is empty." >&2
-          fi
-      
+          # Handle the exit code
           if [ $EXIT_CODE -ne 0 ]; then
-            echo "::error::probe-chat failed with exit code $EXIT_CODE." >&2
+            echo "::error::probe-chat failed ($EXIT_CODE)." >&2
+            if [ -s "$ERROR_LOG" ]; then
+              echo "--- stderr ---" >&2
+              cat "$ERROR_LOG" >&2
+              echo "--- end stderr ---" >&2
+            fi
             if [ ! -s "$RESPONSE_FILE" ]; then
               echo "🤖 **Error:** AI command failed (Exit code: $EXIT_CODE)." > "$RESPONSE_FILE"
             fi
             exit $EXIT_CODE
           fi
       
-          echo "probe-chat finished successfully." >&2
+          echo "probe-chat finished successfully."
           if [ ! -s "$RESPONSE_FILE" ]; then
-            echo "::warning::probe-chat produced empty response." >&2
+            echo "::warning::probe-chat produced empty response."
             echo "🤖 AI generated no response." > "$RESPONSE_FILE"
           fi
 
