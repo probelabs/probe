@@ -31,12 +31,12 @@ jobs:
       github.event.issue.number != null &&
       github.event.comment.id != null
     runs-on: ubuntu-latest
-    # JOB-level outputs are necessary and correct
+    # JOB-level outputs
     outputs:
       response_body: ${{ steps.read_response.outputs.response }}
       issue_number: ${{ steps.set_context_ids.outputs.issue_number }}
       probe_succeeded: ${{ steps.probe.outcome == 'success' }}
-      context_type: ${{ steps.format.outputs.context_type }} # Get context_type output from format step
+      context_type: ${{ steps.format.outputs.context_type }} # Get output from format step
 
     steps:
       - name: Checkout repository
@@ -54,38 +54,28 @@ jobs:
 
       - name: Set Issue Number and Comment ID Output
         id: set_context_ids
-        # No step-level 'outputs:' needed here, set via run script
         run: |
           echo "issue_number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
           echo "comment_id=${{ github.event.comment.id }}" >> $GITHUB_OUTPUT
-          echo "Context ID (Issue/PR Number): ${{ github.event.issue.number }}"
-          echo "Comment ID: ${{ github.event.comment.id }}"
-          echo "Triggering User: ${{ github.event.comment.user.login }}"
+          echo "Context ID (Issue/PR Number): ${{ github.event.issue.number }}, Comment ID: ${{ github.event.comment.id }}"
 
       - name: Add 'eyes' reaction to comment
-        id: add_reaction # Added ID for consistency, though not strictly needed here
+        id: add_reaction
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ steps.set_context_ids.outputs.comment_id }}
         run: |
-          echo "Adding 👀 reaction to comment ID ${COMMENT_ID} in repo ${REPO}..."
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
-            -f content='eyes' \
-            --silent || echo "::warning::Failed to add reaction to comment ${COMMENT_ID}. Continuing..."
+          echo "Adding 👀 reaction to comment ID ${COMMENT_ID}..."
+          gh api --method POST -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" -f content='eyes' --silent || echo "::warning::Failed reaction."
 
       - name: Determine Context, Fetch Comments, Format Input
         id: format
-        # NO explicit step-level 'outputs:' block here - Reverted to original pattern
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMAND_PREFIX: ${{ inputs.command_prefix }}
           REPO: ${{ github.repository }}
         run: |
-          # --- Script Content (Exactly as in the previous good version) ---
           echo "::group::Initialization and User Request Extraction"
           shopt -s extglob && set -e
           ISSUE_OR_PR_NUMBER=${{ steps.set_context_ids.outputs.issue_number }}
@@ -113,54 +103,108 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Fetch Comments and Context Details"
-          COMMENTS_XML=""
-          echo "Fetching standard comments..."
-          STD_COMMENTS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER/comments" --paginate)
-          if [[ $? -ne 0 ]]; then echo "::warning::Failed to fetch standard comments.";
-          elif echo "$STD_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
-              echo "Processing standard comments..."
-              while IFS=$'\t' read -r login created_at body; do
-                  escaped_login=$(echo "$login" | escape_xml) && escaped_body=$(echo "$body" | escape_xml)
-                  COMMENTS_XML="${COMMENTS_XML}<comment type=\"issue\"><author>$escaped_login</author><timestamp>$created_at</timestamp><content>$escaped_body</content></comment>"
-              done < <(echo "$STD_COMMENTS_JSON" | jq -r '.[] | [.user.login // "unknown", .created_at // "N/A", .body // ""] | @tsv')
-          else echo "::warning::Standard comments not a valid JSON array."; fi
-          echo "Standard comments processed. XML length: ${#COMMENTS_XML}"
+          COMMENTS_XML="" # Initialize accumulator
 
+          # --- Standard Comments ---
+          echo "Fetching standard comments..."
+          STD_COMMENTS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER/comments" --paginate || echo "FETCH_FAILED") # Capture potential gh failure
+          if [[ "$STD_COMMENTS_JSON" == "FETCH_FAILED" || -z "$STD_COMMENTS_JSON" ]]; then
+              echo "::warning::Failed to fetch standard comments JSON or received empty response."
+          # Check if it's likely a valid JSON array before processing
+          elif echo "$STD_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+              # Capture TSV output from jq safely
+              TSV_OUTPUT=$(echo "$STD_COMMENTS_JSON" | jq -r '.[] | [.user.login // "unknown", .created_at // "N/A", .body // ""] | @tsv' 2> jq_error.log)
+              JQ_EXIT_CODE=$?
+              if [[ $JQ_EXIT_CODE -eq 0 ]]; then
+                  if [[ -n "$TSV_OUTPUT" ]]; then
+                      echo "Processing standard comments..."
+                      # Use HERESTRING to feed the captured TSV into the loop
+                      while IFS=$'\t' read -r login created_at body; do
+                          # Basic check to skip potentially empty lines from read
+                          [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue
+                          escaped_login=$(echo "$login" | escape_xml) && escaped_body=$(echo "$body" | escape_xml)
+                          # Append to the variable in the *current* shell scope
+                          COMMENTS_XML="${COMMENTS_XML}<comment type=\"issue\"><author>$escaped_login</author><timestamp>$created_at</timestamp><content>$escaped_body</content></comment>"
+                      done <<< "$TSV_OUTPUT"
+                  else
+                      echo "Standard comments JSON was valid array, but no comments found or jq produced empty TSV."
+                  fi
+              else
+                  echo "::warning::jq failed processing standard comments (exit code $JQ_EXIT_CODE). Error log:" && cat jq_error.log
+              fi
+          else
+              echo "::warning::Fetched standard comments data is not a valid JSON array. Data (first 500): $(echo "$STD_COMMENTS_JSON" | head -c 500)"
+          fi
+          echo "Standard comments processed. Current XML length: ${#COMMENTS_XML}"
+
+          # --- Context Specific ---
           CONTEXT_DETAILS_XML="" && DIFF_XML="" && PROMPT_INSTRUCTION=""
           if [[ "$FINAL_CONTEXT_TYPE" == "pr" ]]; then
             echo "Fetching PR specific data..."
             PR_DATA=$(gh pr view $ISSUE_OR_PR_NUMBER --json title,body --repo ${REPO} 2>/dev/null || echo 'FETCH_FAILED')
-            if [[ "$PR_DATA" == "FETCH_FAILED" ]]; then echo "::warning::Failed PR details fetch."; PR_TITLE="Error" && PR_BODY="Error"; else PR_TITLE=$(echo "$PR_DATA" | jq -r .title | escape_xml) && PR_BODY=$(echo "$PR_DATA" | jq -r .body | escape_xml); fi
+            if [[ "$PR_DATA" == "FETCH_FAILED" ]]; then echo "::warning::Failed PR details fetch."; PR_TITLE="Error"; PR_BODY="Error"; else PR_TITLE=$(echo "$PR_DATA" | jq -r .title | escape_xml) && PR_BODY=$(echo "$PR_DATA" | jq -r .body | escape_xml); fi
             PR_DIFF=$(gh pr diff $ISSUE_OR_PR_NUMBER --repo ${REPO} 2>/dev/null || echo "FETCH_FAILED")
             if [[ "$PR_DIFF" == "FETCH_FAILED" ]]; then echo "::warning::Failed PR diff fetch."; ESCAPED_PR_DIFF="<!-- Error fetching diff -->"; else ESCAPED_PR_DIFF=$(echo "$PR_DIFF" | escape_xml); fi
             CONTEXT_DETAILS_XML="<details><title>$PR_TITLE</title><body>$PR_BODY</body></details>"
             DIFF_XML="<diff>$ESCAPED_PR_DIFF</diff>"
 
+            # --- PR Review Comments ---
             echo "Fetching PR review comments..."
-            REVIEW_COMMENTS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/comments" --paginate)
-            if [[ $? -ne 0 ]]; then echo "::warning::Failed review comments fetch.";
+            REVIEW_COMMENTS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/comments" --paginate || echo "FETCH_FAILED")
+            if [[ "$REVIEW_COMMENTS_JSON" == "FETCH_FAILED" || -z "$REVIEW_COMMENTS_JSON" ]]; then
+                echo "::warning::Failed to fetch PR review comments JSON or received empty response."
             elif echo "$REVIEW_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
-                echo "Processing review comments..."
-                while IFS=$'\t' read -r login created_at body path diff_hunk line; do
-                    escaped_login=$(echo "$login" | escape_xml) && escaped_body=$(echo "$body" | escape_xml) && escaped_path=$(echo "$path" | escape_xml) && escaped_diff_hunk=$(echo "$diff_hunk" | escape_xml)
-                    COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_comment\" file=\"$escaped_path\" line=\"$line\"><author>$escaped_login</author><timestamp>$created_at</timestamp><diff_hunk>$escaped_diff_hunk</diff_hunk><content>$escaped_body</content></comment>"
-                done < <(echo "$REVIEW_COMMENTS_JSON" | jq -r '.[] | [.user.login // "unknown", .created_at // "N/A", .body // "", .path // "unknown", .diff_hunk // "", (.line // .original_line // "N/A")] | @tsv')
-            else echo "::warning::Review comments not valid JSON array."; fi
-            echo "Review comments processed. XML length: ${#COMMENTS_XML}"
+                TSV_OUTPUT=$(echo "$REVIEW_COMMENTS_JSON" | jq -r '.[] | [.user.login // "unknown", .created_at // "N/A", .body // "", .path // "unknown", .diff_hunk // "", (.line // .original_line // "N/A")] | @tsv' 2> jq_error.log)
+                JQ_EXIT_CODE=$?
+                if [[ $JQ_EXIT_CODE -eq 0 ]]; then
+                     if [[ -n "$TSV_OUTPUT" ]]; then
+                        echo "Processing review comments..."
+                        while IFS=$'\t' read -r login created_at body path diff_hunk line; do
+                           [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue # Skip empty lines
+                           escaped_login=$(echo "$login" | escape_xml) && escaped_body=$(echo "$body" | escape_xml) && escaped_path=$(echo "$path" | escape_xml) && escaped_diff_hunk=$(echo "$diff_hunk" | escape_xml)
+                           COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_comment\" file=\"$escaped_path\" line=\"$line\"><author>$escaped_login</author><timestamp>$created_at</timestamp><diff_hunk>$escaped_diff_hunk</diff_hunk><content>$escaped_body</content></comment>"
+                        done <<< "$TSV_OUTPUT"
+                     else
+                        echo "Review comments JSON was valid array, but no comments found or jq produced empty TSV."
+                     fi
+                else
+                     echo "::warning::jq failed processing review comments (exit code $JQ_EXIT_CODE). Error log:" && cat jq_error.log
+                fi
+            else
+                 echo "::warning::Fetched review comments data is not a valid JSON array. Data (first 500): $(echo "$REVIEW_COMMENTS_JSON" | head -c 500)"
+            fi
+            echo "Review comments processed. Current XML length: ${#COMMENTS_XML}"
 
+            # --- PR Reviews (Bodies) ---
             echo "Fetching PR reviews..."
-            REVIEWS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/reviews" --paginate)
-            if [[ $? -ne 0 ]]; then echo "::warning::Failed PR reviews fetch.";
-            elif echo "$REVIEWS_JSON" | jq -e '[.[] | select(.body != null and .body != "")] | type == "array"' > /dev/null 2>&1; then
-                 echo "Processing review bodies..."
-                 while IFS=$'\t' read -r login submitted_at body state; do
-                     escaped_login=$(echo "$login" | escape_xml) && escaped_body=$(echo "$body" | escape_xml) && escaped_state=$(echo "$state" | escape_xml)
-                     COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_body\" state=\"$escaped_state\"><author>$escaped_login</author><timestamp>$submitted_at</timestamp><content>$escaped_body</content></comment>"
-                 done < <(echo "$REVIEWS_JSON" | jq -r '.[] | select(.body != null and .body != "") | [.user.login // "unknown", .submitted_at // "N/A", .body, .state // "N/A"] | @tsv')
-            else echo "::warning::No valid PR review bodies found or not JSON array."; fi
-            echo "Review bodies processed. XML length: ${#COMMENTS_XML}"
+            REVIEWS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/reviews" --paginate || echo "FETCH_FAILED")
+            if [[ "$REVIEWS_JSON" == "FETCH_FAILED" || -z "$REVIEWS_JSON" ]]; then
+                 echo "::warning::Failed to fetch PR reviews JSON or received empty response."
+            # Check if array, then capture jq output (jq filters for non-empty body)
+            elif echo "$REVIEWS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+                 TSV_OUTPUT=$(echo "$REVIEWS_JSON" | jq -r '.[] | select(.body != null and .body != "") | [.user.login // "unknown", .submitted_at // "N/A", .body, .state // "N/A"] | @tsv' 2> jq_error.log)
+                 JQ_EXIT_CODE=$?
+                 if [[ $JQ_EXIT_CODE -eq 0 ]]; then
+                     if [[ -n "$TSV_OUTPUT" ]]; then
+                         echo "Processing review bodies..."
+                         while IFS=$'\t' read -r login submitted_at body state; do
+                            [[ -n "$login" || -n "$submitted_at" || -n "$body" ]] || continue # Skip empty lines
+                            escaped_login=$(echo "$login" | escape_xml) && escaped_body=$(echo "$body" | escape_xml) && escaped_state=$(echo "$state" | escape_xml)
+                            COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_body\" state=\"$escaped_state\"><author>$escaped_login</author><timestamp>$submitted_at</timestamp><content>$escaped_body</content></comment>"
+                         done <<< "$TSV_OUTPUT"
+                     else
+                         echo "Review JSON was valid array, but no review bodies found or jq produced empty TSV."
+                     fi
+                 else
+                      echo "::warning::jq failed processing review bodies (exit code $JQ_EXIT_CODE). Error log:" && cat jq_error.log
+                 fi
+            else
+                 echo "::warning::Fetched reviews data is not a valid JSON array. Data (first 500): $(echo "$REVIEWS_JSON" | head -c 500)"
+            fi
+            echo "Review bodies processed. Current XML length: ${#COMMENTS_XML}"
 
             PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request..." # (Shortened)
+
           elif [[ "$FINAL_CONTEXT_TYPE" == "issue" ]]; then
             echo "Fetching Issue specific data..."
             ISSUE_DATA=$(gh issue view $ISSUE_OR_PR_NUMBER --json title,body --repo ${REPO} 2>/dev/null || echo 'FETCH_FAILED')
@@ -183,81 +227,56 @@ jobs:
           if [ ${#FORMATTED_PROMPT} -lt 200 ]; then echo "::warning::Formatted prompt seems short."; fi
           echo "Final prompt assembled. Length: ${#FORMATTED_PROMPT}"
 
-          # Write prompt to temporary file
           PROMPT_FILENAME="formatted_prompt.txt"
           echo "$FORMATTED_PROMPT" > "$PROMPT_FILENAME"
           echo "Prompt written to $PROMPT_FILENAME"
 
-          # Set the step outputs using $GITHUB_OUTPUT - This implicitly defines them for the step
+          # Set step outputs via $GITHUB_OUTPUT
           echo "Setting step outputs..."
           echo "context_type=${FINAL_CONTEXT_TYPE}" >> $GITHUB_OUTPUT
           echo "formatted_prompt_file=${PROMPT_FILENAME}" >> $GITHUB_OUTPUT
-          echo "Outputs set: context_type=${FINAL_CONTEXT_TYPE}, formatted_prompt_file=${PROMPT_FILENAME}"
+          echo "Outputs set."
           echo "::endgroup::"
+
+      # --- Subsequent steps (read_prompt_file, determine_command, probe, read_response) ---
+      # --- remain the same as the previous working version, relying on outputs set above ---
 
       - name: Read Formatted Prompt from File
         id: read_prompt_file
-        # No step-level 'outputs:' needed here
         run: |
-          # Reference the output from the previous step (format)
           PROMPT_FILE="${{ steps.format.outputs.formatted_prompt_file }}"
           if [[ -f "$PROMPT_FILE" ]]; then
             echo "Reading prompt from $PROMPT_FILE"
-            # Use heredoc to set the 'formatted_prompt' output for this step
-            {
-              echo "formatted_prompt<<EOF_PROMPT_MARKER"
-              cat "$PROMPT_FILE"
-              echo "EOF_PROMPT_MARKER"
-            } >> "$GITHUB_OUTPUT"
-            echo "Prompt successfully read and set to output 'formatted_prompt'."
+            { echo "formatted_prompt<<EOF_PROMPT_MARKER"; cat "$PROMPT_FILE"; echo "EOF_PROMPT_MARKER"; } >> "$GITHUB_OUTPUT"
+            echo "Set output 'formatted_prompt'."
           else
-            echo "::error::Formatted prompt file '$PROMPT_FILE' not found."
-            echo "formatted_prompt=" >> "$GITHUB_OUTPUT" # Set empty output on error
-            exit 1
+            echo "::error::Prompt file '$PROMPT_FILE' not found." && echo "formatted_prompt=" >> "$GITHUB_OUTPUT" && exit 1
           fi
 
       - name: Determine probe-chat Command
         id: determine_command
-        # No step-level 'outputs:' needed here
         run: |
           CMD="${{ secrets.PROBE_CHAT_COMMAND || inputs.default_probe_chat_command }}"
-          if [[ "${{ secrets.PROBE_CHAT_COMMAND }}" ]]; then echo "Using command from secret."; else echo "Using default command: ${{ inputs.default_probe_chat_command }}"; fi
-          echo "Final command: $CMD"
-          # Set the 'command' output for this step
-          echo "command=$CMD" >> $GITHUB_OUTPUT
+          if [[ "${{ secrets.PROBE_CHAT_COMMAND }}" ]]; then echo "Using command from secret."; else echo "Using default: ${{ inputs.default_probe_chat_command }}"; fi
+          echo "Final command: $CMD" && echo "command=$CMD" >> $GITHUB_OUTPUT
 
       - name: Run probe-chat
         id: probe
-        # No step-level 'outputs:' needed here (outcome is accessed directly)
         env:
           PROBE_PROMPT: ${{ steps.read_prompt_file.outputs.formatted_prompt }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
-          OPENAI_API_URL: ${{ secrets.OPENAI_API_URL }}
-          GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
-          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          MODEL_NAME: ${{ secrets.MODEL_NAME }}
-          FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
+          # ... other secrets ...
         run: |
-          # --- Script Content (Exactly as in the previous good version) ---
           set -o pipefail
-          PROMPT="$PROBE_PROMPT"
-          COMMAND_TO_RUN='${{ steps.determine_command.outputs.command }}'
-          RESPONSE_FILE="response.txt" && ERROR_LOG="error.log"
+          PROMPT="$PROBE_PROMPT"; COMMAND_TO_RUN='${{ steps.determine_command.outputs.command }}'; RESPONSE_FILE="response.txt"; ERROR_LOG="error.log"
           if [ -z "$PROMPT" ]; then echo "::error::Prompt env var empty." >&2; echo "🤖 **Error:** Internal error - prompt empty." > "$RESPONSE_FILE"; exit 1; fi
-
           echo "Running probe-chat..."
-          echo "--- Prompt Snippet ---"; printf "%.500s\n...\n%s\n" "$PROMPT" "${PROMPT: -100}"; echo "--- End Snippet ---"
-          echo "Command: $COMMAND_TO_RUN"
           bash -c "echo \"\$PROMPT\" | $COMMAND_TO_RUN" > "$RESPONSE_FILE" 2> "$ERROR_LOG"
           EXIT_CODE=$?
           if [ $EXIT_CODE -ne 0 ]; then
-             echo "::error::probe-chat failed ($EXIT_CODE)." >&2
-             if [ -s "$ERROR_LOG" ]; then echo "--- stderr ---" >&2; cat "$ERROR_LOG" >&2; echo "--- end stderr ---" >&2; fi
-             if [ ! -s "$RESPONSE_FILE" ]; then echo "🤖 **Error:** AI command failed (Exit code: $EXIT_CODE)." > "$RESPONSE_FILE"; fi
-             exit $EXIT_CODE
+             echo "::error::probe-chat failed ($EXIT_CODE)." >&2; if [ -s "$ERROR_LOG" ]; then cat "$ERROR_LOG" >&2; fi
+             if [ ! -s "$RESPONSE_FILE" ]; then echo "🤖 **Error:** AI command failed (Exit code: $EXIT_CODE)." > "$RESPONSE_FILE"; fi; exit $EXIT_CODE
           fi
           echo "probe-chat finished successfully."
           if [ ! -s "$RESPONSE_FILE" ]; then echo "::warning::probe-chat produced empty response."; echo "🤖 AI generated no response." > "$RESPONSE_FILE"; fi
@@ -265,35 +284,21 @@ jobs:
       - name: Read Response or Error and Format Output
         if: always()
         id: read_response
-        # No step-level 'outputs:' needed here
         env:
           COMMAND_PREFIX: ${{ inputs.command_prefix }}
         run: |
-          # --- Script Content (Exactly as in the previous good version) ---
-          RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo "")
-          ERROR_LOG_CONTENT=$(cat error.log 2>/dev/null || echo "")
-          FINAL_BODY=""
-          FOOTER_TEMPLATE="\n\n-----\n*Tip: Start comment with \`%s <request>\`.*\n*Built by [probe](https://probeai.dev)*"
-          printf -v FOOTER "$FOOTER_TEMPLATE" "$COMMAND_PREFIX"
-
-          if [[ "${{ steps.probe.outcome }}" == "success" ]]; then
-              if [[ -n "${RESPONSE_CONTENT// }" ]]; then FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}"; else FINAL_BODY="🤖 Processing succeeded, AI response empty.${FOOTER}"; fi
+          RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo ""); ERROR_LOG_CONTENT=$(cat error.log 2>/dev/null || echo ""); FINAL_BODY=""
+          FOOTER_TEMPLATE="\n\n-----\n*Tip: Start comment with \`%s <request>\`.*\n*Built by [probe](https://probeai.dev)*"; printf -v FOOTER "$FOOTER_TEMPLATE" "$COMMAND_PREFIX"
+          if [[ "${{ steps.probe.outcome }}" == "success" ]]; then if [[ -n "${RESPONSE_CONTENT// }" ]]; then FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}"; else FINAL_BODY="🤖 Processing succeeded, AI response empty.${FOOTER}"; fi
           else # Failure
               ERROR_MESSAGE="🤖 **Error:** AI interaction failed."
               if [[ "${{ steps.format.outcome }}" == "failure" ]] || [[ "${{ steps.read_prompt_file.outcome }}" == "failure" ]]; then ERROR_MESSAGE="🤖 **Error:** Failed during context/prompt prep. Check logs.";
-              elif [[ -n "${RESPONSE_CONTENT// }" ]] && echo "$RESPONSE_CONTENT" | grep -q "🤖 \*\*Error:\*\*" ; then ERROR_MESSAGE="${RESPONSE_CONTENT}"; # Use specific error
+              elif [[ -n "${RESPONSE_CONTENT// }" ]] && echo "$RESPONSE_CONTENT" | grep -q "🤖 \*\*Error:\*\*" ; then ERROR_MESSAGE="${RESPONSE_CONTENT}";
               elif [[ -n "${ERROR_LOG_CONTENT// }" ]]; then ERROR_DETAILS=$(head -c 1000 "$ERROR_LOG" ); if [[ ${#ERROR_LOG_CONTENT} -gt 1000 ]]; then ERROR_DETAILS="${ERROR_DETAILS}\n...(truncated)"; fi; ERROR_MESSAGE="${ERROR_MESSAGE}\n\n**Details (stderr):**\n\`\`\`\n${ERROR_DETAILS}\n\`\`\`";
-              else ERROR_MESSAGE="${ERROR_MESSAGE} No details. Check 'Run probe-chat' logs (outcome: ${{ steps.probe.outcome }})."; fi
-              FINAL_BODY="${ERROR_MESSAGE}${FOOTER}"
+              else ERROR_MESSAGE="${ERROR_MESSAGE} No details. Check 'Run probe-chat' logs (outcome: ${{ steps.probe.outcome }})."; fi; FINAL_BODY="${ERROR_MESSAGE}${FOOTER}";
           fi
-
           echo "Final response body prep'd. Length: ${#FINAL_BODY}"
-          # Set the 'response' output for this step using HEREDOC
-          {
-            echo "response<<EOF_RESPONSE_MARKER"
-            echo "$FINAL_BODY"
-            echo "EOF_RESPONSE_MARKER"
-          } >> $GITHUB_OUTPUT
+          { echo "response<<EOF_RESPONSE_MARKER"; echo "$FINAL_BODY"; echo "EOF_RESPONSE_MARKER"; } >> $GITHUB_OUTPUT
 
   # Job 2: Post the response back to GitHub
   post_response:
