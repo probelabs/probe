@@ -37,6 +37,111 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # --- Detect Languages ---
+      - name: Detect Project Languages
+        id: detect_languages
+        run: |
+          # Initialize flags
+          NODE_FOUND=false
+          GO_FOUND=false
+          RUST_FOUND=false
+          PYTHON_FOUND=false
+
+          # Check for dependency files
+          if [ -f "package.json" ]; then
+            echo "Detected Node.js (package.json)"
+            NODE_FOUND=true
+          fi
+          if [ -f "go.mod" ]; then
+            echo "Detected Go (go.mod)"
+            GO_FOUND=true
+          fi
+          if [ -f "Cargo.toml" ]; then
+            echo "Detected Rust (Cargo.toml)"
+            RUST_FOUND=true
+          fi
+          if [ -f "requirements.txt" ]; then
+            echo "Detected Python (requirements.txt)"
+            PYTHON_FOUND=true
+          fi
+
+          # Set outputs for use in later steps
+          echo "node_found=$NODE_FOUND" >> $GITHUB_OUTPUT
+          echo "go_found=$GO_FOUND" >> $GITHUB_OUTPUT
+          echo "rust_found=$RUST_FOUND" >> $GITHUB_OUTPUT
+          echo "python_found=$PYTHON_FOUND" >> $GITHUB_OUTPUT
+
+      # --- Node.js Setup and Caching (Conditional) ---
+      - name: Set up Node.js
+        if: steps.detect_languages.outputs.node_found == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: 'npm' # Caches ~/.npm based on package-lock.jsonව
+
+      # --- Go Setup and Caching (Conditional) ---
+      - name: Set up Go
+        if: steps.detect_languages.outputs.go_found == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          # Go caching is automatic in setup-go@v3.2+
+
+      # --- Rust Setup and Caching (Conditional) ---
+      - name: Set up Rust
+        if: steps.detect_languages.outputs.rust_found == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        if: steps.detect_languages.outputs.rust_found == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # --- Python Setup and Caching (Conditional) ---
+      - name: Set up Python
+        if: steps.detect_languages.outputs.python_found == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+          cache-dependency-path: '**/requirements.txt'
+
+      # --- Install Dependencies ---
+      - name: Install Project Dependencies
+        run: |
+          # Node.js - Check for package.json
+          if [ -f "package.json" ]; then
+            echo "Found package.json - Installing Node.js dependencies..."
+            npm install
+          fi
+
+          # Go - Check for go.mod
+          if [ -f "go.mod" ]; then
+            echo "Found go.mod - Installing Go dependencies..."
+            go mod download
+          fi
+
+          # Rust - Check for Cargo.toml
+          if [ -f "Cargo.toml" ]; then
+            echo "Found Cargo.toml - Installing Rust dependencies..."
+            cargo build --quiet
+          fi
+
+          # Python - Check for requirements.txt
+          if [ -f "requirements.txt" ]; then
+            echo "Found requirements.txt - Installing Python dependencies..."
+            pip install -r requirements.txt
+          fi
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
