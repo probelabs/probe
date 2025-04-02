@@ -318,7 +318,15 @@ jobs:
         id: probe
         env:
           PROBE_PROMPT: ${{ steps.read_prompt_file.outputs.formatted_prompt }} # Assuming this is how PROMPT is sourced
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} # Required by probe-chat, presumably
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          OPENAI_API_URL: ${{ secrets.OPENAI_API_URL }}
+          GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          MODEL_NAME: ${{ secrets.MODEL_NAME }}
+          FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
         run: |
           set -o pipefail # Fail if any command in the pipe fails
           PROMPT="$PROBE_PROMPT"
