@@ -21,7 +21,7 @@ on:
 permissions:
   pull-requests: write # Needed for reading PR data/comments/reviews, posting comments, adding reactions
   issues: write        # Needed for reading issue data/comments, posting comments, adding reactions
-  contents: read
+  contents: read       # Needed for gh pr diff etc.
 
 jobs:
   process_comment:
@@ -42,7 +42,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install jq (if needed) and Verify gh
+      - name: Install jq and Verify gh
         run: |
           sudo apt-get update && sudo apt-get install -y jq --no-install-recommends
           gh --version
@@ -83,7 +83,8 @@ jobs:
 
           ISSUE_OR_PR_NUMBER=${{ steps.set_context_ids.outputs.issue_number }}
           RAW_COMMENT_BODY="${{ github.event.comment.body }}"
-          GITHUB_API_ARGS=(-H "Accept: application/vnd.github+json" --silent) # Common args for gh api
+          GITHUB_API_ARGS=(-H "Accept: application/vnd.github+json" --silent) # Common args for gh api calls that we want to be silent on failure (like the context check)
+          GITHUB_API_ARGS_VERBOSE=(-H "Accept: application/vnd.github+json") # Common args for gh api calls where we want to see errors
 
           # Basic XML escaping function (ampersand first!)
           escape_xml() {
@@ -103,26 +104,41 @@ jobs:
 
           # Determine context type: check if it's a pull request
           CONTEXT_TYPE="issue"
+          # Use the silent args here, we only care about success/failure
           if gh api "${GITHUB_API_ARGS[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER" --jq .url > /dev/null 2>&1; then
              CONTEXT_TYPE="pr"
           fi
           echo "Context type: $CONTEXT_TYPE"
 
           # --- Fetch ALL Comments ---
-          # Initialize variable in the current shell
-          COMMENTS_XML=""
+          COMMENTS_XML="" # Initialize variable
 
           # 1. Fetch regular issue/PR comments
-          echo "Fetching standard comments for $CONTEXT_TYPE #$ISSUE_OR_PR_NUMBER..."
-          # Use process substitution < <(...) to avoid subshell issues with the while loop
-          while IFS= read -r comment_json; do
-              login=$(echo "$comment_json" | jq -r .login | escape_xml)
-              created_at=$(echo "$comment_json" | jq -r .created_at)
-              body=$(echo "$comment_json" | jq -r .body | escape_xml)
-              # Append to the variable in the current shell
-              COMMENTS_XML="${COMMENTS_XML}<comment type=\"issue\"><author>$login</author><timestamp>$created_at</timestamp><content>$body</content></comment>"
-              echo "  Processed standard comment by $login" # Debug log
-          done < <(gh api "${GITHUB_API_ARGS[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER/comments" --paginate --jq '.[] | {login: .user.login, created_at: .created_at, body: .body}' 2>/dev/null || { echo "::warning::Failed to fetch or process standard comments."; echo "[]"; }) # Add --paginate, handle potential errors
+          echo "Fetching standard comments JSON for $CONTEXT_TYPE #$ISSUE_OR_PR_NUMBER..."
+          # Use VERBOSE args to see API errors if they occur
+          STD_COMMENTS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER/comments" --paginate)
+          STD_COMMENTS_EXIT_CODE=$?
+
+          if [[ $STD_COMMENTS_EXIT_CODE -ne 0 ]]; then
+              echo "::warning::Failed to fetch standard comments (exit code $STD_COMMENTS_EXIT_CODE). See logs above for potential API errors."
+          # Check if the fetched data is a valid JSON array using jq's exit code (-e)
+          elif echo "$STD_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+              echo "Standard comments JSON is a valid array. Processing..."
+              # Use jq to iterate over the array, select fields (handle nulls), and output as TSV
+              # Then use a robust while read loop
+              while IFS=$'\t' read -r login created_at body; do
+                  # Escape each field *after* extracting it
+                  escaped_login=$(echo "$login" | escape_xml)
+                  escaped_body=$(echo "$body" | escape_xml)
+                  # Append to the variable in the current shell
+                  COMMENTS_XML="${COMMENTS_XML}<comment type=\"issue\"><author>$escaped_login</author><timestamp>$created_at</timestamp><content>$escaped_body</content></comment>"
+                  # echo "  Processed standard comment by $escaped_login" # Verbose log, uncomment if needed
+              done < <(echo "$STD_COMMENTS_JSON" | jq -r '.[] | [.user.login // "unknown", .created_at // "N/A", .body // ""] | @tsv')
+              echo "Finished processing standard comments. XML length: ${#COMMENTS_XML}"
+          else
+              echo "::warning::API call for standard comments succeeded but did not return a valid JSON array. Response (first 500 chars):"
+              echo "$STD_COMMENTS_JSON" | head -c 500
+          fi
 
 
           # --- Fetch Context-Specific Data & Build XML ---
@@ -132,71 +148,114 @@ jobs:
 
           if [[ "$CONTEXT_TYPE" == "pr" ]]; then
             echo "Fetching PR details and diff..."
-            # Fetch PR details using gh cli
-            PR_DATA=$(gh pr view $ISSUE_OR_PR_NUMBER --json title,body --repo ${REPO} 2>/dev/null || echo '{"title": "Error fetching PR title", "body": "Error fetching PR body"}')
-            PR_TITLE=$(echo "$PR_DATA" | jq -r .title | escape_xml)
-            PR_BODY=$(echo "$PR_DATA" | jq -r .body | escape_xml)
-            # Fetch PR diff using gh cli
-            PR_DIFF=$(gh pr diff $ISSUE_OR_PR_NUMBER --repo ${REPO} 2>/dev/null || echo "<!-- Error fetching diff -->")
-            # Escape the diff content for XML safety, especially if it contains <, >, &
-            ESCAPED_PR_DIFF=$(echo "$PR_DIFF" | escape_xml)
+            # Fetch PR details using gh cli - Add error handling
+            PR_DATA=$(gh pr view $ISSUE_OR_PR_NUMBER --json title,body --repo ${REPO} 2> pr_view_error.log || echo 'FETCH_FAILED')
+            if [[ "$PR_DATA" == "FETCH_FAILED" ]]; then
+                echo "::warning::Failed to fetch PR details (title, body). Error log:"
+                cat pr_view_error.log
+                PR_TITLE="Error fetching PR title"
+                PR_BODY="Error fetching PR body"
+            else
+                PR_TITLE=$(echo "$PR_DATA" | jq -r .title | escape_xml)
+                PR_BODY=$(echo "$PR_DATA" | jq -r .body | escape_xml)
+            fi
+
+            # Fetch PR diff using gh cli - Add error handling
+            PR_DIFF=$(gh pr diff $ISSUE_OR_PR_NUMBER --repo ${REPO} 2> pr_diff_error.log || echo "FETCH_FAILED")
+            if [[ "$PR_DIFF" == "FETCH_FAILED" ]]; then
+                 echo "::warning::Failed to fetch PR diff. Error log:"
+                 cat pr_diff_error.log
+                 ESCAPED_PR_DIFF="<!-- Error fetching diff -->" # Escaped XML comment
+            else
+                 # Escape the diff content for XML safety
+                 ESCAPED_PR_DIFF=$(echo "$PR_DIFF" | escape_xml)
+            fi
 
             CONTEXT_DETAILS_XML="<details><title>$PR_TITLE</title><body>$PR_BODY</body></details>"
-            # Use the escaped diff
             DIFF_XML="<diff>$ESCAPED_PR_DIFF</diff>"
 
             # 2. Fetch PR review comments (comments on the diff)
-            echo "Fetching PR review comments (diff comments)..."
-            # Use process substitution < <(...)
-            while IFS= read -r comment_json; do
-                login=$(echo "$comment_json" | jq -r .login | escape_xml)
-                created_at=$(echo "$comment_json" | jq -r .created_at)
-                body=$(echo "$comment_json" | jq -r .body | escape_xml)
-                path=$(echo "$comment_json" | jq -r .path | escape_xml)
-                # Use diff_hunk for better context if available, otherwise body
-                diff_hunk=$(echo "$comment_json" | jq -r .diff_hunk | escape_xml)
-                line=$(echo "$comment_json" | jq -r .line // .original_line) # Prefer line, fallback to original_line
-                COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_comment\" file=\"$path\" line=\"$line\"><author>$login</author><timestamp>$created_at</timestamp><diff_hunk>$diff_hunk</diff_hunk><content>$body</content></comment>"
-                echo "  Processed review comment by $login on $path:$line" # Debug log
-            done < <(gh api "${GITHUB_API_ARGS[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/comments" --paginate --jq '.[] | {login: .user.login, created_at: .created_at, body: .body, path: .path, line: .line, original_line: .original_line, diff_hunk: .diff_hunk}' 2>/dev/null || { echo "::warning::Failed to fetch or process review comments."; echo "[]"; })
+            echo "Fetching PR review comments (diff comments) JSON..."
+            # Use VERBOSE args
+            REVIEW_COMMENTS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/comments" --paginate)
+            REVIEW_COMMENTS_EXIT_CODE=$?
+
+            if [[ $REVIEW_COMMENTS_EXIT_CODE -ne 0 ]]; then
+                echo "::warning::Failed to fetch PR review comments (exit code $REVIEW_COMMENTS_EXIT_CODE). See logs."
+            elif echo "$REVIEW_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+                echo "PR review comments JSON is a valid array. Processing..."
+                while IFS=$'\t' read -r login created_at body path diff_hunk line; do
+                    escaped_login=$(echo "$login" | escape_xml)
+                    escaped_body=$(echo "$body" | escape_xml)
+                    escaped_path=$(echo "$path" | escape_xml)
+                    escaped_diff_hunk=$(echo "$diff_hunk" | escape_xml)
+                    # Line number is usually safe
+                    COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_comment\" file=\"$escaped_path\" line=\"$line\"><author>$escaped_login</author><timestamp>$created_at</timestamp><diff_hunk>$escaped_diff_hunk</diff_hunk><content>$escaped_body</content></comment>"
+                    # echo "  Processed review comment by $escaped_login on $escaped_path:$line" # Verbose
+                done < <(echo "$REVIEW_COMMENTS_JSON" | jq -r '.[] | [.user.login // "unknown", .created_at // "N/A", .body // "", .path // "unknown", .diff_hunk // "", (.line // .original_line // "N/A")] | @tsv')
+                echo "Finished processing review comments. XML length: ${#COMMENTS_XML}"
+            else
+                echo "::warning::API call for review comments succeeded but did not return a valid JSON array. Response (first 500 chars):"
+                echo "$REVIEW_COMMENTS_JSON" | head -c 500
+            fi
 
             # 3. Fetch PR reviews (overall review comments/states)
-            echo "Fetching PR reviews..."
-             # Use process substitution < <(...) and filter empty/null bodies within jq
-            while IFS= read -r review_json; do
-                login=$(echo "$review_json" | jq -r .login | escape_xml)
-                submitted_at=$(echo "$review_json" | jq -r .submitted_at)
-                body=$(echo "$review_json" | jq -r .body | escape_xml)
-                state=$(echo "$review_json" | jq -r .state | escape_xml)
-                COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_body\" state=\"$state\"><author>$login</author><timestamp>$submitted_at</timestamp><content>$body</content></comment>"
-                echo "  Processed review body by $login (State: $state)" # Debug log
-            done < <(gh api "${GITHUB_API_ARGS[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/reviews" --paginate --jq '.[] | select(.body != null and .body != "") | {login: .user.login, submitted_at: .submitted_at, body: .body, state: .state}' 2>/dev/null || { echo "::warning::Failed to fetch or process reviews."; echo "[]"; })
+            echo "Fetching PR reviews JSON..."
+            # Use VERBOSE args
+            REVIEWS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/reviews" --paginate)
+            REVIEWS_EXIT_CODE=$?
 
-            # --- MODIFIED PR PROMPT (Less Restrictive) ---
+            if [[ $REVIEWS_EXIT_CODE -ne 0 ]]; then
+                echo "::warning::Failed to fetch PR reviews (exit code $REVIEWS_EXIT_CODE). See logs."
+            # Filter for non-empty bodies *within jq* and check if result is an array
+            elif echo "$REVIEWS_JSON" | jq -e '[.[] | select(.body != null and .body != "")] | type == "array"' > /dev/null 2>&1; then
+                 echo "PR reviews JSON is valid and contains reviews with bodies. Processing..."
+                 # Filter within jq first, then extract fields as TSV
+                 while IFS=$'\t' read -r login submitted_at body state; do
+                     escaped_login=$(echo "$login" | escape_xml)
+                     escaped_body=$(echo "$body" | escape_xml)
+                     escaped_state=$(echo "$state" | escape_xml)
+                     COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_body\" state=\"$escaped_state\"><author>$escaped_login</author><timestamp>$submitted_at</timestamp><content>$escaped_body</content></comment>"
+                     # echo "  Processed review body by $escaped_login (State: $escaped_state)" # Verbose
+                 done < <(echo "$REVIEWS_JSON" | jq -r '.[] | select(.body != null and .body != "") | [.user.login // "unknown", .submitted_at // "N/A", .body, .state // "N/A"] | @tsv')
+                 echo "Finished processing review bodies. XML length: ${#COMMENTS_XML}"
+            else
+                 # This case handles both invalid JSON and valid JSON array that is empty after filtering
+                 echo "::warning::API call for reviews succeeded, but no valid review bodies found or response was not a JSON array. Response (first 500 chars):"
+                 echo "$REVIEWS_JSON" | head -c 500
+            fi
+
+            # --- PR PROMPT INSTRUCTION ---
             PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request. Use the information provided within the <github_context> XML structure (including PR details, comments/reviews, and the code diff) as the primary source to understand the request. Provide a concise and helpful response to the <user_request>. You may leverage your general knowledge or other capabilities where appropriate to enhance the response, focusing on code review, understanding changes, or summarizing intent and impact."
 
-            echo "PR details fetched. Title length: ${#PR_TITLE}, Body length: ${#PR_BODY}"
-            echo "Diff fetched. Original Diff length: ${#PR_DIFF}"
+            echo "PR context preparation finished."
 
           elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
             echo "Fetching Issue details..."
-            ISSUE_DATA=$(gh issue view $ISSUE_OR_PR_NUMBER --json title,body --repo ${REPO} 2>/dev/null || echo '{"title": "Error fetching Issue title", "body": "Error fetching Issue body"}')
-            ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title | escape_xml)
-            ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body | escape_xml)
+            # Fetch Issue details using gh cli - Add error handling
+            ISSUE_DATA=$(gh issue view $ISSUE_OR_PR_NUMBER --json title,body --repo ${REPO} 2> issue_view_error.log || echo 'FETCH_FAILED')
+             if [[ "$ISSUE_DATA" == "FETCH_FAILED" ]]; then
+                echo "::warning::Failed to fetch Issue details (title, body). Error log:"
+                cat issue_view_error.log
+                ISSUE_TITLE="Error fetching Issue title"
+                ISSUE_BODY="Error fetching Issue body"
+            else
+                ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title | escape_xml)
+                ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body | escape_xml)
+            fi
 
             CONTEXT_DETAILS_XML="<details><title>$ISSUE_TITLE</title><body>$ISSUE_BODY</body></details>"
             DIFF_XML="" # No diff for issues
 
             # No extra comment types needed for issues, standard comments already fetched above
 
-            # --- MODIFIED ISSUE PROMPT (Less Restrictive) ---
+            # --- ISSUE PROMPT INSTRUCTION ---
             PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue. Use the information provided within the <github_context> XML structure (including issue details and comments) as the primary source to understand the request. Provide a concise and helpful response to the <user_request>. You may leverage your general knowledge or other capabilities where appropriate to enhance the response, aiming to summarize the issue, clarify points, suggest potential next steps, or answer questions. If asked for solutions, propose actionable ideas informed by the issue's description and discussion."
 
-            echo "Issue details fetched. Title length: ${#ISSUE_TITLE}, Body length: ${#ISSUE_BODY}"
+            echo "Issue context preparation finished."
           fi
 
           # --- Assemble Final Prompt ---
-          echo "Final comments XML length: ${#COMMENTS_XML}" # Log final length
           echo "Assembling final prompt..."
           # Ensure proper XML structure and include the final user request
           FORMATTED_PROMPT="<github_context type=\"$CONTEXT_TYPE\" number=\"$ISSUE_OR_PR_NUMBER\">
@@ -207,14 +266,15 @@ jobs:
             </comments>
             <user_request author=\"${{ github.event.comment.user.login }}\" timestamp=\"${{ github.event.comment.created_at }}\">${USER_REQUEST_BODY}</user_request>
             </github_context>
-            
-            ${PROMPT_INSTRUCTION}"
 
-          if [ -z "$FORMATTED_PROMPT" ]; then
-             echo "::error::Formatted prompt became empty after assembly. Check preceding logs and variable contents."
-             exit 1
+            ${PROMPT_INSTRUCTION}" # Note: The instruction is outside the context XML
+
+          # Basic check if prompt seems suspiciously empty (e.g. only skeleton left)
+          if [ ${#FORMATTED_PROMPT} -lt 200 ]; then # Adjust threshold as needed
+             echo "::warning::Formatted prompt seems unusually short. Check preceding logs and variable contents."
+             echo "Prompt Snippet: $FORMATTED_PROMPT"
           fi
-          echo "Final prompt assembled successfully. Length: ${#FORMATTED_PROMPT}"
+          echo "Final prompt assembled. Length: ${#FORMATTED_PROMPT}"
 
           # Output the potentially large prompt securely using delimiters
           echo "formatted_prompt<<EOF_PROMPT_MARKER" >> $GITHUB_OUTPUT
@@ -226,7 +286,7 @@ jobs:
         id: determine_command
         run: |
           # Use parameter expansion for default value if secret is empty or unset
-          CMD="${{ secrets.PROBE_CHAT_COMMAND }}:-${{ inputs.default_probe_chat_command }}"
+          CMD="${{ secrets.PROBE_CHAT_COMMAND }:-${{ inputs.default_probe_chat_command }}}"
           if [[ "${{ secrets.PROBE_CHAT_COMMAND }}" ]]; then
              echo "Using probe-chat command from PROBE_CHAT_COMMAND secret."
           else
@@ -237,7 +297,7 @@ jobs:
 
       - name: Run probe-chat
         id: probe
-        # Use bash -e -o pipefail to ensure errors in pipes are caught
+        # Use bash with -e (exit on error) and -o pipefail (catch pipe errors)
         env:
           # Pass the prompt via environment variable
           PROBE_PROMPT: ${{ steps.format.outputs.formatted_prompt }}
@@ -252,8 +312,7 @@ jobs:
           MODEL_NAME: ${{ secrets.MODEL_NAME }}
           FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
         run: |
-          # No need for set -e here, shell option does it
-          PROMPT="$PROBE_PROMPT" # Assign from env var for clarity if needed later
+          PROMPT="$PROBE_PROMPT" # Assign from env var for clarity
           COMMAND_TO_RUN='${{ steps.determine_command.outputs.command }}'
           RESPONSE_FILE="response.txt"
           ERROR_LOG="error.log" # Capture stderr separately
@@ -273,44 +332,33 @@ jobs:
           echo "Command to run: $COMMAND_TO_RUN"
 
           # Execute the command, redirect stdout to response file, stderr to error log
-          # The pipefail option ensures failure if any command in the pipe fails
-          # The EXIT_CODE capture is now less critical due to -e, but kept for potential finer control
-          EXIT_CODE=0
-          echo "$PROMPT" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> "$ERROR_LOG" || EXIT_CODE=$?
+          # Because of "bash -e -o pipefail", the script will exit if either echo or the command fails.
+          echo "$PROMPT" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> "$ERROR_LOG"
 
-          # Check exit code explicitly (good practice even with -e)
-          if [ $EXIT_CODE -ne 0 ]; then
-            echo "::error::probe-chat command failed with exit code $EXIT_CODE."
-            echo "Stderr output from probe-chat:"
-            cat "$ERROR_LOG" # Display error log in Actions log
-            # Format an error message into the response file for the GitHub comment
-            {
-              echo "🤖 **Error:** The AI command failed (exit code $EXIT_CODE)."
-              echo ""
-              echo "**Details (from stderr):**"
-              echo '```'
-              cat "$ERROR_LOG" # Include stderr in the comment
-              echo '```'
-              echo ""
-              echo "> Check the Action logs for the full prompt and details."
-            } > "$RESPONSE_FILE"
-            exit $EXIT_CODE # Ensure the step fails with the same code
-          else
-             echo "probe-chat command finished successfully."
-             # Optionally log stdout if needed for debugging success cases
-             # echo "Stdout from probe-chat:"
-             # cat "$RESPONSE_FILE"
+          # If we reach here, the command succeeded (exit code 0)
+          echo "probe-chat command finished successfully."
+
+          # Optional: Check if response file is empty even on success
+          if [ ! -s "$RESPONSE_FILE" ]; then
+            echo "::warning::probe-chat succeeded but produced an empty response file."
           fi
 
+        # This catch block runs if the main 'run' command fails (due to -e)
+        # We need to explicitly catch the failure to format an error message.
+        # Using '||' here only works if the LAST command fails. A different structure is needed.
+        # --- REVISED ERROR HANDLING for 'probe' step ---
+        # The 'bash -e' handles the exit, but we want to format the error.
+        # We'll rely on the 'read_response' step checking 'steps.probe.outcome'.
 
       - name: Read Response or Error and Format Output
-        # Always run this step to capture success/failure messages
+        # Always run this step to capture success/failure messages from 'probe'
         if: always()
         id: read_response
         env:
           COMMAND_PREFIX: ${{ inputs.command_prefix }}
         run: |
           RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo "") # Read content, default to empty if file missing
+          ERROR_LOG_CONTENT=$(cat error.log 2>/dev/null || echo "")   # Read error log content
           FINAL_BODY=""
 
           # Define the footer (using printf for safer formatting)
@@ -323,17 +371,25 @@ jobs:
               FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}" # Successful response with content
             else
               # Probe step succeeded, but the response file is empty
-              FINAL_BODY="🤖 Processing finished, but no response was generated by the AI.${FOOTER}"
+              FINAL_BODY="🤖 Processing finished successfully, but no response content was generated by the AI.${FOOTER}"
             fi
-          else # probe step failed or was skipped (though skip condition unlikely if this step runs)
-            if [[ -n "${RESPONSE_CONTENT// }" ]]; then
-              # Probe failed, but response.txt has content (likely the formatted error from probe step)
-              FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}"
-            elif [[ "${{ steps.format.outcome }}" == "failure" ]]; then
-              FINAL_BODY="🤖 **Error:** Processing failed: Error during context preparation (step 'format'). Check Action logs.${FOOTER}"
+          else # probe step failed or was skipped
+            # Construct error message using probe step's failure and any captured stderr
+            ERROR_MESSAGE="🤖 **Error:** The AI command failed."
+            if [[ -n "${ERROR_LOG_CONTENT// }" ]]; then
+              ERROR_MESSAGE="${ERROR_MESSAGE}\n\n**Details (from stderr):**\n\`\`\`\n${ERROR_LOG_CONTENT}\n\`\`\`"
             else
-              # Generic error if probe failed and left no message (e.g., killed)
-              FINAL_BODY="🤖 **Error:** Processing failed unexpectedly (step 'probe'). Check Action logs.${FOOTER}"
+               ERROR_MESSAGE="${ERROR_MESSAGE} No specific error details were captured. Check the Action logs for the 'Run probe-chat' step."
+            fi
+            # Also check if the 'format' step failed first
+            if [[ "${{ steps.format.outcome }}" == "failure" ]]; then
+               FINAL_BODY="🤖 **Error:** Processing failed: Error during context preparation (step 'format'). Check Action logs.${FOOTER}"
+            # Check if the failure was the prompt being empty (caught in probe step)
+            elif grep -q "Failed to prepare the AI prompt content" response.txt 2>/dev/null; then
+               FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}" # Use the error message written to response.txt
+            else
+               # Generic error from probe step failure
+               FINAL_BODY="${ERROR_MESSAGE}${FOOTER}"
             fi
           fi
 
@@ -346,7 +402,8 @@ jobs:
 
   # Job 2: Post the response back to GitHub
   post_response:
-    # Only run if the process_comment job ran (wasn't skipped by the 'if' condition)
+    # Only run if the process_comment job *attempted* to run (wasn't skipped by the top-level 'if')
+    # The 'if: always()' on the read_response step ensures response_body is always set.
     if: needs.process_comment.result != 'skipped'
     runs-on: ubuntu-latest
     needs: [process_comment] # Depend on the previous job
