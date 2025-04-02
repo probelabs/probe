@@ -15,9 +15,6 @@ on:
         default: "npx -y @buger/probe-chat@latest"
         type: string
     secrets:
-      GITHUB_TOKEN:
-        required: true
-        description: "The GitHub token for authentication"
       PROBE_CHAT_COMMAND:
         required: false
         description: "Optional command for probe chat"
