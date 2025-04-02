@@ -34,6 +34,5 @@ jobs:
     # Pass ALL secrets from this repository to the reusable workflow
     # This includes GITHUB_TOKEN, PROBE_CHAT_COMMAND (if set), ANTHROPIC_API_KEY, etc.
     secrets:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
