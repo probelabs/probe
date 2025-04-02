@@ -226,7 +226,7 @@ jobs:
         id: determine_command
         run: |
           # Use parameter expansion for default value if secret is empty or unset
-          CMD="${{ secrets.PROBE_CHAT_COMMAND:-${{ inputs.default_probe_chat_command }} }}"
+          CMD="${{ secrets.PROBE_CHAT_COMMAND }}:-${{ inputs.default_probe_chat_command }}"
           if [[ "${{ secrets.PROBE_CHAT_COMMAND }}" ]]; then
              echo "Using probe-chat command from PROBE_CHAT_COMMAND secret."
           else
@@ -238,7 +238,6 @@ jobs:
       - name: Run probe-chat
         id: probe
         # Use bash -e -o pipefail to ensure errors in pipes are caught
-        shell: bash -e -o pipefail
         env:
           # Pass the prompt via environment variable
           PROBE_PROMPT: ${{ steps.format.outputs.formatted_prompt }}
