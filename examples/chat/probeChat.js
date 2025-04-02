@@ -21,8 +21,8 @@ import { searchToolInstance, queryToolInstance, extractToolInstance } from './pr
 
 // Maximum number of messages to keep in history
 const MAX_HISTORY_MESSAGES = 100;
-// Maximum iterations for the tool loop
-const MAX_TOOL_ITERATIONS = 20;
+// Maximum iterations for the tool loop - configurable via MAX_TOOL_ITERATIONS env var
+const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
 
 // --- XML Tool Definitions for System Prompt ---
 const TOOL_DEFINITIONS = `
@@ -155,6 +155,7 @@ export class ProbeChat {
 
     if (this.debug) {
       console.log(`[DEBUG] Generated session ID for chat: ${this.sessionId}`);
+      console.log(`[DEBUG] Maximum tool iterations configured: ${MAX_TOOL_ITERATIONS}`);
     }
 
     // Store tool instances for execution
@@ -471,7 +472,7 @@ Follow these instructions carefully:
   async _processChat(message) {
     let currentIteration = 0;
     let completionAttempted = false;
-    let finalResult = `Error: Max tool iterations (${MAX_TOOL_ITERATIONS}) reached without completion.`; // Default error
+    let finalResult = `Error: Max tool iterations (${MAX_TOOL_ITERATIONS}) reached without completion. You can increase this limit using the MAX_TOOL_ITERATIONS environment variable or --max-iterations flag.`; // Default error
 
     // Ensure AbortController is fresh for this chat turn (redundant but safe)
     this.abortController = new AbortController();
@@ -519,7 +520,7 @@ Follow these instructions carefully:
         if (this.cancelled) throw new Error('Request was cancelled by the user'); // Check at start of iteration
 
         if (this.debug) {
-          console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${MAX_TOOL_ITERATIONS} ---`);
+          console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${MAX_TOOL_ITERATIONS} (configured via ${process.env.MAX_TOOL_ITERATIONS ? 'env/flag' : 'default'}) ---`);
           console.log(`[DEBUG] Current messages count for AI call: ${currentMessages.length}`);
           // Log last few messages concisely
           currentMessages.slice(-3).forEach((msg, idx) => {
@@ -794,7 +795,7 @@ Follow these instructions carefully:
       } // --- End While Loop ---
 
       if (currentIteration >= MAX_TOOL_ITERATIONS && !completionAttempted) {
-        console.warn(`[WARN] Max tool iterations (${MAX_TOOL_ITERATIONS}) reached for session ${this.sessionId}. Returning current error state.`);
+        console.warn(`[WARN] Max tool iterations (${MAX_TOOL_ITERATIONS}) reached for session ${this.sessionId}. Returning current error state. You can increase this limit using the MAX_TOOL_ITERATIONS environment variable or --max-iterations flag.`);
         // finalResult is already set to the error message
       }
 

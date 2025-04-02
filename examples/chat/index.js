@@ -59,6 +59,7 @@ export function main() {
     .option('-m, --message <message>', 'Send a single message and exit (non-interactive mode)')
     .option('-s, --session-id <sessionId>', 'Specify a session ID for the chat (optional)')
     .option('--json', 'Output the response as JSON in non-interactive mode')
+    .option('--max-iterations <number>', 'Maximum number of tool iterations allowed (default: 30)')
     .argument('[path]', 'Path to the codebase to search (overrides ALLOWED_FOLDERS)')
     .parse(process.argv);
 
@@ -124,6 +125,17 @@ export function main() {
     }
     process.env.FORCE_PROVIDER = provider;
     logInfo(chalk.blue(`Forcing provider: ${provider}`));
+  }
+
+  // Set MAX_TOOL_ITERATIONS from command line if provided
+  if (options.maxIterations) {
+    const maxIterations = parseInt(options.maxIterations, 10);
+    if (isNaN(maxIterations) || maxIterations <= 0) {
+      logError(chalk.red(`Invalid max iterations value: ${options.maxIterations}. Must be a positive number.`));
+      process.exit(1);
+    }
+    process.env.MAX_TOOL_ITERATIONS = maxIterations.toString();
+    logInfo(chalk.blue(`Setting maximum tool iterations to: ${maxIterations}`));
   }
 
   // Parse and validate allowed folders from environment variable
