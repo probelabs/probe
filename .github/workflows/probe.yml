@@ -14,6 +14,40 @@ on:
         required: false
         default: "npx -y @buger/probe-chat@latest"
         type: string
+    secrets:
+      GITHUB_TOKEN:
+        required: true
+        description: "The GitHub token for authentication"
+      PROBE_CHAT_COMMAND:
+        required: false
+        description: "Optional command for probe chat"
+      ANTHROPIC_API_KEY:
+        required: false
+        description: "API key for Anthropic service"
+      OPENAI_API_KEY:
+        required: false
+        description: "API key for OpenAI service"
+      GOOGLE_API_KEY:
+        required: false
+        description: "API key for Google service"
+      ANTHROPIC_API_URL:
+        required: false
+        description: "Custom API URL for Anthropic service"
+      OPENAI_API_URL:
+        required: false
+        description: "Custom API URL for OpenAI service"
+      GOOGLE_API_URL:
+        required: false
+        description: "Custom API URL for Google service"
+      LLM_BASE_URL:
+        required: false
+        description: "Base URL for the LLM service"
+      MODEL_NAME:
+        required: false
+        description: "Name of the model to use"
+      FORCE_PROVIDER:
+        required: false
+        description: "Force the use of a specific provider"
 
 permissions:
   pull-requests: write
