@@ -22,7 +22,7 @@ permissions:
   pull-requests: write
   issues: write
   contents: read
-  # reactions: write # Usually covered by issues/pull-requests write
+  # reactions: write # Required for gh api reaction POST
 
 jobs:
   process_comment:
@@ -47,17 +47,27 @@ jobs:
           sudo apt-get update && sudo apt-get install -y jq --no-install-recommends
           gh --version
 
-      - name: Set Issue Number Output
-        id: set_issue_number
-        run: echo "issue_number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+      - name: Set Issue Number and Comment ID Output
+        id: set_context_ids
+        run: |
+          echo "issue_number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+          echo "comment_id=${{ github.event.comment.id }}" >> $GITHUB_OUTPUT
 
+      # --- MODIFIED: Add reaction using gh api ---
       - name: Add 'eyes' reaction to comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          COMMENT_URL: ${{ github.event.comment.html_url }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ steps.set_context_ids.outputs.comment_id }}
         run: |
-          echo "Adding 👀 reaction to ${COMMENT_URL}"
-          gh reaction add --content eyes "${COMMENT_URL}" || echo "::warning::Failed to add reaction to comment. Continuing..."
+          echo "Adding 👀 reaction to comment ID ${COMMENT_ID} in repo ${REPO}"
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content='eyes' \
+            --silent || echo "::warning::Failed to add reaction to comment ${COMMENT_ID}. Continuing..."
+          # Using --silent to suppress success output, || catches errors
 
       - name: Determine Context and Format Input
         id: format
@@ -69,18 +79,20 @@ jobs:
           set -e
           # set -x
 
-          ISSUE_OR_PR_NUMBER=${{ github.event.issue.number }}
+          ISSUE_OR_PR_NUMBER=${{ steps.set_context_ids.outputs.issue_number }} # Use output from previous step
           RAW_COMMENT_BODY="${{ github.event.comment.body }}"
 
-          # Extract user request
-          USER_REQUEST_BODY="${RAW_COMMENT_BODY#${COMMAND_PREFIX}}"
-          USER_REQUEST_BODY="${USER_REQUEST_BODY##*( )}"
-          USER_REQUEST_BODY="${USER_REQUEST_BODY%%*( )}"
-          echo "User request extracted: [${USER_REQUEST_BODY}]"
+          # Extract user request - escape basic XML entities
+          USER_REQUEST_BODY_RAW="${RAW_COMMENT_BODY#${COMMAND_PREFIX}}"
+          USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW##*( )}"
+          USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW%%*( )}"
+          USER_REQUEST_BODY=$(echo "$USER_REQUEST_BODY_RAW" | sed -e 's/&/\&/g' -e 's/</\</g' -e 's/>/\>/g' -e 's/"/\"/g' -e "s/'/\'/g")
+          echo "User request extracted and escaped: [${USER_REQUEST_BODY:0:100}...]" # Log snippet
 
           # Determine context type
           CONTEXT_TYPE="issue"
-          if gh api "repos/${{ github.repository }}/issues/$ISSUE_OR_PR_NUMBER" --jq '.pull_request' | grep -q 'url'; then
+          # Use --silent on gh api call to avoid polluting logs if check fails
+          if gh api "repos/${{ github.repository }}/issues/$ISSUE_OR_PR_NUMBER" --jq '.pull_request' --silent 2>/dev/null | grep -q 'url'; then
              CONTEXT_TYPE="pr"
           fi
           echo "Context type: $CONTEXT_TYPE"
@@ -92,8 +104,7 @@ jobs:
           echo "$COMMENTS_JSON" | jq -c '.[] | {login: .user.login, created_at: .created_at, body: .body}' | while IFS= read -r comment_json; do
             login=$(echo "$comment_json" | jq -r .login | sed -e 's/&/\&/g' -e 's/</\</g' -e 's/>/\>/g' -e 's/"/\"/g' -e "s/'/\'/g")
             created_at=$(echo "$comment_json" | jq -r .created_at)
-            # Escape comment body - crucially includes single quotes
-            body=$(echo "$comment_json" | jq -r .body | sed -e 's/&/\&/g' -e 's/</\</g' -e 's/>/\>/g' -e 's/"/\"/g' -e "s/'/\'/g")
+            body=$(echo "$comment_json" | jq -r .body | sed -e 's/&/\&/g' -e 's/</\</g' -e 's/>/\>/g' -e 's/"/\"/g' -e "s/'/\'/g") # Basic XML escaping
             COMMENTS_XML="${COMMENTS_XML}<comment><author>$login</author><timestamp>$created_at</timestamp><content>$body</content></comment>"
           done || { echo "Error processing comments JSON."; exit 1; }
           echo "Comments fetched. XML length: ${#COMMENTS_XML}"
@@ -101,21 +112,21 @@ jobs:
           # --- Fetch Context-Specific Data & Build XML ---
           CONTEXT_DETAILS_XML=""
           DIFF_XML=""
-          PROMPT_INSTRUCTION=""
+          PROMPT_INSTRUCTION="" # Will be set based on context type below
 
           if [[ "$CONTEXT_TYPE" == "pr" ]]; then
             echo "Fetching PR details and diff..."
             PR_DATA=$(gh pr view $ISSUE_OR_PR_NUMBER --json title,body --repo ${{ github.repository }} || echo '{"title": "Error fetching PR title", "body": "Error fetching PR body"}')
-            # Escape title and body
             PR_TITLE=$(echo "$PR_DATA" | jq -r .title | sed -e 's/&/\&/g' -e 's/</\</g' -e 's/>/\>/g' -e 's/"/\"/g' -e "s/'/\'/g")
             PR_BODY=$(echo "$PR_DATA" | jq -r .body | sed -e 's/&/\&/g' -e 's/</\</g' -e 's/>/\>/g' -e 's/"/\"/g' -e "s/'/\'/g")
-            # Fetch diff - no need to XML escape if using CDATA
+            # Fetch diff - NO CDATA, raw diff
             PR_DIFF=$(gh pr diff $ISSUE_OR_PR_NUMBER --repo ${{ github.repository }} 2>/dev/null || echo "<!-- Error fetching diff -->")
 
             CONTEXT_DETAILS_XML="<details><title>$PR_TITLE</title><body>$PR_BODY</body></details>"
-            DIFF_XML="<diff><![CDATA[$PR_DIFF]]></diff>" # Use CDATA
+            DIFF_XML="<diff>$PR_DIFF</diff>" # No CDATA
 
-            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request. Based *only* on the information provided within the <github_context> XML structure (including PR details, comments, and the code diff), please provide a concise and helpful response to the <user_request>. Focus on aspects relevant to code review, understanding the changes, or summarizing the PR's intent and impact based *solely* on the provided context."
+            # --- MODIFIED PR PROMPT (Less Restrictive) ---
+            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request. Use the information provided within the <github_context> XML structure (including PR details, comments, and the code diff) as the primary source to understand the request. Provide a concise and helpful response to the <user_request>. You may leverage your general knowledge or other capabilities where appropriate to enhance the response, focusing on code review, understanding changes, or summarizing intent and impact."
 
             echo "PR details fetched. Title length: ${#PR_TITLE}, Body length: ${#PR_BODY}"
             echo "Diff fetched. Diff length: ${#PR_DIFF}"
@@ -123,31 +134,31 @@ jobs:
           elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
             echo "Fetching Issue details..."
             ISSUE_DATA=$(gh issue view $ISSUE_OR_PR_NUMBER --json title,body --repo ${{ github.repository }} || echo '{"title": "Error fetching Issue title", "body": "Error fetching Issue body"}')
-            # Escape title and body
             ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title | sed -e 's/&/\&/g' -e 's/</\</g' -e 's/>/\>/g' -e 's/"/\"/g' -e "s/'/\'/g")
             ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body | sed -e 's/&/\&/g' -e 's/</\</g' -e 's/>/\>/g' -e 's/"/\"/g' -e "s/'/\'/g")
 
             CONTEXT_DETAILS_XML="<details><title>$ISSUE_TITLE</title><body>$ISSUE_BODY</body></details>"
-            DIFF_XML=""
+            DIFF_XML="" # No diff for issues
 
-            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue. Based *only* on the information provided within the <github_context> XML structure (including issue details and comments), please provide a concise and helpful response to the <user_request>. Aim to summarize the issue, clarify points, suggest potential next steps, or answer questions based *solely* on the provided context. If asked for solutions, propose actionable ideas grounded in the issue's description and discussion."
+            # --- MODIFIED ISSUE PROMPT (Less Restrictive) ---
+            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue. Use the information provided within the <github_context> XML structure (including issue details and comments) as the primary source to understand the request. Provide a concise and helpful response to the <user_request>. You may leverage your general knowledge or other capabilities where appropriate to enhance the response, aiming to summarize the issue, clarify points, suggest potential next steps, or answer questions. If asked for solutions, propose actionable ideas informed by the issue's description and discussion."
 
             echo "Issue details fetched. Title length: ${#ISSUE_TITLE}, Body length: ${#ISSUE_BODY}"
           fi
 
           # --- Assemble Final Prompt ---
           echo "Assembling final prompt..."
-          # Ensure User Request is also wrapped in CDATA for robustness
+          # Construct the prompt string directly
           FORMATTED_PROMPT="<github_context type=\"$CONTEXT_TYPE\" number=\"$ISSUE_OR_PR_NUMBER\">
             ${CONTEXT_DETAILS_XML}
             ${DIFF_XML}
             <comments>
             ${COMMENTS_XML}
             </comments>
-            <user_request><![CDATA[${USER_REQUEST_BODY}]]></user_request>
+            <user_request>${USER_REQUEST_BODY}</user_request>
             </github_context>
 
-            ${PROMPT_INSTRUCTION}"
+            ${PROMPT_INSTRUCTION}" # Note: User request is now directly embedded, not CDATA
 
           if [ -z "$FORMATTED_PROMPT" ]; then
              echo "::error::Formatted prompt became empty after assembly. Check variable contents."
@@ -178,12 +189,7 @@ jobs:
         id: probe
         shell: bash
         env:
-          # --- MODIFICATION START ---
-          # Pass the formatted prompt as an environment variable
           PROBE_PROMPT: ${{ steps.format.outputs.formatted_prompt }}
-          # --- MODIFICATION END ---
-
-          # Map the inherited secrets
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -196,93 +202,85 @@ jobs:
         run: |
           set -e
           set -o pipefail
-
-          # --- MODIFICATION START ---
-          # Read the prompt from the environment variable
-          # Use double quotes to preserve newlines and special chars correctly within the variable
           PROMPT="$PROBE_PROMPT"
-          # --- MODIFICATION END ---
-
-          # The command itself is usually simple enough for direct substitution
           COMMAND_TO_RUN='${{ steps.determine_command.outputs.command }}'
           RESPONSE_FILE="response.txt"
           ERROR_LOG="error.log"
           > "$RESPONSE_FILE"
           > "$ERROR_LOG"
 
-          # Add a check in case the prompt environment variable is somehow empty
           if [ -z "$PROMPT" ]; then
             echo "::error::Prompt environment variable (PROBE_PROMPT) is empty. Cannot run probe-chat."
             echo "🤖 **Error:** Failed to prepare the AI prompt content." > "$RESPONSE_FILE"
-            # Exit with non-zero code to ensure the step outcome reflects failure
-            # This will be caught by the `if: always()` in the next step
-            exit 1
+            exit 1 # Fail the step explicitly
           fi
 
           echo "Running probe-chat..."
           echo "--- Start AI Prompt (first 500 chars) ---"
-          # Use printf for safer handling of potential % characters in the prompt snippet
           printf "%.500s...\n" "$PROMPT"
           echo "--- End AI Prompt Snippet ---"
           echo "Command to run: $COMMAND_TO_RUN"
           EXIT_CODE=0
 
-          # Pipe the prompt (read from the variable) to the command
           echo "$PROMPT" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> "$ERROR_LOG" || EXIT_CODE=$?
 
           if [ $EXIT_CODE -ne 0 ]; then
             echo "::error::probe-chat command failed with exit code $EXIT_CODE."
             echo "Stderr output from probe-chat:"
             cat "$ERROR_LOG"
-            # Format error response for GitHub comment
+            # Format error response for GitHub comment - keep prefix for errors
             echo "🤖 **Error:** The AI command failed (exit code $EXIT_CODE)." > "$RESPONSE_FILE"
             echo "" >> "$RESPONSE_FILE"
             echo "**Details:**" >> "$RESPONSE_FILE"
             echo '```' >> "$RESPONSE_FILE"
-            # Ensure cat doesn't fail if error log is empty
             cat "$ERROR_LOG" 2>/dev/null || echo "(No stderr output captured)" >> "$RESPONSE_FILE"
             echo '```' >> "$RESPONSE_FILE"
             echo "" >> "$RESPONSE_FILE"
             echo "> Check the Action logs for the full prompt and details." >> "$RESPONSE_FILE"
-            # Do not exit 1 here, let the workflow continue to post the error
           else
             echo "probe-chat command finished successfully."
           fi
 
-      - name: Read Response or Error
-        if: always() # Run even if 'probe' fails to capture the error message
+      # --- MODIFIED: Read Response/Error and add Footer ---
+      - name: Read Response or Error and Format Output
+        if: always()
         id: read_response
+        env:
+          COMMAND_PREFIX: ${{ inputs.command_prefix }} # Make prefix available here
         run: |
-          RESPONSE=$(cat response.txt 2>/dev/null || echo "")
-          # Add prefix to successful AI responses only if probe step succeeded
-          if [[ "${{ steps.probe.outcome }}" == "success" ]] && [[ -n "${RESPONSE// }" ]]; then
-             RESPONSE="🤖 AI Response:\n\n${RESPONSE}"
-          # If response is empty, check outcomes of previous steps
-          elif [[ -z "${RESPONSE// }" ]]; then
+          RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo "")
+          FINAL_BODY=""
+
+          # Define the footer - Use printf for reliable newline handling
+          FOOTER=$(printf "\n\n-----\n*Tip: Start your comment with \`%s <your request>\` to trigger the AI.*\n*Built by [probe](https://probeai.dev)*" "$COMMAND_PREFIX")
+
+          # Check outcomes and determine main body
+          if [[ "${{ steps.probe.outcome }}" == "success" ]] && [[ -n "${RESPONSE_CONTENT// }" ]]; then
+             # Successful AI response - no prefix, just content
+             FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}"
+          elif [[ -z "${RESPONSE_CONTENT// }" ]]; then
+             # Response file is empty, determine why
              if [[ "${{ steps.probe.outcome }}" == "failure" ]]; then
-                # Use the already formatted error message from response.txt if probe failed but wrote to it
-                # If response.txt is STILL empty even after probe failed, use a generic message.
-                if [[ -s response.txt ]]; then
-                    RESPONSE=$(cat response.txt) # Use the error message generated in the probe step
-                else
-                    RESPONSE="🤖 Processing failed: AI command execution error (exit code ${{ steps.probe.outputs.exit_code || 'unknown' }}). Check Action logs."
-                fi
+                FINAL_BODY="🤖 Processing failed: AI command execution error (exit code ${{ steps.probe.outputs.exit_code || 'unknown' }}). Check Action logs.${FOOTER}"
              elif [[ "${{ steps.format.outcome }}" == "failure" ]]; then
-                RESPONSE="🤖 Processing failed: Error during context preparation. Check Action logs."
+                FINAL_BODY="🤖 Processing failed: Error during context preparation. Check Action logs.${FOOTER}"
              else
                 # Probe succeeded but produced no output
-                RESPONSE="🤖 Processing finished, but no response was generated by the AI."
+                FINAL_BODY="🤖 Processing finished, but no response was generated by the AI.${FOOTER}"
              fi
-          # If probe failed but produced an error message in response.txt, RESPONSE is already set
-          # No need for an extra 'elif' here for that case.
+          else
+             # Probe failed, but response.txt likely contains the formatted error message from the previous step
+             # Append the footer to the existing error message
+             FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}"
           fi
-          echo "Response content prepared for output."
+
+          echo "Final response body prepared for output."
           # Use multi-line output handling
           echo "response<<EOF_RESPONSE_MARKER" >> $GITHUB_OUTPUT
-          echo "$RESPONSE" >> $GITHUB_OUTPUT
+          echo "$FINAL_BODY" >> $GITHUB_OUTPUT
           echo "EOF_RESPONSE_MARKER" >> $GITHUB_OUTPUT
 
-  # Job 2: Post the response back to GitHub
+  # Job 2: Post the response back to GitHub (no changes needed here)
   post_response:
     if: needs.process_comment.result != 'skipped'
     runs-on: ubuntu-latest
@@ -293,6 +291,6 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          issue-number: ${{ needs.process_comment.outputs.issue_number }}
+          issue-number: ${{ needs.process_comment.outputs.issue_number }} # Use the correct output name
           body: ${{ needs.process_comment.outputs.response_body }}
 # </gh>
