@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       command_prefix:
-        description: "The prefix required on comments to trigger the AI (e.g., /probe-chat)"
+        description: "The prefix required on comments to trigger the AI (e.g., /probe, /ai, etc)"
         default: "/probe"
         required: true
         type: string
@@ -176,6 +176,21 @@ jobs:
       - name: Run probe-chat
         id: probe
         shell: bash
+        env:
+          # Map the inherited secrets to the environment variables probe-chat likely expects
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} # Add common ones for flexibility
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          
+          # API URL overrides
+          ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          OPENAI_API_URL: ${{ secrets.OPENAI_API_URL }}
+          GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          
+          # Model configuration
+          MODEL_NAME: ${{ secrets.MODEL_NAME }}
+          FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
         run: |
           set -e
           set -o pipefail
