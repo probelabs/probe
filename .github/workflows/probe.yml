@@ -261,10 +261,8 @@ jobs:
                           echo "Processing standard comments..."
                           while IFS=$'\t' read -r login created_at body; do
                               [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue
-                              # Basic XML escaping (replace with more robust method if needed)
-                              escaped_login=$(echo "$login" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-                              escaped_body=$(echo "$body" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-                              COMMENTS_XML="${COMMENTS_XML}<comment type=\"issue\"><author>$escaped_login</author><timestamp>$created_at</timestamp><content>$escaped_body</content></comment>"
+                              # NO XML ESCAPING
+                              COMMENTS_XML="${COMMENTS_XML}<comment type=\"issue\"><author>$login</author><timestamp>$created_at</timestamp><content>$body</content></comment>"
                           done <<< "$TSV_OUTPUT"
                       else
                           echo "Standard comments JSON valid, but no comments found or jq produced empty TSV."
@@ -292,9 +290,9 @@ jobs:
               PR_TITLE="Error"
               PR_BODY="Error"
             else
-              # Escape title and body for XML
-              PR_TITLE=$(echo "$PR_DATA" | jq -r .title | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-              PR_BODY=$(echo "$PR_DATA" | jq -r .body | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+              # NO XML ESCAPING
+              PR_TITLE=$(echo "$PR_DATA" | jq -r .title)
+              PR_BODY=$(echo "$PR_DATA" | jq -r .body)
             fi
 
             # --- Filtered Diff Logic ---
@@ -326,11 +324,12 @@ jobs:
                 '.dockerignore'
                 '.gitignore'
                 'go.mod'
-                'package.json'
-                'requirements.txt' 'Pipfile', 'pyproject.toml'
-                'Cargo.toml'
+                'package.json' 'package-lock.json'
+                'requirements.txt' 'Pipfile' 'pyproject.toml'
+                'Cargo.toml' 'Cargo.lock'
+                'pom.xml' 'build.gradle' 'settings.gradle'
                 'composer.json'
-                'Gemfile' 'Gemfile.lock'
+                'Gemfile' 
                 # Config files
                 '.*rc' # e.g., .bashrc, .zshrc
                 '*.conf'
@@ -340,6 +339,7 @@ jobs:
                 '*.properties'
                 # Documentation
                 'README.*' # README.md, README.txt etc.
+                'LICENSE*'
                 'CONTRIBUTING.*'
                 'CHANGELOG.*'
                 '*.rst'
@@ -350,7 +350,7 @@ jobs:
             RAW_DIFF_CONTENT=$(gh pr diff "$ISSUE_OR_PR_NUMBER" --repo "${REPO}" -- "${ALLOWED_PATTERNS[@]}" 2> pr_diff_stderr.log || echo "FETCH_FAILED")
             PR_DIFF_EXIT_CODE=$?
 
-            ESCAPED_PR_DIFF="" # Initialize
+            FILTERED_PR_DIFF="" # Renamed variable to avoid confusion with escaping step
 
             if [[ "$RAW_DIFF_CONTENT" == "FETCH_FAILED" ]] || [[ $PR_DIFF_EXIT_CODE -ne 0 ]]; then
               echo "::warning::Failed PR diff fetch (Exit: $PR_DIFF_EXIT_CODE)."
@@ -358,16 +358,15 @@ jobs:
                  echo "Stderr from gh pr diff:"
                  cat pr_diff_stderr.log
               fi
-              # Escape the error message for XML
-              ESCAPED_PR_DIFF="<!-- Error fetching diff -->"
+              FILTERED_PR_DIFF="<!-- Error fetching diff -->" # No escaping
             elif [[ -z "$RAW_DIFF_CONTENT" ]]; then
               echo "No relevant file changes found matching patterns."
-              # Escape the message for XML
-              ESCAPED_PR_DIFF="<!-- No relevant file changes found -->"
+              FILTERED_PR_DIFF="<!-- No relevant file changes found -->" # No escaping
             else
               echo "Raw diff fetched (${#RAW_DIFF_CONTENT} bytes). Filtering minified files..."
-              # Use cat with a here-document inside command substitution to pass the Perl script reliably
-              FILTERED_DIFF=$(echo "$RAW_DIFF_CONTENT" | perl -ne "$(cat << 'PERL_FILTER_SCRIPT'
+
+              # Pipe the raw diff to Perl, which reads the script from STDIN via the here-doc
+              FILTERED_PR_DIFF=$(echo "$RAW_DIFF_CONTENT" | perl -ne '
                 BEGIN {
                     $chunk = "";          # Stores the lines of the current diff chunk
                     $print_chunk = 1;    # Flag: 1 to print, 0 to skip
@@ -429,35 +428,31 @@ jobs:
                 END {
                     print $chunk if $chunk ne "" && $print_chunk;
                 }
-              PERL_FILTER_SCRIPT
-              )" 2> filter_stderr.log) # End of command substitution, captures perl output
+              ' 2> filter_stderr.log) # End of perl command, its output is captured
 
               if [[ -s filter_stderr.log ]]; then
                  echo "Filter script warnings/info:"
                  cat filter_stderr.log
               fi
 
-              if [[ -z "$FILTERED_DIFF" ]] && [[ -n "$RAW_DIFF_CONTENT" ]]; then
+              if [[ -z "$FILTERED_PR_DIFF" ]] && [[ -n "$RAW_DIFF_CONTENT" ]]; then
                   # If filtering resulted in empty diff, but raw wasn't empty
                   echo "All diff chunks were filtered out (likely minified or excluded)."
-                  # Escape the message for XML
-                  ESCAPED_PR_DIFF="<!-- Diff contained only files filtered out (e.g., minified files) -->"
-              elif [[ -n "$FILTERED_DIFF" ]]; then
-                   echo "Filtering complete. Final diff size: ${#FILTERED_DIFF} bytes."
-                   # Escape the filtered diff content for XML *after* filtering
-                   ESCAPED_PR_DIFF=$(echo "$FILTERED_DIFF" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-              else
+                  FILTERED_PR_DIFF="<!-- Diff contained only files filtered out (e.g., minified files) -->" # No escaping
+              elif [[ -z "$FILTERED_PR_DIFF" ]]; then
                    # Filtered diff is empty, and raw diff was likely also empty or only headers
                    echo "Filtered diff is empty (or only contained filtered files)."
-                   # Escape the message for XML
-                   ESCAPED_PR_DIFF="<!-- Filtered diff is empty -->"
+                   FILTERED_PR_DIFF="<!-- Filtered diff is empty -->" # No escaping
+              else
+                   echo "Filtering complete. Final diff size: ${#FILTERED_PR_DIFF} bytes."
+                   # The filtered diff is already in FILTERED_PR_DIFF, no further action needed here
               fi
             fi
             # --- End Filtered Diff Logic ---
 
             CONTEXT_DETAILS_XML="<details><title>$PR_TITLE</title><body>$PR_BODY</body></details>"
-            # Use the potentially filtered and escaped ESCAPED_PR_DIFF here.
-            DIFF_XML="<diff>$ESCAPED_PR_DIFF</diff>"
+            # Use the filtered (but not escaped) diff content
+            DIFF_XML="<diff>$FILTERED_PR_DIFF</diff>"
 
             # --- PR Review Comments ---
             echo "Fetching PR review comments..."
@@ -475,12 +470,8 @@ jobs:
                             echo "Processing review comments..."
                             while IFS=$'\t' read -r login created_at body path diff_hunk line; do
                                [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue
-                               escaped_login=$(echo "$login" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-                               escaped_body=$(echo "$body" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-                               escaped_path=$(echo "$path" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-                               escaped_diff_hunk=$(echo "$diff_hunk" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-                               escaped_line=$(echo "$line" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-                               COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_comment\" file=\"$escaped_path\" line=\"$escaped_line\"><author>$escaped_login</author><timestamp>$created_at</timestamp><diff_hunk>$escaped_diff_hunk</diff_hunk><content>$escaped_body</content></comment>"
+                               # NO XML ESCAPING
+                               COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_comment\" file=\"$path\" line=\"$line\"><author>$login</author><timestamp>$created_at</timestamp><diff_hunk>$diff_hunk</diff_hunk><content>$body</content></comment>"
                             done <<< "$TSV_OUTPUT"
                          else
                             echo "Review comments JSON valid, but no comments found or jq produced empty TSV."
@@ -511,10 +502,8 @@ jobs:
                              echo "Processing review bodies..."
                              while IFS=$'\t' read -r login submitted_at body state; do
                                 [[ -n "$login" || -n "$submitted_at" || -n "$body" ]] || continue
-                                escaped_login=$(echo "$login" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-                                escaped_body=$(echo "$body" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-                                escaped_state=$(echo "$state" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-                                COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_body\" state=\"$escaped_state\"><author>$escaped_login</author><timestamp>$submitted_at</timestamp><content>$escaped_body</content></comment>"
+                                # NO XML ESCAPING
+                                COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_body\" state=\"$state\"><author>$login</author><timestamp>$submitted_at</timestamp><content>$body</content></comment>"
                              done <<< "$TSV_OUTPUT"
                          else
                              echo "Review JSON valid, but no review bodies with content found or jq produced empty TSV."
@@ -539,9 +528,9 @@ jobs:
               ISSUE_TITLE="Error"
               ISSUE_BODY="Error"
             else
-              # Escape title and body for XML
-              ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-              ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+              # NO XML ESCAPING
+              ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title)
+              ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body)
             fi
             CONTEXT_DETAILS_XML="<details><title>$ISSUE_TITLE</title><body>$ISSUE_BODY</body></details>"
             DIFF_XML="" # No diff for issues
@@ -551,16 +540,15 @@ jobs:
 
           # --- Assemble Final Prompt ---
           echo "::group::Assemble Final Prompt & Set Outputs"
-          # Escape the user request body, login, and timestamp for XML inclusion
-          ESCAPED_USER_REQUEST_BODY=$(echo "$USER_REQUEST_BODY" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-          ESCAPED_USER_LOGIN=$(echo "${{ github.event.comment.user.login }}" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
-          ESCAPED_TIMESTAMP=$(echo "${{ github.event.comment.created_at }}" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+          # Use raw values, NO XML ESCAPING
+          USER_LOGIN="${{ github.event.comment.user.login }}"
+          TIMESTAMP="${{ github.event.comment.created_at }}"
 
           FORMATTED_PROMPT="<github_context type=\"$FINAL_CONTEXT_TYPE\" number=\"$ISSUE_OR_PR_NUMBER\">
             ${CONTEXT_DETAILS_XML}
             ${DIFF_XML}
             <comments>${COMMENTS_XML}</comments>
-            <user_request author=\"${ESCAPED_USER_LOGIN}\" timestamp=\"${ESCAPED_TIMESTAMP}\">${ESCAPED_USER_REQUEST_BODY}</user_request>
+            <user_request author=\"${USER_LOGIN}\" timestamp=\"${TIMESTAMP}\">${USER_REQUEST_BODY}</user_request>
             </github_context>
 
             ${PROMPT_INSTRUCTION}"
