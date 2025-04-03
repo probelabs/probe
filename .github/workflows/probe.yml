@@ -292,6 +292,7 @@ jobs:
               PR_TITLE="Error"
               PR_BODY="Error"
             else
+              # Escape title and body for XML
               PR_TITLE=$(echo "$PR_DATA" | jq -r .title | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
               PR_BODY=$(echo "$PR_DATA" | jq -r .body | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
             fi
@@ -324,12 +325,11 @@ jobs:
                 'Makefile'
                 '.dockerignore'
                 '.gitignore'
-                'go.mod' 'go.sum'
-                'package.json' 'package-lock.json' 'yarn.lock'
-                'requirements.txt' 'Pipfile' 'Pipfile.lock' 'pyproject.toml'
-                'Cargo.toml' 'Cargo.lock'
-                'pom.xml' 'build.gradle' 'settings.gradle'
-                'composer.json' 'composer.lock'
+                'go.mod'
+                'package.json'
+                'requirements.txt' 'Pipfile', 'pyproject.toml'
+                'Cargo.toml'
+                'composer.json'
                 'Gemfile' 'Gemfile.lock'
                 # Config files
                 '.*rc' # e.g., .bashrc, .zshrc
@@ -340,7 +340,6 @@ jobs:
                 '*.properties'
                 # Documentation
                 'README.*' # README.md, README.txt etc.
-                'LICENSE*'
                 'CONTRIBUTING.*'
                 'CHANGELOG.*'
                 '*.rst'
@@ -367,14 +366,8 @@ jobs:
               ESCAPED_PR_DIFF="<!-- No relevant file changes found -->"
             else
               echo "Raw diff fetched (${#RAW_DIFF_CONTENT} bytes). Filtering minified files..."
-              # Use a here document for the Perl script inside command substitution
-              # Filter logic:
-              # - Examines each 'diff --git' chunk.
-              # - Tries to read the first 2 lines of the actual file (path from 'b/...').
-              # - If either of the first 2 lines exceeds $max_len, the entire chunk is skipped.
-              # - Handles files not found in checkout (e.g., deleted files, submodule changes) by including them with a warning.
-              # - Includes files that cannot be opened for checking with a warning.
-              FILTERED_DIFF=$(echo "$RAW_DIFF_CONTENT" | perl -ne '
+              # Use cat with a here-document inside command substitution to pass the Perl script reliably
+              FILTERED_DIFF=$(echo "$RAW_DIFF_CONTENT" | perl -ne "$(cat << 'PERL_FILTER_SCRIPT'
                 BEGIN {
                     $chunk = "";          # Stores the lines of the current diff chunk
                     $print_chunk = 1;    # Flag: 1 to print, 0 to skip
@@ -395,7 +388,6 @@ jobs:
                          $print_chunk = 1;
                     }
                     # Skip check for files known not to be minified code/text
-                    # (e.g., lock files, images if they weren't filtered by pathspec)
                     elsif ($b_path =~ m/\.(lock|sum|mod|toml|cfg|ini|properties|yaml|yml|json|md|rst|adoc|txt|conf)$/i ||
                            $b_path =~ m/(Makefile|Dockerfile|LICENSE|README|CONTRIBUTING|CHANGELOG)/i ||
                            $b_path =~ m/\.(gitignore|dockerignore|.*rc)$/ ) {
@@ -437,7 +429,8 @@ jobs:
                 END {
                     print $chunk if $chunk ne "" && $print_chunk;
                 }
-              ' 2> filter_stderr.log) # Capture stderr from Perl (warnings)
+              PERL_FILTER_SCRIPT
+              )" 2> filter_stderr.log) # End of command substitution, captures perl output
 
               if [[ -s filter_stderr.log ]]; then
                  echo "Filter script warnings/info:"
@@ -451,13 +444,13 @@ jobs:
                   ESCAPED_PR_DIFF="<!-- Diff contained only files filtered out (e.g., minified files) -->"
               elif [[ -n "$FILTERED_DIFF" ]]; then
                    echo "Filtering complete. Final diff size: ${#FILTERED_DIFF} bytes."
-                   # Escape the filtered diff content for XML
+                   # Escape the filtered diff content for XML *after* filtering
                    ESCAPED_PR_DIFF=$(echo "$FILTERED_DIFF" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
               else
                    # Filtered diff is empty, and raw diff was likely also empty or only headers
                    echo "Filtered diff is empty (or only contained filtered files)."
-                   # Keep ESCAPED_PR_DIFF empty or use a specific message, ensure it's escaped if not empty
-                   ESCAPED_PR_DIFF="<!-- Filtered diff is empty -->" # Defaulting to an escaped message
+                   # Escape the message for XML
+                   ESCAPED_PR_DIFF="<!-- Filtered diff is empty -->"
               fi
             fi
             # --- End Filtered Diff Logic ---
@@ -546,6 +539,7 @@ jobs:
               ISSUE_TITLE="Error"
               ISSUE_BODY="Error"
             else
+              # Escape title and body for XML
               ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
               ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
             fi
@@ -557,7 +551,7 @@ jobs:
 
           # --- Assemble Final Prompt ---
           echo "::group::Assemble Final Prompt & Set Outputs"
-          # Escape the user request body for XML inclusion
+          # Escape the user request body, login, and timestamp for XML inclusion
           ESCAPED_USER_REQUEST_BODY=$(echo "$USER_REQUEST_BODY" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
           ESCAPED_USER_LOGIN=$(echo "${{ github.event.comment.user.login }}" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
           ESCAPED_TIMESTAMP=$(echo "${{ github.event.comment.created_at }}" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
