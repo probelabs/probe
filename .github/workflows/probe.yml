@@ -261,8 +261,9 @@ jobs:
                           echo "Processing standard comments..."
                           while IFS=$'\t' read -r login created_at body; do
                               [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue
-                              escaped_login="$login"
-                              escaped_body="$body"
+                              # Basic XML escaping (replace with more robust method if needed)
+                              escaped_login=$(echo "$login" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+                              escaped_body=$(echo "$body" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
                               COMMENTS_XML="${COMMENTS_XML}<comment type=\"issue\"><author>$escaped_login</author><timestamp>$created_at</timestamp><content>$escaped_body</content></comment>"
                           done <<< "$TSV_OUTPUT"
                       else
@@ -291,14 +292,13 @@ jobs:
               PR_TITLE="Error"
               PR_BODY="Error"
             else
-              PR_TITLE=$(echo "$PR_DATA" | jq -r .title)
-              PR_BODY=$(echo "$PR_DATA" | jq -r .body)
+              PR_TITLE=$(echo "$PR_DATA" | jq -r .title | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+              PR_BODY=$(echo "$PR_DATA" | jq -r .body | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
             fi
 
             # --- Filtered Diff Logic ---
             echo "Fetching and filtering PR diff..."
             # Define allowed file patterns for gh pr diff pathspec
-            # Add any other extensions you need here
             ALLOWED_PATTERNS=(
                 '*.go'
                 '*.js' '*.ts' '*.jsx' '*.tsx'
@@ -319,6 +319,32 @@ jobs:
                 '*.md'
                 '*.yaml' '*.yml'
                 '*.json'
+                # Add non-code files that are useful context
+                'Dockerfile'
+                'Makefile'
+                '.dockerignore'
+                '.gitignore'
+                'go.mod' 'go.sum'
+                'package.json' 'package-lock.json' 'yarn.lock'
+                'requirements.txt' 'Pipfile' 'Pipfile.lock' 'pyproject.toml'
+                'Cargo.toml' 'Cargo.lock'
+                'pom.xml' 'build.gradle' 'settings.gradle'
+                'composer.json' 'composer.lock'
+                'Gemfile' 'Gemfile.lock'
+                # Config files
+                '.*rc' # e.g., .bashrc, .zshrc
+                '*.conf'
+                '*.cfg'
+                '*.ini'
+                '*.toml'
+                '*.properties'
+                # Documentation
+                'README.*' # README.md, README.txt etc.
+                'LICENSE*'
+                'CONTRIBUTING.*'
+                'CHANGELOG.*'
+                '*.rst'
+                '*.adoc'
             )
 
             # Fetch the initial diff filtered by extension using pathspecs
@@ -333,50 +359,63 @@ jobs:
                  echo "Stderr from gh pr diff:"
                  cat pr_diff_stderr.log
               fi
+              # Escape the error message for XML
               ESCAPED_PR_DIFF="<!-- Error fetching diff -->"
             elif [[ -z "$RAW_DIFF_CONTENT" ]]; then
               echo "No relevant file changes found matching patterns."
+              # Escape the message for XML
               ESCAPED_PR_DIFF="<!-- No relevant file changes found -->"
             else
               echo "Raw diff fetched (${#RAW_DIFF_CONTENT} bytes). Filtering minified files..."
-              # Use a here document for the Perl script
-              FILTERED_DIFF=$(echo "$RAW_DIFF_CONTENT" | perl -ne "$(cat << 'PERL_SCRIPT'
+              # Use a here document for the Perl script inside command substitution
+              # Filter logic:
+              # - Examines each 'diff --git' chunk.
+              # - Tries to read the first 2 lines of the actual file (path from 'b/...').
+              # - If either of the first 2 lines exceeds $max_len, the entire chunk is skipped.
+              # - Handles files not found in checkout (e.g., deleted files, submodule changes) by including them with a warning.
+              # - Includes files that cannot be opened for checking with a warning.
+              FILTERED_DIFF=$(echo "$RAW_DIFF_CONTENT" | perl -ne '
                 BEGIN {
                     $chunk = "";          # Stores the lines of the current diff chunk
                     $print_chunk = 1;    # Flag: 1 to print, 0 to skip
-                    $max_len = 500;      # Max allowed line length for first 2 lines
-                    $is_json_yaml = 0;   # Flag for special handling if needed (currently handled by main check)
+                    $max_len = 500;      # Max allowed line length for first 2 lines of content
                 }
                 # Match the start of a diff for a file
                 if (/^diff --git a\/(?:.*?\/)?(?:.+)\s+b\/(?:.*?\/)?(.+)$/) {
                     # Print the previous chunk if it was marked for printing
                     print $chunk if $chunk ne "" && $print_chunk;
-                
+
                     # Start processing the new chunk
                     $chunk = $_;         # Start the new chunk with the diff --git line
                     $print_chunk = 1;    # Assume printable by default
-                    $is_json_yaml = 0;
                     my $b_path = $1;     # Extract the file path (relative to repo root)
-                
-                    # Check if the path is /dev/null (file added/deleted) or if the file exists
+
+                    # Skip check for /dev/null (means file added or deleted)
                     if ($b_path eq "/dev/null") {
-                         # Deletion or addition of empty file, cannot be minified, always include.
                          $print_chunk = 1;
-                    } elsif (! -e $b_path) {
-                         # File path exists in diff but not in checkout (e.g. submodule change, deleted file not caught above?)
-                         # Cannot check content, let's include it but warn.
+                    }
+                    # Skip check for files known not to be minified code/text
+                    # (e.g., lock files, images if they weren't filtered by pathspec)
+                    elsif ($b_path =~ m/\.(lock|sum|mod|toml|cfg|ini|properties|yaml|yml|json|md|rst|adoc|txt|conf)$/i ||
+                           $b_path =~ m/(Makefile|Dockerfile|LICENSE|README|CONTRIBUTING|CHANGELOG)/i ||
+                           $b_path =~ m/\.(gitignore|dockerignore|.*rc)$/ ) {
+                        $print_chunk = 1; # Assume these are not minified
+                    }
+                    # Check the content of other files
+                    elsif (! -e $b_path) {
+                         # File path exists in diff but not in checkout
                          warn "Warning: File $b_path from diff not found in checkout, including chunk.";
                          $print_chunk = 1;
                     } else {
                          # File exists, check its first two lines for length
-                         $is_json_yaml = ($b_path =~ m/\.(json|ya?ml)$/i); # Check if it's JSON/YAML
                          if (open my $fh, "<", $b_path) {
                              my $lines_read = 0;
                              while (my $line = <$fh>) {
                                  $lines_read++;
                                  chomp $line;
-                                 if (length($line) > $max_len) {
-                                     warn "Info: Filtering chunk for $b_path (line $lines_read length > $max_len)";
+                                 # Allow long lines if they contain common long tokens like URLs, paths, base64 chunks
+                                 if (length($line) > $max_len && $line !~ m{(https?://\S+|/\S+|[a-zA-Z0-9+/=]{20,})}) {
+                                     warn "Info: Filtering chunk for $b_path (line $lines_read length > $max_len and no common long token detected)";
                                      $print_chunk = 0; # Mark chunk NOT to be printed
                                      last; # Stop reading file
                                  }
@@ -390,16 +429,15 @@ jobs:
                          }
                     }
                 } else {
-                    # It's not a "diff --git" line, just add it to the current chunk
+                    # Its not a "diff --git" line, just add it to the current chunk
                     $chunk .= $_;
                 }
-                
+
                 # At the very end of the input, print the last chunk if needed
                 END {
                     print $chunk if $chunk ne "" && $print_chunk;
                 }
-                PERL_SCRIPT
-              )" 2> filter_stderr.log) # Capture stderr from Perl (warnings)
+              ' 2> filter_stderr.log) # Capture stderr from Perl (warnings)
 
               if [[ -s filter_stderr.log ]]; then
                  echo "Filter script warnings/info:"
@@ -408,22 +446,24 @@ jobs:
 
               if [[ -z "$FILTERED_DIFF" ]] && [[ -n "$RAW_DIFF_CONTENT" ]]; then
                   # If filtering resulted in empty diff, but raw wasn't empty
-                  echo "All diff chunks were filtered out (likely minified)."
+                  echo "All diff chunks were filtered out (likely minified or excluded)."
+                  # Escape the message for XML
                   ESCAPED_PR_DIFF="<!-- Diff contained only files filtered out (e.g., minified files) -->"
               elif [[ -n "$FILTERED_DIFF" ]]; then
                    echo "Filtering complete. Final diff size: ${#FILTERED_DIFF} bytes."
-                   ESCAPED_PR_DIFF="$FILTERED_DIFF" # Assign the filtered result
+                   # Escape the filtered diff content for XML
+                   ESCAPED_PR_DIFF=$(echo "$FILTERED_DIFF" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
               else
                    # Filtered diff is empty, and raw diff was likely also empty or only headers
-                   echo "Filtered diff is empty."
-                   # Keep ESCAPED_PR_DIFF empty or use a specific message
-                   ESCAPED_PR_DIFF="" # Defaulting to empty
+                   echo "Filtered diff is empty (or only contained filtered files)."
+                   # Keep ESCAPED_PR_DIFF empty or use a specific message, ensure it's escaped if not empty
+                   ESCAPED_PR_DIFF="<!-- Filtered diff is empty -->" # Defaulting to an escaped message
               fi
             fi
             # --- End Filtered Diff Logic ---
 
             CONTEXT_DETAILS_XML="<details><title>$PR_TITLE</title><body>$PR_BODY</body></details>"
-            # Use the potentially filtered ESCAPED_PR_DIFF here.
+            # Use the potentially filtered and escaped ESCAPED_PR_DIFF here.
             DIFF_XML="<diff>$ESCAPED_PR_DIFF</diff>"
 
             # --- PR Review Comments ---
@@ -442,11 +482,12 @@ jobs:
                             echo "Processing review comments..."
                             while IFS=$'\t' read -r login created_at body path diff_hunk line; do
                                [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue
-                               escaped_login="$login"
-                               escaped_body="$body"
-                               escaped_path="$path"
-                               escaped_diff_hunk="$diff_hunk"
-                               COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_comment\" file=\"$escaped_path\" line=\"$line\"><author>$escaped_login</author><timestamp>$created_at</timestamp><diff_hunk>$escaped_diff_hunk</diff_hunk><content>$escaped_body</content></comment>"
+                               escaped_login=$(echo "$login" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+                               escaped_body=$(echo "$body" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+                               escaped_path=$(echo "$path" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+                               escaped_diff_hunk=$(echo "$diff_hunk" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+                               escaped_line=$(echo "$line" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+                               COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_comment\" file=\"$escaped_path\" line=\"$escaped_line\"><author>$escaped_login</author><timestamp>$created_at</timestamp><diff_hunk>$escaped_diff_hunk</diff_hunk><content>$escaped_body</content></comment>"
                             done <<< "$TSV_OUTPUT"
                          else
                             echo "Review comments JSON valid, but no comments found or jq produced empty TSV."
@@ -477,9 +518,9 @@ jobs:
                              echo "Processing review bodies..."
                              while IFS=$'\t' read -r login submitted_at body state; do
                                 [[ -n "$login" || -n "$submitted_at" || -n "$body" ]] || continue
-                                escaped_login="$login"
-                                escaped_body="$body"
-                                escaped_state="$state"
+                                escaped_login=$(echo "$login" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+                                escaped_body=$(echo "$body" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+                                escaped_state=$(echo "$state" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
                                 COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_body\" state=\"$escaped_state\"><author>$escaped_login</author><timestamp>$submitted_at</timestamp><content>$escaped_body</content></comment>"
                              done <<< "$TSV_OUTPUT"
                          else
@@ -495,7 +536,7 @@ jobs:
             fi
             echo "Review bodies processed. Current XML length: ${#COMMENTS_XML}"
 
-            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request. Answer user questions contextually based on the provided details, comments, and code changes (diff). The diff includes relevant programming, config and documentation files but excludes minified files."
+            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request. Answer user questions contextually based on the provided details, comments, and code changes (diff). The diff includes relevant programming, config and documentation files but excludes minified files based on line length heuristics."
 
           elif [[ "$FINAL_CONTEXT_TYPE" == "issue" ]]; then
             echo "Fetching Issue specific data..."
@@ -505,8 +546,8 @@ jobs:
               ISSUE_TITLE="Error"
               ISSUE_BODY="Error"
             else
-              ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title)
-              ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body)
+              ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+              ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
             fi
             CONTEXT_DETAILS_XML="<details><title>$ISSUE_TITLE</title><body>$ISSUE_BODY</body></details>"
             DIFF_XML="" # No diff for issues
@@ -516,11 +557,16 @@ jobs:
 
           # --- Assemble Final Prompt ---
           echo "::group::Assemble Final Prompt & Set Outputs"
+          # Escape the user request body for XML inclusion
+          ESCAPED_USER_REQUEST_BODY=$(echo "$USER_REQUEST_BODY" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+          ESCAPED_USER_LOGIN=$(echo "${{ github.event.comment.user.login }}" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+          ESCAPED_TIMESTAMP=$(echo "${{ github.event.comment.created_at }}" | sed 's/&/\&/g; s/</\</g; s/>/\>/g; s/"/\"/g; s/'"'"'/\'/g')
+
           FORMATTED_PROMPT="<github_context type=\"$FINAL_CONTEXT_TYPE\" number=\"$ISSUE_OR_PR_NUMBER\">
             ${CONTEXT_DETAILS_XML}
             ${DIFF_XML}
             <comments>${COMMENTS_XML}</comments>
-            <user_request author=\"${{ github.event.comment.user.login }}\" timestamp=\"${{ github.event.comment.created_at }}\">${USER_REQUEST_BODY}</user_request>
+            <user_request author=\"${ESCAPED_USER_LOGIN}\" timestamp=\"${ESCAPED_TIMESTAMP}\">${ESCAPED_USER_REQUEST_BODY}</user_request>
             </github_context>
 
             ${PROMPT_INSTRUCTION}"
