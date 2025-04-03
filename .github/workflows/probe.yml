@@ -567,6 +567,33 @@ jobs:
           echo "Outputs set."
           echo "::endgroup::"
 
+
+      - name: Determine probe-chat command
+        id: determine_command
+        env:
+          # Pass the secret to the step's environment so the script can check it
+          PROBE_CHAT_COMMAND_SECRET: ${{ secrets.PROBE_CHAT_COMMAND }}
+        run: |
+          COMMAND_VAR=""
+          # Check if the secret is set and not empty
+          if [[ -n "${PROBE_CHAT_COMMAND_SECRET}" ]]; then
+            echo "Using PROBE_CHAT_COMMAND secret."
+            COMMAND_VAR="${PROBE_CHAT_COMMAND_SECRET}"
+          else
+            # Fall back to the input default if secret is not set
+            echo "Using default_probe_chat_command input."
+            COMMAND_VAR="${{ inputs.default_probe_chat_command }}"
+          fi
+
+          # Basic validation (optional but recommended)
+          if [[ -z "$COMMAND_VAR" ]]; then
+             echo "::error::Command is empty after evaluation. Check secrets/inputs."
+             exit 1
+          fi
+
+          echo "Determined command: $COMMAND_VAR"
+          echo "command=$COMMAND_VAR" >> "$GITHUB_OUTPUT"
+
       - name: Run probe-chat
         id: probe
         env:
@@ -583,10 +610,17 @@ jobs:
         run: |
           set -o pipefail # Fail if any command in the pipe fails
           PROMPT_FILE="${{ steps.format.outputs.formatted_prompt_file }}" # Get filename from previous step output
-          # Determine the command using the output from the 'determine_command' step
+          # This now correctly uses the output from the step above
           COMMAND_TO_RUN="${{ steps.determine_command.outputs.command }}"
           RESPONSE_FILE="response.txt"
           ERROR_LOG="error.log"
+
+          # Add a safety check here too
+          if [[ -z "$COMMAND_TO_RUN" ]]; then
+            echo "::error::COMMAND_TO_RUN is unexpectedly empty!" >&2
+            echo "🤖 **Error:** Internal configuration error - AI command is missing." > "$RESPONSE_FILE"
+            exit 1
+          fi
 
           # Check if PROMPT_FILE exists and is not empty
           if [ ! -s "$PROMPT_FILE" ]; then
@@ -614,13 +648,8 @@ jobs:
               echo "--- end stderr ---" >&2
             fi
             if [ ! -s "$RESPONSE_FILE" ]; then
-              # If probe-chat failed AND didn't write anything, provide a generic error.
-              # If it did write something (e.g., its own error message), let that stand.
                echo "🤖 **Error:** AI command failed (Exit code: $EXIT_CODE)." > "$RESPONSE_FILE"
             fi
-             # It's often better to exit with the actual code from the tool
-             # exit $EXIT_CODE
-             # Or just ensure the step fails if the tool fails
              exit 1 # Ensure the step fails in GH Actions UI
           fi
 
