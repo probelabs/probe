@@ -341,64 +341,64 @@ jobs:
               echo "Raw diff fetched (${#RAW_DIFF_CONTENT} bytes). Filtering minified files..."
               # Use a here document for the Perl script
               FILTERED_DIFF=$(echo "$RAW_DIFF_CONTENT" | perl -ne "$(cat << 'PERL_SCRIPT'
-BEGIN {
-    $chunk = "";          # Stores the lines of the current diff chunk
-    $print_chunk = 1;    # Flag: 1 to print, 0 to skip
-    $max_len = 500;      # Max allowed line length for first 2 lines
-    $is_json_yaml = 0;   # Flag for special handling if needed (currently handled by main check)
-}
-# Match the start of a diff for a file
-if (/^diff --git a\/(?:.*?\/)?(?:.+)\s+b\/(?:.*?\/)?(.+)$/) {
-    # Print the previous chunk if it was marked for printing
-    print $chunk if $chunk ne "" && $print_chunk;
-
-    # Start processing the new chunk
-    $chunk = $_;         # Start the new chunk with the diff --git line
-    $print_chunk = 1;    # Assume printable by default
-    $is_json_yaml = 0;
-    my $b_path = $1;     # Extract the file path (relative to repo root)
-
-    # Check if the path is /dev/null (file added/deleted) or if the file exists
-    if ($b_path eq "/dev/null") {
-         # Deletion or addition of empty file, cannot be minified, always include.
-         $print_chunk = 1;
-    } elsif (! -e $b_path) {
-         # File path exists in diff but not in checkout (e.g. submodule change, deleted file not caught above?)
-         # Cannot check content, let's include it but warn.
-         warn "Warning: File $b_path from diff not found in checkout, including chunk.";
-         $print_chunk = 1;
-    } else {
-         # File exists, check its first two lines for length
-         $is_json_yaml = ($b_path =~ m/\.(json|ya?ml)$/i); # Check if it's JSON/YAML
-         if (open my $fh, "<", $b_path) {
-             my $lines_read = 0;
-             while (my $line = <$fh>) {
-                 $lines_read++;
-                 chomp $line;
-                 if (length($line) > $max_len) {
-                     warn "Info: Filtering chunk for $b_path (line $lines_read length > $max_len)";
-                     $print_chunk = 0; # Mark chunk NOT to be printed
-                     last; # Stop reading file
-                 }
-                 last if $lines_read >= 2; # Only check first two lines
-             }
-             close $fh;
-         } else {
-             # Could not open the file for checking
-             warn "Warning: Could not open $b_path to check for minification, including chunk.";
-             $print_chunk = 1; # Include if we cannot check
-         }
-    }
-} else {
-    # It's not a "diff --git" line, just add it to the current chunk
-    $chunk .= $_;
-}
-
-# At the very end of the input, print the last chunk if needed
-END {
-    print $chunk if $chunk ne "" && $print_chunk;
-}
-PERL_SCRIPT
+                BEGIN {
+                    $chunk = "";          # Stores the lines of the current diff chunk
+                    $print_chunk = 1;    # Flag: 1 to print, 0 to skip
+                    $max_len = 500;      # Max allowed line length for first 2 lines
+                    $is_json_yaml = 0;   # Flag for special handling if needed (currently handled by main check)
+                }
+                # Match the start of a diff for a file
+                if (/^diff --git a\/(?:.*?\/)?(?:.+)\s+b\/(?:.*?\/)?(.+)$/) {
+                    # Print the previous chunk if it was marked for printing
+                    print $chunk if $chunk ne "" && $print_chunk;
+                
+                    # Start processing the new chunk
+                    $chunk = $_;         # Start the new chunk with the diff --git line
+                    $print_chunk = 1;    # Assume printable by default
+                    $is_json_yaml = 0;
+                    my $b_path = $1;     # Extract the file path (relative to repo root)
+                
+                    # Check if the path is /dev/null (file added/deleted) or if the file exists
+                    if ($b_path eq "/dev/null") {
+                         # Deletion or addition of empty file, cannot be minified, always include.
+                         $print_chunk = 1;
+                    } elsif (! -e $b_path) {
+                         # File path exists in diff but not in checkout (e.g. submodule change, deleted file not caught above?)
+                         # Cannot check content, let's include it but warn.
+                         warn "Warning: File $b_path from diff not found in checkout, including chunk.";
+                         $print_chunk = 1;
+                    } else {
+                         # File exists, check its first two lines for length
+                         $is_json_yaml = ($b_path =~ m/\.(json|ya?ml)$/i); # Check if it's JSON/YAML
+                         if (open my $fh, "<", $b_path) {
+                             my $lines_read = 0;
+                             while (my $line = <$fh>) {
+                                 $lines_read++;
+                                 chomp $line;
+                                 if (length($line) > $max_len) {
+                                     warn "Info: Filtering chunk for $b_path (line $lines_read length > $max_len)";
+                                     $print_chunk = 0; # Mark chunk NOT to be printed
+                                     last; # Stop reading file
+                                 }
+                                 last if $lines_read >= 2; # Only check first two lines
+                             }
+                             close $fh;
+                         } else {
+                             # Could not open the file for checking
+                             warn "Warning: Could not open $b_path to check for minification, including chunk.";
+                             $print_chunk = 1; # Include if we cannot check
+                         }
+                    }
+                } else {
+                    # It's not a "diff --git" line, just add it to the current chunk
+                    $chunk .= $_;
+                }
+                
+                # At the very end of the input, print the last chunk if needed
+                END {
+                    print $chunk if $chunk ne "" && $print_chunk;
+                }
+                PERL_SCRIPT
               )" 2> filter_stderr.log) # Capture stderr from Perl (warnings)
 
               if [[ -s filter_stderr.log ]]; then
