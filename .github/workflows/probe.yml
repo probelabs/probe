@@ -453,7 +453,7 @@ jobs:
       - name: Run probe-chat
         id: probe
         env:
-          PROBE_PROMPT: ${{ steps.read_prompt_file.outputs.formatted_prompt }} # Assuming this is how PROMPT is sourced
+          # Keep other necessary env vars
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -465,29 +465,30 @@ jobs:
           FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
         run: |
           set -o pipefail # Fail if any command in the pipe fails
-          PROMPT="$PROBE_PROMPT"
-          COMMAND_TO_RUN="npx -y @buger/probe-chat@latest"
+          PROMPT_FILE="${{ steps.format.outputs.formatted_prompt_file }}" # Get filename from previous step output
+          # Determine the command using the output from the 'determine_command' step
+          COMMAND_TO_RUN="${{ steps.determine_command.outputs.command }}"
           RESPONSE_FILE="response.txt"
           ERROR_LOG="error.log"
-      
-          # Check if PROMPT is empty
-          if [ -z "$PROMPT" ]; then
-            echo "::error::Prompt env var empty." >&2
-            echo "🤖 **Error:** Internal error - prompt empty." > "$RESPONSE_FILE"
+
+          # Check if PROMPT_FILE exists and is not empty
+          if [ ! -s "$PROMPT_FILE" ]; then
+            echo "::error::Prompt file '$PROMPT_FILE' not found or is empty." >&2
+            echo "🤖 **Error:** Internal error - prompt file missing or empty." > "$RESPONSE_FILE"
             exit 1
           fi
-      
-          # Debug the PROMPT content
-          echo "Prompt length: ${#PROMPT}"
-          echo "First 100 chars of PROMPT: ${PROMPT:0:100}"
+
+          # Debug info
+          echo "Prompt file: $PROMPT_FILE"
+          echo "Prompt file size: $(wc -c < "$PROMPT_FILE") bytes"
           echo "Command to run: $COMMAND_TO_RUN"
           echo "Running probe-chat..."
-      
-          # Pipe the PROMPT directly to the command
-          echo "$PROMPT" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> "$ERROR_LOG"
-          EXIT_CODE=$?
-      
-          # Handle the exit code
+
+          # Pipe the *content* of the file directly to the command's stdin
+          cat "$PROMPT_FILE" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> "$ERROR_LOG"
+          EXIT_CODE=${PIPESTATUS[1]} # Get exit code of the right-most command in the pipe ($COMMAND_TO_RUN)
+
+          # Handle the exit code (keep your existing logic here)
           if [ $EXIT_CODE -ne 0 ]; then
             echo "::error::probe-chat failed ($EXIT_CODE)." >&2
             if [ -s "$ERROR_LOG" ]; then
@@ -496,11 +497,16 @@ jobs:
               echo "--- end stderr ---" >&2
             fi
             if [ ! -s "$RESPONSE_FILE" ]; then
-              echo "🤖 **Error:** AI command failed (Exit code: $EXIT_CODE)." > "$RESPONSE_FILE"
+              # If probe-chat failed AND didn't write anything, provide a generic error.
+              # If it did write something (e.g., its own error message), let that stand.
+               echo "🤖 **Error:** AI command failed (Exit code: $EXIT_CODE)." > "$RESPONSE_FILE"
             fi
-            exit $EXIT_CODE
+             # It's often better to exit with the actual code from the tool
+             # exit $EXIT_CODE
+             # Or just ensure the step fails if the tool fails
+             exit 1 # Ensure the step fails in GH Actions UI
           fi
-      
+
           echo "probe-chat finished successfully."
           if [ ! -s "$RESPONSE_FILE" ]; then
             echo "::warning::probe-chat produced empty response."
