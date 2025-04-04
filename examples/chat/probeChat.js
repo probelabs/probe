@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { generateText } from 'ai'; // Removed 'tool' import as it's not used directly here
+import { streamText } from 'ai'; // Removed 'tool' import as it's not used directly here
 import { randomUUID } from 'crypto';
 import { TokenCounter } from './tokenCounter.js';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
@@ -474,7 +474,6 @@ Follow these instructions carefully:
     let completionAttempted = false;
     let finalResult = `Error: Max tool iterations (${MAX_TOOL_ITERATIONS}) reached without completion. You can increase this limit using the MAX_TOOL_ITERATIONS environment variable or --max-iterations flag.`; // Default error
 
-    // Ensure AbortController is fresh for this chat turn (redundant but safe)
     this.abortController = new AbortController();
     const debugFilePath = join(process.cwd(), 'probe-debug.txt');
 
@@ -485,23 +484,15 @@ Follow these instructions carefully:
         console.log(`[DEBUG] Initial history length: ${this.history.length}`);
       }
 
-      // Reset current token counters for new turn
       this.tokenCounter.startNewTurn();
-
-      // Count tokens in the initial user message (approx)
       this.tokenCounter.addRequestTokens(this.tokenCounter.countTokens(message));
 
-      // --- Prepare messages for the first LLM call ---
-      // Limit history *before* adding the new message
       if (this.history.length > MAX_HISTORY_MESSAGES) {
         const removedCount = this.history.length - MAX_HISTORY_MESSAGES;
         this.history = this.history.slice(removedCount);
         if (this.debug) console.log(`[DEBUG] Trimmed history to ${this.history.length} messages (removed ${removedCount}).`);
       }
 
-      // Add user message to the *local* messages array for this turn
-      // Use structured content if needed, but simple string is fine here
-      // If this is the first message in a conversation (empty history), wrap it in <task> tags
       const isFirstMessage = this.history.length === 0;
       const wrappedMessage = isFirstMessage ? `<task>\n${message}\n</task>` : message;
 
@@ -510,47 +501,37 @@ Follow these instructions carefully:
         { role: 'user', content: wrappedMessage }
       ];
 
-      // Get the potentially large system message (can be async)
       const systemPrompt = await this.getSystemMessage();
       if (this.debug) {
         const systemTokens = this.tokenCounter.countTokens(systemPrompt);
-        this.tokenCounter.addRequestTokens(systemTokens); // Count system prompt towards request
+        this.tokenCounter.addRequestTokens(systemTokens);
         console.log(`[DEBUG] System prompt estimated tokens: ${systemTokens}`);
       }
 
-      // --- Tool Execution Loop ---
       while (currentIteration < MAX_TOOL_ITERATIONS && !completionAttempted) {
         currentIteration++;
-        if (this.cancelled) throw new Error('Request was cancelled by the user'); // Check at start of iteration
+        if (this.cancelled) throw new Error('Request was cancelled by the user');
 
         if (this.debug) {
-          console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${MAX_TOOL_ITERATIONS} (configured via ${process.env.MAX_TOOL_ITERATIONS ? 'env/flag' : 'default'}) ---`);
+          console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${MAX_TOOL_ITERATIONS} ---`);
           console.log(`[DEBUG] Current messages count for AI call: ${currentMessages.length}`);
-          // Log last few messages concisely
           currentMessages.slice(-3).forEach((msg, idx) => {
             const contentPreview = (typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)).substring(0, 80).replace(/\n/g, ' ');
             console.log(`[DEBUG]   Msg[${currentMessages.length - 3 + idx}]: ${msg.role}: ${contentPreview}...`);
           });
         }
 
-
-        // Estimate current context size before calling LLM
-        this.tokenCounter.calculateContextSize(currentMessages); // Includes history + current turn messages
+        this.tokenCounter.calculateContextSize(currentMessages);
         if (this.debug) console.log(`[DEBUG] Estimated context tokens BEFORE LLM call (Iter ${currentIteration}): ${this.tokenCounter.contextSize}`);
 
-
-        // Determine max response tokens based on model (adjust as needed)
-        // This is a rough guideline, the actual context limit is handled by the provider/model
-        let maxResponseTokens = 4000; // Default generous limit
+        let maxResponseTokens = 4000;
         if (this.model.includes('claude-3-opus') || this.model.startsWith('gpt-4-')) {
-          maxResponseTokens = 4096; // Some models have fixed output limits
+          maxResponseTokens = 4096;
         } else if (this.model.includes('claude-3-5-sonnet') || this.model.startsWith('gpt-4o') || this.model.startsWith('gemini-1.5')) {
-          maxResponseTokens = 8000; // Models with larger output capabilities
+          maxResponseTokens = 8000;
         }
-        this.tokenDisplay = new TokenUsageDisplay({ maxTokens: maxResponseTokens }); // Update display
+        this.tokenDisplay = new TokenUsageDisplay({ maxTokens: maxResponseTokens });
 
-
-        // Find user message indices for caching
         const userMsgIndices = currentMessages.reduce(
           (acc, msg, index) => (msg.role === 'user' ? [...acc, index] : acc),
           []
@@ -558,307 +539,161 @@ Follow these instructions carefully:
         const lastUserMsgIndex = userMsgIndices[userMsgIndices.length - 1] ?? -1;
         const secondLastUserMsgIndex = userMsgIndices[userMsgIndices.length - 2] ?? -1;
 
-        // Configure generateOptions for this iteration
         let transformedMessages = currentMessages;
-
-        // Apply cache control for Anthropic models
         if (this.apiType === 'anthropic') {
-          // Transform ALL user messages to include cache control
-          // Keep system prompt as a string
           transformedMessages = currentMessages.map((message, index) => {
             if (message.role === 'user' && (index === lastUserMsgIndex || index === secondLastUserMsgIndex)) {
-              // Only apply cache control to the last and second-to-last user messages
               return {
                 ...message,
                 content: typeof message.content === 'string'
-                  ? [
-                    {
-                      type: "text",
-                      text: message.content,
-                      providerOptions: {
-                        anthropic: { cacheControl: { type: 'ephemeral' } },
-                      },
-                    }
-                  ]
+                  ? [{ type: "text", text: message.content, providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } } }]
                   : message.content.map(content => ({
                     ...content,
-                    providerOptions: {
-                      anthropic: { cacheControl: { type: 'ephemeral' } },
-                    },
+                    providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } }
                   }))
               };
             }
             return message;
           });
-
-          if (this.debug) {
-            const cachedUserMsgs = transformedMessages.filter(msg =>
-              msg.role === 'user' &&
-              msg.content &&
-              Array.isArray(msg.content) &&
-              msg.content.some(c => c.cache_control && c.cache_control.type === 'ephemeral')
-            ).length;
-
-            console.log(`[DEBUG] Applied cache control to ${cachedUserMsgs} user messages out of ${userMsgIndices.length} total user messages`);
-          }
-
-          if (this.debug) {
-            console.log(`[DEBUG] Applied cache control to all user messages for Anthropic API`);
-          }
         }
 
         const generateOptions = {
           model: this.provider(this.model),
           messages: transformedMessages,
-          system: systemPrompt, // Keep system as a string
-          // No 'tools' or 'toolChoice' for XML approach
-          temperature: 0.3, // Lower temp for more deterministic tool use
-          maxTokens: maxResponseTokens, // Max tokens for the *response*
-          stopSequences: ['</tool_result>'], // Might help prevent hallucinating after tool result in some cases? Test this.
+          system: systemPrompt,
+          temperature: 0.3,
+          maxTokens: maxResponseTokens,
           signal: this.abortController.signal,
         };
 
-        // --- Call LLM with retry mechanism ---
-        let result;
+        // **Streaming Response Handling**
         let assistantResponseContent = '';
         try {
-          if (this.debug) console.log(`[DEBUG] Calling generateText with model ${this.model}...`);
+          if (this.debug) console.log(`[DEBUG] Calling streamText with model ${this.model}...`);
 
-          // Retry mechanism - attempt up to 3 times with 1 second delay between retries
-          const MAX_RETRIES = 3;
-          let retryCount = 0;
-          let lastError = null;
-
-          while (retryCount < MAX_RETRIES) {
-            try {
-              if (retryCount > 0 && this.debug) {
-                console.log(`[DEBUG] Retry attempt ${retryCount}/${MAX_RETRIES} for generateText...`);
-              }
-
-              result = await generateText(generateOptions);
-              // If successful, break out of the retry loop
-              break;
-            } catch (err) {
-              // Don't retry if the request was cancelled
-              if (this.cancelled || err.name === 'AbortError' || (err.message && err.message.includes('cancelled'))) {
-                console.log(`Chat request cancelled during LLM call (Iter ${currentIteration})`);
-                this.cancelled = true; // Ensure flag is set
-                throw new Error('Request was cancelled by the user');
-              }
-
-              lastError = err;
-              retryCount++;
-
-              if (retryCount < MAX_RETRIES) {
-                if (this.debug) console.log(`[DEBUG] generateText failed, will retry in 1 second. Error: ${err.message}`);
-                // Wait for 1 second before retrying
-                await new Promise(resolve => setTimeout(resolve, 1000));
-              } else {
-                // Max retries reached, throw the last error
-                throw lastError;
-              }
-            }
+          const { textStream } = streamText(generateOptions);
+          for await (const chunk of textStream) {
+            if (this.cancelled) throw new Error('Request was cancelled by the user');
+            assistantResponseContent += chunk;
           }
-
-          assistantResponseContent = result.text?.trim() || ''; // Ensure we have a trimmed string
 
           if (this.debug) {
-            console.log(`[DEBUG] Received AI response (Iter ${currentIteration}). Length: ${assistantResponseContent.length}`);
+            console.log(`[DEBUG] Streamed AI response (Iter ${currentIteration}). Length: ${assistantResponseContent.length}`);
           }
 
-          // Add assistant's raw response to history for the next turn (or final history)
           currentMessages.push({ role: 'assistant', content: assistantResponseContent });
 
-          // --- Token Counting (Post-LLM Call) ---
-          if (result.usage) {
-            if (this.debug) console.log(`[DEBUG] Usage reported (Iter ${currentIteration}):`, result.usage);
-            // Pass system prompt tokens calculated earlier if needed by counter logic
-            this.tokenCounter.recordUsage(result.usage, result.providerMetadata);
-          } else {
-            const responseTokenCount = this.tokenCounter.countTokens(assistantResponseContent);
-            if (this.debug) console.log(`[DEBUG] result.usage not available, estimating response tokens (Iter ${currentIteration}): ${responseTokenCount}`);
-            this.tokenCounter.addResponseTokens(responseTokenCount);
-            // Need to add request tokens based on messages if not provided
-            // This is tricky without accurate prompt_tokens, relying on context calc might be better
-          }
-          // Recalculate context *after* adding assistant message & recording usage
+          const responseTokenCount = this.tokenCounter.countTokens(assistantResponseContent);
+          if (this.debug) console.log(`[DEBUG] Estimated response tokens (Iter ${currentIteration}): ${responseTokenCount}`);
+          this.tokenCounter.addResponseTokens(responseTokenCount);
           this.tokenCounter.calculateContextSize(currentMessages);
           if (this.debug) console.log(`[DEBUG] Context size AFTER LLM response (Iter ${currentIteration}): ${this.tokenCounter.contextSize}`);
 
         } catch (error) {
           if (this.cancelled || error.name === 'AbortError' || (error.message && error.message.includes('cancelled'))) {
             console.log(`Chat request cancelled during LLM call (Iter ${currentIteration})`);
-            this.cancelled = true; // Ensure flag is set
+            this.cancelled = true;
             throw new Error('Request was cancelled by the user');
           }
-          console.error(`Error during generateText after all retries (Iter ${currentIteration}):`, error);
-
-          // Add error message to history? Maybe not, let the caller handle the thrown error.
-          // currentMessages.push({ role: 'user', content: `System Error: Failed to get response from AI model. Error: ${error.message}` });
-
+          console.error(`Error during streamText (Iter ${currentIteration}):`, error);
           finalResult = `Error: Failed to get response from AI model during iteration ${currentIteration}. ${error.message}`;
-          // Decide whether to break or throw. Throwing might be cleaner.
-          throw new Error(finalResult); // Throw the error to be caught by the outer catch block
-          // break; // Exit loop on generation error - Replaced by throw
+          throw new Error(finalResult);
         }
 
-        // --- Parse Assistant Response for Tool Call ---
         const parsedTool = parseXmlToolCallWithThinking(assistantResponseContent);
-
         if (parsedTool) {
           const { toolName, params } = parsedTool;
           if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
 
-
           if (toolName === 'attempt_completion') {
-            // --- Handle Completion ---
             completionAttempted = true;
             const validation = attemptCompletionSchema.safeParse(params);
             if (!validation.success) {
               finalResult = `Error: AI attempted completion with invalid parameters: ${JSON.stringify(validation.error.issues)}`;
               console.warn(`[WARN] Invalid attempt_completion parameters:`, validation.error.issues);
-              // We don't add an error message back to the AI here, we just stop and return the error result.
             } else {
-              finalResult = validation.data.result; // Extract the final result text
+              finalResult = validation.data.result;
               if (this.debug) {
                 console.log(`[DEBUG] Completion attempted successfully. Final Result captured.`);
-                if (validation.data.command) {
-                  console.log(`[DEBUG] Completion included command: "${validation.data.command}"`);
-                }
-              }
 
-              // Write the entire history to probe-debug.txt in a nice text format
-              try {
-                // Get the system message
-                const systemPrompt = await this.getSystemMessage();
-
-                // Start with the system message
-                let debugContent = `system: ${systemPrompt}\n\n`;
-
-                // Add each message from currentMessages (which includes all messages for this chat turn)
-                for (const msg of currentMessages) {
-                  if (msg.role === 'user' || msg.role === 'assistant') {
-                    debugContent += `${msg.role}: ${msg.content}\n\n`;
+                try {
+                  const systemPrompt = await this.getSystemMessage();
+                  let debugContent = `system: ${systemPrompt}\n\n`;
+                  for (const msg of currentMessages) {
+                    if (msg.role === 'user' || msg.role === 'assistant') {
+                      debugContent += `${msg.role}: ${msg.content}\n\n`;
+                    }
                   }
-                }
-
-                // Add the final result as the last assistant message if it's not already included
-                if (completionAttempted) {
                   debugContent += `assistant (final result): ${finalResult}\n\n`;
+                  writeFileSync(debugFilePath, debugContent, { flag: 'w' });
+                  if (this.debug) console.log(`[DEBUG] Wrote complete chat history to ${debugFilePath}`);
+                } catch (error) {
+                  console.error(`Error writing chat history to debug file: ${error.message}`);
                 }
-
-                // Write to file
-                writeFileSync(debugFilePath, debugContent, { flag: 'w' });
-                if (this.debug) {
-                  console.log(`[DEBUG] Wrote complete chat history to ${debugFilePath}`);
-                }
-              } catch (error) {
-                console.error(`Error writing chat history to debug file: ${error.message}`);
               }
             }
-            break; // Exit the loop on successful or failed completion attempt
+            break;
 
           } else if (this.toolImplementations[toolName]) {
-            // --- Execute Tool ---
             const toolInstance = this.toolImplementations[toolName];
-            let toolResultContent = ''; // Will be wrapped in <tool_result>
-            let toolExecutionError = false;
+            let toolResultContent = '';
             try {
-              // Add sessionId to params for the tool execution context if needed by the tool impl
-              const enhancedParams = {
-                ...params,
-                sessionId: this.sessionId // Pass session ID automatically
-              };
+              const enhancedParams = { ...params, sessionId: this.sessionId };
               if (this.debug) console.log(`[DEBUG] Executing tool '${toolName}' with params:`, enhancedParams);
-
-              // Execute the actual tool function/method
               const executionResult = await toolInstance.execute(enhancedParams);
-
-              // Format result for LLM (usually string or JSON string)
-              toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2); // Pretty print JSON slightly
-
+              toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2);
               if (this.debug) {
                 const preview = toolResultContent.substring(0, 200).replace(/\n/g, ' ') + (toolResultContent.length > 200 ? '...' : '');
                 console.log(`[DEBUG] Tool '${toolName}' executed successfully. Result preview: ${preview}`);
               }
-
             } catch (error) {
-              toolExecutionError = true;
               console.error(`Error executing tool ${toolName}:`, error);
-              toolResultContent = `Error executing tool ${toolName}: ${error.message}`; // Provide error message back to AI
-              if (this.debug) {
-                console.log(`[DEBUG] Tool '${toolName}' execution FAILED.`);
-              }
+              toolResultContent = `Error executing tool ${toolName}: ${error.message}`;
+              if (this.debug) console.log(`[DEBUG] Tool '${toolName}' execution FAILED.`);
             }
 
-            // Add tool result (or error) message to history for the next iteration
-            // Wrap the result in the expected tags
             const toolResultMessage = `<tool_result>\n${toolResultContent}\n</tool_result>`;
-            currentMessages.push({ role: 'user', content: toolResultMessage }); // Use 'user' role for tool results
-
-            // Recalculate context after adding tool result
+            currentMessages.push({ role: 'user', content: toolResultMessage });
             this.tokenCounter.calculateContextSize(currentMessages);
             if (this.debug) console.log(`[DEBUG] Context size after adding tool result for '${toolName}': ${this.tokenCounter.contextSize}`);
 
           } else {
-            // --- Handle Invalid Tool Name ---
             if (this.debug) console.log(`[DEBUG] Assistant used invalid tool name: ${toolName}`);
             const errorContent = `<tool_result>\nError: Invalid tool name specified: '${toolName}'. Please use one of: search, query, extract, attempt_completion.\n</tool_result>`;
-            // Provide feedback as if it were a tool result (using 'user' role)
             currentMessages.push({ role: 'user', content: errorContent });
             this.tokenCounter.calculateContextSize(currentMessages);
           }
 
         } else {
-          // --- Handle No Tool Call ---
           if (this.debug) console.log(`[DEBUG] Assistant response did not contain a valid XML tool call.`);
           const forceToolContent = `Your response did not contain a valid tool call in the required XML format. You MUST respond with exactly one tool call (e.g., <search>...</search> or <attempt_completion>...</attempt_completion>) based on the previous steps and the user's goal. Analyze the situation and choose the appropriate next tool.`;
-          // Add feedback/instruction message to history, using 'user' role might be most effective
           currentMessages.push({ role: 'user', content: forceToolContent });
           this.tokenCounter.calculateContextSize(currentMessages);
-          // Loop continues, giving AI another chance with the guidance.
         }
 
-        // --- History Trimming within the loop ---
-        // Check if message array exceeds max *plus a buffer* (e.g., sys, user, asst, tool_result)
         if (currentMessages.length > MAX_HISTORY_MESSAGES + 3) {
           const removeCount = currentMessages.length - MAX_HISTORY_MESSAGES;
-          // Be careful not to remove the system prompt if it was implicitly included
-          // Assuming system prompt is handled separately by generateText, only trim messages
           currentMessages = currentMessages.slice(removeCount);
-          if (this.debug) {
-            console.log(`[DEBUG] Trimmed 'currentMessages' within loop to ${currentMessages.length} (removed ${removeCount}).`);
-          }
-          this.tokenCounter.calculateContextSize(currentMessages); // Recalc after trimming
+          if (this.debug) console.log(`[DEBUG] Trimmed 'currentMessages' within loop to ${currentMessages.length} (removed ${removeCount}).`);
+          this.tokenCounter.calculateContextSize(currentMessages);
         }
-
-      } // --- End While Loop ---
-
-      if (currentIteration >= MAX_TOOL_ITERATIONS && !completionAttempted) {
-        console.warn(`[WARN] Max tool iterations (${MAX_TOOL_ITERATIONS}) reached for session ${this.sessionId}. Returning current error state. You can increase this limit using the MAX_TOOL_ITERATIONS environment variable or --max-iterations flag.`);
-        // finalResult is already set to the error message
       }
 
-      // --- Final History Update ---
-      // Update the main instance history *after* the loop finishes successfully or hits limit
-      this.history = currentMessages.map(msg => ({ ...msg })); // Create copies
+      if (currentIteration >= MAX_TOOL_ITERATIONS && !completionAttempted) {
+        console.warn(`[WARN] Max tool iterations (${MAX_TOOL_ITERATIONS}) reached for session ${this.sessionId}. Returning current error state.`);
+      }
 
-      // Ensure final history does not exceed max length *strictly*
+      this.history = currentMessages.map(msg => ({ ...msg }));
       if (this.history.length > MAX_HISTORY_MESSAGES) {
         const finalRemoveCount = this.history.length - MAX_HISTORY_MESSAGES;
         this.history = this.history.slice(finalRemoveCount);
         if (this.debug) console.log(`[DEBUG] Final history trim applied. Length: ${this.history.length} (removed ${finalRemoveCount})`);
       }
 
-      // Update the tokenCounter's history with the chat history
-      // This is critical for context window size calculation
       this.tokenCounter.updateHistory(this.history);
       if (this.debug) {
         console.log(`[DEBUG] Updated tokenCounter history with ${this.history.length} messages`);
         console.log(`[DEBUG] Context size after history update: ${this.tokenCounter.contextSize}`);
-      }
-
-      if (this.debug) {
         console.log(`[DEBUG] ===== Ending XML Tool Chat Loop =====`);
         console.log(`[DEBUG] Loop finished after ${currentIteration} iterations.`);
         console.log(`[DEBUG] Completion attempted: ${completionAttempted}`);
@@ -867,65 +702,41 @@ Follow these instructions carefully:
         console.log(`[DEBUG] Returning final result: "${resultPreview}..."`);
       }
 
-      // Get token usage data
-      const tokenUsage = this.tokenCounter.getTokenUsage();
-
-      // Force recalculation of context window size
       this.tokenCounter.calculateContextSize(this.history);
-
-      // Get updated token usage data after recalculation
       const updatedTokenUsage = this.tokenCounter.getTokenUsage();
-
       if (this.debug) {
         console.log(`[DEBUG] Final context window size: ${updatedTokenUsage.contextWindow}`);
         console.log(`[DEBUG] Cache metrics - Read: ${updatedTokenUsage.current.cacheRead}, Write: ${updatedTokenUsage.current.cacheWrite}`);
       }
 
-      // Return a structured response with both the final result and token usage data
       return {
-        response: finalResult, // The content from attempt_completion or the error message
-        tokenUsage: updatedTokenUsage // Include token usage metrics for the frontend
+        response: finalResult,
+        tokenUsage: updatedTokenUsage
       };
 
     } catch (error) {
       console.error('Error in chat processing loop:', error);
-      if (this.debug) {
-        console.error('Error in chat processing loop:', error);
-      }
+      if (this.debug) console.error('Error in chat processing loop:', error);
 
-      // Update the tokenCounter's history with the chat history
-      // This is critical for context window size calculation
       this.tokenCounter.updateHistory(this.history);
-      if (this.debug) {
-        console.log(`[DEBUG] Error case - Updated tokenCounter history with ${this.history.length} messages`);
-      }
+      if (this.debug) console.log(`[DEBUG] Error case - Updated tokenCounter history with ${this.history.length} messages`);
 
-      // Force recalculation of context window size even in error cases
       this.tokenCounter.calculateContextSize(this.history);
-
-      // Get updated token usage data after recalculation
       const updatedTokenUsage = this.tokenCounter.getTokenUsage();
-
       if (this.debug) {
         console.log(`[DEBUG] Error case - Final context window size: ${updatedTokenUsage.contextWindow}`);
         console.log(`[DEBUG] Error case - Cache metrics - Read: ${updatedTokenUsage.current.cacheRead}, Write: ${updatedTokenUsage.current.cacheWrite}`);
       }
 
       if (this.cancelled || (error.message && error.message.includes('cancelled'))) {
-        // Don't return generic message for cancellation, re-throw or return specific status
-        return {
-          response: "Request cancelled.",
-          tokenUsage: updatedTokenUsage
-        }; // Or throw error for caller to handle
+        return { response: "Request cancelled.", tokenUsage: updatedTokenUsage };
       }
-      // Return a user-friendly error message for other errors
       return {
         response: `Error during chat processing: ${error.message || 'An unexpected error occurred.'}`,
         tokenUsage: updatedTokenUsage
       };
     } finally {
-      // Clean up abort controller if needed, though creating a new one per `chat` call is safer
-      this.abortController = null; // Indicate no active request
+      this.abortController = null;
     }
   }
 
