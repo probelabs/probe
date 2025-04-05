@@ -1,6 +1,7 @@
 use crate::ranking::{
     tokenize, get_stemmer, compute_tf_df,
-    compute_avgdl, rank_documents, RankingParams
+    compute_avgdl, rank_documents, RankingParams,
+    QueryTokenMap
 };
 use crate::search::tokenization::is_stop_word;
 
