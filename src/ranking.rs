@@ -152,20 +152,20 @@ fn generate_query_token_map(query_terms: &HashSet<String>) -> Result<QueryTokenM
     if query_terms.len() > 256 {
         return Err("Query exceeds the 256 unique token limit for u8 mapping");
     }
-    
+
     let mut token_map = QueryTokenMap::new();
     let mut index: u8 = 0;
-    
+
     // Sort terms for deterministic mapping (HashMap iteration order isn't guaranteed)
     let mut sorted_terms: Vec<&String> = query_terms.iter().collect();
     sorted_terms.sort();
-    
+
     // Assign each term a unique index
     for term in sorted_terms {
         token_map.insert(term.clone(), index);
         index = index.wrapping_add(1); // Use wrapping_add to handle potential overflow safely
     }
-    
+
     Ok(token_map)
 }
 
@@ -178,7 +178,7 @@ fn bm25_single_token_optimized(token: &str, params: &PrecomputedBm25Params) -> f
         // Or maybe the term was stemmed differently? Return 0 for safety.
         return 0.0;
     };
-    
+
     // Get frequency using the u8 index
     let freq_in_doc = *params.doc_tf.get(&token_index).unwrap_or(&0) as f64;
     if freq_in_doc <= 0.0 {
@@ -196,10 +196,7 @@ fn bm25_single_token_optimized(token: &str, params: &PrecomputedBm25Params) -> f
 }
 
 /// Sum BM25 for all keywords in a single "Term" node using precomputed IDF values
-fn score_term_bm25_optimized(
-    keywords: &[String],
-    params: &PrecomputedBm25Params
-) -> f64 {
+fn score_term_bm25_optimized(keywords: &[String], params: &PrecomputedBm25Params) -> f64 {
     let mut total = 0.0;
     for kw in keywords {
         total += bm25_single_token_optimized(kw, params);
@@ -214,10 +211,7 @@ fn score_term_bm25_optimized(
 /// - For "AND," doc must match both sides
 /// - For a "should" term, we add the BM25 if it matches; if the entire query has no must, then
 ///   at least one "should" must match in order to include the doc.
-pub fn score_expr_bm25_optimized(
-    expr: &Expr,
-    params: &PrecomputedBm25Params
-) -> Option<f64> {
+pub fn score_expr_bm25_optimized(expr: &Expr, params: &PrecomputedBm25Params) -> Option<f64> {
     use Expr::*;
     match expr {
         Term {
@@ -298,7 +292,7 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
 
     // 3) Extract query terms, create token mapping
     let query_terms = extract_query_terms(&parsed_expr);
-    
+
     // Generate query token map (maps each unique query term to a unique u8 index)
     let query_token_map = match generate_query_token_map(&query_terms) {
         Ok(map) => map,
@@ -310,14 +304,14 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
             return vec![];
         }
     };
-    
+
     if debug_mode {
         println!(
             "DEBUG: Generated query token map with {} entries",
             query_token_map.len()
         );
     }
-    
+
     // 2) Precompute TF/DF for docs
     let tf_df_result = if let Some(pre_tokenized) = &params.pre_tokenized {
         // Use pre-tokenized content if available
@@ -340,7 +334,7 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
     let avgdl = compute_avgdl(&tf_df_result.document_lengths);
 
     // Precompute IDF values
-    
+
     let precomputed_idfs =
         precompute_idfs(&query_terms, &tf_df_result.document_frequencies, n_docs);
 
@@ -445,17 +439,23 @@ pub fn compute_tf_df_from_tokenized(
     }
 
     // Process documents in parallel to compute term frequencies and document lengths
-    let doc_results: Vec<(HashMap<u8, usize>, HashMap<String, usize>, usize, HashSet<String>)> = tokenized_docs
+    #[allow(clippy::type_complexity)]
+    let doc_results: Vec<(
+        HashMap<u8, usize>,
+        HashMap<String, usize>,
+        usize,
+        HashSet<String>,
+    )> = tokenized_docs
         .par_iter()
         .map(|tokens| {
-            let mut tf_u8 = HashMap::new();  // Term frequencies using u8 indices
+            let mut tf_u8 = HashMap::new(); // Term frequencies using u8 indices
             let mut tf_str = HashMap::new(); // Term frequencies using strings (for DF calculation)
 
             // Compute term frequency for the current document
             for token in tokens.iter() {
                 // Update string-based term frequency (for document frequency calculation)
                 *tf_str.entry(token.clone()).or_insert(0) += 1;
-                
+
                 // Update u8-based term frequency (only for tokens in the query)
                 if let Some(&token_index) = query_token_map.get(token) {
                     *tf_u8.entry(token_index).or_insert(0) += 1;
@@ -642,13 +642,13 @@ mod tests {
 
         // Verify the map contains all terms
         assert_eq!(token_map.len(), 3);
-        
+
         // Verify each term has a unique index
         let mut indices = HashSet::new();
         for (_, &idx) in &token_map {
             assert!(indices.insert(idx), "Duplicate index found");
         }
-        
+
         // Verify the indices are in the expected range
         assert_eq!(indices.len(), 3);
         assert!(indices.contains(&0));
@@ -660,10 +660,10 @@ mod tests {
     fn test_generate_query_token_map_empty() {
         // Test with empty query terms
         let query_terms = HashSet::new();
-        
+
         // Generate the token map
         let token_map = generate_query_token_map(&query_terms).unwrap();
-        
+
         // Verify the map is empty
         assert!(token_map.is_empty());
     }
@@ -675,35 +675,37 @@ mod tests {
         query_terms1.insert("apple".to_string());
         query_terms1.insert("banana".to_string());
         query_terms1.insert("cherry".to_string());
-        
+
         let mut query_terms2 = HashSet::new();
         query_terms2.insert("cherry".to_string());
         query_terms2.insert("apple".to_string());
         query_terms2.insert("banana".to_string());
-        
+
         // Generate token maps for both sets
         let token_map1 = generate_query_token_map(&query_terms1).unwrap();
         let token_map2 = generate_query_token_map(&query_terms2).unwrap();
-        
+
         // Verify both maps have the same mappings despite different insertion order
         assert_eq!(token_map1.len(), token_map2.len());
-        
+
         for (term, &idx1) in &token_map1 {
-            assert_eq!(Some(&idx1), token_map2.get(term),
-                       "Term '{}' has different indices in the two maps", term);
+            assert_eq!(
+                Some(&idx1),
+                token_map2.get(term),
+                "Term '{}' has different indices in the two maps",
+                term
+            );
         }
     }
 
     #[test]
     fn test_generate_query_token_map_too_many_terms() {
         // Create a set with more than 256 terms
-        let query_terms: HashSet<String> = (0..257)
-            .map(|i| format!("term{}", i))
-            .collect();
-        
+        let query_terms: HashSet<String> = (0..257).map(|i| format!("term{}", i)).collect();
+
         // Attempt to generate the token map
         let result = generate_query_token_map(&query_terms);
-        
+
         // Verify it returns an error
         assert!(result.is_err());
         assert_eq!(
@@ -711,78 +713,83 @@ mod tests {
             "Query exceeds the 256 unique token limit for u8 mapping"
         );
     }
-    
+
     #[test]
     fn test_compute_tf_df_with_u8_indices() {
         // Create a simple set of documents
         let docs = vec![
-            vec!["apple".to_string(), "banana".to_string(), "cherry".to_string()],
+            vec![
+                "apple".to_string(),
+                "banana".to_string(),
+                "cherry".to_string(),
+            ],
             vec!["apple".to_string(), "banana".to_string()],
             vec!["apple".to_string()],
         ];
-        
+
         // Create a query token map
         let mut query_token_map = QueryTokenMap::new();
         query_token_map.insert("apple".to_string(), 0);
         query_token_map.insert("banana".to_string(), 1);
         query_token_map.insert("cherry".to_string(), 2);
-        
+
         // Compute TF/DF
         let tf_df_result = compute_tf_df_from_tokenized(&docs, &query_token_map);
-        
+
         // Check document lengths
         assert_eq!(tf_df_result.document_lengths[0], 3);
         assert_eq!(tf_df_result.document_lengths[1], 2);
         assert_eq!(tf_df_result.document_lengths[2], 1);
-        
+
         // Check term frequencies using u8 indices
         assert_eq!(*tf_df_result.term_frequencies[0].get(&0).unwrap(), 1); // "apple" in doc 0
         assert_eq!(*tf_df_result.term_frequencies[0].get(&1).unwrap(), 1); // "banana" in doc 0
         assert_eq!(*tf_df_result.term_frequencies[0].get(&2).unwrap(), 1); // "cherry" in doc 0
-        
+
         assert_eq!(*tf_df_result.term_frequencies[1].get(&0).unwrap(), 1); // "apple" in doc 1
         assert_eq!(*tf_df_result.term_frequencies[1].get(&1).unwrap(), 1); // "banana" in doc 1
-        assert!(tf_df_result.term_frequencies[1].get(&2).is_none());      // no "cherry" in doc 1
-        
+        assert!(tf_df_result.term_frequencies[1].get(&2).is_none()); // no "cherry" in doc 1
+
         assert_eq!(*tf_df_result.term_frequencies[2].get(&0).unwrap(), 1); // "apple" in doc 2
-        assert!(tf_df_result.term_frequencies[2].get(&1).is_none());      // no "banana" in doc 2
-        assert!(tf_df_result.term_frequencies[2].get(&2).is_none());      // no "cherry" in doc 2
-        
+        assert!(tf_df_result.term_frequencies[2].get(&1).is_none()); // no "banana" in doc 2
+        assert!(tf_df_result.term_frequencies[2].get(&2).is_none()); // no "cherry" in doc 2
+
         // Check document frequencies (still string-based)
-        assert_eq!(*tf_df_result.document_frequencies.get("apple").unwrap(), 3);   // in all 3 docs
-        assert_eq!(*tf_df_result.document_frequencies.get("banana").unwrap(), 2);  // in 2 docs
-        assert_eq!(*tf_df_result.document_frequencies.get("cherry").unwrap(), 1);  // in 1 doc
+        assert_eq!(*tf_df_result.document_frequencies.get("apple").unwrap(), 3); // in all 3 docs
+        assert_eq!(*tf_df_result.document_frequencies.get("banana").unwrap(), 2); // in 2 docs
+        assert_eq!(*tf_df_result.document_frequencies.get("cherry").unwrap(), 1);
+        // in 1 doc
     }
-    
+
     #[test]
     fn test_bm25_scoring_with_u8_indices() {
         // Create a simple document
         let _doc_content = "apple banana cherry"; // Kept for documentation purposes
-        
+
         // Create a query token map
         let mut query_token_map = QueryTokenMap::new();
         query_token_map.insert("apple".to_string(), 0);
         query_token_map.insert("banana".to_string(), 1);
         query_token_map.insert("cherry".to_string(), 2);
-        
+
         // Create term frequencies using u8 indices
         let mut doc_tf = HashMap::new();
         doc_tf.insert(0u8, 1); // "apple" appears once
         doc_tf.insert(1u8, 1); // "banana" appears once
         doc_tf.insert(2u8, 1); // "cherry" appears once
-        
+
         // Create document frequencies
         let mut doc_freqs = HashMap::new();
         doc_freqs.insert("apple".to_string(), 1);
         doc_freqs.insert("banana".to_string(), 1);
         doc_freqs.insert("cherry".to_string(), 1);
-        
+
         // Create IDF values (simplified for testing)
         let mut idfs = HashMap::new();
         idfs.insert("apple".to_string(), 1.0);
         idfs.insert("banana".to_string(), 1.0);
         idfs.insert("cherry".to_string(), 1.0);
-        
+
         // Create BM25 parameters
         let params = PrecomputedBm25Params {
             doc_tf: &doc_tf,
@@ -793,26 +800,26 @@ mod tests {
             k1: 1.2,
             b: 0.75,
         };
-        
+
         // Test bm25_single_token_optimized
         let apple_score = bm25_single_token_optimized("apple", &params);
         let banana_score = bm25_single_token_optimized("banana", &params);
         let cherry_score = bm25_single_token_optimized("cherry", &params);
-        
+
         // All terms have the same frequency, IDF, and document length,
         // so they should have the same score
         assert!(apple_score > 0.0);
         assert_eq!(apple_score, banana_score);
         assert_eq!(banana_score, cherry_score);
-        
+
         // Test with a term not in the query_token_map
         let unknown_score = bm25_single_token_optimized("unknown", &params);
         assert_eq!(unknown_score, 0.0);
-        
+
         // Test score_term_bm25_optimized
         let keywords = vec!["apple".to_string(), "banana".to_string()];
         let term_score = score_term_bm25_optimized(&keywords, &params);
-        
+
         // The score should be the sum of individual scores
         assert_eq!(term_score, apple_score + banana_score);
     }

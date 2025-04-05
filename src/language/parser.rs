@@ -76,10 +76,20 @@ fn find_prev_sibling(node: Node<'_>) -> Option<Node<'_>> {
 
 /// Find the nearest acceptable ancestor for a node
 /// This traverses up the AST to find the first parent that is an acceptable parent
+/// Uses a cache to avoid redundant traversals for nodes with the same ancestor
 fn find_nearest_acceptable_ancestor<'a>(
     node: Node<'a>,
     language_impl: &dyn LanguageImpl,
+    cache: &mut HashMap<(usize, usize), Option<Node<'a>>>,
 ) -> Option<Node<'a>> {
+    // Use start and end byte as a unique identifier for the node
+    let node_key = (node.start_byte(), node.end_byte());
+
+    // Check if result is already in cache
+    if let Some(cached_result) = cache.get(&node_key) {
+        return *cached_result;
+    }
+
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Check if the current node is acceptable
@@ -92,18 +102,24 @@ fn find_nearest_acceptable_ancestor<'a>(
                 node.end_position().row + 1
             );
         }
-        return Some(node);
+        let result = Some(node);
+        cache.insert(node_key, result);
+        return result;
     }
 
     // Traverse up the parent chain
     let mut current = node;
     while let Some(parent) = current.parent() {
         if language_impl.is_acceptable_parent(&parent) {
-            return Some(parent);
+            let result = Some(parent);
+            cache.insert(node_key, result);
+            return result;
         }
         current = parent;
     }
 
+    // Cache the negative result
+    cache.insert(node_key, None);
     None
 }
 
@@ -318,6 +334,7 @@ fn find_comment_context_node<'a>(
 
 /// Process a node and its children in a single pass, building a comprehensive line-to-node map.
 /// This is the core of our unified AST traversal strategy.
+#[allow(clippy::too_many_arguments)]
 fn process_node<'a>(
     node: Node<'a>,
     line_map: &mut Vec<Option<NodeInfo<'a>>>,
@@ -326,6 +343,7 @@ fn process_node<'a>(
     content: &[u8],
     allow_tests: bool,
     debug_mode: bool,
+    ancestor_cache: &mut HashMap<(usize, usize), Option<Node<'a>>>,
 ) {
     let start_row = node.start_position().row;
     let end_row = node.end_position().row;
@@ -360,7 +378,7 @@ fn process_node<'a>(
         // For non-comment nodes, find the nearest acceptable ancestor
         // This ensures that each line is associated with an acceptable parent node
         if !language_impl.is_acceptable_parent(&node) {
-            find_nearest_acceptable_ancestor(node, language_impl)
+            find_nearest_acceptable_ancestor(node, language_impl, ancestor_cache)
         } else {
             None // Node is already acceptable
         }
@@ -398,6 +416,7 @@ fn process_node<'a>(
             content,
             allow_tests,
             debug_mode,
+            ancestor_cache,
         );
     }
 }
@@ -452,6 +471,7 @@ pub fn parse_file_for_code_blocks(
     // Create a line-to-node map for the entire file
     let line_count = content.lines().count();
     let mut line_map: Vec<Option<NodeInfo>> = vec![None; line_count];
+    let mut ancestor_cache: HashMap<(usize, usize), Option<Node>> = HashMap::new();
 
     // Build the line-to-node map with a single traversal
     if debug_mode {
@@ -474,6 +494,7 @@ pub fn parse_file_for_code_blocks(
         content.as_bytes(),
         allow_tests,
         debug_mode,
+        &mut ancestor_cache,
     );
 
     if debug_mode {

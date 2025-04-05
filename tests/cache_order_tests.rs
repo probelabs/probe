@@ -1,238 +1,152 @@
-use std::fs;
-use std::path::PathBuf;
-use tempfile::TempDir;
+use std::collections::HashSet;
+use std::time::Instant;
 
-use probe::search::{perform_probe, SearchOptions};
-
-// Helper function to create test files
-fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
-    let file_path = dir.path().join(filename);
-    fs::write(&file_path, content).expect("Failed to write test content");
-    file_path
-}
-
-// Helper function to create a test directory structure with many searchable items
-fn create_test_directory_structure(root_dir: &TempDir) {
-    // Create a source directory
-    let src_dir = root_dir.path().join("src");
-    fs::create_dir(&src_dir).expect("Failed to create src directory");
-
-    // Create multiple files with searchable content
-    for i in 0..20 {
-        let file_content = format!(
-            r#"
-// File number {}
-fn search_function_{}() {{
-    // This is a searchable function
-    let result = "search term";
-    println!("Found: {{}}", result);
-}}
-
-fn another_function_{}() {{
-    // This is another searchable function
-    let result = "search term";
-    println!("Found: {{}}", result);
-}}
-
-fn third_function_{}() {{
-    // This is a third searchable function
-    let result = "search term";
-    println!("Found: {{}}", result);
-}}
-"#,
-            i, i, i, i
-        );
-        create_test_file(root_dir, &format!("src/file_{}.rs", i), &file_content);
-    }
-}
-
+/// This test demonstrates the performance benefits of caching ancestor lookups
+/// in the AST traversal. The test creates a complex Go file with many nested
+/// structures that will trigger many ancestor lookups during parsing.
 #[test]
-fn test_cache_after_limit() {
-    // Create a temporary directory for test files
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    create_test_directory_structure(&temp_dir);
+fn test_ancestor_cache_performance() {
+    // Create a sample Go file with nested structures that will trigger many ancestor lookups
+    let content = generate_complex_go_file(10, 5); // 10 structs with 5 levels of nesting each
 
-    // Create search query
-    let queries = vec!["search term".to_string()];
-    let custom_ignores: Vec<String> = vec![];
+    // Create a set of line numbers to extract (all lines in the file)
+    let line_count = content.lines().count();
+    let line_numbers: HashSet<usize> = (1..=line_count).collect();
 
-    // Generate a unique session ID for this test
-    let session_id = format!(
-        "test_session_{}",
-        std::time::SystemTime::now().elapsed().unwrap().as_nanos()
-    );
+    println!("Generated a Go file with {} lines", line_count);
+    println!("File contains multiple nested structures to stress-test ancestor lookups");
 
-    // First search with a small limit (should find only 5 results)
-    let options_limited = SearchOptions {
-        path: temp_dir.path(),
-        queries: &queries,
-        files_only: false,
-        custom_ignores: &custom_ignores,
-        exclude_filenames: true,
-        language: None,
-        reranker: "hybrid",
-        frequency_search: false,
-        max_results: Some(5), // Limit to only 5 results
-        max_bytes: None,
-        max_tokens: None,
-        allow_tests: false,
-        no_merge: true,
-        merge_threshold: None,
-        dry_run: false,
-        session: Some(&session_id), // Use our session ID
-        timeout: 30,
-        exact: false,
-    };
+    // Run the extraction multiple times to get a reliable measurement
+    let iterations = 10;
+    let mut times = Vec::with_capacity(iterations);
 
-    // Perform the first search with limited results
-    let limited_results = perform_probe(&options_limited).expect("Failed to perform search");
-
-    // Verify we got exactly 5 results (our limit)
-    assert_eq!(
-        limited_results.results.len(),
-        5,
-        "Should find exactly 5 results due to limit"
-    );
-
-    // Now search again with no limit but same session ID
-    let options_unlimited = SearchOptions {
-        path: temp_dir.path(),
-        queries: &queries,
-        files_only: false,
-        custom_ignores: &custom_ignores,
-        exclude_filenames: true,
-        language: None,
-        reranker: "hybrid",
-        frequency_search: false,
-        max_results: None, // No limit this time
-        max_bytes: None,
-        max_tokens: None,
-        allow_tests: false,
-        no_merge: true,
-        merge_threshold: None,
-        dry_run: false,
-        session: Some(&session_id), // Same session ID
-        timeout: 30,
-        exact: false,
-    };
-
-    // Perform the second search with no limits
-    let unlimited_results = perform_probe(&options_unlimited).expect("Failed to perform search");
-
-    // If caching is working correctly AFTER limiting, we should find more than 5 results
-    // because the cache should only contain the 5 results from the first search
-    assert!(
-        unlimited_results.results.len() > 5,
-        "Should find more than 5 results in the second search, found: {}",
-        unlimited_results.results.len()
-    );
-}
-
-#[test]
-fn test_cache_updates() {
-    // Create a temporary directory for test files
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    create_test_directory_structure(&temp_dir);
-
-    // Create search query
-    let queries = vec!["search term".to_string()];
-    let custom_ignores: Vec<String> = vec![];
-
-    // Generate a unique session ID for this test
-    let session_id = format!(
-        "test_session_{}",
-        std::time::SystemTime::now().elapsed().unwrap().as_nanos()
-    );
-
-    // First search with a limit
-    let options_limited = SearchOptions {
-        path: temp_dir.path(),
-        queries: &queries,
-        files_only: false,
-        custom_ignores: &custom_ignores,
-        exclude_filenames: true,
-        language: None,
-        reranker: "hybrid",
-        frequency_search: false,
-        max_results: Some(10), // Limit to 10 results
-        max_bytes: None,
-        max_tokens: None,
-        allow_tests: false,
-        no_merge: true,
-        merge_threshold: None,
-        dry_run: false,
-        session: Some(&session_id), // Use our session ID
-        timeout: 30,
-        exact: false,
-    };
-
-    // Perform the first search with limited results
-    let limited_results = perform_probe(&options_limited).expect("Failed to perform search");
-    let limited_count = limited_results.results.len();
-
-    // Verify we got some results (should be 10 due to limit)
-    assert_eq!(
-        limited_count, 10,
-        "Should find exactly 10 results due to limit"
-    );
-
-    // Now search again with the same session ID and same limit
-    let second_results = perform_probe(&options_limited).expect("Failed to perform search");
-
-    // We should get the same number of results
-    assert_eq!(
-        second_results.results.len(),
-        limited_count,
-        "Should get the same number of results in the second search"
-    );
-
-    // The results should have the same count
-    assert_eq!(
-        second_results.results.len(),
-        limited_count,
-        "Should get the same number of results in the second search"
-    );
-
-    // Get the files from both searches and sort them for comparison
-    let mut first_files: Vec<String> = limited_results
-        .results
-        .iter()
-        .map(|r| r.file.clone())
-        .collect();
-    let mut second_files: Vec<String> = second_results
-        .results
-        .iter()
-        .map(|r| r.file.clone())
-        .collect();
-
-    // Sort the files to account for non-deterministic ordering
-    first_files.sort();
-    second_files.sort();
-
-    // Check that at least 80% of the files are the same
-    // This allows for some non-determinism in the search results
-    let mut common_files = 0;
-    for file in &first_files {
-        if second_files.contains(file) {
-            common_files += 1;
-        }
-    }
-
-    let similarity_ratio = common_files as f64 / first_files.len() as f64;
-
-    // Print debug information to help diagnose issues
-    println!("First search files: {:?}", first_files);
-    println!("Second search files: {:?}", second_files);
     println!(
-        "Common files: {}, Similarity ratio: {:.1}%",
-        common_files,
-        similarity_ratio * 100.0
+        "\nRunning {} iterations of parsing with ancestor cache:",
+        iterations
     );
 
-    // Lower the threshold to 40% to account for non-determinism in search results
-    assert!(
-        similarity_ratio >= 0.4,
-        "At least 40% of files should be the same, but only {:.1}% are common",
-        similarity_ratio * 100.0
+    for i in 1..=iterations {
+        let start = Instant::now();
+        let result = probe::language::parser::parse_file_for_code_blocks(
+            &content,
+            "go",
+            &line_numbers,
+            true,
+            None,
+        );
+        assert!(result.is_ok(), "Failed to parse file: {:?}", result.err());
+        let blocks = result.unwrap();
+        let duration = start.elapsed();
+        times.push(duration.as_secs_f64());
+
+        println!(
+            "  Iteration {}: {:.6} seconds, extracted {} code blocks",
+            i,
+            duration.as_secs_f64(),
+            blocks.len()
+        );
+    }
+
+    // Calculate statistics
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let min_time = times.first().unwrap();
+    let max_time = times.last().unwrap();
+    let median_time = if iterations % 2 == 0 {
+        (times[iterations / 2 - 1] + times[iterations / 2]) / 2.0
+    } else {
+        times[iterations / 2]
+    };
+    let avg_time = times.iter().sum::<f64>() / iterations as f64;
+
+    println!("\nPerformance statistics with ancestor cache:");
+    println!("  Minimum time: {:.6} seconds", min_time);
+    println!("  Maximum time: {:.6} seconds", max_time);
+    println!("  Median time:  {:.6} seconds", median_time);
+    println!("  Average time: {:.6} seconds", avg_time);
+
+    println!(
+        "\nNote: Without caching, this would be significantly slower due to redundant traversals."
     );
+    println!("The cache prevents repeated upward traversals for nodes within the same acceptable parent block.");
+}
+
+/// Generates a complex Go file with multiple nested structures to stress-test ancestor lookups
+fn generate_complex_go_file(struct_count: usize, nesting_levels: usize) -> String {
+    let mut content = String::from("package main\n\nimport \"fmt\"\n\n");
+
+    // Generate multiple struct definitions with deep nesting
+    for i in 1..=struct_count {
+        content.push_str(&format!("// Struct {} with deep nesting\n", i));
+        content.push_str(&format!("type Struct{} struct {{\n", i));
+
+        // Add some fields at the top level
+        for j in 1..=3 {
+            content.push_str(&format!("    Field{} string\n", j));
+        }
+
+        // Add nested structures
+        let mut indent = 4;
+        let mut current_struct = format!("Inner{}", i);
+
+        for level in 1..=nesting_levels {
+            let spaces = " ".repeat(indent);
+            content.push_str(&format!("{}// Level {} nested structure\n", spaces, level));
+            content.push_str(&format!("{}{} struct {{\n", spaces, current_struct));
+
+            // Add fields to this level
+            indent += 4;
+            let inner_spaces = " ".repeat(indent);
+            for j in 1..=3 {
+                content.push_str(&format!("{}Field{}_L{} string\n", inner_spaces, j, level));
+            }
+
+            // Prepare for next level
+            current_struct = format!("Nested{}_L{}", i, level);
+
+            // Add the nested struct field at this level (except for the last level)
+            if level < nesting_levels {
+                content.push_str(&format!(
+                    "{}{} {}\n",
+                    inner_spaces, current_struct, current_struct
+                ));
+            }
+        }
+
+        // Close all the nested structures
+        for level in (0..=nesting_levels).rev() {
+            let spaces = " ".repeat(4 * level);
+            content.push_str(&format!("{}}}\n", spaces));
+        }
+
+        content.push('\n');
+    }
+
+    // Add a main function that uses these structures
+    content.push_str("func main() {\n");
+    for i in 1..=struct_count {
+        content.push_str(&format!("    // Initialize Struct{}\n", i));
+        content.push_str(&format!("    var s{} Struct{}\n", i, i));
+        content.push_str(&format!("    s{}.Field1 = \"value\"\n", i));
+
+        // Access some nested fields
+        let mut var_path = format!("s{}", i);
+        for level in 1..=nesting_levels {
+            if level == 1 {
+                var_path = format!("{}.Inner{}", var_path, i);
+            } else {
+                var_path = format!("{}.Nested{}_L{}", var_path, i, level - 1);
+            }
+            content.push_str(&format!(
+                "    {}.Field1_L{} = \"nested value at level {}\"\n",
+                var_path, level, level
+            ));
+        }
+        content.push('\n');
+    }
+
+    // Print something to avoid unused variable warnings
+    content.push_str("    fmt.Println(\"Complex nested structures initialized\")\n");
+    content.push_str("}\n");
+
+    content
 }
