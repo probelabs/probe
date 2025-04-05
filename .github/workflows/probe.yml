@@ -53,10 +53,6 @@ permissions:
 
 jobs:
   process_comment:
-    if: >
-      startsWith(github.event.comment.body, inputs.command_prefix) &&
-      github.event.issue.number != null &&
-      github.event.comment.id != null
     runs-on: ubuntu-latest
     outputs:
       response_body: ${{ steps.read_response.outputs.response }}
