@@ -30,7 +30,7 @@ const chatSessions = new Map();
 /**
  * Retrieve or create a ProbeChat instance keyed by sessionId.
  */
-function getOrCreateChat(sessionId) {
+function getOrCreateChat(sessionId, apiCredentials = null) {
 	if (!sessionId) {
 		// Safety fallback: generate a random ID if missing
 		sessionId = randomUUID(); // Use crypto.randomUUID() if available/preferred
@@ -39,10 +39,22 @@ function getOrCreateChat(sessionId) {
 	if (chatSessions.has(sessionId)) {
 		return chatSessions.get(sessionId);
 	}
-	const newChat = new ProbeChat({ sessionId });
+
+	// Create options object with sessionId and API credentials if provided
+	const options = { sessionId };
+	if (apiCredentials) {
+		options.apiProvider = apiCredentials.apiProvider;
+		options.apiKey = apiCredentials.apiKey;
+		options.apiUrl = apiCredentials.apiUrl;
+	}
+
+	const newChat = new ProbeChat(options);
 	chatSessions.set(sessionId, newChat);
 	if (process.env.DEBUG_CHAT === '1') {
 		console.log(`[DEBUG] Created and stored new chat instance for session: ${sessionId}. Total sessions: ${chatSessions.size}`);
+		if (apiCredentials && apiCredentials.apiKey) {
+			console.log(`[DEBUG] Chat instance created with client-provided API credentials (provider: ${apiCredentials.apiProvider})`);
+		}
 	}
 	return newChat;
 }
@@ -351,7 +363,14 @@ export function startWebServer(version, hasApiKeys = true) {
 			// --- Main Chat Endpoint (Handles the Loop) ---
 			'POST /chat': (req, res) => { // This is the route used by the frontend UI
 				handlePostRequest(req, res, async (requestData) => {
-					const { message, sessionId: reqSessionId, clearHistory } = requestData;
+					const {
+						message,
+						sessionId: reqSessionId,
+						clearHistory,
+						apiProvider,
+						apiKey,
+						apiUrl
+					} = requestData;
 					const DEBUG = process.env.DEBUG_CHAT === '1';
 
 					if (DEBUG) {
@@ -367,7 +386,11 @@ export function startWebServer(version, hasApiKeys = true) {
 					// Get or create the chat instance *without* API key overrides here.
 					// API keys from request are ignored for existing sessions to preserve history consistency.
 					// If a *new* session is created AND keys are provided, the ProbeChat constructor *should* handle them.
-					const chatInstance = getOrCreateChat(chatSessionId);
+					// Extract API credentials from request if available
+					const apiCredentials = apiKey ? { apiProvider, apiKey, apiUrl } : null;
+
+					// Get or create chat instance with API credentials
+					const chatInstance = getOrCreateChat(chatSessionId, apiCredentials);
 
 					// Check if API keys are needed but missing
 					if (chatInstance.noApiKeysMode) {
@@ -425,7 +448,9 @@ export function startWebServer(version, hasApiKeys = true) {
 					// The loop is inside chatInstance.chat now.
 					// We expect the *final* result string back.
 					try {
-						const result = await chatInstance.chat(message, chatSessionId); // Pass session ID
+						// Pass API credentials to the chat method if provided
+						const apiCredentials = apiKey ? { apiProvider, apiKey, apiUrl } : null;
+						const result = await chatInstance.chat(message, chatSessionId, apiCredentials); // Pass session ID and API credentials
 
 						// Check if cancelled *during* the chat call (ProbeChat throws error)
 						// Error handled in catch block

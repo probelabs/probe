@@ -76,6 +76,7 @@ I need to find code related to error handling in the search module. The most app
 7.  Analyze the tool result and decide the next step. If more tool calls are needed, repeat steps 2-6.
 8.  If the task is fully complete and all previous steps were successful, use the \`<attempt_completion>\` tool to provide the final answer. This is the ONLY way to finish the task.
 9.  If you cannot proceed (e.g., missing information, invalid request), explain the issue clearly before using \`<attempt_completion>\` with an appropriate message in the \`<result>\` tag.
+10. Do not be lazy and dig to the topic as deep as possible, until you see full picture.
 
 Available Tools:
 - search: Search code using keyword queries.
@@ -141,6 +142,11 @@ export class ProbeChat {
     // Make allowedFolders accessible as a property of the class
     this.allowedFolders = allowedFolders;
 
+    // Store client-provided API credentials if available
+    this.clientApiProvider = options.apiProvider;
+    this.clientApiKey = options.apiKey;
+    this.clientApiUrl = options.apiUrl;
+
     // Initialize token counter and display
     this.tokenCounter = new TokenCounter();
     this.tokenDisplay = new TokenUsageDisplay({
@@ -178,22 +184,35 @@ export class ProbeChat {
    * Initialize the AI model based on available API keys and forced provider setting
    */
   initializeModel() {
-    // Get API keys from environment variables
-    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-    const openaiApiKey = process.env.OPENAI_API_KEY;
-    const googleApiKey = process.env.GOOGLE_API_KEY;
+    // Get API keys from environment variables or client-provided values
+    const anthropicApiKey = this.clientApiKey && this.clientApiProvider === 'anthropic' ?
+      this.clientApiKey : process.env.ANTHROPIC_API_KEY;
+    const openaiApiKey = this.clientApiKey && this.clientApiProvider === 'openai' ?
+      this.clientApiKey : process.env.OPENAI_API_KEY;
+    const googleApiKey = this.clientApiKey && this.clientApiProvider === 'google' ?
+      this.clientApiKey : process.env.GOOGLE_API_KEY;
 
-    // Get custom API URLs if provided
+    // Get custom API URLs if provided (client URL takes precedence over environment variables)
     const llmBaseUrl = process.env.LLM_BASE_URL;           // Generic base URL for all providers
-    const anthropicApiUrl = process.env.ANTHROPIC_API_URL || llmBaseUrl; // Provider-specific URL takes precedence
-    const openaiApiUrl = process.env.OPENAI_API_URL || llmBaseUrl;       // Provider-specific URL takes precedence
-    const googleApiUrl = process.env.GOOGLE_API_URL || llmBaseUrl;       // Provider-specific URL takes precedence
+
+    // For each provider, use client URL if available and matches the provider
+    const anthropicApiUrl = (this.clientApiUrl && this.clientApiProvider === 'anthropic') ?
+      this.clientApiUrl : (process.env.ANTHROPIC_API_URL || llmBaseUrl);
+
+    const openaiApiUrl = (this.clientApiUrl && this.clientApiProvider === 'openai') ?
+      this.clientApiUrl : (process.env.OPENAI_API_URL || llmBaseUrl);
+
+    const googleApiUrl = (this.clientApiUrl && this.clientApiProvider === 'google') ?
+      this.clientApiUrl : (process.env.GOOGLE_API_URL || llmBaseUrl);
 
     // Get model override if provided
     const modelName = process.env.MODEL_NAME;
 
-    // Get forced provider if specified
-    const forceProvider = process.env.FORCE_PROVIDER ? process.env.FORCE_PROVIDER.toLowerCase() : null;
+    // Check if client has specified a provider that should be forced
+    const clientForceProvider = this.clientApiProvider && this.clientApiKey ? this.clientApiProvider : null;
+
+    // Use client-forced provider or environment variable
+    const forceProvider = clientForceProvider || (process.env.FORCE_PROVIDER ? process.env.FORCE_PROVIDER.toLowerCase() : null);
 
     if (this.debug) {
       console.log(`[DEBUG] Available API keys: Anthropic=${!!anthropicApiKey}, OpenAI=${!!openaiApiKey}, Google=${!!googleApiKey}`);
@@ -206,6 +225,7 @@ export class ProbeChat {
     }
 
     // Check if a specific provider is forced
+
     if (forceProvider) {
       if (!this.isNonInteractive || this.debug) {
         console.log(`Provider forced to: ${forceProvider}`);
@@ -294,7 +314,7 @@ export class ProbeChat {
       apiKey: apiKey,
       ...(apiUrl && { baseURL: apiUrl }), // Conditionally add baseURL
     });
-    this.model = modelName || 'gemini-1.5-flash-latest';
+    this.model = modelName || 'gemini-2.0-flash';
     this.apiType = 'google';
     if (!this.isNonInteractive || this.debug) {
       const urlSource = process.env.GOOGLE_API_URL ? 'GOOGLE_API_URL' :
@@ -319,9 +339,8 @@ Follow these instructions carefully:
 5.  You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
 6.  Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
 7.  Once the task is fully completed, and you have confirmed the success of all steps, use the '<attempt_completion>' tool to provide the final result. This is the ONLY way to signal completion.
-8.  Be concise and focus on using tools effectively. Avoid conversational filler.
-9.  Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results. Avoid reading files in full, only when absolutely necessary.
-10.  Show mermaid diagrams to illustrate complex code structures or workflows. Ensure to wrap content inside  [] diagram to quotes.
+8.  Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results. Avoid reading files in full, only when absolutely necessary.
+9.  Show mermaid diagrams to illustrate complex code structures or workflows. In diagrams, content inside ["..."] always should be in quotes.
 `;
 
     let systemMessage = baseSystemMessage;
@@ -430,13 +449,25 @@ Follow these instructions carefully:
    * @param {string} [sessionId] - Optional session ID to use for this chat (overrides the default)
    * @returns {Promise<string>} - The AI response
    */
-  async chat(message, sessionId) {
+  async chat(message, sessionId, apiCredentials = null) {
+    // Update client credentials if provided in this call
+    if (apiCredentials) {
+      this.clientApiProvider = apiCredentials.apiProvider || this.clientApiProvider;
+      this.clientApiKey = apiCredentials.apiKey || this.clientApiKey;
+      this.clientApiUrl = apiCredentials.apiUrl || this.clientApiUrl;
+
+      // Re-initialize the model with the new credentials
+      if (apiCredentials.apiKey && apiCredentials.apiProvider) {
+        this.initializeModel();
+      }
+    }
+
     // Handle no API keys mode gracefully
     if (this.noApiKeysMode) {
       console.error("Cannot process chat: No API keys configured.");
       // Return structured response even for API key errors
       return {
-        response: "Error: ProbeChat is not configured with an AI provider API key. Please set the appropriate environment variable (e.g., ANTHROPIC_API_KEY, OPENAI_API_KEY).",
+        response: "Error: ProbeChat is not configured with an AI provider API key. Please set the appropriate environment variable (e.g., ANTHROPIC_API_KEY, OPENAI_API_KEY) or provide an API key in the browser.",
         tokenUsage: { contextWindow: 0, current: {}, total: {} }
       };
     }
@@ -527,7 +558,7 @@ Follow these instructions carefully:
         let maxResponseTokens = 4000;
         if (this.model.includes('claude-3-opus') || this.model.startsWith('gpt-4-')) {
           maxResponseTokens = 4096;
-        } else if (this.model.includes('claude-3-5-sonnet') || this.model.startsWith('gpt-4o') || this.model.startsWith('gemini-1.5')) {
+        } else if (this.model.includes('claude-3-5-sonnet') || this.model.startsWith('gpt-4o') || this.model.startsWith('gemini')) {
           maxResponseTokens = 8000;
         }
         this.tokenDisplay = new TokenUsageDisplay({ maxTokens: maxResponseTokens });
@@ -557,6 +588,8 @@ Follow these instructions carefully:
           });
         }
 
+        let streamError;
+
         const generateOptions = {
           model: this.provider(this.model),
           messages: transformedMessages,
@@ -564,6 +597,10 @@ Follow these instructions carefully:
           temperature: 0.3,
           maxTokens: maxResponseTokens,
           signal: this.abortController.signal,
+          onError({ error }) {
+            streamError = error;
+            console.error(error); // your error logging logic here
+          },
         };
 
         // **Streaming Response Handling**
@@ -571,8 +608,13 @@ Follow these instructions carefully:
         try {
           if (this.debug) console.log(`[DEBUG] Calling streamText with model ${this.model}...`);
 
+          if (streamError) {
+            throw streamError
+          }
+
           const { textStream } = streamText(generateOptions);
           for await (const chunk of textStream) {
+            console.log(chunk)
             if (this.cancelled) throw new Error('Request was cancelled by the user');
             assistantResponseContent += chunk;
           }

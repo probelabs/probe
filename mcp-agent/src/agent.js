@@ -324,7 +324,7 @@ Examples:
 					enabled: true,
 					budget: 8000
 				};
-			} else if (this.apiType === 'google' && this.model.includes('gemini-1.5')) {
+			} else if (this.apiType === 'google' && this.model.includes('gemini')) {
 				// Add any Google-specific options here if needed
 				generateOptions.temperature = 0.5; // Google models may need different temperature settings
 			}

@@ -160,7 +160,7 @@ export const attemptCompletionToolDefinition = `
 ## attempt_completion
 Description: Use this tool ONLY when the task is fully complete and you have received confirmation of success for all previous tool uses. Presents the final result to the user.
 Parameters:
-- result: (required) The final result of the task. Formulate this result concisely and definitively. Do not end with questions or offers for further assistance.
+- result: (required) The final result of the task. Formulate this result concisely and definitively. Do not end with questions or offers for further assistance. Ensure that answer fully addresses the user's request, and a clear and detailed maneer.
 - command: (optional) A CLI command to demonstrate the result (e.g., 'open index.html'). Avoid simple print commands like 'echo'.
 Usage Example:
 <attempt_completion>
