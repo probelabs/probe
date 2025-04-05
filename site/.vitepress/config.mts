@@ -63,7 +63,8 @@ export default defineConfig({
           ]}
         ]
       },
-      { text: 'GitHub', link: 'https://github.com/buger/probe' }
+      { text: 'GitHub', link: 'https://github.com/buger/probe' },
+      { text: 'Discord', link: 'https://discord.gg/hBN4UsTZ' }
     ],
 
     sidebar: [
@@ -120,7 +121,8 @@ export default defineConfig({
     ],
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/buger/probe' }
+      { icon: 'github', link: 'https://github.com/buger/probe' },
+      { icon: 'discord', link: 'https://discord.gg/hBN4UsTZ' }
     ],
     
     footer: {

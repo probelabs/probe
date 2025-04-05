@@ -15,6 +15,9 @@ hero:
     - theme: alt
       text: GitHub Repo
       link: https://github.com/buger/probe
+    - theme: alt
+      text: Join Discord
+      link: https://discord.gg/hBN4UsTZ
 ---
 
 <div class="quick-start-section">

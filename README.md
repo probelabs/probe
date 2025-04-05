@@ -749,4 +749,4 @@ Each release includes:
 
 We believe that **local, privacy-focused, semantic code search** is essential for the future of AI-assisted development. Probe is built to empower developers and AI alike to navigate and comprehend large codebases more effectively.
 
-For questions or contributions, please open an issue on [GitHub](https://github.com/buger/probe/issues). Happy coding—and searching!
+For questions or contributions, please open an issue on [GitHub](https://github.com/buger/probe/issues) or join our [Discord community](https://discord.gg/hBN4UsTZ) for discussions and support. Happy coding—and searching!
