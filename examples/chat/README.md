@@ -127,6 +127,7 @@ This will override any ALLOWED_FOLDERS setting in your .env file.
 - `-f, --force-provider <provider>`: Force a specific provider (options: `anthropic`, `openai`, `google`)
 - `-w, --web`: Run in web interface mode
 - `-p, --port <port>`: Port to run web server on (default: 8080)
+- `--prompt <value>`: Use a custom prompt (values: `architect`, `code-review`, `support`, or path to a file)
 - `[path]`: Path to the codebase to search (overrides ALLOWED_FOLDERS)
 
 ### Special Commands
@@ -229,7 +230,89 @@ You can configure custom API endpoints for each provider:
    GOOGLE_API_URL=https://your-google-endpoint.com
    ```
    These override the generic LLM_BASE_URL for their respective providers.
+Provider-specific URLs always take precedence over the generic LLM_BASE_URL.
 
+## Custom Prompts
+
+Probe Chat allows you to customize the system prompt used by the AI assistant. This can be useful for tailoring the assistant's behavior to specific use cases or domains.
+
+### Predefined Prompts
+
+By default, Probe Chat uses a "Code Explorer" prompt that's optimized for answering questions about code, explaining how systems work, and providing insights into code functionality.
+
+The `--prompt` option accepts several predefined prompt types to specialize the assistant for different tasks:
+
+1. **code-explorer** (default): Focuses on explaining and navigating code. The assistant will provide clear explanations of how code works, find relevant snippets, and trace function calls and data flow.
+
+   ```bash
+   node index.js --prompt code-explorer
+   ```
+   
+   Note: This is the default behavior, so you don't need to specify this prompt explicitly.
+
+2. **architect**: Focuses on software architecture and design. The assistant will analyze code from an architectural perspective, identify patterns, suggest improvements, and create high-level design documentation.
+
+   ```bash
+   node index.js --prompt architect
+   ```
+
+2. **code-review**: Focuses on code quality and best practices. The assistant will identify issues, suggest improvements, and ensure code follows best practices.
+
+   ```bash
+   node index.js --prompt code-review
+   ```
+
+3. **support**: Focuses on troubleshooting and problem-solving. The assistant will help diagnose errors, understand unexpected behaviors, and find solutions.
+
+   ```bash
+   node index.js --prompt support
+   ```
+
+Each predefined prompt type maintains the core functionality of Probe Chat while specializing in a particular area of focus. The standard instructions for using tools and following the XML format are automatically included with all predefined prompts.
+
+### Custom Prompt Files
+
+You can also provide a path to a file containing your own custom prompt:
+
+```bash
+node index.js --prompt /path/to/your/prompt.txt
+```
+
+The file should contain the complete system prompt that you want to use. This completely replaces the default system prompt. If you're creating a custom prompt, make sure to include instructions for using the available tools and following the XML format.
+
+Example custom prompt file:
+
+```
+You are ProbeChat Custom, a specialized AI assistant for [your specific use case].
+You focus on [specific area of expertise] and excel at [key strengths].
+
+Follow these instructions carefully:
+1.  Analyze the user's request with a focus on [your specific focus area].
+2.  Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool for each step.
+3.  Use the available tools step-by-step to fulfill the request.
+4.  Ensure to get really deep and understand the full picture before answering.
+5.  You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
+6.  Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
+7.  Once the task is fully completed, and you have confirmed the success of all steps, use the '<attempt_completion>' tool to provide the final result.
+8.  Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.
+9.  [Add any additional specialized instructions here]
+```
+
+### Environment Variables
+
+You can also set a default prompt type using the environment variable:
+
+```
+PROMPT_TYPE=architect
+```
+
+Or specify a path to a custom prompt file:
+
+```
+CUSTOM_PROMPT=/path/to/your/prompt.txt
+```
+
+The command-line option takes precedence over the environment variable.
 Provider-specific URLs always take precedence over the generic LLM_BASE_URL.
 
 ## Example Queries

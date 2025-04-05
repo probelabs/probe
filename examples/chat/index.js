@@ -60,6 +60,7 @@ export function main() {
     .option('-s, --session-id <sessionId>', 'Specify a session ID for the chat (optional)')
     .option('--json', 'Output the response as JSON in non-interactive mode')
     .option('--max-iterations <number>', 'Maximum number of tool iterations allowed (default: 30)')
+    .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, support, or path to a file)')
     .argument('[path]', 'Path to the codebase to search (overrides ALLOWED_FOLDERS)')
     .parse(process.argv);
 
@@ -138,6 +139,33 @@ export function main() {
     logInfo(chalk.blue(`Setting maximum tool iterations to: ${maxIterations}`));
   }
 
+  // Handle custom prompt if provided
+  let customPrompt = null;
+  if (options.prompt) {
+    // Check if it's one of the predefined prompts
+    const predefinedPrompts = ['architect', 'code-review', 'support'];
+    if (predefinedPrompts.includes(options.prompt)) {
+      process.env.PROMPT_TYPE = options.prompt;
+      logInfo(chalk.blue(`Using predefined prompt: ${options.prompt}`));
+    } else {
+      // Assume it's a file path
+      try {
+        const promptPath = resolve(options.prompt);
+        if (existsSync(promptPath)) {
+          customPrompt = readFileSync(promptPath, 'utf8');
+          process.env.CUSTOM_PROMPT = customPrompt;
+          logInfo(chalk.blue(`Loaded custom prompt from file: ${promptPath}`));
+        } else {
+          logError(chalk.red(`Prompt file not found: ${promptPath}`));
+          process.exit(1);
+        }
+      } catch (error) {
+        logError(chalk.red(`Error reading prompt file: ${error.message}`));
+        process.exit(1);
+      }
+    }
+  }
+
   // Parse and validate allowed folders from environment variable
   const allowedFolders = process.env.ALLOWED_FOLDERS
     ? process.env.ALLOWED_FOLDERS.split(',').map(folder => folder.trim()).filter(Boolean)
@@ -194,7 +222,12 @@ export function main() {
     let chat;
     try {
       // Pass session ID if provided, ProbeChat generates one otherwise
-      chat = new ProbeChat({ sessionId: options.sessionId, isNonInteractive: true });
+      chat = new ProbeChat({
+        sessionId: options.sessionId,
+        isNonInteractive: true,
+        customPrompt: customPrompt,
+        promptType: options.prompt && ['architect', 'code-review', 'support'].includes(options.prompt) ? options.prompt : null
+      });
       // Model/Provider info is logged via logInfo above if debug enabled
       logInfo(chalk.blue(`Using Session ID: ${chat.getSessionId()}`)); // Log the actual session ID being used
     } catch (error) {
@@ -319,7 +352,12 @@ export function main() {
   let chat;
   try {
     // Pass session ID if provided (though less common for interactive start)
-    chat = new ProbeChat({ sessionId: options.sessionId, isNonInteractive: false });
+    chat = new ProbeChat({
+      sessionId: options.sessionId,
+      isNonInteractive: false,
+      customPrompt: customPrompt,
+      promptType: options.prompt && ['architect', 'code-review', 'support'].includes(options.prompt) ? options.prompt : null
+    });
 
     // Log model/provider info using logInfo
     if (chat.apiType === 'anthropic') {

@@ -108,14 +108,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: 'npm' # Caches ~/.npm based on package-lock.jsonව
+          cache: "npm" # Caches ~/.npm based on package-lock.jsonව
 
       # --- Go Setup and Caching (Conditional) ---
       - name: Set up Go
         if: steps.detect_languages.outputs.go_found == 'true'
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: "1.21"
           # Go caching is automatic in setup-go@v3.2+
 
       # --- Rust Setup and Caching (Conditional) ---
@@ -142,9 +142,9 @@ jobs:
         if: steps.detect_languages.outputs.python_found == 'true'
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
-          cache: 'pip'
-          cache-dependency-path: '**/requirements.txt'
+          python-version: "3.x"
+          cache: "pip"
+          cache-dependency-path: "**/requirements.txt"
 
       # --- Install Dependencies ---
       - name: Install Project Dependencies
@@ -567,7 +567,6 @@ jobs:
           echo "Outputs set."
           echo "::endgroup::"
 
-
       - name: Determine probe-chat command
         id: determine_command
         env:
@@ -614,6 +613,18 @@ jobs:
           COMMAND_TO_RUN="${{ steps.determine_command.outputs.command }}"
           RESPONSE_FILE="response.txt"
           ERROR_LOG="error.log"
+
+          # Set the prompt type based on context
+          CONTEXT_TYPE="${{ steps.format.outputs.context_type }}"
+          if [[ "$CONTEXT_TYPE" == "pr" ]]; then
+            # For pull requests, use the code-review prompt
+            COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt code-review"
+            echo "Using code-review prompt for pull request context"
+          elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
+            # For issues, use the support prompt
+            COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt support"
+            echo "Using support prompt for issue context"
+          fi
 
           # Add a safety check here too
           if [[ -z "$COMMAND_TO_RUN" ]]; then
@@ -715,5 +726,4 @@ jobs:
           issue-number: ${{ needs.process_comment.outputs.issue_number }}
           body: ${{ needs.process_comment.outputs.response_body }}
           reactions: ${{ needs.process_comment.outputs.probe_succeeded == 'true' && '+1' || '-1' }}
-
 # </gh>
