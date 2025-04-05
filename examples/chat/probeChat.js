@@ -690,7 +690,6 @@ When troubleshooting:
 
           const { textStream } = streamText(generateOptions);
           for await (const chunk of textStream) {
-            console.log(chunk)
             if (this.cancelled) throw new Error('Request was cancelled by the user');
             assistantResponseContent += chunk;
           }
