@@ -333,328 +333,258 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
         // Continue to generate individual patterns instead of returning early
     }
 
-    // Special handling for queries with excluded terms
-    if !plan.excluded_terms.is_empty() {
-        let excluded_start = Instant::now();
-
-        if debug_mode {
-            println!("DEBUG: Query has excluded terms, using special pattern generation");
-        }
-
-        // For queries with excluded terms, we need to ensure we generate patterns
-        // for all non-excluded terms, even if they're part of a complex expression
-        for (term, &idx) in &plan.term_indices {
-            if !plan.excluded_terms.contains(term) {
-                let base_pattern = regex_escape(term);
-                // Use more flexible pattern matching without word boundaries
-                let pattern = format!("({})", base_pattern);
-
-                if debug_mode {
-                    println!(
-                        "DEBUG: Created pattern for non-excluded term '{}': '{}'",
-                        term, pattern
-                    );
+    // Define the recursive helper function *before* calling it
+    fn collect_patterns(
+        expr: &elastic_query::Expr,
+        plan: &QueryPlan,
+        results: &mut Vec<(String, HashSet<usize>)>,
+        debug_mode: bool,
+    ) {
+        match expr {
+            elastic_query::Expr::Term {
+                keywords,
+                field: _,
+                excluded,
+                exact,
+                ..
+            } => {
+                // Skip pattern generation for excluded terms
+                if *excluded {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Skipping pattern generation for excluded term: '{:?}'",
+                            keywords
+                        );
+                    }
+                    return; // Skip pattern generation for excluded terms
                 }
 
-                results.push((pattern, HashSet::from([idx])));
-
-                // Also add patterns for compound words
-                if term.len() > 3 {
-                    // Check if it's a camelCase word or a known compound word from vocabulary
-                    let camel_parts = crate::search::tokenization::split_camel_case(term);
-                    let compound_parts = if camel_parts.len() <= 1 {
-                        // Not a camelCase word, check if it's in vocabulary
-                        crate::search::tokenization::split_compound_word(
-                            term,
-                            crate::search::tokenization::load_vocabulary(),
-                        )
-                    } else {
-                        camel_parts
-                    };
-
-                    if compound_parts.len() > 1 {
+                // Process each keyword
+                for keyword in keywords {
+                    // ADDED: Check against the global exclusion list first
+                    if plan.excluded_terms.contains(keyword) {
                         if debug_mode {
-                            println!("DEBUG: Processing compound word: '{}'", term);
+                            println!(
+                                    "DEBUG: Skipping pattern generation for globally excluded keyword: '{}'",
+                                    keyword
+                                );
+                        }
+                        continue;
+                    }
+                    // The original check `if *excluded` (line 352) already handles terms explicitly marked with `-`
+                    // No need for an additional check here for `*excluded` as the outer check handles it.
+
+                    // Find the keyword's index in term_indices
+                    if let Some(&idx) = plan.term_indices.get(keyword) {
+                        let base_pattern = regex_escape(keyword);
+
+                        // For exact terms, use stricter matching
+                        let pattern = if *exact {
+                            base_pattern.to_string()
+                        } else {
+                            format!("({})", base_pattern)
+                        };
+
+                        if debug_mode {
+                            println!(
+                                "DEBUG: Created pattern for keyword '{}': '{}'",
+                                keyword, pattern
+                            );
                         }
 
-                        for part in compound_parts {
-                            if part.len() >= 3 {
-                                let part_pattern = regex_escape(&part);
-                                let pattern = format!("({})", part_pattern);
+                        results.push((pattern, HashSet::from([idx])));
+
+                        // Only tokenize if not exact
+                        if !*exact {
+                            // Generate patterns for each token of the term to match AST tokenization
+                            let tokens = crate::search::tokenization::tokenize_and_stem(keyword);
+
+                            if debug_mode && tokens.len() > 1 {
+                                println!("DEBUG: Term '{}' tokenized into: {:?}", keyword, tokens);
+                            }
+
+                            // Generate a pattern for each token with the same term index
+                            for token in tokens {
+                                let token_pattern = regex_escape(&token);
+                                let pattern = format!("({})", token_pattern);
 
                                 if debug_mode {
                                     println!(
-                                        "DEBUG: Adding compound part pattern: '{}' from '{}'",
-                                        pattern, part
-                                    );
+                                            "DEBUG: Created pattern for token '{}' from term '{}': '{}'",
+                                            token, keyword, pattern
+                                        );
                                 }
 
                                 results.push((pattern, HashSet::from([idx])));
                             }
+                        } else if debug_mode {
+                            println!("DEBUG: Skipping tokenization for exact term '{}'", keyword);
                         }
                     }
                 }
             }
-        }
-
-        let excluded_duration = excluded_start.elapsed();
-
-        if debug_mode {
-            println!(
-                "DEBUG: Excluded term pattern generation completed in {} - Generated {} patterns",
-                format_duration(excluded_duration),
-                results.len()
-            );
-        }
-    } else {
-        // Standard pattern generation for queries without excluded terms
-        let standard_start = Instant::now();
-
-        if debug_mode {
-            println!("DEBUG: Using standard pattern generation (no excluded terms)");
-        }
-
-        fn collect_patterns(
-            expr: &elastic_query::Expr,
-            plan: &QueryPlan,
-            results: &mut Vec<(String, HashSet<usize>)>,
-            debug_mode: bool,
-        ) {
-            match expr {
-                elastic_query::Expr::Term {
-                    keywords,
-                    field: _,
-                    excluded,
-                    exact,
-                    ..
-                } => {
-                    // Skip pattern generation for excluded terms
-                    if *excluded {
-                        if debug_mode {
-                            println!(
-                                "DEBUG: Skipping pattern generation for excluded term: '{:?}'",
-                                keywords
-                            );
-                        }
-                        return; // Skip pattern generation for excluded terms
-                    }
-
-                    // Process each keyword
-                    for keyword in keywords {
-                        // Skip if this keyword is in the excluded terms set
-                        if plan.excluded_terms.contains(keyword) {
-                            if debug_mode {
-                                println!(
-                                    "DEBUG: Skipping pattern generation for excluded keyword: '{}'",
-                                    keyword
-                                );
-                            }
-                            continue;
-                        }
-
-                        // Find the keyword's index in term_indices
-                        if let Some(&idx) = plan.term_indices.get(keyword) {
-                            let base_pattern = regex_escape(keyword);
-
-                            // For exact terms, use stricter matching
-                            let pattern = if *exact {
-                                base_pattern.to_string()
-                            } else {
-                                format!("({})", base_pattern)
-                            };
-
-                            if debug_mode {
-                                println!(
-                                    "DEBUG: Created pattern for keyword '{}': '{}'",
-                                    keyword, pattern
-                                );
-                            }
-
-                            results.push((pattern, HashSet::from([idx])));
-
-                            // Only tokenize if not exact
-                            if !*exact {
-                                // Generate patterns for each token of the term to match AST tokenization
-                                let tokens =
-                                    crate::search::tokenization::tokenize_and_stem(keyword);
-
-                                if debug_mode && tokens.len() > 1 {
-                                    println!(
-                                        "DEBUG: Term '{}' tokenized into: {:?}",
-                                        keyword, tokens
-                                    );
-                                }
-
-                                // Generate a pattern for each token with the same term index
-                                for token in tokens {
-                                    let token_pattern = regex_escape(&token);
-                                    let pattern = format!("({})", token_pattern);
-
-                                    if debug_mode {
-                                        println!(
-                                            "DEBUG: Created pattern for token '{}' from term '{}': '{}'",
-                                            token, keyword, pattern
-                                        );
-                                    }
-
-                                    results.push((pattern, HashSet::from([idx])));
-                                }
-                            } else if debug_mode {
-                                println!(
-                                    "DEBUG: Skipping tokenization for exact term '{}'",
-                                    keyword
-                                );
-                            }
-                        }
-                    }
+            elastic_query::Expr::And(left, right) => {
+                // For AND, collect patterns from both sides independently
+                if debug_mode {
+                    println!("DEBUG: Processing AND expression");
                 }
-                elastic_query::Expr::And(left, right) => {
-                    // For AND, collect patterns from both sides independently
-                    if debug_mode {
-                        println!("DEBUG: Processing AND expression");
-                    }
-                    collect_patterns(left, plan, results, debug_mode);
-                    collect_patterns(right, plan, results, debug_mode);
+                collect_patterns(left, plan, results, debug_mode);
+                collect_patterns(right, plan, results, debug_mode);
+            }
+            elastic_query::Expr::Or(left, right) => {
+                if debug_mode {
+                    println!("DEBUG: Processing OR expression");
                 }
-                elastic_query::Expr::Or(left, right) => {
+
+                // For OR, create combined patterns
+                let mut left_patterns = Vec::new();
+                let mut right_patterns = Vec::new();
+
+                collect_patterns(left, plan, &mut left_patterns, debug_mode);
+                collect_patterns(right, plan, &mut right_patterns, debug_mode);
+
+                if !left_patterns.is_empty() && !right_patterns.is_empty() {
+                    // Combine the patterns with OR
+                    let combined = format!(
+                        "({}|{})",
+                        left_patterns
+                            .iter()
+                            .map(|(p, _)| p.as_str())
+                            .collect::<Vec<_>>()
+                            .join("|"),
+                        right_patterns
+                            .iter()
+                            .map(|(p, _)| p.as_str())
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    );
+
+                    // Merge the term indices
+                    let mut indices = HashSet::new();
+                    for (_, idx_set) in left_patterns.iter().chain(right_patterns.iter()) {
+                        indices.extend(idx_set.iter().cloned());
+                    }
+
                     if debug_mode {
-                        println!("DEBUG: Processing OR expression");
+                        println!("DEBUG: Created combined OR pattern: '{}'", combined);
+                        println!("DEBUG: Combined indices: {:?}", indices);
                     }
 
-                    // For OR, create combined patterns
-                    let mut left_patterns = Vec::new();
-                    let mut right_patterns = Vec::new();
-
-                    collect_patterns(left, plan, &mut left_patterns, debug_mode);
-                    collect_patterns(right, plan, &mut right_patterns, debug_mode);
-
-                    if !left_patterns.is_empty() && !right_patterns.is_empty() {
-                        // Combine the patterns with OR
-                        let combined = format!(
-                            "({}|{})",
-                            left_patterns
-                                .iter()
-                                .map(|(p, _)| p.as_str())
-                                .collect::<Vec<_>>()
-                                .join("|"),
-                            right_patterns
-                                .iter()
-                                .map(|(p, _)| p.as_str())
-                                .collect::<Vec<_>>()
-                                .join("|")
-                        );
-
-                        // Merge the term indices
-                        let mut indices = HashSet::new();
-                        for (_, idx_set) in left_patterns.iter().chain(right_patterns.iter()) {
-                            indices.extend(idx_set.iter().cloned());
-                        }
-
-                        if debug_mode {
-                            println!("DEBUG: Created combined OR pattern: '{}'", combined);
-                            println!("DEBUG: Combined indices: {:?}", indices);
-                        }
-
-                        results.push((combined, indices));
-                    }
-
-                    // Also add individual patterns to ensure we catch all matches
-                    // This is important for multi-keyword terms where we want to match any of the keywords
-                    if debug_mode {
-                        println!("DEBUG: Adding individual patterns from OR expression");
-                    }
-                    results.extend(left_patterns);
-                    results.extend(right_patterns);
+                    results.push((combined, indices));
                 }
+
+                // Also add individual patterns to ensure we catch all matches
+                // This is important for multi-keyword terms where we want to match any of the keywords
+                if debug_mode {
+                    println!("DEBUG: Adding individual patterns from OR expression");
+                }
+                results.extend(left_patterns);
+                results.extend(right_patterns);
             }
         }
+    }
+    // Removed extra closing brace after collect_patterns definition
 
-        collect_patterns(&plan.ast, plan, &mut results, debug_mode);
+    // Always call the recursive pattern collection logic
+    // Removed unused variable 'standard_start'
+    if debug_mode {
+        println!("DEBUG: Using recursive pattern generation via collect_patterns");
+    }
+    collect_patterns(&plan.ast, plan, &mut results, debug_mode);
 
-        // Additional pass for compound words
-        let compound_start = Instant::now();
+    // Additional pass for compound words
+    let compound_start = Instant::now();
 
-        if debug_mode {
-            println!("DEBUG: Starting compound word pattern generation");
-        }
+    if debug_mode {
+        println!("DEBUG: Starting compound word pattern generation");
+    }
 
-        let mut compound_patterns = Vec::new();
+    let mut compound_patterns = Vec::new();
 
-        // Process all terms from the term_indices map
-        for (keyword, &idx) in &plan.term_indices {
-            // Process compound words - either camelCase or those in the vocabulary
-            // Skip compound word processing if exact search is enabled
-            if !plan.excluded_terms.contains(keyword)
-                && keyword.len() > 3
-                && !is_exact_search(&plan.ast)
-            {
-                // Check if it's a camelCase word or a known compound word from vocabulary
-                let camel_parts = crate::search::tokenization::split_camel_case(keyword);
-                let compound_parts = if camel_parts.len() <= 1 {
-                    // Not a camelCase word, check if it's in vocabulary
-                    crate::search::tokenization::split_compound_word(
-                        keyword,
-                        crate::search::tokenization::load_vocabulary(),
-                    )
-                } else {
-                    camel_parts
-                };
-
-                if compound_parts.len() > 1 {
-                    if debug_mode {
-                        println!("DEBUG: Processing compound word: '{}'", keyword);
-                    }
-
-                    for part in compound_parts {
-                        if part.len() >= 3 {
-                            let part_pattern = regex_escape(&part);
-                            let pattern = format!("({})", part_pattern);
-
-                            if debug_mode {
-                                println!(
-                                    "DEBUG: Adding compound part pattern: '{}' from '{}'",
-                                    pattern, part
-                                );
-                            }
-
-                            compound_patterns.push((pattern, HashSet::from([idx])));
-                        }
-                    }
-                }
-            } else if debug_mode && is_exact_search(&plan.ast) {
+    // Process all terms from the term_indices map
+    for (keyword, &idx) in &plan.term_indices {
+        // Check if the original keyword itself is excluded before processing for compound parts
+        if plan.excluded_terms.contains(keyword) {
+            if debug_mode {
                 println!(
-                    "DEBUG: Skipping compound word processing for exact search term: '{}'",
+                    "DEBUG: Skipping compound processing for excluded keyword: '{}'",
                     keyword
                 );
             }
+            continue; // Skip this keyword entirely
         }
 
-        // Store the length before moving compound_patterns
-        let compound_patterns_len = compound_patterns.len();
+        // Process compound words - either camelCase or those in the vocabulary
+        // Skip compound word processing if exact search is enabled
+        if keyword.len() > 3 && !is_exact_search(&plan.ast) {
+            // Check if it's a camelCase word or a known compound word from vocabulary
+            let camel_parts = crate::search::tokenization::split_camel_case(keyword);
+            let compound_parts = if camel_parts.len() <= 1 {
+                // Not a camelCase word, check if it's in vocabulary
+                crate::search::tokenization::split_compound_word(
+                    keyword,
+                    crate::search::tokenization::load_vocabulary(),
+                )
+            } else {
+                camel_parts
+            };
 
-        // Add compound patterns after AST-based patterns
-        results.extend(compound_patterns);
+            if compound_parts.len() > 1 {
+                if debug_mode {
+                    println!("DEBUG: Processing compound word: '{}'", keyword);
+                }
 
-        let compound_duration = compound_start.elapsed();
+                for part in compound_parts {
+                    // Check if the part itself is excluded before adding its pattern
+                    if part.len() >= 3 && !plan.excluded_terms.contains(&part) {
+                        let part_pattern = regex_escape(&part);
+                        let pattern = format!("({})", part_pattern);
 
-        if debug_mode {
+                        if debug_mode {
+                            println!(
+                                "DEBUG: Adding compound part pattern: '{}' from '{}'",
+                                pattern, part
+                            );
+                        }
+                        compound_patterns.push((pattern, HashSet::from([idx])));
+                    } else if debug_mode && plan.excluded_terms.contains(&part) {
+                        println!(
+                            "DEBUG: Skipping excluded compound part: '{}' from keyword '{}'",
+                            part, keyword
+                        );
+                    } else if debug_mode {
+                        println!(
+                            "DEBUG: Skipping short compound part: '{}' from keyword '{}'",
+                            part, keyword
+                        );
+                    }
+                }
+            }
+        } else if debug_mode && is_exact_search(&plan.ast) {
             println!(
-                "DEBUG: Compound word pattern generation completed in {} - Generated {} patterns",
-                format_duration(compound_duration),
-                compound_patterns_len
-            );
-        }
-
-        let standard_duration = standard_start.elapsed();
-
-        if debug_mode {
-            println!(
-                "DEBUG: Standard pattern generation completed in {} - Generated {} patterns",
-                format_duration(standard_duration),
-                results.len()
+                "DEBUG: Skipping compound word processing for exact search term: '{}'",
+                keyword
             );
         }
     }
+
+    // Store the length before moving compound_patterns
+    let compound_patterns_len = compound_patterns.len();
+
+    // Add compound patterns after AST-based patterns
+    results.extend(compound_patterns);
+
+    let compound_duration = compound_start.elapsed();
+
+    if debug_mode {
+        println!(
+            "DEBUG: Compound word pattern generation completed in {} - Generated {} patterns",
+            format_duration(compound_duration),
+            compound_patterns_len
+        );
+    }
+
+    // Removed misplaced debug logging block and extra closing brace from old 'else' structure
 
     // Deduplicate patterns by combining those with the same regex but different indices
     // Also deduplicate patterns that match the same terms
@@ -734,4 +664,4 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
     }
 
     deduplicated_results
-}
+} // Re-added function closing brace

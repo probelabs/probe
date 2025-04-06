@@ -53,42 +53,18 @@ struct TestStruct {
         );
     }
 
-    // Note: The cache miss path and cache hit path may return different numbers of blocks
-    // due to differences in how they process the AST. This is expected behavior.
-    // The important thing is that both paths return valid code blocks for the requested lines.
-
-    // Verify that both paths return blocks that cover the requested lines
-    let requested_lines: Vec<usize> = line_numbers.iter().cloned().collect();
-
-    // Check that result1 covers all requested lines
-    for &line in &requested_lines {
-        let line_covered = result1
-            .iter()
-            .any(|block| line > block.start_row && line <= block.end_row + 1);
-        assert!(
-            line_covered,
-            "Line {} not covered by any block in result1",
-            line
-        );
-    }
-
-    // Check that result2 covers all requested lines
-    for &line in &requested_lines {
-        let line_covered = result2
-            .iter()
-            .any(|block| line > block.start_row && line <= block.end_row + 1);
-        assert!(
-            line_covered,
-            "Line {} not covered by any block in result2",
-            line
-        );
-    }
+    // Assert that the results from cache miss and cache hit are identical
+    assert_eq!(
+        result1, result2,
+        "Cache miss and cache hit results should be identical"
+    );
 
     // Test with different allow_tests flag
     let result3 = parse_file_for_code_blocks(content, "rs", &line_numbers, false, None).unwrap();
 
     // Should be a different cache entry, but results should be similar since there are no tests
     // Check that result3 covers all requested lines
+    let requested_lines: Vec<usize> = line_numbers.iter().cloned().collect(); // Define requested_lines here
     for &line in &requested_lines {
         let line_covered = result3
             .iter()

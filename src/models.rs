@@ -70,7 +70,7 @@ pub struct SearchResult {
 }
 
 // Structure to hold node information for merging
-#[derive(Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CodeBlock {
     pub start_row: usize,
     pub end_row: usize,
