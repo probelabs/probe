@@ -54,7 +54,7 @@ pub fn get_or_parse_tree(
 
     // Try to get from cache first
     {
-        let cache = TREE_CACHE
+        let mut cache = TREE_CACHE
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some((cached_tree, cached_hash)) = cache.get(file_path) {
@@ -71,11 +71,15 @@ pub fn get_or_parse_tree(
                     println!("[DEBUG] Cache hit for file: {}", file_path);
                 }
                 return Ok(cached_tree.clone());
-            } else if debug_mode {
-                println!(
-                    "[DEBUG] Cache invalidated for file: {} (content changed)",
-                    file_path
-                );
+            } else {
+                // Content changed, explicitly remove the old entry
+                cache.remove(file_path);
+                if debug_mode {
+                    println!(
+                        "[DEBUG] Cache invalidated for file: {} (content changed)",
+                        file_path
+                    );
+                }
             }
         } else if debug_mode {
             println!("[DEBUG] Cache miss for file: {}", file_path);

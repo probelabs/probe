@@ -1,11 +1,128 @@
 use anyhow::{Context, Result};
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use tree_sitter::{Node, Parser as TSParser};
 
 use crate::language::factory::get_language_impl;
 use crate::language::language_trait::LanguageImpl;
 use crate::language::tree_cache;
 use crate::models::CodeBlock;
+
+// Define a static cache for line maps
+static LINE_MAP_CACHE: Lazy<DashMap<String, Vec<Option<CachedNodeInfo>>>> = Lazy::new(DashMap::new);
+
+/// Calculate a hash of the content for cache validation
+fn calculate_content_hash(content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// A version of NodeInfo without lifetimes for caching
+#[derive(Clone, Debug)]
+struct CachedNodeInfo {
+    // Original node info
+    start_byte: usize,
+    end_byte: usize,
+    start_row: usize,
+    end_row: usize,
+    node_kind: String,
+    is_comment: bool,
+    is_test: bool,
+    // Context node info (if any)
+    context_node_bytes: Option<(usize, usize)>,
+    context_node_rows: Option<(usize, usize)>,
+    context_node_kind: Option<String>,
+    #[allow(dead_code)]
+    specificity: usize,
+    // Parent function info (if applicable)
+    parent_node_type: Option<String>,
+    parent_start_row: Option<usize>,
+    parent_end_row: Option<usize>,
+    // Representative node info (the node that was actually used to create the code block)
+    // This could be the original node, the context node, or a merged block
+    representative_start_byte: usize,
+    representative_end_byte: usize,
+    representative_start_row: usize,
+    representative_end_row: usize,
+    representative_node_kind: String,
+    is_merged_comment: bool, // Flag if this represents a merged comment+context block
+}
+
+impl CachedNodeInfo {
+    /// Create a CachedNodeInfo from a NodeInfo and determine the representative node
+    fn from_node_info(
+        info: &NodeInfo<'_>,
+        language_impl: &dyn LanguageImpl,
+        content: &[u8],
+        allow_tests: bool,
+    ) -> Self {
+        // Determine the representative node based on the same logic used in the live processing path
+        let mut rep_node = info.node; // Default to self
+        let mut is_merged = false;
+
+        if info.is_comment {
+            if let Some(ctx) = info.context_node {
+                if !allow_tests && !language_impl.is_test_node(&ctx, content) {
+                    rep_node = ctx; // Context represents the merged block
+                    is_merged = true;
+                }
+            }
+        } else if !info.is_test {
+            if let Some(ctx) = info.context_node {
+                if !allow_tests && !language_impl.is_test_node(&ctx, content) {
+                    rep_node = ctx; // Use context ancestor
+                }
+            }
+        }
+        // If info.is_test is true, rep_node remains info.node
+
+        // Get parent function info if applicable (e.g., for struct_type nodes)
+        let parent_info = if rep_node.kind() == "struct_type" {
+            language_impl
+                .find_parent_function(rep_node)
+                .map(|parent_node| {
+                    let parent_type = parent_node.kind().to_string();
+                    let parent_start = parent_node.start_position().row;
+                    let parent_end = parent_node.end_position().row;
+                    (parent_type, parent_start, parent_end)
+                })
+        } else {
+            None
+        };
+
+        CachedNodeInfo {
+            // Original node details
+            start_byte: info.node.start_byte(),
+            end_byte: info.node.end_byte(),
+            start_row: info.node.start_position().row,
+            end_row: info.node.end_position().row,
+            node_kind: info.node.kind().to_string(),
+            is_comment: info.is_comment,
+            is_test: info.is_test,
+            context_node_bytes: info.context_node.map(|n| (n.start_byte(), n.end_byte())),
+            context_node_rows: info
+                .context_node
+                .map(|n| (n.start_position().row, n.end_position().row)),
+            context_node_kind: info.context_node.map(|n| n.kind().to_string()),
+            specificity: info.specificity,
+            // Parent function info
+            parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
+            parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
+            parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
+            // Representative node details
+            representative_start_byte: rep_node.start_byte(),
+            representative_end_byte: rep_node.end_byte(),
+            representative_start_row: rep_node.start_position().row,
+            representative_end_row: rep_node.end_position().row,
+            representative_node_kind: rep_node.kind().to_string(),
+            is_merged_comment: is_merged,
+        }
+    }
+}
 
 /// Structure to hold node information for a specific line
 #[derive(Clone, Copy)]
@@ -421,6 +538,266 @@ fn process_node<'a>(
     }
 }
 
+/// Process a cached line map to extract code blocks
+fn process_cached_line_map(
+    cached_line_map: &[Option<CachedNodeInfo>],
+    line_numbers: &HashSet<usize>,
+    _language_impl: &dyn LanguageImpl, // Prefixed with underscore as it's not directly used
+    _content: &str,                    // Prefixed with underscore as it's not directly used
+    allow_tests: bool,
+    debug_mode: bool,
+) -> Result<Vec<CodeBlock>> {
+    let mut code_blocks: Vec<CodeBlock> = Vec::new();
+    let mut seen_nodes: HashSet<(usize, usize)> = HashSet::new();
+
+    // Process each line number using the cached map
+    for &line in line_numbers {
+        // Adjust for 0-based indexing
+        let line_idx = line.saturating_sub(1);
+
+        if debug_mode {
+            println!("DEBUG: Processing line {} from cache", line);
+        }
+
+        // Skip if line is out of bounds
+        if line_idx >= cached_line_map.len() {
+            if debug_mode {
+                println!("DEBUG: Line {} is out of bounds", line);
+            }
+            continue;
+        }
+
+        // Get the cached node info for this line
+        if let Some(info) = &cached_line_map[line_idx] {
+            if debug_mode {
+                println!(
+                    "DEBUG: Found cached node for line {}: type='{}', lines={}-{}",
+                    line,
+                    info.node_kind,
+                    info.start_row + 1,
+                    info.end_row + 1
+                );
+            }
+
+            // Use the representative node details for the node key
+            let node_key = (info.representative_start_row, info.representative_end_row);
+
+            // Skip if we've already processed this node
+            if seen_nodes.contains(&node_key) {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Already processed representative node at lines {}-{}, type: {}",
+                        info.representative_start_row + 1,
+                        info.representative_end_row + 1,
+                        info.representative_node_kind
+                    );
+                }
+                continue;
+            }
+
+            // Mark this representative node as seen
+            seen_nodes.insert(node_key);
+
+            // Skip test nodes unless allow_tests is true
+            if !allow_tests && info.is_test {
+                if debug_mode {
+                    println!(
+                        "DEBUG: Skipping test node at line {}, type: {}",
+                        line, info.node_kind
+                    );
+                }
+                continue;
+            }
+
+            // For non-comments, first check if this line is within any existing block
+            let mut existing_block = false;
+            for block in &code_blocks {
+                if line > block.start_row + 1 && line <= block.end_row + 1 {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Line {} is within existing block: type='{}', lines={}-{}",
+                            line,
+                            block.node_type,
+                            block.start_row + 1,
+                            block.end_row + 1
+                        );
+                    }
+                    existing_block = true;
+                    break;
+                }
+            }
+
+            if existing_block {
+                continue;
+            }
+
+            // Create a code block using the representative node details
+            code_blocks.push(CodeBlock {
+                start_row: info.representative_start_row,
+                end_row: info.representative_end_row,
+                start_byte: info.representative_start_byte,
+                end_byte: info.representative_end_byte,
+                node_type: info.representative_node_kind.clone(),
+                parent_node_type: info.parent_node_type.clone(),
+                parent_start_row: info.parent_start_row,
+                parent_end_row: info.parent_end_row,
+            });
+
+            if debug_mode {
+                println!(
+                    "DEBUG: Added block using representative node for line {}: type='{}', lines={}-{}",
+                    line,
+                    info.representative_node_kind,
+                    info.representative_start_row + 1,
+                    info.representative_end_row + 1
+                );
+            }
+        } else if debug_mode {
+            println!("DEBUG: No node found for line {}", line);
+        }
+    }
+
+    // Sort code blocks by start position
+    code_blocks.sort_by_key(|block| block.start_row);
+
+    // Deduplicate blocks with overlapping spans using improved logic
+    let mut deduplicated_blocks: Vec<CodeBlock> = Vec::new();
+
+    // First add all comment blocks (we want to keep these)
+    for block in code_blocks
+        .iter()
+        .filter(|b| b.node_type.contains("comment") || b.node_type == "/*" || b.node_type == "*/")
+    {
+        deduplicated_blocks.push(block.clone());
+    }
+
+    // Then add non-comment blocks, preferring contained blocks
+    for block in code_blocks
+        .into_iter()
+        .filter(|b| !b.node_type.contains("comment") && b.node_type != "/*" && b.node_type != "*/")
+    {
+        let mut should_add = true;
+        let mut blocks_to_remove: Vec<usize> = Vec::new();
+
+        // Define important block types that should be preserved
+        let important_block_types = [
+            "function_declaration",
+            "method_declaration",
+            "function_item",
+            "impl_item",
+            "type_declaration",
+            "struct_item",
+            "block_comment",
+        ];
+        let is_important = important_block_types.contains(&block.node_type.as_str());
+
+        // Check if this block overlaps with any of the previous blocks
+        for (idx, prev_block) in deduplicated_blocks.iter().enumerate() {
+            if prev_block.node_type.contains("comment")
+                || prev_block.node_type == "/*"
+                || prev_block.node_type == "*/"
+            {
+                continue; // Skip comments
+            }
+
+            let prev_is_important = important_block_types.contains(&prev_block.node_type.as_str());
+
+            // Check if blocks overlap
+            if block.start_row <= prev_block.end_row && block.end_row >= prev_block.start_row {
+                // Case 1: Current block is contained within previous block
+                if block.start_row >= prev_block.start_row && block.end_row <= prev_block.end_row {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Current block is contained within previous block: type='{}', lines={}-{} (contained in type='{}', lines={}-{})",
+                            block.node_type, block.start_row + 1, block.end_row + 1,
+                            prev_block.node_type, prev_block.start_row + 1, prev_block.end_row + 1
+                        );
+                    }
+
+                    // If current block is important and previous block is not, keep both
+                    if is_important && !prev_is_important {
+                        if debug_mode {
+                            println!("DEBUG: Keeping important block type: {}", block.node_type);
+                        }
+                        // Don't remove any blocks, don't set should_add to false
+                    }
+                    // If previous block is important and current block is not, skip current block
+                    else if !is_important && prev_is_important {
+                        if debug_mode {
+                            println!("DEBUG: Skipping non-important block in favor of important block: {}", prev_block.node_type);
+                        }
+                        should_add = false;
+                        break;
+                    }
+                    // Otherwise, prefer the more specific (contained) block
+                    else {
+                        blocks_to_remove.push(idx);
+                    }
+                }
+                // Case 2: Previous block is contained within current block
+                else if prev_block.start_row >= block.start_row
+                    && prev_block.end_row <= block.end_row
+                {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Previous block is contained within current block: type='{}', lines={}-{} (contains type='{}', lines={}-{})",
+                            block.node_type, block.start_row + 1, block.end_row + 1,
+                            prev_block.node_type, prev_block.start_row + 1, prev_block.end_row + 1
+                        );
+                    }
+
+                    // If current block is important and previous block is not, keep both
+                    if is_important && !prev_is_important {
+                        if debug_mode {
+                            println!("DEBUG: Keeping important block type: {}", block.node_type);
+                        }
+                        // Don't set should_add to false, continue checking other blocks
+                    }
+                    // If previous block is important and current block is not, skip current block
+                    else if !is_important && prev_is_important {
+                        if debug_mode {
+                            println!("DEBUG: Skipping non-important block in favor of important block: {}", prev_block.node_type);
+                        }
+                        should_add = false;
+                        break;
+                    }
+                    // Otherwise, skip current block as it's less specific
+                    else {
+                        should_add = false;
+                        break;
+                    }
+                }
+                // Case 3: Blocks partially overlap
+                else {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Blocks partially overlap: type='{}', lines={}-{} (overlaps with type='{}', lines={}-{})",
+                            block.node_type, block.start_row + 1, block.end_row + 1,
+                            prev_block.node_type, prev_block.start_row + 1, prev_block.end_row + 1
+                        );
+                    }
+                    // Skip current block in case of partial overlap
+                    should_add = false;
+                    break;
+                }
+            }
+        }
+
+        // Remove any blocks that should be replaced
+        for idx in blocks_to_remove.iter().rev() {
+            deduplicated_blocks.remove(*idx);
+        }
+
+        if should_add {
+            deduplicated_blocks.push(block);
+        }
+    }
+
+    // Final sort to maintain correct order
+    deduplicated_blocks.sort_by_key(|block| block.start_row);
+    Ok(deduplicated_blocks)
+}
+
 /// Function to parse a file and extract code blocks for the given line numbers
 pub fn parse_file_for_code_blocks(
     content: &str,
@@ -440,6 +817,37 @@ pub fn parse_file_for_code_blocks(
         }
     };
 
+    // Check for debug mode
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Calculate content hash for cache key
+    let content_hash = calculate_content_hash(content);
+    let cache_key = format!("{}_{}_{}", extension, content_hash, allow_tests);
+
+    // Check if we have a cached line map
+    if let Some(cached_entry) = LINE_MAP_CACHE.get(&cache_key) {
+        if debug_mode {
+            println!("DEBUG: Cache hit for line_map key: {}", cache_key);
+        }
+
+        // Process the cached line map
+        return process_cached_line_map(
+            cached_entry.value(),
+            line_numbers,
+            language_impl.as_ref(),
+            content,
+            allow_tests,
+            debug_mode,
+        );
+    }
+
+    if debug_mode {
+        println!(
+            "DEBUG: Cache miss for line_map key: {}. Generating...",
+            cache_key
+        );
+    }
+
     // Get the tree-sitter language
     let language = language_impl.get_tree_sitter_language();
 
@@ -449,8 +857,8 @@ pub fn parse_file_for_code_blocks(
 
     // Use the tree cache to get or parse the tree
     // We use a stable identifier for the file
-    let cache_key = format!("file_{}", extension);
-    let tree = tree_cache::get_or_parse_tree(&cache_key, content, &mut parser)
+    let tree_cache_key = format!("file_{}", extension);
+    let tree = tree_cache::get_or_parse_tree(&tree_cache_key, content, &mut parser)
         .context("Failed to parse the file")?;
 
     let root_node = tree.root_node();
@@ -501,28 +909,33 @@ pub fn parse_file_for_code_blocks(
         println!("DEBUG: Line-to-node map built successfully");
     }
 
-    // Collect all code blocks
-    let mut code_blocks: Vec<CodeBlock> = Vec::new();
-    let mut seen_nodes: HashSet<(usize, usize)> = HashSet::new();
+    // ====================================================================
+    // START: Inserted Original Block Processing Logic (Cache Miss Path)
+    // ====================================================================
+    // This code runs ONLY on a cache miss, after process_node generates the live line_map.
+    // It generates the CodeBlocks for *this specific request* from the live NodeInfo data.
 
-    // Process each line number using the precomputed map
+    let mut code_blocks: Vec<CodeBlock> = Vec::new();
+    let mut seen_nodes: HashSet<(usize, usize)> = HashSet::new(); // Use row-based key for this original logic
+
+    // Process each line number using the *live* precomputed map (line_map)
     for &line in line_numbers {
         // Adjust for 0-based indexing
-        let line_idx = line - 1;
+        let line_idx = line.saturating_sub(1);
 
         if debug_mode {
-            println!("DEBUG: Processing line {}", line);
+            println!("DEBUG: Processing line {} (Live NodeInfo)", line);
         }
 
         // Skip if line is out of bounds
         if line_idx >= line_map.len() {
             if debug_mode {
-                println!("DEBUG: Line {} is out of bounds", line);
+                println!("DEBUG: Line {} is out of bounds (Live NodeInfo)", line);
             }
             continue;
         }
 
-        // Get the node info for this line
+        // Get the node info for this line from the live map
         if let Some(info) = &line_map[line_idx] {
             if debug_mode {
                 println!(
@@ -536,6 +949,7 @@ pub fn parse_file_for_code_blocks(
             let target_node = info.node;
             let start_pos = target_node.start_position();
             let end_pos = target_node.end_position();
+            // Use row key consistent with original logic for seen_nodes in this block
             let node_key = (start_pos.row, end_pos.row);
 
             // Skip if we've already processed this node
@@ -554,7 +968,7 @@ pub fn parse_file_for_code_blocks(
             // Mark this node as seen
             seen_nodes.insert(node_key);
 
-            // Special handling for comments
+            // Special handling for comments (using live NodeInfo and context_node)
             if info.is_comment {
                 if debug_mode {
                     println!(
@@ -570,40 +984,37 @@ pub fn parse_file_for_code_blocks(
                     let rel_end_pos = context_node.end_position();
                     let rel_key = (rel_start_pos.row, rel_end_pos.row);
 
-                    // Skip test nodes unless allow_tests is true
+                    // Check test status using live node and language_impl
+                    // Ensure content is available here if needed by is_test_node
                     if !allow_tests && language_impl.is_test_node(&context_node, content.as_bytes())
                     {
                         if debug_mode {
                             println!(
-                                "DEBUG: Skipping test node at lines {}-{}, type: {}",
+                                "DEBUG: Skipping test context node at lines {}-{}, type: {}",
                                 rel_start_pos.row + 1,
                                 rel_end_pos.row + 1,
                                 context_node.kind()
                             );
                         }
                     } else {
-                        // Create a merged block that includes both the comment and its context
+                        // Create a merged block
                         let merged_start_row = std::cmp::min(start_pos.row, rel_start_pos.row);
                         let merged_end_row = std::cmp::max(end_pos.row, rel_end_pos.row);
                         let merged_start_byte =
                             std::cmp::min(target_node.start_byte(), context_node.start_byte());
                         let merged_end_byte =
                             std::cmp::max(target_node.end_byte(), context_node.end_byte());
-
-                        // Use the context node's type as the merged block's type
                         let merged_node_type = context_node.kind().to_string();
 
-                        // Mark both the comment and context as seen
-                        seen_nodes.insert(rel_key);
+                        seen_nodes.insert(rel_key); // Mark context as seen too
 
-                        // Add the merged block
                         code_blocks.push(CodeBlock {
                             start_row: merged_start_row,
                             end_row: merged_end_row,
                             start_byte: merged_start_byte,
                             end_byte: merged_end_byte,
                             node_type: merged_node_type.clone(),
-                            parent_node_type: None,
+                            parent_node_type: None, // Keep consistent with original logic here
                             parent_start_row: None,
                             parent_end_row: None,
                         });
@@ -616,12 +1027,11 @@ pub fn parse_file_for_code_blocks(
                                 merged_node_type
                             );
                         }
-
-                        continue;
+                        continue; // Skip adding individual comment
                     }
                 }
 
-                // If we didn't add the comment as part of a merged block, add it individually
+                // Add individual comment if not merged
                 code_blocks.push(CodeBlock {
                     start_row: start_pos.row,
                     end_row: end_pos.row,
@@ -632,31 +1042,31 @@ pub fn parse_file_for_code_blocks(
                     parent_start_row: None,
                     parent_end_row: None,
                 });
-
                 if debug_mode {
                     println!(
-                        "DEBUG: Added comment block at lines {}-{}, type: {}",
+                        "DEBUG: Added individual comment block at lines {}-{}",
                         start_pos.row + 1,
-                        end_pos.row + 1,
-                        target_node.kind()
+                        end_pos.row + 1
                     );
                 }
-                continue;
+                continue; // Skip rest for comments
             }
 
-            // Skip test nodes unless allow_tests is true
+            // Skip test nodes (using live check)
             if info.is_test {
+                // is_test flag was set during process_node
                 if debug_mode {
                     println!(
-                        "DEBUG: Skipping test node at line {}, type: {}",
-                        line,
-                        target_node.kind()
+                        "DEBUG: Skipping test node at lines {}-{}",
+                        start_pos.row + 1,
+                        end_pos.row + 1
                     );
                 }
                 continue;
             }
 
-            // For non-comments, first check if this line is within any existing block
+            // Check if line is within an existing block (this check might be redundant with seen_nodes)
+            // Keep consistent with original logic if it was there
             let mut existing_block = false;
             for block in &code_blocks {
                 if line > block.start_row + 1 && line <= block.end_row + 1 {
@@ -673,136 +1083,84 @@ pub fn parse_file_for_code_blocks(
                     break;
                 }
             }
-
             if existing_block {
                 continue;
             }
 
-            // Check if we have a context node (nearest acceptable ancestor) for this node
+            // Check context node (acceptable ancestor)
             if let Some(context_node) = info.context_node {
+                // context_node was set during process_node
                 let rel_start_pos = context_node.start_position();
                 let rel_end_pos = context_node.end_position();
                 let rel_key = (rel_start_pos.row, rel_end_pos.row);
 
-                // Skip test nodes unless allow_tests is true
+                // Ensure content is available if needed by is_test_node
                 if !allow_tests && language_impl.is_test_node(&context_node, content.as_bytes()) {
                     if debug_mode {
                         println!(
-                            "DEBUG: Skipping test node at lines {}-{}, type: {}",
+                            "DEBUG: Skipping test context node (ancestor) at lines {}-{}",
                             rel_start_pos.row + 1,
-                            rel_end_pos.row + 1,
-                            context_node.kind()
+                            rel_end_pos.row + 1
                         );
                     }
                 } else {
                     if debug_mode {
                         println!(
-                            "DEBUG: Using context node for line {}: type='{}', lines={}-{}",
-                            line,
-                            context_node.kind(),
+                            "DEBUG: Using context node (ancestor) at lines {}-{}",
                             rel_start_pos.row + 1,
                             rel_end_pos.row + 1
                         );
                     }
+                    seen_nodes.insert(rel_key); // Mark context as seen
 
-                    // Mark the context node as seen
-                    seen_nodes.insert(rel_key);
+                    // Get parent function info if applicable (e.g., for struct_type nodes)
+                    let parent_info = if context_node.kind() == "struct_type" {
+                        language_impl
+                            .find_parent_function(context_node)
+                            .map(|parent_node| {
+                                let parent_type = parent_node.kind().to_string();
+                                let parent_start = parent_node.start_position().row;
+                                let parent_end = parent_node.end_position().row;
+                                (parent_type, parent_start, parent_end)
+                            })
+                    } else {
+                        None
+                    };
 
-                    // Add the context node to the code blocks
                     code_blocks.push(CodeBlock {
                         start_row: rel_start_pos.row,
                         end_row: rel_end_pos.row,
                         start_byte: context_node.start_byte(),
                         end_byte: context_node.end_byte(),
                         node_type: context_node.kind().to_string(),
-                        parent_node_type: None,
-                        parent_start_row: None,
-                        parent_end_row: None,
+                        parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
+                        parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
+                        parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
                     });
-
-                    continue;
+                    continue; // Skip adding target_node if context was added
                 }
             }
 
-            // Check if this node is an acceptable parent
+            // Check if target_node itself is acceptable (using live check)
             if language_impl.is_acceptable_parent(&target_node) {
                 if debug_mode {
                     println!(
-                        "DEBUG: Adding acceptable parent node for line {}: type='{}', lines={}-{}",
-                        line,
-                        target_node.kind(),
+                        "DEBUG: Adding acceptable parent node at lines {}-{}",
                         start_pos.row + 1,
                         end_pos.row + 1
                     );
                 }
 
-                // Add the node to the code blocks
-                code_blocks.push(CodeBlock {
-                    start_row: start_pos.row,
-                    end_row: end_pos.row,
-                    start_byte: target_node.start_byte(),
-                    end_byte: target_node.end_byte(),
-                    node_type: target_node.kind().to_string(),
-                    parent_node_type: None,
-                    parent_start_row: None,
-                    parent_end_row: None,
-                });
-
-                continue;
-            }
-
-            // No need for fallback exact line matching - the line_map is comprehensive
-            // and should already contain the best node for this line
-
-            // If no exact match found, use the line_map directly
-            // No need for a fallback approach since we've built a comprehensive line_map
-            if let Some(node_info) = &line_map[line_idx] {
-                let node = node_info.node;
-                let start_pos = node.start_position();
-                let end_pos = node.end_position();
-                let node_key = (start_pos.row, end_pos.row);
-
-                if seen_nodes.contains(&node_key) {
-                    continue;
-                }
-
-                seen_nodes.insert(node_key);
-
-                if debug_mode {
-                    println!(
-                        "DEBUG: Match at line {}, found node type: {}",
-                        line,
-                        node.kind()
-                    );
-                    println!(
-                        "DEBUG: Node spans lines {}-{}",
-                        start_pos.row + 1,
-                        end_pos.row + 1
-                    );
-                }
-
-                // Ensure we never have an empty node_type
-                let node_type = node.kind().to_string();
-
-                // Check if this node has a parent that is a function or method
-                let parent_info = if node_type == "struct_type" {
-                    if let Some(parent_node) = language_impl.find_parent_function(node) {
-                        let parent_type = parent_node.kind().to_string();
-                        let parent_start = parent_node.start_position().row;
-                        let parent_end = parent_node.end_position().row;
-
-                        if debug_mode {
-                            println!(
-                                "DEBUG: Found parent {} for struct_type at lines {}-{}, parent at {}-{}",
-                                parent_type, start_pos.row + 1, end_pos.row + 1,
-                                parent_start + 1, parent_end + 1
-                            );
-                        }
-
-                        Some((parent_type, parent_start, parent_end))
-                    } else {
-                        None
-                    }
+                // Get parent function info if applicable (e.g., for struct_type nodes)
+                let parent_info = if target_node.kind() == "struct_type" {
+                    language_impl
+                        .find_parent_function(target_node)
+                        .map(|parent_node| {
+                            let parent_type = parent_node.kind().to_string();
+                            let parent_start = parent_node.start_position().row;
+                            let parent_end = parent_node.end_position().row;
+                            (parent_type, parent_start, parent_end)
+                        })
                 } else {
                     None
                 };
@@ -810,68 +1168,224 @@ pub fn parse_file_for_code_blocks(
                 code_blocks.push(CodeBlock {
                     start_row: start_pos.row,
                     end_row: end_pos.row,
-                    start_byte: node.start_byte(),
-                    end_byte: node.end_byte(),
-                    node_type,
+                    start_byte: target_node.start_byte(),
+                    end_byte: target_node.end_byte(),
+                    node_type: target_node.kind().to_string(),
                     parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
                     parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
                     parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
                 });
+                continue; // Skip fallback if acceptable parent added
             }
-        } else if debug_mode {
-            println!("DEBUG: No node found for line {}", line);
-        }
-    }
 
-    // Sort code blocks by start position
+            // Fallback: Add the node found for the line if no context/acceptable parent logic applied
+            if debug_mode {
+                println!(
+                    "DEBUG: Adding node via fallback at lines {}-{}",
+                    start_pos.row + 1,
+                    end_pos.row + 1
+                );
+            }
+
+            // Get parent function info if applicable (e.g., for struct_type nodes)
+            let parent_info = if target_node.kind() == "struct_type" {
+                language_impl
+                    .find_parent_function(target_node)
+                    .map(|parent_node| {
+                        let parent_type = parent_node.kind().to_string();
+                        let parent_start = parent_node.start_position().row;
+                        let parent_end = parent_node.end_position().row;
+                        (parent_type, parent_start, parent_end)
+                    })
+            } else {
+                None
+            };
+
+            code_blocks.push(CodeBlock {
+                start_row: start_pos.row,
+                end_row: end_pos.row,
+                start_byte: target_node.start_byte(),
+                end_byte: target_node.end_byte(),
+                node_type: target_node.kind().to_string(),
+                parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
+                parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
+                parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
+            });
+        } else if debug_mode {
+            println!(
+                "DEBUG: No node info found for line {} (Live NodeInfo)",
+                line
+            );
+        }
+    } // End loop over line_numbers
+
+    // Sort and deduplicate the blocks generated from live data
     code_blocks.sort_by_key(|block| block.start_row);
 
-    // Deduplicate blocks with overlapping spans
-    let mut deduplicated_blocks: Vec<CodeBlock> = Vec::new();
+    // Apply the improved deduplication logic
+    let mut final_code_blocks: Vec<CodeBlock> = Vec::new();
 
-    // First add all comment blocks (we want to keep these)
+    // Add comments first
     for block in code_blocks
         .iter()
-        .filter(|b| b.node_type.contains("comment"))
+        .filter(|b| b.node_type.contains("comment") || b.node_type == "/*" || b.node_type == "*/")
     {
-        deduplicated_blocks.push(block.clone());
+        final_code_blocks.push(block.clone());
     }
 
-    // Then add non-comment blocks that don't overlap
+    // Add non-comments, using the improved deduplication logic
     for block in code_blocks
-        .into_iter()
-        .filter(|b| !b.node_type.contains("comment"))
+        .iter()
+        .filter(|b| !b.node_type.contains("comment") && b.node_type != "/*" && b.node_type != "*/")
     {
         let mut should_add = true;
+        let mut blocks_to_remove: Vec<usize> = Vec::new();
+
+        // Define important block types that should be preserved
+        let important_block_types = [
+            "function_declaration",
+            "method_declaration",
+            "function_item",
+            "impl_item",
+            "type_declaration",
+            "struct_item",
+            "block_comment",
+        ];
+        let is_important = important_block_types.contains(&block.node_type.as_str());
 
         // Check if this block overlaps with any of the previous blocks
-        for prev_block in &deduplicated_blocks {
-            if !prev_block.node_type.contains("comment") && // Only check overlap with non-comment blocks
-               ((block.start_row >= prev_block.start_row && block.start_row <= prev_block.end_row) ||
-                (block.end_row >= prev_block.start_row && block.end_row <= prev_block.end_row))
+        for (idx, prev_block) in final_code_blocks.iter().enumerate() {
+            if prev_block.node_type.contains("comment")
+                || prev_block.node_type == "/*"
+                || prev_block.node_type == "*/"
             {
-                if debug_mode {
-                    println!(
-                        "DEBUG: Skipping overlapping block: type='{}', lines={}-{} (overlaps with type='{}', lines={}-{})",
-                        block.node_type,
-                        block.start_row + 1,
-                        block.end_row + 1,
-                        prev_block.node_type,
-                        prev_block.start_row + 1,
-                        prev_block.end_row + 1
-                    );
-                }
-                should_add = false;
-                break;
+                continue; // Skip comments
             }
+
+            let prev_is_important = important_block_types.contains(&prev_block.node_type.as_str());
+
+            // Check if blocks overlap
+            if block.start_row <= prev_block.end_row && block.end_row >= prev_block.start_row {
+                // Case 1: Current block is contained within previous block
+                if block.start_row >= prev_block.start_row && block.end_row <= prev_block.end_row {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Current block is contained within previous block: type='{}', lines={}-{} (contained in type='{}', lines={}-{})",
+                            block.node_type, block.start_row + 1, block.end_row + 1,
+                            prev_block.node_type, prev_block.start_row + 1, prev_block.end_row + 1
+                        );
+                    }
+
+                    // If current block is important and previous block is not, keep both
+                    if is_important && !prev_is_important {
+                        if debug_mode {
+                            println!("DEBUG: Keeping important block type: {}", block.node_type);
+                        }
+                        // Don't remove any blocks, don't set should_add to false
+                    }
+                    // If previous block is important and current block is not, skip current block
+                    else if !is_important && prev_is_important {
+                        if debug_mode {
+                            println!("DEBUG: Skipping non-important block in favor of important block: {}", prev_block.node_type);
+                        }
+                        should_add = false;
+                        break;
+                    }
+                    // Otherwise, prefer the more specific (contained) block
+                    else {
+                        blocks_to_remove.push(idx);
+                    }
+                }
+                // Case 2: Previous block is contained within current block
+                else if prev_block.start_row >= block.start_row
+                    && prev_block.end_row <= block.end_row
+                {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Previous block is contained within current block: type='{}', lines={}-{} (contains type='{}', lines={}-{})",
+                            block.node_type, block.start_row + 1, block.end_row + 1,
+                            prev_block.node_type, prev_block.start_row + 1, prev_block.end_row + 1
+                        );
+                    }
+
+                    // If current block is important and previous block is not, keep both
+                    if is_important && !prev_is_important {
+                        if debug_mode {
+                            println!("DEBUG: Keeping important block type: {}", block.node_type);
+                        }
+                        // Don't set should_add to false, continue checking other blocks
+                    }
+                    // If previous block is important and current block is not, skip current block
+                    else if !is_important && prev_is_important {
+                        if debug_mode {
+                            println!("DEBUG: Skipping non-important block in favor of important block: {}", prev_block.node_type);
+                        }
+                        should_add = false;
+                        break;
+                    }
+                    // Otherwise, skip current block as it's less specific
+                    else {
+                        should_add = false;
+                        break;
+                    }
+                }
+                // Case 3: Blocks partially overlap
+                else {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Blocks partially overlap: type='{}', lines={}-{} (overlaps with type='{}', lines={}-{})",
+                            block.node_type, block.start_row + 1, block.end_row + 1,
+                            prev_block.node_type, prev_block.start_row + 1, prev_block.end_row + 1
+                        );
+                    }
+                    // Skip current block in case of partial overlap
+                    should_add = false;
+                    break;
+                }
+            }
+        }
+
+        // Remove any blocks that should be replaced
+        for idx in blocks_to_remove.iter().rev() {
+            final_code_blocks.remove(*idx);
         }
 
         if should_add {
-            deduplicated_blocks.push(block);
+            final_code_blocks.push(block.clone());
         }
     }
 
     // Final sort to maintain correct order
-    deduplicated_blocks.sort_by_key(|block| block.start_row);
-    Ok(deduplicated_blocks)
+    final_code_blocks.sort_by_key(|block| block.start_row);
+
+    // ====================================================================
+    // END: Inserted Original Block Processing Logic (Cache Miss Path)
+    // ====================================================================
+
+    // Convert the original line_map to a cacheable format with representative node info
+    let cacheable_line_map: Vec<Option<CachedNodeInfo>> = line_map
+        .iter()
+        .map(|opt_node_info| {
+            opt_node_info.map(|node_info| {
+                CachedNodeInfo::from_node_info(
+                    &node_info,
+                    language_impl.as_ref(),
+                    content.as_bytes(),
+                    allow_tests,
+                )
+            })
+        })
+        .collect();
+
+    // Store the cacheable version in the cache (as you already have)
+    LINE_MAP_CACHE.insert(cache_key.clone(), cacheable_line_map);
+    if debug_mode {
+        println!(
+            "DEBUG: Stored generated line_map in cache key: {}",
+            cache_key
+        );
+    }
+
+    // Return the blocks generated from the LIVE data in this cache miss path
+    Ok(final_code_blocks)
 }

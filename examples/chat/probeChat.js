@@ -634,7 +634,11 @@ When troubleshooting:
         let maxResponseTokens = 4000;
         if (this.model.includes('claude-3-opus') || this.model.startsWith('gpt-4-')) {
           maxResponseTokens = 4096;
-        } else if (this.model.includes('claude-3-5-sonnet') || this.model.startsWith('gpt-4o') || this.model.startsWith('gemini')) {
+        } else if (this.model.includes('claude-3-5-sonnet') || this.model.startsWith('gpt-4o')) {
+          maxResponseTokens = 8000;
+        } else if (this.model.includes('gemini-2.5')) {
+          maxResponseTokens = 60000;
+        } else if (this.model.startsWith('gemini')) {
           maxResponseTokens = 8000;
         }
         this.tokenDisplay = new TokenUsageDisplay({ maxTokens: maxResponseTokens });
