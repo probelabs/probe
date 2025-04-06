@@ -43,14 +43,10 @@ hero:
 
 <StarsBackground />
 
+
 <div class="main-content">
   <HomeFeatures />
 
-  <div class="container vision-section">
-    <h2>Automate with GitHub Actions</h2>
-    <p>Integrate Probe directly into your GitHub workflows to automate issue responses and pull request reviews. Leverage code-aware AI assistance right where your development happens.</p>
-    <p><a href="/integrations/github-actions">Learn how to set up the GitHub Actions integration →</a></p>
-  </div>
 </div>
 
 <style>

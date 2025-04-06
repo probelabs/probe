@@ -45,7 +45,15 @@
 
           <div class="feature-card">
             <div class="feature-header">
-              <span class="feature-icon">🛠️</span>
+              <span class="feature-icon">🚀</span>
+              <h3>Automate with GitHub Actions</h3>
+            </div>
+            <p>Integrate Probe into your CI/CD pipeline for automated issue responses and PR reviews.<br/><br/><a href="/integrations/github-actions">GitHub Actions Guide →</a></p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-header">
+              <span class="feature-icon">�️</span>
               <h3>For AI Tooling Developers</h3>
             </div>
             <p>Embed Probe into your Node.js apps with our SDK.<br/><br/><a href="/use-cases/building-ai-tools">SDK Guide →</a></p>
