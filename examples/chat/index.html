@@ -1966,9 +1966,38 @@
 
 			// Display user message
 			const userMsgDiv = document.createElement('div');
-			userMsgDiv.className = 'user-message';
-			userMsgDiv.textContent = message;
+			userMsgDiv.className = 'user-message markdown-content'; // Add markdown-content class
+			userMsgDiv.innerHTML = renderMarkdown(message); // Render as markdown
 			messagesDiv.appendChild(userMsgDiv);
+
+			// Apply syntax highlighting to code blocks in user message
+			userMsgDiv.querySelectorAll('pre code').forEach((block) => {
+				hljs.highlightElement(block);
+			});
+
+			// Render Mermaid diagrams in user message
+			const userMermaidDivs = userMsgDiv.querySelectorAll('.mermaid');
+			if (userMermaidDivs.length > 0) {
+				console.log(`Found ${userMermaidDivs.length} mermaid diagrams in user message`);
+				try {
+					if (typeof mermaid.run === 'function') {
+						mermaid.run({ nodes: userMermaidDivs });
+					} else if (typeof mermaid.init === 'function') {
+						mermaid.init(undefined, userMermaidDivs);
+					}
+					// Convert rendered SVGs to PNGs
+					setTimeout(() => {
+						const renderedSvgs = userMsgDiv.querySelectorAll('.mermaid svg');
+						if (renderedSvgs.length > 0) {
+							renderedSvgs.forEach((svg, index) => {
+								convertSvgToPng(svg, userMsgDiv, index);
+							});
+						}
+					}, 100);
+				} catch (error) {
+					console.error('Error rendering mermaid in user message:', error);
+				}
+			}
 			input.value = '';
 			autoResizeTextarea(); // Reset textarea height after clearing content
 
