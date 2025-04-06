@@ -88,7 +88,8 @@ export default defineConfig({
           { text: 'AI Code Editors & MCP', link: '/use-cases/integrating-probe-into-ai-code-editors' },
           { text: 'CLI for AI Workflows', link: '/use-cases/advanced-cli' },
           { text: 'Web Interface for Teams', link: '/use-cases/deploying-probe-web-interface' },
-          { text: 'Developers & SDK', link: '/use-cases/building-ai-tools' }
+          { text: 'Developers & SDK', link: '/use-cases/building-ai-tools' },
+          { text: 'GitHub Actions Integration', link: '/integrations/github-actions' }
         ]
       },
       {

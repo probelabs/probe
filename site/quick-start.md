@@ -269,6 +269,12 @@ If you want to embed Probe programmatically into your Node.js or Python tools:
 
 - [Building AI Tools on Probe](/use-cases/building-ai-tools) - Use the Node.js SDK, integrate with LangChain or Vercel AI SDK, and build custom AI-powered code tools
 
+### Automating Workflows
+
+If you want to integrate Probe into your CI/CD or development workflows:
+
+- [GitHub Actions Integration](/integrations/github-actions) - Automate issue responses and PR reviews using Probe directly within GitHub.
+
 ## Reference Documentation
 
 For comprehensive reference information:
