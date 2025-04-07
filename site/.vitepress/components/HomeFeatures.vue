@@ -50,15 +50,7 @@
             </div>
             <p>Integrate Probe into your CI/CD pipeline for automated issue responses and PR reviews.<br/><br/><a href="/integrations/github-actions">GitHub Actions Guide →</a></p>
           </div>
-
-          <div class="feature-card">
-            <div class="feature-header">
-              <span class="feature-icon">�️</span>
-              <h3>For AI Tooling Developers</h3>
-            </div>
-            <p>Embed Probe into your Node.js apps with our SDK.<br/><br/><a href="/use-cases/building-ai-tools">SDK Guide →</a></p>
-          </div>
-        </div>
+        </div> <!-- Add missing closing tag for features-grid -->
       </template>
     </FullWidthFeatureSection>
 
@@ -117,6 +109,41 @@ Lines: 56-62
   assert.NotEmpty(t, token)
 }
 ```</code></pre></div>
+      </template>
+    </FeatureSection>
+
+
+    <FeatureSection>
+      <template #content>
+        <h2>Automate Your Workflows</h2>
+        <p>Integrate Probe into your CI/CD pipeline using GitHub Actions for automated issue responses, PR reviews, and more.</p>
+        <p>Bring code-aware AI assistance directly into your development lifecycle.</p>
+        <p><a href="/integrations/github-actions">Learn more about GitHub Actions Integration →</a></p>
+      </template>
+      <template #code>
+        <div class="language-yaml"><pre style="font-family:monospace;color: rgb(68, 68, 68); background-color: rgb(243, 243, 243); font-weight: 400; "><code><span style="color: rgb(136, 0, 0); font-weight: 400;">name</span>: <span style="color: rgb(0, 136, 0); font-weight: 400;">AI Comment Handler</span>
+
+<span style="color: rgb(136, 0, 0); font-weight: 400;">on</span>:
+  <span style="color: rgb(136, 0, 0); font-weight: 400;">pull_request</span>:
+    <span style="color: rgb(136, 0, 0); font-weight: 400;">types</span>: [<span style="color: rgb(0, 136, 0); font-weight: 400;">opened</span>]
+  <span style="color: rgb(136, 0, 0); font-weight: 400;">issue_comment</span>:
+    <span style="color: rgb(136, 0, 0); font-weight: 400;">types</span>: [<span style="color: rgb(0, 136, 0); font-weight: 400;">created</span>]
+  <span style="color: rgb(136, 0, 0); font-weight: 400;">issues</span>:
+    <span style="color: rgb(136, 0, 0); font-weight: 400;">types</span>: [<span style="color: rgb(0, 136, 0); font-weight: 400;">opened</span>]
+
+<span style="color: rgb(136, 0, 0); font-weight: 400;">permissions</span>:
+  <span style="color: rgb(136, 0, 0); font-weight: 400;">issues</span>: <span style="color: rgb(0, 136, 0); font-weight: 400;">write</span>
+  <span style="color: rgb(136, 0, 0); font-weight: 400;">pull-requests</span>: <span style="color: rgb(0, 136, 0); font-weight: 400;">write</span>
+  <span style="color: rgb(136, 0, 0); font-weight: 400;">contents</span>: <span style="color: rgb(0, 136, 0); font-weight: 400;">read</span>
+
+<span style="color: rgb(136, 0, 0); font-weight: 400;">jobs</span>:
+  <span style="color: rgb(136, 0, 0); font-weight: 400;">trigger_probe_chat</span>:
+    <span style="color: rgb(136, 0, 0); font-weight: 400;">uses</span>: <span style="color: rgb(0, 136, 0); font-weight: 400;">buger/probe/.github/workflows/probe.yml@main</span>
+    <span style="color: rgb(136, 0, 0); font-weight: 400;">with</span>:
+      <span style="color: rgb(136, 0, 0); font-weight: 400;">command_prefix</span>: <span style="color: rgb(0, 136, 0); font-weight: 400;">"/probe"</span>
+    <span style="color: rgb(136, 0, 0); font-weight: 400;">secrets</span>:
+      <span style="color: rgb(136, 0, 0); font-weight: 400;">ANTHROPIC_API_KEY</span>: <span style="color: rgb(0, 136, 0); font-weight: 400;">$<span>{</span>{ secrets.API_KEY }}</span>
+      </code></pre></div>
       </template>
     </FeatureSection>
 
@@ -220,9 +247,9 @@ probe query -p <span style="color: rgb(136, 0, 0); font-weight: 400;">"function 
         
         <div class="audience-grid">
           <div class="audience-card">
-            <h3>🖥️ AI Code Editor User</h3>
-            <p>Enhance your AI-powered editor with deep code understanding</p>
-            <a href="/use-cases/ai-code-editors" class="audience-link">AI Editor Integration →</a>
+            <h3>🚀 CI/CD & Automation</h3>
+            <p>Integrate Probe into GitHub Actions for automated reviews and issue responses.</p>
+            <a href="/integrations/github-actions" class="audience-link">GitHub Actions Guide →</a>
           </div>
           
           <div class="audience-card">
