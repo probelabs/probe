@@ -2,9 +2,12 @@ import { h } from 'vue'
 import DefaultTheme from 'vitepress/theme'
 import './custom.css'
 import './home.css'
+import './blog.css'
 import FeatureList from './components/FeatureList.vue'
 import CodeEditor from './components/CodeEditor.vue'
 import CommandExample from './components/CommandExample.vue'
+import BlogPostLayout from './components/BlogPostLayout.vue'
+import BlogLayout from './layouts/BlogLayout.vue'
 import FeatureSection from '../components/FeatureSection.vue'
 import SimpleFeatureSection from '../components/SimpleFeatureSection.vue'
 import StarsBackground from '../components/StarsBackground.vue'
@@ -22,6 +25,8 @@ export default {
 		app.component('FeatureList', FeatureList)
 		app.component('CodeEditor', CodeEditor)
 		app.component('CommandExample', CommandExample)
+		app.component('BlogPostLayout', BlogPostLayout)
+		app.component('BlogLayout', BlogLayout)
 		app.component('FeatureSection', FeatureSection)
 		app.component('SimpleFeatureSection', SimpleFeatureSection)
 		app.component('StarsBackground', StarsBackground)

@@ -7,6 +7,7 @@ export default defineConfig({
   lastUpdated: true,
   cleanUrls: true,
   appearance: true,
+  ignoreDeadLinks: true,
   
   markdown: {
     theme: {
@@ -32,6 +33,7 @@ export default defineConfig({
     nav: [
       { text: 'Home', link: '/' },
       { text: 'Quick Start', link: '/quick-start' },
+      // { text: 'Blog', link: '/blog/' },
       {
         text: 'Documentation',
         items: [
