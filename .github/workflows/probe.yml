@@ -342,6 +342,7 @@ jobs:
 
           # --- Fetch Base/Head SHAs ---
           echo "Fetching PR base and head SHAs..."
+          # This part seems okay based on the logs showing SHAs were fetched
           PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
           BASE_SHA=""
           HEAD_SHA=""
@@ -365,15 +366,25 @@ jobs:
           echo "HEAD_SHA=$HEAD_SHA" >> $GITHUB_ENV
 
           # --- Fetch PR Title/Body ---
+          echo "Fetching PR Title and Body..." # Added echo for clarity
           PR_DATA=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
-          PR_TITLE="Error fetching title" # Default values
-          PR_BODY="Error fetching body"
+          PR_TITLE_DEFAULT="Error fetching title" # Define defaults
+          PR_BODY_DEFAULT="Error fetching body"
+
           if [[ "$PR_DATA" == "FETCH_FAILED" ]]; then
-            echo "::warning::Failed PR details fetch."
+            echo "::warning::Failed PR details fetch (gh pr view command failed)."
+            PR_TITLE="$PR_TITLE_DEFAULT"
+            PR_BODY="$PR_BODY_DEFAULT"
           else
-            PR_TITLE=$(echo "$PR_DATA" | jq -r .title // "Error fetching title")
-            PR_BODY=$(echo "$PR_DATA" | jq -r .body // "Error fetching body")
+            echo "Parsing PR Title and Body..."
+            # Corrected jq syntax: // fallback operator is INSIDE the quotes
+            PR_TITLE=$(echo "$PR_DATA" | jq -r --arg default "$PR_TITLE_DEFAULT" '.title // $default')
+            PR_BODY=$(echo "$PR_DATA" | jq -r --arg default "$PR_BODY_DEFAULT" '.body // $default')
+
+            # Optional: Check if jq failed for some other reason (e.g., invalid JSON) although unlikely here
+            # Add checks on JQ_EXIT_CODE if needed for robustness
           fi
+
           # Save multi-line title/body to env
           echo "PR_TITLE<<EOF_PR_TITLE" >> $GITHUB_ENV
           echo "$PR_TITLE" >> $GITHUB_ENV
