@@ -588,13 +588,13 @@ jobs:
           # Assemble the prompt using CDATA where needed
           # Ensure the variables themselves are expanded correctly by the shell
           FORMATTED_PROMPT="<github_context type=\"$FINAL_CONTEXT_TYPE\" number=\"$ISSUE_OR_PR_NUMBER\">
-${CONTEXT_DETAILS_XML}
-${DIFF_XML}
-<comments>${COMMENTS_XML}</comments>
-<user_request author=\"${USER_LOGIN}\" timestamp=\"${TIMESTAMP}\"><![CDATA[${USER_REQUEST_BODY}]]></user_request>
-</github_context>
-
-<instructions><![CDATA[${PROMPT_INSTRUCTION}]]></instructions>"
+            ${CONTEXT_DETAILS_XML}
+            ${DIFF_XML}
+            <comments>${COMMENTS_XML}</comments>
+            <user_request author=\"${USER_LOGIN}\" timestamp=\"${TIMESTAMP}\"><![CDATA[${USER_REQUEST_BODY}]]></user_request>
+            </github_context>
+            
+            <instructions><![CDATA[${PROMPT_INSTRUCTION}]]></instructions>"
 
           if [ ${#FORMATTED_PROMPT} -lt 200 ]; then
             echo "::warning::Formatted prompt seems very short (${#FORMATTED_PROMPT} bytes). Ensure context fetching worked."
