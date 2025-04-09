@@ -206,20 +206,18 @@ jobs:
           echo "Adding 👀 reaction to comment ID ${COMMENT_ID} in repo ${REPO}..."
           gh api --method POST -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" -f content='eyes' --silent || echo "::warning::Failed to add 'eyes' reaction."
 
-      # --- Steps to replace the original 'format' step ---
-
       - name: Format - Initialize and Detect Context
         id: format_init
         env:
           COMMAND_PREFIX: ${{ inputs.command_prefix }}
           REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Ensure gh uses the right token
         run: |
           echo "::group::Initialization and User Request Extraction"
           shopt -s extglob # Enable extended globbing for string manipulation
           set -e # Exit immediately if a command exits with a non-zero status.
           ISSUE_OR_PR_NUMBER=${{ steps.set_context_ids.outputs.issue_number }}
           RAW_COMMENT_BODY="${{ github.event.comment.body }}"
-          GITHUB_API_ARGS_VERBOSE=(-H "Accept: application/vnd.github+json")
 
           # Trim prefix and leading/trailing whitespace from user request
           USER_REQUEST_BODY_RAW="${RAW_COMMENT_BODY#${COMMAND_PREFIX}}"
@@ -233,22 +231,49 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Determine Context Type"
-          CONTEXT_TYPE="issue" # Assume issue by default
-          echo "Detecting context for #$ISSUE_OR_PR_NUMBER in $REPO"
-          if gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER" --jq .url --silent > /dev/null 2>&1; then
-             CONTEXT_TYPE="pr"
-             echo "Context detected: PR"
+          CONTEXT_TYPE="unknown" # Start with unknown
+
+          echo "Detecting context for #${ISSUE_OR_PR_NUMBER} in $REPO"
+
+          # Try viewing as PR first
+          echo "Checking if #${ISSUE_OR_PR_NUMBER} is a Pull Request using 'gh pr view'..."
+          # Use `--json id` as a lightweight check for existence
+          set +e # Temporarily disable exit on error for the check
+          gh pr view "$ISSUE_OR_PR_NUMBER" --repo "$REPO" --json id > /dev/null 2>&1
+          PR_VIEW_EXIT_CODE=$?
+          set -e # Re-enable exit on error
+
+          if [[ $PR_VIEW_EXIT_CODE -eq 0 ]]; then
+              CONTEXT_TYPE="pr"
+              echo "Context detected: PR (gh pr view succeeded)"
           else
-             EXIT_CODE=$?
-             echo "Not a PR (API check failed with code $EXIT_CODE). Verifying as Issue..."
-             if ! gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER" --jq .url --silent > /dev/null 2>&1; then
-               ISSUE_EXIT_CODE=$?
-               echo "::warning::Issue API check also failed (code $ISSUE_EXIT_CODE). Check permissions or if #$ISSUE_OR_PR_NUMBER exists. Proceeding as 'issue' context."
-             else
-                echo "Context confirmed: Issue"
-             fi
-             CONTEXT_TYPE="issue" # Explicitly set back to issue if PR check failed
+              echo "'gh pr view' failed or returned no JSON (exit code $PR_VIEW_EXIT_CODE). Checking if it's an Issue..."
+
+              # Try viewing as Issue ONLY if PR view failed
+              set +e # Temporarily disable exit on error for the check
+              gh issue view "$ISSUE_OR_PR_NUMBER" --repo "$REPO" --json id > /dev/null 2>&1
+              ISSUE_VIEW_EXIT_CODE=$?
+              set -e # Re-enable exit on error
+
+              if [[ $ISSUE_VIEW_EXIT_CODE -eq 0 ]]; then
+                  CONTEXT_TYPE="issue"
+                  echo "Context confirmed: Issue (gh issue view succeeded)"
+              else
+                  # BOTH views failed. This is problematic.
+                  echo "::error::Failed to determine context for #${ISSUE_OR_PR_NUMBER}. 'gh pr view' failed (code $PR_VIEW_EXIT_CODE) AND 'gh issue view' failed (code $ISSUE_VIEW_EXIT_CODE)."
+                  echo "::error::Please check the GITHUB_TOKEN permissions (needs issues:read and pull-requests:read) and if the item #${ISSUE_OR_PR_NUMBER} actually exists and is accessible."
+                  # Defaulting to 'issue' as a fallback, consistent with original behavior but with better error logging
+                  CONTEXT_TYPE="issue"
+                  echo "::warning::Proceeding with 'issue' context as a fallback despite view errors."
+               fi
           fi
+
+          if [[ "$CONTEXT_TYPE" == "unknown" ]]; then
+            # Safeguard - should not be reached with the logic above unless something unexpected happens
+            echo "::error::Context type could not be determined after checks. Defaulting to 'issue'."
+            CONTEXT_TYPE="issue"
+          fi
+
           echo "Final Context Type: $CONTEXT_TYPE"
           echo "FINAL_CONTEXT_TYPE=$CONTEXT_TYPE" >> $GITHUB_ENV
           echo "ISSUE_OR_PR_NUMBER=$ISSUE_OR_PR_NUMBER" >> $GITHUB_ENV # Pass number too
