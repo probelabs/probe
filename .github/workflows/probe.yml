@@ -49,12 +49,13 @@ on:
 permissions:
   pull-requests: write
   issues: write
-  contents: read
+  contents: read # Keep read for checkout, needs write for potential comment/reaction later
 
 jobs:
   process_comment:
     runs-on: ubuntu-latest
-    if: github.event_name != 'issue_comment' || (github.event_name == 'issue_comment' && !contains(github.event.comment.user.login, '[bot]') && contains(github.event.comment.body, inputs.command_prefix))
+    # Only run on issue comments that are not from bots and contain the command prefix
+    if: github.event_name == 'issue_comment' && !contains(github.event.comment.user.login, '[bot]') && contains(github.event.comment.body, inputs.command_prefix)
     outputs:
       response_body: ${{ steps.read_response.outputs.response }}
       issue_number: ${{ steps.set_context_ids.outputs.issue_number }}
@@ -64,6 +65,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for git diff base/head comparison
+
+      - name: Install jq, perl and Verify gh
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq perl --no-install-recommends
+          gh --version
 
       # --- Detect Languages ---
       - name: Detect Project Languages
@@ -100,15 +108,15 @@ jobs:
           echo "python_found=$PYTHON_FOUND" >> $GITHUB_OUTPUT
 
       # --- Node.js Setup and Caching (Conditional) ---
-      - name: Set up Node.js
+      - name: Set up Node.js (Project Deps)
         if: steps.detect_languages.outputs.node_found == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm" # Caches ~/.npm based on package-lock.jsonව
+          cache: "npm" # Caches ~/.npm based on package-lock.json
 
       # --- Go Setup and Caching (Conditional) ---
-      - name: Set up Go
+      - name: Set up Go (Project Deps)
         if: steps.detect_languages.outputs.go_found == 'true'
         uses: actions/setup-go@v5
         with:
@@ -116,13 +124,13 @@ jobs:
           # Go caching is automatic in setup-go@v3.2+
 
       # --- Rust Setup and Caching (Conditional) ---
-      - name: Set up Rust
+      - name: Set up Rust (Project Deps)
         if: steps.detect_languages.outputs.rust_found == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
-      - name: Cache Rust dependencies
+      - name: Cache Rust dependencies (Project Deps)
         if: steps.detect_languages.outputs.rust_found == 'true'
         uses: actions/cache@v4
         with:
@@ -135,7 +143,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       # --- Python Setup and Caching (Conditional) ---
-      - name: Set up Python
+      - name: Set up Python (Project Deps)
         if: steps.detect_languages.outputs.python_found == 'true'
         uses: actions/setup-python@v5
         with:
@@ -143,46 +151,47 @@ jobs:
           cache: "pip"
           cache-dependency-path: "**/requirements.txt"
 
-      # --- Install Dependencies ---
+      # --- Install Project Dependencies (Conditional) ---
       - name: Install Project Dependencies
         run: |
           # Node.js - Check for package.json
-          if [ -f "package.json" ]; then
+          if [ "${{ steps.detect_languages.outputs.node_found }}" == "true" ]; then
             echo "Found package.json - Installing Node.js dependencies..."
-            npm install
+            npm install || echo "::warning::npm install failed, continuing..."
           fi
 
           # Go - Check for go.mod
-          if [ -f "go.mod" ]; then
+          if [ "${{ steps.detect_languages.outputs.go_found }}" == "true" ]; then
             echo "Found go.mod - Installing Go dependencies..."
-            go mod download
+            go mod download || echo "::warning::go mod download failed, continuing..."
           fi
 
           # Rust - Check for Cargo.toml
-          if [ -f "Cargo.toml" ]; then
-            echo "Found Cargo.toml - Installing Rust dependencies..."
-            cargo build --quiet
+          if [ "${{ steps.detect_languages.outputs.rust_found }}" == "true" ]; then
+            echo "Found Cargo.toml - Building Rust dependencies..."
+            cargo build --quiet || echo "::warning::cargo build failed, continuing..."
           fi
 
           # Python - Check for requirements.txt
-          if [ -f "requirements.txt" ]; then
+          if [ "${{ steps.detect_languages.outputs.python_found }}" == "true" ]; then
             echo "Found requirements.txt - Installing Python dependencies..."
-            pip install -r requirements.txt
+            pip install -r requirements.txt || echo "::warning::pip install failed, continuing..."
           fi
 
-      - name: Set up Node.js
+      # --- Node.js setup for probe-chat command itself ---
+      - name: Set up Node.js (for probe-chat command)
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install jq, perl and Verify gh
-        run: |
-          sudo apt-get update && sudo apt-get install -y jq perl --no-install-recommends
-          gh --version
-
       - name: Set Issue Number and Comment ID Output
         id: set_context_ids
         run: |
+          # Safety check: Ensure github.event context is as expected
+          if [[ -z "${{ github.event.issue.number }}" || -z "${{ github.event.comment.id }}" ]]; then
+            echo "::error::Could not get issue number or comment ID from event context."
+            exit 1
+          fi
           echo "issue_number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
           echo "comment_id=${{ github.event.comment.id }}" >> $GITHUB_OUTPUT
           echo "Context ID (Issue/PR Number): ${{ github.event.issue.number }}, Comment ID: ${{ github.event.comment.id }}"
@@ -194,8 +203,8 @@ jobs:
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ steps.set_context_ids.outputs.comment_id }}
         run: |
-          echo "Adding 👀 reaction to comment ID ${COMMENT_ID}..."
-          gh api --method POST -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" -f content='eyes' --silent || echo "::warning::Failed reaction."
+          echo "Adding 👀 reaction to comment ID ${COMMENT_ID} in repo ${REPO}..."
+          gh api --method POST -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" -f content='eyes' --silent || echo "::warning::Failed to add 'eyes' reaction."
 
       - name: Determine Context, Fetch Comments, Format Input
         id: format
@@ -206,12 +215,13 @@ jobs:
         run: |
           # --- Initialization ---
           echo "::group::Initialization and User Request Extraction"
-          shopt -s extglob
-          set -e
+          shopt -s extglob # Enable extended globbing for string manipulation
+          set -e # Exit immediately if a command exits with a non-zero status.
           ISSUE_OR_PR_NUMBER=${{ steps.set_context_ids.outputs.issue_number }}
           RAW_COMMENT_BODY="${{ github.event.comment.body }}"
           GITHUB_API_ARGS_VERBOSE=(-H "Accept: application/vnd.github+json")
 
+          # Trim prefix and leading/trailing whitespace from user request
           USER_REQUEST_BODY_RAW="${RAW_COMMENT_BODY#${COMMAND_PREFIX}}"
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW##*( )}"
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW%%*( )}"
@@ -222,18 +232,23 @@ jobs:
 
           # --- Determine Context ---
           echo "::group::Determine Context Type"
-          CONTEXT_TYPE="issue"
+          CONTEXT_TYPE="issue" # Assume issue by default
           echo "Detecting context for #$ISSUE_OR_PR_NUMBER in $REPO"
-          if gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER" --jq .url > /dev/null 2>&1; then
+          # Try fetching as PR first. If successful, it's a PR.
+          if gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER" --jq .url --silent > /dev/null 2>&1; then
              CONTEXT_TYPE="pr"
-             echo "Context: PR"
+             echo "Context detected: PR"
           else
              EXIT_CODE=$?
-             echo "PR API check failed ($EXIT_CODE). Assuming: Issue"
-             if ! gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER" --jq .url > /dev/null 2>&1; then
-               echo "::warning::Issue API check also failed ($?). Check permissions/number."
+             echo "Not a PR (API check failed with code $EXIT_CODE). Verifying as Issue..."
+             # If PR check failed, verify it's an issue (or log warning if both fail)
+             if ! gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER" --jq .url --silent > /dev/null 2>&1; then
+               ISSUE_EXIT_CODE=$?
+               echo "::warning::Issue API check also failed (code $ISSUE_EXIT_CODE). Check permissions or if #$ISSUE_OR_PR_NUMBER exists. Proceeding as 'issue' context."
+             else
+                echo "Context confirmed: Issue"
              fi
-             CONTEXT_TYPE="issue"
+             CONTEXT_TYPE="issue" # Explicitly set back to issue if PR check failed
           fi
           FINAL_CONTEXT_TYPE=$CONTEXT_TYPE
           echo "Final Context Type: $FINAL_CONTEXT_TYPE"
@@ -241,25 +256,25 @@ jobs:
 
           # --- Fetch Comments and Context Details ---
           echo "::group::Fetch Comments and Context Details"
-          # --- Standard Comments ---
+          # --- Standard Comments (Issue Comments) ---
           echo "Fetching standard comments..."
           STD_COMMENTS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER/comments" --paginate || echo "FETCH_FAILED")
 
           if [[ "$STD_COMMENTS_JSON" == "FETCH_FAILED" || -z "$STD_COMMENTS_JSON" ]]; then
               echo "::warning::Failed to fetch standard comments JSON or received empty response."
           else
-              echo "$STD_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1
-              IS_JSON_ARRAY_EXIT_CODE=$?
-              if [[ $IS_JSON_ARRAY_EXIT_CODE -eq 0 ]]; then
-                  TSV_OUTPUT=$(echo "$STD_COMMENTS_JSON" | jq -r '.[] | [.user.login // "unknown", .created_at // "N/A", .body // ""] | @tsv' 2> jq_std_error.log)
+              # Validate if it's a JSON array before processing
+              if echo "$STD_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+                  # Process valid JSON array
+                  TSV_OUTPUT=$(echo "$STD_COMMENTS_JSON" | jq -r '.[] | select(.body != null) | [.user.login // "unknown", .created_at // "N/A", .body] | @tsv' 2> jq_std_error.log)
                   JQ_EXIT_CODE=$?
                   if [[ $JQ_EXIT_CODE -eq 0 ]]; then
                       if [[ -n "$TSV_OUTPUT" ]]; then
                           echo "Processing standard comments..."
                           while IFS=$'\t' read -r login created_at body; do
-                              [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue
-                              # NO XML ESCAPING
-                              COMMENTS_XML="${COMMENTS_XML}<comment type=\"issue\"><author>$login</author><timestamp>$created_at</timestamp><content>$body</content></comment>"
+                              [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue # Skip empty lines just in case
+                              # WARNING: No XML escaping. Assumes LLM can handle raw content. Consider escaping if issues arise.
+                              COMMENTS_XML="${COMMENTS_XML}<comment type=\"issue\"><author>$login</author><timestamp>$created_at</timestamp><content><![CDATA[$body]]></content></comment>"
                           done <<< "$TSV_OUTPUT"
                       else
                           echo "Standard comments JSON valid, but no comments found or jq produced empty TSV."
@@ -281,20 +296,42 @@ jobs:
 
           if [[ "$FINAL_CONTEXT_TYPE" == "pr" ]]; then
             echo "Fetching PR specific data..."
+            # --- Fetch Base/Head SHAs ---
+            echo "Fetching PR base and head SHAs..."
+            PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
+            BASE_SHA=""
+            HEAD_SHA=""
+            if [[ "$PR_REFS_JSON" == "FETCH_FAILED" ]]; then
+              echo "::error::Failed to fetch PR SHAs."
+              cat pr_refs_stderr.log >&2
+            else
+              BASE_SHA=$(echo "$PR_REFS_JSON" | jq -r .baseRefOid)
+              HEAD_SHA=$(echo "$PR_REFS_JSON" | jq -r .headRefOid)
+              if [[ -z "$BASE_SHA" || "$BASE_SHA" == "null" || -z "$HEAD_SHA" || "$HEAD_SHA" == "null" ]]; then
+                 echo "::error::Could not extract valid base/head SHAs from JSON: $PR_REFS_JSON"
+                 BASE_SHA="" # Ensure they are marked as invalid
+                 HEAD_SHA=""
+              else
+                 echo "Base SHA: $BASE_SHA"
+                 echo "Head SHA: $HEAD_SHA"
+              fi
+            fi
+            # --- End Fetch Base/Head SHAs ---
+
             PR_DATA=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
             if [[ "$PR_DATA" == "FETCH_FAILED" ]]; then
               echo "::warning::Failed PR details fetch."
-              PR_TITLE="Error"
-              PR_BODY="Error"
+              PR_TITLE="Error fetching title"
+              PR_BODY="Error fetching body"
             else
-              # NO XML ESCAPING
+              # WARNING: No XML escaping
               PR_TITLE=$(echo "$PR_DATA" | jq -r .title)
               PR_BODY=$(echo "$PR_DATA" | jq -r .body)
             fi
 
-            # --- Filtered Diff Logic ---
-            echo "Fetching and filtering PR diff..."
-            # Define allowed file patterns for gh pr diff pathspec
+            # --- Filtered Diff Logic using git diff ---
+            echo "Fetching PR diff using git diff with pathspecs..."
+            # Define allowed file patterns for git diff pathspec
             ALLOWED_PATTERNS=(
                 '*.go'
                 '*.js' '*.ts' '*.jsx' '*.tsx'
@@ -320,13 +357,13 @@ jobs:
                 'Makefile'
                 '.dockerignore'
                 '.gitignore'
-                'go.mod'
-                'package.json' 'package-lock.json'
-                'requirements.txt' 'Pipfile' 'pyproject.toml'
+                'go.mod' 'go.sum'
+                'package.json' 'package-lock.json' 'yarn.lock' 'pnpm-lock.yaml'
+                'requirements.txt' 'Pipfile' 'Pipfile.lock' 'pyproject.toml' 'poetry.lock'
                 'Cargo.toml' 'Cargo.lock'
-                'pom.xml' 'build.gradle' 'settings.gradle'
-                'composer.json'
-                'Gemfile' 
+                'pom.xml' 'build.gradle' 'settings.gradle' 'build.gradle.kts' 'settings.gradle.kts'
+                'composer.json' 'composer.lock'
+                'Gemfile' 'Gemfile.lock'
                 # Config files
                 '.*rc' # e.g., .bashrc, .zshrc
                 '*.conf'
@@ -343,26 +380,50 @@ jobs:
                 '*.adoc'
             )
 
-            # Fetch the initial diff filtered by extension using pathspecs
-            RAW_DIFF_CONTENT=$(gh pr diff "$ISSUE_OR_PR_NUMBER" --repo "${REPO}" -- "${ALLOWED_PATTERNS[@]}" 2> pr_diff_stderr.log || echo "FETCH_FAILED")
-            PR_DIFF_EXIT_CODE=$?
+            RAW_DIFF_CONTENT=""
+            GIT_DIFF_EXIT_CODE=1 # Default to error
 
-            FILTERED_PR_DIFF="" # Renamed variable to avoid confusion with escaping step
-
-            if [[ "$RAW_DIFF_CONTENT" == "FETCH_FAILED" ]] || [[ $PR_DIFF_EXIT_CODE -ne 0 ]]; then
-              echo "::warning::Failed PR diff fetch (Exit: $PR_DIFF_EXIT_CODE)."
-              if [[ -s pr_diff_stderr.log ]]; then
-                 echo "Stderr from gh pr diff:"
-                 cat pr_diff_stderr.log
-              fi
-              FILTERED_PR_DIFF="<!-- Error fetching diff -->" # No escaping
-            elif [[ -z "$RAW_DIFF_CONTENT" ]]; then
-              echo "No relevant file changes found matching patterns."
-              FILTERED_PR_DIFF="<!-- No relevant file changes found -->" # No escaping
+            # Check if SHAs were obtained
+            if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+                echo "::error::Cannot run git diff without valid base/head SHAs."
+                RAW_DIFF_CONTENT="FETCH_FAILED" # Use this signal
             else
-              echo "Raw diff fetched (${#RAW_DIFF_CONTENT} bytes). Filtering minified files..."
+                # Use git diff with the fetched SHAs and the allowed patterns
+                # The '...' syntax shows changes between base merge-base and head
+                echo "Running: git diff '${BASE_SHA}...${HEAD_SHA}' -- ${ALLOWED_PATTERNS[*]}" # Debug echo
+                git diff "${BASE_SHA}...${HEAD_SHA}" -- "${ALLOWED_PATTERNS[@]}" > raw_diff_output.txt 2> git_diff_stderr.log
+                GIT_DIFF_EXIT_CODE=$?
+                RAW_DIFF_CONTENT=$(cat raw_diff_output.txt) # Read the output
 
-              # Pipe the raw diff to Perl, which reads the script from STDIN via the here-doc
+                if [[ $GIT_DIFF_EXIT_CODE -ne 0 ]]; then
+                    echo "::warning::git diff command failed (Exit: $GIT_DIFF_EXIT_CODE)."
+                    if [[ -s git_diff_stderr.log ]]; then
+                       echo "Stderr from git diff:"
+                       cat git_diff_stderr.log
+                    fi
+                    RAW_DIFF_CONTENT="FETCH_FAILED" # Signal failure
+                elif [[ -z "$RAW_DIFF_CONTENT" ]]; then
+                    echo "git diff produced no output for the specified patterns between $BASE_SHA...$HEAD_SHA."
+                    # Keep RAW_DIFF_CONTENT empty, handled below
+                else
+                    echo "git diff successful. Raw diff size: ${#RAW_DIFF_CONTENT} bytes."
+                fi
+            fi
+
+            FILTERED_PR_DIFF="" # Initialize
+
+            # Check the result of the git diff operation
+            if [[ "$RAW_DIFF_CONTENT" == "FETCH_FAILED" ]] || [[ $GIT_DIFF_EXIT_CODE -ne 0 && -z "$RAW_DIFF_CONTENT" ]]; then # Check exit code only if diff is empty (might be non-zero for no changes)
+              echo "::warning::Failed to obtain git diff or diff was empty with error (Exit: $GIT_DIFF_EXIT_CODE). Check previous errors."
+              FILTERED_PR_DIFF="<!-- Error fetching or generating diff -->"
+            elif [[ -z "$RAW_DIFF_CONTENT" ]]; then
+              echo "No relevant file changes found matching patterns (git diff was empty)."
+              FILTERED_PR_DIFF="<!-- No relevant file changes found for specified patterns -->"
+            else
+              # Raw diff obtained successfully, now proceed with Perl filtering for minified content etc.
+              echo "Raw diff fetched (${#RAW_DIFF_CONTENT} bytes). Filtering suspected minified files..."
+
+              # Pipe the raw diff (from git diff) to Perl
               FILTERED_PR_DIFF=$(echo "$RAW_DIFF_CONTENT" | perl -ne '
                 BEGIN {
                     $chunk = "";          # Stores the lines of the current diff chunk
@@ -370,44 +431,46 @@ jobs:
                     $max_len = 500;      # Max allowed line length for first 2 lines of content
                 }
                 # Match the start of a diff for a file
-                if (/^diff --git a\/(?:.*?\/)?(?:.+)\s+b\/(?:.*?\/)?(.+)$/) {
+                # Updated regex to handle paths that might contain spaces (though uncommon in git diff output usually)
+                if (/^diff --git a\/(.+)\s+b\/(.+)$/) {
                     # Print the previous chunk if it was marked for printing
                     print $chunk if $chunk ne "" && $print_chunk;
 
                     # Start processing the new chunk
                     $chunk = $_;         # Start the new chunk with the diff --git line
                     $print_chunk = 1;    # Assume printable by default
-                    my $b_path = $1;     # Extract the file path (relative to repo root)
+                    my $b_path = $2;     # Extract the file path (relative to repo root)
 
                     # Skip check for /dev/null (means file added or deleted)
                     if ($b_path eq "/dev/null") {
                          $print_chunk = 1;
                     }
-                    # Skip check for files known not to be minified code/text
+                    # Skip check for files known not to be minified code/text (adjust regex as needed)
                     elsif ($b_path =~ m/\.(lock|sum|mod|toml|cfg|ini|properties|yaml|yml|json|md|rst|adoc|txt|conf)$/i ||
                            $b_path =~ m/(Makefile|Dockerfile|LICENSE|README|CONTRIBUTING|CHANGELOG)/i ||
                            $b_path =~ m/\.(gitignore|dockerignore|.*rc)$/ ) {
                         $print_chunk = 1; # Assume these are not minified
                     }
-                    # Check the content of other files
+                    # Check the content of other files that exist in the checkout
                     elsif (! -e $b_path) {
-                         # File path exists in diff but not in checkout
-                         warn "Warning: File $b_path from diff not found in checkout, including chunk.";
+                         # File path exists in diff but not in checkout (e.g., deleted file, submodule?)
+                         # Include the diff chunk but warn.
+                         warn "Warning: File $b_path from diff not found in checkout at ./$b_path, including chunk.";
                          $print_chunk = 1;
                     } else {
-                         # File exists, check its first two lines for length
+                         # File exists, check its first few lines for length
                          if (open my $fh, "<", $b_path) {
                              my $lines_read = 0;
                              while (my $line = <$fh>) {
                                  $lines_read++;
                                  chomp $line;
-                                 # Allow long lines if they contain common long tokens like URLs, paths, base64 chunks
-                                 if (length($line) > $max_len && $line !~ m{(https?://\S+|/\S+|[a-zA-Z0-9+/=]{20,})}) {
+                                 # Allow long lines if they contain common long tokens like URLs, paths, base64 chunks, SVG paths
+                                 if (length($line) > $max_len && $line !~ m{(https?://\S+|/\S+|[a-zA-Z0-9+/=]{20,}|d="M[\d\.,\sA-Za-z-]+"})}) {
                                      warn "Info: Filtering chunk for $b_path (line $lines_read length > $max_len and no common long token detected)";
                                      $print_chunk = 0; # Mark chunk NOT to be printed
                                      last; # Stop reading file
                                  }
-                                 last if $lines_read >= 2; # Only check first two lines
+                                 last if $lines_read >= 3; # Check first three lines
                              }
                              close $fh;
                          } else {
@@ -417,7 +480,7 @@ jobs:
                          }
                     }
                 } else {
-                    # Its not a "diff --git" line, just add it to the current chunk
+                    # It's not a "diff --git" line, just add it to the current chunk
                     $chunk .= $_;
                 }
 
@@ -428,28 +491,28 @@ jobs:
               ' 2> filter_stderr.log) # End of perl command, its output is captured
 
               if [[ -s filter_stderr.log ]]; then
-                 echo "Filter script warnings/info:"
+                 echo "Perl filter script warnings/info:"
                  cat filter_stderr.log
               fi
 
               if [[ -z "$FILTERED_PR_DIFF" ]] && [[ -n "$RAW_DIFF_CONTENT" ]]; then
                   # If filtering resulted in empty diff, but raw wasn't empty
-                  echo "All diff chunks were filtered out (likely minified or excluded)."
-                  FILTERED_PR_DIFF="<!-- Diff contained only files filtered out (e.g., minified files) -->" # No escaping
+                  echo "All diff chunks were filtered out by Perl script (likely suspected minified or excluded)."
+                  FILTERED_PR_DIFF="<!-- Diff contained only files filtered out by heuristic (e.g., suspected minified files) -->"
               elif [[ -z "$FILTERED_PR_DIFF" ]]; then
                    # Filtered diff is empty, and raw diff was likely also empty or only headers
-                   echo "Filtered diff is empty (or only contained filtered files)."
-                   FILTERED_PR_DIFF="<!-- Filtered diff is empty -->" # No escaping
+                   echo "Filtered diff is empty (no matching patterns or all filtered)."
+                   FILTERED_PR_DIFF="<!-- Filtered diff is empty -->"
               else
-                   echo "Filtering complete. Final diff size: ${#FILTERED_PR_DIFF} bytes."
-                   # The filtered diff is already in FILTERED_PR_DIFF, no further action needed here
+                   echo "Perl filtering complete. Final diff size: ${#FILTERED_PR_DIFF} bytes."
+                   # The filtered diff is already in FILTERED_PR_DIFF
               fi
             fi
             # --- End Filtered Diff Logic ---
 
-            CONTEXT_DETAILS_XML="<details><title>$PR_TITLE</title><body>$PR_BODY</body></details>"
-            # Use the filtered (but not escaped) diff content
-            DIFF_XML="<diff>$FILTERED_PR_DIFF</diff>"
+            # WARNING: No XML escaping for details/diff. Use CDATA.
+            CONTEXT_DETAILS_XML="<details><title><![CDATA[$PR_TITLE]]></title><body><![CDATA[$PR_BODY]]></body></details>"
+            DIFF_XML="<diff><![CDATA[$FILTERED_PR_DIFF]]></diff>"
 
             # --- PR Review Comments ---
             echo "Fetching PR review comments..."
@@ -457,18 +520,16 @@ jobs:
             if [[ "$REVIEW_COMMENTS_JSON" == "FETCH_FAILED" || -z "$REVIEW_COMMENTS_JSON" ]]; then
                 echo "::warning::Failed to fetch PR review comments JSON or received empty response."
             else
-                echo "$REVIEW_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1
-                IS_JSON_ARRAY_EXIT_CODE=$?
-                if [[ $IS_JSON_ARRAY_EXIT_CODE -eq 0 ]]; then
-                    TSV_OUTPUT=$(echo "$REVIEW_COMMENTS_JSON" | jq -r '.[] | [.user.login // "unknown", .created_at // "N/A", .body // "", .path // "unknown", .diff_hunk // "", (.line // .original_line // "N/A")] | @tsv' 2> jq_rev_com_error.log)
+                if echo "$REVIEW_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+                    TSV_OUTPUT=$(echo "$REVIEW_COMMENTS_JSON" | jq -r '.[] | select(.body != null) | [.user.login // "unknown", .created_at // "N/A", .body, .path // "unknown", .diff_hunk // "", (.line // .original_line // "N/A")] | @tsv' 2> jq_rev_com_error.log)
                     JQ_EXIT_CODE=$?
                     if [[ $JQ_EXIT_CODE -eq 0 ]]; then
                          if [[ -n "$TSV_OUTPUT" ]]; then
                             echo "Processing review comments..."
                             while IFS=$'\t' read -r login created_at body path diff_hunk line; do
                                [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue
-                               # NO XML ESCAPING
-                               COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_comment\" file=\"$path\" line=\"$line\"><author>$login</author><timestamp>$created_at</timestamp><diff_hunk>$diff_hunk</diff_hunk><content>$body</content></comment>"
+                               # WARNING: No XML escaping. Use CDATA.
+                               COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_comment\" file=\"$path\" line=\"$line\"><author>$login</author><timestamp>$created_at</timestamp><diff_hunk><![CDATA[$diff_hunk]]></diff_hunk><content><![CDATA[$body]]></content></comment>"
                             done <<< "$TSV_OUTPUT"
                          else
                             echo "Review comments JSON valid, but no comments found or jq produced empty TSV."
@@ -484,14 +545,13 @@ jobs:
             echo "Review comments processed. Current XML length: ${#COMMENTS_XML}"
 
             # --- PR Reviews (Bodies) ---
-            echo "Fetching PR reviews..."
+            echo "Fetching PR reviews (bodies)..."
             REVIEWS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/reviews" --paginate || echo "FETCH_FAILED")
             if [[ "$REVIEWS_JSON" == "FETCH_FAILED" || -z "$REVIEWS_JSON" ]]; then
                  echo "::warning::Failed to fetch PR reviews JSON or received empty response."
             else
-                 echo "$REVIEWS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1
-                 IS_JSON_ARRAY_EXIT_CODE=$?
-                 if [[ $IS_JSON_ARRAY_EXIT_CODE -eq 0 ]]; then
+                 if echo "$REVIEWS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+                     # Filter for reviews with non-empty bodies
                      TSV_OUTPUT=$(echo "$REVIEWS_JSON" | jq -r '.[] | select(.body != null and .body != "") | [.user.login // "unknown", .submitted_at // "N/A", .body, .state // "N/A"] | @tsv' 2> jq_rev_error.log)
                      JQ_EXIT_CODE=$?
                      if [[ $JQ_EXIT_CODE -eq 0 ]]; then
@@ -499,8 +559,8 @@ jobs:
                              echo "Processing review bodies..."
                              while IFS=$'\t' read -r login submitted_at body state; do
                                 [[ -n "$login" || -n "$submitted_at" || -n "$body" ]] || continue
-                                # NO XML ESCAPING
-                                COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_body\" state=\"$state\"><author>$login</author><timestamp>$submitted_at</timestamp><content>$body</content></comment>"
+                                # WARNING: No XML escaping. Use CDATA.
+                                COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_body\" state=\"$state\"><author>$login</author><timestamp>$submitted_at</timestamp><content><![CDATA[$body]]></content></comment>"
                              done <<< "$TSV_OUTPUT"
                          else
                              echo "Review JSON valid, but no review bodies with content found or jq produced empty TSV."
@@ -515,44 +575,47 @@ jobs:
             fi
             echo "Review bodies processed. Current XML length: ${#COMMENTS_XML}"
 
-            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request. Answer user questions contextually based on the provided details, comments, and code changes (diff). The diff includes relevant programming, config and documentation files but excludes minified files based on line length heuristics."
+            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request. The user triggered you via a comment. Analyze the provided PR details (title, body), the conversation history (issue comments, review comments, review summaries), and the code changes (diff). The diff includes changes only for specific file types (code, config, docs) and filters out chunks suspected of being minified based on line length heuristics. Provide a helpful and concise response to the user's request based on this context."
 
           elif [[ "$FINAL_CONTEXT_TYPE" == "issue" ]]; then
             echo "Fetching Issue specific data..."
             ISSUE_DATA=$(gh issue view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
             if [[ "$ISSUE_DATA" == "FETCH_FAILED" ]]; then
               echo "::warning::Failed Issue details fetch."
-              ISSUE_TITLE="Error"
-              ISSUE_BODY="Error"
+              ISSUE_TITLE="Error fetching title"
+              ISSUE_BODY="Error fetching body"
             else
-              # NO XML ESCAPING
+              # WARNING: No XML escaping
               ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title)
               ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body)
             fi
-            CONTEXT_DETAILS_XML="<details><title>$ISSUE_TITLE</title><body>$ISSUE_BODY</body></details>"
+            # WARNING: No XML escaping for details. Use CDATA.
+            CONTEXT_DETAILS_XML="<details><title><![CDATA[$ISSUE_TITLE]]></title><body><![CDATA[$ISSUE_BODY]]></body></details>"
             DIFF_XML="" # No diff for issues
-            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue. Answer user questions contextually based on the provided details and comments."
+            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue. The user triggered you via a comment. Analyze the provided issue details (title, body) and the conversation history (comments). Provide a helpful and concise response to the user's request based on this context."
           fi
           echo "::endgroup::"
 
           # --- Assemble Final Prompt ---
           echo "::group::Assemble Final Prompt & Set Outputs"
-          # Use raw values, NO XML ESCAPING
+          # Use raw values, NO XML escaping needed for these simple values
           USER_LOGIN="${{ github.event.comment.user.login }}"
           TIMESTAMP="${{ github.event.comment.created_at }}"
 
+          # Assemble the prompt using CDATA for user-generated content
           FORMATTED_PROMPT="<github_context type=\"$FINAL_CONTEXT_TYPE\" number=\"$ISSUE_OR_PR_NUMBER\">
             ${CONTEXT_DETAILS_XML}
             ${DIFF_XML}
             <comments>${COMMENTS_XML}</comments>
-            <user_request author=\"${USER_LOGIN}\" timestamp=\"${TIMESTAMP}\">${USER_REQUEST_BODY}</user_request>
+            <user_request author=\"${USER_LOGIN}\" timestamp=\"${TIMESTAMP}\"><![CDATA[${USER_REQUEST_BODY}]]></user_request>
             </github_context>
 
-            ${PROMPT_INSTRUCTION}"
+            <instructions>${PROMPT_INSTRUCTION}</instructions>"
+
           if [ ${#FORMATTED_PROMPT} -lt 200 ]; then
-            echo "::warning::Formatted prompt seems short."
+            echo "::warning::Formatted prompt seems very short (${#FORMATTED_PROMPT} bytes). Ensure context fetching worked."
           fi
-          echo "Final prompt assembled. Length: ${#FORMATTED_PROMPT}"
+          echo "Final prompt assembled. Length: ${#FORMATTED_PROMPT} bytes."
 
           PROMPT_FILENAME="formatted_prompt.txt"
           echo "$FORMATTED_PROMPT" > "$PROMPT_FILENAME"
@@ -563,6 +626,8 @@ jobs:
           echo "formatted_prompt_file=${PROMPT_FILENAME}" >> "$GITHUB_OUTPUT"
           echo "Outputs set."
           echo "::endgroup::"
+          # Reset errexit for subsequent steps that might handle errors differently
+          set +e
 
       - name: Determine probe-chat command
         id: determine_command
@@ -577,23 +642,23 @@ jobs:
             COMMAND_VAR="${PROBE_CHAT_COMMAND_SECRET}"
           else
             # Fall back to the input default if secret is not set
-            echo "Using default_probe_chat_command input."
+            echo "Using default_probe_chat_command input: ${{ inputs.default_probe_chat_command }}"
             COMMAND_VAR="${{ inputs.default_probe_chat_command }}"
           fi
 
-          # Basic validation (optional but recommended)
+          # Basic validation
           if [[ -z "$COMMAND_VAR" ]]; then
              echo "::error::Command is empty after evaluation. Check secrets/inputs."
              exit 1
           fi
 
-          echo "Determined command: $COMMAND_VAR"
+          echo "Determined command base: $COMMAND_VAR"
           echo "command=$COMMAND_VAR" >> "$GITHUB_OUTPUT"
 
       - name: Run probe-chat
         id: probe
         env:
-          # Keep other necessary env vars
+          # Pass API keys and config via environment variables
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -604,36 +669,40 @@ jobs:
           MODEL_NAME: ${{ secrets.MODEL_NAME }}
           FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
         run: |
-          set -o pipefail # Fail if any command in the pipe fails
+          set -o pipefail # Fail if any command in the pipe fails (important for cat | command)
           PROMPT_FILE="${{ steps.format.outputs.formatted_prompt_file }}" # Get filename from previous step output
-          # This now correctly uses the output from the step above
-          COMMAND_TO_RUN="${{ steps.determine_command.outputs.command }}"
+          # This now correctly uses the output from the determine_command step
+          COMMAND_BASE="${{ steps.determine_command.outputs.command }}"
           RESPONSE_FILE="response.txt"
           ERROR_LOG="error.log"
+          COMMAND_TO_RUN="$COMMAND_BASE" # Start building the full command
 
-          # Set the prompt type based on context
+          # Add prompt type based on context
           CONTEXT_TYPE="${{ steps.format.outputs.context_type }}"
           if [[ "$CONTEXT_TYPE" == "pr" ]]; then
-            # For pull requests, use the code-review prompt
+            # For pull requests, add the code-review prompt flag
             COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt code-review"
             echo "Using code-review prompt for pull request context"
           elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
-            # For issues, use the support prompt
+            # For issues, add the support prompt flag
             COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt support"
             echo "Using support prompt for issue context"
+          else
+            echo "::warning:: Unknown context type '$CONTEXT_TYPE', not adding specific prompt flag."
           fi
 
-          # Add a safety check here too
+          # Safety check for final command
           if [[ -z "$COMMAND_TO_RUN" ]]; then
-            echo "::error::COMMAND_TO_RUN is unexpectedly empty!" >&2
-            echo "🤖 **Error:** Internal configuration error - AI command is missing." > "$RESPONSE_FILE"
+            echo "::error::COMMAND_TO_RUN is unexpectedly empty after building!" >&2
+            # Attempt to write error to response file for feedback
+            echo "🤖 **Error:** Internal configuration error - AI command is missing or could not be constructed." > "$RESPONSE_FILE"
             exit 1
           fi
 
-          # Check if PROMPT_FILE exists and is not empty
+          # Check if PROMPT_FILE exists and is not empty before proceeding
           if [ ! -s "$PROMPT_FILE" ]; then
-            echo "::error::Prompt file '$PROMPT_FILE' not found or is empty." >&2
-            echo "🤖 **Error:** Internal error - prompt file missing or empty." > "$RESPONSE_FILE"
+            echo "::error::Prompt file '$PROMPT_FILE' not found or is empty. Check 'format' step logs." >&2
+            echo "🤖 **Error:** Internal error - prompt file missing or empty. Cannot query AI." > "$RESPONSE_FILE"
             exit 1
           fi
 
@@ -643,31 +712,42 @@ jobs:
           echo "Command to run: $COMMAND_TO_RUN"
           echo "Running probe-chat..."
 
-          # Pipe the *content* of the file directly to the command's stdin
+          # Pipe the *content* of the prompt file directly to the command's stdin
+          # Capture stdout to RESPONSE_FILE and stderr to ERROR_LOG
           cat "$PROMPT_FILE" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> "$ERROR_LOG"
-          EXIT_CODE=${PIPESTATUS[1]} # Get exit code of the right-most command in the pipe ($COMMAND_TO_RUN)
+          # PIPESTATUS[1] gets the exit code of the right-most command in the pipe ($COMMAND_TO_RUN)
+          # PIPESTATUS[0] would be the exit code of 'cat'
+          EXIT_CODE=${PIPESTATUS[1]}
 
-          # Handle the exit code (keep your existing logic here)
+          # Handle the exit code
           if [ $EXIT_CODE -ne 0 ]; then
-            echo "::error::probe-chat failed ($EXIT_CODE)." >&2
+            echo "::error::probe-chat command failed with exit code $EXIT_CODE." >&2
+            # If error log has content, display it
             if [ -s "$ERROR_LOG" ]; then
-              echo "--- stderr ---" >&2
+              echo "--- probe-chat stderr ---" >&2
               cat "$ERROR_LOG" >&2
-              echo "--- end stderr ---" >&2
+              echo "--- end probe-chat stderr ---" >&2
+            else
+              echo "probe-chat stderr was empty." >&2
             fi
+            # If the response file wasn't created or is empty, create a generic error message
             if [ ! -s "$RESPONSE_FILE" ]; then
-               echo "🤖 **Error:** AI command failed (Exit code: $EXIT_CODE)." > "$RESPONSE_FILE"
+               echo "🤖 **Error:** AI command failed (Exit code: $EXIT_CODE). Check Action logs for details." > "$RESPONSE_FILE"
             fi
-             exit 1 # Ensure the step fails in GH Actions UI
+             # Don't exit here, let the next step handle reporting based on outcome
+          else
+            echo "probe-chat command finished successfully (Exit code: 0)."
           fi
 
-          echo "probe-chat finished successfully."
-          if [ ! -s "$RESPONSE_FILE" ]; then
-            echo "::warning::probe-chat produced empty response."
-            echo "🤖 AI generated no response." > "$RESPONSE_FILE"
+          # Check if the successful command produced an empty response
+          if [ $EXIT_CODE -eq 0 ] && [ ! -s "$RESPONSE_FILE" ]; then
+            echo "::warning::probe-chat command succeeded but produced an empty response."
+            echo "🤖 AI command ran successfully but generated no response." > "$RESPONSE_FILE"
           fi
+          # Allow script to continue to the next step regardless of probe outcome
 
       - name: Read Response or Error and Format Output
+        # Run this step always to ensure some output is generated, even on failure
         if: always()
         id: read_response
         env:
@@ -676,34 +756,54 @@ jobs:
           RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo "")
           ERROR_LOG_CONTENT=$(cat error.log 2>/dev/null || echo "")
           FINAL_BODY=""
-          FOOTER_TEMPLATE="\n\n-----\n*Tip: Start comment with \`%s <request>\`.*\n*Built by [probe](https://probeai.dev)*"
+          FOOTER_TEMPLATE="\n\n-----\n*Tip: Mention me again using \`%s <request>\`.*\n*Powered by [Probe AI](https://probeai.dev)*"
+          # Safely format the footer using printf
           printf -v FOOTER "$FOOTER_TEMPLATE" "$COMMAND_PREFIX"
 
+          # Check the outcome of the 'probe' step
           if [[ "${{ steps.probe.outcome }}" == "success" ]]; then
-            if [[ -n "${RESPONSE_CONTENT// }" ]]; then
+            # Probe step succeeded technically (exit 0), check if response content is meaningful
+            if [[ -n "${RESPONSE_CONTENT// }" ]]; then # Check if not empty or just whitespace
               FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}"
             else
-              FINAL_BODY="🤖 Processing succeeded, AI response empty.${FOOTER}"
+              # Should have been handled by the previous step, but as a fallback:
+              FINAL_BODY="🤖 Processing succeeded, but the AI response was empty.${FOOTER}"
             fi
           else
+            # Probe step failed or earlier steps failed
             ERROR_MESSAGE="🤖 **Error:** AI interaction failed."
-            if [[ "${{ steps.format.outcome }}" == "failure" ]] || [[ "${{ steps.read_prompt_file.outcome }}" == "failure" ]]; then
-              ERROR_MESSAGE="🤖 **Error:** Failed during context/prompt prep. Check logs."
-            elif [[ -n "${RESPONSE_CONTENT// }" ]] && echo "$RESPONSE_CONTENT" | grep -q "🤖 **Error:**"; then
-              ERROR_MESSAGE="${RESPONSE_CONTENT}"
-            elif [[ -n "${ERROR_LOG_CONTENT// }" ]]; then
-              ERROR_DETAILS=$(head -c 1000 <<< "$ERROR_LOG_CONTENT")
-              if [[ ${#ERROR_LOG_CONTENT} -gt 1000 ]]; then
-                ERROR_DETAILS="${ERROR_DETAILS}\n...(truncated)"
-              fi
-              ERROR_MESSAGE="${ERROR_MESSAGE}\n\n**Details (stderr):**\n\`\`\`\n${ERROR_DETAILS}\n\`\`\`"
+
+            # Check for specific failure points if possible
+            if [[ "${{ steps.format.outcome }}" == "failure" ]]; then
+              ERROR_MESSAGE="🤖 **Error:** Failed during context preparation (fetching data or formatting prompt). Please check the Action logs for details."
+            elif [[ "${{ steps.probe.outcome }}" == "failure" ]]; then
+                ERROR_MESSAGE="🤖 **Error:** The AI command failed to execute or returned an error."
+                # Append stderr details if available and not already in the response file
+                if [[ -n "${ERROR_LOG_CONTENT// }" ]] && ! grep -qF "$ERROR_LOG_CONTENT" <<< "$RESPONSE_CONTENT"; then
+                  # Limit error log size in comment
+                  ERROR_DETAILS=$(head -c 1000 <<< "$ERROR_LOG_CONTENT")
+                  if [[ ${#ERROR_LOG_CONTENT} -gt 1000 ]]; then
+                    ERROR_DETAILS="${ERROR_DETAILS}\n...(truncated)"
+                  fi
+                  # Append details clearly marked
+                   ERROR_MESSAGE="${ERROR_MESSAGE}\n\n**Stderr:**\n\`\`\`\n${ERROR_DETAILS}\n\`\`\`"
+                # If response.txt contains a specific error from the tool, use it preferentially
+                elif [[ -n "${RESPONSE_CONTENT// }" ]] && echo "$RESPONSE_CONTENT" | grep -q -E "(Error:|ERROR:|Failed|failed)"; then
+                   ERROR_MESSAGE="${RESPONSE_CONTENT}" # Use the error from response.txt
+                else
+                   ERROR_MESSAGE="${ERROR_MESSAGE} No specific error details found in stderr or response file. Check the 'Run probe-chat' step logs."
+                fi
             else
-              ERROR_MESSAGE="${ERROR_MESSAGE} No details. Check 'Run probe-chat' logs (outcome: ${{ steps.probe.outcome }})."
+              # Generic failure if specific step isn't identified as the cause
+              ERROR_MESSAGE="🤖 **Error:** An unexpected error occurred in the workflow before or during the AI interaction. Check Action logs."
             fi
+
             FINAL_BODY="${ERROR_MESSAGE}${FOOTER}"
           fi
 
-          echo "Final response body prep'd. Length: ${#FINAL_BODY}"
+          echo "Final response body prepared. Length: ${#FINAL_BODY}"
+
+          # Use multi-line output format for potentially long bodies
           {
             echo "response<<EOF_RESPONSE_MARKER"
             echo "$FINAL_BODY"
@@ -711,16 +811,20 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   post_response:
+    # Run only if the main processing job was not skipped
     if: needs.process_comment.result != 'skipped'
     runs-on: ubuntu-latest
-    needs: [process_comment]
+    needs: [process_comment] # Depend on the processing job
     steps:
       - name: Post Response Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
+          # Use the issue number output from the previous job
           issue-number: ${{ needs.process_comment.outputs.issue_number }}
+          # Use the response body output from the previous job
           body: ${{ needs.process_comment.outputs.response_body }}
+          # Add reaction based on success/failure of the probe step
           reactions: ${{ needs.process_comment.outputs.probe_succeeded == 'true' && '+1' || '-1' }}
 # </gh>
