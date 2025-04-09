@@ -561,18 +561,61 @@ jobs:
 
           elif [[ "$FINAL_CONTEXT_TYPE" == "issue" ]]; then
             echo "Fetching Issue specific data..."
-            ISSUE_DATA=$(gh issue view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
-            ISSUE_TITLE="Error fetching title" # Default values
+            # Run gh command, capture output or "FETCH_FAILED" marker
+            # Use a different variable name to avoid confusion
+            ISSUE_DATA_JSON=$(gh issue view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
+
+            # Set default shell variables first
+            ISSUE_TITLE="Error fetching title"
             ISSUE_BODY="Error fetching body"
-            if [[ "$ISSUE_DATA" == "FETCH_FAILED" ]]; then
-              echo "::warning::Failed Issue details fetch."
+
+            # Check if the fetch succeeded AND returned non-empty data before trying to parse JSON
+            if [[ "$ISSUE_DATA_JSON" != "FETCH_FAILED" && -n "$ISSUE_DATA_JSON" ]]; then
+              echo "Issue data fetched successfully. Parsing title and body..."
+              # Attempt to extract title using jq.
+              # Use printf for safer piping. Use -e to set exit code on null.
+              # Store extracted value temporarily.
+              EXTRACTED_TITLE=$(printf "%s" "$ISSUE_DATA_JSON" | jq -e -r '.title // ""')
+              JQ_TITLE_EXIT=$?
+
+              # Overwrite default ONLY if jq succeeded (exit 0) AND extracted value is not empty string
+              if [[ $JQ_TITLE_EXIT -eq 0 && -n "$EXTRACTED_TITLE" ]]; then
+                  ISSUE_TITLE="$EXTRACTED_TITLE"
+              elif [[ $JQ_TITLE_EXIT -eq 0 && -z "$EXTRACTED_TITLE" ]]; then
+                   # Handle case where title is explicitly null or empty string in the issue
+                   echo "::debug::Issue title is null or empty in fetched data."
+                   ISSUE_TITLE="" # Set to empty string
+              else
+                  # jq failed or returned null (which -e treats as exit code 10)
+                  echo "::warning::jq failed to extract issue title (exit code $JQ_TITLE_EXIT) or value was null. Using default."
+                  # Default is already set, no action needed
+              fi
+
+              # Attempt to extract body using jq.
+              EXTRACTED_BODY=$(printf "%s" "$ISSUE_DATA_JSON" | jq -e -r '.body // ""')
+              JQ_BODY_EXIT=$?
+
+              # Overwrite default ONLY if jq succeeded (exit 0) AND extracted value is not empty string
+              if [[ $JQ_BODY_EXIT -eq 0 && -n "$EXTRACTED_BODY" ]]; then
+                  ISSUE_BODY="$EXTRACTED_BODY"
+              elif [[ $JQ_BODY_EXIT -eq 0 && -z "$EXTRACTED_BODY" ]]; then
+                   # Handle case where body is explicitly null or empty string in the issue
+                   echo "::debug::Issue body is null or empty in fetched data."
+                   ISSUE_BODY="" # Set to empty string
+              else
+                   # jq failed or returned null
+                  echo "::warning::jq failed to extract issue body (exit code $JQ_BODY_EXIT) or value was null. Using default."
+                  # Default is already set, no action needed
+              fi
             else
-              # Use jq to safely extract
-              ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r .title // "Error fetching title")
-              ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r .body // "Error fetching body")
-            fi # End issue data fetch check
-            # Use CDATA for body
-            CONTEXT_DETAILS_XML="<details><title><![CDATA[$ISSUE_TITLE]]></title><body><![CDATA[$ISSUE_BODY]]></body></details>"
+              # This block runs if gh command failed OR returned empty string
+              echo "::warning::Failed Issue details fetch (gh command failed or returned empty). Using default title/body."
+              # Defaults are already set, no action needed here
+            fi # End issue data JSON parsing check
+
+            # --- Assign Context/Diff XML ---
+            # Use CDATA for all potentially multi-line/complex string fields
+            CONTEXT_DETAILS_XML="<details><title>$ISSUE_TITLE</title><body>$ISSUE_BODY</body></details>"
             DIFF_XML="" # No diff for issues
             PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue. The user triggered you via a comment. Analyze the provided issue details (title, body) and the conversation history (comments). Provide a helpful and concise response to the user's request based on this context."
           fi # End PR/Issue context specific block
