@@ -206,14 +206,14 @@ jobs:
           echo "Adding 👀 reaction to comment ID ${COMMENT_ID} in repo ${REPO}..."
           gh api --method POST -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" -f content='eyes' --silent || echo "::warning::Failed to add 'eyes' reaction."
 
-      - name: Determine Context, Fetch Comments, Format Input
-        id: format
+      # --- Steps to replace the original 'format' step ---
+
+      - name: Format - Initialize and Detect Context
+        id: format_init
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMAND_PREFIX: ${{ inputs.command_prefix }}
           REPO: ${{ github.repository }}
         run: |
-          # --- Initialization ---
           echo "::group::Initialization and User Request Extraction"
           shopt -s extglob # Enable extended globbing for string manipulation
           set -e # Exit immediately if a command exits with a non-zero status.
@@ -225,23 +225,22 @@ jobs:
           USER_REQUEST_BODY_RAW="${RAW_COMMENT_BODY#${COMMAND_PREFIX}}"
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW##*( )}"
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW%%*( )}"
-          USER_REQUEST_BODY="$USER_REQUEST_BODY_RAW"
-          COMMENTS_XML=""
-          echo "User request extracted: [${USER_REQUEST_BODY:0:100}...]"
+          # Use EOF markers for multi-line env var
+          echo "USER_REQUEST_BODY<<EOF_USER_REQUEST" >> $GITHUB_ENV
+          echo "$USER_REQUEST_BODY_RAW" >> $GITHUB_ENV
+          echo "EOF_USER_REQUEST" >> $GITHUB_ENV
+          echo "User request extracted: [${USER_REQUEST_BODY_RAW:0:100}...]"
           echo "::endgroup::"
 
-          # --- Determine Context ---
           echo "::group::Determine Context Type"
           CONTEXT_TYPE="issue" # Assume issue by default
           echo "Detecting context for #$ISSUE_OR_PR_NUMBER in $REPO"
-          # Try fetching as PR first. If successful, it's a PR.
           if gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER" --jq .url --silent > /dev/null 2>&1; then
              CONTEXT_TYPE="pr"
              echo "Context detected: PR"
           else
              EXIT_CODE=$?
              echo "Not a PR (API check failed with code $EXIT_CODE). Verifying as Issue..."
-             # If PR check failed, verify it's an issue (or log warning if both fail)
              if ! gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER" --jq .url --silent > /dev/null 2>&1; then
                ISSUE_EXIT_CODE=$?
                echo "::warning::Issue API check also failed (code $ISSUE_EXIT_CODE). Check permissions or if #$ISSUE_OR_PR_NUMBER exists. Proceeding as 'issue' context."
@@ -250,30 +249,38 @@ jobs:
              fi
              CONTEXT_TYPE="issue" # Explicitly set back to issue if PR check failed
           fi
-          FINAL_CONTEXT_TYPE=$CONTEXT_TYPE
-          echo "Final Context Type: $FINAL_CONTEXT_TYPE"
+          echo "Final Context Type: $CONTEXT_TYPE"
+          echo "FINAL_CONTEXT_TYPE=$CONTEXT_TYPE" >> $GITHUB_ENV
+          echo "ISSUE_OR_PR_NUMBER=$ISSUE_OR_PR_NUMBER" >> $GITHUB_ENV # Pass number too
           echo "::endgroup::"
 
-          # --- Fetch Comments and Context Details ---
-          echo "::group::Fetch Comments and Context Details"
-          # --- Standard Comments (Issue Comments) ---
-          echo "Fetching standard comments..."
+      - name: Format - Fetch Standard Comments
+        id: format_fetch_comments
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # Read vars set by previous step
+          ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
+        run: |
+          echo "::group::Fetch Standard Comments"
+          set -e
+          GITHUB_API_ARGS_VERBOSE=(-H "Accept: application/vnd.github+json")
+          COMMENTS_XML="" # Initialize here
+
+          echo "Fetching standard comments for #${ISSUE_OR_PR_NUMBER}..."
           STD_COMMENTS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER/comments" --paginate || echo "FETCH_FAILED")
 
           if [[ "$STD_COMMENTS_JSON" == "FETCH_FAILED" || -z "$STD_COMMENTS_JSON" ]]; then
               echo "::warning::Failed to fetch standard comments JSON or received empty response."
           else
-              # Validate if it's a JSON array before processing
               if echo "$STD_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
-                  # Process valid JSON array
                   TSV_OUTPUT=$(echo "$STD_COMMENTS_JSON" | jq -r '.[] | select(.body != null) | [.user.login // "unknown", .created_at // "N/A", .body] | @tsv' 2> jq_std_error.log)
                   JQ_EXIT_CODE=$?
                   if [[ $JQ_EXIT_CODE -eq 0 ]]; then
                       if [[ -n "$TSV_OUTPUT" ]]; then
                           echo "Processing standard comments..."
                           while IFS=$'\t' read -r login created_at body; do
-                              [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue # Skip empty lines just in case
-                              # Use CDATA to wrap potentially problematic body content
+                              [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue
                               COMMENTS_XML="${COMMENTS_XML}<comment type=\"issue\"><author>$login</author><timestamp>$created_at</timestamp><content><![CDATA[$body]]></content></comment>"
                           done <<< "$TSV_OUTPUT"
                       else
@@ -286,160 +293,137 @@ jobs:
               else
                   echo "::warning::Fetched standard comments data is not a valid JSON array."
               fi
-          fi # End standard comments fetch check
+          fi
           echo "Standard comments processed. Current XML length: ${#COMMENTS_XML}"
 
-          # --- Context Specific ---
-          CONTEXT_DETAILS_XML=""
-          DIFF_XML=""
-          PROMPT_INSTRUCTION=""
+          # Save multi-line COMMENTS_XML to env
+          echo "COMMENTS_XML<<EOF_COMMENTS_XML" >> $GITHUB_ENV
+          echo "$COMMENTS_XML" >> $GITHUB_ENV
+          echo "EOF_COMMENTS_XML" >> $GITHUB_ENV
+          echo "::endgroup::"
 
-          if [[ "$FINAL_CONTEXT_TYPE" == "pr" ]]; then
-            echo "Fetching PR specific data..."
-            # --- Fetch Base/Head SHAs ---
-            echo "Fetching PR base and head SHAs..."
-            PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
-            BASE_SHA=""
-            HEAD_SHA=""
-            if [[ "$PR_REFS_JSON" == "FETCH_FAILED" ]]; then
-              echo "::error::Failed to fetch PR SHAs."
-              cat pr_refs_stderr.log >&2
-              # Allow script to continue, diff will be marked as error later
+      - name: Format - Fetch PR Details (Title, Body, SHAs)
+        id: format_pr_details
+        # Only run this step if context is PR
+        if: env.FINAL_CONTEXT_TYPE == 'pr'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
+        run: |
+          echo "::group::Fetch PR Details (Title, Body, SHAs)"
+          set -e
+          echo "Fetching PR specific data for #${ISSUE_OR_PR_NUMBER}..."
+
+          # --- Fetch Base/Head SHAs ---
+          echo "Fetching PR base and head SHAs..."
+          PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
+          BASE_SHA=""
+          HEAD_SHA=""
+          if [[ "$PR_REFS_JSON" == "FETCH_FAILED" ]]; then
+            echo "::error::Failed to fetch PR SHAs."
+            cat pr_refs_stderr.log >&2
+            # Allow script to continue, handle missing SHAs in diff step
+          else
+            BASE_SHA=$(echo "$PR_REFS_JSON" | jq -r .baseRefOid)
+            HEAD_SHA=$(echo "$PR_REFS_JSON" | jq -r .headRefOid)
+            if [[ -z "$BASE_SHA" || "$BASE_SHA" == "null" || -z "$HEAD_SHA" || "$HEAD_SHA" == "null" ]]; then
+               echo "::error::Could not extract valid base/head SHAs from JSON: $PR_REFS_JSON"
+               BASE_SHA=""
+               HEAD_SHA=""
             else
-              BASE_SHA=$(echo "$PR_REFS_JSON" | jq -r .baseRefOid)
-              HEAD_SHA=$(echo "$PR_REFS_JSON" | jq -r .headRefOid)
-              if [[ -z "$BASE_SHA" || "$BASE_SHA" == "null" || -z "$HEAD_SHA" || "$HEAD_SHA" == "null" ]]; then
-                 echo "::error::Could not extract valid base/head SHAs from JSON: $PR_REFS_JSON"
-                 BASE_SHA="" # Ensure they are marked as invalid
-                 HEAD_SHA=""
-                 # Allow script to continue, diff will be marked as error later
-              else
-                 echo "Base SHA: $BASE_SHA"
-                 echo "Head SHA: $HEAD_SHA"
+               echo "Base SHA: $BASE_SHA"
+               echo "Head SHA: $HEAD_SHA"
+            fi
+          fi
+          echo "BASE_SHA=$BASE_SHA" >> $GITHUB_ENV
+          echo "HEAD_SHA=$HEAD_SHA" >> $GITHUB_ENV
+
+          # --- Fetch PR Title/Body ---
+          PR_DATA=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
+          PR_TITLE="Error fetching title" # Default values
+          PR_BODY="Error fetching body"
+          if [[ "$PR_DATA" == "FETCH_FAILED" ]]; then
+            echo "::warning::Failed PR details fetch."
+          else
+            PR_TITLE=$(echo "$PR_DATA" | jq -r .title // "Error fetching title")
+            PR_BODY=$(echo "$PR_DATA" | jq -r .body // "Error fetching body")
+          fi
+          # Save multi-line title/body to env
+          echo "PR_TITLE<<EOF_PR_TITLE" >> $GITHUB_ENV
+          echo "$PR_TITLE" >> $GITHUB_ENV
+          echo "EOF_PR_TITLE" >> $GITHUB_ENV
+          echo "PR_BODY<<EOF_PR_BODY" >> $GITHUB_ENV
+          echo "$PR_BODY" >> $GITHUB_ENV
+          echo "EOF_PR_BODY" >> $GITHUB_ENV
+          echo "::endgroup::"
+
+      - name: Format - Fetch & Filter PR Diff
+        id: format_pr_diff
+        # Only run this step if context is PR
+        if: env.FINAL_CONTEXT_TYPE == 'pr'
+        env:
+          # Read SHAs set by previous step
+          BASE_SHA: ${{ env.BASE_SHA }}
+          HEAD_SHA: ${{ env.HEAD_SHA }}
+          # Constants needed for filtering
+        run: |
+          echo "::group::Fetch & Filter PR Diff"
+          set -e
+          FILTERED_PR_DIFF="<!-- Diff generation skipped or failed -->" # Default value
+
+          # Check if SHAs were obtained before attempting git diff
+          if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+              echo "::error::Cannot run git diff without valid base/head SHAs. Skipping diff generation."
+              RAW_DIFF_CONTENT="FETCH_FAILED" # Signal failure
+          else
+              # Define allowed file patterns for git diff pathspec
+              ALLOWED_PATTERNS=(
+                  '*.go' '*.js' '*.ts' '*.jsx' '*.tsx' '*.rs' '*.java' '*.c' '*.h' '*.cpp' '*.hpp' '*.py'
+                  '*.cs' '*.php' '*.rb' '*.swift' '*.kt' '*.kts' '*.scala' '*.sh' '*.pl' '*.pm' '*.lua' '*.sql'
+                  '*.md' '*.yaml' '*.yml' '*.json'
+                  'Dockerfile' 'Makefile' '.dockerignore' '.gitignore'
+                  'go.mod' 'go.sum' 'package.json' 'package-lock.json' 'yarn.lock' 'pnpm-lock.yaml'
+                  'requirements.txt' 'Pipfile' 'Pipfile.lock' 'pyproject.toml' 'poetry.lock'
+                  'Cargo.toml' 'Cargo.lock' 'pom.xml' 'build.gradle' 'settings.gradle' 'build.gradle.kts' 'settings.gradle.kts'
+                  'composer.json' 'composer.lock' 'Gemfile' 'Gemfile.lock'
+                  '.*rc' '*.conf' '*.cfg' '*.ini' '*.toml' '*.properties'
+                  'README.*' 'LICENSE*' 'CONTRIBUTING.*' 'CHANGELOG.*' '*.rst' '*.adoc'
+              )
+              RAW_DIFF_CONTENT=""
+              GIT_DIFF_EXIT_CODE=1 # Default error
+
+              echo "Running: git diff '${BASE_SHA}...${HEAD_SHA}' -- ${ALLOWED_PATTERNS[*]}"
+              set +e # Temporarily disable exit on error for git diff
+              git diff "${BASE_SHA}...${HEAD_SHA}" -- "${ALLOWED_PATTERNS[@]}" > raw_diff_output.txt 2> git_diff_stderr.log
+              GIT_DIFF_EXIT_CODE=$?
+              set -e # Re-enable exit on error
+              RAW_DIFF_CONTENT=$(cat raw_diff_output.txt)
+
+              if [[ $GIT_DIFF_EXIT_CODE -ne 0 ]]; then
+                  echo "::warning::git diff command exited with code $GIT_DIFF_EXIT_CODE."
+                  if [[ -s git_diff_stderr.log ]]; then echo "Stderr from git diff:"; cat git_diff_stderr.log; fi
               fi
-            fi # End SHA fetch check
 
-            # --- Fetch PR Title/Body ---
-            PR_DATA=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
-            PR_TITLE="Error fetching title" # Default values
-            PR_BODY="Error fetching body"
-            if [[ "$PR_DATA" == "FETCH_FAILED" ]]; then
-              echo "::warning::Failed PR details fetch."
-            else
-              # Use jq to safely extract, handles nulls gracefully
-              PR_TITLE=$(echo "$PR_DATA" | jq -r .title // "Error fetching title")
-              PR_BODY=$(echo "$PR_DATA" | jq -r .body // "Error fetching body")
-            fi # End PR data fetch check
+              if [[ -z "$RAW_DIFF_CONTENT" ]]; then
+                 if [[ $GIT_DIFF_EXIT_CODE -eq 0 || $GIT_DIFF_EXIT_CODE -eq 1 ]]; then
+                   echo "git diff produced no output for the specified patterns."
+                   FILTERED_PR_DIFF="<!-- No relevant file changes found for specified patterns -->"
+                 else
+                   echo "::error::git diff failed (Exit: $GIT_DIFF_EXIT_CODE) and produced no output."
+                   RAW_DIFF_CONTENT="FETCH_FAILED" # Signal failure
+                 fi
+              else
+                  echo "git diff successful. Raw diff size: ${#RAW_DIFF_CONTENT} bytes."
+              fi
+          fi # End SHA check
 
-            # --- Filtered Diff Logic using git diff ---
-            echo "Fetching PR diff using git diff with pathspecs..."
-            # Define allowed file patterns for git diff pathspec
-            ALLOWED_PATTERNS=(
-                '*.go'
-                '*.js' '*.ts' '*.jsx' '*.tsx'
-                '*.rs'
-                '*.java'
-                '*.c' '*.h' '*.cpp' '*.hpp'
-                '*.py'
-                '*.cs'
-                '*.php'
-                '*.rb'
-                '*.swift'
-                '*.kt' '*.kts'
-                '*.scala'
-                '*.sh'
-                '*.pl' '*.pm'
-                '*.lua'
-                '*.sql'
-                '*.md'
-                '*.yaml' '*.yml'
-                '*.json'
-                # Add non-code files that are useful context
-                'Dockerfile'
-                'Makefile'
-                '.dockerignore'
-                '.gitignore'
-                'go.mod' 'go.sum'
-                'package.json' 'package-lock.json' 'yarn.lock' 'pnpm-lock.yaml'
-                'requirements.txt' 'Pipfile' 'Pipfile.lock' 'pyproject.toml' 'poetry.lock'
-                'Cargo.toml' 'Cargo.lock'
-                'pom.xml' 'build.gradle' 'settings.gradle' 'build.gradle.kts' 'settings.gradle.kts'
-                'composer.json' 'composer.lock'
-                'Gemfile' 'Gemfile.lock'
-                # Config files
-                '.*rc' # e.g., .bashrc, .zshrc
-                '*.conf'
-                '*.cfg'
-                '*.ini'
-                '*.toml'
-                '*.properties'
-                # Documentation
-                'README.*' # README.md, README.txt etc.
-                'LICENSE*'
-                'CONTRIBUTING.*'
-                'CHANGELOG.*'
-                '*.rst'
-                '*.adoc'
-            )
-
-            RAW_DIFF_CONTENT=""
-            GIT_DIFF_EXIT_CODE=1 # Default to error state
-
-            # Check if SHAs were obtained before attempting git diff
-            if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
-                echo "::error::Cannot run git diff without valid base/head SHAs. Skipping diff generation."
-                RAW_DIFF_CONTENT="FETCH_FAILED" # Use this signal to indicate prerequisite failure
-            else
-                # Use git diff with the fetched SHAs and the allowed patterns
-                echo "Running: git diff '${BASE_SHA}...${HEAD_SHA}' -- ${ALLOWED_PATTERNS[*]}" # Debug echo
-                # Need to handle potential errors from git diff itself
-                set +e # Temporarily disable exit on error for git diff
-                git diff "${BASE_SHA}...${HEAD_SHA}" -- "${ALLOWED_PATTERNS[@]}" > raw_diff_output.txt 2> git_diff_stderr.log
-                GIT_DIFF_EXIT_CODE=$?
-                set -e # Re-enable exit on error
-                RAW_DIFF_CONTENT=$(cat raw_diff_output.txt) # Read the output file
-
-                if [[ $GIT_DIFF_EXIT_CODE -ne 0 ]]; then
-                    # git diff can return non-zero for various reasons, including actual errors or just no differences found
-                    echo "::warning::git diff command exited with code $GIT_DIFF_EXIT_CODE."
-                    if [[ -s git_diff_stderr.log ]]; then
-                       echo "Stderr from git diff:"
-                       cat git_diff_stderr.log
-                    fi
-                    # If the exit code was non-zero AND the output is empty, treat it as "no changes found" or an error handled below.
-                    # If exit code non-zero but output exists, it might be okay (e.g., diff with context lines only?) - proceed cautiously.
-                fi
-
-                # Check content regardless of exit code, as 0 means changes found, 1 can mean no changes or error
-                if [[ -z "$RAW_DIFF_CONTENT" ]]; then
-                   if [[ $GIT_DIFF_EXIT_CODE -eq 0 || $GIT_DIFF_EXIT_CODE -eq 1 ]]; then # Exit code 0 or 1 with no output usually means no relevant diff
-                     echo "git diff produced no output for the specified patterns between $BASE_SHA...$HEAD_SHA."
-                   else # Non-zero exit code other than 1 with no output is more likely a real error
-                     echo "::error::git diff failed (Exit: $GIT_DIFF_EXIT_CODE) and produced no output."
-                     RAW_DIFF_CONTENT="FETCH_FAILED" # Signal failure
-                   fi
-                else
-                    echo "git diff successful. Raw diff size: ${#RAW_DIFF_CONTENT} bytes."
-                fi
-            fi # End SHA check for git diff
-
-            FILTERED_PR_DIFF="" # Initialize variable for filtered diff
-
-            # Check the result of the git diff operation before Perl filtering
-            if [[ "$RAW_DIFF_CONTENT" == "FETCH_FAILED" ]]; then
-              echo "::warning::Skipping Perl filtering due to previous failure in obtaining git diff."
-              FILTERED_PR_DIFF="<!-- Error fetching or generating diff -->"
-            elif [[ -z "$RAW_DIFF_CONTENT" ]]; then
-              echo "Skipping Perl filtering as git diff produced no relevant content."
-              FILTERED_PR_DIFF="<!-- No relevant file changes found for specified patterns -->"
-            else
-              # Raw diff obtained successfully, now proceed with Perl filtering for minified content etc.
-              echo "Raw diff fetched (${#RAW_DIFF_CONTENT} bytes). Filtering suspected minified files..."
-
-              # Pipe the raw diff (from git diff) to Perl
-              # Use command substitution carefully
-              set +e # Disable exit on error temporarily for the pipe
-              FILTERED_PR_DIFF=$(echo "$RAW_DIFF_CONTENT" | perl -ne '
+          # Proceed with Perl filtering only if git diff succeeded and produced content
+          if [[ "$RAW_DIFF_CONTENT" != "FETCH_FAILED" && -n "$RAW_DIFF_CONTENT" ]]; then
+              echo "Filtering suspected minified files..."
+              set +e # Disable exit on error for the pipe
+              # (Perl script remains the same as before)
+              FILTERED_PR_DIFF_CONTENT=$(echo "$RAW_DIFF_CONTENT" | perl -ne '
                 BEGIN { $chunk = ""; $print_chunk = 1; $max_len = 500; }
                 if (/^diff --git a\/(.+)\s+b\/(.+)$/) {
                     print $chunk if $chunk ne "" && $print_chunk;
@@ -465,182 +449,208 @@ jobs:
                 } else { $chunk .= $_; }
                 END { print $chunk if $chunk ne "" && $print_chunk; }
               ' 2> filter_stderr.log)
-              PERL_PIPE_STATUS=${PIPESTATUS[1]} # Get exit status of perl
+              PERL_PIPE_STATUS=${PIPESTATUS[1]}
               set -e # Re-enable exit on error
 
-              if [[ $PERL_PIPE_STATUS -ne 0 ]]; then
-                 echo "::warning::Perl filter script exited with status $PERL_PIPE_STATUS."
-                 # Keep the potentially partial output in FILTERED_PR_DIFF, but log warning.
-              fi
+              if [[ $PERL_PIPE_STATUS -ne 0 ]]; then echo "::warning::Perl filter script exited with status $PERL_PIPE_STATUS."; fi
+              if [[ -s filter_stderr.log ]]; then echo "Perl filter script warnings/info:"; cat filter_stderr.log; fi
 
-              if [[ -s filter_stderr.log ]]; then
-                 echo "Perl filter script warnings/info:"
-                 cat filter_stderr.log
-              fi
-
-              # Check result *after* filtering
-              if [[ -z "$FILTERED_PR_DIFF" ]] && [[ -n "$RAW_DIFF_CONTENT" ]]; then
+              if [[ -z "$FILTERED_PR_DIFF_CONTENT" ]] && [[ -n "$RAW_DIFF_CONTENT" ]]; then
                   echo "All diff chunks were filtered out by Perl script."
                   FILTERED_PR_DIFF="<!-- Diff contained only files filtered out by heuristic -->"
-              elif [[ -z "$FILTERED_PR_DIFF" ]]; then
-                   # This case now covers both "no raw diff" and "raw diff was filtered to nothing"
-                   echo "Filtered diff is empty."
-                   # Keep the message assigned earlier based on raw diff status
+              elif [[ -z "$FILTERED_PR_DIFF_CONTENT" ]]; then
+                  echo "Filtered diff is empty (remained empty after Perl filter)."
+                  # Keep the message set previously based on git diff result
               else
-                   echo "Perl filtering complete. Final diff size: ${#FILTERED_PR_DIFF} bytes."
+                   echo "Perl filtering complete. Final diff size: ${#FILTERED_PR_DIFF_CONTENT} bytes."
+                   FILTERED_PR_DIFF="$FILTERED_PR_DIFF_CONTENT" # Assign the successfully filtered content
               fi
-            fi # End of Perl filtering block check
+          elif [[ "$RAW_DIFF_CONTENT" == "FETCH_FAILED" ]]; then
+              FILTERED_PR_DIFF="<!-- Error fetching or generating diff -->"
+          # else: FILTERED_PR_DIFF remains as set by the git diff check (e.g., no relevant changes)
+          fi
 
-            # --- Assign Context/Diff XML ---
-            # Use CDATA for all potentially multi-line/complex string fields
-            CONTEXT_DETAILS_XML="<details><title><![CDATA[$PR_TITLE]]></title><body><![CDATA[$PR_BODY]]></body></details>"
-            DIFF_XML="<diff><![CDATA[$FILTERED_PR_DIFF]]></diff>"
-
-            # --- PR Review Comments ---
-            echo "Fetching PR review comments..."
-            REVIEW_COMMENTS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/comments" --paginate || echo "FETCH_FAILED")
-            if [[ "$REVIEW_COMMENTS_JSON" == "FETCH_FAILED" || -z "$REVIEW_COMMENTS_JSON" ]]; then
-                echo "::warning::Failed to fetch PR review comments JSON or received empty response."
-            else
-                if echo "$REVIEW_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
-                    TSV_OUTPUT=$(echo "$REVIEW_COMMENTS_JSON" | jq -r '.[] | select(.body != null) | [.user.login // "unknown", .created_at // "N/A", .body, .path // "unknown", .diff_hunk // "", (.line // .original_line // "N/A")] | @tsv' 2> jq_rev_com_error.log)
-                    JQ_EXIT_CODE=$?
-                    if [[ $JQ_EXIT_CODE -eq 0 ]]; then
-                         if [[ -n "$TSV_OUTPUT" ]]; then
-                            echo "Processing review comments..."
-                            while IFS=$'\t' read -r login created_at body path diff_hunk line; do
-                               [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue
-                               # Use CDATA for body and diff_hunk
-                               COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_comment\" file=\"$path\" line=\"$line\"><author>$login</author><timestamp>$created_at</timestamp><diff_hunk><![CDATA[$diff_hunk]]></diff_hunk><content><![CDATA[$body]]></content></comment>"
-                            done <<< "$TSV_OUTPUT"
-                         else
-                            echo "Review comments JSON valid, but no comments found or jq produced empty TSV."
-                         fi
-                    else
-                         echo "::warning::jq failed processing review comments (exit code $JQ_EXIT_CODE). Error log:"
-                         cat jq_rev_com_error.log
-                    fi
-                else
-                     echo "::warning::Fetched review comments data is not a valid JSON array."
-                fi
-            fi # End review comments fetch check
-            echo "Review comments processed. Current XML length: ${#COMMENTS_XML}"
-
-            # --- PR Reviews (Bodies) ---
-            echo "Fetching PR reviews (bodies)..."
-            REVIEWS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/reviews" --paginate || echo "FETCH_FAILED")
-            if [[ "$REVIEWS_JSON" == "FETCH_FAILED" || -z "$REVIEWS_JSON" ]]; then
-                 echo "::warning::Failed to fetch PR reviews JSON or received empty response."
-            else
-                 if echo "$REVIEWS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
-                     # Filter for reviews with non-empty bodies
-                     TSV_OUTPUT=$(echo "$REVIEWS_JSON" | jq -r '.[] | select(.body != null and .body != "") | [.user.login // "unknown", .submitted_at // "N/A", .body, .state // "N/A"] | @tsv' 2> jq_rev_error.log)
-                     JQ_EXIT_CODE=$?
-                     if [[ $JQ_EXIT_CODE -eq 0 ]]; then
-                         if [[ -n "$TSV_OUTPUT" ]]; then
-                             echo "Processing review bodies..."
-                             while IFS=$'\t' read -r login submitted_at body state; do
-                                [[ -n "$login" || -n "$submitted_at" || -n "$body" ]] || continue
-                                # Use CDATA for body
-                                COMMENTS_XML="${COMMENTS_XML}<comment type=\"review_body\" state=\"$state\"><author>$login</author><timestamp>$submitted_at</timestamp><content><![CDATA[$body]]></content></comment>"
-                             done <<< "$TSV_OUTPUT"
-                         else
-                             echo "Review JSON valid, but no review bodies with content found or jq produced empty TSV."
-                         fi
-                     else
-                          echo "::warning::jq failed processing review bodies (exit code $JQ_EXIT_CODE). Error log:"
-                          cat jq_rev_error.log
-                     fi
-                 else
-                      echo "::warning::Fetched reviews data is not a valid JSON array."
-                 fi
-            fi # End reviews fetch check
-            echo "Review bodies processed. Current XML length: ${#COMMENTS_XML}"
-
-            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request. The user triggered you via a comment. Analyze the provided PR details (title, body), the conversation history (issue comments, review comments, review summaries), and the code changes (diff). The diff includes changes only for specific file types (code, config, docs) and filters out chunks suspected of being minified based on line length heuristics. Provide a helpful and concise response to the user's request based on this context."
-
-          elif [[ "$FINAL_CONTEXT_TYPE" == "issue" ]]; then
-            echo "Fetching Issue specific data..."
-            # Run gh command, capture output or "FETCH_FAILED" marker
-            # Use a different variable name to avoid confusion
-            ISSUE_DATA_JSON=$(gh issue view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
-
-            # Set default shell variables first
-            ISSUE_TITLE="Error fetching title"
-            ISSUE_BODY="Error fetching body"
-
-            # Check if the fetch succeeded AND returned non-empty data before trying to parse JSON
-            if [[ "$ISSUE_DATA_JSON" != "FETCH_FAILED" && -n "$ISSUE_DATA_JSON" ]]; then
-              echo "Issue data fetched successfully. Parsing title and body..."
-              # Attempt to extract title using jq.
-              # Use printf for safer piping. Use -e to set exit code on null.
-              # Store extracted value temporarily.
-              EXTRACTED_TITLE=$(printf "%s" "$ISSUE_DATA_JSON" | jq -e -r '.title // ""')
-              JQ_TITLE_EXIT=$?
-
-              # Overwrite default ONLY if jq succeeded (exit 0) AND extracted value is not empty string
-              if [[ $JQ_TITLE_EXIT -eq 0 && -n "$EXTRACTED_TITLE" ]]; then
-                  ISSUE_TITLE="$EXTRACTED_TITLE"
-              elif [[ $JQ_TITLE_EXIT -eq 0 && -z "$EXTRACTED_TITLE" ]]; then
-                   # Handle case where title is explicitly null or empty string in the issue
-                   echo "::debug::Issue title is null or empty in fetched data."
-                   ISSUE_TITLE="" # Set to empty string
-              else
-                  # jq failed or returned null (which -e treats as exit code 10)
-                  echo "::warning::jq failed to extract issue title (exit code $JQ_TITLE_EXIT) or value was null. Using default."
-                  # Default is already set, no action needed
-              fi
-
-              # Attempt to extract body using jq.
-              EXTRACTED_BODY=$(printf "%s" "$ISSUE_DATA_JSON" | jq -e -r '.body // ""')
-              JQ_BODY_EXIT=$?
-
-              # Overwrite default ONLY if jq succeeded (exit 0) AND extracted value is not empty string
-              if [[ $JQ_BODY_EXIT -eq 0 && -n "$EXTRACTED_BODY" ]]; then
-                  ISSUE_BODY="$EXTRACTED_BODY"
-              elif [[ $JQ_BODY_EXIT -eq 0 && -z "$EXTRACTED_BODY" ]]; then
-                   # Handle case where body is explicitly null or empty string in the issue
-                   echo "::debug::Issue body is null or empty in fetched data."
-                   ISSUE_BODY="" # Set to empty string
-              else
-                   # jq failed or returned null
-                  echo "::warning::jq failed to extract issue body (exit code $JQ_BODY_EXIT) or value was null. Using default."
-                  # Default is already set, no action needed
-              fi
-            else
-              # This block runs if gh command failed OR returned empty string
-              echo "::warning::Failed Issue details fetch (gh command failed or returned empty). Using default title/body."
-              # Defaults are already set, no action needed here
-            fi # End issue data JSON parsing check
-
-            # --- Assign Context/Diff XML ---
-            # Use CDATA for all potentially multi-line/complex string fields
-            CONTEXT_DETAILS_XML="<details><title>$ISSUE_TITLE</title><body>$ISSUE_BODY</body></details>"
-            DIFF_XML="" # No diff for issues
-            PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue. The user triggered you via a comment. Analyze the provided issue details (title, body) and the conversation history (comments). Provide a helpful and concise response to the user's request based on this context."
-          fi # End PR/Issue context specific block
-
+          # Save final filtered diff (or error message) to env
+          echo "FILTERED_PR_DIFF<<EOF_PR_DIFF" >> $GITHUB_ENV
+          echo "$FILTERED_PR_DIFF" >> $GITHUB_ENV
+          echo "EOF_PR_DIFF" >> $GITHUB_ENV
           echo "::endgroup::"
 
-          # --- Assemble Final Prompt ---
+      - name: Format - Fetch PR Review Comments & Bodies
+        id: format_pr_reviews
+        # Only run this step if context is PR
+        if: env.FINAL_CONTEXT_TYPE == 'pr'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
+          # Read the comments XML from the earlier step
+          COMMENTS_XML: ${{ env.COMMENTS_XML }}
+        run: |
+          echo "::group::Fetch PR Review Comments & Bodies"
+          set -e
+          GITHUB_API_ARGS_VERBOSE=(-H "Accept: application/vnd.github+json")
+          # Initialize with comments from previous step
+          CURRENT_COMMENTS_XML="$COMMENTS_XML"
+
+          # --- PR Review Comments ---
+          echo "Fetching PR review comments..."
+          REVIEW_COMMENTS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/comments" --paginate || echo "FETCH_FAILED")
+          if [[ "$REVIEW_COMMENTS_JSON" == "FETCH_FAILED" || -z "$REVIEW_COMMENTS_JSON" ]]; then
+              echo "::warning::Failed to fetch PR review comments JSON or received empty response."
+          else
+              if echo "$REVIEW_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+                  TSV_OUTPUT=$(echo "$REVIEW_COMMENTS_JSON" | jq -r '.[] | select(.body != null) | [.user.login // "unknown", .created_at // "N/A", .body, .path // "unknown", .diff_hunk // "", (.line // .original_line // "N/A")] | @tsv' 2> jq_rev_com_error.log)
+                  JQ_EXIT_CODE=$?
+                  if [[ $JQ_EXIT_CODE -eq 0 ]]; then
+                       if [[ -n "$TSV_OUTPUT" ]]; then
+                          echo "Processing review comments..."
+                          while IFS=$'\t' read -r login created_at body path diff_hunk line; do
+                             [[ -n "$login" || -n "$created_at" || -n "$body" ]] || continue
+                             CURRENT_COMMENTS_XML="${CURRENT_COMMENTS_XML}<comment type=\"review_comment\" file=\"$path\" line=\"$line\"><author>$login</author><timestamp>$created_at</timestamp><diff_hunk><![CDATA[$diff_hunk]]></diff_hunk><content><![CDATA[$body]]></content></comment>"
+                          done <<< "$TSV_OUTPUT"
+                       else
+                          echo "Review comments JSON valid, but no comments found or jq produced empty TSV."
+                       fi
+                  else
+                       echo "::warning::jq failed processing review comments (exit code $JQ_EXIT_CODE). Error log:"
+                       cat jq_rev_com_error.log
+                  fi
+              else
+                   echo "::warning::Fetched review comments data is not a valid JSON array."
+              fi
+          fi
+          echo "Review comments processed. Current XML length: ${#CURRENT_COMMENTS_XML}"
+
+          # --- PR Reviews (Bodies) ---
+          echo "Fetching PR reviews (bodies)..."
+          REVIEWS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/pulls/$ISSUE_OR_PR_NUMBER/reviews" --paginate || echo "FETCH_FAILED")
+          if [[ "$REVIEWS_JSON" == "FETCH_FAILED" || -z "$REVIEWS_JSON" ]]; then
+               echo "::warning::Failed to fetch PR reviews JSON or received empty response."
+          else
+               if echo "$REVIEWS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+                   TSV_OUTPUT=$(echo "$REVIEWS_JSON" | jq -r '.[] | select(.body != null and .body != "") | [.user.login // "unknown", .submitted_at // "N/A", .body, .state // "N/A"] | @tsv' 2> jq_rev_error.log)
+                   JQ_EXIT_CODE=$?
+                   if [[ $JQ_EXIT_CODE -eq 0 ]]; then
+                       if [[ -n "$TSV_OUTPUT" ]]; then
+                           echo "Processing review bodies..."
+                           while IFS=$'\t' read -r login submitted_at body state; do
+                              [[ -n "$login" || -n "$submitted_at" || -n "$body" ]] || continue
+                              CURRENT_COMMENTS_XML="${CURRENT_COMMENTS_XML}<comment type=\"review_body\" state=\"$state\"><author>$login</author><timestamp>$submitted_at</timestamp><content><![CDATA[$body]]></content></comment>"
+                           done <<< "$TSV_OUTPUT"
+                       else
+                           echo "Review JSON valid, but no review bodies with content found or jq produced empty TSV."
+                       fi
+                   else
+                        echo "::warning::jq failed processing review bodies (exit code $JQ_EXIT_CODE). Error log:"
+                        cat jq_rev_error.log
+                   fi
+               else
+                    echo "::warning::Fetched reviews data is not a valid JSON array."
+               fi
+          fi
+          echo "Review bodies processed. Final XML length: ${#CURRENT_COMMENTS_XML}"
+
+          # Save updated multi-line COMMENTS_XML back to env
+          echo "COMMENTS_XML<<EOF_COMMENTS_XML_UPDATED" >> $GITHUB_ENV
+          echo "$CURRENT_COMMENTS_XML" >> $GITHUB_ENV
+          echo "EOF_COMMENTS_XML_UPDATED" >> $GITHUB_ENV
+          echo "::endgroup::"
+
+      - name: Format - Fetch Issue Details (Title, Body)
+        id: format_issue_details
+        # Only run this step if context is Issue
+        if: env.FINAL_CONTEXT_TYPE == 'issue'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
+        run: |
+          echo "::group::Fetch Issue Details (Title, Body)"
+          set -e
+          echo "Fetching Issue specific data for #${ISSUE_OR_PR_NUMBER}..."
+          ISSUE_DATA_JSON=$(gh issue view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
+
+          ISSUE_TITLE="Error fetching title"
+          ISSUE_BODY="Error fetching body"
+
+          if [[ "$ISSUE_DATA_JSON" != "FETCH_FAILED" && -n "$ISSUE_DATA_JSON" ]]; then
+            echo "Issue data fetched successfully. Parsing title and body..."
+            EXTRACTED_TITLE=$(printf "%s" "$ISSUE_DATA_JSON" | jq -e -r '.title // ""')
+            JQ_TITLE_EXIT=$?
+            if [[ $JQ_TITLE_EXIT -eq 0 && -n "$EXTRACTED_TITLE" ]]; then ISSUE_TITLE="$EXTRACTED_TITLE";
+            elif [[ $JQ_TITLE_EXIT -eq 0 && -z "$EXTRACTED_TITLE" ]]; then echo "::debug::Issue title is null/empty."; ISSUE_TITLE="";
+            else echo "::warning::jq failed to extract issue title (exit $JQ_TITLE_EXIT) or value was null."; fi
+
+            EXTRACTED_BODY=$(printf "%s" "$ISSUE_DATA_JSON" | jq -e -r '.body // ""')
+            JQ_BODY_EXIT=$?
+            if [[ $JQ_BODY_EXIT -eq 0 && -n "$EXTRACTED_BODY" ]]; then ISSUE_BODY="$EXTRACTED_BODY";
+            elif [[ $JQ_BODY_EXIT -eq 0 && -z "$EXTRACTED_BODY" ]]; then echo "::debug::Issue body is null/empty."; ISSUE_BODY="";
+            else echo "::warning::jq failed to extract issue body (exit $JQ_BODY_EXIT) or value was null."; fi
+          else
+            echo "::warning::Failed Issue details fetch (gh command failed or returned empty)."
+          fi
+
+          # Save multi-line title/body to env
+          echo "ISSUE_TITLE<<EOF_ISSUE_TITLE" >> $GITHUB_ENV
+          echo "$ISSUE_TITLE" >> $GITHUB_ENV
+          echo "EOF_ISSUE_TITLE" >> $GITHUB_ENV
+          echo "ISSUE_BODY<<EOF_ISSUE_BODY" >> $GITHUB_ENV
+          echo "$ISSUE_BODY" >> $GITHUB_ENV
+          echo "EOF_ISSUE_BODY" >> $GITHUB_ENV
+          echo "::endgroup::"
+
+      - name: Format - Assemble Final Prompt
+        id: format # Keep original ID for output mapping
+        env:
+          # Read all potentially set env vars
+          FINAL_CONTEXT_TYPE: ${{ env.FINAL_CONTEXT_TYPE }}
+          ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
+          USER_REQUEST_BODY: ${{ env.USER_REQUEST_BODY }}
+          COMMENTS_XML: ${{ env.COMMENTS_XML }} # Use original if PR reviews didn't run/update
+          UPDATED_COMMENTS_XML: ${{ env.COMMENTS_XML_UPDATED }} # Use this if PR reviews ran
+          # PR specific
+          PR_TITLE: ${{ env.PR_TITLE }}
+          PR_BODY: ${{ env.PR_BODY }}
+          FILTERED_PR_DIFF: ${{ env.FILTERED_PR_DIFF }}
+          # Issue specific
+          ISSUE_TITLE: ${{ env.ISSUE_TITLE }}
+          ISSUE_BODY: ${{ env.ISSUE_BODY }}
+        run: |
           echo "::group::Assemble Final Prompt & Set Outputs"
-          # Ensure variables are properly escaped for use in XML attributes if needed, though login/timestamp are usually safe
+          set -e
+          CONTEXT_DETAILS_XML=""
+          DIFF_XML=""
+          PROMPT_INSTRUCTION=""
+          # Choose the correct comments XML based on whether PR reviews updated it
+          FINAL_COMMENTS_XML="${UPDATED_COMMENTS_XML:-$COMMENTS_XML}"
+
+          # Assemble context-specific parts
+          if [[ "$FINAL_CONTEXT_TYPE" == "pr" ]]; then
+              CONTEXT_DETAILS_XML="<details><title><![CDATA[$PR_TITLE]]></title><body><![CDATA[$PR_BODY]]></body></details>"
+              DIFF_XML="<diff><![CDATA[$FILTERED_PR_DIFF]]></diff>"
+              PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request..." # Keep your instruction
+          elif [[ "$FINAL_CONTEXT_TYPE" == "issue" ]]; then
+              CONTEXT_DETAILS_XML="<details><title><![CDATA[$ISSUE_TITLE]]></title><body><![CDATA[$ISSUE_BODY]]></body></details>"
+              DIFF_XML="" # No diff for issues
+              PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue..." # Keep your instruction
+          fi
+
           USER_LOGIN="${{ github.event.comment.user.login }}"
           TIMESTAMP="${{ github.event.comment.created_at }}"
 
-          # Assemble the prompt using CDATA where needed
-          # Ensure the variables themselves are expanded correctly by the shell
+          # Assemble the final prompt
           FORMATTED_PROMPT="<github_context type=\"$FINAL_CONTEXT_TYPE\" number=\"$ISSUE_OR_PR_NUMBER\">
             ${CONTEXT_DETAILS_XML}
             ${DIFF_XML}
-            <comments>${COMMENTS_XML}</comments>
+            <comments>${FINAL_COMMENTS_XML}</comments>
             <user_request author=\"${USER_LOGIN}\" timestamp=\"${TIMESTAMP}\"><![CDATA[${USER_REQUEST_BODY}]]></user_request>
             </github_context>
             
             <instructions><![CDATA[${PROMPT_INSTRUCTION}]]></instructions>"
 
           if [ ${#FORMATTED_PROMPT} -lt 200 ]; then
-            echo "::warning::Formatted prompt seems very short (${#FORMATTED_PROMPT} bytes). Ensure context fetching worked."
+            echo "::warning::Formatted prompt seems very short (${#FORMATTED_PROMPT} bytes)."
           fi
           echo "Final prompt assembled. Length: ${#FORMATTED_PROMPT} bytes."
 
@@ -653,8 +663,6 @@ jobs:
           echo "formatted_prompt_file=${PROMPT_FILENAME}" >> "$GITHUB_OUTPUT"
           echo "Outputs set."
           echo "::endgroup::"
-          # IMPORTANT: set +e was removed earlier, ensure script exits correctly on error or succeeds
-          # Script implicitly ends here
 
       - name: Determine probe-chat command
         id: determine_command
