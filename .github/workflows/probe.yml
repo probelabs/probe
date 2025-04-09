@@ -54,10 +54,7 @@ permissions:
 jobs:
   process_comment:
     runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'issue_comment' && 
-      !contains(github.event.comment.user.login, '[bot]') && 
-      startsWith(github.event.comment.body, inputs.command_prefix)
+    if: github.event_name != 'issue_comment' || (github.event_name == 'issue_comment' && !contains(github.event.comment.user.login, '[bot]') && contains(github.event.comment.body, inputs.command_prefix))
     outputs:
       response_body: ${{ steps.read_response.outputs.response }}
       issue_number: ${{ steps.set_context_ids.outputs.issue_number }}
