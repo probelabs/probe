@@ -701,6 +701,10 @@ When troubleshooting:
           if (this.debug) {
             console.log(`[DEBUG] Streamed AI response (Iter ${currentIteration}). Length: ${assistantResponseContent.length}`);
           }
+          if (assistantResponseContent.length == 0) {
+            console.warn(`[WARN] Empty response from AI model (Iter ${currentIteration}).`);
+            throw new Error('Empty response from AI model');
+          }
 
           currentMessages.push({ role: 'assistant', content: assistantResponseContent });
 
