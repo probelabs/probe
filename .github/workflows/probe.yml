@@ -365,34 +365,44 @@ jobs:
           REPO: ${{ github.repository }}
           ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
         run: |
-          echo "::group::Fetch PR Details (Title, Body, SHAs)"
+          echo "::group::Fetch PR Details (Title, Body, SHAs, RefName)" # <-- Updated title
           set -e
           echo "Fetching PR specific data for #${ISSUE_OR_PR_NUMBER}..."
 
-          # --- Fetch Base/Head SHAs ---
-          echo "Fetching PR base and head SHAs..."
-          # This part seems okay based on the logs showing SHAs were fetched
-          PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
+          # --- Fetch Base/Head SHAs and Head Ref Name --- # <-- Updated comment
+          echo "Fetching PR base SHA, head SHA, and head ref name..." # <-- Updated echo
+          # Fetch headRefName as well
+          PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid,headRefName --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
           BASE_SHA=""
           HEAD_SHA=""
+          HEAD_REF_NAME="" # <-- Initialize head ref name variable
+
           if [[ "$PR_REFS_JSON" == "FETCH_FAILED" ]]; then
-            echo "::error::Failed to fetch PR SHAs."
+            echo "::error::Failed to fetch PR SHAs/RefName."
             cat pr_refs_stderr.log >&2
-            # Allow script to continue, handle missing SHAs in diff step
+            # Allow script to continue, handle missing SHAs/RefName later
           else
             BASE_SHA=$(echo "$PR_REFS_JSON" | jq -r .baseRefOid)
             HEAD_SHA=$(echo "$PR_REFS_JSON" | jq -r .headRefOid)
-            if [[ -z "$BASE_SHA" || "$BASE_SHA" == "null" || -z "$HEAD_SHA" || "$HEAD_SHA" == "null" ]]; then
-               echo "::error::Could not extract valid base/head SHAs from JSON: $PR_REFS_JSON"
+            HEAD_REF_NAME=$(echo "$PR_REFS_JSON" | jq -r .headRefName) # <-- Extract head ref name
+
+            # Validate all three
+            if [[ -z "$BASE_SHA" || "$BASE_SHA" == "null" || \
+                  -z "$HEAD_SHA" || "$HEAD_SHA" == "null" || \
+                  -z "$HEAD_REF_NAME" || "$HEAD_REF_NAME" == "null" ]]; then
+               echo "::error::Could not extract valid base SHA, head SHA, or head ref name from JSON: $PR_REFS_JSON"
                BASE_SHA=""
                HEAD_SHA=""
+               HEAD_REF_NAME="" # <-- Reset on error
             else
                echo "Base SHA: $BASE_SHA"
                echo "Head SHA: $HEAD_SHA"
+               echo "Head Ref Name: $HEAD_REF_NAME" # <-- Log head ref name
             fi
           fi
           echo "BASE_SHA=$BASE_SHA" >> $GITHUB_ENV
           echo "HEAD_SHA=$HEAD_SHA" >> $GITHUB_ENV
+          echo "HEAD_REF_NAME=$HEAD_REF_NAME" >> $GITHUB_ENV # <-- Output head ref name
 
           # --- Fetch PR Title/Body ---
           echo "Fetching PR Title and Body..." # Added echo for clarity
@@ -890,6 +900,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CONTEXT_TYPE: ${{ steps.format.outputs.context_type }}
           ISSUE_NUMBER: ${{ steps.set_context_ids.outputs.issue_number }}
+          # Get the head ref name from the previous step's environment variable
+          HEAD_REF_NAME: ${{ env.HEAD_REF_NAME }}
         run: |
           echo "::group::Checking for Git Changes"
           # Configure git user based on inputs
@@ -918,19 +930,33 @@ jobs:
           PR_URL=""
 
           if [[ "$CONTEXT_TYPE" == "pr" ]]; then
-            # If in PR context, commit to the current branch to extend the PR
+            # If in PR context, commit to the PR's head branch to extend the PR
             echo "In PR context, extending the existing PR..."
-            
+
+            # --- START: Added Section to Checkout Correct Branch ---
+            if [[ -z "$HEAD_REF_NAME" ]]; then
+              echo "::error::HEAD_REF_NAME is empty. Cannot determine PR source branch. Aborting git changes."
+              # Optionally create a comment indicating failure?
+              exit 1
+            fi
+            echo "Checking out PR head branch: $HEAD_REF_NAME"
+            # Ensure the local branch exists and tracks the remote if necessary
+            # This assumes actions/checkout fetched the branch correctly due to fetch-depth: 0
+            git checkout "$HEAD_REF_NAME"
+            # Optional: Pull latest changes from the branch first to avoid potential push conflicts
+            # git pull origin "$HEAD_REF_NAME"
+            # --- END: Added Section ---
+
             # Add changes but exclude debug files
             git add --all
-            git reset -- error.log formatted_prompt.txt jq_std_error.log response.txt
+            git reset -- error.log formatted_prompt.txt jq_std_error.log response.txt # Add any other temp files here
+            git status --porcelain # See what is actually staged
             git commit -m "$COMMIT_MSG"
-            
-            # Push to the current branch
-            CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-            echo "Pushing changes to current branch: $CURRENT_BRANCH..."
-            git push origin "$CURRENT_BRANCH"
-            echo "pr_url=" >> $GITHUB_OUTPUT
+
+            # Push to the PR's head branch
+            echo "Pushing changes to PR branch: $HEAD_REF_NAME..." # <-- Use correct branch name
+            git push origin "$HEAD_REF_NAME" # <-- Use correct branch name
+            echo "pr_url=" >> $GITHUB_OUTPUT # No new PR URL when updating existing
             
           elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
             # If in issue context, create a new branch and PR
