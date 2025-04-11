@@ -14,6 +14,25 @@ on:
         required: false
         default: "npx -y @buger/probe-chat@latest"
         type: string
+      git_user_name:
+        description: "Git user name for commits (default: GitHub Actions)"
+        required: false
+        type: string
+        default: "github-actions[bot]"
+      git_user_email:
+        description: "Git user email for commits (default: GitHub Actions bot email)"
+        required: false
+        type: string
+        default: "41898282+github-actions[bot]@users.noreply.github.com"
+      prompt:
+        description: "Custom prompt to use (values: architect, code-review, support, path to a file, or arbitrary string)"
+        required: false
+        type: string
+      allow_edit:
+        description: "Enable the implement tool for editing files"
+        required: false
+        type: boolean
+        default: false
     secrets:
       PROBE_CHAT_COMMAND:
         required: false
@@ -722,6 +741,20 @@ jobs:
           echo "Determined command base: $COMMAND_VAR"
           echo "command=$COMMAND_VAR" >> "$GITHUB_OUTPUT"
 
+      - name: Set up Python and Install Aider
+        if: inputs.allow_edit == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Aider
+        if: inputs.allow_edit == 'true'
+        run: |
+          echo "Installing aider for code editing capabilities..."
+          python -m pip install aider-install
+          aider-install
+          echo "Aider installation completed."
+
       - name: Run probe-chat
         id: probe
         env:
@@ -734,6 +767,7 @@ jobs:
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           MODEL_NAME: ${{ secrets.MODEL_NAME }}
           FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
+          ALLOW_EDIT: ${{ inputs.allow_edit == 'true' && '1' || '0' }}
         run: |
           set -o pipefail # Fail pipe if any command fails
           PROMPT_FILE="${{ steps.format.outputs.formatted_prompt_file }}"
@@ -742,16 +776,28 @@ jobs:
           ERROR_LOG="error.log"
           COMMAND_TO_RUN="$COMMAND_BASE" # Start building command
 
-          # Add prompt type based on context
-          CONTEXT_TYPE="${{ steps.format.outputs.context_type }}"
-          if [[ "$CONTEXT_TYPE" == "pr" ]]; then
-            COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt code-review"
-            echo "Using code-review prompt for pull request context"
-          elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
-            COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt support"
-            echo "Using support prompt for issue context"
+          # Check if custom prompt is provided as input
+          if [[ -n "${{ inputs.prompt }}" ]]; then
+            COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt ${{ inputs.prompt }}"
+            echo "Using custom prompt from workflow input: ${{ inputs.prompt }}"
           else
-            echo "::warning:: Unknown context type '$CONTEXT_TYPE', not adding specific prompt flag."
+            # Use default prompt type based on context if no custom prompt provided
+            CONTEXT_TYPE="${{ steps.format.outputs.context_type }}"
+            if [[ "$CONTEXT_TYPE" == "pr" ]]; then
+              COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt code-review"
+              echo "Using code-review prompt for pull request context"
+            elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
+              COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt support"
+              echo "Using support prompt for issue context"
+            else
+              echo "::warning:: Unknown context type '$CONTEXT_TYPE', not adding specific prompt flag."
+            fi
+          fi
+
+          # Add allow-edit flag if enabled in workflow input
+          if [[ "${{ inputs.allow_edit }}" == "true" ]]; then
+            COMMAND_TO_RUN="$COMMAND_TO_RUN --allow-edit"
+            echo "Enabling implement tool with --allow-edit flag"
           fi
 
           if [[ -z "$COMMAND_TO_RUN" ]]; then
@@ -797,15 +843,128 @@ jobs:
             echo "🤖 AI command ran successfully but generated no response." > "$RESPONSE_FILE"
           fi
 
+      - name: Handle Git Changes
+        id: handle_git
+        if: inputs.allow_edit == 'true' && steps.probe.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CONTEXT_TYPE: ${{ steps.format.outputs.context_type }}
+          ISSUE_NUMBER: ${{ steps.set_context_ids.outputs.issue_number }}
+        run: |
+          echo "::group::Checking for Git Changes"
+          # Configure git user based on inputs
+          git config --global user.name "${{ inputs.git_user_name }}"
+          git config --global user.email "${{ inputs.git_user_email }}"
+          echo "Using git identity: ${{ inputs.git_user_name }} <${{ inputs.git_user_email }}>"
+
+          # Check if there are any changes
+          git status --porcelain
+          if [[ -z $(git status --porcelain) ]]; then
+            echo "No changes detected in the repository."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          echo "Changes detected in the repository."
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+
+          # Read AI response to use as commit message
+          RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo "AI-assisted changes")
+          # Truncate and format commit message
+          COMMIT_MSG="AI: ${RESPONSE_CONTENT:0:50}"
+          if [[ ${#RESPONSE_CONTENT} -gt 50 ]]; then
+            COMMIT_MSG="${COMMIT_MSG}..."
+          fi
+
+          # Handle different contexts
+          PR_URL=""
+
+          if [[ "$CONTEXT_TYPE" == "pr" ]]; then
+            # If in PR context, commit to the current branch to extend the PR
+            echo "In PR context, extending the existing PR..."
+            
+            # Add and commit changes
+            git add .
+            git commit -m "$COMMIT_MSG"
+            
+            # Push to the current branch
+            CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+            echo "Pushing changes to current branch: $CURRENT_BRANCH..."
+            git push origin "$CURRENT_BRANCH"
+            echo "pr_url=" >> $GITHUB_OUTPUT
+            
+          elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
+            # If in issue context, create a new branch and PR
+            echo "Creating PR for issue #${ISSUE_NUMBER}..."
+            
+            # Create a branch name that includes the issue number
+            TIMESTAMP=$(date +%Y%m%d%H%M%S)
+            BRANCH_NAME="probe-ai/issue-${ISSUE_NUMBER}-${TIMESTAMP}"
+            
+            # Create a new branch
+            git checkout -b "$BRANCH_NAME"
+            
+            # Add and commit changes
+            git add .
+            git commit -m "$COMMIT_MSG"
+            
+            PR_TITLE="AI-assisted changes for issue #${ISSUE_NUMBER}"
+            PR_BODY="This PR was automatically created by Probe AI in response to issue #${ISSUE_NUMBER}.\n\nChanges include:\n\n${RESPONSE_CONTENT:0:500}..."
+            
+            # Push the branch
+            git push origin "$BRANCH_NAME"
+            
+            # Create PR
+            PR_URL=$(gh pr create --title "$PR_TITLE" --body "$PR_BODY" --base main --head "$BRANCH_NAME")
+            echo "Created PR: $PR_URL"
+            echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+            
+          else
+            # Not in PR or issue context, use current branch
+            echo "Not in PR or issue context, using current branch..."
+            
+            # Get current branch name
+            CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+            
+            # Add and commit changes
+            git add .
+            git commit -m "$COMMIT_MSG"
+            
+            # Push the changes to current branch
+            echo "Pushing changes to current branch: $CURRENT_BRANCH..."
+            git push origin "$CURRENT_BRANCH"
+            echo "pr_url=" >> $GITHUB_OUTPUT
+          fi
+          echo "::endgroup::"
+
       - name: Read Response or Error and Format Output
         if: always() # Run always to report status
         id: read_response
         env:
           COMMAND_PREFIX: ${{ inputs.command_prefix }}
+          HAS_CHANGES: ${{ steps.handle_git.outputs.has_changes }}
+          PR_URL: ${{ steps.handle_git.outputs.pr_url }}
+          CONTEXT_TYPE: ${{ steps.format.outputs.context_type }}
         run: |
           RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo "")
           ERROR_LOG_CONTENT=$(cat error.log 2>/dev/null || echo "")
           FINAL_BODY=""
+
+          # Add info about changes based on context
+          if [[ "$HAS_CHANGES" == "true" ]]; then
+            if [[ "$CONTEXT_TYPE" == "pr" ]]; then
+              # In PR context
+              RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and pushed to the current PR branch.**"
+            elif [[ "$CONTEXT_TYPE" == "issue" && -n "$PR_URL" ]]; then
+              # In issue context with PR created
+              RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and a PR has been created: ${PR_URL}**"
+            else
+              # Not in PR or issue context, or issue context but PR creation failed
+              RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and committed to the current branch.**"
+            fi
+          fi
+
           FOOTER_TEMPLATE="\n\n-----\n*Tip: Mention me again using \`%s <request>\`.*\n*Powered by [Probe AI](https://probeai.dev)*"
           printf -v FOOTER "$FOOTER_TEMPLATE" "$COMMAND_PREFIX"
 
@@ -863,5 +1022,4 @@ jobs:
           issue-number: ${{ needs.process_comment.outputs.issue_number }}
           body: ${{ needs.process_comment.outputs.response_body }}
           reactions: ${{ needs.process_comment.outputs.probe_succeeded == 'true' && '+1' || '-1' }}
-
 # </gh>

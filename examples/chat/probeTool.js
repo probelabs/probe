@@ -1,5 +1,7 @@
 // Import tool generators from @buger/probe package
 import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE, listFilesByLevel } from '@buger/probe';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 
@@ -218,10 +220,72 @@ const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
 	};
 };
 
+// Create the implement tool
+const baseImplementTool = {
+	name: "implement",
+	description: 'Implement a feature or fix a bug using aider. Only available when --allow-edit is enabled.',
+	parameters: {
+		type: 'object',
+		properties: {
+			task: {
+				type: 'string',
+				description: 'The task description to pass to aider for implementation'
+			}
+		},
+		required: ['task']
+	},
+	execute: async ({ task, autoCommits = false, prompt, sessionId }) => {
+		const execPromise = promisify(exec);
+		const debug = process.env.DEBUG_CHAT === '1';
+
+		if (debug) {
+			console.log(`[DEBUG] Executing aider with task: ${task}`);
+			console.log(`[DEBUG] Auto-commits: ${autoCommits}`);
+			if (prompt) console.log(`[DEBUG] Custom prompt: ${prompt}`);
+		}
+
+		// Build the aider command with the required arguments
+		const autoCommitsFlag = '--no-auto-commits';
+		const escapedTask = task.replace(/"/g, '\\"');
+
+		const aiderCommand = `aider --yes --no-check-update --no-analytics ${autoCommitsFlag} --message "${escapedTask}"`;
+
+		try {
+			// Execute aider with the provided task
+			const { stdout, stderr } = await execPromise(aiderCommand);
+
+			if (debug) {
+				console.log(`[DEBUG] aider stdout: ${stdout}`);
+				if (stderr) console.error(`[DEBUG] aider stderr: ${stderr}`);
+			}
+
+			return {
+				success: true,
+				output: stdout,
+				error: stderr || null,
+				command: aiderCommand,
+				timestamp: new Date().toISOString(),
+				prompt: prompt || null
+			};
+		} catch (error) {
+			console.error(`Error executing aider:`, error);
+			return {
+				success: false,
+				output: null,
+				error: error.message || 'Unknown error executing aider',
+				command: aiderCommand,
+				timestamp: new Date().toISOString(),
+				prompt: prompt || null
+			};
+		}
+	}
+};
+
 // Export the wrapped tool instances
 export const searchToolInstance = wrapToolWithEmitter(baseSearchTool, 'search', baseSearchTool.execute);
 export const queryToolInstance = wrapToolWithEmitter(baseQueryTool, 'query', baseQueryTool.execute);
 export const extractToolInstance = wrapToolWithEmitter(baseExtractTool, 'extract', baseExtractTool.execute);
+export const implementToolInstance = wrapToolWithEmitter(baseImplementTool, 'implement', baseImplementTool.execute);
 
 // --- Backward Compatibility Layer (probeTool mapping to searchToolInstance) ---
 // This might be less relevant if the AI is strictly using the new XML format,

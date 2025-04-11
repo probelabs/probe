@@ -13,11 +13,11 @@ import { listFilesByLevel } from '@buger/probe';
 // Import schemas and parser from common (assuming tools.js)
 import {
   searchSchema, querySchema, extractSchema, attemptCompletionSchema,
-  searchToolDefinition, queryToolDefinition, extractToolDefinition, attemptCompletionToolDefinition,
+  searchToolDefinition, queryToolDefinition, extractToolDefinition, attemptCompletionToolDefinition, implementToolDefinition,
   parseXmlToolCallWithThinking
 } from './tools.js'; // Assuming common.js is moved to tools/
 // Import tool *instances* for execution
-import { searchToolInstance, queryToolInstance, extractToolInstance } from './probeTool.js'; // Removed probeTool import
+import { searchToolInstance, queryToolInstance, extractToolInstance, implementToolInstance } from './probeTool.js'; // Added implement instance
 
 // Maximum number of messages to keep in history
 const MAX_HISTORY_MESSAGES = 100;
@@ -25,66 +25,66 @@ const MAX_HISTORY_MESSAGES = 100;
 const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
 
 // --- XML Tool Definitions for System Prompt ---
-const TOOL_DEFINITIONS = `
-${searchToolDefinition}
-${queryToolDefinition}
-${extractToolDefinition}
-${attemptCompletionToolDefinition}
-`;
+// Tool definitions will be constructed dynamically in getSystemMessage based on allowEdit flag
 
-const XML_TOOL_GUIDELINES = `
-# Tool Use Formatting
 
-Tool use MUST be formatted using XML-style tags. The tool name is enclosed in opening and closing tags, and each parameter is similarly enclosed within its own set of tags. You MUST use exactly ONE tool call per message until you are ready to complete the task.
 
-Structure:
-<tool_name>
-<parameter1_name>value1</parameter1_name>
-<parameter2_name>value2</parameter2_name>
-...
-</tool_name>
 
-Example:
-<search>
-<query>error handling</query>
-<path>src/search</path>
-</search>
 
-# Thinking Process
 
-Before using a tool, analyze the situation within <thinking></thinking> tags. This helps you organize your thoughts and make better decisions. Your thinking process should include:
+// Tool guidelines will be constructed dynamically in getSystemMessage based on allowEdit flag
 
-1. Analyze what information you already have and what information you need to proceed with the task.
-2. Determine which of the available tools would be most effective for gathering this information or accomplishing the current step.
-3. Check if all required parameters for the tool are available or can be inferred from the context.
-4. If all parameters are available, proceed with the tool use.
-5. If parameters are missing, explain what's missing and why it's needed.
 
-Example:
-<thinking>
-I need to find code related to error handling in the search module. The most appropriate tool for this is the search tool, which requires a query parameter and a path parameter. I have both the query ("error handling") and the path ("src/search"), so I can proceed with the search.
-</thinking>
 
-# Tool Use Guidelines
 
-1.  Think step-by-step about how to achieve the user's goal.
-2.  Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool.
-3.  Choose **one** tool that helps achieve the current step.
-4.  Format the tool call using the specified XML format. Ensure all required parameters are included.
-5.  **You MUST respond with exactly one tool call in the specified XML format in each turn.**
-6.  Wait for the tool execution result, which will be provided in the next message (within a <tool_result> block).
-7.  Analyze the tool result and decide the next step. If more tool calls are needed, repeat steps 2-6.
-8.  If the task is fully complete and all previous steps were successful, use the \`<attempt_completion>\` tool to provide the final answer. This is the ONLY way to finish the task.
-9.  If you cannot proceed (e.g., missing information, invalid request), explain the issue clearly before using \`<attempt_completion>\` with an appropriate message in the \`<result>\` tag.
-10. Do not be lazy and dig to the topic as deep as possible, until you see full picture.
 
-Available Tools:
-- search: Search code using keyword queries.
-- query: Search code using structural AST patterns.
-- extract: Extract specific code blocks or lines from files.
-- attempt_completion: Finalize the task and provide the result to the user.
-`;
-// --- End XML Tool Definitions ---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// --- End XML Tool Definitions Placeholder ---
 
 
 // Parse and validate allowed folders from environment variable
@@ -132,6 +132,7 @@ export class ProbeChat {
    * @param {Function} [options.toolCallCallback] - Callback function for tool calls (sessionId, toolCallData) - *Note: Callback may need adjustment for XML flow*
    * @param {string} [options.customPrompt] - Custom prompt to replace the default system message
    * @param {string} [options.promptType] - Predefined prompt type (architect, code-review, support)
+   * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
    */
   constructor(options = {}) {
     // Suppress internal logs if in non-interactive mode
@@ -147,6 +148,9 @@ export class ProbeChat {
     // Store custom prompt or prompt type if provided
     this.customPrompt = options.customPrompt || process.env.CUSTOM_PROMPT || null;
     this.promptType = options.promptType || process.env.PROMPT_TYPE || null;
+
+    // Store allowEdit flag
+    this.allowEdit = !!options.allowEdit || process.env.ALLOW_EDIT === '1';
 
     // Store client-provided API credentials if available
     this.clientApiProvider = options.apiProvider;
@@ -168,6 +172,7 @@ export class ProbeChat {
     if (this.debug) {
       console.log(`[DEBUG] Generated session ID for chat: ${this.sessionId}`);
       console.log(`[DEBUG] Maximum tool iterations configured: ${MAX_TOOL_ITERATIONS}`);
+      console.log(`[DEBUG] Allow Edit (implement tool): ${this.allowEdit}`);
     }
 
     // Store tool instances for execution
@@ -178,6 +183,11 @@ export class ProbeChat {
       extract: extractToolInstance,
       // attempt_completion is handled specially in the loop, no direct implementation needed here
     };
+
+    // Conditionally add the implement tool if allowed
+    if (this.allowEdit) {
+      this.toolImplementations.implement = implementToolInstance;
+    }
 
     // Initialize the chat model
     this.initializeModel();
@@ -335,6 +345,71 @@ export class ProbeChat {
     * @returns {Promise<string>} - The system message
     */
   async getSystemMessage() {
+    // --- Dynamically build Tool Definitions ---
+    let toolDefinitions = `
+${searchToolDefinition}
+${queryToolDefinition}
+${extractToolDefinition}
+${attemptCompletionToolDefinition}
+`;
+    if (this.allowEdit) {
+      toolDefinitions += `${implementToolDefinition}\n`;
+    }
+
+    // --- Dynamically build Tool Guidelines ---
+    let xmlToolGuidelines = `
+# Tool Use Formatting
+
+Tool use MUST be formatted using XML-style tags. The tool name is enclosed in opening and closing tags, and each parameter is similarly enclosed within its own set of tags. You MUST use exactly ONE tool call per message until you are ready to complete the task.
+
+Structure:
+<tool_name>
+<parameter1_name>value1</parameter1_name>
+<parameter2_name>value2</parameter2_name>
+...
+</tool_name>
+
+Example:
+<search>
+<query>error handling</query>
+<path>src/search</path>
+</search>
+
+# Thinking Process
+
+Before using a tool, analyze the situation within <thinking></thinking> tags. This helps you organize your thoughts and make better decisions. Your thinking process should include:
+
+1. Analyze what information you already have and what information you need to proceed with the task.
+2. Determine which of the available tools would be most effective for gathering this information or accomplishing the current step.
+3. Check if all required parameters for the tool are available or can be inferred from the context.
+4. If all parameters are available, proceed with the tool use.
+5. If parameters are missing, explain what's missing and why it's needed.
+
+Example:
+<thinking>
+I need to find code related to error handling in the search module. The most appropriate tool for this is the search tool, which requires a query parameter and a path parameter. I have both the query ("error handling") and the path ("src/search"), so I can proceed with the search.
+</thinking>
+
+# Tool Use Guidelines
+
+1.  Think step-by-step about how to achieve the user's goal.
+2.  Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool.
+3.  Choose **one** tool that helps achieve the current step.
+4.  Format the tool call using the specified XML format. Ensure all required parameters are included.
+5.  **You MUST respond with exactly one tool call in the specified XML format in each turn.**
+6.  Wait for the tool execution result, which will be provided in the next message (within a <tool_result> block).
+7.  Analyze the tool result and decide the next step. If more tool calls are needed, repeat steps 2-6.
+8.  If the task is fully complete and all previous steps were successful, use the \`<attempt_completion>\` tool to provide the final answer. This is the ONLY way to finish the task.
+9.  If you cannot proceed (e.g., missing information, invalid request), explain the issue clearly before using \`<attempt_completion>\` with an appropriate message in the \`<result>\` tag.
+10. Do not be lazy and dig to the topic as deep as possible, until you see full picture.
+
+Available Tools:
+- search: Search code using keyword queries.
+- query: Search code using structural AST patterns.
+- extract: Extract specific code blocks or lines from files.
+${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}
+- attempt_completion: Finalize the task and provide the result to the user.
+`;
     // Common instructions that will be added to all prompts
     const commonInstructions = `<instructions>
 Follow these instructions carefully:
@@ -400,7 +475,7 @@ When troubleshooting:
       // For custom prompts, use the entire content as is
       systemMessage = "<role>" + this.customPrompt + "</role>";
       if (this.debug) {
-        console.log(`[DEBUG] Using custom prompt from file`);
+        console.log(`[DEBUG] Using custom prompt`);
       }
     }
     // Use predefined prompt if specified
@@ -421,11 +496,10 @@ When troubleshooting:
       systemMessage += commonInstructions;
     }
     // Add XML Tool Guidelines
-    systemMessage += `\n${XML_TOOL_GUIDELINES}\n`;
+    systemMessage += `\n${xmlToolGuidelines}\n`;
 
     // Add Tool Definitions
-    systemMessage += `\n# Tools Available\n${TOOL_DEFINITIONS}\n`;
-    systemMessage += `\n# Tools Available\n${TOOL_DEFINITIONS}\n`;
+    systemMessage += `\n# Tools Available\n${toolDefinitions}\n`;
 
 
     const searchDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();

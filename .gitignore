@@ -105,3 +105,4 @@ rust-project.json
 mcp/bin/probe
 
 .vitepress
+.aider*

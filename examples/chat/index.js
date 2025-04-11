@@ -60,7 +60,8 @@ export function main() {
     .option('-s, --session-id <sessionId>', 'Specify a session ID for the chat (optional)')
     .option('--json', 'Output the response as JSON in non-interactive mode')
     .option('--max-iterations <number>', 'Maximum number of tool iterations allowed (default: 30)')
-    .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, support, or path to a file)')
+    .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, support, path to a file, or arbitrary string)')
+    .option('--allow-edit', 'Enable the implement tool for editing files')
     .argument('[path]', 'Path to the codebase to search (overrides ALLOWED_FOLDERS)')
     .parse(process.argv);
 
@@ -139,6 +140,12 @@ export function main() {
     logInfo(chalk.blue(`Setting maximum tool iterations to: ${maxIterations}`));
   }
 
+  // Set ALLOW_EDIT from command line if provided
+  if (options.allowEdit) {
+    process.env.ALLOW_EDIT = '1';
+    logInfo(chalk.blue(`Enabling implement tool with --allow-edit flag`));
+  }
+
   // Handle custom prompt if provided
   let customPrompt = null;
   if (options.prompt) {
@@ -148,7 +155,7 @@ export function main() {
       process.env.PROMPT_TYPE = options.prompt;
       logInfo(chalk.blue(`Using predefined prompt: ${options.prompt}`));
     } else {
-      // Assume it's a file path
+      // Check if it's a file path
       try {
         const promptPath = resolve(options.prompt);
         if (existsSync(promptPath)) {
@@ -156,12 +163,16 @@ export function main() {
           process.env.CUSTOM_PROMPT = customPrompt;
           logInfo(chalk.blue(`Loaded custom prompt from file: ${promptPath}`));
         } else {
-          logError(chalk.red(`Prompt file not found: ${promptPath}`));
-          process.exit(1);
+          // Not a predefined prompt or existing file, treat as a direct string prompt
+          customPrompt = options.prompt;
+          process.env.CUSTOM_PROMPT = customPrompt;
+          logInfo(chalk.blue(`Using custom prompt string`));
         }
       } catch (error) {
-        logError(chalk.red(`Error reading prompt file: ${error.message}`));
-        process.exit(1);
+        // If there's an error resolving the path, treat as a direct string prompt
+        customPrompt = options.prompt;
+        process.env.CUSTOM_PROMPT = customPrompt;
+        logInfo(chalk.blue(`Using custom prompt string`));
       }
     }
   }
@@ -226,7 +237,8 @@ export function main() {
         sessionId: options.sessionId,
         isNonInteractive: true,
         customPrompt: customPrompt,
-        promptType: options.prompt && ['architect', 'code-review', 'support'].includes(options.prompt) ? options.prompt : null
+        promptType: options.prompt && ['architect', 'code-review', 'support'].includes(options.prompt) ? options.prompt : null,
+        allowEdit: options.allowEdit
       });
       // Model/Provider info is logged via logInfo above if debug enabled
       logInfo(chalk.blue(`Using Session ID: ${chat.getSessionId()}`)); // Log the actual session ID being used
@@ -324,7 +336,7 @@ export function main() {
       .then(module => {
         const { startWebServer } = module;
         logInfo(`Starting web server on port ${process.env.PORT || 8080}...`);
-        startWebServer(version, hasApiKeys);
+        startWebServer(version, hasApiKeys, { allowEdit: options.allowEdit });
       })
       .catch(error => {
         logError(chalk.red(`Error starting web server: ${error.message}`));
@@ -356,7 +368,8 @@ export function main() {
       sessionId: options.sessionId,
       isNonInteractive: false,
       customPrompt: customPrompt,
-      promptType: options.prompt && ['architect', 'code-review', 'support'].includes(options.prompt) ? options.prompt : null
+      promptType: options.prompt && ['architect', 'code-review', 'support'].includes(options.prompt) ? options.prompt : null,
+      allowEdit: options.allowEdit
     });
 
     // Log model/provider info using logInfo
