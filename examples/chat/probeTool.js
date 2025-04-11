@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import fs from 'fs';
+import { promises as fsPromises } from 'fs';
 import path from 'path';
 import { glob } from 'glob';
 
@@ -238,6 +239,7 @@ const baseImplementTool = {
 		required: ['task']
 	},
 	execute: async ({ task, autoCommits = false, prompt, sessionId }) => {
+		const execPromise = promisify(exec); // Keep this for compatibility
 		const debug = process.env.DEBUG_CHAT === '1';
 		// Get the current working directory where probe-chat is running
 		const currentWorkingDir = process.cwd();
@@ -258,83 +260,79 @@ const baseImplementTool = {
 		console.error("Task:", escapedTask);
 		console.error("Working directory:", currentWorkingDir);
 
-		try {
-			// Use spawn instead of exec to get real-time output
-			return new Promise((resolve, reject) => {
-				// Split the command into the main command and its arguments
-				const [cmd, ...args] = aiderCommand.split(' ');
-
-				// Spawn the process
-				const process = spawn(cmd, args, {
-					cwd: currentWorkingDir,
-					shell: true // Use shell to handle complex command with quotes
+		// Use a safer approach that won't interfere with other tools
+		// We'll use child_process.spawn but in a way that's compatible with the existing code
+		return new Promise((resolve, reject) => {
+			try {
+				// Create a child process with spawn
+				const childProcess = spawn('sh', ['-c', aiderCommand], {
+					cwd: currentWorkingDir
 				});
 
 				let stdoutData = '';
 				let stderrData = '';
 
 				// Stream stdout in real-time to stderr
-				process.stdout.on('data', (data) => {
+				childProcess.stdout.on('data', (data) => {
 					const output = data.toString();
 					stdoutData += output;
 					// Print to stderr in real-time
-					console.error(output);
+					process.stderr.write(output);
 				});
 
 				// Stream stderr in real-time to stderr
-				process.stderr.on('data', (data) => {
+				childProcess.stderr.on('data', (data) => {
 					const output = data.toString();
 					stderrData += output;
 					// Print to stderr in real-time
-					console.error(output);
+					process.stderr.write(output);
 				});
 
 				// Handle process completion
-				process.on('close', (code) => {
+				childProcess.on('close', (code) => {
 					if (debug) {
 						console.log(`[DEBUG] aider process exited with code ${code}`);
 						console.log(`[DEBUG] Total stdout: ${stdoutData.length} chars`);
 						console.log(`[DEBUG] Total stderr: ${stderrData.length} chars`);
 					}
 
-					if (code === 0) {
-						resolve({
-							success: true,
-							output: stdoutData,
-							error: stderrData || null,
-							command: aiderCommand,
-							timestamp: new Date().toISOString(),
-							prompt: prompt || null
-						});
-					} else {
-						resolve({
-							success: false,
-							output: stdoutData,
-							error: stderrData || `Process exited with code ${code}`,
-							command: aiderCommand,
-							timestamp: new Date().toISOString(),
-							prompt: prompt || null
-						});
-					}
+					// Always resolve, never reject (to match exec behavior)
+					resolve({
+						success: code === 0,
+						output: stdoutData,
+						error: stderrData || (code !== 0 ? `Process exited with code ${code}` : null),
+						command: aiderCommand,
+						timestamp: new Date().toISOString(),
+						prompt: prompt || null
+					});
 				});
 
-				// Handle process errors
-				process.on('error', (error) => {
+				// Handle process errors (like command not found)
+				childProcess.on('error', (error) => {
 					console.error(`Error executing aider:`, error);
-					reject(error);
+					// Still resolve with error information, don't reject
+					resolve({
+						success: false,
+						output: stdoutData,
+						error: error.message || 'Unknown error executing aider',
+						command: aiderCommand,
+						timestamp: new Date().toISOString(),
+						prompt: prompt || null
+					});
 				});
-			});
-		} catch (error) {
-			console.error(`Error executing aider:`, error);
-			return {
-				success: false,
-				output: null,
-				error: error.message || 'Unknown error executing aider',
-				command: aiderCommand,
-				timestamp: new Date().toISOString(),
-				prompt: prompt || null
-			};
-		}
+			} catch (error) {
+				// Catch any synchronous errors from spawn
+				console.error(`Error spawning aider process:`, error);
+				resolve({
+					success: false,
+					output: null,
+					error: error.message || 'Unknown error spawning aider process',
+					command: aiderCommand,
+					timestamp: new Date().toISOString(),
+					prompt: prompt || null
+				});
+			}
+		});
 	}
 };
 
@@ -419,10 +417,18 @@ const baseSearchFilesTool = {
 		},
 		required: ['pattern']
 	},
-	execute: async ({ pattern, directory = '.', recursive = true, sessionId }) => {
+	execute: async ({ pattern, directory, recursive = true, sessionId }) => {
+		// Ensure directory defaults to current directory
+		directory = directory || '.';
+
 		const debug = process.env.DEBUG_CHAT === '1';
 		const currentWorkingDir = process.cwd();
 		const targetDir = path.resolve(currentWorkingDir, directory);
+
+		// Log execution parameters to stderr for visibility
+		console.error(`Executing searchFiles with params: pattern="${pattern}", directory="${directory}", recursive=${recursive}`);
+		console.error(`Resolved target directory: ${targetDir}`);
+		console.error(`Current working directory: ${currentWorkingDir}`);
 
 		if (debug) {
 			console.log(`[DEBUG] Searching for files with pattern: ${pattern}`);
@@ -430,23 +436,139 @@ const baseSearchFilesTool = {
 			console.log(`[DEBUG] Recursive: ${recursive}`);
 		}
 
+		// Validate pattern to prevent overly complex patterns
+		if (pattern.includes('**/**') || pattern.split('*').length > 10) {
+			console.error(`Pattern too complex: ${pattern}`);
+			return {
+				success: false,
+				directory: targetDir,
+				pattern: pattern,
+				error: 'Pattern too complex. Please use a simpler glob pattern.',
+				timestamp: new Date().toISOString()
+			};
+		}
+
 		try {
-			// Set glob options
+			// Set glob options with timeout and limits
 			const options = {
 				cwd: targetDir,
 				dot: true, // Include dotfiles
 				nodir: true, // Only return files, not directories
 				absolute: false, // Return paths relative to the search directory
+				timeout: 10000, // 10 second timeout
+				maxDepth: recursive ? 10 : 1, // Limit recursion depth
 			};
 
 			// If not recursive, modify the pattern to only search the top level
 			const searchPattern = recursive ? pattern : pattern.replace(/^\*\*\//, '');
 
-			// Search for files
-			const files = await promisify(glob)(searchPattern, options);
+			console.error(`Starting glob search with pattern: ${searchPattern} in ${targetDir}`);
+			console.error(`Glob options: ${JSON.stringify(options)}`);
+
+			// Use a safer approach with manual file searching if the pattern is simple enough
+			let files = [];
+
+			// For simple patterns like "*.js" or "bin/*.js", use a more direct approach
+			if (pattern.includes('*') && !pattern.includes('**') && pattern.split('/').length <= 2) {
+				console.error(`Using direct file search for simple pattern: ${pattern}`);
+
+				try {
+					// Handle patterns like "dir/*.ext" or "*.ext"
+					const parts = pattern.split('/');
+					let searchDir = targetDir;
+					let filePattern;
+
+					if (parts.length === 2) {
+						// Pattern like "dir/*.ext"
+						searchDir = path.join(targetDir, parts[0]);
+						filePattern = parts[1];
+					} else {
+						// Pattern like "*.ext"
+						filePattern = parts[0];
+					}
+
+					console.error(`Searching in directory: ${searchDir} for files matching: ${filePattern}`);
+
+					// Check if directory exists
+					try {
+						await fsPromises.access(searchDir);
+					} catch (err) {
+						console.error(`Directory does not exist: ${searchDir}`);
+						return {
+							success: true,
+							directory: targetDir,
+							pattern: pattern,
+							recursive: recursive,
+							files: [],
+							count: 0,
+							timestamp: new Date().toISOString()
+						};
+					}
+
+					// Read directory contents
+					const dirEntries = await fsPromises.readdir(searchDir, { withFileTypes: true });
+
+					// Convert glob pattern to regex
+					const regexPattern = filePattern
+						.replace(/\./g, '\\.')
+						.replace(/\*/g, '.*');
+					const regex = new RegExp(`^${regexPattern}$`);
+
+					// Filter files based on pattern
+					files = dirEntries
+						.filter(entry => entry.isFile() && regex.test(entry.name))
+						.map(entry => {
+							const relativePath = parts.length === 2
+								? path.join(parts[0], entry.name)
+								: entry.name;
+							return relativePath;
+						});
+
+					console.error(`Direct search found ${files.length} files matching ${filePattern}`);
+				} catch (err) {
+					console.error(`Error in direct file search: ${err.message}`);
+					// Fall back to glob if direct search fails
+					console.error(`Falling back to glob search`);
+
+					// Create a promise that rejects after a timeout
+					const timeoutPromise = new Promise((_, reject) => {
+						setTimeout(() => reject(new Error('Search operation timed out after 10 seconds')), 10000);
+					});
+
+					// Use glob without promisify since it might already return a Promise
+					files = await Promise.race([
+						glob(searchPattern, options),
+						timeoutPromise
+					]);
+				}
+			} else {
+				console.error(`Using glob for complex pattern: ${pattern}`);
+
+				// Create a promise that rejects after a timeout
+				const timeoutPromise = new Promise((_, reject) => {
+					setTimeout(() => reject(new Error('Search operation timed out after 10 seconds')), 10000);
+				});
+
+				// Use glob without promisify since it might already return a Promise
+				files = await Promise.race([
+					glob(searchPattern, options),
+					timeoutPromise
+				]);
+			}
+
+			console.error(`Search completed, found ${files.length} files in ${targetDir}`);
+			console.error(`Pattern: ${pattern}, Recursive: ${recursive}`);
 
 			if (debug) {
 				console.log(`[DEBUG] Found ${files.length} files matching pattern ${pattern}`);
+			}
+
+			// Limit the number of results to prevent memory issues
+			const maxResults = 1000;
+			const limitedFiles = files.length > maxResults ? files.slice(0, maxResults) : files;
+
+			if (files.length > maxResults) {
+				console.warn(`Warning: Limited results to ${maxResults} files out of ${files.length} total matches`);
 			}
 
 			return {
@@ -454,12 +576,15 @@ const baseSearchFilesTool = {
 				directory: targetDir,
 				pattern: pattern,
 				recursive: recursive,
-				files: files.map(file => path.join(directory, file)),
-				count: files.length,
+				files: limitedFiles.map(file => path.join(directory, file)),
+				count: limitedFiles.length,
+				totalMatches: files.length,
+				limited: files.length > maxResults,
 				timestamp: new Date().toISOString()
 			};
 		} catch (error) {
-			console.error(`Error searching files with pattern ${pattern} in ${targetDir}:`, error);
+			console.error(`Error searching files with pattern "${pattern}" in ${targetDir}:`, error);
+			console.error(`Search parameters: directory="${directory}", recursive=${recursive}, sessionId=${sessionId}`);
 			return {
 				success: false,
 				directory: targetDir,
