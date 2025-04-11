@@ -85,10 +85,20 @@ jobs:
       context_type: ${{ steps.format.outputs.context_type }}
 
     steps:
+      - name: Check for App Credentials
+        id: check_app_secrets # Give this step an ID
+        run: |
+          if [[ -n "${{ secrets.APP_ID }}" && -n "${{ secrets.APP_PRIVATE_KEY }}" ]]; then
+            echo "App credentials provided."
+            echo "use_app_token=true" >> $GITHUB_OUTPUT
+          else
+            echo "App credentials not provided."
+            echo "use_app_token=false" >> $GITHUB_OUTPUT
+          fi
       # --- Generate GitHub App Token (if applicable) ---
       - name: Generate GitHub App Token
         id: generate_app_token
-        if: secrets.APP_ID != '' && secrets.APP_PRIVATE_KEY != ''
+        if: steps.check_app_secrets.outputs.use_app_token == 'true'
         uses: actions/create-github-app-token@v1 # Official action
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -1041,10 +1051,20 @@ jobs:
     runs-on: ubuntu-latest
     needs: [process_comment]
     steps:
+      - name: Check for App Credentials Post
+        id: check_app_secrets_post # Use a different ID if needed, or reuse if logic is identical
+        run: |
+          if [[ -n "${{ secrets.APP_ID }}" && -n "${{ secrets.APP_PRIVATE_KEY }}" ]]; then
+            echo "App credentials provided for posting."
+            echo "use_app_token=true" >> $GITHUB_OUTPUT
+          else
+            echo "App credentials not provided for posting."
+            echo "use_app_token=false" >> $GITHUB_OUTPUT
+          fi
       # --- Generate GitHub App Token (if applicable) - REPEAT FOR THIS JOB ---
       - name: Generate GitHub App Token
         id: generate_app_token_post
-        if: secrets.APP_ID != '' && secrets.APP_PRIVATE_KEY != ''
+        if: steps.check_app_secrets_post.outputs.use_app_token == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.APP_ID }}
