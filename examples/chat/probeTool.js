@@ -7,6 +7,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import { promises as fsPromises } from 'fs';
 import path from 'path';
+import os from 'os';
 import { glob } from 'glob';
 
 // Create an event emitter for tool calls
@@ -244,6 +245,8 @@ const baseImplementTool = {
 		// Get the current working directory where probe-chat is running
 		const currentWorkingDir = process.cwd();
 
+		// Use the modules imported at the top of the file
+
 		if (debug) {
 			console.log(`[DEBUG] Executing aider with task: ${task}`);
 			console.log(`[DEBUG] Auto-commits: ${autoCommits}`);
@@ -251,88 +254,149 @@ const baseImplementTool = {
 			if (prompt) console.log(`[DEBUG] Custom prompt: ${prompt}`);
 		}
 
-		// Build the aider command with the required arguments
-		const autoCommitsFlag = '';
-		const escapedTask = task.replace(/"/g, '\\"');
+		// Create a temporary file for the task message
+		const tempDir = os.tmpdir();
+		const tempFilePath = path.join(tempDir, `aider-task-${Date.now()}-${Math.random().toString(36).substring(2, 10)}.txt`);
 
-		const aiderCommand = `aider --yes --no-check-update --no-auto-commits --no-analytics ${autoCommitsFlag} --message "${escapedTask}"`;
+		try {
+			// Write the task to the temporary file
+			await fsPromises.writeFile(tempFilePath, task, 'utf8');
 
-		console.error("Task:", escapedTask);
-		console.error("Working directory:", currentWorkingDir);
-
-		// Use a safer approach that won't interfere with other tools
-		// We'll use child_process.spawn but in a way that's compatible with the existing code
-		return new Promise((resolve, reject) => {
-			try {
-				// Create a child process with spawn
-				const childProcess = spawn('sh', ['-c', aiderCommand], {
-					cwd: currentWorkingDir
-				});
-
-				let stdoutData = '';
-				let stderrData = '';
-
-				// Stream stdout in real-time to stderr
-				childProcess.stdout.on('data', (data) => {
-					const output = data.toString();
-					stdoutData += output;
-					// Print to stderr in real-time
-					process.stderr.write(output);
-				});
-
-				// Stream stderr in real-time to stderr
-				childProcess.stderr.on('data', (data) => {
-					const output = data.toString();
-					stderrData += output;
-					// Print to stderr in real-time
-					process.stderr.write(output);
-				});
-
-				// Handle process completion
-				childProcess.on('close', (code) => {
-					if (debug) {
-						console.log(`[DEBUG] aider process exited with code ${code}`);
-						console.log(`[DEBUG] Total stdout: ${stdoutData.length} chars`);
-						console.log(`[DEBUG] Total stderr: ${stderrData.length} chars`);
-					}
-
-					// Always resolve, never reject (to match exec behavior)
-					resolve({
-						success: code === 0,
-						output: stdoutData,
-						error: stderrData || (code !== 0 ? `Process exited with code ${code}` : null),
-						command: aiderCommand,
-						timestamp: new Date().toISOString(),
-						prompt: prompt || null
-					});
-				});
-
-				// Handle process errors (like command not found)
-				childProcess.on('error', (error) => {
-					console.error(`Error executing aider:`, error);
-					// Still resolve with error information, don't reject
-					resolve({
-						success: false,
-						output: stdoutData,
-						error: error.message || 'Unknown error executing aider',
-						command: aiderCommand,
-						timestamp: new Date().toISOString(),
-						prompt: prompt || null
-					});
-				});
-			} catch (error) {
-				// Catch any synchronous errors from spawn
-				console.error(`Error spawning aider process:`, error);
-				resolve({
-					success: false,
-					output: null,
-					error: error.message || 'Unknown error spawning aider process',
-					command: aiderCommand,
-					timestamp: new Date().toISOString(),
-					prompt: prompt || null
-				});
+			if (debug) {
+				console.log(`[DEBUG] Created temporary file for task: ${tempFilePath}`);
 			}
-		});
+
+			// Build the aider command with the message-file argument
+			const autoCommitsFlag = '';
+			const aiderCommand = `aider --yes --no-check-update --no-auto-commits --no-analytics ${autoCommitsFlag} --message-file "${tempFilePath}"`;
+
+			console.error("Task:", task.substring(0, 100) + (task.length > 100 ? "..." : ""));
+			console.error("Working directory:", currentWorkingDir);
+			console.error("Temp file:", tempFilePath);
+
+			// Use a safer approach that won't interfere with other tools
+			// We'll use child_process.spawn but in a way that's compatible with the existing code
+			return new Promise((resolve, reject) => {
+				try {
+					// Create a child process with spawn
+					const childProcess = spawn('sh', ['-c', aiderCommand], {
+						cwd: currentWorkingDir
+					});
+
+					let stdoutData = '';
+					let stderrData = '';
+
+					// Stream stdout in real-time to stderr
+					childProcess.stdout.on('data', (data) => {
+						const output = data.toString();
+						stdoutData += output;
+						// Print to stderr in real-time
+						process.stderr.write(output);
+					});
+
+					// Stream stderr in real-time to stderr
+					childProcess.stderr.on('data', (data) => {
+						const output = data.toString();
+						stderrData += output;
+						// Print to stderr in real-time
+						process.stderr.write(output);
+					});
+
+					// Handle process completion
+					childProcess.on('close', (code) => {
+						if (debug) {
+							console.log(`[DEBUG] aider process exited with code ${code}`);
+							console.log(`[DEBUG] Total stdout: ${stdoutData.length} chars`);
+							console.log(`[DEBUG] Total stderr: ${stderrData.length} chars`);
+						}
+
+						// Clean up the temporary file
+						fsPromises.unlink(tempFilePath)
+							.then(() => {
+								if (debug) {
+									console.log(`[DEBUG] Removed temporary file: ${tempFilePath}`);
+								}
+							})
+							.catch(err => {
+								console.error(`Error removing temporary file ${tempFilePath}:`, err);
+							})
+							.finally(() => {
+								// Always resolve, never reject (to match exec behavior)
+								resolve({
+									success: code === 0,
+									output: stdoutData,
+									error: stderrData || (code !== 0 ? `Process exited with code ${code}` : null),
+									command: aiderCommand,
+									timestamp: new Date().toISOString(),
+									prompt: prompt || null
+								});
+							});
+					});
+
+					// Handle process errors (like command not found)
+					childProcess.on('error', (error) => {
+						console.error(`Error executing aider:`, error);
+
+						// Clean up the temporary file
+						fsPromises.unlink(tempFilePath)
+							.then(() => {
+								if (debug) {
+									console.log(`[DEBUG] Removed temporary file after error: ${tempFilePath}`);
+								}
+							})
+							.catch(err => {
+								console.error(`Error removing temporary file ${tempFilePath}:`, err);
+							})
+							.finally(() => {
+								// Still resolve with error information, don't reject
+								resolve({
+									success: false,
+									output: stdoutData,
+									error: error.message || 'Unknown error executing aider',
+									command: aiderCommand,
+									timestamp: new Date().toISOString(),
+									prompt: prompt || null
+								});
+							});
+					});
+				} catch (error) {
+					// Catch any synchronous errors from spawn
+					console.error(`Error spawning aider process:`, error);
+
+					// Clean up the temporary file
+					fsPromises.unlink(tempFilePath)
+						.then(() => {
+							if (debug) {
+								console.log(`[DEBUG] Removed temporary file after spawn error: ${tempFilePath}`);
+							}
+						})
+						.catch(err => {
+							console.error(`Error removing temporary file ${tempFilePath}:`, err);
+						})
+						.finally(() => {
+							resolve({
+								success: false,
+								output: null,
+								error: error.message || 'Unknown error spawning aider process',
+								command: aiderCommand,
+								timestamp: new Date().toISOString(),
+								prompt: prompt || null
+							});
+						});
+				}
+			});
+		} catch (error) {
+			// Handle errors with creating or writing to the temp file
+			console.error(`Error creating temporary file:`, error);
+			return {
+				success: false,
+				output: null,
+				error: `Error creating temporary file: ${error.message}`,
+				command: null,
+				timestamp: new Date().toISOString(),
+				prompt: prompt || null
+			};
+		}
 	}
 };
 
