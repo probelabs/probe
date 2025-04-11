@@ -226,6 +226,8 @@ jobs:
           COMMAND_PREFIX: ${{ inputs.command_prefix }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Ensure gh uses the right token
+          # Add this environment variable:
+          EVENT_COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           shopt -s extglob # Enable extended globbing for string manipulation
           set -e # Exit immediately if a command exits with a non-zero status.
@@ -233,13 +235,24 @@ jobs:
           echo "::group::Initialization and User Request Extraction"
 
           # Extract the user request after trimming the prefix
-          RAW_COMMENT_BODY="${{ github.event.comment.body }}"
-          USER_REQUEST_BODY_RAW="${RAW_COMMENT_BODY#${COMMAND_PREFIX}}"
+          # Read from the environment variable for safety
+          RAW_COMMENT_BODY="$EVENT_COMMENT_BODY"
+
+          # Ensure the variable is not empty before proceeding (optional but good practice)
+          if [[ -z "$RAW_COMMENT_BODY" ]]; then
+            echo "::error::Comment body is empty!"
+            exit 1
+          fi
+
+          # Trim prefix (ensure COMMAND_PREFIX is also available, which it is via env)
+          USER_REQUEST_BODY_RAW="${RAW_COMMENT_BODY#$COMMAND_PREFIX}"
+          # Trim leading/trailing whitespace using extglob patterns
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW##*( )}"
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW%%*( )}"
 
-          # Safely write multiline to $GITHUB_ENV using a single redirection
+          # Safely write multiline USER_REQUEST_BODY to $GITHUB_ENV
           echo "USER_REQUEST_BODY<<EOF_USER_REQUEST" >> "$GITHUB_ENV"
+          # Use printf for safety with potential special characters in the body
           printf '%s\n' "$USER_REQUEST_BODY_RAW" >> "$GITHUB_ENV"
           echo "EOF_USER_REQUEST" >> "$GITHUB_ENV"
 
