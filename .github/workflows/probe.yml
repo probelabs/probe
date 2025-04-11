@@ -778,8 +778,10 @@ jobs:
 
           # Check if custom prompt is provided as input
           if [[ -n "${{ inputs.prompt }}" ]]; then
-            COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt ${{ inputs.prompt }}"
-            echo "Using custom prompt from workflow input: ${{ inputs.prompt }}"
+            # Store prompt in a variable and properly quote it to handle multiline values
+            PROMPT_VALUE="${{ inputs.prompt }}"
+            COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt '$PROMPT_VALUE'"
+            echo "Using custom prompt from workflow input (properly quoted for multiline support)"
           else
             # Use default prompt type based on context if no custom prompt provided
             CONTEXT_TYPE="${{ steps.format.outputs.context_type }}"
