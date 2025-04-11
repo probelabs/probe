@@ -820,7 +820,8 @@ jobs:
           echo "Running probe-chat..."
 
           # Pipe prompt content to command stdin, capture stdout/stderr
-          cat "$PROMPT_FILE" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> "$ERROR_LOG"
+          # Use tee with process substitution to both display stderr in real-time and save to file
+          cat "$PROMPT_FILE" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> >(tee "$ERROR_LOG" >&2)
           EXIT_CODE=${PIPESTATUS[1]} # Get exit code of $COMMAND_TO_RUN
 
           if [ $EXIT_CODE -ne 0 ]; then

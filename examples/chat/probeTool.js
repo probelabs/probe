@@ -1,6 +1,6 @@
 // Import tool generators from @buger/probe package
 import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE, listFilesByLevel } from '@buger/probe';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
@@ -238,7 +238,6 @@ const baseImplementTool = {
 		required: ['task']
 	},
 	execute: async ({ task, autoCommits = false, prompt, sessionId }) => {
-		const execPromise = promisify(exec);
 		const debug = process.env.DEBUG_CHAT === '1';
 		// Get the current working directory where probe-chat is running
 		const currentWorkingDir = process.cwd();
@@ -260,22 +259,71 @@ const baseImplementTool = {
 		console.error("Working directory:", currentWorkingDir);
 
 		try {
-			// Execute aider with the provided task, explicitly setting the working directory
-			const { stdout, stderr } = await execPromise(aiderCommand, { cwd: currentWorkingDir });
+			// Use spawn instead of exec to get real-time output
+			return new Promise((resolve, reject) => {
+				// Split the command into the main command and its arguments
+				const [cmd, ...args] = aiderCommand.split(' ');
 
-			if (debug) {
-				console.log(`[DEBUG] aider stdout: ${stdout}`);
-				if (stderr) console.error(`[DEBUG] aider stderr: ${stderr}`);
-			}
+				// Spawn the process
+				const process = spawn(cmd, args, {
+					cwd: currentWorkingDir,
+					shell: true // Use shell to handle complex command with quotes
+				});
 
-			return {
-				success: true,
-				output: stdout,
-				error: stderr || null,
-				command: aiderCommand,
-				timestamp: new Date().toISOString(),
-				prompt: prompt || null
-			};
+				let stdoutData = '';
+				let stderrData = '';
+
+				// Stream stdout in real-time to stderr
+				process.stdout.on('data', (data) => {
+					const output = data.toString();
+					stdoutData += output;
+					// Print to stderr in real-time
+					console.error(output);
+				});
+
+				// Stream stderr in real-time to stderr
+				process.stderr.on('data', (data) => {
+					const output = data.toString();
+					stderrData += output;
+					// Print to stderr in real-time
+					console.error(output);
+				});
+
+				// Handle process completion
+				process.on('close', (code) => {
+					if (debug) {
+						console.log(`[DEBUG] aider process exited with code ${code}`);
+						console.log(`[DEBUG] Total stdout: ${stdoutData.length} chars`);
+						console.log(`[DEBUG] Total stderr: ${stderrData.length} chars`);
+					}
+
+					if (code === 0) {
+						resolve({
+							success: true,
+							output: stdoutData,
+							error: stderrData || null,
+							command: aiderCommand,
+							timestamp: new Date().toISOString(),
+							prompt: prompt || null
+						});
+					} else {
+						resolve({
+							success: false,
+							output: stdoutData,
+							error: stderrData || `Process exited with code ${code}`,
+							command: aiderCommand,
+							timestamp: new Date().toISOString(),
+							prompt: prompt || null
+						});
+					}
+				});
+
+				// Handle process errors
+				process.on('error', (error) => {
+					console.error(`Error executing aider:`, error);
+					reject(error);
+				});
+			});
 		} catch (error) {
 			console.error(`Error executing aider:`, error);
 			return {
