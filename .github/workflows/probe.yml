@@ -34,6 +34,7 @@ on:
         type: boolean
         default: false
     secrets:
+      # ---- Existing Secrets ----
       PROBE_CHAT_COMMAND:
         required: false
         description: "Optional command for probe chat"
@@ -64,6 +65,13 @@ on:
       FORCE_PROVIDER:
         required: false
         description: "Force the use of a specific provider"
+      # ---- GitHub App Authentication Secrets (Optional) ----
+      APP_ID:
+        required: false
+        description: "The GitHub App ID (if using App auth)"
+      APP_PRIVATE_KEY:
+        required: false
+        description: "The GitHub App's private key (if using App auth)"
 
 jobs:
   process_comment:
@@ -77,9 +85,36 @@ jobs:
       context_type: ${{ steps.format.outputs.context_type }}
 
     steps:
+      # --- Generate GitHub App Token (if applicable) ---
+      - name: Generate GitHub App Token
+        id: generate_app_token
+        if: secrets.APP_ID != '' && secrets.APP_PRIVATE_KEY != ''
+        uses: actions/create-github-app-token@v1 # Official action
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          # owner: ${{ github.repository_owner }} # Optional: Scope token to repo owner
+          # repositories: ${{ github.event.repository.name }} # Optional: Scope token to specific repo
+
+      # --- Determine Workflow Token (App Token or Default GITHUB_TOKEN) ---
+      - name: Determine Workflow Token
+        id: set_token
+        run: |
+          if [[ -n "${{ steps.generate_app_token.outputs.token }}" ]]; then
+            echo "Using GitHub App token for authentication."
+            echo "WORKFLOW_TOKEN=${{ steps.generate_app_token.outputs.token }}" >> $GITHUB_ENV
+          else
+            echo "Using default GITHUB_TOKEN for authentication."
+            echo "WORKFLOW_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+          fi
+          # Mask the token value in logs
+          echo "::add-mask::${{ env.WORKFLOW_TOKEN }}"
+
+      # --- Checkout with selected token ---
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          token: ${{ env.WORKFLOW_TOKEN }} # Use the determined token
           fetch-depth: 0 # Fetch all history for git diff base/head comparison
 
       - name: Install jq, perl and Verify gh
@@ -91,6 +126,7 @@ jobs:
       - name: Detect Project Languages
         id: detect_languages
         run: |
+          # (Script remains the same)
           # Initialize flags
           NODE_FOUND=false
           GO_FOUND=false
@@ -121,23 +157,21 @@ jobs:
           echo "rust_found=$RUST_FOUND" >> $GITHUB_OUTPUT
           echo "python_found=$PYTHON_FOUND" >> $GITHUB_OUTPUT
 
-      # --- Node.js Setup and Caching (Conditional) ---
+      # --- Language Setup and Caching (Conditional) ---
+      # (These setup steps generally don't need the token, leaving them as is)
       - name: Set up Node.js (Project Deps)
         if: steps.detect_languages.outputs.node_found == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm" # Caches ~/.npm based on package-lock.json
+          cache: "npm"
 
-      # --- Go Setup and Caching (Conditional) ---
       - name: Set up Go (Project Deps)
         if: steps.detect_languages.outputs.go_found == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: "1.21"
-          # Go caching is automatic in setup-go@v3.2+
 
-      # --- Rust Setup and Caching (Conditional) ---
       - name: Set up Rust (Project Deps)
         if: steps.detect_languages.outputs.rust_found == 'true'
         uses: dtolnay/rust-toolchain@stable
@@ -156,7 +190,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      # --- Python Setup and Caching (Conditional) ---
       - name: Set up Python (Project Deps)
         if: steps.detect_languages.outputs.python_found == 'true'
         uses: actions/setup-python@v5
@@ -166,8 +199,10 @@ jobs:
           cache-dependency-path: "**/requirements.txt"
 
       # --- Install Project Dependencies (Conditional) ---
+      # (Installation steps usually don't need the token unless fetching private packages)
       - name: Install Project Dependencies
         run: |
+          # (Script remains the same)
           # Node.js - Check for package.json
           if [ "${{ steps.detect_languages.outputs.node_found }}" == "true" ]; then
             echo "Found package.json - Installing Node.js dependencies..."
@@ -201,7 +236,7 @@ jobs:
       - name: Set Issue Number and Comment ID Output
         id: set_context_ids
         run: |
-          # Safety check: Ensure github.event context is as expected
+          # (Script remains the same)
           if [[ -z "${{ github.event.issue.number }}" || -z "${{ github.event.comment.id }}" ]]; then
             echo "::error::Could not get issue number or comment ID from event context."
             exit 1
@@ -210,116 +245,101 @@ jobs:
           echo "comment_id=${{ github.event.comment.id }}" >> $GITHUB_OUTPUT
           echo "Context ID (Issue/PR Number): ${{ github.event.issue.number }}, Comment ID: ${{ github.event.comment.id }}"
 
+      # --- Add 'eyes' reaction using selected token ---
       - name: Add 'eyes' reaction to comment
         id: add_reaction
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }} # Use the determined token
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ steps.set_context_ids.outputs.comment_id }}
         run: |
           echo "Adding 👀 reaction to comment ID ${COMMENT_ID} in repo ${REPO}..."
           gh api --method POST -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" -f content='eyes' --silent || echo "::warning::Failed to add 'eyes' reaction."
 
+      # --- Format - Initialize and Detect Context using selected token ---
       - name: Format - Initialize and Detect Context
         id: format_init
         env:
+          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }} # Use the determined token
           COMMAND_PREFIX: ${{ inputs.command_prefix }}
           REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Ensure gh uses the right token
-          # Add this environment variable:
           EVENT_COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          shopt -s extglob # Enable extended globbing for string manipulation
-          set -e # Exit immediately if a command exits with a non-zero status.
+          # (Script logic remains the same, uses GH_TOKEN env var for gh commands)
+          shopt -s extglob
+          set -e
 
           echo "::group::Initialization and User Request Extraction"
-
-          # Extract the user request after trimming the prefix
-          # Read from the environment variable for safety
           RAW_COMMENT_BODY="$EVENT_COMMENT_BODY"
-
-          # Ensure the variable is not empty before proceeding (optional but good practice)
           if [[ -z "$RAW_COMMENT_BODY" ]]; then
             echo "::error::Comment body is empty!"
             exit 1
           fi
-
-          # Trim prefix (ensure COMMAND_PREFIX is also available, which it is via env)
           USER_REQUEST_BODY_RAW="${RAW_COMMENT_BODY#$COMMAND_PREFIX}"
-          # Trim leading/trailing whitespace using extglob patterns
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW##*( )}"
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW%%*( )}"
-
-          # Safely write multiline USER_REQUEST_BODY to $GITHUB_ENV
           echo "USER_REQUEST_BODY<<EOF_USER_REQUEST" >> "$GITHUB_ENV"
-          # Use printf for safety with potential special characters in the body
           printf '%s\n' "$USER_REQUEST_BODY_RAW" >> "$GITHUB_ENV"
           echo "EOF_USER_REQUEST" >> "$GITHUB_ENV"
-
           echo "User request extracted (first 100 chars): [${USER_REQUEST_BODY_RAW:0:100}]"
           echo "::endgroup::"
-          echo "::group::Determine Context Type"
-          CONTEXT_TYPE="unknown" # Start with unknown
 
+          echo "::group::Determine Context Type"
+          CONTEXT_TYPE="unknown"
           ISSUE_OR_PR_NUMBER=${{ steps.set_context_ids.outputs.issue_number }}
-          echo "Detecting context for #${ISSUE_OR_PR_NUMBER} in $REPO"
+          echo "Detecting context for #${ISSUE_OR_PR_NUMBER} in $REPO using token type: ${{ env.WORKFLOW_TOKEN != secrets.GITHUB_TOKEN && 'App Token' || 'Default GITHUB_TOKEN' }}" # Log token type
 
           # Try viewing as PR first
           echo "Checking if #${ISSUE_OR_PR_NUMBER} is a Pull Request using 'gh pr view'..."
-          # Use `--json id` as a lightweight check for existence
-          set +e # Temporarily disable exit on error for the check
+          set +e
           gh pr view "$ISSUE_OR_PR_NUMBER" --repo "$REPO" --json id > /dev/null 2>&1
           PR_VIEW_EXIT_CODE=$?
-          set -e # Re-enable exit on error
+          set -e
 
           if [[ $PR_VIEW_EXIT_CODE -eq 0 ]]; then
               CONTEXT_TYPE="pr"
               echo "Context detected: PR (gh pr view succeeded)"
           else
               echo "'gh pr view' failed or returned no JSON (exit code $PR_VIEW_EXIT_CODE). Checking if it's an Issue..."
-
-              # Try viewing as Issue ONLY if PR view failed
-              set +e # Temporarily disable exit on error for the check
+              set +e
               gh issue view "$ISSUE_OR_PR_NUMBER" --repo "$REPO" --json id > /dev/null 2>&1
               ISSUE_VIEW_EXIT_CODE=$?
-              set -e # Re-enable exit on error
+              set -e
 
               if [[ $ISSUE_VIEW_EXIT_CODE -eq 0 ]]; then
                   CONTEXT_TYPE="issue"
                   echo "Context confirmed: Issue (gh issue view succeeded)"
               else
-                  # BOTH views failed. This is problematic.
                   echo "::error::Failed to determine context for #${ISSUE_OR_PR_NUMBER}. 'gh pr view' failed (code $PR_VIEW_EXIT_CODE) AND 'gh issue view' failed (code $ISSUE_VIEW_EXIT_CODE)."
-                  echo "::error::Please check the GITHUB_TOKEN permissions (needs issues:read and pull-requests:read) and if the item #${ISSUE_OR_PR_NUMBER} actually exists and is accessible."
-                  # Defaulting to 'issue' as a fallback, consistent with original behavior but with better error logging
+                  echo "::error::Please check the token permissions (needs issues:read and pull-requests:read) and if the item #${ISSUE_OR_PR_NUMBER} actually exists and is accessible."
                   CONTEXT_TYPE="issue"
                   echo "::warning::Proceeding with 'issue' context as a fallback despite view errors."
                fi
           fi
 
           if [[ "$CONTEXT_TYPE" == "unknown" ]]; then
-            # Safeguard - should not be reached with the logic above unless something unexpected happens
             echo "::error::Context type could not be determined after checks. Defaulting to 'issue'."
             CONTEXT_TYPE="issue"
           fi
 
           echo "Final Context Type: $CONTEXT_TYPE"
           echo "FINAL_CONTEXT_TYPE=$CONTEXT_TYPE" >> $GITHUB_ENV
-          echo "ISSUE_OR_PR_NUMBER=$ISSUE_OR_PR_NUMBER" >> $GITHUB_ENV # Pass number too
+          echo "ISSUE_OR_PR_NUMBER=$ISSUE_OR_PR_NUMBER" >> $GITHUB_ENV
           echo "::endgroup::"
 
+      # --- Fetch Standard Comments using selected token ---
       - name: Format - Fetch Standard Comments
         id: format_fetch_comments
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }} # Use the determined token
           REPO: ${{ github.repository }}
-          # Read vars set by previous step
           ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
         run: |
+          # (Script logic remains the same, uses GH_TOKEN env var for gh command)
           echo "::group::Fetch Standard Comments"
           set -e
           GITHUB_API_ARGS_VERBOSE=(-H "Accept: application/vnd.github+json")
-          COMMENTS_XML="" # Initialize here
+          COMMENTS_XML=""
 
           echo "Fetching standard comments for #${ISSUE_OR_PR_NUMBER}..."
           STD_COMMENTS_JSON=$(gh api "${GITHUB_API_ARGS_VERBOSE[@]}" "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER/comments" --paginate || echo "FETCH_FAILED")
@@ -327,6 +347,7 @@ jobs:
           if [[ "$STD_COMMENTS_JSON" == "FETCH_FAILED" || -z "$STD_COMMENTS_JSON" ]]; then
               echo "::warning::Failed to fetch standard comments JSON or received empty response."
           else
+              # Rest of the script remains the same
               if echo "$STD_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
                   TSV_OUTPUT=$(echo "$STD_COMMENTS_JSON" | jq -r '.[] | select(.body != null) | [.user.login // "unknown", .created_at // "N/A", .body] | @tsv' 2> jq_std_error.log)
                   JQ_EXIT_CODE=$?
@@ -349,65 +370,59 @@ jobs:
               fi
           fi
           echo "Standard comments processed. Current XML length: ${#COMMENTS_XML}"
-
-          # Save multi-line COMMENTS_XML to env
           echo "COMMENTS_XML<<EOF_COMMENTS_XML" >> $GITHUB_ENV
           echo "$COMMENTS_XML" >> $GITHUB_ENV
           echo "EOF_COMMENTS_XML" >> $GITHUB_ENV
           echo "::endgroup::"
 
+      # --- Fetch PR Details using selected token ---
       - name: Format - Fetch PR Details (Title, Body, SHAs)
         id: format_pr_details
-        # Only run this step if context is PR
         if: env.FINAL_CONTEXT_TYPE == 'pr'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }} # Use the determined token
           REPO: ${{ github.repository }}
           ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
         run: |
-          echo "::group::Fetch PR Details (Title, Body, SHAs, RefName)" # <-- Updated title
+          # (Script logic remains the same, uses GH_TOKEN env var for gh commands)
+          echo "::group::Fetch PR Details (Title, Body, SHAs, RefName)"
           set -e
           echo "Fetching PR specific data for #${ISSUE_OR_PR_NUMBER}..."
 
-          # --- Fetch Base/Head SHAs and Head Ref Name --- # <-- Updated comment
-          echo "Fetching PR base SHA, head SHA, and head ref name..." # <-- Updated echo
-          # Fetch headRefName as well
+          echo "Fetching PR base SHA, head SHA, and head ref name..."
           PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid,headRefName --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
           BASE_SHA=""
           HEAD_SHA=""
-          HEAD_REF_NAME="" # <-- Initialize head ref name variable
+          HEAD_REF_NAME=""
 
           if [[ "$PR_REFS_JSON" == "FETCH_FAILED" ]]; then
             echo "::error::Failed to fetch PR SHAs/RefName."
             cat pr_refs_stderr.log >&2
-            # Allow script to continue, handle missing SHAs/RefName later
           else
             BASE_SHA=$(echo "$PR_REFS_JSON" | jq -r .baseRefOid)
             HEAD_SHA=$(echo "$PR_REFS_JSON" | jq -r .headRefOid)
-            HEAD_REF_NAME=$(echo "$PR_REFS_JSON" | jq -r .headRefName) # <-- Extract head ref name
+            HEAD_REF_NAME=$(echo "$PR_REFS_JSON" | jq -r .headRefName)
 
-            # Validate all three
             if [[ -z "$BASE_SHA" || "$BASE_SHA" == "null" || \
                   -z "$HEAD_SHA" || "$HEAD_SHA" == "null" || \
                   -z "$HEAD_REF_NAME" || "$HEAD_REF_NAME" == "null" ]]; then
                echo "::error::Could not extract valid base SHA, head SHA, or head ref name from JSON: $PR_REFS_JSON"
                BASE_SHA=""
                HEAD_SHA=""
-               HEAD_REF_NAME="" # <-- Reset on error
+               HEAD_REF_NAME=""
             else
                echo "Base SHA: $BASE_SHA"
                echo "Head SHA: $HEAD_SHA"
-               echo "Head Ref Name: $HEAD_REF_NAME" # <-- Log head ref name
+               echo "Head Ref Name: $HEAD_REF_NAME"
             fi
           fi
           echo "BASE_SHA=$BASE_SHA" >> $GITHUB_ENV
           echo "HEAD_SHA=$HEAD_SHA" >> $GITHUB_ENV
-          echo "HEAD_REF_NAME=$HEAD_REF_NAME" >> $GITHUB_ENV # <-- Output head ref name
+          echo "HEAD_REF_NAME=$HEAD_REF_NAME" >> $GITHUB_ENV
 
-          # --- Fetch PR Title/Body ---
-          echo "Fetching PR Title and Body..." # Added echo for clarity
+          echo "Fetching PR Title and Body..."
           PR_DATA=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
-          PR_TITLE_DEFAULT="Error fetching title" # Define defaults
+          PR_TITLE_DEFAULT="Error fetching title"
           PR_BODY_DEFAULT="Error fetching body"
 
           if [[ "$PR_DATA" == "FETCH_FAILED" ]]; then
@@ -416,15 +431,10 @@ jobs:
             PR_BODY="$PR_BODY_DEFAULT"
           else
             echo "Parsing PR Title and Body..."
-            # Corrected jq syntax: // fallback operator is INSIDE the quotes
             PR_TITLE=$(echo "$PR_DATA" | jq -r --arg default "$PR_TITLE_DEFAULT" '.title // $default')
             PR_BODY=$(echo "$PR_DATA" | jq -r --arg default "$PR_BODY_DEFAULT" '.body // $default')
-
-            # Optional: Check if jq failed for some other reason (e.g., invalid JSON) although unlikely here
-            # Add checks on JQ_EXIT_CODE if needed for robustness
           fi
 
-          # Save multi-line title/body to env
           echo "PR_TITLE<<EOF_PR_TITLE" >> $GITHUB_ENV
           echo "$PR_TITLE" >> $GITHUB_ENV
           echo "EOF_PR_TITLE" >> $GITHUB_ENV
@@ -433,26 +443,23 @@ jobs:
           echo "EOF_PR_BODY" >> $GITHUB_ENV
           echo "::endgroup::"
 
+      # --- Fetch & Filter PR Diff (Uses git, relies on checkout token setup) ---
       - name: Format - Fetch & Filter PR Diff
         id: format_pr_diff
-        # Only run this step if context is PR
         if: env.FINAL_CONTEXT_TYPE == 'pr'
         env:
-          # Read SHAs set by previous step
           BASE_SHA: ${{ env.BASE_SHA }}
           HEAD_SHA: ${{ env.HEAD_SHA }}
-          # Constants needed for filtering
         run: |
+          # (Script remains the same, git diff uses credentials set by checkout)
           echo "::group::Fetch & Filter PR Diff"
           set -e
           FILTERED_PR_DIFF="<!-- Diff generation skipped or failed -->" # Default value
 
-          # Check if SHAs were obtained before attempting git diff
           if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
               echo "::error::Cannot run git diff without valid base/head SHAs. Skipping diff generation."
-              RAW_DIFF_CONTENT="FETCH_FAILED" # Signal failure
+              RAW_DIFF_CONTENT="FETCH_FAILED"
           else
-              # Define allowed file patterns for git diff pathspec
               ALLOWED_PATTERNS=(
                   '*.go' '*.js' '*.ts' '*.jsx' '*.tsx' '*.rs' '*.java' '*.c' '*.h' '*.cpp' '*.hpp' '*.py'
                   '*.cs' '*.php' '*.rb' '*.swift' '*.kt' '*.kts' '*.scala' '*.sh' '*.pl' '*.pm' '*.lua' '*.sql'
@@ -466,13 +473,13 @@ jobs:
                   'README.*' 'LICENSE*' 'CONTRIBUTING.*' 'CHANGELOG.*' '*.rst' '*.adoc'
               )
               RAW_DIFF_CONTENT=""
-              GIT_DIFF_EXIT_CODE=1 # Default error
+              GIT_DIFF_EXIT_CODE=1
 
               echo "Running: git diff '${BASE_SHA}...${HEAD_SHA}' -- ${ALLOWED_PATTERNS[*]}"
-              set +e # Temporarily disable exit on error for git diff
+              set +e
               git diff "${BASE_SHA}...${HEAD_SHA}" -- "${ALLOWED_PATTERNS[@]}" > raw_diff_output.txt 2> git_diff_stderr.log
               GIT_DIFF_EXIT_CODE=$?
-              set -e # Re-enable exit on error
+              set -e
               RAW_DIFF_CONTENT=$(cat raw_diff_output.txt)
 
               if [[ $GIT_DIFF_EXIT_CODE -ne 0 ]]; then
@@ -486,18 +493,16 @@ jobs:
                    FILTERED_PR_DIFF="<!-- No relevant file changes found for specified patterns -->"
                  else
                    echo "::error::git diff failed (Exit: $GIT_DIFF_EXIT_CODE) and produced no output."
-                   RAW_DIFF_CONTENT="FETCH_FAILED" # Signal failure
+                   RAW_DIFF_CONTENT="FETCH_FAILED"
                  fi
               else
                   echo "git diff successful. Raw diff size: ${#RAW_DIFF_CONTENT} bytes."
               fi
-          fi # End SHA check
+          fi
 
-          # Proceed with Perl filtering only if git diff succeeded and produced content
           if [[ "$RAW_DIFF_CONTENT" != "FETCH_FAILED" && -n "$RAW_DIFF_CONTENT" ]]; then
               echo "Filtering suspected minified files..."
-              set +e # Disable exit on error for the pipe
-              # (Perl script remains the same as before)
+              set +e
               FILTERED_PR_DIFF_CONTENT=$(echo "$RAW_DIFF_CONTENT" | perl -ne '
                 BEGIN { $chunk = ""; $print_chunk = 1; $max_len = 500; }
                 if (/^diff --git a\/(.+)\s+b\/(.+)$/) {
@@ -525,7 +530,7 @@ jobs:
                 END { print $chunk if $chunk ne "" && $print_chunk; }
               ' 2> filter_stderr.log)
               PERL_PIPE_STATUS=${PIPESTATUS[1]}
-              set -e # Re-enable exit on error
+              set -e
 
               if [[ $PERL_PIPE_STATUS -ne 0 ]]; then echo "::warning::Perl filter script exited with status $PERL_PIPE_STATUS."; fi
               if [[ -s filter_stderr.log ]]; then echo "Perl filter script warnings/info:"; cat filter_stderr.log; fi
@@ -535,37 +540,33 @@ jobs:
                   FILTERED_PR_DIFF="<!-- Diff contained only files filtered out by heuristic -->"
               elif [[ -z "$FILTERED_PR_DIFF_CONTENT" ]]; then
                   echo "Filtered diff is empty (remained empty after Perl filter)."
-                  # Keep the message set previously based on git diff result
               else
                    echo "Perl filtering complete. Final diff size: ${#FILTERED_PR_DIFF_CONTENT} bytes."
-                   FILTERED_PR_DIFF="$FILTERED_PR_DIFF_CONTENT" # Assign the successfully filtered content
+                   FILTERED_PR_DIFF="$FILTERED_PR_DIFF_CONTENT"
               fi
           elif [[ "$RAW_DIFF_CONTENT" == "FETCH_FAILED" ]]; then
               FILTERED_PR_DIFF="<!-- Error fetching or generating diff -->"
-          # else: FILTERED_PR_DIFF remains as set by the git diff check (e.g., no relevant changes)
           fi
 
-          # Save final filtered diff (or error message) to env
           echo "FILTERED_PR_DIFF<<EOF_PR_DIFF" >> $GITHUB_ENV
           echo "$FILTERED_PR_DIFF" >> $GITHUB_ENV
           echo "EOF_PR_DIFF" >> $GITHUB_ENV
           echo "::endgroup::"
 
+      # --- Fetch PR Review Comments & Bodies using selected token ---
       - name: Format - Fetch PR Review Comments & Bodies
         id: format_pr_reviews
-        # Only run this step if context is PR
         if: env.FINAL_CONTEXT_TYPE == 'pr'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }} # Use the determined token
           REPO: ${{ github.repository }}
           ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
-          # Read the comments XML from the earlier step
           COMMENTS_XML: ${{ env.COMMENTS_XML }}
         run: |
+          # (Script logic remains the same, uses GH_TOKEN env var for gh commands)
           echo "::group::Fetch PR Review Comments & Bodies"
           set -e
           GITHUB_API_ARGS_VERBOSE=(-H "Accept: application/vnd.github+json")
-          # Initialize with comments from previous step
           CURRENT_COMMENTS_XML="$COMMENTS_XML"
 
           # --- PR Review Comments ---
@@ -574,6 +575,7 @@ jobs:
           if [[ "$REVIEW_COMMENTS_JSON" == "FETCH_FAILED" || -z "$REVIEW_COMMENTS_JSON" ]]; then
               echo "::warning::Failed to fetch PR review comments JSON or received empty response."
           else
+              # Rest of script remains the same
               if echo "$REVIEW_COMMENTS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
                   TSV_OUTPUT=$(echo "$REVIEW_COMMENTS_JSON" | jq -r '.[] | select(.body != null) | [.user.login // "unknown", .created_at // "N/A", .body, .path // "unknown", .diff_hunk // "", (.line // .original_line // "N/A")] | @tsv' 2> jq_rev_com_error.log)
                   JQ_EXIT_CODE=$?
@@ -603,6 +605,7 @@ jobs:
           if [[ "$REVIEWS_JSON" == "FETCH_FAILED" || -z "$REVIEWS_JSON" ]]; then
                echo "::warning::Failed to fetch PR reviews JSON or received empty response."
           else
+               # Rest of script remains the same
                if echo "$REVIEWS_JSON" | jq -e '. | type == "array"' > /dev/null 2>&1; then
                    TSV_OUTPUT=$(echo "$REVIEWS_JSON" | jq -r '.[] | select(.body != null and .body != "") | [.user.login // "unknown", .submitted_at // "N/A", .body, .state // "N/A"] | @tsv' 2> jq_rev_error.log)
                    JQ_EXIT_CODE=$?
@@ -625,22 +628,21 @@ jobs:
                fi
           fi
           echo "Review bodies processed. Final XML length: ${#CURRENT_COMMENTS_XML}"
-
-          # Save updated multi-line COMMENTS_XML back to env
           echo "COMMENTS_XML<<EOF_COMMENTS_XML_UPDATED" >> $GITHUB_ENV
           echo "$CURRENT_COMMENTS_XML" >> $GITHUB_ENV
           echo "EOF_COMMENTS_XML_UPDATED" >> $GITHUB_ENV
           echo "::endgroup::"
 
+      # --- Fetch Issue Details using selected token ---
       - name: Format - Fetch Issue Details (Title, Body)
         id: format_issue_details
-        # Only run this step if context is Issue
         if: env.FINAL_CONTEXT_TYPE == 'issue'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }} # Use the determined token
           REPO: ${{ github.repository }}
           ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
         run: |
+          # (Script logic remains the same, uses GH_TOKEN env var for gh command)
           echo "::group::Fetch Issue Details (Title, Body)"
           set -e
           echo "Fetching Issue specific data for #${ISSUE_OR_PR_NUMBER}..."
@@ -666,7 +668,6 @@ jobs:
             echo "::warning::Failed Issue details fetch (gh command failed or returned empty)."
           fi
 
-          # Save multi-line title/body to env
           echo "ISSUE_TITLE<<EOF_ISSUE_TITLE" >> $GITHUB_ENV
           echo "$ISSUE_TITLE" >> $GITHUB_ENV
           echo "EOF_ISSUE_TITLE" >> $GITHUB_ENV
@@ -675,46 +676,42 @@ jobs:
           echo "EOF_ISSUE_BODY" >> $GITHUB_ENV
           echo "::endgroup::"
 
+      # --- Format - Assemble Final Prompt (No token needed here) ---
       - name: Format - Assemble Final Prompt
         id: format # Keep original ID for output mapping
         env:
-          # Read all potentially set env vars
           FINAL_CONTEXT_TYPE: ${{ env.FINAL_CONTEXT_TYPE }}
           ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
           USER_REQUEST_BODY: ${{ env.USER_REQUEST_BODY }}
-          COMMENTS_XML: ${{ env.COMMENTS_XML }} # Use original if PR reviews didn't run/update
-          UPDATED_COMMENTS_XML: ${{ env.COMMENTS_XML_UPDATED }} # Use this if PR reviews ran
-          # PR specific
+          COMMENTS_XML: ${{ env.COMMENTS_XML }}
+          UPDATED_COMMENTS_XML: ${{ env.COMMENTS_XML_UPDATED }}
           PR_TITLE: ${{ env.PR_TITLE }}
           PR_BODY: ${{ env.PR_BODY }}
           FILTERED_PR_DIFF: ${{ env.FILTERED_PR_DIFF }}
-          # Issue specific
           ISSUE_TITLE: ${{ env.ISSUE_TITLE }}
           ISSUE_BODY: ${{ env.ISSUE_BODY }}
         run: |
+          # (Script remains the same)
           echo "::group::Assemble Final Prompt & Set Outputs"
           set -e
           CONTEXT_DETAILS_XML=""
           DIFF_XML=""
           PROMPT_INSTRUCTION=""
-          # Choose the correct comments XML based on whether PR reviews updated it
           FINAL_COMMENTS_XML="${UPDATED_COMMENTS_XML:-$COMMENTS_XML}"
 
-          # Assemble context-specific parts
           if [[ "$FINAL_CONTEXT_TYPE" == "pr" ]]; then
               CONTEXT_DETAILS_XML="<details><title><![CDATA[$PR_TITLE]]></title><body><![CDATA[$PR_BODY]]></body></details>"
               DIFF_XML="<diff><![CDATA[$FILTERED_PR_DIFF]]></diff>"
-              PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request..." # Keep your instruction
+              PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request..."
           elif [[ "$FINAL_CONTEXT_TYPE" == "issue" ]]; then
               CONTEXT_DETAILS_XML="<details><title><![CDATA[$ISSUE_TITLE]]></title><body><![CDATA[$ISSUE_BODY]]></body></details>"
-              DIFF_XML="" # No diff for issues
-              PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue..." # Keep your instruction
+              DIFF_XML=""
+              PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Issue..."
           fi
 
           USER_LOGIN="${{ github.event.comment.user.login }}"
           TIMESTAMP="${{ github.event.comment.created_at }}"
 
-          # Assemble the final prompt
           FORMATTED_PROMPT="<github_context type=\"$FINAL_CONTEXT_TYPE\" number=\"$ISSUE_OR_PR_NUMBER\">
             ${CONTEXT_DETAILS_XML}
             ${DIFF_XML}
@@ -739,11 +736,13 @@ jobs:
           echo "Outputs set."
           echo "::endgroup::"
 
+      # --- Determine probe-chat command (No token needed) ---
       - name: Determine probe-chat command
         id: determine_command
         env:
           PROBE_CHAT_COMMAND_SECRET: ${{ secrets.PROBE_CHAT_COMMAND }}
         run: |
+          # (Script remains the same)
           COMMAND_VAR=""
           if [[ -n "${PROBE_CHAT_COMMAND_SECRET}" ]]; then
             echo "Using PROBE_CHAT_COMMAND secret."
@@ -761,6 +760,7 @@ jobs:
           echo "Determined command base: $COMMAND_VAR"
           echo "command=$COMMAND_VAR" >> "$GITHUB_OUTPUT"
 
+      # --- Setup Python and Install Aider (No token needed) ---
       - name: Set up Python and Install Aider
         if: inputs.allow_edit
         uses: actions/setup-python@v5
@@ -770,54 +770,57 @@ jobs:
       - name: Install Aider
         if: inputs.allow_edit
         run: |
+          # (Script remains the same)
           echo "Installing aider for code editing capabilities..."
           python -m pip install aider-install
           aider-install
           echo "Aider installation completed."
 
+      # --- Run probe-chat (Passes API keys, no GitHub token needed directly) ---
       - name: Run probe-chat
         id: probe
         env:
+          # LLM Keys and Config
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
-          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_API_URL }} # Will be modified below if needed
           OPENAI_API_URL: ${{ secrets.OPENAI_API_URL }}
           GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           MODEL_NAME: ${{ secrets.MODEL_NAME }}
           FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
+          # Aider/Edit Config
           ALLOW_EDIT: ${{ inputs.allow_edit == 'true' && '1' || '0' }}
+          # Pass determined GitHub token for potential use by tools/aider if needed
+          # Note: This assumes probe-chat/aider might use GH_TOKEN if set. Verify if needed.
+          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }}
         run: |
+          # (Script remains the same)
           # Check and modify ANTHROPIC_API_URL to set ANTHROPIC_BASE_URL
           if [[ -n "$ANTHROPIC_API_URL" ]]; then
-            # If ANTHROPIC_API_URL ends with /v1, remove it for ANTHROPIC_BASE_URL
             if [[ "$ANTHROPIC_API_URL" == */v1 ]]; then
               export ANTHROPIC_BASE_URL="${ANTHROPIC_API_URL%/v1}"
               echo "ANTHROPIC_BASE_URL set to $ANTHROPIC_BASE_URL (removed /v1 from ANTHROPIC_API_URL)"
             else
-              # If it doesn't end with /v1, use as is
               export ANTHROPIC_BASE_URL="$ANTHROPIC_API_URL"
               echo "ANTHROPIC_BASE_URL set to $ANTHROPIC_BASE_URL (same as ANTHROPIC_API_URL)"
             fi
           fi
 
-          set -o pipefail # Fail pipe if any command fails
+          set -o pipefail
           PROMPT_FILE="${{ steps.format.outputs.formatted_prompt_file }}"
           COMMAND_BASE="${{ steps.determine_command.outputs.command }}"
           RESPONSE_FILE="response.txt"
           ERROR_LOG="error.log"
-          COMMAND_TO_RUN="$COMMAND_BASE" # Start building command
+          COMMAND_TO_RUN="$COMMAND_BASE"
 
-          # Check if custom prompt is provided as input
           if [[ -n "${{ inputs.prompt }}" ]]; then
-            # Store prompt in a variable and properly quote it to handle multiline values
             PROMPT_VALUE="${{ inputs.prompt }}"
             COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt '$PROMPT_VALUE'"
             echo "Using custom prompt from workflow input (properly quoted for multiline support)"
           else
-            # Use default prompt type based on context if no custom prompt provided
             CONTEXT_TYPE="${{ steps.format.outputs.context_type }}"
             if [[ "$CONTEXT_TYPE" == "pr" ]]; then
               COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt code-review"
@@ -830,7 +833,6 @@ jobs:
             fi
           fi
 
-          # Add allow-edit flag if enabled in workflow input
           if [[ "${{ inputs.allow_edit }}" == "true" ]]; then
             COMMAND_TO_RUN="$COMMAND_TO_RUN --allow-edit"
             echo "Enabling implement tool with --allow-edit flag"
@@ -853,10 +855,8 @@ jobs:
           echo "Command to run: $COMMAND_TO_RUN"
           echo "Running probe-chat..."
 
-          # Pipe prompt content to command stdin, capture stdout/stderr
-          # Use tee with process substitution to both display stderr in real-time and save to file
           cat "$PROMPT_FILE" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> >(tee "$ERROR_LOG" >&2)
-          EXIT_CODE=${PIPESTATUS[1]} # Get exit code of $COMMAND_TO_RUN
+          EXIT_CODE=${PIPESTATUS[1]}
 
           if [ $EXIT_CODE -ne 0 ]; then
             echo "::error::probe-chat command failed with exit code $EXIT_CODE." >&2
@@ -865,21 +865,19 @@ jobs:
               cat "$ERROR_LOG" >&2
               echo "--- end probe-chat stderr ---" >&2
             fi
-            # If response file empty, write a generic error
             if [ ! -s "$RESPONSE_FILE" ]; then
                echo "🤖 **Error:** AI command failed (Exit code: $EXIT_CODE). Check Action logs." > "$RESPONSE_FILE"
             fi
-             # Let workflow continue to reporting step
           else
             echo "probe-chat command finished successfully (Exit code: 0)."
           fi
 
-          # Check for empty response on success
           if [ $EXIT_CODE -eq 0 ] && [ ! -s "$RESPONSE_FILE" ]; then
             echo "::warning::probe-chat command succeeded but produced an empty response."
             echo "🤖 AI command ran successfully but generated no response." > "$RESPONSE_FILE"
           fi
 
+      # --- Upload Debug Files (No token needed) ---
       - name: Upload Debug Files as Artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -899,23 +897,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # --- Handle Git Changes using selected token ---
       - name: Handle Git Changes
         id: handle_git
         if: inputs.allow_edit && steps.probe.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }} # Use the determined token for gh and git push
           CONTEXT_TYPE: ${{ steps.format.outputs.context_type }}
           ISSUE_NUMBER: ${{ steps.set_context_ids.outputs.issue_number }}
-          # Get the head ref name from the previous step's environment variable
           HEAD_REF_NAME: ${{ env.HEAD_REF_NAME }}
         run: |
+          # (Script logic remains the same, uses GH_TOKEN env var for gh commands)
+          # (Git push uses credentials configured by checkout using WORKFLOW_TOKEN)
           echo "::group::Checking for Git Changes"
-          # Configure git user based on inputs
           git config --global user.name "${{ inputs.git_user_name }}"
           git config --global user.email "${{ inputs.git_user_email }}"
           echo "Using git identity: ${{ inputs.git_user_name }} <${{ inputs.git_user_email }}>"
 
-          # Check if there are any changes
           git status --porcelain
           if [[ -z $(git status --porcelain) ]]; then
             echo "No changes detected in the repository."
@@ -927,89 +925,54 @@ jobs:
           echo "Changes detected in the repository."
           echo "has_changes=true" >> $GITHUB_OUTPUT
 
-          # Read AI response to use as commit message
           RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo "AI-assisted changes")
-          # Truncate and format commit message
           COMMIT_MSG=$(printf "AI: %s" "$RESPONSE_CONTENT")
-
-          # Handle different contexts
           PR_URL=""
 
           if [[ "$CONTEXT_TYPE" == "pr" ]]; then
-            # If in PR context, commit to the PR's head branch to extend the PR
             echo "In PR context, extending the existing PR..."
-
-            # --- START: Added Section to Checkout Correct Branch ---
             if [[ -z "$HEAD_REF_NAME" ]]; then
               echo "::error::HEAD_REF_NAME is empty. Cannot determine PR source branch. Aborting git changes."
-              # Optionally create a comment indicating failure?
               exit 1
             fi
             echo "Checking out PR head branch: $HEAD_REF_NAME"
-            # Ensure the local branch exists and tracks the remote if necessary
-            # This assumes actions/checkout fetched the branch correctly due to fetch-depth: 0
             git checkout "$HEAD_REF_NAME"
-            # Optional: Pull latest changes from the branch first to avoid potential push conflicts
-            # git pull origin "$HEAD_REF_NAME"
-            # --- END: Added Section ---
-
-            # Add changes but exclude debug files
             git add --all
-            git reset -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt # Exclude all log files
-            git status --porcelain # See what is actually staged
+            git reset -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt
+            git status --porcelain
             git commit -m "$COMMIT_MSG"
+            echo "Pushing changes to PR branch: $HEAD_REF_NAME..."
+            git push origin "$HEAD_REF_NAME"
+            echo "pr_url=" >> $GITHUB_OUTPUT
 
-            # Push to the PR's head branch
-            echo "Pushing changes to PR branch: $HEAD_REF_NAME..." # <-- Use correct branch name
-            git push origin "$HEAD_REF_NAME" # <-- Use correct branch name
-            echo "pr_url=" >> $GITHUB_OUTPUT # No new PR URL when updating existing
-            
-          elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
-            # If in issue context, create a new branch and PR
+          elif [[ "$CONTEXT_TYPE" == "issue" ]]; "issue" ]]; then
             echo "Creating PR for issue #${ISSUE_NUMBER}..."
-            
-            # Create a branch name that includes the issue number
             TIMESTAMP=$(date +%Y%m%d%H%M%S)
             BRANCH_NAME="probe-ai/issue-${ISSUE_NUMBER}-${TIMESTAMP}"
-            
-            # Create a new branch
             git checkout -b "$BRANCH_NAME"
-            
-            # Add changes but exclude debug files
             git add --all
             git reset -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt
             git commit -m "$COMMIT_MSG"
-            
             PR_TITLE="AI-assisted changes for issue #${ISSUE_NUMBER}"
             PR_BODY=$(printf "This PR was automatically created by Probe AI in response to issue #%s.\n\nChanges include:\n\n%s" "$ISSUE_NUMBER" "$RESPONSE_CONTENT")
-            
-            # Push the branch
             git push origin "$BRANCH_NAME"
-            
-            # Create PR
             PR_URL=$(gh pr create --title "$PR_TITLE" --body "$PR_BODY" --base main --head "$BRANCH_NAME")
             echo "Created PR: $PR_URL"
             echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
-            
+
           else
-            # Not in PR or issue context, use current branch
             echo "Not in PR or issue context, using current branch..."
-            
-            # Get current branch name
             CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-            
-            # Add changes but exclude debug files
             git add --all
             git reset -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt
             git commit -m "$COMMIT_MSG"
-            
-            # Push the changes to current branch
             echo "Pushing changes to current branch: $CURRENT_BRANCH..."
             git push origin "$CURRENT_BRANCH"
             echo "pr_url=" >> $GITHUB_OUTPUT
           fi
           echo "::endgroup::"
 
+      # --- Read Response or Error and Format Output (No token needed) ---
       - name: Read Response or Error and Format Output
         if: always() # Run always to report status
         id: read_response
@@ -1019,20 +982,17 @@ jobs:
           PR_URL: ${{ steps.handle_git.outputs.pr_url }}
           CONTEXT_TYPE: ${{ steps.format.outputs.context_type }}
         run: |
+          # (Script remains the same)
           RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo "")
           ERROR_LOG_CONTENT=$(cat error.log 2>/dev/null || echo "")
           FINAL_BODY=""
 
-          # Add info about changes based on context
           if [[ "$HAS_CHANGES" == "true" ]]; then
             if [[ "$CONTEXT_TYPE" == "pr" ]]; then
-              # In PR context
               RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and pushed to the current PR branch.**"
             elif [[ "$CONTEXT_TYPE" == "issue" && -n "$PR_URL" ]]; then
-              # In issue context with PR created
               RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and a PR has been created: ${PR_URL}**"
             else
-              # Not in PR or issue context, or issue context but PR creation failed
               RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and committed to the current branch.**"
             fi
           fi
@@ -1040,25 +1000,20 @@ jobs:
           FOOTER_TEMPLATE="\n\n-----\n*Tip: Mention me again using \`%s <request>\`.*\n*Powered by [Probe AI](https://probeai.dev)*"
           printf -v FOOTER "$FOOTER_TEMPLATE" "$COMMAND_PREFIX"
 
-          # Check the outcome of the 'probe' step
           if [[ "${{ steps.probe.outcome }}" == "success" ]]; then
-            if [[ -n "${RESPONSE_CONTENT// }" ]]; then # Check if not empty or just whitespace
+            if [[ -n "${RESPONSE_CONTENT// }" ]]; then
               FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}"
             else
-              # Probe succeeded but response file was empty (handled in probe step)
-              FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}" # Use the message written in probe step
+              FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}"
             fi
           else
-            # Probe step failed or earlier steps failed
             ERROR_MESSAGE="🤖 **Error:** AI interaction failed."
             if [[ "${{ steps.format.outcome }}" == "failure" ]]; then
               ERROR_MESSAGE="🤖 **Error:** Failed during context preparation. Check 'Format Input' logs."
             elif [[ "${{ steps.probe.outcome }}" == "failure" ]]; then
-                # Prefer error message from response.txt if it looks like an error
                 if [[ -n "${RESPONSE_CONTENT// }" ]] && echo "$RESPONSE_CONTENT" | grep -q -E "(Error:|ERROR:|Failed|failed|Cannot|Could not)"; then
-                   ERROR_MESSAGE="${RESPONSE_CONTENT}" # Use the error from response.txt
+                   ERROR_MESSAGE="${RESPONSE_CONTENT}"
                 else
-                   # Fallback to generic message + stderr if available
                    ERROR_MESSAGE="🤖 **Error:** The AI command failed to execute or returned an error."
                    if [[ -n "${ERROR_LOG_CONTENT// }" ]]; then
                      ERROR_DETAILS=$(head -c 1000 <<< "$ERROR_LOG_CONTENT")
@@ -1068,7 +1023,7 @@ jobs:
                      ERROR_MESSAGE="${ERROR_MESSAGE} Check 'Run probe-chat' logs."
                    fi
                 fi
-            else # Other preceding failure
+            else
               ERROR_MESSAGE="🤖 **Error:** Workflow failed before AI interaction. Check logs."
             fi
             FINAL_BODY="${ERROR_MESSAGE}${FOOTER}"
@@ -1082,14 +1037,40 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   post_response:
-    if: always() && needs.process_comment.result != 'skipped' # Run if process_comment ran, even if it failed
+    if: always() && needs.process_comment.result != 'skipped'
     runs-on: ubuntu-latest
     needs: [process_comment]
     steps:
+      # --- Generate GitHub App Token (if applicable) - REPEAT FOR THIS JOB ---
+      - name: Generate GitHub App Token
+        id: generate_app_token_post
+        if: secrets.APP_ID != '' && secrets.APP_PRIVATE_KEY != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          # owner: ${{ github.repository_owner }} # Optional scope
+          # repositories: ${{ github.event.repository.name }} # Optional scope
+
+      # --- Determine Workflow Token - REPEAT FOR THIS JOB ---
+      - name: Determine Workflow Token
+        id: set_token_post
+        run: |
+          if [[ -n "${{ steps.generate_app_token_post.outputs.token }}" ]]; then
+            echo "Using GitHub App token for posting comment."
+            echo "WORKFLOW_TOKEN_POST=${{ steps.generate_app_token_post.outputs.token }}" >> $GITHUB_ENV
+          else
+            echo "Using default GITHUB_TOKEN for posting comment."
+            echo "WORKFLOW_TOKEN_POST=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+          fi
+          # Mask the token value in logs
+          echo "::add-mask::${{ env.WORKFLOW_TOKEN_POST }}"
+
+      # --- Post Response Comment using selected token ---
       - name: Post Response Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ env.WORKFLOW_TOKEN_POST }} # Use the token determined for this job
           repository: ${{ github.repository }}
           issue-number: ${{ needs.process_comment.outputs.issue_number }}
           body: ${{ needs.process_comment.outputs.response_body }}
