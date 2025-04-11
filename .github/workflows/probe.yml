@@ -762,6 +762,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
+          ANTHROPIC_API_BASE: ${{ secrets.ANTHROPIC_API_URL }}
           OPENAI_API_URL: ${{ secrets.OPENAI_API_URL }}
           GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
