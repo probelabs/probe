@@ -929,7 +929,7 @@ jobs:
             git commit -m "$COMMIT_MSG"
             
             PR_TITLE="AI-assisted changes for issue #${ISSUE_NUMBER}"
-            PR_BODY="This PR was automatically created by Probe AI in response to issue #${ISSUE_NUMBER}.\n\nChanges include:\n\n${RESPONSE_CONTENT:0:500}..."
+            PR_BODY=$'This PR was automatically created by Probe AI in response to issue #'${ISSUE_NUMBER}$'\n\nChanges include:\n\n'${RESPONSE_CONTENT}
             
             # Push the branch
             git push origin "$BRANCH_NAME"
