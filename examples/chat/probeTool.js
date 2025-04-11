@@ -4,6 +4,9 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import path from 'path';
+import { glob } from 'glob';
 
 // Create an event emitter for tool calls
 export const toolCallEmitter = new EventEmitter();
@@ -287,11 +290,146 @@ const baseImplementTool = {
 	}
 };
 
+// Create the listFiles tool
+const baseListFilesTool = {
+	name: "listFiles",
+	description: 'List files in a specified directory',
+	parameters: {
+		type: 'object',
+		properties: {
+			directory: {
+				type: 'string',
+				description: 'The directory path to list files from. Defaults to current directory if not specified.'
+			}
+		},
+		required: []
+	},
+	execute: async ({ directory = '.', sessionId }) => {
+		const debug = process.env.DEBUG_CHAT === '1';
+		const currentWorkingDir = process.cwd();
+		const targetDir = path.resolve(currentWorkingDir, directory);
+
+		if (debug) {
+			console.log(`[DEBUG] Listing files in directory: ${targetDir}`);
+		}
+
+		try {
+			// Read the directory contents
+			const files = await fs.promises.readdir(targetDir, { withFileTypes: true });
+
+			// Format the results
+			const result = files.map(file => {
+				const isDirectory = file.isDirectory();
+				return {
+					name: file.name,
+					type: isDirectory ? 'directory' : 'file',
+					path: path.join(directory, file.name)
+				};
+			});
+
+			if (debug) {
+				console.log(`[DEBUG] Found ${result.length} files/directories in ${targetDir}`);
+			}
+
+			return {
+				success: true,
+				directory: targetDir,
+				files: result,
+				timestamp: new Date().toISOString()
+			};
+		} catch (error) {
+			console.error(`Error listing files in ${targetDir}:`, error);
+			return {
+				success: false,
+				directory: targetDir,
+				error: error.message || 'Unknown error listing files',
+				timestamp: new Date().toISOString()
+			};
+		}
+	}
+};
+
+// Create the searchFiles tool
+const baseSearchFilesTool = {
+	name: "searchFiles",
+	description: 'Search for files using a glob pattern, recursively by default',
+	parameters: {
+		type: 'object',
+		properties: {
+			pattern: {
+				type: 'string',
+				description: 'The glob pattern to search for (e.g., "**/*.js", "*.md")'
+			},
+			directory: {
+				type: 'string',
+				description: 'The directory to search in. Defaults to current directory if not specified.'
+			},
+			recursive: {
+				type: 'boolean',
+				description: 'Whether to search recursively. Defaults to true.'
+			}
+		},
+		required: ['pattern']
+	},
+	execute: async ({ pattern, directory = '.', recursive = true, sessionId }) => {
+		const debug = process.env.DEBUG_CHAT === '1';
+		const currentWorkingDir = process.cwd();
+		const targetDir = path.resolve(currentWorkingDir, directory);
+
+		if (debug) {
+			console.log(`[DEBUG] Searching for files with pattern: ${pattern}`);
+			console.log(`[DEBUG] In directory: ${targetDir}`);
+			console.log(`[DEBUG] Recursive: ${recursive}`);
+		}
+
+		try {
+			// Set glob options
+			const options = {
+				cwd: targetDir,
+				dot: true, // Include dotfiles
+				nodir: true, // Only return files, not directories
+				absolute: false, // Return paths relative to the search directory
+			};
+
+			// If not recursive, modify the pattern to only search the top level
+			const searchPattern = recursive ? pattern : pattern.replace(/^\*\*\//, '');
+
+			// Search for files
+			const files = await promisify(glob)(searchPattern, options);
+
+			if (debug) {
+				console.log(`[DEBUG] Found ${files.length} files matching pattern ${pattern}`);
+			}
+
+			return {
+				success: true,
+				directory: targetDir,
+				pattern: pattern,
+				recursive: recursive,
+				files: files.map(file => path.join(directory, file)),
+				count: files.length,
+				timestamp: new Date().toISOString()
+			};
+		} catch (error) {
+			console.error(`Error searching files with pattern ${pattern} in ${targetDir}:`, error);
+			return {
+				success: false,
+				directory: targetDir,
+				pattern: pattern,
+				error: error.message || 'Unknown error searching files',
+				timestamp: new Date().toISOString()
+			};
+		}
+	}
+};
+
 // Export the wrapped tool instances
 export const searchToolInstance = wrapToolWithEmitter(baseSearchTool, 'search', baseSearchTool.execute);
 export const queryToolInstance = wrapToolWithEmitter(baseQueryTool, 'query', baseQueryTool.execute);
 export const extractToolInstance = wrapToolWithEmitter(baseExtractTool, 'extract', baseExtractTool.execute);
 export const implementToolInstance = wrapToolWithEmitter(baseImplementTool, 'implement', baseImplementTool.execute);
+export const listFilesToolInstance = wrapToolWithEmitter(baseListFilesTool, 'listFiles', baseListFilesTool.execute);
+export const searchFilesToolInstance = wrapToolWithEmitter(baseSearchFilesTool, 'searchFiles', baseSearchFilesTool.execute);
 
 // --- Backward Compatibility Layer (probeTool mapping to searchToolInstance) ---
 // This might be less relevant if the AI is strictly using the new XML format,
@@ -347,8 +485,17 @@ export const probeTool = {
 		}
 	}
 };
-
 // Export necessary items
 export { DEFAULT_SYSTEM_MESSAGE, listFilesByLevel };
 // Export the tool generator functions if needed elsewhere
 export { searchTool, queryTool, extractTool };
+
+// Export capabilities information for the new tools
+export const toolCapabilities = {
+	search: "Search code using keywords and patterns",
+	query: "Query code with structured parameters for more precise results",
+	extract: "Extract code blocks and context from files",
+	implement: "Implement features or fix bugs using aider (requires --allow-edit)",
+	listFiles: "List files and directories in a specified location",
+	searchFiles: "Find files matching a glob pattern with recursive search capability"
+};

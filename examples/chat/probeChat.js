@@ -14,10 +14,11 @@ import { listFilesByLevel } from '@buger/probe';
 import {
   searchSchema, querySchema, extractSchema, attemptCompletionSchema,
   searchToolDefinition, queryToolDefinition, extractToolDefinition, attemptCompletionToolDefinition, implementToolDefinition,
+  listFilesToolDefinition, searchFilesToolDefinition,
   parseXmlToolCallWithThinking
 } from './tools.js'; // Assuming common.js is moved to tools/
 // Import tool *instances* for execution
-import { searchToolInstance, queryToolInstance, extractToolInstance, implementToolInstance } from './probeTool.js'; // Added implement instance
+import { searchToolInstance, queryToolInstance, extractToolInstance, implementToolInstance, listFilesToolInstance, searchFilesToolInstance } from './probeTool.js'; // Added new tool instances
 
 // Maximum number of messages to keep in history
 const MAX_HISTORY_MESSAGES = 100;
@@ -181,6 +182,8 @@ export class ProbeChat {
       search: searchToolInstance,
       query: queryToolInstance,
       extract: extractToolInstance,
+      listFiles: listFilesToolInstance,
+      searchFiles: searchFilesToolInstance,
       // attempt_completion is handled specially in the loop, no direct implementation needed here
     };
 
@@ -350,6 +353,8 @@ export class ProbeChat {
 ${searchToolDefinition}
 ${queryToolDefinition}
 ${extractToolDefinition}
+${listFilesToolDefinition}
+${searchFilesToolDefinition}
 ${attemptCompletionToolDefinition}
 `;
     if (this.allowEdit) {
@@ -407,6 +412,8 @@ Available Tools:
 - search: Search code using keyword queries.
 - query: Search code using structural AST patterns.
 - extract: Extract specific code blocks or lines from files.
+- listFiles: List files and directories in a specified location.
+- searchFiles: Find files matching a glob pattern with recursive search capability.
 ${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}
 - attempt_completion: Finalize the task and provide the result to the user.
 `;

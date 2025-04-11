@@ -95,6 +95,59 @@ User: Can you implement a function to calculate Fibonacci numbers in main.js wit
 </examples>
 `;
 
+// Define the listFiles tool XML definition
+export const listFilesToolDefinition = `
+## listFiles
+Description: List files and directories in a specified location.
+
+Parameters:
+- directory: (optional) The directory path to list files from. Defaults to current directory if not specified.
+
+Usage Example:
+
+<examples>
+
+User: Can you list the files in the src directory?
+<listFiles>
+<directory>src</directory>
+</listFiles>
+
+User: What files are in the current directory?
+<listFiles>
+</listFiles>
+
+</examples>
+`;
+
+// Define the searchFiles tool XML definition
+export const searchFilesToolDefinition = `
+## searchFiles
+Description: Find files with name matching a glob pattern with recursive search capability.
+
+Parameters:
+- pattern: (required) The glob pattern to search for (e.g., "**/*.js", "*.md").
+- directory: (optional) The directory to search in. Defaults to current directory if not specified.
+- recursive: (optional) Whether to search recursively. Defaults to true.
+
+Usage Example:
+
+<examples>
+
+User: Can you find all JavaScript files in the project?
+<searchFiles>
+<pattern>**/*.js</pattern>
+</searchFiles>
+
+User: Find all markdown files in the docs directory, but only at the top level.
+<searchFiles>
+<pattern>*.md</pattern>
+<directory>docs</directory>
+<recursive>false</recursive>
+</searchFiles>
+
+</examples>
+`;
+
 
 // Import the XML parser function from @buger/probe
 import { parseXmlToolCall } from '@buger/probe';
