@@ -889,6 +889,12 @@ jobs:
             error.log
             formatted_prompt.txt
             jq_std_error.log
+            jq_rev_com_error.log
+            jq_rev_error.log
+            pr_refs_stderr.log
+            raw_diff_output.txt
+            git_diff_stderr.log
+            filter_stderr.log
             response.txt
           if-no-files-found: ignore
           retention-days: 7
@@ -949,7 +955,7 @@ jobs:
 
             # Add changes but exclude debug files
             git add --all
-            git reset -- error.log formatted_prompt.txt jq_std_error.log response.txt # Add any other temp files here
+            git reset -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt # Exclude all log files
             git status --porcelain # See what is actually staged
             git commit -m "$COMMIT_MSG"
 
@@ -971,7 +977,7 @@ jobs:
             
             # Add changes but exclude debug files
             git add --all
-            git reset -- error.log formatted_prompt.txt jq_std_error.log response.txt
+            git reset -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt
             git commit -m "$COMMIT_MSG"
             
             PR_TITLE="AI-assisted changes for issue #${ISSUE_NUMBER}"
@@ -994,7 +1000,7 @@ jobs:
             
             # Add changes but exclude debug files
             git add --all
-            git reset -- error.log formatted_prompt.txt jq_std_error.log response.txt
+            git reset -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt
             git commit -m "$COMMIT_MSG"
             
             # Push the changes to current branch
