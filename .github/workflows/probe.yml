@@ -762,7 +762,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
-          ANTHROPIC_API_BASE: ${{ secrets.ANTHROPIC_API_URL }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_API_URL }}
           OPENAI_API_URL: ${{ secrets.OPENAI_API_URL }}
           GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
@@ -770,6 +770,19 @@ jobs:
           FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
           ALLOW_EDIT: ${{ inputs.allow_edit == 'true' && '1' || '0' }}
         run: |
+          # Check and modify ANTHROPIC_API_URL to set ANTHROPIC_BASE_URL
+          if [[ -n "$ANTHROPIC_API_URL" ]]; then
+            # If ANTHROPIC_API_URL ends with /v1, remove it for ANTHROPIC_BASE_URL
+            if [[ "$ANTHROPIC_API_URL" == */v1 ]]; then
+              export ANTHROPIC_BASE_URL="${ANTHROPIC_API_URL%/v1}"
+              echo "ANTHROPIC_BASE_URL set to $ANTHROPIC_BASE_URL (removed /v1 from ANTHROPIC_API_URL)"
+            else
+              # If it doesn't end with /v1, use as is
+              export ANTHROPIC_BASE_URL="$ANTHROPIC_API_URL"
+              echo "ANTHROPIC_BASE_URL set to $ANTHROPIC_BASE_URL (same as ANTHROPIC_API_URL)"
+            fi
+          fi
+
           set -o pipefail # Fail pipe if any command fails
           PROMPT_FILE="${{ steps.format.outputs.formatted_prompt_file }}"
           COMMAND_BASE="${{ steps.determine_command.outputs.command }}"
@@ -889,10 +902,7 @@ jobs:
           # Read AI response to use as commit message
           RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo "AI-assisted changes")
           # Truncate and format commit message
-          COMMIT_MSG="AI: ${RESPONSE_CONTENT:0:50}"
-          if [[ ${#RESPONSE_CONTENT} -gt 50 ]]; then
-            COMMIT_MSG="${COMMIT_MSG}..."
-          fi
+          COMMIT_MSG=$(printf "AI: %s" "$RESPONSE_CONTENT")
 
           # Handle different contexts
           PR_URL=""
@@ -929,7 +939,7 @@ jobs:
             git commit -m "$COMMIT_MSG"
             
             PR_TITLE="AI-assisted changes for issue #${ISSUE_NUMBER}"
-            PR_BODY=$'This PR was automatically created by Probe AI in response to issue #'${ISSUE_NUMBER}$'\n\nChanges include:\n\n'${RESPONSE_CONTENT}
+            PR_BODY=$(printf "This PR was automatically created by Probe AI in response to issue #%s.\n\nChanges include:\n\n%s" "$ISSUE_NUMBER" "$RESPONSE_CONTENT")
             
             # Push the branch
             git push origin "$BRANCH_NAME"
