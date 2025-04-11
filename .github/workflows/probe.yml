@@ -68,7 +68,7 @@ on:
 permissions:
   pull-requests: write
   issues: write
-  contents: read # Keep read for checkout, needs write for potential comment/reaction later
+  contents: write # Keep read for checkout, needs write for potential comment/reaction later
 
 jobs:
   process_comment:
