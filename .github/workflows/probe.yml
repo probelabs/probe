@@ -847,6 +847,19 @@ jobs:
             echo "🤖 AI command ran successfully but generated no response." > "$RESPONSE_FILE"
           fi
 
+      - name: Upload Debug Files as Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-debug-files
+          path: |
+            error.log
+            formatted_prompt.txt
+            jq_std_error.log
+            response.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Handle Git Changes
         id: handle_git
         if: inputs.allow_edit && steps.probe.outcome == 'success'
@@ -888,8 +901,9 @@ jobs:
             # If in PR context, commit to the current branch to extend the PR
             echo "In PR context, extending the existing PR..."
             
-            # Add and commit changes
-            git add .
+            # Add changes but exclude debug files
+            git add --all
+            git reset -- error.log formatted_prompt.txt jq_std_error.log response.txt
             git commit -m "$COMMIT_MSG"
             
             # Push to the current branch
@@ -909,8 +923,9 @@ jobs:
             # Create a new branch
             git checkout -b "$BRANCH_NAME"
             
-            # Add and commit changes
-            git add .
+            # Add changes but exclude debug files
+            git add --all
+            git reset -- error.log formatted_prompt.txt jq_std_error.log response.txt
             git commit -m "$COMMIT_MSG"
             
             PR_TITLE="AI-assisted changes for issue #${ISSUE_NUMBER}"
@@ -931,8 +946,9 @@ jobs:
             # Get current branch name
             CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
             
-            # Add and commit changes
-            git add .
+            # Add changes but exclude debug files
+            git add --all
+            git reset -- error.log formatted_prompt.txt jq_std_error.log response.txt
             git commit -m "$COMMIT_MSG"
             
             # Push the changes to current branch
