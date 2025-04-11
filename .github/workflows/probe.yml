@@ -227,28 +227,30 @@ jobs:
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Ensure gh uses the right token
         run: |
-          echo "::group::Initialization and User Request Extraction"
           shopt -s extglob # Enable extended globbing for string manipulation
           set -e # Exit immediately if a command exits with a non-zero status.
-          ISSUE_OR_PR_NUMBER=${{ steps.set_context_ids.outputs.issue_number }}
-          RAW_COMMENT_BODY="${{ github.event.comment.body }}"
 
-          # Trim prefix and leading/trailing whitespace from user request
+          echo "::group::Initialization and User Request Extraction"
+
+          # Extract the user request after trimming the prefix
+          RAW_COMMENT_BODY="${{ github.event.comment.body }}"
           USER_REQUEST_BODY_RAW="${RAW_COMMENT_BODY#${COMMAND_PREFIX}}"
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW##*( )}"
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW%%*( )}"
-          # Use EOF markers for multi-line env var
+
+          # Safely write multiline to $GITHUB_ENV using a single redirection
           {
             echo "USER_REQUEST_BODY<<EOF_USER_REQUEST"
             printf '%s\n' "$USER_REQUEST_BODY_RAW"
             echo "EOF_USER_REQUEST"
           } >> "$GITHUB_ENV"
-          echo "User request extracted: [${USER_REQUEST_BODY_RAW:0:100}...]"
-          echo "::endgroup::"
 
+          echo "User request extracted (first 100 chars): [${USER_REQUEST_BODY_RAW:0:100}]"
+          echo "::endgroup::"
           echo "::group::Determine Context Type"
           CONTEXT_TYPE="unknown" # Start with unknown
 
+          ISSUE_OR_PR_NUMBER=${{ steps.set_context_ids.outputs.issue_number }}
           echo "Detecting context for #${ISSUE_OR_PR_NUMBER} in $REPO"
 
           # Try viewing as PR first
