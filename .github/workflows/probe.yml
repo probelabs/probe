@@ -238,9 +238,11 @@ jobs:
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW##*( )}"
           USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW%%*( )}"
           # Use EOF markers for multi-line env var
-          echo "USER_REQUEST_BODY<<EOF_USER_REQUEST" >> $GITHUB_ENV
-          echo "$USER_REQUEST_BODY_RAW" >> $GITHUB_ENV
-          echo "EOF_USER_REQUEST" >> $GITHUB_ENV
+          {
+            echo "USER_REQUEST_BODY<<EOF_USER_REQUEST"
+            echo "$USER_REQUEST_BODY_RAW"
+            echo "EOF_USER_REQUEST"
+          } >> $GITHUB_ENV
           echo "User request extracted: [${USER_REQUEST_BODY_RAW:0:100}...]"
           echo "::endgroup::"
 
