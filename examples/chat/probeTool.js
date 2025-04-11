@@ -237,22 +237,28 @@ const baseImplementTool = {
 	execute: async ({ task, autoCommits = false, prompt, sessionId }) => {
 		const execPromise = promisify(exec);
 		const debug = process.env.DEBUG_CHAT === '1';
+		// Get the current working directory where probe-chat is running
+		const currentWorkingDir = process.cwd();
 
 		if (debug) {
 			console.log(`[DEBUG] Executing aider with task: ${task}`);
 			console.log(`[DEBUG] Auto-commits: ${autoCommits}`);
+			console.log(`[DEBUG] Working directory: ${currentWorkingDir}`);
 			if (prompt) console.log(`[DEBUG] Custom prompt: ${prompt}`);
 		}
 
 		// Build the aider command with the required arguments
-		const autoCommitsFlag = '--no-auto-commits';
+		const autoCommitsFlag = '';
 		const escapedTask = task.replace(/"/g, '\\"');
 
-		const aiderCommand = `aider --yes --no-check-update --no-analytics ${autoCommitsFlag} --message "${escapedTask}"`;
+		const aiderCommand = `aider --yes --no-check-update --no-auto-commits --no-analytics ${autoCommitsFlag} --message "${escapedTask}"`;
+
+		console.error("Task:", escapedTask);
+		console.error("Working directory:", currentWorkingDir);
 
 		try {
-			// Execute aider with the provided task
-			const { stdout, stderr } = await execPromise(aiderCommand);
+			// Execute aider with the provided task, explicitly setting the working directory
+			const { stdout, stderr } = await execPromise(aiderCommand, { cwd: currentWorkingDir });
 
 			if (debug) {
 				console.log(`[DEBUG] aider stdout: ${stdout}`);
