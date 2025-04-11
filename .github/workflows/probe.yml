@@ -65,11 +65,6 @@ on:
         required: false
         description: "Force the use of a specific provider"
 
-permissions:
-  pull-requests: write
-  issues: write
-  contents: write # Keep read for checkout, needs write for potential comment/reaction later
-
 jobs:
   process_comment:
     runs-on: ubuntu-latest
