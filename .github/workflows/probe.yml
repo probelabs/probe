@@ -742,13 +742,13 @@ jobs:
           echo "command=$COMMAND_VAR" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python and Install Aider
-        if: inputs.allow_edit == 'true'
+        if: inputs.allow_edit
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
       - name: Install Aider
-        if: inputs.allow_edit == 'true'
+        if: inputs.allow_edit
         run: |
           echo "Installing aider for code editing capabilities..."
           python -m pip install aider-install
@@ -847,7 +847,7 @@ jobs:
 
       - name: Handle Git Changes
         id: handle_git
-        if: inputs.allow_edit == 'true' && steps.probe.outcome == 'success'
+        if: inputs.allow_edit && steps.probe.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CONTEXT_TYPE: ${{ steps.format.outputs.context_type }}
