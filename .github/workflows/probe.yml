@@ -945,8 +945,11 @@ jobs:
               echo "::error::HEAD_REF_NAME is empty. Cannot determine PR source branch. Aborting git changes."
               exit 1
             fi
+            git stash
             echo "Checking out PR head branch: $HEAD_REF_NAME"
             git checkout "$HEAD_REF_NAME"
+            git pull origin "$HEAD_REF_NAME"
+            git stash apply
             git add --all
             git reset -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt
             git status --porcelain

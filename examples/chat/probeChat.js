@@ -423,6 +423,7 @@ Follow these instructions carefully:
 1.  Analyze the user's request.
 2.  Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool for each step.
 3.  Use the available tools step-by-step to fulfill the request.
+4.  You should always prefer the \`search\` tool for code-related questions. Read full files only if really necessary.
 4.  Ensure to get really deep and understand the full picture before answering. Ensure to check dependencies where required.
 5.  You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
 6.  Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
@@ -523,7 +524,7 @@ When troubleshooting:
     }
 
     // Add Rules/Capabilities section
-    systemMessage += `\n\n# Capabilities & Rules\n- Search code with keywords (\`search\`) or structural patterns (\`query\`).\n- Extract specific code blocks or full files using (\`extract\`).\n- File paths are relative to the project base unless using dependency syntax.\n- Always wait for tool results (\`<tool_result>...\`) before proceeding.\n- Use \`attempt_completion\` ONLY when the entire task is finished.\n- Be direct and technical. Use exactly ONE tool call per response in the specified XML format.\n`;
+    systemMessage += `\n\n# Capabilities & Rules\n- Search given folder using keywords (\`search\`) or structural patterns (\`query\`).\n- Extract specific code blocks or full files using (\`extract\`).\n- File paths are relative to the project base unless using dependency syntax.\n- Always wait for tool results (\`<tool_result>...\`) before proceeding.\n- Use \`attempt_completion\` ONLY when the entire task is finished.\n- Be direct and technical. Use exactly ONE tool call per response in the specified XML format. Prefer using search tool.\n`;
 
     if (this.debug) {
       console.log(`[DEBUG] Base system message length (pre-file list): ${systemMessage.length}`);
