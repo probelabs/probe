@@ -120,11 +120,28 @@ jobs:
           # Mask the token value in logs
           echo "::add-mask::${{ env.WORKFLOW_TOKEN }}"
 
-      # --- Checkout with selected token ---
+      - name: Get PR Head Ref Name (if applicable)
+        id: get_pr_ref
+        # Run only for issue_comment events triggered on a PR
+        if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+        run: |
+          # Get the head ref name from the event payload
+          # Note: Ensure the calling workflow has access to the event payload correctly
+          HEAD_REF="${{ github.event.pull_request.head.ref }}"
+          if [[ -z "$HEAD_REF" ]]; then
+            echo "::warning::Could not get PR head ref from github.event.pull_request.head.ref"
+            # Fallback or error handling might be needed if this is critical and fails
+          else
+            echo "PR head ref from event: $HEAD_REF"
+            echo "head_ref=$HEAD_REF" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ env.WORKFLOW_TOKEN }} # Use the determined token
+          # Checkout the PR head branch if we got it, otherwise checkout default (e.g., main)
+          ref: ${{ steps.get_pr_ref.outputs.head_ref || github.ref }}
           fetch-depth: 0 # Fetch all history for git diff base/head comparison
 
       - name: Install jq, perl and Verify gh
@@ -923,8 +940,9 @@ jobs:
           git config --global user.email "${{ inputs.git_user_email }}"
           echo "Using git identity: ${{ inputs.git_user_name }} <${{ inputs.git_user_email }}>"
 
-          # Get current commit SHA for potential reference (optional)
-          INITIAL_COMMIT=$(git rev-parse HEAD)
+          CHECKED_OUT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          echo "Working directory based on branch: $CHECKED_OUT_BRANCH"
+          INITIAL_COMMIT=$(git rev-parse HEAD) # Commit SHA checked out
           echo "Working directory based on commit: $INITIAL_COMMIT"
 
           # Check if there are any changes staged or unstaged
@@ -977,7 +995,14 @@ jobs:
 
           # === Push the commit to the appropriate destination ===
           if [[ "$CONTEXT_TYPE" == "pr" ]]; then
-            echo "Context is PR #${ISSUE_NUMBER}. Attempting to push commit $NEW_COMMIT to branch '${HEAD_REF_NAME}'."
+            # We should already BE on the PR branch ($CHECKED_OUT_BRANCH should match the PR head ref)
+            TARGET_BRANCH_NAME="$CHECKED_OUT_BRANCH"
+            echo "Context is PR #${ISSUE_NUMBER}. Attempting to push commit $NEW_COMMIT to branch '${TARGET_BRANCH_NAME}'."
+
+            if [[ "$TARGET_BRANCH_NAME" == "HEAD" ]]; then
+              echo "::error::Checked out branch is 'HEAD' (detached). Cannot determine target branch name automatically. Check checkout step."
+              exit 1
+            fi
 
             if [[ -z "$HEAD_REF_NAME" ]]; then
               echo "::error::HEAD_REF_NAME (PR source branch) is empty. Cannot push."
@@ -989,11 +1014,11 @@ jobs:
             # Push the current commit (HEAD) to the remote PR branch ref
             # Use full refspec for safety: refs/heads/your-branch-name
             # This will fail safely if the remote has diverged (non-fast-forward)
-            TARGET_REF="refs/heads/${HEAD_REF_NAME}"
+            TARGET_REF="refs/heads/${TARGET_BRANCH_NAME}"
             echo "Executing: git push origin HEAD:${TARGET_REF}"
             git push origin "HEAD:${TARGET_REF}"
             PUSH_EXIT_CODE=$?
-
+            
             if [[ $PUSH_EXIT_CODE -ne 0 ]]; then
                 echo "::error::Git push failed (Exit code: $PUSH_EXIT_CODE). The remote branch '${HEAD_REF_NAME}' might have new changes (non-fast-forward). Manual intervention required."
                 # Rollback the local commit to leave the workspace potentially cleaner? Optional.
