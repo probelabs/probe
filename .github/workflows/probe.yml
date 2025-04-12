@@ -139,10 +139,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ env.WORKFLOW_TOKEN }} # Use the determined token
-          # Checkout the PR head branch if we got it, otherwise checkout default (e.g., main)
-          ref: ${{ steps.get_pr_ref.outputs.head_ref || github.ref }}
-          fetch-depth: 0 # Fetch all history for git diff base/head comparison
+          token: ${{ env.WORKFLOW_TOKEN }}
+          fetch-depth: 0 # Fetch all history
 
       - name: Install jq, perl and Verify gh
         run: |
@@ -402,21 +400,21 @@ jobs:
           echo "EOF_COMMENTS_XML" >> $GITHUB_ENV
           echo "::endgroup::"
 
-      # --- Fetch PR Details using selected token ---
-      - name: Format - Fetch PR Details (Title, Body, SHAs)
+      - name: Format - Fetch PR Details (Title, Body, SHAs, RefName)
         id: format_pr_details
         if: env.FINAL_CONTEXT_TYPE == 'pr'
         env:
-          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }} # Use the determined token
+          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }}
           REPO: ${{ github.repository }}
           ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
         run: |
-          # (Script logic remains the same, uses GH_TOKEN env var for gh commands)
+          # (Script remains the same - it fetches and outputs HEAD_REF_NAME to GITHUB_ENV)
           echo "::group::Fetch PR Details (Title, Body, SHAs, RefName)"
           set -e
           echo "Fetching PR specific data for #${ISSUE_OR_PR_NUMBER}..."
 
           echo "Fetching PR base SHA, head SHA, and head ref name..."
+          # *** Ensure this command correctly outputs HEAD_REF_NAME to GITHUB_ENV ***
           PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid,headRefName --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
           BASE_SHA=""
           HEAD_SHA=""
@@ -425,6 +423,7 @@ jobs:
           if [[ "$PR_REFS_JSON" == "FETCH_FAILED" ]]; then
             echo "::error::Failed to fetch PR SHAs/RefName."
             cat pr_refs_stderr.log >&2
+            # Keep HEAD_REF_NAME empty, the checkout step will fail safely later
           else
             BASE_SHA=$(echo "$PR_REFS_JSON" | jq -r .baseRefOid)
             HEAD_SHA=$(echo "$PR_REFS_JSON" | jq -r .headRefOid)
@@ -433,19 +432,20 @@ jobs:
             if [[ -z "$BASE_SHA" || "$BASE_SHA" == "null" || \
                   -z "$HEAD_SHA" || "$HEAD_SHA" == "null" || \
                   -z "$HEAD_REF_NAME" || "$HEAD_REF_NAME" == "null" ]]; then
-               echo "::error::Could not extract valid base SHA, head SHA, or head ref name from JSON: $PR_REFS_JSON"
-               BASE_SHA=""
-               HEAD_SHA=""
-               HEAD_REF_NAME=""
+              echo "::error::Could not extract valid base SHA, head SHA, or head ref name from JSON: $PR_REFS_JSON"
+              BASE_SHA=""
+              HEAD_SHA=""
+              HEAD_REF_NAME="" # Ensure it's empty on error
             else
-               echo "Base SHA: $BASE_SHA"
-               echo "Head SHA: $HEAD_SHA"
-               echo "Head Ref Name: $HEAD_REF_NAME"
+              echo "Base SHA: $BASE_SHA"
+              echo "Head SHA: $HEAD_SHA"
+              echo "Head Ref Name: $HEAD_REF_NAME"
+              # *** This is the critical part ***
+              echo "HEAD_REF_NAME=$HEAD_REF_NAME" >> $GITHUB_ENV
             fi
           fi
           echo "BASE_SHA=$BASE_SHA" >> $GITHUB_ENV
           echo "HEAD_SHA=$HEAD_SHA" >> $GITHUB_ENV
-          echo "HEAD_REF_NAME=$HEAD_REF_NAME" >> $GITHUB_ENV
 
           echo "Fetching PR Title and Body..."
           PR_DATA=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
@@ -803,6 +803,23 @@ jobs:
           aider-install
           echo "Aider installation completed."
 
+      - name: Switch to PR Branch (if applicable)
+        # Only run if context is PR and we successfully got the branch name
+        if: env.FINAL_CONTEXT_TYPE == 'pr' && env.HEAD_REF_NAME != ''
+        env:
+          PR_BRANCH_NAME: ${{ env.HEAD_REF_NAME }}
+        run: |
+          echo "::group::Switching to PR branch '$PR_BRANCH_NAME'"
+          git checkout "$PR_BRANCH_NAME"
+          if [[ $? -ne 0 ]]; then
+            echo "::error::Failed to checkout PR branch '$PR_BRANCH_NAME'. Does it exist locally? Trying fetch..."
+            # Fetch the specific ref just in case and try again
+            git fetch origin "refs/heads/${PR_BRANCH_NAME}:refs/remotes/origin/${PR_BRANCH_NAME}"
+            git checkout "$PR_BRANCH_NAME" || { echo "::error::Checkout failed even after fetch."; exit 1; }
+          fi
+          echo "Successfully checked out branch: $(git rev-parse --abbrev-ref HEAD)"
+          echo "::endgroup::"
+
       # --- Run probe-chat (Passes API keys, no GitHub token needed directly) ---
       - name: Run probe-chat
         id: probe
@@ -929,23 +946,22 @@ jobs:
         if: inputs.allow_edit && steps.probe.outcome == 'success'
         env:
           GH_TOKEN: ${{ env.WORKFLOW_TOKEN }}
-          CONTEXT_TYPE: ${{ steps.format.outputs.context_type }}
-          ISSUE_NUMBER: ${{ steps.set_context_ids.outputs.issue_number }}
-          HEAD_REF_NAME: ${{ env.HEAD_REF_NAME }} # Branch name of the PR head
-          # BASE_REF_NAME: ${{ github.event.pull_request.base.ref }} # Could be useful? Maybe not needed.
+          CONTEXT_TYPE: ${{ env.FINAL_CONTEXT_TYPE }} # Use context from env
+          ISSUE_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }} # Use number from env
+          # We don't strictly need HEAD_REF_NAME passed here anymore,
+          # as we'll determine the push target from the currently checked out branch.
         run: |
           echo "::group::Handling Git Changes"
-          # Configure Git user
           git config --global user.name "${{ inputs.git_user_name }}"
           git config --global user.email "${{ inputs.git_user_email }}"
           echo "Using git identity: ${{ inputs.git_user_name }} <${{ inputs.git_user_email }}>"
 
+          # Get the branch that is ACTUALLY checked out now (SHOULD be the PR branch)
           CHECKED_OUT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          echo "Working directory based on branch: $CHECKED_OUT_BRANCH"
-          INITIAL_COMMIT=$(git rev-parse HEAD) # Commit SHA checked out
-          echo "Working directory based on commit: $INITIAL_COMMIT"
+          echo "Working directory is on branch: $CHECKED_OUT_BRANCH"
+          INITIAL_COMMIT=$(git rev-parse HEAD)
+          echo "Commit SHA before AI changes: $INITIAL_COMMIT" # More accurate description
 
-          # Check if there are any changes staged or unstaged
           echo "Checking for file changes made by AI..."
           git status --porcelain
           if [[ -z $(git status --porcelain) ]]; then
@@ -964,79 +980,60 @@ jobs:
 
           PR_URL=""
 
-          # === Stage, Commit the changes WHERE WE ARE ===
+          # === Stage, Commit the changes WHERE WE ARE (on the checked-out branch) ===
           echo "Staging all detected changes..."
           git add --all
-
           echo "Unstaging workflow artifacts..."
-          # Use git reset HEAD <file> to unstage, not just git reset <file>
           git reset HEAD -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt || echo "::warning::Failed to unstage some artifacts, continuing..."
 
-          # Check again if there are actual code changes left to commit
           echo "Checking for staged code changes after unstaging artifacts..."
           git status --porcelain
-          if [[ -z $(git status --porcelain | grep -v '??') ]]; then # Check for staged changes (ignore untracked ??)
-             echo "No actual code changes left after unstaging artifacts. Nothing to commit."
-             echo "has_changes=false" >> $GITHUB_OUTPUT # Update output
-             echo "::endgroup::"
-             exit 0
+          if [[ -z $(git status --porcelain | grep -v '??') ]]; then
+            echo "No actual code changes left after unstaging artifacts. Nothing to commit."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
           fi
 
           echo "Committing staged changes locally..."
           git commit -m "$COMMIT_MSG"
           if [[ $? -ne 0 ]]; then
               echo "::error::Git commit failed."
-              git status
-              git diff --staged
+              git status; git diff --staged
               exit 1
           fi
           NEW_COMMIT=$(git rev-parse HEAD)
-          echo "Created local commit: $NEW_COMMIT"
+          echo "Created local commit: $NEW_COMMIT on branch $CHECKED_OUT_BRANCH"
 
           # === Push the commit to the appropriate destination ===
           if [[ "$CONTEXT_TYPE" == "pr" ]]; then
-            # We should already BE on the PR branch ($CHECKED_OUT_BRANCH should match the PR head ref)
+            # Target the currently checked-out branch (which should be the PR branch)
             TARGET_BRANCH_NAME="$CHECKED_OUT_BRANCH"
             echo "Context is PR #${ISSUE_NUMBER}. Attempting to push commit $NEW_COMMIT to branch '${TARGET_BRANCH_NAME}'."
 
-            if [[ "$TARGET_BRANCH_NAME" == "HEAD" ]]; then
-              echo "::error::Checked out branch is 'HEAD' (detached). Cannot determine target branch name automatically. Check checkout step."
+            if [[ "$TARGET_BRANCH_NAME" == "HEAD" || -z "$TARGET_BRANCH_NAME" ]]; then
+              echo "::error::Cannot push because checked out branch is '$TARGET_BRANCH_NAME' (HEAD or empty). Check 'Switch to PR Branch' step."
               exit 1
             fi
 
-            if [[ -z "$HEAD_REF_NAME" ]]; then
-              echo "::error::HEAD_REF_NAME (PR source branch) is empty. Cannot push."
-              # Attempt to rollback the commit? Maybe not necessary, just fail.
-              # git reset --hard HEAD~1
-              exit 1
-            fi
-
-            # Push the current commit (HEAD) to the remote PR branch ref
-            # Use full refspec for safety: refs/heads/your-branch-name
-            # This will fail safely if the remote has diverged (non-fast-forward)
             TARGET_REF="refs/heads/${TARGET_BRANCH_NAME}"
             echo "Executing: git push origin HEAD:${TARGET_REF}"
             git push origin "HEAD:${TARGET_REF}"
             PUSH_EXIT_CODE=$?
-            
+
             if [[ $PUSH_EXIT_CODE -ne 0 ]]; then
-                echo "::error::Git push failed (Exit code: $PUSH_EXIT_CODE). The remote branch '${HEAD_REF_NAME}' might have new changes (non-fast-forward). Manual intervention required."
-                # Rollback the local commit to leave the workspace potentially cleaner? Optional.
-                # echo "Rolling back local commit $NEW_COMMIT"
-                # git reset --hard HEAD~1
+                echo "::error::Git push failed (Exit code: $PUSH_EXIT_CODE). The remote branch '${TARGET_BRANCH_NAME}' might have new changes (non-fast-forward). Manual intervention required."
                 exit 1 # Fail the step
             fi
-            echo "Changes successfully pushed to the PR branch '${HEAD_REF_NAME}'."
-            echo "pr_url=" >> $GITHUB_OUTPUT # No new PR URL needed
+            echo "Changes successfully pushed to the PR branch '${TARGET_BRANCH_NAME}'."
+            echo "pr_url=" >> $GITHUB_OUTPUT
 
           elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
-            # This logic should remain largely the same, as it creates a *new* branch
-            echo "Context is Issue #${ISSUE_NUMBER}. Creating a new branch and PR based on commit $NEW_COMMIT."
+            # Issue context - create a NEW branch from the current HEAD (which should be 'main' or default)
+            echo "Context is Issue #${ISSUE_NUMBER}. Creating a new branch and PR based on commit $NEW_COMMIT from branch $CHECKED_OUT_BRANCH."
             TIMESTAMP=$(date +%Y%m%d%H%M%S)
             BRANCH_NAME="probe-ai/issue-${ISSUE_NUMBER}-${TIMESTAMP}"
 
-            # We already committed. We just need to create the branch pointing to this commit
-            # and push it.
             echo "Creating new branch '$BRANCH_NAME' pointing to current commit $NEW_COMMIT..."
             git branch "$BRANCH_NAME" HEAD
              if [[ $? -ne 0 ]]; then
