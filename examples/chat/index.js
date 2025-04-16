@@ -150,7 +150,7 @@ export function main() {
   let customPrompt = null;
   if (options.prompt) {
     // Check if it's one of the predefined prompts
-    const predefinedPrompts = ['architect', 'code-review', 'support'];
+    const predefinedPrompts = ['architect', 'code-review', 'support', 'engineer'];
     if (predefinedPrompts.includes(options.prompt)) {
       process.env.PROMPT_TYPE = options.prompt;
       logInfo(chalk.blue(`Using predefined prompt: ${options.prompt}`));
@@ -237,7 +237,7 @@ export function main() {
         sessionId: options.sessionId,
         isNonInteractive: true,
         customPrompt: customPrompt,
-        promptType: options.prompt && ['architect', 'code-review', 'support'].includes(options.prompt) ? options.prompt : null,
+        promptType: options.prompt && ['architect', 'code-review', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
         allowEdit: options.allowEdit
       });
       // Model/Provider info is logged via logInfo above if debug enabled
@@ -368,7 +368,7 @@ export function main() {
       sessionId: options.sessionId,
       isNonInteractive: false,
       customPrompt: customPrompt,
-      promptType: options.prompt && ['architect', 'code-review', 'support'].includes(options.prompt) ? options.prompt : null,
+      promptType: options.prompt && ['architect', 'code-review', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
       allowEdit: options.allowEdit
     });
 

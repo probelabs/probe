@@ -232,3 +232,73 @@ probe search "authentication" --session ""
 # Subsequent searches - reuse the session ID
 probe search "login" --session "a1b2"
 # Will skip code blocks already shown in the previous search
+
+## Chat Command (`probe-chat`)
+
+Engage in an interactive chat session with the Probe AI agent or send single messages for non-interactive use.
+
+```bash
+probe-chat [PATH] [OPTIONS]
+```
+
+### Chat Options
+
+| Option | Function |
+|--------|----------|
+| `[PATH]` | Path to the codebase to search (overrides `ALLOWED_FOLDERS` env var) |
+| `-d, --debug` | Enable debug mode for verbose logging |
+| `--model-name <model>` | Specify the AI model to use (e.g., `claude-3-opus-20240229`, `gpt-4o`) |
+| `-f, --force-provider <provider>` | Force a specific provider (`anthropic`, `openai`, `google`) |
+| `-w, --web` | Run in web interface mode instead of CLI |
+| `-p, --port <port>` | Port for web server (default: 8080) |
+| `-m, --message <message>` | Send a single message and exit (non-interactive) |
+| `-s, --session-id <sessionId>` | Specify a session ID for the chat |
+| `--json` | Output response as JSON in non-interactive mode |
+| `--max-iterations <number>` | Max tool iterations allowed (default: 30) |
+| `--prompt <value>` | Use a custom prompt (`architect`, `code-review`, `support`, `engineer`, path to file, or string) |
+| `--allow-edit` | **Enable code editing via the `implement` tool (uses Aider)** |
+
+### Enabling Code Editing (`--allow-edit`)
+
+Using the `--allow-edit` flag enables the AI agent's `implement` tool, which allows it to modify your codebase.
+
+*   **Functionality**: When enabled, the agent can use the `implement` tool in response to requests like "Refactor this function" or "Add error handling here". This tool uses **Aider** (an external command-line AI coding assistant) to apply the requested changes to your files.
+*   **Requirements**:
+    *   **Aider Installation**: You must install Aider for the `implement` tool to function. Visit the [Aider project website](https://aider.chat/) for full details. A common installation method is:
+        ```bash
+        # Install the aider installer
+        python -m pip install -U aider-chat
+
+        # Run the installer (optional, installs aider command globally)
+        # aider-install
+        ```
+        Ensure the `aider` command is available in your system's PATH.
+    *   **Permissions**: The `probe-chat` process needs write permissions to the files and directories it intends to modify.
+*   **Security**: Enabling code editing by an AI carries risks. Always review changes made by Aider carefully before committing them. Ensure the AI understands the context and your intent correctly.
+*   **Usage**:
+    ```bash
+    # Start an interactive chat session with editing enabled
+    probe-chat --allow-edit
+
+    # Send a single message requesting a change (non-interactive)
+    probe-chat --allow-edit --message "Add comments to the process_data function in utils.py"
+    ```
+
+### Chat Examples
+
+```bash
+# Start interactive chat in the current directory
+probe-chat
+
+# Start interactive chat targeting a specific project path
+probe-chat /path/to/my/project
+
+# Use the 'engineer' persona
+probe-chat --prompt engineer
+
+# Send a single question and get a JSON response
+probe-chat --message "Explain the auth flow in main.go" --json
+
+# Start chat with editing enabled (requires Aider)
+probe-chat /path/to/project --allow-edit
+```

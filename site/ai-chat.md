@@ -125,6 +125,15 @@ The chat maintains context across multiple interactions, allowing for follow-up 
 
 The terminal interface provides user-friendly colored output with syntax highlighting for code blocks.
 
+### Code Editing (Experimental)
+
+With the `--allow-edit` flag, you can enable the AI agent to modify your code.
+
+*   **How it Works**: This flag enables the `implement` tool, which uses **Aider** (an external AI coding assistant) to apply changes based on your requests (e.g., "Refactor this function").
+*   **Requirements**: Requires `aider-chat` to be installed and accessible in your PATH. The chat process also needs write permissions to the target files.
+*   **Caution**: Granting AI write access to your code is powerful but carries risks. Always review changes made by Aider carefully.
+*   **More Info**: See the [CLI Reference](./cli-mode.md#enabling-code-editing---allow-edit) for detailed usage and security considerations.
+
 ## Configuration
 
 You can configure the AI Chat mode using environment variables or command-line options:
