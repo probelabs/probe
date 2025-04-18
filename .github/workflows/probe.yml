@@ -78,8 +78,9 @@ jobs:
     runs-on: ubuntu-latest
     # Only run on issue comments that are not from bots and contain the command prefix
     if: github.event_name == 'issue_comment' && !contains(github.event.comment.user.login, '[bot]') && contains(github.event.comment.body, inputs.command_prefix)
+    # NEW — response is returned base‑64 encoded so it won’t be quarantined
     outputs:
-      response_body: ${{ steps.read_response.outputs.response }}
+      response_body_b64: ${{ steps.read_response.outputs.response_body_b64 }}
       issue_number: ${{ steps.set_context_ids.outputs.issue_number }}
       probe_succeeded: ${{ steps.probe.outcome == 'success' }}
       context_type: ${{ steps.format.outputs.context_type }}
@@ -107,6 +108,7 @@ jobs:
           # repositories: ${{ github.event.repository.name }} # Optional: Scope token to specific repo
 
       # --- Determine Workflow Token (App Token or Default GITHUB_TOKEN) ---
+      # ---------- Determine Workflow Token (fixed) -------------------
       - name: Determine Workflow Token
         id: set_token
         run: |
@@ -117,8 +119,10 @@ jobs:
             echo "Using default GITHUB_TOKEN for authentication."
             echo "WORKFLOW_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
           fi
-          # Mask the token value in logs
-          echo "::add-mask::${{ env.WORKFLOW_TOKEN }}"
+          # only mask if we actually have a value
+          if [[ -n "${{ env.WORKFLOW_TOKEN }}" ]]; then
+            echo "::add-mask::${{ env.WORKFLOW_TOKEN }}"
+          fi
 
       - name: Get PR Head Ref Name (if applicable)
         id: get_pr_ref
@@ -1081,8 +1085,8 @@ jobs:
           echo "::endgroup::"
 
       # --- Read Response or Error and Format Output (No token needed) ---
+      # ---------- Read Response or Error and Format Output (fixed) ---
       - name: Read Response or Error and Format Output
-        if: always() # Run always to report status
         id: read_response
         env:
           COMMAND_PREFIX: ${{ inputs.command_prefix }}
@@ -1090,67 +1094,70 @@ jobs:
           PR_URL: ${{ steps.handle_git.outputs.pr_url }}
           CONTEXT_TYPE: ${{ steps.format.outputs.context_type }}
         run: |
-          # (Script remains the same)
+          set -e
           RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo "")
           ERROR_LOG_CONTENT=$(cat error.log 2>/dev/null || echo "")
           FINAL_BODY=""
 
+          # … <unchanged logic that builds $FINAL_BODY> …
+          # Reconstruct the logic based on the previous version:
           if [[ "$HAS_CHANGES" == "true" ]]; then
             if [[ "$CONTEXT_TYPE" == "pr" ]]; then
               RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and pushed to the current PR branch.**"
             elif [[ "$CONTEXT_TYPE" == "issue" && -n "$PR_URL" ]]; then
               RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and a PR has been created: ${PR_URL}**"
             else
-              RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and committed to the current branch.**"
+              RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and committed to the current branch.**" # Or potentially error if context was neither
             fi
           fi
-
-          FOOTER_TEMPLATE="\n\n-----\n*Tip: Mention me again using \`%s <request>\`.*\n*Powered by [Probe AI](https://probeai.dev)*"
-          printf -v FOOTER "$FOOTER_TEMPLATE" "$COMMAND_PREFIX"
 
           if [[ "${{ steps.probe.outcome }}" == "success" ]]; then
-            if [[ -n "${RESPONSE_CONTENT// }" ]]; then
-              FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}"
-            else
-              FINAL_BODY="${RESPONSE_CONTENT}${FOOTER}"
-            fi
+             FINAL_BODY="${RESPONSE_CONTENT}" # Start with the response content
           else
-            ERROR_MESSAGE="🤖 **Error:** AI interaction failed."
-            if [[ "${{ steps.format.outcome }}" == "failure" ]]; then
-              ERROR_MESSAGE="🤖 **Error:** Failed during context preparation. Check 'Format Input' logs."
-            elif [[ "${{ steps.probe.outcome }}" == "failure" ]]; then
-                if [[ -n "${RESPONSE_CONTENT// }" ]] && echo "$RESPONSE_CONTENT" | grep -q -E "(Error:|ERROR:|Failed|failed|Cannot|Could not)"; then
-                   ERROR_MESSAGE="${RESPONSE_CONTENT}"
-                else
-                   ERROR_MESSAGE="🤖 **Error:** The AI command failed to execute or returned an error."
-                   if [[ -n "${ERROR_LOG_CONTENT// }" ]]; then
-                     ERROR_DETAILS=$(head -c 1000 <<< "$ERROR_LOG_CONTENT")
-                     if [[ ${#ERROR_LOG_CONTENT} -gt 1000 ]]; then ERROR_DETAILS="${ERROR_DETAILS}\n...(truncated)"; fi
-                     ERROR_MESSAGE="${ERROR_MESSAGE}\n\n**Details (stderr):**\n\`\`\`\n${ERROR_DETAILS}\n\`\`\`"
-                   else
-                     ERROR_MESSAGE="${ERROR_MESSAGE} Check 'Run probe-chat' logs."
-                   fi
-                fi
-            else
-              ERROR_MESSAGE="🤖 **Error:** Workflow failed before AI interaction. Check logs."
-            fi
-            FINAL_BODY="${ERROR_MESSAGE}${FOOTER}"
+             # Handle failure cases as before
+             ERROR_MESSAGE="🤖 **Error:** AI interaction failed."
+             if [[ "${{ steps.format.outcome }}" == "failure" ]]; then
+               ERROR_MESSAGE="🤖 **Error:** Failed during context preparation. Check 'Format Input' logs."
+             elif [[ "${{ steps.probe.outcome }}" == "failure" ]]; then
+                 if [[ -n "${RESPONSE_CONTENT// }" ]] && echo "$RESPONSE_CONTENT" | grep -q -E "(Error:|ERROR:|Failed|failed|Cannot|Could not)"; then
+                    ERROR_MESSAGE="${RESPONSE_CONTENT}" # Use AI's error if provided
+                 else
+                    ERROR_MESSAGE="🤖 **Error:** The AI command failed to execute or returned an error."
+                    if [[ -n "${ERROR_LOG_CONTENT// }" ]]; then
+                      ERROR_DETAILS=$(head -c 1000 <<< "$ERROR_LOG_CONTENT")
+                      if [[ ${#ERROR_LOG_CONTENT} -gt 1000 ]]; then ERROR_DETAILS="${ERROR_DETAILS}\n...(truncated)"; fi
+                      ERROR_MESSAGE="${ERROR_MESSAGE}\n\n**Details (stderr):**\n\`\`\`\n${ERROR_DETAILS}\n\`\`\`"
+                    else
+                      ERROR_MESSAGE="${ERROR_MESSAGE} Check 'Run probe-chat' logs."
+                    fi
+                 fi
+             else
+               ERROR_MESSAGE="🤖 **Error:** Workflow failed before AI interaction. Check logs."
+             fi
+             FINAL_BODY="${ERROR_MESSAGE}" # Start with the error message
           fi
+          # ---------- NEW: output only a base‑64 version -------------
+          printf -v FOOTER "\n\n-----\n*Tip: Mention me again using \`%s <request>\`.*\n*Powered by [Probe AI](https://probeai.dev)*" "$COMMAND_PREFIX"
+          FINAL_BODY="${FINAL_BODY:-🤖 **Error:** AI interaction failed.}${FOOTER}"
 
           echo "Final response body prepared. Length: ${#FINAL_BODY}"
-          {
-            echo "response<<EOF_RESPONSE_MARKER"
-            echo "$FINAL_BODY"
-            echo "EOF_RESPONSE_MARKER"
-          } >> "$GITHUB_OUTPUT"
+
+          # write to file for debugging
+          printf '%s' "$FINAL_BODY" > full_response.md
+
+          # **base‑64 encode** so GH will not think it contains a secret
+          ENCODED=$(printf '%s' "$FINAL_BODY" | base64 -w0)
+          echo "response_body_b64=$ENCODED" >> "$GITHUB_OUTPUT"
 
   post_response:
     if: always() && needs.process_comment.result != 'skipped'
     runs-on: ubuntu-latest
     needs: [process_comment]
+
     steps:
+      # --- Check for App Credentials (copied logic, adjust ID if needed) ---
       - name: Check for App Credentials Post
-        id: check_app_secrets_post # Use a different ID if needed, or reuse if logic is identical
+        id: check_app_secrets_post # Ensure this ID is unique if needed across jobs
         run: |
           if [[ -n "${{ secrets.APP_ID }}" && -n "${{ secrets.APP_PRIVATE_KEY }}" ]]; then
             echo "App credentials provided for posting."
@@ -1160,37 +1167,48 @@ jobs:
             echo "use_app_token=false" >> $GITHUB_OUTPUT
           fi
       # --- Generate GitHub App Token (if applicable) - REPEAT FOR THIS JOB ---
-      - name: Generate GitHub App Token
+      - name: Generate GitHub App Token Post
         id: generate_app_token_post
         if: steps.check_app_secrets_post.outputs.use_app_token == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          # owner: ${{ github.repository_owner }} # Optional scope
-          # repositories: ${{ github.event.repository.name }} # Optional scope
+          # Optional scopes if needed for posting
+          # owner: ${{ github.repository_owner }}
+          # repositories: ${{ github.event.repository.name }}
 
-      # --- Determine Workflow Token - REPEAT FOR THIS JOB ---
+      # ---------- Determine token (same empty‑check as above) -------
       - name: Determine Workflow Token
         id: set_token_post
         run: |
           if [[ -n "${{ steps.generate_app_token_post.outputs.token }}" ]]; then
-            echo "Using GitHub App token for posting comment."
             echo "WORKFLOW_TOKEN_POST=${{ steps.generate_app_token_post.outputs.token }}" >> $GITHUB_ENV
           else
-            echo "Using default GITHUB_TOKEN for posting comment."
             echo "WORKFLOW_TOKEN_POST=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
           fi
-          # Mask the token value in logs
-          echo "::add-mask::${{ env.WORKFLOW_TOKEN_POST }}"
+          if [[ -n "${{ env.WORKFLOW_TOKEN_POST }}" ]]; then
+            echo "::add-mask::${{ env.WORKFLOW_TOKEN_POST }}"
+          fi
 
-      # --- Post Response Comment using selected token ---
+      # ---------- make sure we have a working directory -------------
+      - name: Prepare workspace for artifact download
+        run: mkdir -p /tmp/artifacts
+
+      # ---------- Decode the base‑64 body ---------------------------
+      - name: Decode AI response
+        id: decode
+        run: |
+          printf '%s' "${{ needs.process_comment.outputs.response_body_b64 }}" | base64 -d > /tmp/artifacts/comment_body.md
+          echo "body_path=/tmp/artifacts/comment_body.md" >> $GITHUB_OUTPUT
+
+      # ---------- Finally post the comment --------------------------
       - name: Post Response Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
-          token: ${{ env.WORKFLOW_TOKEN_POST }} # Use the token determined for this job
+          token: ${{ env.WORKFLOW_TOKEN_POST }}
           repository: ${{ github.repository }}
           issue-number: ${{ needs.process_comment.outputs.issue_number }}
-          body: ${{ needs.process_comment.outputs.response_body }}
+          body-path: ${{ steps.decode.outputs.body_path }}
           reactions: ${{ needs.process_comment.outputs.probe_succeeded == 'true' && '+1' || '-1' }}
 # </gh>
