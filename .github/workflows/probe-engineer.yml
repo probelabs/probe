@@ -16,7 +16,7 @@ jobs:
     with:
       command_prefix: "/engineer" # Or '/ai', '/ask', etc.
       allow_edit: true
-      prompt: ./.probe/engineer.md
+      prompt: ./.prompts/engineer.md
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.PROBE_ANTHROPIC_API_KEY }}
       ANTHROPIC_API_URL: ${{ secrets.PROBE_ANTHROPIC_URL }}
