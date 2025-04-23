@@ -17,7 +17,7 @@ hero:
       link: https://github.com/buger/probe
     - theme: alt
       text: Join Discord
-      link: https://discord.gg/hBN4UsTZ
+      link: https://discord.gg/t5QmP9EWSS
 ---
 
 <div class="quick-start-section">
