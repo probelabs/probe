@@ -109,7 +109,15 @@ export function buildCliArgs(options, flagMap) {
  * @returns {string} - Escaped string
  */
 export function escapeString(str) {
-	// Use single quotes instead of double quotes for better shell compatibility
-	// Escape single quotes in the string by replacing ' with '\''
-	return `'${str.replace(/'/g, "'\\''")}'`;
+  if (process.platform === 'win32') {
+    // For Windows PowerShell, simply wrap with double quotes.
+    // More complex escaping might be needed if the path contains double quotes,
+    // but this covers the common case.
+    // Note: Avoid backticks `\`${str}\`` as they can cause issues if str contains $
+    return `"${str}"`;
+  } else {
+    // Use single quotes for POSIX shells
+    // Escape single quotes in the string by replacing ' with '\''
+    return `'${str.replace(/'/g, "'\\''")}'`;
+  }
 }
