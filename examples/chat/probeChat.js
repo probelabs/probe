@@ -247,6 +247,7 @@ export class ProbeChat {
    */
   initializeOpenAIModel(apiKey, apiUrl, modelName) {
     this.provider = createOpenAI({
+      compatibility: 'strict',
       apiKey: apiKey,
       ...(apiUrl && { baseURL: apiUrl }), // Conditionally add baseURL
     });
