@@ -25,69 +25,6 @@ const MAX_HISTORY_MESSAGES = 100;
 // Maximum iterations for the tool loop - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
 
-// --- XML Tool Definitions for System Prompt ---
-// Tool definitions will be constructed dynamically in getSystemMessage based on allowEdit flag
-
-
-
-
-
-
-// Tool guidelines will be constructed dynamically in getSystemMessage based on allowEdit flag
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// --- End XML Tool Definitions Placeholder ---
-
-
 // Parse and validate allowed folders from environment variable
 const allowedFolders = process.env.ALLOWED_FOLDERS
   ? process.env.ALLOWED_FOLDERS.split(',').map(folder => folder.trim()).filter(Boolean)
@@ -780,6 +717,13 @@ When troubleshooting:
             streamError = error;
             console.error(error); // your error logging logic here
           },
+          providerOptions: {
+            openai: {
+              streamOptions: {
+                include_usage: true
+              }
+            }
+          }
         };
 
         // **Streaming Response Handling**
