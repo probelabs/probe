@@ -475,7 +475,6 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
         lines: [usize; 2],
         node_type: &'a str,
         code: &'a str,
-        content: &'a str, // Alias for code for backward compatibility
         // Include other relevant fields
         matched_keywords: Option<&'a Vec<String>>,
         score: Option<f64>,
@@ -494,7 +493,6 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
             lines: [r.lines.0, r.lines.1],
             node_type: &r.node_type,
             code: &r.code,
-            content: &r.code, // Same as code for backward compatibility
             matched_keywords: r.matched_keywords.as_ref(),
             score: r.score,
             tfidf_score: r.tfidf_score,

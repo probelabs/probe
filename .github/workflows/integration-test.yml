@@ -91,27 +91,6 @@ jobs:
           exit 1
         fi
 
-    - name: Verify Probe installation
-      run: |
-        echo "Testing probe --version..."
-        probe --version || {
-          echo "ERROR: probe --version failed"
-          echo "Binary info:"
-          which probe
-          ls -la $(which probe)
-          file $(which probe) 2>/dev/null || echo "file command failed"
-          echo "System info:"
-          uname -a
-          echo "Architecture check:"
-          arch
-          exit 1
-        }
-        echo "Testing probe --help..."
-        probe --help | head -10 || {
-          echo "ERROR: probe --help failed"
-          exit 1
-        }
-
     - name: Debug binary location (Unix)
       if: runner.os != 'Windows'
       run: |
@@ -154,6 +133,27 @@ jobs:
         dir "$env:APPDATA\npm\node_modules\@buger\probe\bin\" 2>$null
         echo "Checking for any probe binaries..."
         Get-ChildItem -Path "$env:APPDATA\npm\node_modules\@buger\probe\" -Recurse -Name "*probe*" 2>$null
+
+    - name: Verify Probe installation
+      run: |
+        echo "Testing probe --version..."
+        probe --version || {
+          echo "ERROR: probe --version failed"
+          echo "Binary info:"
+          which probe
+          ls -la $(which probe)
+          file $(which probe) 2>/dev/null || echo "file command failed"
+          echo "System info:"
+          uname -a
+          echo "Architecture check:"
+          arch
+          exit 1
+        }
+        echo "Testing probe --help..."
+        probe --help | head -10 || {
+          echo "ERROR: probe --help failed"
+          exit 1
+        }
 
     - name: Test search functionality
       run: |
