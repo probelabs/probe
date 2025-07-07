@@ -72,6 +72,9 @@ on:
       APP_PRIVATE_KEY:
         required: false
         description: "The GitHub App's private key (if using App auth)"
+      MAX_TOOL_ITERATIONS:
+        required: false
+        description: "Max tool iterations. Default to 30"
 
 jobs:
   process_comment:
@@ -844,6 +847,7 @@ jobs:
           # Pass determined GitHub token for potential use by tools/aider if needed
           # Note: This assumes probe-chat/aider might use GH_TOKEN if set. Verify if needed.
           GH_TOKEN: ${{ env.WORKFLOW_TOKEN }}
+          MAX_TOOL_ITERATIONS: ${{ secrets.MAX_TOOL_ITERATIONS }}
         run: |
           # (Script remains the same)
           # Check and modify ANTHROPIC_API_URL to set ANTHROPIC_BASE_URL
