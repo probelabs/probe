@@ -22,3 +22,5 @@ jobs:
       ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
       APP_ID: ${{ secrets.PROBE_APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.PROBE_APP_PRIVATE_KEY }}
+    env:
+      MAX_TOOL_ITERATIONS: 60
