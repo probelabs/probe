@@ -12,8 +12,23 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        node-version: [20]
+        include:
+          - os: ubuntu-latest
+            node-version: 20
+            platform: linux
+            arch: x64
+          - os: windows-latest
+            node-version: 20
+            platform: win32
+            arch: x64
+          - os: macos-latest
+            node-version: 20
+            platform: darwin
+            arch: arm64
+          - os: macos-13
+            node-version: 20
+            platform: darwin
+            arch: x64
       fail-fast: false
 
     steps:
@@ -25,11 +40,31 @@ jobs:
       with:
         node-version: ${{ matrix.node-version }}
 
+    - name: Debug system info
+      run: |
+        echo "OS: ${{ matrix.os }}"
+        echo "Platform: ${{ matrix.platform }}"
+        echo "Architecture: ${{ matrix.arch }}"
+        node -p "process.platform"
+        node -p "process.arch"
+
     - name: Install Probe via npm
       run: npm install -g @buger/probe
 
     - name: Verify Probe installation
       run: probe --version
+
+    - name: Debug binary location (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        which probe || echo "probe not found in PATH"
+        ls -la $(npm root -g)/@buger/probe/bin/ || echo "bin directory not found"
+
+    - name: Debug binary location (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        where probe
+        dir "$env:APPDATA\npm\node_modules\@buger\probe\bin\"
 
     - name: Test search functionality
       run: |
@@ -47,6 +82,7 @@ jobs:
 
         if ! grep -q '"code"' search_results.json; then
           echo "Error: JSON output missing 'code' field"
+          echo "Actual content:"
           cat search_results.json
           exit 1
         fi
@@ -79,6 +115,7 @@ jobs:
 
         if (-not ($content -match '"code"')) {
           Write-Host "Error: JSON output missing 'code' field"
+          Write-Host "Actual content:"
           Get-Content search_results.json
           exit 1
         }
@@ -107,6 +144,7 @@ jobs:
         # Check that the extract output contains expected fields
         if ! grep -q '"file"' extract_results.json; then
           echo "Error: Extract JSON output missing 'file' field"
+          echo "Actual content:"
           cat extract_results.json
           exit 1
         fi
@@ -127,6 +165,7 @@ jobs:
 
         if (-not ($content -match '"file"')) {
           Write-Host "Error: Extract JSON output missing 'file' field"
+          Write-Host "Actual content:"
           Get-Content extract_results.json
           exit 1
         }
