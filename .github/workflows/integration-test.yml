@@ -168,74 +168,107 @@ jobs:
           echo "probe command not found or not accessible: $($_.Exception.Message)"
         }
 
-    - name: Check binary architecture and fix if needed (macOS x64)
-      if: matrix.platform == 'darwin' && matrix.arch == 'x64'
+    - name: Fix binary compatibility issues
+      shell: bash
       run: |
-        echo "Checking binary architecture for macOS x64..."
-        PROBE_PATH=$(which probe)
-        echo "Probe binary location: $PROBE_PATH"
+        echo "=== Fixing Binary Compatibility Issues ==="
         
-        # Check the architecture of the installed binary
-        if [ -f "$PROBE_PATH" ]; then
-          echo "Current binary architecture:"
-          file "$PROBE_PATH"
-          lipo -archs "$PROBE_PATH" 2>/dev/null || echo "Not a universal binary or lipo failed"
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          echo "Windows: Ensuring probe.exe is used..."
+          NPM_ROOT=$(npm root -g)
+          PROBE_DIR="$NPM_ROOT/@buger/probe/bin"
           
-          # Check if binary is arm64 when we need x64
-          if lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "arm64" && ! lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "x86_64"; then
-            echo "Found arm64 binary but need x64. Attempting to fix..."
+          # Check if probe.exe exists
+          if [ -f "$PROBE_DIR/probe.exe" ]; then
+            echo "Found probe.exe at $PROBE_DIR/probe.exe"
             
-            # Try to extract x64 slice if it's a universal binary
-            if lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "x86_64"; then
-              echo "Extracting x64 slice from universal binary..."
-              lipo -thin x86_64 "$PROBE_PATH" -output "${PROBE_PATH}.x64"
-              mv "${PROBE_PATH}.x64" "$PROBE_PATH"
-              chmod +x "$PROBE_PATH"
-            else
-              echo "No x64 slice found. Binary may not be compatible."
-              echo "Continuing with existing binary - test may fail."
+            # Create a wrapper script in npm bin directory
+            NPM_BIN=$(dirname "$NPM_ROOT")/bin
+            mkdir -p "$NPM_BIN"
+            
+            # Create probe.cmd wrapper for Windows
+            cat > "$NPM_BIN/probe.cmd" << 'EOF'
+        @echo off
+        "%~dp0../node_modules/@buger/probe/bin/probe.exe" %*
+        EOF
+            echo "Created probe.cmd wrapper"
+          else
+            echo "ERROR: probe.exe not found in expected location"
+            ls -la "$PROBE_DIR" 2>/dev/null || echo "Bin directory not found"
+            exit 1
+          fi
+          
+        elif [[ "${{ runner.os }}" == "macOS" ]]; then
+          echo "macOS: Checking binary architecture..."
+          PROBE_PATH=$(which probe)
+          
+          if [ -f "$PROBE_PATH" ]; then
+            echo "Current binary: $PROBE_PATH"
+            file "$PROBE_PATH"
+            
+            # Check architecture compatibility
+            BINARY_ARCH=$(lipo -archs "$PROBE_PATH" 2>/dev/null || echo "unknown")
+            SYSTEM_ARCH=$(uname -m)
+            
+            echo "Binary architecture: $BINARY_ARCH"
+            echo "System architecture: $SYSTEM_ARCH"
+            echo "Expected architecture: ${{ matrix.arch }}"
+            
+            # For x64 runners, ensure we have x64 compatible binary
+            if [[ "${{ matrix.arch }}" == "x64" && "$BINARY_ARCH" == "arm64" ]]; then
+              echo "Architecture mismatch detected. Attempting to fix..."
+              
+              # Try to find x64 binary in package
+              NPM_ROOT=$(npm root -g)
+              PROBE_PKG_DIR="$NPM_ROOT/@buger/probe"
+              
+              if [ -d "$PROBE_PKG_DIR/bin" ]; then
+                echo "Checking for alternative binaries..."
+                ls -la "$PROBE_PKG_DIR/bin/"
+                
+                # Look for x64 specific binary or universal binary
+                if [ -f "$PROBE_PKG_DIR/bin/probe" ]; then
+                  PACKAGE_BINARY_ARCH=$(lipo -archs "$PROBE_PKG_DIR/bin/probe" 2>/dev/null || echo "unknown")
+                  echo "Package binary architecture: $PACKAGE_BINARY_ARCH"
+                  
+                  if echo "$PACKAGE_BINARY_ARCH" | grep -q "x86_64"; then
+                    if echo "$PACKAGE_BINARY_ARCH" | grep -q "arm64"; then
+                      echo "Extracting x64 slice from universal binary..."
+                      lipo -thin x86_64 "$PROBE_PKG_DIR/bin/probe" -output "$PROBE_PATH"
+                      chmod +x "$PROBE_PATH"
+                    else
+                      echo "Using x64-only binary..."
+                      cp "$PROBE_PKG_DIR/bin/probe" "$PROBE_PATH"
+                      chmod +x "$PROBE_PATH"
+                    fi
+                  else
+                    echo "No compatible x64 binary found. Continuing with existing binary."
+                  fi
+                fi
+              fi
             fi
           else
-            echo "Binary architecture appears correct for x64"
+            echo "ERROR: Probe binary not found"
+            exit 1
           fi
-        else
-          echo "Probe binary not found at expected location"
-          exit 1
-        fi
-
-    - name: Check binary architecture and fix if needed (macOS x64)
-      if: matrix.platform == 'darwin' && matrix.arch == 'x64'
-      run: |
-        echo "Checking binary architecture for macOS x64..."
-        PROBE_PATH=$(which probe)
-        echo "Probe binary location: $PROBE_PATH"
-        
-        # Check the architecture of the installed binary
-        if [ -f "$PROBE_PATH" ]; then
-          echo "Current binary architecture:"
-          file "$PROBE_PATH"
-          lipo -archs "$PROBE_PATH" 2>/dev/null || echo "Not a universal binary or lipo failed"
           
-          # Check if binary is arm64 when we need x64
-          if lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "arm64" && ! lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "x86_64"; then
-            echo "Found arm64 binary but need x64. Attempting to fix..."
-            
-            # Try to extract x64 slice if it's a universal binary
-            if lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "x86_64"; then
-              echo "Extracting x64 slice from universal binary..."
-              lipo -thin x86_64 "$PROBE_PATH" -output "${PROBE_PATH}.x64"
-              mv "${PROBE_PATH}.x64" "$PROBE_PATH"
-              chmod +x "$PROBE_PATH"
+        else
+          echo "Linux: Verifying binary..."
+          PROBE_PATH=$(which probe)
+          if [ -f "$PROBE_PATH" ]; then
+            echo "Binary location: $PROBE_PATH"
+            file "$PROBE_PATH"
+            echo "Checking if executable..."
+            if [ -x "$PROBE_PATH" ]; then
+              echo "Binary is executable"
             else
-              echo "No x64 slice found. Binary may not be compatible."
-              echo "Continuing with existing binary - test may fail."
+              echo "Making binary executable..."
+              chmod +x "$PROBE_PATH"
             fi
           else
-            echo "Binary architecture appears correct for x64"
+            echo "ERROR: Probe binary not found"
+            exit 1
           fi
-        else
-          echo "Probe binary not found at expected location"
-          exit 1
         fi
 
     - name: Verify Probe installation
