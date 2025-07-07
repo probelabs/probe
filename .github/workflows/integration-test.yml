@@ -56,6 +56,118 @@ jobs:
         npm install -g @buger/probe
         echo "Installation completed"
 
+    - name: Debug binary location (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        echo "=== Binary Location Debug ==="
+        echo "Checking probe in PATH..."
+        which probe || echo "probe not found in PATH"
+        echo "Checking npm global root..."
+        npm root -g
+        echo "Checking probe package directory..."
+        ls -la $(npm root -g)/@buger/probe/ || echo "probe package directory not found"
+        echo "Checking bin directory..."
+        ls -la $(npm root -g)/@buger/probe/bin/ || echo "bin directory not found"
+        echo "Checking for any probe binaries..."
+        find $(npm root -g)/@buger/probe/ -name "*probe*" -type f 2>/dev/null || echo "no probe binaries found"
+        echo "Checking file permissions..."
+        ls -la $(which probe) 2>/dev/null || echo "probe binary not accessible"
+        
+        # Enhanced architecture debugging
+        if [ -f "$(which probe)" ]; then
+          echo "=== Binary Analysis ==="
+          echo "Binary path: $(which probe)"
+          echo "Binary size: $(ls -lh $(which probe) | awk '{print $5}')"
+          echo "Binary type: $(file $(which probe))"
+          
+          # Platform-specific debugging
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            echo "=== macOS-specific debugging ==="
+            echo "System architecture: $(uname -m)"
+            echo "Expected architecture: ${{ matrix.arch }}"
+            echo "Binary architecture details:"
+            lipo -info $(which probe) 2>/dev/null || echo "lipo info failed"
+            otool -hv $(which probe) 2>/dev/null | head -10 || echo "otool failed"
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            echo "=== Linux-specific debugging ==="
+            echo "System architecture: $(uname -m)"
+            echo "Binary architecture: $(objdump -f $(which probe) 2>/dev/null | grep architecture || echo 'objdump failed')"
+            echo "Binary dependencies:"
+            ldd $(which probe) 2>/dev/null | head -5 || echo "ldd failed"
+          fi
+        fi
+
+    - name: Debug binary location (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        echo "=== Binary Location Debug ==="
+        echo "Checking probe in PATH..."
+        where probe 2>$null || echo "probe not found in PATH"
+        echo "Checking npm global root..."
+        $npmRoot = npm root -g
+        echo "NPM global root: $npmRoot"
+        
+        # Check multiple possible locations
+        $locations = @(
+          "$env:APPDATA\npm\node_modules\@buger\probe\",
+          "$npmRoot\@buger\probe\",
+          "$env:ProgramFiles\nodejs\node_modules\@buger\probe\",
+          "$env:USERPROFILE\AppData\Roaming\npm\node_modules\@buger\probe\"
+        )
+        
+        foreach ($location in $locations) {
+          echo "Checking location: $location"
+          if (Test-Path $location) {
+            echo "  ✓ Directory exists"
+            dir "$location" 2>$null | Select-Object -First 10
+            echo "  Checking bin directory..."
+            dir "$location\bin\" 2>$null | Select-Object -First 10
+          } else {
+            echo "  ✗ Directory not found"
+          }
+        }
+        
+        echo "Searching for any probe binaries..."
+        foreach ($location in $locations) {
+          if (Test-Path $location) {
+            Get-ChildItem -Path "$location" -Recurse -Name "*probe*" -ErrorAction SilentlyContinue | ForEach-Object {
+              echo "  Found: $location$_"
+            }
+          }
+        }
+        
+        # Enhanced Windows debugging
+        echo "=== Binary Analysis ==="
+        try {
+          $probePath = (Get-Command probe -ErrorAction Stop).Source
+          echo "Binary path: $probePath"
+          echo "Binary exists: $(Test-Path $probePath)"
+          if (Test-Path $probePath) {
+            $fileInfo = Get-Item $probePath
+            echo "Binary size: $($fileInfo.Length) bytes"
+            echo "Binary creation time: $($fileInfo.CreationTime)"
+            echo "Binary last write time: $($fileInfo.LastWriteTime)"
+            
+            # Try to get version info
+            try {
+              $versionInfo = $fileInfo.VersionInfo
+              if ($versionInfo) {
+                echo "Binary version info:"
+                echo "  File Version: $($versionInfo.FileVersion)"
+                echo "  Product Version: $($versionInfo.ProductVersion)"
+                echo "  File Description: $($versionInfo.FileDescription)"
+              }
+            } catch {
+              echo "Could not retrieve version info: $($_.Exception.Message)"
+            }
+            
+            # Check if it's executable
+            echo "File attributes: $($fileInfo.Attributes)"
+          }
+        } catch {
+          echo "probe command not found or not accessible: $($_.Exception.Message)"
+        }
+
     - name: Check binary architecture and fix if needed (macOS x64)
       if: matrix.platform == 'darwin' && matrix.arch == 'x64'
       run: |
@@ -91,48 +203,40 @@ jobs:
           exit 1
         fi
 
-    - name: Debug binary location (Unix)
-      if: runner.os != 'Windows'
+    - name: Check binary architecture and fix if needed (macOS x64)
+      if: matrix.platform == 'darwin' && matrix.arch == 'x64'
       run: |
-        echo "Checking probe in PATH..."
-        which probe || echo "probe not found in PATH"
-        echo "Checking npm global root..."
-        npm root -g
-        echo "Checking probe package directory..."
-        ls -la $(npm root -g)/@buger/probe/ || echo "probe package directory not found"
-        echo "Checking bin directory..."
-        ls -la $(npm root -g)/@buger/probe/bin/ || echo "bin directory not found"
-        echo "Checking for any probe binaries..."
-        find $(npm root -g)/@buger/probe/ -name "*probe*" -type f 2>/dev/null || echo "no probe binaries found"
-        echo "Checking file permissions..."
-        ls -la $(which probe) 2>/dev/null || echo "probe binary not accessible"
+        echo "Checking binary architecture for macOS x64..."
+        PROBE_PATH=$(which probe)
+        echo "Probe binary location: $PROBE_PATH"
         
-        # Additional architecture debugging for macOS
-        if [[ "$RUNNER_OS" == "macOS" ]]; then
-          echo "macOS-specific debugging:"
-          echo "System architecture: $(uname -m)"
-          echo "Expected architecture: ${{ matrix.arch }}"
-          if [ -f "$(which probe)" ]; then
-            echo "Binary architecture details:"
-            file $(which probe)
-            lipo -info $(which probe) 2>/dev/null || echo "lipo info failed"
-            otool -hv $(which probe) 2>/dev/null | head -10 || echo "otool failed"
+        # Check the architecture of the installed binary
+        if [ -f "$PROBE_PATH" ]; then
+          echo "Current binary architecture:"
+          file "$PROBE_PATH"
+          lipo -archs "$PROBE_PATH" 2>/dev/null || echo "Not a universal binary or lipo failed"
+          
+          # Check if binary is arm64 when we need x64
+          if lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "arm64" && ! lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "x86_64"; then
+            echo "Found arm64 binary but need x64. Attempting to fix..."
+            
+            # Try to extract x64 slice if it's a universal binary
+            if lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "x86_64"; then
+              echo "Extracting x64 slice from universal binary..."
+              lipo -thin x86_64 "$PROBE_PATH" -output "${PROBE_PATH}.x64"
+              mv "${PROBE_PATH}.x64" "$PROBE_PATH"
+              chmod +x "$PROBE_PATH"
+            else
+              echo "No x64 slice found. Binary may not be compatible."
+              echo "Continuing with existing binary - test may fail."
+            fi
+          else
+            echo "Binary architecture appears correct for x64"
           fi
+        else
+          echo "Probe binary not found at expected location"
+          exit 1
         fi
-
-    - name: Debug binary location (Windows)
-      if: runner.os == 'Windows'
-      run: |
-        echo "Checking probe in PATH..."
-        where probe
-        echo "Checking npm global root..."
-        npm root -g
-        echo "Checking probe package directory..."
-        dir "$env:APPDATA\npm\node_modules\@buger\probe\" 2>$null
-        echo "Checking bin directory..."
-        dir "$env:APPDATA\npm\node_modules\@buger\probe\bin\" 2>$null
-        echo "Checking for any probe binaries..."
-        Get-ChildItem -Path "$env:APPDATA\npm\node_modules\@buger\probe\" -Recurse -Name "*probe*" 2>$null
 
     - name: Verify Probe installation
       run: |
