@@ -176,30 +176,52 @@ async function getLatestRelease(version) {
  */
 function findBestAsset(assets, osInfo, archInfo) {
 	console.log(`Finding appropriate binary for ${osInfo.type} ${archInfo.type}...`);
+	console.log(`Available assets: ${assets.map(a => a.name).join(', ')}`);
 
 	let bestAsset = null;
 	let bestScore = 0;
+	const assetScores = [];
 
 	for (const asset of assets) {
 		// Skip checksum files
 		if (asset.name.endsWith('.sha256') || asset.name.endsWith('.md5') || asset.name.endsWith('.asc')) {
+			console.log(`Skipping checksum file: ${asset.name}`);
 			continue;
 		}
 
 		let score = 0;
+		let osMatch = false;
+		let archMatch = false;
+		const matchDetails = [];
 
-		// Check for OS match
+		// Check for OS match with priority scoring
 		for (const keyword of osInfo.keywords) {
-			if (asset.name.includes(keyword)) {
-				score += 5;
+			if (asset.name.toLowerCase().includes(keyword.toLowerCase())) {
+				// Give higher scores for more specific matches
+				if (keyword === osInfo.type) {
+					score += 10; // Exact OS type match
+					matchDetails.push(`exact-os:${keyword}`);
+				} else {
+					score += 7; // Keyword match
+					matchDetails.push(`os:${keyword}`);
+				}
+				osMatch = true;
 				break;
 			}
 		}
 
-		// Check for architecture match
+		// Check for architecture match with priority scoring
 		for (const keyword of archInfo.keywords) {
-			if (asset.name.includes(keyword)) {
-				score += 5;
+			if (asset.name.toLowerCase().includes(keyword.toLowerCase())) {
+				// Give higher scores for more specific matches
+				if (keyword === archInfo.type) {
+					score += 10; // Exact arch type match
+					matchDetails.push(`exact-arch:${keyword}`);
+				} else {
+					score += 7; // Keyword match
+					matchDetails.push(`arch:${keyword}`);
+				}
+				archMatch = true;
 				break;
 			}
 		}
@@ -207,11 +229,64 @@ function findBestAsset(assets, osInfo, archInfo) {
 		// Prefer exact matches for binary name
 		if (asset.name.startsWith(`${BINARY_NAME}-`)) {
 			score += 3;
+			matchDetails.push('binary-prefix');
 		}
 
-		// If we have a perfect match, use it immediately
-		if (score === 13) {
-			console.log(`Found perfect match: ${asset.name}`);
+		// Bonus for having both OS and arch matches
+		if (osMatch && archMatch) {
+			score += 5;
+			matchDetails.push('complete-match');
+		}
+
+		// Special handling for common naming patterns
+		const assetLower = asset.name.toLowerCase();
+		
+		// macOS ARM64 specific patterns
+		if (osInfo.type === 'darwin' && archInfo.type === 'aarch64') {
+			if (assetLower.includes('darwin') && assetLower.includes('arm64')) {
+				score += 15; // High priority for exact darwin+arm64
+				matchDetails.push('darwin-arm64-exact');
+			} else if (assetLower.includes('apple') && assetLower.includes('silicon')) {
+				score += 12; // Apple Silicon naming
+				matchDetails.push('apple-silicon');
+			}
+		}
+
+		// Windows specific patterns
+		if (osInfo.type === 'windows') {
+			if (assetLower.includes('windows') && (assetLower.includes('x86_64') || assetLower.includes('amd64'))) {
+				score += 15; // High priority for exact windows+x64
+				matchDetails.push('windows-x64-exact');
+			} else if (assetLower.includes('.exe')) {
+				score += 8; // Windows executable
+				matchDetails.push('exe-file');
+			}
+		}
+
+		// Linux specific patterns
+		if (osInfo.type === 'linux') {
+			if (assetLower.includes('linux') && assetLower.includes('x86_64')) {
+				score += 15; // High priority for exact linux+x64
+				matchDetails.push('linux-x64-exact');
+			} else if (assetLower.includes('gnu')) {
+				score += 8; // GNU/Linux
+				matchDetails.push('gnu-linux');
+			}
+		}
+
+		assetScores.push({
+			name: asset.name,
+			score,
+			matches: matchDetails,
+			osMatch,
+			archMatch
+		});
+
+		console.log(`Asset: ${asset.name} - Score: ${score} - Matches: [${matchDetails.join(', ')}]`);
+
+		// If we have a very high confidence match, use it immediately
+		if (score >= 25 && osMatch && archMatch) {
+			console.log(`Found high-confidence match: ${asset.name} (score: ${score})`);
 			return asset;
 		}
 
@@ -222,8 +297,22 @@ function findBestAsset(assets, osInfo, archInfo) {
 		}
 	}
 
+	// Log all scored assets for debugging
+	console.log('Asset scoring summary:');
+	assetScores
+		.sort((a, b) => b.score - a.score)
+		.forEach(item => {
+			console.log(`  ${item.name}: ${item.score} [${item.matches.join(', ')}]`);
+		});
+
 	if (!bestAsset) {
-		throw new Error(`Could not find a suitable binary for ${osInfo.type} ${archInfo.type}`);
+		const availableAssets = assets.filter(a => 
+			!a.name.endsWith('.sha256') && 
+			!a.name.endsWith('.md5') && 
+			!a.name.endsWith('.asc')
+		).map(a => a.name);
+		
+		throw new Error(`Could not find a suitable binary for ${osInfo.type} ${archInfo.type}. Available assets: ${availableAssets.join(', ')}`);
 	}
 
 	console.log(`Selected asset: ${bestAsset.name} (score: ${bestScore})`);
@@ -322,7 +411,13 @@ async function extractBinary(assetPath, outputDir) {
 			});
 		} else if (assetName.endsWith('.zip')) {
 			console.log(`Extracting zip to ${extractDir}...`);
-			await exec(`unzip -q "${assetPath}" -d "${extractDir}"`);
+			if (isWindows) {
+				// Use PowerShell's Expand-Archive on Windows
+				await exec(`powershell -Command "Expand-Archive -Path '${assetPath}' -DestinationPath '${extractDir}' -Force"`);
+			} else {
+				// Use unzip on Unix-like systems
+				await exec(`unzip -q "${assetPath}" -d "${extractDir}"`);
+			}
 		} else {
 			// Assume it's a direct binary
 			console.log(`Copying binary directly to ${binaryPath}`);
@@ -341,9 +436,13 @@ async function extractBinary(assetPath, outputDir) {
 
 		// Find the binary in the extracted files
 		console.log(`Searching for binary in extracted files...`);
+		const { os: osInfo, arch: archInfo } = detectOsArch();
+		
 		const findBinary = async (dir) => {
 			const entries = await fs.readdir(dir, { withFileTypes: true });
+			const candidates = [];
 
+			// First pass: collect all potential binary candidates
 			for (const entry of entries) {
 				const fullPath = path.join(dir, entry.name);
 
@@ -351,16 +450,111 @@ async function extractBinary(assetPath, outputDir) {
 					const result = await findBinary(fullPath);
 					if (result) return result;
 				} else if (entry.isFile()) {
-					// Check if this is the binary we're looking for
-					if (entry.name === binaryName ||
+					// Check if this could be a binary we're looking for
+					const entryLower = entry.name.toLowerCase();
+					const isExecutable = !isWindows ? await isFileExecutable(fullPath) : true;
+					
+					if ((entry.name === binaryName ||
 						entry.name === BINARY_NAME ||
-						(isWindows && entry.name.endsWith('.exe'))) {
-						return fullPath;
+						entryLower.includes(BINARY_NAME) ||
+						(isWindows && entry.name.endsWith('.exe'))) && isExecutable) {
+						
+						// Score this candidate based on platform match
+						let score = 0;
+						const matchDetails = [];
+
+						// Base score for being a potential binary
+						score += 10;
+						matchDetails.push('binary-candidate');
+
+						// Exact name match gets highest priority
+						if (entry.name === binaryName || entry.name === BINARY_NAME) {
+							score += 50;
+							matchDetails.push('exact-name');
+						}
+
+						// Platform-specific scoring
+						for (const keyword of osInfo.keywords) {
+							if (entryLower.includes(keyword.toLowerCase())) {
+								score += 20;
+								matchDetails.push(`os:${keyword}`);
+								break;
+							}
+						}
+
+						// Architecture-specific scoring
+						for (const keyword of archInfo.keywords) {
+							if (entryLower.includes(keyword.toLowerCase())) {
+								score += 20;
+								matchDetails.push(`arch:${keyword}`);
+								break;
+							}
+						}
+
+						// Special handling for macOS ARM64
+						if (osInfo.type === 'darwin' && archInfo.type === 'aarch64') {
+							if (entryLower.includes('darwin') && entryLower.includes('arm64')) {
+								score += 30;
+								matchDetails.push('darwin-arm64-match');
+							} else if (entryLower.includes('apple') && entryLower.includes('silicon')) {
+								score += 25;
+								matchDetails.push('apple-silicon-match');
+							} else if (entryLower.includes('aarch64')) {
+								score += 15;
+								matchDetails.push('aarch64-match');
+							}
+						}
+
+						// Windows-specific patterns
+						if (osInfo.type === 'windows') {
+							if (entryLower.includes('windows') || entry.name.endsWith('.exe')) {
+								score += 15;
+								matchDetails.push('windows-match');
+							}
+						}
+
+						// Linux-specific patterns
+						if (osInfo.type === 'linux') {
+							if (entryLower.includes('linux')) {
+								score += 15;
+								matchDetails.push('linux-match');
+							}
+						}
+
+						candidates.push({
+							path: fullPath,
+							name: entry.name,
+							score,
+							matches: matchDetails
+						});
+
+						console.log(`Binary candidate: ${entry.name} - Score: ${score} - Matches: [${matchDetails.join(', ')}]`);
 					}
 				}
 			}
 
+			// If we found candidates, return the best one
+			if (candidates.length > 0) {
+				candidates.sort((a, b) => b.score - a.score);
+				const best = candidates[0];
+				console.log(`Selected binary: ${best.name} (score: ${best.score})`);
+				return best.path;
+			}
+
 			return null;
+		};
+
+		// Helper function to check if a file is executable (Unix-like systems only)
+		const isFileExecutable = async (filePath) => {
+			if (isWindows) return true; // Skip check on Windows
+			
+			try {
+				const stats = await fs.stat(filePath);
+				// Check if file has execute permission for owner, group, or others
+				return (stats.mode & parseInt('111', 8)) !== 0;
+			} catch (error) {
+				return false;
+			}
 		};
 
 		const binaryFilePath = await findBinary(extractDir);
