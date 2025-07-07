@@ -47,24 +47,113 @@ jobs:
         echo "Architecture: ${{ matrix.arch }}"
         node -p "process.platform"
         node -p "process.arch"
+        echo "Runner OS: ${{ runner.os }}"
+        echo "Runner Arch: ${{ runner.arch }}"
 
     - name: Install Probe via npm
-      run: npm install -g @buger/probe
+      run: |
+        echo "Installing @buger/probe globally..."
+        npm install -g @buger/probe
+        echo "Installation completed"
+
+    - name: Check binary architecture and fix if needed (macOS x64)
+      if: matrix.platform == 'darwin' && matrix.arch == 'x64'
+      run: |
+        echo "Checking binary architecture for macOS x64..."
+        PROBE_PATH=$(which probe)
+        echo "Probe binary location: $PROBE_PATH"
+        
+        # Check the architecture of the installed binary
+        if [ -f "$PROBE_PATH" ]; then
+          echo "Current binary architecture:"
+          file "$PROBE_PATH"
+          lipo -archs "$PROBE_PATH" 2>/dev/null || echo "Not a universal binary or lipo failed"
+          
+          # Check if binary is arm64 when we need x64
+          if lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "arm64" && ! lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "x86_64"; then
+            echo "Found arm64 binary but need x64. Attempting to fix..."
+            
+            # Try to extract x64 slice if it's a universal binary
+            if lipo -archs "$PROBE_PATH" 2>/dev/null | grep -q "x86_64"; then
+              echo "Extracting x64 slice from universal binary..."
+              lipo -thin x86_64 "$PROBE_PATH" -output "${PROBE_PATH}.x64"
+              mv "${PROBE_PATH}.x64" "$PROBE_PATH"
+              chmod +x "$PROBE_PATH"
+            else
+              echo "No x64 slice found. Binary may not be compatible."
+              echo "Continuing with existing binary - test may fail."
+            fi
+          else
+            echo "Binary architecture appears correct for x64"
+          fi
+        else
+          echo "Probe binary not found at expected location"
+          exit 1
+        fi
 
     - name: Verify Probe installation
-      run: probe --version
+      run: |
+        echo "Testing probe --version..."
+        probe --version || {
+          echo "ERROR: probe --version failed"
+          echo "Binary info:"
+          which probe
+          ls -la $(which probe)
+          file $(which probe) 2>/dev/null || echo "file command failed"
+          echo "System info:"
+          uname -a
+          echo "Architecture check:"
+          arch
+          exit 1
+        }
+        echo "Testing probe --help..."
+        probe --help | head -10 || {
+          echo "ERROR: probe --help failed"
+          exit 1
+        }
 
     - name: Debug binary location (Unix)
       if: runner.os != 'Windows'
       run: |
+        echo "Checking probe in PATH..."
         which probe || echo "probe not found in PATH"
+        echo "Checking npm global root..."
+        npm root -g
+        echo "Checking probe package directory..."
+        ls -la $(npm root -g)/@buger/probe/ || echo "probe package directory not found"
+        echo "Checking bin directory..."
         ls -la $(npm root -g)/@buger/probe/bin/ || echo "bin directory not found"
+        echo "Checking for any probe binaries..."
+        find $(npm root -g)/@buger/probe/ -name "*probe*" -type f 2>/dev/null || echo "no probe binaries found"
+        echo "Checking file permissions..."
+        ls -la $(which probe) 2>/dev/null || echo "probe binary not accessible"
+        
+        # Additional architecture debugging for macOS
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          echo "macOS-specific debugging:"
+          echo "System architecture: $(uname -m)"
+          echo "Expected architecture: ${{ matrix.arch }}"
+          if [ -f "$(which probe)" ]; then
+            echo "Binary architecture details:"
+            file $(which probe)
+            lipo -info $(which probe) 2>/dev/null || echo "lipo info failed"
+            otool -hv $(which probe) 2>/dev/null | head -10 || echo "otool failed"
+          fi
+        fi
 
     - name: Debug binary location (Windows)
       if: runner.os == 'Windows'
       run: |
+        echo "Checking probe in PATH..."
         where probe
-        dir "$env:APPDATA\npm\node_modules\@buger\probe\bin\"
+        echo "Checking npm global root..."
+        npm root -g
+        echo "Checking probe package directory..."
+        dir "$env:APPDATA\npm\node_modules\@buger\probe\" 2>$null
+        echo "Checking bin directory..."
+        dir "$env:APPDATA\npm\node_modules\@buger\probe\bin\" 2>$null
+        echo "Checking for any probe binaries..."
+        Get-ChildItem -Path "$env:APPDATA\npm\node_modules\@buger\probe\" -Recurse -Name "*probe*" 2>$null
 
     - name: Test search functionality
       run: |
