@@ -286,10 +286,9 @@ jobs:
           # Create a simple wrapper script
           mv "$PROBE_PATH" "${PROBE_PATH}.original"
           echo '#!/bin/bash
-    echo "Probe version 0.0.0-test (macOS wrapper)"' > "$PROBE_PATH"
-          chmod +x "$PROBE_PATH"
-          
-          echo "Updated binary type: $(file $PROBE_PATH)"
+             echo "Probe version 0.0.0-test (macOS wrapper)"' > "$PROBE_PATH"
+             chmod +x "$PROBE_PATH"
+             echo "Updated binary type: $(file $PROBE_PATH)"
         fi
       shell: bash
 
