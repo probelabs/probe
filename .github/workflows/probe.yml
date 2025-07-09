@@ -80,7 +80,7 @@ jobs:
   process_comment:
     runs-on: ubuntu-latest
     # Only run on issue comments that are not from bots and contain the command prefix
-    if: github.event_name == 'issue_comment' && !contains(github.event.comment.user.login, '[bot]') && contains(github.event.comment.body, inputs.command_prefix)
+    if: (github.event_name != 'issue_comment') || (github.event_name == 'issue_comment' && !contains(github.event.comment.user.login, '[bot]') && contains(github.event.comment.body, inputs.command_prefix))
     # NEW — response is returned base‑64 encoded so it won’t be quarantined
     outputs:
       response_body_b64: ${{ steps.read_response.outputs.response_body_b64 }}
