@@ -133,7 +133,7 @@ jobs:
           echo "Event name: $EVENT_NAME"
           if [[ "$EVENT_NAME" == "issue_comment" ]]; then
             # Filter out bot comments and those without prefix
-            if contains('${{ github.event.comment.user.login }}', '[bot]') || !contains('${{ github.event.comment.body }}', '${{ inputs.command_prefix }}'); then
+            if [[ "${{ github.event.comment.user.login }}" == *"[bot]"* ]] || [[ ! "${{ github.event.comment.body }}" == *"${{ inputs.command_prefix }}"* ]]; then
               echo "::notice::Skipping: Bot comment or missing prefix."
               echo "skip=true" >> $GITHUB_OUTPUT
               exit 0
