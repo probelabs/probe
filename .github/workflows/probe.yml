@@ -36,7 +36,7 @@ on:
       update_existing_comment:
         description: "If 'true', Probe will try to update the previous comment identified by update_comment_marker."
         required: false
-        default: "false"
+        default: false
         type: boolean
       update_comment_marker:
         description: "Hidden marker injected into the comment to locate it later."
