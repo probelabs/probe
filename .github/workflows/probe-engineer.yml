@@ -17,6 +17,8 @@ jobs:
       command_prefix: "/engineer" # Or '/ai', '/ask', etc.
       allow_edit: true
       prompt: ./.prompts/engineer.md
+      update_existing_comment: false
+      update_comment_marker: "<!-- probe-bot -->"
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
