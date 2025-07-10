@@ -1267,8 +1267,20 @@ jobs:
           printf '%s' "${{ needs.process_comment.outputs.response_body_b64 }}" | base64 -d > /tmp/artifacts/comment_body.md
           echo "body_path=/tmp/artifacts/comment_body.md" >> $GITHUB_OUTPUT
 
-      # ---------- Finally post the comment --------------------------
+      # ---------- Find existing comment (if update mode enabled) ----
+      - name: Find Comment
+        id: find_comment
+        if: inputs.update_existing_comment == 'true'
+        uses: peter-evans/find-comment@v3
+        with:
+          token: ${{ env.WORKFLOW_TOKEN_POST }}
+          repository: ${{ github.repository }}
+          issue-number: ${{ needs.process_comment.outputs.issue_number }}
+          body-includes: ${{ inputs.update_comment_marker }}
+
+      # ---------- Create new comment (if not updating or no existing comment found) ----
       - name: Post Response Comment
+        if: inputs.update_existing_comment != 'true' || steps.find_comment.outputs.comment-id == ''
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ env.WORKFLOW_TOKEN_POST }}
@@ -1276,6 +1288,17 @@ jobs:
           issue-number: ${{ needs.process_comment.outputs.issue_number }}
           body-path: ${{ steps.decode.outputs.body_path }}
           reactions: ${{ needs.process_comment.outputs.probe_succeeded == 'true' && '+1' || '-1' }}
-          body-includes: ${{ inputs.update_existing_comment == 'true' && inputs.update_comment_marker || '' }}
-          edit-mode: ${{ inputs.update_existing_comment == 'true' && 'replace' || 'append' }}
+
+      # ---------- Update existing comment (if found) ----------------
+      - name: Update Comment
+        if: inputs.update_existing_comment == 'true' && steps.find_comment.outputs.comment-id != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ env.WORKFLOW_TOKEN_POST }}
+          repository: ${{ github.repository }}
+          issue-number: ${{ needs.process_comment.outputs.issue_number }}
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          body-path: ${{ steps.decode.outputs.body_path }}
+          reactions: ${{ needs.process_comment.outputs.probe_succeeded == 'true' && '+1' || '-1' }}
+          edit-mode: replace
 # </gh>
