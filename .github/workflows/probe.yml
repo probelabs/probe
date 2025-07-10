@@ -133,26 +133,32 @@ jobs:
           echo "Event name: $EVENT_NAME"
           if [[ "$EVENT_NAME" == "issue_comment" ]]; then
             # Filter out bot comments and those without prefix
-            if [[ "${{ github.event.comment.user.login }}" == *"[bot]"* ]] || [[ ! "${{ github.event.comment.body }}" == *"${{ inputs.command_prefix }}"* ]]; then
+            if [ "${{ github.event_name == 'issue_comment' && contains(github.event.comment.user.login, '[bot]') }}" = true ] || [ "${{ github.event_name == 'issue_comment' && contains(github.event.comment.body, inputs.command_prefix) }}" = false ]; then
               echo "::notice::Skipping: Bot comment or missing prefix."
               echo "skip=true" >> $GITHUB_OUTPUT
               exit 0
             fi
             echo "issue_number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
             echo "comment_id=${{ github.event.comment.id }}" >> $GITHUB_OUTPUT
-            echo "user_request=${{ github.event.comment.body }}" >> $GITHUB_OUTPUT
+            echo "user_request<<EOF_USER_REQUEST" >> $GITHUB_OUTPUT
+            echo "${{ github.event.comment.body }}" >> $GITHUB_OUTPUT
+            echo "EOF_USER_REQUEST" >> $GITHUB_OUTPUT
             echo "context_type=to_determine" >> $GITHUB_OUTPUT
             echo "head_ref=" >> $GITHUB_OUTPUT  # Determined later via API
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
             echo "issue_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
             echo "comment_id=" >> $GITHUB_OUTPUT
-            echo "user_request=${{ github.event.pull_request.body }}" >> $GITHUB_OUTPUT
+            echo "user_request<<EOF_USER_REQUEST" >> $GITHUB_OUTPUT
+            echo "${{ github.event.pull_request.body }}" >> $GITHUB_OUTPUT
+            echo "EOF_USER_REQUEST" >> $GITHUB_OUTPUT
             echo "context_type=pr" >> $GITHUB_OUTPUT
             echo "head_ref=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
           elif [[ "$EVENT_NAME" == "issues" ]]; then
             echo "issue_number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
             echo "comment_id=" >> $GITHUB_OUTPUT
-            echo "user_request=${{ github.event.issue.body }}" >> $GITHUB_OUTPUT
+            echo "user_request<<EOF_USER_REQUEST" >> $GITHUB_OUTPUT
+            echo "${{ github.event.issue.body }}" >> $GITHUB_OUTPUT
+            echo "EOF_USER_REQUEST" >> $GITHUB_OUTPUT
             echo "context_type=issue" >> $GITHUB_OUTPUT
             echo "head_ref=" >> $GITHUB_OUTPUT  # N/A for issues
           else
