@@ -440,7 +440,7 @@ jobs:
       # --- Fetch PR Details (Title, Body, SHAs, RefName) ---
       - name: Format - Fetch PR Details (Title, Body, SHAs, RefName)
         id: format_pr_details
-        if: env.FINAL_CONTEXT_TYPE == 'pr'
+        if: env.FINAL_CONTEXT_TYPE == 'pr' && steps.set_context.outputs.skip != 'true'  # Add skip condition if not already
         env:
           GH_TOKEN: ${{ env.WORKFLOW_TOKEN }}
           REPO: ${{ github.repository }}
@@ -451,21 +451,23 @@ jobs:
           set -e
           echo "Fetching PR specific data for #${ISSUE_OR_PR_NUMBER}..."
 
-          echo "Fetching PR base SHA, head SHA, and head ref name..."
-          # Use event payload if available (for pull_request event), else API
+          echo "Fetching PR base SHA, head SHA, head ref name, and head repo..."
+          # FIX: Also fetch headRepositoryOwner.login and headRepository.name to handle forks
           if [[ -n "$EVENT_HEAD_REF" ]]; then
-            # For pull_request event, fetch SHAs via API but use head ref from event
-            PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
+            # For pull_request event, fetch via API but use head ref from event
+            PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid,headRepositoryOwner,headRepository --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
             HEAD_REF_NAME="$EVENT_HEAD_REF"
           else
-            PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid,headRefName --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
+            PR_REFS_JSON=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json baseRefOid,headRefOid,headRefName,headRepositoryOwner,headRepository --repo "${REPO}" 2> pr_refs_stderr.log || echo "FETCH_FAILED")
             HEAD_REF_NAME=""
           fi
           BASE_SHA=""
           HEAD_SHA=""
+          HEAD_REPO_OWNER=""
+          HEAD_REPO_NAME=""
 
           if [[ "$PR_REFS_JSON" == "FETCH_FAILED" ]]; then
-            echo "::error::Failed to fetch PR SHAs/RefName."
+            echo "::error::Failed to fetch PR SHAs/RefName/Repo."
             cat pr_refs_stderr.log >&2
           else
             BASE_SHA=$(echo "$PR_REFS_JSON" | jq -r .baseRefOid)
@@ -473,19 +475,29 @@ jobs:
             if [[ -z "$HEAD_REF_NAME" ]]; then
               HEAD_REF_NAME=$(echo "$PR_REFS_JSON" | jq -r .headRefName)
             fi
+            HEAD_REPO_OWNER=$(echo "$PR_REFS_JSON" | jq -r .headRepositoryOwner.login)
+            HEAD_REPO_NAME=$(echo "$PR_REFS_JSON" | jq -r .headRepository.name)
 
             if [[ -z "$BASE_SHA" || "$BASE_SHA" == "null" || \
                   -z "$HEAD_SHA" || "$HEAD_SHA" == "null" || \
-                  -z "$HEAD_REF_NAME" || "$HEAD_REF_NAME" == "null" ]]; then
-              echo "::error::Could not extract valid base SHA, head SHA, or head ref name from JSON: $PR_REFS_JSON"
+                  -z "$HEAD_REF_NAME" || "$HEAD_REF_NAME" == "null" || \
+                  -z "$HEAD_REPO_OWNER" || "$HEAD_REPO_OWNER" == "null" || \
+                  -z "$HEAD_REPO_NAME" || "$HEAD_REPO_NAME" == "null" ]]; then
+              echo "::error::Could not extract valid base SHA, head SHA, head ref name, or head repo details from JSON: $PR_REFS_JSON"
               BASE_SHA=""
               HEAD_SHA=""
               HEAD_REF_NAME=""
+              HEAD_REPO_OWNER=""
+              HEAD_REPO_NAME=""
             else
               echo "Base SHA: $BASE_SHA"
               echo "Head SHA: $HEAD_SHA"
               echo "Head Ref Name: $HEAD_REF_NAME"
+              echo "Head Repo Owner: $HEAD_REPO_OWNER"
+              echo "Head Repo Name: $HEAD_REPO_NAME"
               echo "HEAD_REF_NAME=$HEAD_REF_NAME" >> $GITHUB_ENV
+              echo "HEAD_REPO_OWNER=$HEAD_REPO_OWNER" >> $GITHUB_ENV
+              echo "HEAD_REPO_NAME=$HEAD_REPO_NAME" >> $GITHUB_ENV
             fi
           fi
           echo "BASE_SHA=$BASE_SHA" >> $GITHUB_ENV
@@ -852,17 +864,44 @@ jobs:
 
       - name: Switch to PR Branch (if applicable)
         # Only run if context is PR and we have the branch name
-        if: env.FINAL_CONTEXT_TYPE == 'pr' && env.HEAD_REF_NAME != ''
+        if: env.FINAL_CONTEXT_TYPE == 'pr' && env.HEAD_REF_NAME != '' && steps.set_context.outputs.skip != 'true'  # Add skip condition if not already
         env:
           PR_BRANCH_NAME: ${{ env.HEAD_REF_NAME }}
+          PR_HEAD_REPO_OWNER: ${{ env.HEAD_REPO_OWNER }}
+          PR_HEAD_REPO_NAME: ${{ env.HEAD_REPO_NAME }}
         run: |
           echo "::group::Switching to PR branch '$PR_BRANCH_NAME'"
+          set -e
+
+          # FIX: Handle fork PRs by adding remote if head repo != base repo
+          BASE_REPO_OWNER="${{ github.repository_owner }}"
+          BASE_REPO_NAME="${{ github.event.repository.name }}"
+          if [[ "$PR_HEAD_REPO_OWNER" != "$BASE_REPO_OWNER" || "$PR_HEAD_REPO_NAME" != "$BASE_REPO_NAME" ]]; then
+            FORK_REMOTE_NAME="fork-origin"
+            FORK_REMOTE_URL="https://github.com/${PR_HEAD_REPO_OWNER}/${PR_HEAD_REPO_NAME}.git"
+            echo "PR is from a fork (${PR_HEAD_REPO_OWNER}/${PR_HEAD_REPO_NAME}). Adding remote '$FORK_REMOTE_NAME'..."
+            git remote add "$FORK_REMOTE_NAME" "$FORK_REMOTE_URL" || echo "::warning::Failed to add fork remote, it may already exist."
+            FETCH_REPO="$FORK_REMOTE_NAME"
+          else
+            FETCH_REPO="origin"
+            echo "PR is internal. Using origin remote."
+          fi
+
+          # FIX: Always fetch the branch first, then checkout (avoids failed initial checkout)
+          echo "Fetching branch '$PR_BRANCH_NAME' from $FETCH_REPO..."
+          git fetch "$FETCH_REPO" "refs/heads/${PR_BRANCH_NAME}:refs/remotes/${FETCH_REPO}/${PR_BRANCH_NAME}"
+          if [[ $? -ne 0 ]]; then
+            echo "::error::Failed to fetch PR branch '$PR_BRANCH_NAME' from $FETCH_REPO."
+            exit 1
+          fi
+
+          echo "Checking out branch '$PR_BRANCH_NAME'..."
           git checkout "$PR_BRANCH_NAME"
           if [[ $? -ne 0 ]]; then
-            echo "::error::Failed to checkout PR branch '$PR_BRANCH_NAME'. Does it exist locally? Trying fetch..."
-            git fetch origin "refs/heads/${PR_BRANCH_NAME}:refs/remotes/origin/${PR_BRANCH_NAME}"
-            git checkout "$PR_BRANCH_NAME" || { echo "::error::Checkout failed even after fetch."; exit 1; }
+            echo "::error::Failed to checkout PR branch '$PR_BRANCH_NAME' even after fetch."
+            exit 1
           fi
+
           echo "Successfully checked out branch: $(git rev-parse --abbrev-ref HEAD)"
           echo "::endgroup::"
 
