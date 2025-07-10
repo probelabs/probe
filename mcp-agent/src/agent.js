@@ -7,6 +7,7 @@ import { randomUUID } from 'crypto';
 import { get_encoding } from 'tiktoken';
 import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE, listFilesByLevel } from '@buger/probe';
 import config from './config.js';
+import { processProbeFailure } from './github.js';
 
 // Initialize tokenizer
 let tokenizer;
@@ -425,9 +426,18 @@ Examples:
 			}
 
 			// Prepend the extracted code to the response
-			const finalResponse = `<code>${extractedCode}</code>\n\n${formattedResponse}`;
+			const responseWithCode = `<code>${extractedCode}</code>\n\n${formattedResponse}`;
 
-			return finalResponse;
+			// Process the response for GitHub Probe failure tags
+			const { processedResponse, shouldFail } = processProbeFailure(responseWithCode);
+
+			// If shouldFail is true, exit with non-zero status code
+			if (shouldFail) {
+				console.error('Probe failure detected, exiting with status code 1');
+				process.exit(1);
+			}
+
+			return processedResponse;
 		} catch (error) {
 			console.error('Error in processQuery:', error);
 			return `Error: ${error.message}`;

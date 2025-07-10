@@ -42,7 +42,14 @@ const configSchema = zod.object({
 	allowedFolders: zod.array(zod.string()).default([]),
 
 	// Debug mode
-	debug: zod.boolean().default(false)
+	debug: zod.boolean().default(false),
+
+	// Failure configuration
+	failure: zod.object({
+		enabled: zod.boolean().default(true),
+		tag: zod.string().default('<fail>'),
+		message: zod.string().default('🔴 CHECK FAILED: This review has identified issues that require attention.')
+	}).default({})
 });
 
 // Parse and validate allowed folders from environment variable
@@ -83,7 +90,12 @@ export const config = configSchema.parse({
 	maxTokens: process.env.MAX_TOKENS ? parseInt(process.env.MAX_TOKENS) : undefined,
 	maxHistoryMessages: process.env.MAX_HISTORY_MESSAGES ? parseInt(process.env.MAX_HISTORY_MESSAGES) : undefined,
 	allowedFolders,
-	debug: process.env.DEBUG === 'true' || process.env.DEBUG === '1'
+	debug: process.env.DEBUG === 'true' || process.env.DEBUG === '1',
+	failure: {
+		enabled: process.env.FAILURE_ENABLED !== 'false' && process.env.FAILURE_ENABLED !== '0',
+		tag: process.env.FAILURE_TAG || '<fail>',
+		message: process.env.FAILURE_MESSAGE || '🔴 CHECK FAILED: This review has identified issues that require attention.'
+	}
 });
 
 // Validate that at least one API key is provided

@@ -11,3 +11,9 @@ Before jumping to implementation:
 During the implementation:
 - Avoid implementing special cases
 - Do not forget to add the tests
+
+Special failure handling:
+- If you identify critical issues that should fail the CI/CD pipeline, include the `<fail>` tag in your response
+- The `<fail>` tag will cause the GitHub action to exit with a non-zero status code
+- Use this sparingly, only for serious issues that require immediate attention
+- Example: "This code has a critical security vulnerability. <fail>"
