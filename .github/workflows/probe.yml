@@ -33,6 +33,16 @@ on:
         required: false
         type: boolean
         default: false
+      update_existing_comment:
+        description: "If 'true', Probe will try to update the previous comment identified by update_comment_marker."
+        required: false
+        default: "false"
+        type: boolean
+      update_comment_marker:
+        description: "Hidden marker injected into the comment to locate it later."
+        required: false
+        default: "<!-- probe-bot -->"
+        type: string
     secrets:
       # ---- Existing Secrets ----
       PROBE_CHAT_COMMAND:
@@ -1191,6 +1201,11 @@ jobs:
              FINAL_BODY="${ERROR_MESSAGE}"
           fi
           printf -v FOOTER "\n\n-----\n*Tip: Mention me again using \`%s <request>\`.*\n*Powered by [Probe AI](https://probeai.dev)*" "$COMMAND_PREFIX"
+          
+          if [[ "${{ inputs.update_existing_comment }}" == "true" ]]; then
+            FOOTER+="\n${{ inputs.update_comment_marker }}"
+          fi
+          
           FINAL_BODY="${FINAL_BODY:-🤖 **Error:** AI interaction failed.}${FOOTER}"
 
           echo "Final response body prepared. Length: ${#FINAL_BODY}"
@@ -1261,4 +1276,6 @@ jobs:
           issue-number: ${{ needs.process_comment.outputs.issue_number }}
           body-path: ${{ steps.decode.outputs.body_path }}
           reactions: ${{ needs.process_comment.outputs.probe_succeeded == 'true' && '+1' || '-1' }}
+          body-includes: ${{ inputs.update_existing_comment == 'true' && inputs.update_comment_marker || '' }}
+          edit-mode: ${{ inputs.update_existing_comment == 'true' && 'replace' || 'append' }}
 # </gh>
