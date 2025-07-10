@@ -864,46 +864,31 @@ jobs:
 
       - name: Switch to PR Branch (if applicable)
         # Only run if context is PR and we have the branch name
-        if: env.FINAL_CONTEXT_TYPE == 'pr' && env.HEAD_REF_NAME != '' && steps.set_context.outputs.skip != 'true'  # Add skip condition if not already
+        if: env.FINAL_CONTEXT_TYPE == 'pr' && env.HEAD_REF_NAME != '' && steps.set_context.outputs.skip != 'true'
         env:
+          PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
           PR_BRANCH_NAME: ${{ env.HEAD_REF_NAME }}
-          PR_HEAD_REPO_OWNER: ${{ env.HEAD_REPO_OWNER }}
-          PR_HEAD_REPO_NAME: ${{ env.HEAD_REPO_NAME }}
         run: |
           echo "::group::Switching to PR branch '$PR_BRANCH_NAME'"
           set -e
 
-          # FIX: Handle fork PRs by adding remote if head repo != base repo
-          BASE_REPO_OWNER="${{ github.repository_owner }}"
-          BASE_REPO_NAME="${{ github.event.repository.name }}"
-          if [[ "$PR_HEAD_REPO_OWNER" != "$BASE_REPO_OWNER" || "$PR_HEAD_REPO_NAME" != "$BASE_REPO_NAME" ]]; then
-            FORK_REMOTE_NAME="fork-origin"
-            FORK_REMOTE_URL="https://github.com/${PR_HEAD_REPO_OWNER}/${PR_HEAD_REPO_NAME}.git"
-            echo "PR is from a fork (${PR_HEAD_REPO_OWNER}/${PR_HEAD_REPO_NAME}). Adding remote '$FORK_REMOTE_NAME'..."
-            git remote add "$FORK_REMOTE_NAME" "$FORK_REMOTE_URL" || echo "::warning::Failed to add fork remote, it may already exist."
-            FETCH_REPO="$FORK_REMOTE_NAME"
-          else
-            FETCH_REPO="origin"
-            echo "PR is internal. Using origin remote."
-          fi
-
-          # FIX: Always fetch the branch first, then checkout (avoids failed initial checkout)
-          echo "Fetching branch '$PR_BRANCH_NAME' from $FETCH_REPO..."
-          git fetch "$FETCH_REPO" "refs/heads/${PR_BRANCH_NAME}:refs/remotes/${FETCH_REPO}/${PR_BRANCH_NAME}"
+          # FIX: Fetch the PR head ref instead of the branch ref (works even if branch deleted, and for forks)
+          echo "Fetching PR #${PR_NUMBER} head commit to local branch '$PR_BRANCH_NAME' from origin..."
+          git fetch origin "refs/pull/${PR_NUMBER}/head:refs/heads/${PR_BRANCH_NAME}"
           if [[ $? -ne 0 ]]; then
-            echo "::error::Failed to fetch PR branch '$PR_BRANCH_NAME' from $FETCH_REPO."
+            echo "::error::Failed to fetch PR #${PR_NUMBER} head."
             exit 1
           fi
 
-          echo "Checking out branch '$PR_BRANCH_NAME'..."
+          echo "Checking out local branch '$PR_BRANCH_NAME'..."
           git checkout "$PR_BRANCH_NAME"
           if [[ $? -ne 0 ]]; then
-            echo "::error::Failed to checkout PR branch '$PR_BRANCH_NAME' even after fetch."
+            echo "::error::Failed to checkout '$PR_BRANCH_NAME' even after fetch."
             exit 1
           fi
 
           echo "Successfully checked out branch: $(git rev-parse --abbrev-ref HEAD)"
-          echo "::endgroup::"
+          echo "::endgroup::""
 
       # --- Run probe-chat (Passes API keys, no GitHub token needed directly) ---
       - name: Run probe-chat
