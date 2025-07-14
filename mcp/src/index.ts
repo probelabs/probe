@@ -168,7 +168,7 @@ class ProbeServer {
                 default: "new",
               }
             },
-            required: ['query']
+            required: ['path', 'query']
           },
         },
         {
@@ -204,7 +204,7 @@ class ProbeServer {
                 description: 'Output format for the query results'
               }
             },
-            required: ['pattern']
+            required: ['path', 'pattern']
           },
         },
         {
