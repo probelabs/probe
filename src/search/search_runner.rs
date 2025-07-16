@@ -745,7 +745,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         };
 
         if debug_mode {
-            println!("DEBUG: Starting early caching for session: {session_id} with query: {raw_query}");
+            println!(
+                "DEBUG: Starting early caching for session: {session_id} with query: {raw_query}"
+            );
             // Print cache contents before filtering
             if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
                 eprintln!("Error printing cache: {e}");
@@ -1199,7 +1201,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         };
 
         if debug_mode {
-            println!("DEBUG: Starting final caching for session: {session_id} with query: {raw_query}");
+            println!(
+                "DEBUG: Starting final caching for session: {session_id} with query: {raw_query}"
+            );
             println!("DEBUG: Already skipped {early_skipped_count} lines in early caching");
             // Print cache contents before filtering
             if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
@@ -1212,7 +1216,10 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             Ok((_, cached_skipped)) => {
                 if debug_mode {
                     println!("DEBUG: Final caching found {cached_skipped} cached blocks");
-                    println!("DEBUG: Total skipped (early + final): {}", early_skipped_count + cached_skipped);
+                    println!(
+                        "DEBUG: Total skipped (early + final): {}",
+                        early_skipped_count + cached_skipped
+                    );
                 }
 
                 skipped_count += cached_skipped;
