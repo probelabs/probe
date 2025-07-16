@@ -100,7 +100,7 @@ fn format_extraction_internal(
                     #[serde(serialize_with = "serialize_lines_as_array")]
                     lines: (usize, usize),
                     node_type: &'a str,
-                    content: &'a str,
+                    code: &'a str,
                     #[serde(skip_serializing_if = "Option::is_none")]
                     original_input: Option<&'a str>,
                 }
@@ -126,7 +126,7 @@ fn format_extraction_internal(
                         file: &r.file,
                         lines: r.lines,
                         node_type: &r.node_type,
-                        content: &r.code,
+                        code: &r.code,
                         // We no longer put original_input per result. If you truly need it,
                         // you can uncomment the line below, but it's typically at the root.
                         // original_input: r.original_input.as_deref(),

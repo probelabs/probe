@@ -474,7 +474,7 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
         file: &'a str,
         lines: [usize; 2],
         node_type: &'a str,
-        content: &'a str,
+        code: &'a str,
         // Include other relevant fields
         matched_keywords: Option<&'a Vec<String>>,
         score: Option<f64>,
@@ -492,7 +492,7 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
             file: &r.file,
             lines: [r.lines.0, r.lines.1],
             node_type: &r.node_type,
-            content: &r.code,
+            code: &r.code,
             matched_keywords: r.matched_keywords.as_ref(),
             score: r.score,
             tfidf_score: r.tfidf_score,
