@@ -108,7 +108,7 @@ jobs:
     # NEW — response is returned base‑64 encoded so it won’t be quarantined
     outputs:
       response_body_b64: ${{ steps.read_response.outputs.response_body_b64 }}
-      issue_number: ${{ steps.set_context.outputs.issue_number }}
+      pr_issue_num: ${{ steps.set_context.outputs.pr_issue_num }}
       probe_succeeded: ${{ steps.probe.outcome == 'success' }}
       context_type: ${{ steps.format.outputs.context_type }}
 
@@ -174,7 +174,7 @@ jobs:
               echo "skip=true" >> $GITHUB_OUTPUT
               exit 0
             fi
-            echo "issue_number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+            echo "pr_issue_num=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
             echo "comment_id=${{ github.event.comment.id }}" >> $GITHUB_OUTPUT
             echo "user_request<<EOF" >> $GITHUB_OUTPUT
             echo "${{ github.event.comment.body }}" >> $GITHUB_OUTPUT
@@ -182,7 +182,7 @@ jobs:
             echo "context_type=to_determine" >> $GITHUB_OUTPUT
             echo "head_ref=" >> $GITHUB_OUTPUT  # Determined later via API
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
-            echo "issue_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            echo "pr_issue_num=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
             echo "comment_id=" >> $GITHUB_OUTPUT
             echo "user_request<<EOF" >> $GITHUB_OUTPUT
             echo "${{ github.event.pull_request.body }}" >> $GITHUB_OUTPUT
@@ -190,7 +190,7 @@ jobs:
             echo "context_type=pr" >> $GITHUB_OUTPUT
             echo "head_ref=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
           elif [[ "$EVENT_NAME" == "issues" ]]; then
-            echo "issue_number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+            echo "pr_issue_num=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
             echo "comment_id=" >> $GITHUB_OUTPUT
             echo "user_request<<EOF" >> $GITHUB_OUTPUT
             echo "${{ github.event.issue.body }}" >> $GITHUB_OUTPUT
@@ -1357,7 +1357,7 @@ jobs:
         with:
           token: ${{ env.WORKFLOW_TOKEN_POST }}
           repository: ${{ github.repository }}
-          issue-number: ${{ needs.process_comment.outputs.issue_number }}
+          issue-number: ${{ needs.process_comment.outputs.pr_issue_num }}
           body-includes: ${{ inputs.update_comment_marker }}
 
       # ---------- Create new comment (if not updating or no existing comment found) ----
@@ -1367,7 +1367,7 @@ jobs:
         with:
           token: ${{ env.WORKFLOW_TOKEN_POST }}
           repository: ${{ github.repository }}
-          issue-number: ${{ needs.process_comment.outputs.issue_number }}
+          issue-number: ${{ needs.process_comment.outputs.pr_issue_num }}
           body-path: ${{ steps.decode.outputs.body_path }}
           reactions: ${{ needs.process_comment.outputs.probe_succeeded == 'true' && '+1' || '-1' }}
 
@@ -1378,7 +1378,7 @@ jobs:
         with:
           token: ${{ env.WORKFLOW_TOKEN_POST }}
           repository: ${{ github.repository }}
-          issue-number: ${{ needs.process_comment.outputs.issue_number }}
+          issue-number: ${{ needs.process_comment.outputs.pr_issue_num }}
           comment-id: ${{ steps.find_comment.outputs.comment-id }}
           body-path: ${{ steps.decode.outputs.body_path }}
           reactions: ${{ needs.process_comment.outputs.probe_succeeded == 'true' && '+1' || '-1' }}
