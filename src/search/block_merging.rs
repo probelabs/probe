@@ -402,7 +402,7 @@ fn merge_block_content(block1: &SearchResult, block2: &SearchResult) -> String {
                 ));
             } else {
                 // Add a more informative placeholder showing how many lines were skipped for larger gaps
-                merged_lines.push(format!("... lines {}-{} skipped...", gap_start, gap_end));
+                merged_lines.push(format!("... lines {gap_start}-{gap_end} skipped..."));
             }
 
             // Move past the gap

@@ -939,7 +939,7 @@ pub fn parse_file_for_code_blocks(
 
     // Calculate content hash for cache key
     let content_hash = calculate_content_hash(content);
-    let cache_key = format!("{}_{}_{}", extension, content_hash, allow_tests);
+    let cache_key = format!("{extension}_{content_hash}_{allow_tests}");
 
     // Check if we have a cached line map
     if let Some(cached_entry) = LINE_MAP_CACHE.get(&cache_key) {
@@ -974,7 +974,7 @@ pub fn parse_file_for_code_blocks(
 
     // Use the tree cache to get or parse the tree
     // We use a stable identifier for the file
-    let tree_cache_key = format!("file_{}", extension);
+    let tree_cache_key = format!("file_{extension}");
     let tree = tree_cache::get_or_parse_tree(&tree_cache_key, content, &mut parser)
         .context("Failed to parse the file")?;
 
@@ -1396,14 +1396,14 @@ pub fn parse_file_for_code_blocks(
                     // If current block is important and previous block is not, keep both
                     if is_important && !prev_is_important {
                         if debug_mode {
-                            println!("DEBUG: Keeping important block type: {}", block.node_type);
+                            println!("DEBUG: Keeping important block type: {node_type}", node_type = block.node_type);
                         }
                         // Don't remove any blocks, don't set should_add to false
                     }
                     // If previous block is important and current block is not, skip current block
                     else if !is_important && prev_is_important {
                         if debug_mode {
-                            println!("DEBUG: Skipping non-important block in favor of important block: {}", prev_block.node_type);
+                            println!("DEBUG: Skipping non-important block in favor of important block: {node_type}", node_type = prev_block.node_type);
                         }
                         should_add = false;
                         break;
@@ -1428,14 +1428,14 @@ pub fn parse_file_for_code_blocks(
                     // If current block is important and previous block is not, keep both
                     if is_important && !prev_is_important {
                         if debug_mode {
-                            println!("DEBUG: Keeping important block type: {}", block.node_type);
+                            println!("DEBUG: Keeping important block type: {node_type}", node_type = block.node_type);
                         }
                         // Don't set should_add to false, continue checking other blocks
                     }
                     // If previous block is important and current block is not, skip current block
                     else if !is_important && prev_is_important {
                         if debug_mode {
-                            println!("DEBUG: Skipping non-important block in favor of important block: {}", prev_block.node_type);
+                            println!("DEBUG: Skipping non-important block in favor of important block: {node_type}", node_type = prev_block.node_type);
                         }
                         should_add = false;
                         break;

@@ -5,9 +5,11 @@ use std::time::Instant;
 /// Helper function to format duration in a human-readable way
 fn format_duration(duration: std::time::Duration) -> String {
     if duration.as_millis() < 1000 {
-        format!("{}ms", duration.as_millis())
+        let millis = duration.as_millis();
+        format!("{millis}ms")
     } else {
-        format!("{:.2}s", duration.as_secs_f64())
+        let secs = duration.as_secs_f64();
+        format!("{secs:.2}s")
     }
 }
 

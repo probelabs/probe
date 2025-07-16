@@ -26,9 +26,11 @@ lazy_static! {
 /// Helper function to format duration in a human-readable way
 fn format_duration(duration: std::time::Duration) -> String {
     if duration.as_millis() < 1000 {
-        format!("{}ms", duration.as_millis())
+        let duration_millis = duration.as_millis();
+        format!("{duration_millis}ms")
     } else {
-        format!("{:.2}s", duration.as_secs_f64())
+        let duration_secs = duration.as_secs_f64();
+        format!("{duration_secs:.2}s")
     }
 }
 
@@ -53,10 +55,10 @@ fn generate_cache_key(path: &Path, allow_tests: bool, custom_ignores: &[String])
                 hash = hash.wrapping_mul(31).wrapping_add(byte as u64);
             }
         }
-        format!("ignores_{:x}", hash)
+        format!("ignores_{hash:x}")
     };
 
-    format!("{}_{}_{}", path_str, allow_tests_str, ignores_hash)
+    format!("{path_str}_{allow_tests_str}_{ignores_hash}")
 }
 
 /// Get a list of files in a directory, respecting ignore patterns and test file exclusions.
@@ -245,7 +247,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
 
     // Add all ignore patterns to the override builder
     for pattern in &common_ignores {
-        if let Err(err) = override_builder.add(&format!("!**/{}", pattern)) {
+        if let Err(err) = override_builder.add(&format!("!**/{pattern}")) {
             eprintln!("Error adding ignore pattern {pattern:?}: {err}");
         }
     }
@@ -360,8 +362,7 @@ pub fn find_matching_filenames(
 
     if debug_mode {
         println!(
-            "DEBUG: Query tokens for filename matching: {:?}",
-            query_tokens
+            "DEBUG: Query tokens for filename matching: {query_tokens:?}"
         );
     }
 
@@ -382,8 +383,7 @@ pub fn find_matching_filenames(
 
         if debug_mode && !filename_tokens.is_empty() {
             println!(
-                "DEBUG: Path '{}' tokenized as: {:?}",
-                relative_path, filename_tokens
+                "DEBUG: Path '{relative_path}' tokenized as: {filename_tokens:?}"
             );
         }
         // Find which terms match the filename
@@ -403,8 +403,7 @@ pub fn find_matching_filenames(
                 matched_terms.insert(idx);
                 if debug_mode {
                     println!(
-                        "DEBUG: Term '{}' matched path '{}', adding index {}",
-                        term, relative_path, idx
+                        "DEBUG: Term '{term}' matched path '{relative_path}', adding index {idx}"
                     );
                 }
             }
@@ -497,7 +496,8 @@ pub fn get_file_list_by_language(
             .iter()
             .filter(|file| {
                 if let Some(ext) = file.extension() {
-                    let ext_str = format!(".{}", ext.to_string_lossy());
+                    let ext_lossy = ext.to_string_lossy();
+                    let ext_str = format!(".{ext_lossy}");
                     extensions.iter().any(|e| e == &ext_str)
                 } else {
                     false

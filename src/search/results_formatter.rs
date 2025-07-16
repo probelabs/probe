@@ -16,11 +16,11 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
     if !valid_results.is_empty() {
         if dry_run {
             // More compact header for dry-run mode
-            println!("{}", format!("Found {valid_results_len} results:", valid_results_len = valid_results.len()).bold());
+            println!("{}", format!("Found {len} results:", len = valid_results.len()).bold());
         } else {
             // Full header for normal mode
             println!("{}", "╭─────────────────────────────────────────────────╮".cyan());
-            println!("{} {} {}", "│".cyan(), format!("Found {valid_results_len} results", valid_results_len = valid_results.len()).bold(), "│".cyan());
+            println!("{} {} {}", "│".cyan(), format!("Found {len} results", len = valid_results.len()).bold(), "│".cyan());
             println!("{}", "╰─────────────────────────────────────────────────╯".cyan());
             println!();
         }
@@ -39,7 +39,7 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
             } else {
                 // Get line numbers if available
                 let line_info = if let Some(lines) = &result.lines {
-                    format!("Lines: {}-{}", lines.0, lines.1)
+                    format!("Lines: {start}-{end}", start = lines.0, end = lines.1)
                 } else {
                     "".to_string()
                 };
@@ -66,7 +66,7 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
             let is_full_file = result.node_type == "file";
 
             // Print result number
-            println!("{} {}", "Result".bold().blue(), format!("#{result_num}", result_num = index + 1).bold().blue());
+            println!("{} {}", "Result".bold().blue(), format!("#{num}", num = index + 1).bold().blue());
             
             // Print the file path and node info with color
             if is_full_file {
@@ -90,10 +90,12 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
                     println!("{} {bm25_score:.6}", "BM25 Score:".dimmed());
                 }
                 if let Some(content_matches) = &result.content_matches {
-                    println!("{} {content_matches_str}", "Content matches:".dimmed(), content_matches_str = content_matches.join(", "));
+                    let content_matches_str = content_matches.join(", ");
+                    println!("{} {content_matches_str}", "Content matches:".dimmed());
                 }
                 if let Some(filename_matches) = &result.filename_matches {
-                    println!("{} {filename_matches_str}", "Filename matches:".dimmed(), filename_matches_str = filename_matches.join(", "));
+                    let filename_matches_str = filename_matches.join(", ");
+                    println!("{} {filename_matches_str}", "Filename matches:".dimmed());
                 }
                 if let Some(unique_terms) = result.unique_terms {
                     println!("{} {unique_terms}", "Unique terms matched:".dimmed());
@@ -167,6 +169,5 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
                 println!();
             }
         }
-    }
     }
 }

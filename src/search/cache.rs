@@ -176,7 +176,7 @@ impl SessionCache {
             .join(".cache")
             .join("probe")
             .join("sessions")
-            .join(format!("{}_{}.json", session_id, query_hash))
+            .join(format!("{session_id}_{query_hash}.json"))
     }
 }
 /// Normalize a file path for consistent cache keys
@@ -196,7 +196,7 @@ fn normalize_path(path: &str) -> String {
 /// Format: "file.rs:23-45" (file path with start-end line numbers)
 pub fn generate_cache_key(result: &SearchResult) -> String {
     let normalized_path = normalize_path(&result.file);
-    format!("{}:{}-{}", normalized_path, result.lines.0, result.lines.1)
+    format!("{normalized_path}:{}-{}", result.lines.0, result.lines.1)
 }
 
 /// Filter search results using the cache without adding to the cache
@@ -345,7 +345,7 @@ pub fn filter_matched_lines_with_cache(
             // Format: "file.rs:line_num"
             let path_str = file_path.to_string_lossy();
             let normalized_path = normalize_path(&path_str);
-            let line_cache_key = format!("{}:{}", normalized_path, line_num);
+            let line_cache_key = format!("{normalized_path}:{line_num}");
 
             // Check if this line is part of a cached block
             let is_cached = cache.block_identifiers.iter().any(|block_id| {
@@ -496,6 +496,7 @@ pub fn debug_print_cache(session_id: &str, query: &str) -> Result<()> {
     }
 
     if cache.block_identifiers.len() > 10 {
+        let _remaining = cache.block_identifiers.len() - 10;
         println!("DEBUG: ... and {} more", cache.block_identifiers.len() - 10);
     }
 

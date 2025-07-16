@@ -63,9 +63,11 @@ pub struct SearchTimings {
 /// Helper function to format duration in a human-readable way
 pub fn format_duration(duration: Duration) -> String {
     if duration.as_millis() < 1000 {
-        format!("{}ms", duration.as_millis())
+        let millis = duration.as_millis();
+        format!("{millis}ms")
     } else {
-        format!("{:.2}s", duration.as_secs_f64())
+        let secs = duration.as_secs_f64();
+        format!("{secs:.2}s")
     }
 }
 
@@ -240,8 +242,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 if !env_session_id.is_empty() {
                     if debug_mode {
                         println!(
-                            "DEBUG: Using session ID from environment: {}",
-                            env_session_id
+                            "DEBUG: Using session ID from environment: {env_session_id}"
                         );
                     }
                     // Convert to a static string (this leaks memory, but it's a small amount and only happens once per session)
@@ -286,8 +287,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             if !env_session_id.is_empty() {
                 if debug_mode {
                     println!(
-                        "DEBUG: Using session ID from environment: {}",
-                        env_session_id
+                        "DEBUG: Using session ID from environment: {env_session_id}"
                     );
                 }
                 // Convert to a static string (this leaks memory, but it's a small amount and only happens once per session)
@@ -397,7 +397,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             "DEBUG: Pattern generation completed in {}",
             format_duration(pg_duration)
         );
-        println!("DEBUG: Generated {} patterns", structured_patterns.len());
+        println!("DEBUG: Generated {patterns_len} patterns", patterns_len = structured_patterns.len());
         if structured_patterns.len() == 1 {
             println!("DEBUG: Successfully created a single combined pattern for all terms");
         }

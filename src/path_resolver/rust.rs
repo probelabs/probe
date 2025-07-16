@@ -26,7 +26,7 @@ impl RustPathResolver {
         let output = Command::new("cargo")
             .args(["metadata", "--format-version=1"])
             .output()
-            .map_err(|e| format!("Failed to execute 'cargo metadata': {}", e))?;
+            .map_err(|e| format!("Failed to execute 'cargo metadata': {e}"))?;
 
         if !output.status.success() {
             return Err(format!(
@@ -37,7 +37,7 @@ impl RustPathResolver {
 
         let json_str = String::from_utf8_lossy(&output.stdout);
         let json: Value = serde_json::from_str(&json_str)
-            .map_err(|e| format!("Failed to parse JSON output from 'cargo metadata': {}", e))?;
+            .map_err(|e| format!("Failed to parse JSON output from 'cargo metadata': {e}"))?;
 
         // Find the package in the packages array
         if let Some(packages) = json["packages"].as_array() {
@@ -91,10 +91,10 @@ impl RustPathResolver {
         let cargo_home = std::env::var("CARGO_HOME")
             .or_else(|_| {
                 let home = std::env::var("HOME")
-                    .map_err(|e| format!("Failed to get HOME environment variable: {}", e))?;
-                Ok::<String, String>(format!("{}/.cargo", home))
+                    .map_err(|e| format!("Failed to get HOME environment variable: {e}"))?;
+                Ok::<String, String>(format!("{home}/.cargo"))
             })
-            .map_err(|e| format!("Failed to determine CARGO_HOME: {}", e))?;
+            .map_err(|e| format!("Failed to determine CARGO_HOME: {e}"))?;
 
         // The registry cache is in $CARGO_HOME/registry/src
         let registry_dir = PathBuf::from(cargo_home).join("registry").join("src");
@@ -108,11 +108,11 @@ impl RustPathResolver {
 
         // Look for the crate in all registry indices
         let registry_indices = std::fs::read_dir(&registry_dir)
-            .map_err(|e| format!("Failed to read registry directory: {}", e))?;
+            .map_err(|e| format!("Failed to read registry directory: {e}"))?;
 
         for index_entry in registry_indices {
             let index_dir = index_entry
-                .map_err(|e| format!("Failed to read registry index entry: {}", e))?
+                .map_err(|e| format!("Failed to read registry index entry: {e}"))?
                 .path();
 
             if !index_dir.is_dir() {
@@ -121,11 +121,11 @@ impl RustPathResolver {
 
             // Look for directories that contain the crate name
             let crates = std::fs::read_dir(&index_dir)
-                .map_err(|e| format!("Failed to read index directory: {}", e))?;
+                .map_err(|e| format!("Failed to read index directory: {e}"))?;
 
             for crate_entry in crates {
                 let crate_dir = crate_entry
-                    .map_err(|e| format!("Failed to read crate entry: {}", e))?
+                    .map_err(|e| format!("Failed to read crate entry: {e}"))?
                     .path();
 
                 if !crate_dir.is_dir() {
@@ -138,14 +138,14 @@ impl RustPathResolver {
                     .ok_or_else(|| "Invalid directory name".to_string())?
                     .to_string_lossy();
 
-                if dir_name.starts_with(&format!("{}-", crate_name)) {
+                if dir_name.starts_with(&format!("{crate_name}-")) {
                     // Found a matching crate directory
                     return Ok(crate_dir);
                 }
             }
         }
 
-        Err(format!("Could not find Rust crate: {}", crate_name))
+        Err(format!("Could not find Rust crate: {crate_name}"))
     }
 }
 

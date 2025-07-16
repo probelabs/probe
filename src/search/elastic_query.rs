@@ -314,7 +314,7 @@ impl std::fmt::Display for Expr {
                     ""
                 };
                 let field_prefix = if let Some(ref field_name) = field {
-                    format!("{}:", field_name)
+                    format!("{field_name}:")
                 } else {
                     String::new()
                 };
@@ -514,7 +514,7 @@ impl Parser {
     fn parse_or_expr(&mut self) -> Result<Expr, ParseError> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
         if debug_mode {
-            println!("DEBUG: parse_or_expr => pos={}", self.pos);
+            println!("DEBUG: parse_or_expr => pos={pos}", pos = self.pos);
         }
 
         let mut left = self.parse_and_expr()?;
@@ -533,7 +533,7 @@ impl Parser {
     fn parse_and_expr(&mut self) -> Result<Expr, ParseError> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
         if debug_mode {
-            println!("DEBUG: parse_and_expr => pos={}", self.pos);
+            println!("DEBUG: parse_and_expr => pos={pos}", pos = self.pos);
         }
 
         let mut left = self.parse_factor()?;

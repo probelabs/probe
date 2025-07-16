@@ -89,7 +89,7 @@ pub fn get_or_parse_tree(
     // Not in cache or content changed, parse and store
     let tree = parser
         .parse(content, None)
-        .context(format!("Failed to parse file: {}", file_path))?;
+        .context(format!("Failed to parse file: {file_path}"))?;
 
     // Store in cache
     {

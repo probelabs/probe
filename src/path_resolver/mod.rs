@@ -147,7 +147,7 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
         }
 
         // This should not happen if all language identifiers are properly mapped
-        return Err(format!("No resolver found for language: {}", lang_id));
+        return Err(format!("No resolver found for language: {lang_id}"));
     }
 
     // Find the appropriate resolver based on the path prefix

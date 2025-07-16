@@ -37,7 +37,7 @@ pub struct QueryPlan {
 /// Helper function to format duration in a human-readable way
 fn format_duration(duration: std::time::Duration) -> String {
     if duration.as_millis() < 1000 {
-        format!("{}ms", duration.as_millis())
+        format!("{millis}ms", millis = duration.as_millis())
     } else {
         format!("{:.2}s", duration.as_secs_f64())
     }
@@ -266,7 +266,7 @@ pub fn build_combined_pattern(terms: &[String]) -> String {
     let escaped_terms = terms.iter().map(|t| regex_escape(t)).collect::<Vec<_>>();
 
     // Join terms with | operator and add case-insensitive flag without word boundaries
-    let pattern = format!("(?i)({})", escaped_terms.join("|"));
+    let pattern = format!("(?i)({terms})", terms = escaped_terms.join("|"));
 
     if debug_mode {
         let duration = start_time.elapsed();
@@ -296,8 +296,8 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 
     if debug_mode {
         println!("DEBUG: Creating structured patterns with AST awareness");
-        println!("DEBUG: AST: {:?}", plan.ast);
-        println!("DEBUG: Excluded terms: {:?}", plan.excluded_terms);
+        println!("DEBUG: AST: {ast:?}", ast = plan.ast);
+        println!("DEBUG: Excluded terms: {excluded_terms:?}", excluded_terms = plan.excluded_terms);
     }
 
     // Extract all non-excluded terms from the query plan
@@ -382,7 +382,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                         let pattern = if *exact {
                             base_pattern.to_string()
                         } else {
-                            format!("({})", base_pattern)
+                            format!("({base_pattern})")
                         };
 
                         if debug_mode {
@@ -406,7 +406,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                             // Generate a pattern for each token with the same term index
                             for token in tokens {
                                 let token_pattern = regex_escape(&token);
-                                let pattern = format!("({})", token_pattern);
+                                let pattern = format!("({token_pattern})");
 
                                 if debug_mode {
                                     println!(
@@ -538,7 +538,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                     // Check if the part itself is excluded before adding its pattern
                     if part.len() >= 3 && !plan.excluded_terms.contains(&part) {
                         let part_pattern = regex_escape(&part);
-                        let pattern = format!("({})", part_pattern);
+                        let pattern = format!("({part_pattern})");
 
                         if debug_mode {
                             println!(

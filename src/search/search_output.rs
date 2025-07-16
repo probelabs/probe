@@ -69,9 +69,9 @@ pub fn format_and_print_search_results(
                         println!("```");
                     } else {
                         println!("File: {}", result.file);
-                        println!("Lines: {}-{}", result.lines.0, result.lines.1);
+                        println!("Lines: {start}-{end}", start = result.lines.0, end = result.lines.1);
                         println!("```{extension}");
-                        println!("{}", result.code);
+                        println!("{code}", code = result.code);
                         println!("```");
                     }
                 }
@@ -155,7 +155,7 @@ pub fn format_and_print_search_results(
         }
     }
 
-    println!("Found {} search results", valid_results.len());
+    println!("Found {count} search results", count = valid_results.len());
 
     let total_bytes: usize = valid_results.iter().map(|r| r.code.len()).sum();
     let total_tokens: usize = valid_results.iter().map(|r| count_tokens(&r.code)).sum();
@@ -203,7 +203,7 @@ fn format_and_print_color_results(
 
         // Print the file path and node info with color
         if is_full_file {
-            println!("{} {}", "File:".bold().green().yellow(), result.file);
+            println!("{label} {file}", label = "File:".bold().green().yellow(), file = result.file);
         } else {
             println!(
                 "{} {} ({})",
@@ -271,13 +271,13 @@ fn format_and_print_color_results(
             _ => "",
         };
 
-        println!("{}", "Code:".bold().magenta());
+        println!("{label}", label = "Code:".bold().magenta());
 
         // Print the code with syntax highlighting
         if !language.is_empty() {
-            println!("{}", format!("```{language}").cyan());
+            println!("{code_block}", code_block = format!("```{language}").cyan());
         } else {
-            println!("{}", "```".cyan());
+            println!("{code_block}", code_block = "```".cyan());
         }
 
         // Generate patterns from the matched keywords in the search result
@@ -374,7 +374,7 @@ fn format_and_print_color_results(
         // Print a separator between results
         if index < results.len() - 1 {
             println!();
-            println!("{}", "─".repeat(50).cyan());
+            println!("{separator}", separator = "─".repeat(50).cyan());
             println!();
         }
 
@@ -514,7 +514,7 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
         }
     });
 
-    println!("{}", serde_json::to_string_pretty(&wrapper)?);
+    println!("{json}", json = serde_json::to_string_pretty(&wrapper)?);
     Ok(())
 }
 
@@ -525,8 +525,8 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
 
     for result in results {
         println!("  <result>");
-        println!("    <file>{}</file>", escape_xml(&result.file));
-        println!("    <lines>{}-{}</lines>", result.lines.0, result.lines.1);
+        println!("    <file>{file}</file>", file = escape_xml(&result.file));
+        println!("    <lines>{start}-{end}</lines>", start = result.lines.0, end = result.lines.1);
         println!(
             "    <node_type>{}</node_type>",
             escape_xml(&result.node_type)
@@ -535,7 +535,7 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
         if let Some(keywords) = &result.matched_keywords {
             println!("    <matched_keywords>");
             for keyword in keywords {
-                println!("      <keyword>{}</keyword>", escape_xml(keyword));
+                println!("      <keyword>{keyword}</keyword>", keyword = escape_xml(keyword));
             }
             println!("    </matched_keywords>");
         }
@@ -554,33 +554,29 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
 
         if let Some(file_unique_terms) = result.file_unique_terms {
             println!(
-                "    <file_unique_terms>{}</file_unique_terms>",
-                file_unique_terms
+                "    <file_unique_terms>{file_unique_terms}</file_unique_terms>"
             );
         }
 
         if let Some(file_total_matches) = result.file_total_matches {
             println!(
-                "    <file_total_matches>{}</file_total_matches>",
-                file_total_matches
+                "    <file_total_matches>{file_total_matches}</file_total_matches>"
             );
         }
 
         if let Some(block_unique_terms) = result.block_unique_terms {
             println!(
-                "    <block_unique_terms>{}</block_unique_terms>",
-                block_unique_terms
+                "    <block_unique_terms>{block_unique_terms}</block_unique_terms>"
             );
         }
 
         if let Some(block_total_matches) = result.block_total_matches {
             println!(
-                "    <block_total_matches>{}</block_total_matches>",
-                block_total_matches
+                "    <block_total_matches>{block_total_matches}</block_total_matches>"
             );
         }
 
-        println!("    <code><![CDATA[{}]]></code>", result.code);
+        println!("    <code><![CDATA[{code}]]></code>", code = result.code);
         println!("  </result>");
     }
 
@@ -588,12 +584,12 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
     println!("  <summary>");
     println!("    <count>{}</count>", results.len());
     println!(
-        "    <total_bytes>{}</total_bytes>",
-        results.iter().map(|r| r.code.len()).sum::<usize>()
+        "    <total_bytes>{total_bytes}</total_bytes>",
+        total_bytes = results.iter().map(|r| r.code.len()).sum::<usize>()
     );
     println!(
-        "    <total_tokens>{}</total_tokens>",
-        results.iter().map(|r| count_tokens(&r.code)).sum::<usize>()
+        "    <total_tokens>{total_tokens}</total_tokens>",
+        total_tokens = results.iter().map(|r| count_tokens(&r.code)).sum::<usize>()
     );
     println!("  </summary>");
 

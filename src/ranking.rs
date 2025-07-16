@@ -699,7 +699,7 @@ mod tests {
     #[test]
     fn test_generate_query_token_map_too_many_terms() {
         // Create a set with more than 256 terms
-        let query_terms: HashSet<String> = (0..257).map(|i| format!("term{}", i)).collect();
+        let query_terms: HashSet<String> = (0..257).map(|i| format!("term{i}")).collect();
 
         // Attempt to generate the token map
         let result = generate_query_token_map(&query_terms);

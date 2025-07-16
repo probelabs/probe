@@ -89,7 +89,7 @@ impl PathResolver for GoPathResolver {
         let output = Command::new("go")
             .args(["list", "-json", module_name])
             .output()
-            .map_err(|e| format!("Failed to execute 'go list': {}", e))?;
+            .map_err(|e| format!("Failed to execute 'go list': {e}"))?;
 
         if !output.status.success() {
             return Err(format!(
@@ -100,15 +100,14 @@ impl PathResolver for GoPathResolver {
 
         let json_str = String::from_utf8_lossy(&output.stdout);
         let json: Value = serde_json::from_str(&json_str)
-            .map_err(|e| format!("Failed to parse JSON output from 'go list': {}", e))?;
+            .map_err(|e| format!("Failed to parse JSON output from 'go list': {e}"))?;
 
         // Extract the directory path
         if let Some(dir) = json["Dir"].as_str() {
             Ok(PathBuf::from(dir))
         } else {
             Err(format!(
-                "No directory found for Go package: {}",
-                module_name
+                "No directory found for Go package: {module_name}"
             ))
         }
     }

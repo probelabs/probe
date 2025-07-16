@@ -62,7 +62,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
         advanced_options.push("Frequency search disabled".to_string());
     }
     if let Some(lang) = &params.language {
-        advanced_options.push(format!("Language: {}", lang));
+        advanced_options.push(format!("Language: {lang}"));
     }
     if params.allow_tests {
         advanced_options.push("Including tests".to_string());
@@ -71,13 +71,13 @@ fn handle_search(params: SearchParams) -> Result<()> {
         advanced_options.push("No block merging".to_string());
     }
     if let Some(threshold) = params.merge_threshold {
-        advanced_options.push(format!("Merge threshold: {}", threshold));
+        advanced_options.push(format!("Merge threshold: {threshold}"));
     }
     if params.dry_run {
         advanced_options.push("Dry run (file names and lines only)".to_string());
     }
     if let Some(session) = &params.session {
-        advanced_options.push(format!("Session: {}", session));
+        advanced_options.push(format!("Session: {session}"));
     }
 
     // Show timeout if it's not the default value of 30 seconds

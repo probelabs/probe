@@ -91,7 +91,7 @@ impl PromptTemplate {
             PromptTemplate::Engineer => Ok(ENGINEER_PROMPT.to_string()),
             PromptTemplate::Architect => Ok(ARCHITECT_PROMPT.to_string()),
             PromptTemplate::Custom(path) => fs::read_to_string(path)
-                .with_context(|| format!("Failed to read prompt file: {}", path)),
+                .with_context(|| format!("Failed to read prompt file: {path}")),
         }
     }
 }

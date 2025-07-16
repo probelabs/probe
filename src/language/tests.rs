@@ -371,7 +371,7 @@ type ModelPriceInput struct {
     let blocks = result.unwrap();
 
     // Print the blocks for debugging
-    println!("Found {} blocks:", blocks.len());
+    println!("Found {len} blocks:", len = blocks.len());
     for (i, block) in blocks.iter().enumerate() {
         println!(
             "Block {}: type={}, lines={}-{}",
@@ -455,7 +455,7 @@ func HandleNotFound(c *gin.Context) {
     let blocks = result.unwrap();
 
     // Print the blocks for debugging
-    println!("Found {} blocks:", blocks.len());
+    println!("Found {len} blocks:", len = blocks.len());
     for (i, block) in blocks.iter().enumerate() {
         println!(
             "Block {}: type={}, lines={}-{}",
@@ -516,7 +516,7 @@ fn test_function() {
     let blocks = result.unwrap();
 
     // Print the blocks for debugging
-    println!("Found {} blocks:", blocks.len());
+    println!("Found {len} blocks:", len = blocks.len());
     for (i, block) in blocks.iter().enumerate() {
         println!(
             "Block {}: type={}, lines={}-{}",
@@ -613,7 +613,7 @@ impl TestStruct {
     let blocks = result.unwrap();
 
     // Print the blocks for debugging
-    println!("Found {} blocks:", blocks.len());
+    println!("Found {len} blocks:", len = blocks.len());
     for (i, block) in blocks.iter().enumerate() {
         println!(
             "Block {}: type={}, lines={}-{}",
@@ -697,7 +697,7 @@ fn test_function() {
     let result = parse_file_for_code_blocks(rust_code, "rs", &line_numbers, true, None).unwrap();
 
     // Print the result for debugging
-    println!("Found {} blocks:", result.len());
+    println!("Found {len} blocks:", len = result.len());
     for (i, block) in result.iter().enumerate() {
         println!(
             "Block {}: type={}, lines={}-{}",

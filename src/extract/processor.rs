@@ -53,7 +53,7 @@ pub fn process_file_for_extraction(
     }
 
     // Read the file content
-    let content = fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
+    let content = fs::read_to_string(path).context(format!("Failed to read file: {path:?}"))?;
     let lines: Vec<&str> = content.lines().collect();
 
     if debug_mode {

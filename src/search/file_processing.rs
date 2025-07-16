@@ -416,7 +416,7 @@ pub fn process_file_with_results(
     if debug_mode {
         println!("DEBUG: Processing file: {:?}", params.path);
         println!("DEBUG:   matched lines: {:?}", params.line_numbers);
-        println!("DEBUG:   file I/O time: {file_io_duration:?}");
+        println!("DEBUG:   file I/O time: {:?}", file_io_duration);
     }
 
     // Measure AST parsing time with sub-steps
@@ -496,7 +496,7 @@ pub fn process_file_with_results(
             }
         }
 
-        let file_id = format!("{}", params.path.to_string_lossy());
+        let file_id = params.path.to_string_lossy().to_string();
 
         // Measure block extraction time with sub-steps
         let block_extraction_start = Instant::now();
@@ -1211,19 +1211,19 @@ pub fn process_file_with_results(
                 println!("DEBUG:     - Tree parsing: {d:?}");
             }
             if let Some(d) = timings.ast_parsing_line_map_building {
-                println!("DEBUG:     - Line map building: {:?}", d);
+                println!("DEBUG:     - Line map building: {d:?}");
             }
         }
         if let Some(duration) = timings.block_extraction {
-            println!("DEBUG:   Block extraction: {:?}", duration);
+            println!("DEBUG:   Block extraction: {duration:?}");
             if let Some(d) = timings.block_extraction_code_structure {
-                println!("DEBUG:     - Code structure finding: {:?}", d);
+                println!("DEBUG:     - Code structure finding: {d:?}");
             }
             if let Some(d) = timings.block_extraction_filtering {
-                println!("DEBUG:     - Filtering: {:?}", d);
+                println!("DEBUG:     - Filtering: {d:?}");
             }
             if let Some(d) = timings.block_extraction_result_building {
-                println!("DEBUG:     - Result building: {:?}", d);
+                println!("DEBUG:     - Result building: {d:?}");
             }
         }
     }
@@ -1231,22 +1231,22 @@ pub fn process_file_with_results(
     if debug_mode {
         println!("DEBUG: Detailed result building timings:");
         if let Some(duration) = timings.result_building_term_matching {
-            println!("DEBUG:   Term matching: {:?}", duration);
+            println!("DEBUG:   Term matching: {duration:?}");
         }
         if let Some(duration) = timings.result_building_compound_processing {
-            println!("DEBUG:   Compound word processing: {:?}", duration);
+            println!("DEBUG:   Compound word processing: {duration:?}");
         }
         if let Some(duration) = timings.result_building_line_matching {
-            println!("DEBUG:   Line range matching: {:?}", duration);
+            println!("DEBUG:   Line range matching: {duration:?}");
         }
         if let Some(duration) = timings.result_building_result_creation {
             println!("DEBUG:   Result creation: {:?}", duration);
         }
         if let Some(duration) = timings.result_building_synchronization {
-            println!("DEBUG:   Synchronization: {:?}", duration);
+            println!("DEBUG:   Synchronization: {duration:?}");
         }
         if let Some(duration) = timings.result_building_uncovered_lines {
-            println!("DEBUG:   Uncovered lines processing: {:?}", duration);
+            println!("DEBUG:   Uncovered lines processing: {duration:?}");
         }
     }
 
