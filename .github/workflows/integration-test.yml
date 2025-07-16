@@ -85,8 +85,8 @@ jobs:
           exit 1
         fi
 
-        if ! grep -q '"content"' search_results.json; then
-          echo "Error: JSON output missing 'content' field"
+        if ! grep -q '"code"' search_results.json; then
+          echo "Error: JSON output missing 'code' field"
           cat search_results.json
           exit 1
         fi
@@ -117,8 +117,8 @@ jobs:
           exit 1
         }
 
-        if (-not ($content -match '"content"')) {
-          Write-Host "Error: JSON output missing 'content' field"
+        if (-not ($content -match '"code"')) {
+          Write-Host "Error: JSON output missing 'code' field"
           Get-Content search_results.json
           exit 1
         }
