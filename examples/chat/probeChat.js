@@ -87,16 +87,9 @@ export class ProbeChat {
     this.customPrompt = options.customPrompt || process.env.CUSTOM_PROMPT || null;
     this.promptType = options.promptType || process.env.PROMPT_TYPE || null;
 
-    // Store allowEdit flag
-    this.allowEdit = !!options.allowEdit || process.env.ALLOW_EDIT === '1';
-
-    // Store allowSuggestions flag
-    this.allowSuggestions = !!options.allowSuggestions || process.env.ALLOW_SUGGESTIONS === '1';
-
-    // Validate conflicting flags
-    if (this.allowEdit && this.allowSuggestions) {
-      console.warn('[WARNING] Both allowEdit and allowSuggestions enabled. Suggestions will take precedence in PR contexts.');
-    }
+    // Store allowEdit flag - enable if either allow_edit or allow_suggestions is set
+    this.allowEdit = !!options.allowEdit || process.env.ALLOW_EDIT === '1' || 
+                     !!options.allowSuggestions || process.env.ALLOW_SUGGESTIONS === '1';
 
     // Store client-provided API credentials if available
     this.clientApiProvider = options.apiProvider;
@@ -119,7 +112,6 @@ export class ProbeChat {
       console.log(`[DEBUG] Generated session ID for chat: ${this.sessionId}`);
       console.log(`[DEBUG] Maximum tool iterations configured: ${MAX_TOOL_ITERATIONS}`);
       console.log(`[DEBUG] Allow Edit (implement tool): ${this.allowEdit}`);
-      console.log(`[DEBUG] Allow Suggestions (implement tool): ${this.allowSuggestions}`);
     }
 
     // Store tool instances for execution
@@ -134,7 +126,7 @@ export class ProbeChat {
     };
 
     // Conditionally add the implement tool if allowed
-    if (this.allowEdit || this.allowSuggestions) {
+    if (this.allowEdit) {
       this.toolImplementations.implement = implementToolInstance;
     }
 
@@ -304,7 +296,7 @@ ${listFilesToolDefinition}
 ${searchFilesToolDefinition}
 ${attemptCompletionToolDefinition}
 `;
-    if (this.allowEdit || this.allowSuggestions) {
+    if (this.allowEdit) {
       toolDefinitions += `${implementToolDefinition}\n`;
     }
 
@@ -361,7 +353,7 @@ Available Tools:
 - extract: Extract specific code blocks or lines from files.
 - listFiles: List files and directories in a specified location.
 - searchFiles: Find files matching a glob pattern with recursive search capability.
-${this.allowEdit || this.allowSuggestions ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}
+${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}
 - attempt_completion: Finalize the task and provide the result to the user.
 `;
     // Common instructions that will be added to all prompts

@@ -125,14 +125,30 @@ The chat maintains context across multiple interactions, allowing for follow-up 
 
 The terminal interface provides user-friendly colored output with syntax highlighting for code blocks.
 
-### Code Editing (Experimental)
+### Code Modification (Experimental)
 
-With the `--allow-edit` flag, you can enable the AI agent to modify your code.
+Probe Chat supports AI-powered code modifications through two modes:
+
+#### Direct Code Editing (`--allow-edit`)
+
+With the `--allow-edit` flag, you can enable the AI agent to directly modify your code.
 
 *   **How it Works**: This flag enables the `implement` tool, which uses **Aider** (an external AI coding assistant) to apply changes based on your requests (e.g., "Refactor this function").
 *   **Requirements**: Requires `aider-chat` to be installed and accessible in your PATH. The chat process also needs write permissions to the target files.
+
+#### Code Suggestions (`--allow-suggestions`)
+
+With the `--allow-suggestions` flag, you can enable the same code modification capabilities optimized for GitHub Actions integration.
+
+*   **How it Works**: Internally enables the same `implement` tool as `--allow-edit`, but when used in GitHub Actions workflows, changes are presented as reviewable suggestions via reviewdog instead of direct commits.
+*   **Local Usage**: When used locally, behaves identically to `--allow-edit`.
+*   **Requirements**: Same requirements as `--allow-edit`.
+
+#### Security Considerations
+
 *   **Caution**: Granting AI write access to your code is powerful but carries risks. Always review changes made by Aider carefully.
-*   **More Info**: See the [CLI Reference](./cli-mode.md#enabling-code-editing---allow-edit) for detailed usage and security considerations.
+*   **Review Process**: The `--allow-suggestions` mode provides an additional review step when used in GitHub Actions workflows.
+*   **More Info**: See the [CLI Reference](./cli-mode.md#code-modification-options) for detailed usage and security considerations.
 
 ## Configuration
 

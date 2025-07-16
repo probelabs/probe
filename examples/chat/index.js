@@ -245,8 +245,7 @@ export function main() {
         isNonInteractive: true,
         customPrompt: customPrompt,
         promptType: options.prompt && ['architect', 'code-review', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
-        allowEdit: options.allowEdit,
-        allowSuggestions: options.allowSuggestions
+        allowEdit: options.allowEdit || options.allowSuggestions
       });
       // Model/Provider info is logged via logInfo above if debug enabled
       logInfo(chalk.blue(`Using Session ID: ${chat.getSessionId()}`)); // Log the actual session ID being used
@@ -344,7 +343,7 @@ export function main() {
       .then(module => {
         const { startWebServer } = module;
         logInfo(`Starting web server on port ${process.env.PORT || 8080}...`);
-        startWebServer(version, hasApiKeys, { allowEdit: options.allowEdit, allowSuggestions: options.allowSuggestions });
+        startWebServer(version, hasApiKeys, { allowEdit: options.allowEdit || options.allowSuggestions });
       })
       .catch(error => {
         logError(chalk.red(`Error starting web server: ${error.message}`));
@@ -377,8 +376,7 @@ export function main() {
       isNonInteractive: false,
       customPrompt: customPrompt,
       promptType: options.prompt && ['architect', 'code-review', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
-      allowEdit: options.allowEdit,
-      allowSuggestions: options.allowSuggestions
+      allowEdit: options.allowEdit || options.allowSuggestions
     });
 
     // Log model/provider info using logInfo

@@ -257,10 +257,15 @@ probe-chat [PATH] [OPTIONS]
 | `--max-iterations <number>` | Max tool iterations allowed (default: 30) |
 | `--prompt <value>` | Use a custom prompt (`architect`, `code-review`, `support`, `engineer`, path to file, or string) |
 | `--allow-edit` | **Enable code editing via the `implement` tool (uses Aider)** |
+| `--allow-suggestions` | **Enable implement tool with reviewdog suggestions (PR context only)** |
 
-### Enabling Code Editing (`--allow-edit`)
+### Code Modification Options
 
-Using the `--allow-edit` flag enables the AI agent's `implement` tool, which allows it to modify your codebase.
+Probe Chat supports two modes for AI-powered code modifications:
+
+#### Direct Code Editing (`--allow-edit`)
+
+Using the `--allow-edit` flag enables the AI agent's `implement` tool to directly modify your codebase.
 
 *   **Functionality**: When enabled, the agent can use the `implement` tool in response to requests like "Refactor this function" or "Add error handling here". This tool uses **Aider** (an external command-line AI coding assistant) to apply the requested changes to your files.
 *   **Requirements**:
@@ -274,7 +279,6 @@ Using the `--allow-edit` flag enables the AI agent's `implement` tool, which all
         ```
         Ensure the `aider` command is available in your system's PATH.
     *   **Permissions**: The `probe-chat` process needs write permissions to the files and directories it intends to modify.
-*   **Security**: Enabling code editing by an AI carries risks. Always review changes made by Aider carefully before committing them. Ensure the AI understands the context and your intent correctly.
 *   **Usage**:
     ```bash
     # Start an interactive chat session with editing enabled
@@ -283,6 +287,31 @@ Using the `--allow-edit` flag enables the AI agent's `implement` tool, which all
     # Send a single message requesting a change (non-interactive)
     probe-chat --allow-edit --message "Add comments to the process_data function in utils.py"
     ```
+
+#### Code Suggestions (`--allow-suggestions`)
+
+Using the `--allow-suggestions` flag enables the same `implement` tool functionality but optimized for GitHub Actions workflows with reviewdog integration.
+
+*   **Functionality**: Internally enables the same `implement` tool as `--allow-edit`, allowing the agent to process code modification requests. The difference is in how changes are presented when used in GitHub Actions workflows.
+*   **GitHub Actions Integration**: When used in GitHub Actions workflows, changes are presented as reviewable suggestions via `reviewdog/action-suggester` instead of direct commits.
+*   **Local Usage**: When used locally (outside GitHub Actions), behaves identically to `--allow-edit`.
+*   **Requirements**: Same Aider installation requirements as `--allow-edit`.
+*   **Usage**:
+    ```bash
+    # Start an interactive chat session with suggestions mode
+    probe-chat --allow-suggestions
+
+    # Send a single message requesting a change (non-interactive)
+    probe-chat --allow-suggestions --message "Add error handling to the API endpoint"
+    ```
+
+#### Security Considerations
+
+Both modes grant AI write access to your codebase, which carries inherent risks:
+
+*   **Review Required**: Always review changes made by Aider carefully before accepting them.
+*   **Understanding**: Ensure the AI understands the context and your intent correctly.
+*   **Suggestions Advantage**: The `--allow-suggestions` mode provides an additional review step when used in GitHub Actions, as changes must be explicitly accepted through GitHub's suggestion interface.
 
 ### Chat Examples
 

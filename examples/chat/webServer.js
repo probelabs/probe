@@ -69,13 +69,9 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
  */
 export function startWebServer(version, hasApiKeys = true, options = {}) {
 	const allowEdit = options?.allowEdit || false;
-	const allowSuggestions = options?.allowSuggestions || false;
 	
 	if (allowEdit) {
 		console.log('Edit mode enabled: implement tool is available');
-	}
-	if (allowSuggestions) {
-		console.log('Suggestions mode enabled: implement tool is available');
 	}
 	// Authentication configuration
 	const AUTH_ENABLED = process.env.AUTH_ENABLED === '1';

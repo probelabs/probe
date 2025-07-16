@@ -87,8 +87,9 @@ jobs:
     with:
       # Define the command prefix
       command_prefix: "/engineer" # Specific prefix for this persona
-      # --- Enable Editing ---
-      allow_edit: true # Explicitly allow code modifications
+      # --- Enable Code Modifications ---
+      allow_suggestions: true # Enable suggestions via reviewdog (recommended for PR contexts)
+      # allow_edit: true # Alternative: enable direct commits
       # --- Set AI Persona ---
       prompt: engineer # Use the 'engineer' predefined prompt
       # --- Comment Management ---
@@ -115,14 +116,35 @@ jobs:
     *   `prompt: engineer`: Instructs the AI agent to use the specialized "engineer" persona, focusing on analysis and implementation.
     *   `secrets`: May require additional secrets like GitHub App credentials (`APP_ID`, `APP_PRIVATE_KEY`) if the implementation involves creating commits or PRs under a specific App identity, depending on the underlying `implement` tool's behavior.
 
-## Enabling Code Editing (`allow_edit: true`)
+## Code Modification Options
 
-Setting the `allow_edit` input parameter to `true` in the reusable workflow (`buger/probe/.github/workflows/probe.yml@main`) grants the Probe AI agent the capability to modify your codebase.
+The reusable workflow supports two modes for AI-powered code modifications:
+
+### Direct Code Editing (`allow_edit: true`)
+
+Setting the `allow_edit` input parameter to `true` grants the Probe AI agent the capability to modify your codebase with direct commits.
 
 *   **Functionality**: When enabled, the agent gains access to the `implement` tool. This tool utilizes **Aider** (an external command-line AI coding assistant) under the hood to apply code changes based on the provided task description (e.g., "`/engineer Refactor function X`").
 *   **Permissions**: Requires the workflow to have `contents: write` permission. Without this, Aider cannot modify files, and the `implement` tool will fail.
-*   **Security**: Granting write access to an automated workflow, especially one driven by an AI using tools like Aider, carries inherent risks. Ensure you understand the capabilities and limitations of the AI agent and Aider. Review any changes made by the workflow carefully. Consider restricting this capability to specific triggers or branches if necessary.
-*   **Output**: The exact mechanism of how changes are applied (e.g., direct commit, creating a PR) depends on Aider's configuration and the implementation within the reusable workflow.
+*   **Output**: Changes are applied as direct commits to the repository or branch.
+
+### Code Suggestions (`allow_suggestions: true`)
+
+Setting the `allow_suggestions` input parameter to `true` enables the same `implement` tool functionality but uses reviewdog to create GitHub suggestions instead of direct commits.
+
+*   **Functionality**: Internally enables the same `implement` tool as `allow_edit`, but the workflow uses `reviewdog/action-suggester` to present changes as GitHub PR suggestions rather than direct commits.
+*   **Permissions**: Requires `contents: read` and `pull-requests: write` permissions. Does not require `contents: write` since no direct commits are made.
+*   **Output**: Changes are presented as reviewable suggestions in pull request contexts using GitHub's suggestion feature.
+*   **Context**: Only works in pull request contexts. In other contexts, behaves like `allow_edit: false`.
+
+### Security Considerations
+
+Both modes grant AI write access to your codebase, which carries inherent risks:
+
+*   **Review Required**: Always review changes made by the AI carefully before accepting them.
+*   **Understanding**: Ensure the AI understands the context and your intent correctly.
+*   **Scope**: Consider restricting these capabilities to specific triggers, branches, or trusted contributors.
+*   **Suggestions Advantage**: The `allow_suggestions` mode provides an additional review step since changes must be explicitly accepted through GitHub's suggestion interface.
 
 ## Manual Triggering (`workflow_dispatch`)
 
