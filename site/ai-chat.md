@@ -136,13 +136,12 @@ With the `--allow-edit` flag, you can enable the AI agent to directly modify you
 *   **How it Works**: This flag enables the `implement` tool, which uses **Aider** (an external AI coding assistant) to apply changes based on your requests (e.g., "Refactor this function").
 *   **Requirements**: Requires `aider-chat` to be installed and accessible in your PATH. The chat process also needs write permissions to the target files.
 
-#### Code Suggestions (`--allow-suggestions`)
+#### GitHub Actions Integration
 
-With the `--allow-suggestions` flag, you can enable the same code modification capabilities optimized for GitHub Actions integration.
+For GitHub Actions workflows, code suggestions can be enabled using the `allow_suggestions` input parameter in the workflow configuration instead of direct commits.
 
-*   **How it Works**: Internally enables the same `implement` tool as `--allow-edit`, but when used in GitHub Actions workflows, changes are presented as reviewable suggestions via reviewdog instead of direct commits.
-*   **Local Usage**: When used locally, behaves identically to `--allow-edit`.
-*   **Requirements**: Same requirements as `--allow-edit`.
+*   **How it Works**: When `allow_suggestions` is set in a GitHub Actions workflow, the chat internally receives `allow_edit: true` but the workflow uses reviewdog to present changes as reviewable suggestions instead of direct commits.
+*   **Configuration**: See the [GitHub Actions Integration](./integrations/github-actions.md#code-modification-options) documentation for setup details.
 
 #### Security Considerations
 

@@ -969,8 +969,8 @@ jobs:
           fi
 
           if [[ "${{ inputs.allow_suggestions }}" == "true" ]]; then
-            COMMAND_TO_RUN="$COMMAND_TO_RUN --allow-suggestions"
-            echo "Enabling implement tool with --allow-suggestions flag"
+            COMMAND_TO_RUN="$COMMAND_TO_RUN --allow-edit"
+            echo "Enabling implement tool with --allow-edit flag (suggestions mode)"
           fi
 
           if [[ -z "$COMMAND_TO_RUN" ]]; then

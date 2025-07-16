@@ -87,9 +87,8 @@ export class ProbeChat {
     this.customPrompt = options.customPrompt || process.env.CUSTOM_PROMPT || null;
     this.promptType = options.promptType || process.env.PROMPT_TYPE || null;
 
-    // Store allowEdit flag - enable if either allow_edit or allow_suggestions is set
-    this.allowEdit = !!options.allowEdit || process.env.ALLOW_EDIT === '1' || 
-                     !!options.allowSuggestions || process.env.ALLOW_SUGGESTIONS === '1';
+    // Store allowEdit flag - enable if allow_edit is set or if allow_suggestions is set via environment
+    this.allowEdit = !!options.allowEdit || process.env.ALLOW_EDIT === '1' || process.env.ALLOW_SUGGESTIONS === '1';
 
     // Store client-provided API credentials if available
     this.clientApiProvider = options.apiProvider;
