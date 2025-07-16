@@ -26,9 +26,9 @@ mod tests {
             session: None,
             timeout: 30,
         };
-        
+
         let results = perform_probe(&options).unwrap();
-        
+
         // Just check that we get some results
         assert!(!results.results.is_empty());
         println!("Found {} results", results.results.len());
@@ -37,7 +37,7 @@ mod tests {
     #[test]
     fn test_query_functionality() {
         use probe::query::{perform_query, QueryOptions};
-        
+
         let options = QueryOptions {
             path: Path::new("."),
             pattern: "fn",
@@ -47,9 +47,9 @@ mod tests {
             max_results: Some(5),
             format: "text",
         };
-        
+
         let matches = perform_query(&options).unwrap();
-        
+
         // Just check that we get some results
         assert!(!matches.is_empty());
         println!("Found {} matches", matches.len());

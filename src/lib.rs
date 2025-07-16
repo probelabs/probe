@@ -103,11 +103,14 @@ pub mod search;
 
 // Re-export commonly used types for convenience
 pub use extract::{
-    format_and_print_extraction_results, handle_extract, process_file_for_extraction, ExtractOptions,
+    format_and_print_extraction_results, handle_extract, process_file_for_extraction,
+    ExtractOptions,
 };
 pub use models::{CodeBlock, LimitedSearchResults, SearchLimits, SearchResult};
 pub use path_resolver::resolve_path;
-pub use query::{format_and_print_query_results, handle_query, perform_query, AstMatch, QueryOptions};
+pub use query::{
+    format_and_print_query_results, handle_query, perform_query, AstMatch, QueryOptions,
+};
 pub use search::{format_and_print_search_results, perform_probe, SearchOptions};
 
 // Tests are defined in their respective modules with #[cfg(test)]
