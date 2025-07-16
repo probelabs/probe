@@ -79,9 +79,15 @@ jobs:
         echo "Running search command..."
         probe search "semantic code search" README.md --format json > search_results.json
         echo "Search command completed, checking file size:"
-        ls -la search_results.json
-        echo "File contents (first 10 lines):"
-        head -10 search_results.json
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          powershell -Command "Get-ChildItem search_results.json | Select-Object Name,Length"
+          echo "File contents (first 10 lines):"
+          powershell -Command "Get-Content search_results.json | Select-Object -First 10"
+        else
+          ls -la search_results.json
+          echo "File contents (first 10 lines):"
+          head -10 search_results.json
+        fi
 
     - name: Verify search results (Unix)
       if: runner.os != 'Windows'
