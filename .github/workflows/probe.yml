@@ -1170,12 +1170,12 @@ jobs:
         uses: reviewdog/action-suggester@latest
         with:
           github_token: ${{ env.WORKFLOW_TOKEN }}
-          tool_name: 'reviewdog-suggester'
-          level: 'warning'
-          filter_mode: 'diff_context'
+          tool_name: 'probe-ai-suggestions'
+          level: 'info'
+          filter_mode: 'added'
           fail_level: 'none'
           fail_on_error: 'false'
-          reviewdog_flags: ''
+          reviewdog_flags: '--reporter=github-pr-review'
           cleanup: 'true'
 
       # ---------- Read Response or Error and Format Output (fixed) ---
@@ -1205,6 +1205,10 @@ jobs:
           if [[ "${{ steps.handle_suggestions.outcome }}" == "success" && "${{ inputs.allow_suggestions }}" == "true" ]]; then
             if [[ "$CONTEXT_TYPE" == "pr" ]]; then
               RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Suggestions have been added to this PR for review.**"
+            fi
+          elif [[ "${{ steps.handle_suggestions.outcome }}" == "failure" && "${{ inputs.allow_suggestions }}" == "true" ]]; then
+            if [[ "$CONTEXT_TYPE" == "pr" ]]; then
+              RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Note:** Failed to create suggestions via reviewdog. Check workflow logs for details."
             fi
           fi
 

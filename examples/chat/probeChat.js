@@ -93,6 +93,11 @@ export class ProbeChat {
     // Store allowSuggestions flag
     this.allowSuggestions = !!options.allowSuggestions || process.env.ALLOW_SUGGESTIONS === '1';
 
+    // Validate conflicting flags
+    if (this.allowEdit && this.allowSuggestions) {
+      console.warn('[WARNING] Both allowEdit and allowSuggestions enabled. Suggestions will take precedence in PR contexts.');
+    }
+
     // Store client-provided API credentials if available
     this.clientApiProvider = options.apiProvider;
     this.clientApiKey = options.apiKey;

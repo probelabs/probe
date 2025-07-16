@@ -62,7 +62,7 @@ export function main() {
     .option('--max-iterations <number>', 'Maximum number of tool iterations allowed (default: 30)')
     .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, support, path to a file, or arbitrary string)')
     .option('--allow-edit', 'Enable the implement tool for editing files')
-    .option('--allow-suggestions', 'Enable the implement tool for suggesting file changes via reviewdog')
+    .option('--allow-suggestions', 'Enable implement tool with reviewdog suggestions (PR context only)')
     .argument('[path]', 'Path to the codebase to search (overrides ALLOWED_FOLDERS)')
     .parse(process.argv);
 
