@@ -33,6 +33,11 @@ on:
         required: false
         type: boolean
         default: false
+      allow_suggestions:
+        description: "Enable the implement tool for suggesting file changes via reviewdog"
+        required: false
+        type: boolean
+        default: false
       update_existing_comment:
         description: "If 'true', Probe will try to update the previous comment identified by update_comment_marker."
         required: false
@@ -917,6 +922,7 @@ jobs:
           FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
           # Aider/Edit Config
           ALLOW_EDIT: ${{ inputs.allow_edit == 'true' && '1' || '0' }}
+          ALLOW_SUGGESTIONS: ${{ inputs.allow_suggestions == 'true' && '1' || '0' }}
           # Pass determined GitHub token for potential use by tools/aider if needed
           GH_TOKEN: ${{ env.WORKFLOW_TOKEN }}
           MAX_TOOL_ITERATIONS: ${{ secrets.MAX_TOOL_ITERATIONS }}
@@ -960,6 +966,11 @@ jobs:
           if [[ "${{ inputs.allow_edit }}" == "true" ]]; then
             COMMAND_TO_RUN="$COMMAND_TO_RUN --allow-edit"
             echo "Enabling implement tool with --allow-edit flag"
+          fi
+
+          if [[ "${{ inputs.allow_suggestions }}" == "true" ]]; then
+            COMMAND_TO_RUN="$COMMAND_TO_RUN --allow-suggestions"
+            echo "Enabling implement tool with --allow-suggestions flag"
           fi
 
           if [[ -z "$COMMAND_TO_RUN" ]]; then
@@ -1152,6 +1163,21 @@ jobs:
           fi
           echo "::endgroup::"
 
+      # ---------- Handle Suggestions with reviewdog ---
+      - name: Handle Suggestions with reviewdog
+        id: handle_suggestions
+        if: inputs.allow_suggestions && steps.probe.outcome == 'success' && env.FINAL_CONTEXT_TYPE == 'pr'
+        uses: reviewdog/action-suggester@latest
+        with:
+          github_token: ${{ env.WORKFLOW_TOKEN }}
+          tool_name: 'reviewdog-suggester'
+          level: 'warning'
+          filter_mode: 'diff_context'
+          fail_level: 'none'
+          fail_on_error: 'false'
+          reviewdog_flags: ''
+          cleanup: 'true'
+
       # ---------- Read Response or Error and Format Output (fixed) ---
       - name: Read Response or Error and Format Output
         id: read_response
@@ -1173,6 +1199,12 @@ jobs:
               RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and a PR has been created: ${PR_URL}**"
             else
               RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Changes have been applied and committed to the current branch.**"
+            fi
+          fi
+
+          if [[ "${{ steps.handle_suggestions.outcome }}" == "success" && "${{ inputs.allow_suggestions }}" == "true" ]]; then
+            if [[ "$CONTEXT_TYPE" == "pr" ]]; then
+              RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Suggestions have been added to this PR for review.**"
             fi
           fi
 

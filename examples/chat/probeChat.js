@@ -90,6 +90,9 @@ export class ProbeChat {
     // Store allowEdit flag
     this.allowEdit = !!options.allowEdit || process.env.ALLOW_EDIT === '1';
 
+    // Store allowSuggestions flag
+    this.allowSuggestions = !!options.allowSuggestions || process.env.ALLOW_SUGGESTIONS === '1';
+
     // Store client-provided API credentials if available
     this.clientApiProvider = options.apiProvider;
     this.clientApiKey = options.apiKey;
@@ -111,6 +114,7 @@ export class ProbeChat {
       console.log(`[DEBUG] Generated session ID for chat: ${this.sessionId}`);
       console.log(`[DEBUG] Maximum tool iterations configured: ${MAX_TOOL_ITERATIONS}`);
       console.log(`[DEBUG] Allow Edit (implement tool): ${this.allowEdit}`);
+      console.log(`[DEBUG] Allow Suggestions (implement tool): ${this.allowSuggestions}`);
     }
 
     // Store tool instances for execution
@@ -125,7 +129,7 @@ export class ProbeChat {
     };
 
     // Conditionally add the implement tool if allowed
-    if (this.allowEdit) {
+    if (this.allowEdit || this.allowSuggestions) {
       this.toolImplementations.implement = implementToolInstance;
     }
 
@@ -295,7 +299,7 @@ ${listFilesToolDefinition}
 ${searchFilesToolDefinition}
 ${attemptCompletionToolDefinition}
 `;
-    if (this.allowEdit) {
+    if (this.allowEdit || this.allowSuggestions) {
       toolDefinitions += `${implementToolDefinition}\n`;
     }
 
@@ -352,7 +356,7 @@ Available Tools:
 - extract: Extract specific code blocks or lines from files.
 - listFiles: List files and directories in a specified location.
 - searchFiles: Find files matching a glob pattern with recursive search capability.
-${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}
+${this.allowEdit || this.allowSuggestions ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}
 - attempt_completion: Finalize the task and provide the result to the user.
 `;
     // Common instructions that will be added to all prompts
