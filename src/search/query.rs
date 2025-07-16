@@ -297,7 +297,10 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
     if debug_mode {
         println!("DEBUG: Creating structured patterns with AST awareness");
         println!("DEBUG: AST: {ast:?}", ast = plan.ast);
-        println!("DEBUG: Excluded terms: {excluded_terms:?}", excluded_terms = plan.excluded_terms);
+        println!(
+            "DEBUG: Excluded terms: {excluded_terms:?}",
+            excluded_terms = plan.excluded_terms
+        );
     }
 
     // Extract all non-excluded terms from the query plan

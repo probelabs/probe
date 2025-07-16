@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+
+const { spawn } = require('child_process');
+const path = require('path');
+
+const isWindows = process.platform === 'win32';
+const binaryName = isWindows ? 'probe.exe' : 'probe';
+const binaryPath = path.join(__dirname, binaryName);
+
+const child = spawn(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
+child.on('exit', (code) => process.exit(code));

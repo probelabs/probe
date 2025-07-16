@@ -241,9 +241,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             if let Ok(env_session_id) = std::env::var("PROBE_SESSION_ID") {
                 if !env_session_id.is_empty() {
                     if debug_mode {
-                        println!(
-                            "DEBUG: Using session ID from environment: {env_session_id}"
-                        );
+                        println!("DEBUG: Using session ID from environment: {env_session_id}");
                     }
                     // Convert to a static string (this leaks memory, but it's a small amount and only happens once per session)
                     let static_id: &'static str = Box::leak(env_session_id.into_boxed_str());
@@ -286,9 +284,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         if let Ok(env_session_id) = std::env::var("PROBE_SESSION_ID") {
             if !env_session_id.is_empty() {
                 if debug_mode {
-                    println!(
-                        "DEBUG: Using session ID from environment: {env_session_id}"
-                    );
+                    println!("DEBUG: Using session ID from environment: {env_session_id}");
                 }
                 // Convert to a static string (this leaks memory, but it's a small amount and only happens once per session)
                 let static_id: &'static str = Box::leak(env_session_id.into_boxed_str());
@@ -397,7 +393,10 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             "DEBUG: Pattern generation completed in {}",
             format_duration(pg_duration)
         );
-        println!("DEBUG: Generated {patterns_len} patterns", patterns_len = structured_patterns.len());
+        println!(
+            "DEBUG: Generated {patterns_len} patterns",
+            patterns_len = structured_patterns.len()
+        );
         if structured_patterns.len() == 1 {
             println!("DEBUG: Successfully created a single combined pattern for all terms");
         }

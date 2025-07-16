@@ -1396,7 +1396,10 @@ pub fn parse_file_for_code_blocks(
                     // If current block is important and previous block is not, keep both
                     if is_important && !prev_is_important {
                         if debug_mode {
-                            println!("DEBUG: Keeping important block type: {node_type}", node_type = block.node_type);
+                            println!(
+                                "DEBUG: Keeping important block type: {node_type}",
+                                node_type = block.node_type
+                            );
                         }
                         // Don't remove any blocks, don't set should_add to false
                     }
@@ -1428,7 +1431,10 @@ pub fn parse_file_for_code_blocks(
                     // If current block is important and previous block is not, keep both
                     if is_important && !prev_is_important {
                         if debug_mode {
-                            println!("DEBUG: Keeping important block type: {node_type}", node_type = block.node_type);
+                            println!(
+                                "DEBUG: Keeping important block type: {node_type}",
+                                node_type = block.node_type
+                            );
                         }
                         // Don't set should_add to false, continue checking other blocks
                     }

@@ -106,9 +106,7 @@ impl PathResolver for GoPathResolver {
         if let Some(dir) = json["Dir"].as_str() {
             Ok(PathBuf::from(dir))
         } else {
-            Err(format!(
-                "No directory found for Go package: {module_name}"
-            ))
+            Err(format!("No directory found for Go package: {module_name}"))
         }
     }
 }

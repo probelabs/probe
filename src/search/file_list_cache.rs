@@ -361,9 +361,7 @@ pub fn find_matching_filenames(
         .collect();
 
     if debug_mode {
-        println!(
-            "DEBUG: Query tokens for filename matching: {query_tokens:?}"
-        );
+        println!("DEBUG: Query tokens for filename matching: {query_tokens:?}");
     }
 
     // Search each file for matching filenames
@@ -382,9 +380,7 @@ pub fn find_matching_filenames(
         let filename_tokens = tokenization::tokenize(&relative_path);
 
         if debug_mode && !filename_tokens.is_empty() {
-            println!(
-                "DEBUG: Path '{relative_path}' tokenized as: {filename_tokens:?}"
-            );
+            println!("DEBUG: Path '{relative_path}' tokenized as: {filename_tokens:?}");
         }
         // Find which terms match the filename
         let mut matched_terms = HashSet::new();

@@ -34,7 +34,10 @@ pub fn merge_code_blocks(
     }
 
     if debug_mode {
-        println!("DEBUG: After merging: {len} blocks", len = merged_blocks.len());
+        println!(
+            "DEBUG: After merging: {len} blocks",
+            len = merged_blocks.len()
+        );
         for (i, block) in merged_blocks.iter().enumerate() {
             println!(
                 "DEBUG:   Block {}: type={}, lines={}-{}",

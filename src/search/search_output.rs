@@ -69,7 +69,11 @@ pub fn format_and_print_search_results(
                         println!("```");
                     } else {
                         println!("File: {}", result.file);
-                        println!("Lines: {start}-{end}", start = result.lines.0, end = result.lines.1);
+                        println!(
+                            "Lines: {start}-{end}",
+                            start = result.lines.0,
+                            end = result.lines.1
+                        );
                         println!("```{extension}");
                         println!("{code}", code = result.code);
                         println!("```");
@@ -203,7 +207,11 @@ fn format_and_print_color_results(
 
         // Print the file path and node info with color
         if is_full_file {
-            println!("{label} {file}", label = "File:".bold().green().yellow(), file = result.file);
+            println!(
+                "{label} {file}",
+                label = "File:".bold().green().yellow(),
+                file = result.file
+            );
         } else {
             println!(
                 "{} {} ({})",
@@ -526,7 +534,11 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
     for result in results {
         println!("  <result>");
         println!("    <file>{file}</file>", file = escape_xml(&result.file));
-        println!("    <lines>{start}-{end}</lines>", start = result.lines.0, end = result.lines.1);
+        println!(
+            "    <lines>{start}-{end}</lines>",
+            start = result.lines.0,
+            end = result.lines.1
+        );
         println!(
             "    <node_type>{}</node_type>",
             escape_xml(&result.node_type)
@@ -535,7 +547,10 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
         if let Some(keywords) = &result.matched_keywords {
             println!("    <matched_keywords>");
             for keyword in keywords {
-                println!("      <keyword>{keyword}</keyword>", keyword = escape_xml(keyword));
+                println!(
+                    "      <keyword>{keyword}</keyword>",
+                    keyword = escape_xml(keyword)
+                );
             }
             println!("    </matched_keywords>");
         }
@@ -553,27 +568,19 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
         }
 
         if let Some(file_unique_terms) = result.file_unique_terms {
-            println!(
-                "    <file_unique_terms>{file_unique_terms}</file_unique_terms>"
-            );
+            println!("    <file_unique_terms>{file_unique_terms}</file_unique_terms>");
         }
 
         if let Some(file_total_matches) = result.file_total_matches {
-            println!(
-                "    <file_total_matches>{file_total_matches}</file_total_matches>"
-            );
+            println!("    <file_total_matches>{file_total_matches}</file_total_matches>");
         }
 
         if let Some(block_unique_terms) = result.block_unique_terms {
-            println!(
-                "    <block_unique_terms>{block_unique_terms}</block_unique_terms>"
-            );
+            println!("    <block_unique_terms>{block_unique_terms}</block_unique_terms>");
         }
 
         if let Some(block_total_matches) = result.block_total_matches {
-            println!(
-                "    <block_total_matches>{block_total_matches}</block_total_matches>"
-            );
+            println!("    <block_total_matches>{block_total_matches}</block_total_matches>");
         }
 
         println!("    <code><![CDATA[{code}]]></code>", code = result.code);

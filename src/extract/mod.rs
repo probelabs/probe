@@ -78,13 +78,25 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             "[DEBUG] Custom ignores: {custom_ignores:?}",
             custom_ignores = options.custom_ignores
         );
-        println!("[DEBUG] Context lines: {context_lines}", context_lines = options.context_lines);
+        println!(
+            "[DEBUG] Context lines: {context_lines}",
+            context_lines = options.context_lines
+        );
         println!("[DEBUG] Output format: {format}", format = options.format);
-        println!("[DEBUG] Read from clipboard: {from_clipboard}", from_clipboard = options.from_clipboard);
-        println!("[DEBUG] Write to clipboard: {to_clipboard}", to_clipboard = options.to_clipboard);
+        println!(
+            "[DEBUG] Read from clipboard: {from_clipboard}",
+            from_clipboard = options.from_clipboard
+        );
+        println!(
+            "[DEBUG] Write to clipboard: {to_clipboard}",
+            to_clipboard = options.to_clipboard
+        );
         println!("[DEBUG] Dry run: {dry_run}", dry_run = options.dry_run);
         println!("[DEBUG] Parse as git diff: {diff}", diff = options.diff);
-        println!("[DEBUG] Allow tests: {allow_tests}", allow_tests = options.allow_tests);
+        println!(
+            "[DEBUG] Allow tests: {allow_tests}",
+            allow_tests = options.allow_tests
+        );
         println!(
             "[DEBUG] Prompt template: {prompt:?}",
             prompt = options.prompt
@@ -393,11 +405,17 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         }
 
         if options.context_lines > 0 {
-            println!("Context lines: {context_lines}", context_lines = options.context_lines);
+            println!(
+                "Context lines: {context_lines}",
+                context_lines = options.context_lines
+            );
         }
 
         if options.dry_run {
-            println!("{text}", text = "Dry run (file names and lines only)".yellow());
+            println!(
+                "{text}",
+                text = "Dry run (file names and lines only)".yellow()
+            );
         }
 
         println!("Format: {format}", format = options.format);
@@ -423,7 +441,10 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 Some(content)
             }
             Err(e) => {
-                eprintln!("{text}", text = format!("Error loading prompt template: {e}").red());
+                eprintln!(
+                    "{text}",
+                    text = format!("Error loading prompt template: {e}").red()
+                );
                 if debug_mode {
                     println!("[DEBUG] Error loading prompt template: {e}");
                 }
@@ -490,7 +511,10 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             println!("[DEBUG] Start line: {:?}", params.start_line);
             println!("[DEBUG] End line: {:?}", params.end_line);
             println!("[DEBUG] Symbol: {:?}", params.symbol);
-            println!("[DEBUG] Specific lines: {:?}", params.specific_lines.as_ref().map(|l| l.len()));
+            println!(
+                "[DEBUG] Specific lines: {:?}",
+                params.specific_lines.as_ref().map(|l| l.len())
+            );
 
             // Check if file exists
             if params.path.exists() {
@@ -548,7 +572,11 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 results.push(result);
             }
             Err(e) => {
-                let error_msg = format!("Error processing file {path:?}: {e}", path = params.path, e = e);
+                let error_msg = format!(
+                    "Error processing file {path:?}: {e}",
+                    path = params.path,
+                    e = e
+                );
                 if params.debug_mode {
                     println!("[DEBUG] Error: {error_msg}");
                 }

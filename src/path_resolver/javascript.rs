@@ -22,8 +22,8 @@ impl JavaScriptPathResolver {
     /// Finds the nearest node_modules directory from the current directory upwards.
     fn find_node_modules(&self) -> Result<PathBuf, String> {
         // Start from the current directory
-        let mut current_dir = std::env::current_dir()
-            .map_err(|e| format!("Failed to get current directory: {e}"))?;
+        let mut current_dir =
+            std::env::current_dir().map_err(|e| format!("Failed to get current directory: {e}"))?;
 
         // Look for node_modules in the current directory and its parents
         loop {
