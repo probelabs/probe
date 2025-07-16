@@ -45,7 +45,14 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
     // This ensures filename terms are considered in the ranking algorithms
     let documents: Vec<String> = results
         .iter()
-        .map(|r| format!("// Filename: {}\n{}", r.file, r.code))
+        .map(|r| {
+            let mut doc = String::with_capacity(r.file.len() + r.code.len() + 15);
+            doc.push_str("// Filename: ");
+            doc.push_str(&r.file);
+            doc.push('\n');
+            doc.push_str(&r.code);
+            doc
+        })
         .collect();
     let documents_refs: Vec<&str> = documents.iter().map(|s| s.as_str()).collect();
     let document_extraction_duration = document_extraction_start.elapsed();

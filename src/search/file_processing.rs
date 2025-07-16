@@ -439,8 +439,11 @@ pub fn process_file_with_results(
 
     // Measure tree parsing time
     let tree_parsing_start = Instant::now();
-    let file_path = params.path.to_string_lossy().to_string();
-    let cache_key = format!("{}_{}", file_path, extension);
+    let file_path = params.path.to_string_lossy();
+    let mut cache_key = String::with_capacity(file_path.len() + extension.len() + 1);
+    cache_key.push_str(&file_path);
+    cache_key.push('_');
+    cache_key.push_str(extension);
 
     let _ = if language_impl.is_some() {
         crate::language::tree_cache::get_or_parse_tree(&cache_key, &content, &mut parser).ok()

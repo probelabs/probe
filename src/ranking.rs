@@ -123,11 +123,12 @@ pub fn precompute_idfs(
                 let numerator = (n_docs as f64 - df as f64) + 0.5;
                 let denominator = df as f64 + 0.5;
                 let idf = (1.0 + (numerator / denominator)).ln();
-                Some((term.clone(), idf))
+                Some((term.as_str(), idf))
             } else {
                 None
             }
         })
+        .map(|(term, idf)| (term.to_string(), idf))
         .collect()
 }
 
@@ -157,12 +158,12 @@ fn generate_query_token_map(query_terms: &HashSet<String>) -> Result<QueryTokenM
     let mut index: u8 = 0;
 
     // Sort terms for deterministic mapping (HashMap iteration order isn't guaranteed)
-    let mut sorted_terms: Vec<&String> = query_terms.iter().collect();
+    let mut sorted_terms: Vec<&str> = query_terms.iter().map(|s| s.as_str()).collect();
     sorted_terms.sort();
 
     // Assign each term a unique index
     for term in sorted_terms {
-        token_map.insert(term.clone(), index);
+        token_map.insert(term.to_string(), index);
         index = index.wrapping_add(1); // Use wrapping_add to handle potential overflow safely
     }
 
