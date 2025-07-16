@@ -480,7 +480,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 }
                 Err(err) => {
                     if debug_mode {
-                        println!("DEBUG: Failed to resolve path '{}': {}", path_str, err);
+                        println!("DEBUG: Failed to resolve path '{path_str}': {err}");
                     }
                     // Fall back to the original path
                     path.to_path_buf()
@@ -1322,14 +1322,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             };
 
             if let Err(e) = cache::add_results_to_cache(&merged, session_id, &raw_query) {
-                eprintln!("Error adding merged results to cache: {}", e);
+                eprintln!("Error adding merged results to cache: {e}");
             }
 
             if debug_mode {
                 println!("DEBUG: Added merged results to cache after merging");
                 // Print cache contents after adding merged results
                 if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
-                    eprintln!("Error printing updated cache: {}", e);
+                    eprintln!("Error printing updated cache: {e}");
                 }
             }
         }
@@ -1352,12 +1352,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // Print the session ID to the console if it was generated or provided
     if let Some(session_id) = effective_session {
         if session_was_generated {
-            println!(
-                "Session ID: {} (generated - ALWAYS USE IT in future sessions for caching)",
-                session_id
-            );
+            println!("Session ID: {session_id} (generated - ALWAYS USE IT in future sessions for caching)");
         } else {
-            println!("Session ID: {}", session_id);
+            println!("Session ID: {session_id}");
         }
     }
 
@@ -1407,7 +1404,7 @@ pub fn search_with_structured_patterns(
             }
             Err(err) => {
                 if std::env::var("DEBUG").unwrap_or_default() == "1" {
-                    println!("DEBUG: Failed to resolve path '{}': {}", path_str, err);
+                    println!("DEBUG: Failed to resolve path '{path_str}': {err}");
                 }
                 // Fall back to the original path
                 root_path_str.to_path_buf()
@@ -1431,7 +1428,7 @@ pub fn search_with_structured_patterns(
     }
 
     // Extract just the patterns for the RegexSet
-    let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| format!("(?i){}", p)).collect();
+    let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| format!("(?i){p}")).collect();
 
     // Create a RegexSet for deterministic matching
     let regex_set = RegexSet::new(&pattern_strings)?;
@@ -1564,10 +1561,7 @@ fn search_file_with_regex_set(
         Ok(meta) => meta,
         Err(e) => {
             if debug_mode {
-                println!(
-                    "DEBUG: Error getting metadata for {:?}: {:?}",
-                    resolved_path, e
-                );
+                println!("DEBUG: Error getting metadata for {resolved_path:?}: {e:?}");
             }
             return Err(anyhow::anyhow!("Failed to get file metadata: {}", e));
         }
