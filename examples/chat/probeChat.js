@@ -403,7 +403,17 @@ When reviewing code:
 - Evaluate code style and consistency
 - Is the backward compatibility can be broken?
 - Organize feedback by severity (critical, major, minor) and type (bug, performance, security, style)
-- Provide specific, actionable suggestions with code examples where appropriate`,
+- Provide specific, actionable suggestions with code examples where appropriate
+
+## Failure Detection
+
+If you detect critical issues that should prevent the code from being merged, include <fail> in your response:
+- Security vulnerabilities that could be exploited
+- Breaking changes without proper documentation or migration path
+- Critical bugs that would cause system failures
+- Severe violations of project standards that must be addressed
+
+The <fail> tag will cause the GitHub check to fail, drawing immediate attention to these critical issues.`,
 
       'engineer': `You are senior engineer focused on software architecture and design.
 Before jumping on the task you first, in details analyse user request, and try to provide elegant and concise solution.
