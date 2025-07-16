@@ -73,8 +73,7 @@ impl JavaScriptPathResolver {
 
         // If we couldn't find it, try using require.resolve
         let script = format!(
-            "try {{ console.log(require.resolve('{}')) }} catch(e) {{ process.exit(1) }}",
-            package_name
+            "try {{ console.log(require.resolve('{package_name}')) }} catch(e) {{ process.exit(1) }}"
         );
 
         let output = Command::new("node")
@@ -97,8 +96,7 @@ impl JavaScriptPathResolver {
         }
 
         Err(format!(
-            "Could not resolve JavaScript package: {}",
-            package_name
+            "Could not resolve JavaScript package: {package_name}"
         ))
     }
 }
@@ -127,8 +125,7 @@ impl PathResolver for JavaScriptPathResolver {
             let parts: Vec<&str> = path.splitn(3, '/').collect();
             match parts.len() {
                 1 => Err(format!(
-                    "Invalid scoped package format (missing package name): {}",
-                    path
+                    "Invalid scoped package format (missing package name): {path}"
                 )), // e.g., "@scope"
                 2 => {
                     // e.g., "@scope/package"
@@ -224,8 +221,7 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "Failed to resolve directory with package.json: {:?}",
-            result
+            "Failed to resolve directory with package.json: {result:?}"
         );
         assert_eq!(result.unwrap(), temp_dir.path());
     }
@@ -248,8 +244,7 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "Failed to resolve package.json: {:?}",
-            result
+            "Failed to resolve package.json: {result:?}"
         );
         assert_eq!(result.unwrap(), temp_dir.path());
     }
@@ -276,14 +271,13 @@ mod tests {
         let result = resolver.resolve("lodash");
         if result.is_ok() {
             let path = result.unwrap();
-            assert!(path.exists(), "Path does not exist: {:?}", path);
+            assert!(path.exists(), "Path does not exist: {path:?}");
 
             // Check if it contains a package.json
             let package_json = path.join("package.json");
             assert!(
                 package_json.exists(),
-                "package.json not found: {:?}",
-                package_json
+                "package.json not found: {package_json:?}"
             );
         } else {
             println!("Skipping assertion for 'lodash': Package not found");

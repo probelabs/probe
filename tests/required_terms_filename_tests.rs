@@ -81,8 +81,8 @@ fn test_required_terms_with_filename_matching() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    println!("STDOUT: {}", stdout);
-    println!("STDERR: {}", stderr);
+    println!("STDOUT: {stdout}");
+    println!("STDERR: {stderr}");
 
     // Extract the file names from the output
     let file_names: Vec<&str> = stdout

@@ -82,8 +82,7 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
             format_duration(metrics_extraction_duration)
         );
         println!(
-            "DEBUG: Extracted metrics - file_unique_terms: {:?}, file_total_matches: {:?}, block_unique_terms: {:?}, block_total_matches: {:?}",
-            file_unique_terms, file_total_matches, block_unique_terms, block_total_matches
+            "DEBUG: Extracted metrics - file_unique_terms: {file_unique_terms:?}, file_total_matches: {file_total_matches:?}, block_unique_terms: {block_unique_terms:?}, block_total_matches: {block_total_matches:?}"
         );
     }
 
@@ -169,8 +168,7 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
 
     if debug_mode {
         println!(
-            "DEBUG: Score update completed - Updated {} results",
-            updated_len
+            "DEBUG: Score update completed - Updated {updated_len} results"
         );
     }
 

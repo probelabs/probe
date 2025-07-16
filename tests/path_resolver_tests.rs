@@ -10,7 +10,7 @@ fn check_js_module(module: &str) -> bool {
     if Command::new("node").arg("--version").output().is_err() {
         return false;
     }
-    let script = format!("try {{ require.resolve('{}/package.json'); process.exit(0); }} catch (e) {{ process.exit(1); }}", module);
+    let script = format!("try {{ require.resolve('{module}/package.json'); process.exit(0); }} catch (e) {{ process.exit(1); }}");
     Command::new("node")
         .arg("-e")
         .arg(&script)
@@ -60,14 +60,13 @@ fn test_go_stdlib_resolution_no_subpath() {
         return;
     }
     let result = resolve_path("go:fmt");
-    assert!(result.is_ok(), "Failed to resolve 'go:fmt': {:?}", result);
+    assert!(result.is_ok(), "Failed to resolve 'go:fmt': {result:?}");
     let path = result.unwrap();
-    assert!(path.exists(), "Path does not exist: {:?}", path);
-    assert!(path.is_dir(), "Path is not a directory: {:?}", path);
+    assert!(path.exists(), "Path does not exist: {path:?}");
+    assert!(path.is_dir(), "Path is not a directory: {path:?}");
     assert!(
         path.join("print.go").exists(),
-        "fmt/print.go not found in {:?}",
-        path
+        "fmt/print.go not found in {path:?}"
     ); // Check a known file
 }
 
@@ -83,12 +82,11 @@ fn test_go_stdlib_resolution_with_subpath_file() {
     let result = resolve_path("go:net/http/server.go"); // Path is module=net/http, sub=server.go
     assert!(
         result.is_ok(),
-        "Failed to resolve 'go:net/http/server.go': {:?}",
-        result
+        "Failed to resolve 'go:net/http/server.go': {result:?}"
     );
     let path = result.unwrap();
-    assert!(path.exists(), "Path does not exist: {:?}", path);
-    assert!(path.is_file(), "Path is not a file: {:?}", path);
+    assert!(path.exists(), "Path does not exist: {path:?}");
+    assert!(path.is_file(), "Path is not a file: {path:?}");
     assert_eq!(path.file_name().unwrap(), "server.go");
 }
 
@@ -103,16 +101,14 @@ fn test_go_stdlib_resolution_with_subpath_dir() {
     let result_mod = resolve_path("go:net/http/pprof");
     assert!(
         result_mod.is_ok(),
-        "Failed to resolve 'go:net/http/pprof' as module: {:?}",
-        result_mod
+        "Failed to resolve 'go:net/http/pprof' as module: {result_mod:?}"
     );
     let path_mod = result_mod.unwrap();
-    assert!(path_mod.exists(), "Path does not exist: {:?}", path_mod);
-    assert!(path_mod.is_dir(), "Path is not a directory: {:?}", path_mod);
+    assert!(path_mod.exists(), "Path does not exist: {path_mod:?}");
+    assert!(path_mod.is_dir(), "Path is not a directory: {path_mod:?}");
     assert!(
         path_mod.join("pprof.go").exists(),
-        "pprof.go not found in {:?}",
-        path_mod
+        "pprof.go not found in {path_mod:?}"
     );
 }
 
@@ -121,25 +117,21 @@ fn test_go_external_resolution_no_subpath() {
     let module = "github.com/stretchr/testify";
     if !check_go_module(module) {
         println!(
-            "Skipping test_go_external_resolution_no_subpath: Go or '{}' not available",
-            module
+            "Skipping test_go_external_resolution_no_subpath: Go or '{module}' not available"
         );
         return;
     }
-    let result = resolve_path(&format!("go:{}", module));
+    let result = resolve_path(&format!("go:{module}"));
     assert!(
         result.is_ok(),
-        "Failed to resolve 'go:{}': {:?}",
-        module,
-        result
+        "Failed to resolve 'go:{module}': {result:?}"
     );
     let path = result.unwrap();
-    assert!(path.exists(), "Path does not exist: {:?}", path);
-    assert!(path.is_dir(), "Path is not a directory: {:?}", path);
+    assert!(path.exists(), "Path does not exist: {path:?}");
+    assert!(path.is_dir(), "Path is not a directory: {path:?}");
     assert!(
         path.join("assert").exists(),
-        "'assert' subdir not found in {:?}",
-        path
+        "'assert' subdir not found in {path:?}"
     ); // Check subdir
 }
 
@@ -147,45 +139,39 @@ fn test_go_external_resolution_no_subpath() {
 fn test_go_external_resolution_with_subpath() {
     let module = "github.com/stretchr/testify";
     let subpath = "assert";
-    let full_module_path = format!("{}/{}", module, subpath); // e.g. github.com/stretchr/testify/assert
+    let full_module_path = format!("{module}/{subpath}"); // e.g. github.com/stretchr/testify/assert
     if !check_go_module(&full_module_path) {
         // Check if the sub-package itself is resolvable by go list
         if !check_go_module(module) {
             // If not, check if base module exists before skipping entirely
-            println!("Skipping test_go_external_resolution_with_subpath: Go or base module '{}' not available", module);
+            println!("Skipping test_go_external_resolution_with_subpath: Go or base module '{module}' not available");
             return;
         }
         // Base module exists, but sub-package doesn't resolve directly. Our split logic should handle this.
         println!(
-            "Note: '{}' not directly resolvable by 'go list', testing split logic.",
-            full_module_path
+            "Note: '{full_module_path}' not directly resolvable by 'go list', testing split logic."
         );
     } else if !check_go_module(module) {
-        println!("Skipping test_go_external_resolution_with_subpath: Go or base module '{}' not available", module);
+        println!("Skipping test_go_external_resolution_with_subpath: Go or base module '{module}' not available");
         return;
     }
 
-    let input_path = format!("go:{}/{}", module, subpath); // "go:github.com/stretchr/testify/assert"
+    let input_path = format!("go:{module}/{subpath}"); // "go:github.com/stretchr/testify/assert"
     let result = resolve_path(&input_path);
     assert!(
         result.is_ok(),
-        "Failed to resolve '{}': {:?}",
-        input_path,
-        result
+        "Failed to resolve '{input_path}': {result:?}"
     );
     let path = result.unwrap();
-    assert!(path.exists(), "Path does not exist: {:?}", path);
-    assert!(path.is_dir(), "Path is not a directory: {:?}", path); // assert is a directory
+    assert!(path.exists(), "Path does not exist: {path:?}");
+    assert!(path.is_dir(), "Path is not a directory: {path:?}"); // assert is a directory
     assert!(
         path.file_name().unwrap() == subpath,
-        "Path should end with '{}': {:?}",
-        subpath,
-        path
+        "Path should end with '{subpath}': {path:?}"
     );
     assert!(
         path.join("assertions.go").exists(),
-        "assertions.go not found in {:?}",
-        path
+        "assertions.go not found in {path:?}"
     ); // Check known file
 }
 
@@ -198,8 +184,7 @@ fn test_go_nonexistent_package() {
     let result = resolve_path("go:nonexistent_gopkg_xyz_123_abc");
     assert!(
         result.is_err(),
-        "Expected error for non-existent package, got Ok: {:?}",
-        result
+        "Expected error for non-existent package, got Ok: {result:?}"
     );
 }
 
@@ -211,25 +196,21 @@ fn test_js_resolution_no_subpath() {
     let module = "npm"; // Or change to a dev dep of *this* project if available
     if !check_js_module(module) {
         println!(
-            "Skipping test_js_resolution_no_subpath: Node or '{}' module not available",
-            module
+            "Skipping test_js_resolution_no_subpath: Node or '{module}' module not available"
         );
         return;
     }
-    let result = resolve_path(&format!("js:{}", module));
+    let result = resolve_path(&format!("js:{module}"));
     assert!(
         result.is_ok(),
-        "Failed to resolve 'js:{}': {:?}",
-        module,
-        result
+        "Failed to resolve 'js:{module}': {result:?}"
     );
     let path = result.unwrap();
-    assert!(path.exists(), "Path does not exist: {:?}", path);
-    assert!(path.is_dir(), "Path is not a directory: {:?}", path);
+    assert!(path.exists(), "Path does not exist: {path:?}");
+    assert!(path.is_dir(), "Path is not a directory: {path:?}");
     assert!(
         path.join("package.json").exists(),
-        "package.json not found in {:?}",
-        path
+        "package.json not found in {path:?}"
     );
 }
 
@@ -239,23 +220,21 @@ fn test_js_resolution_with_subpath_file() {
     let subpath = "index.js"; // Common entry point, might exist
     if !check_js_module(module) {
         println!(
-            "Skipping test_js_resolution_with_subpath_file: Node or '{}' module not available",
-            module
+            "Skipping test_js_resolution_with_subpath_file: Node or '{module}' module not available"
         );
         return;
     }
 
-    let input_path = format!("js:{}/{}", module, subpath);
+    let input_path = format!("js:{module}/{subpath}");
     let result = resolve_path(&input_path);
 
     // Check if the subpath *actually* exists before asserting Ok
-    let expected_path = match resolve_path(&format!("js:{}", module)) {
+    let expected_path = match resolve_path(&format!("js:{module}")) {
         Ok(p) => p.join(subpath),
         Err(_) => {
             // Can't resolve base module
             println!(
-                "Skipping test_js_resolution_with_subpath_file: Cannot resolve base module '{}'",
-                module
+                "Skipping test_js_resolution_with_subpath_file: Cannot resolve base module '{module}'"
             );
             return;
         }
@@ -269,18 +248,14 @@ fn test_js_resolution_with_subpath_file() {
 
     assert!(
         result.is_ok(),
-        "Failed to resolve '{}': {:?}",
-        input_path,
-        result
+        "Failed to resolve '{input_path}': {result:?}"
     );
     let path = result.unwrap();
-    assert!(path.exists(), "Path does not exist: {:?}", path);
-    assert!(path.is_file(), "Path is not a file: {:?}", path); // Check if it's a file
+    assert!(path.exists(), "Path does not exist: {path:?}");
+    assert!(path.is_file(), "Path is not a file: {path:?}"); // Check if it's a file
     assert!(
         path.file_name().unwrap() == subpath,
-        "Path should end with '{}': {:?}",
-        subpath,
-        path
+        "Path should end with '{subpath}': {path:?}"
     );
 }
 
@@ -290,22 +265,20 @@ fn test_js_resolution_with_subpath_dir() {
     let subpath = "lib"; // npm usually has a lib directory
     if !check_js_module(module) {
         println!(
-            "Skipping test_js_resolution_with_subpath_dir: Node or '{}' module not available",
-            module
+            "Skipping test_js_resolution_with_subpath_dir: Node or '{module}' module not available"
         );
         return;
     }
 
-    let input_path = format!("js:{}/{}", module, subpath);
+    let input_path = format!("js:{module}/{subpath}");
     let result = resolve_path(&input_path);
 
     // Check if the subpath *actually* exists
-    let expected_path = match resolve_path(&format!("js:{}", module)) {
+    let expected_path = match resolve_path(&format!("js:{module}")) {
         Ok(p) => p.join(subpath),
         Err(_) => {
             println!(
-                "Skipping test_js_resolution_with_subpath_dir: Cannot resolve base module '{}'",
-                module
+                "Skipping test_js_resolution_with_subpath_dir: Cannot resolve base module '{module}'"
             );
             return;
         }
@@ -317,18 +290,14 @@ fn test_js_resolution_with_subpath_dir() {
 
     assert!(
         result.is_ok(),
-        "Failed to resolve '{}': {:?}",
-        input_path,
-        result
+        "Failed to resolve '{input_path}': {result:?}"
     );
     let path = result.unwrap();
-    assert!(path.exists(), "Path does not exist: {:?}", path);
-    assert!(path.is_dir(), "Path is not a directory: {:?}", path);
+    assert!(path.exists(), "Path does not exist: {path:?}");
+    assert!(path.is_dir(), "Path is not a directory: {path:?}");
     assert!(
         path.file_name().unwrap() == subpath,
-        "Path should end with '{}': {:?}",
-        subpath,
-        path
+        "Path should end with '{subpath}': {path:?}"
     );
 }
 
@@ -338,25 +307,21 @@ fn test_js_scoped_resolution_no_subpath() {
     let module = "@npmcli/config"; // Example, check if installed
     if !check_js_module(module) {
         println!(
-            "Skipping test_js_scoped_resolution_no_subpath: Node or '{}' module not available",
-            module
+            "Skipping test_js_scoped_resolution_no_subpath: Node or '{module}' module not available"
         );
         return;
     }
-    let result = resolve_path(&format!("js:{}", module));
+    let result = resolve_path(&format!("js:{module}"));
     assert!(
         result.is_ok(),
-        "Failed to resolve 'js:{}': {:?}",
-        module,
-        result
+        "Failed to resolve 'js:{module}': {result:?}"
     );
     let path = result.unwrap();
-    assert!(path.exists(), "Path does not exist: {:?}", path);
-    assert!(path.is_dir(), "Path is not a directory: {:?}", path);
+    assert!(path.exists(), "Path does not exist: {path:?}");
+    assert!(path.is_dir(), "Path is not a directory: {path:?}");
     assert!(
         path.join("package.json").exists(),
-        "package.json not found in {:?}",
-        path
+        "package.json not found in {path:?}"
     );
 }
 
@@ -366,22 +331,20 @@ fn test_js_scoped_resolution_with_subpath() {
     let subpath = "lib/index.js"; // Check actual structure if test fails
     if !check_js_module(module) {
         println!(
-            "Skipping test_js_scoped_resolution_with_subpath: Node or '{}' module not available",
-            module
+            "Skipping test_js_scoped_resolution_with_subpath: Node or '{module}' module not available"
         );
         return;
     }
 
-    let input_path = format!("js:{}/{}", module, subpath);
+    let input_path = format!("js:{module}/{subpath}");
     let result = resolve_path(&input_path);
 
     // Check if the subpath *actually* exists
-    let expected_path = match resolve_path(&format!("js:{}", module)) {
+    let expected_path = match resolve_path(&format!("js:{module}")) {
         Ok(p) => p.join(subpath),
         Err(_) => {
             println!(
-                "Skipping test_js_scoped_resolution_with_subpath: Cannot resolve base module '{}'",
-                module
+                "Skipping test_js_scoped_resolution_with_subpath: Cannot resolve base module '{module}'"
             );
             return;
         }
@@ -393,18 +356,14 @@ fn test_js_scoped_resolution_with_subpath() {
 
     assert!(
         result.is_ok(),
-        "Failed to resolve '{}': {:?}",
-        input_path,
-        result
+        "Failed to resolve '{input_path}': {result:?}"
     );
     let path = result.unwrap();
-    assert!(path.exists(), "Path does not exist: {:?}", path);
+    assert!(path.exists(), "Path does not exist: {path:?}");
     // assert!(path.is_file(), "Path is not a file: {:?}", path); // Adjust if subpath is dir
     assert!(
         path.ends_with(subpath.replace('/', std::path::MAIN_SEPARATOR_STR)),
-        "Path should end with '{}': {:?}",
-        subpath,
-        path
+        "Path should end with '{subpath}': {path:?}"
     );
 }
 
@@ -417,13 +376,12 @@ fn test_js_nonexistent_package() {
     let result = resolve_path("js:nonexistent_jspkg_xyz_123_abc");
     assert!(
         result.is_err(),
-        "Expected error for non-existent package, got Ok: {:?}",
-        result
+        "Expected error for non-existent package, got Ok: {result:?}"
     );
 
     // The error message might vary depending on the environment, so just check that it's an error
     let err_msg = result.unwrap_err();
-    println!("Error message for nonexistent JS package: {}", err_msg);
+    println!("Error message for nonexistent JS package: {err_msg}");
     // Could contain "not found", "Cannot find module", "Failed to resolve", etc.
 }
 
@@ -453,7 +411,7 @@ edition = "2021"
     let path_str = format!("rust:{}", canonical_toml_path.to_str().unwrap());
     let result = resolve_path(&path_str);
 
-    assert!(result.is_ok(), "Failed to resolve rust: path: {:?}", result);
+    assert!(result.is_ok(), "Failed to resolve rust: path: {result:?}");
     // Expect the parent directory of the Cargo.toml
     let expected_path = fs::canonicalize(crate_root).unwrap();
     assert_eq!(result.unwrap(), expected_path);
@@ -465,8 +423,7 @@ fn test_rust_nonexistent_toml() {
     let result = resolve_path(path_str);
     assert!(
         result.is_err(),
-        "Expected error for non-existent Cargo.toml, got Ok: {:?}",
-        result
+        "Expected error for non-existent Cargo.toml, got Ok: {result:?}"
     );
 }
 
@@ -482,8 +439,7 @@ fn test_rust_path_is_not_toml() {
     // Resolve should fail because the path is not a file
     assert!(
         result.is_err(),
-        "Expected error for path not pointing to a file, got Ok: {:?}",
-        result
+        "Expected error for path not pointing to a file, got Ok: {result:?}"
     );
 }
 
@@ -504,13 +460,11 @@ fn test_dep_go_resolution() {
 
     assert!(
         result.is_ok(),
-        "Failed to resolve '/dep/go/fmt': {:?}",
-        result
+        "Failed to resolve '/dep/go/fmt': {result:?}"
     );
     assert!(
         traditional_result.is_ok(),
-        "Failed to resolve 'go:fmt': {:?}",
-        traditional_result
+        "Failed to resolve 'go:fmt': {traditional_result:?}"
     );
 
     // Both paths should resolve to the same location
@@ -522,29 +476,24 @@ fn test_dep_js_resolution() {
     let module = "npm"; // Or change to a dev dep of *this* project if available
     if !check_js_module(module) {
         println!(
-            "Skipping test_dep_js_resolution: Node or '{}' module not available",
-            module
+            "Skipping test_dep_js_resolution: Node or '{module}' module not available"
         );
         return;
     }
 
     // Test with npm package using /dep/js prefix
-    let result = resolve_path(&format!("/dep/js/{}", module));
+    let result = resolve_path(&format!("/dep/js/{module}"));
 
     // Compare with traditional js: prefix
-    let traditional_result = resolve_path(&format!("js:{}", module));
+    let traditional_result = resolve_path(&format!("js:{module}"));
 
     assert!(
         result.is_ok(),
-        "Failed to resolve '/dep/js/{}': {:?}",
-        module,
-        result
+        "Failed to resolve '/dep/js/{module}': {result:?}"
     );
     assert!(
         traditional_result.is_ok(),
-        "Failed to resolve 'js:{}': {:?}",
-        module,
-        traditional_result
+        "Failed to resolve 'js:{module}': {traditional_result:?}"
     );
 
     // Both paths should resolve to the same location
@@ -582,13 +531,11 @@ edition = "2021"
 
     assert!(
         result.is_ok(),
-        "Failed to resolve /dep/rust path: {:?}",
-        result
+        "Failed to resolve /dep/rust path: {result:?}"
     );
     assert!(
         traditional_result.is_ok(),
-        "Failed to resolve rust: path: {:?}",
-        traditional_result
+        "Failed to resolve rust: path: {traditional_result:?}"
     );
 
     // Both paths should resolve to the same location

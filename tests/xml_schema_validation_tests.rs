@@ -99,7 +99,7 @@ function validateTerm(term) {
 // Helper function to validate XML structure
 fn validate_xml_structure(xml_str: &str) -> Result<(), String> {
     // Parse the XML to verify its structure
-    let doc = Document::parse(xml_str).map_err(|e| format!("Failed to parse XML: {}", e))?;
+    let doc = Document::parse(xml_str).map_err(|e| format!("Failed to parse XML: {e}"))?;
 
     let root = doc.root_element();
 

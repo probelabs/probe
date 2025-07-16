@@ -300,7 +300,7 @@ fn test_query_json_output_with_special_characters() {
         .unwrap();
 
     // Print the code content for debugging
-    println!("Code content: {}", code);
+    println!("Code content: {code}");
 
     // Check for special characters in the function body
     // The function contains special characters in the string literals

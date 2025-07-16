@@ -58,8 +58,7 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
 
     if debug_mode {
         println!(
-            "DEBUG: Starting AST parsing for query: '{}', exact={}",
-            query, exact
+            "DEBUG: Starting AST parsing for query: '{query}', exact={exact}"
         );
     }
 
@@ -194,8 +193,7 @@ fn collect_all_terms(
 
             if debug_mode {
                 println!(
-                    "DEBUG: Collected keywords '{:?}', excluded={}",
-                    keywords, is_excluded
+                    "DEBUG: Collected keywords '{keywords:?}', excluded={is_excluded}"
                 );
             }
 
@@ -225,8 +223,7 @@ fn collect_all_terms(
                 for keyword in keywords {
                     if debug_mode {
                         println!(
-                            "DEBUG: Adding excluded term '{}' from AND expression",
-                            keyword
+                            "DEBUG: Adding excluded term '{keyword}' from AND expression"
                         );
                     }
                     excluded.insert(keyword.clone());
@@ -322,12 +319,10 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 
         if debug_mode {
             println!(
-                "DEBUG: Created combined pattern for all terms: '{}'",
-                combined_pattern
+                "DEBUG: Created combined pattern for all terms: '{combined_pattern}'"
             );
             println!(
-                "DEBUG: Combined pattern includes indices: {:?}",
-                all_indices
+                "DEBUG: Combined pattern includes indices: {all_indices:?}"
             );
         }
 
@@ -355,8 +350,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                 if *excluded {
                     if debug_mode {
                         println!(
-                            "DEBUG: Skipping pattern generation for excluded term: '{:?}'",
-                            keywords
+                            "DEBUG: Skipping pattern generation for excluded term: '{keywords:?}'"
                         );
                     }
                     return; // Skip pattern generation for excluded terms
@@ -368,8 +362,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                     if plan.excluded_terms.contains(keyword) {
                         if debug_mode {
                             println!(
-                                    "DEBUG: Skipping pattern generation for globally excluded keyword: '{}'",
-                                    keyword
+                                    "DEBUG: Skipping pattern generation for globally excluded keyword: '{keyword}'"
                                 );
                         }
                         continue;
@@ -390,8 +383,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 
                         if debug_mode {
                             println!(
-                                "DEBUG: Created pattern for keyword '{}': '{}'",
-                                keyword, pattern
+                                "DEBUG: Created pattern for keyword '{keyword}': '{pattern}'"
                             );
                         }
 
@@ -413,8 +405,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 
                                 if debug_mode {
                                     println!(
-                                            "DEBUG: Created pattern for token '{}' from term '{}': '{}'",
-                                            token, keyword, pattern
+                                            "DEBUG: Created pattern for token '{token}' from term '{keyword}': '{pattern}'"
                                         );
                                 }
 
@@ -510,8 +501,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
         if plan.excluded_terms.contains(keyword) {
             if debug_mode {
                 println!(
-                    "DEBUG: Skipping compound processing for excluded keyword: '{}'",
-                    keyword
+                    "DEBUG: Skipping compound processing for excluded keyword: '{keyword}'"
                 );
             }
             continue; // Skip this keyword entirely
@@ -545,28 +535,24 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 
                         if debug_mode {
                             println!(
-                                "DEBUG: Adding compound part pattern: '{}' from '{}'",
-                                pattern, part
+                                "DEBUG: Adding compound part pattern: '{pattern}' from '{part}'"
                             );
                         }
                         compound_patterns.push((pattern, HashSet::from([idx])));
                     } else if debug_mode && plan.excluded_terms.contains(&part) {
                         println!(
-                            "DEBUG: Skipping excluded compound part: '{}' from keyword '{}'",
-                            part, keyword
+                            "DEBUG: Skipping excluded compound part: '{part}' from keyword '{keyword}'"
                         );
                     } else if debug_mode {
                         println!(
-                            "DEBUG: Skipping short compound part: '{}' from keyword '{}'",
-                            part, keyword
+                            "DEBUG: Skipping short compound part: '{part}' from keyword '{keyword}'"
                         );
                     }
                 }
             }
         } else if debug_mode && is_exact_search(&plan.ast) {
             println!(
-                "DEBUG: Skipping compound word processing for exact search term: '{}'",
-                keyword
+                "DEBUG: Skipping compound word processing for exact search term: '{keyword}'"
             );
         }
     }

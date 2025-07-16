@@ -375,8 +375,7 @@ function processResults(results) {
                 // so we'll just check that we have at least 1 unique term
                 assert!(
                     block_unique_terms >= 1,
-                    "Expected at least 1 unique term, got {}",
-                    block_unique_terms
+                    "Expected at least 1 unique term, got {block_unique_terms}"
                 );
 
                 // Check that block_total_matches is also set

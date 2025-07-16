@@ -152,8 +152,7 @@ pub fn filter_code_block_with_ast(
 
     if debug_mode {
         println!(
-            "DEBUG: filter_code_block_with_ast => lines {:?} => matched {:?}, decision={}",
-            block_lines, matched_terms, decision
+            "DEBUG: filter_code_block_with_ast => lines {block_lines:?} => matched {matched_terms:?}, decision={decision}"
         );
     }
     decision
@@ -192,8 +191,7 @@ pub fn filter_tokenized_block(
                 matched_terms.insert(idx);
                 if debug_mode {
                     println!(
-                        "DEBUG: Special case term '{}' matched in tokenized content",
-                        term
+                        "DEBUG: Special case term '{term}' matched in tokenized content"
                     );
                 }
             }
@@ -259,8 +257,7 @@ pub fn filter_tokenized_block(
         println!("DEBUG: Tokenized block matched terms: {matched_terms:?}");
         println!("DEBUG: AST evaluation result: {decision}");
         println!(
-            "DEBUG: filter_tokenized_block => matched {:?}, decision={}",
-            matched_terms, decision
+            "DEBUG: filter_tokenized_block => matched {matched_terms:?}, decision={decision}"
         );
     }
 
@@ -416,7 +413,7 @@ pub fn process_file_with_results(
     if debug_mode {
         println!("DEBUG: Processing file: {:?}", params.path);
         println!("DEBUG:   matched lines: {:?}", params.line_numbers);
-        println!("DEBUG:   file I/O time: {:?}", file_io_duration);
+        println!("DEBUG:   file I/O time: {file_io_duration:?}");
     }
 
     // Measure AST parsing time with sub-steps
@@ -587,8 +584,7 @@ pub fn process_file_with_results(
                 let should_include = {
                     if debug_mode {
                         println!(
-                            "DEBUG: Using filter_tokenized_block for block {}-{}",
-                            final_start_line, final_end_line
+                            "DEBUG: Using filter_tokenized_block for block {final_start_line}-{final_end_line}"
                         );
                     }
 
@@ -598,8 +594,7 @@ pub fn process_file_with_results(
                         // so we should include this block without re-evaluating
                         if debug_mode {
                             println!(
-                                "DEBUG: Exact mode enabled, skipping tokenization and evaluation for block {}-{}",
-                                final_start_line, final_end_line
+                                "DEBUG: Exact mode enabled, skipping tokenization and evaluation for block {final_start_line}-{final_end_line}"
                             );
                         }
                         true
@@ -614,8 +609,7 @@ pub fn process_file_with_results(
 
                         if debug_mode {
                             println!(
-                                "DEBUG: Block {}-{} filter result: {}",
-                                final_start_line, final_end_line, result
+                                "DEBUG: Block {final_start_line}-{final_end_line} filter result: {result}"
                             );
                         }
 
@@ -632,8 +626,7 @@ pub fn process_file_with_results(
 
                 if debug_mode {
                     println!(
-                        "DEBUG: Block lines {}-{} => should_include={}",
-                        final_start_line, final_end_line, should_include
+                        "DEBUG: Block lines {final_start_line}-{final_end_line} => should_include={should_include}"
                     );
                 }
 
@@ -870,17 +863,14 @@ pub fn process_file_with_results(
 
         if debug_mode {
             println!(
-                "DEBUG:   Block extraction time: {:?}",
-                block_extraction_duration
+                "DEBUG:   Block extraction time: {block_extraction_duration:?}"
             );
             println!(
-                "DEBUG:     - Code structure finding: {:?}",
-                code_structure_duration_value
+                "DEBUG:     - Code structure finding: {code_structure_duration_value:?}"
             );
             println!("DEBUG:     - Filtering: {filtering_duration_value:?}");
             println!(
-                "DEBUG:     - Result building: {:?}",
-                result_building_duration_value
+                "DEBUG:     - Result building: {result_building_duration_value:?}"
             );
         }
     }
@@ -891,8 +881,7 @@ pub fn process_file_with_results(
         if !covered_lines.contains(&line_num) {
             if debug_mode {
                 println!(
-                    "DEBUG: Line {} not covered, will use fallback context",
-                    line_num
+                    "DEBUG: Line {line_num} not covered, will use fallback context"
                 );
                 if line_num <= lines.len() {
                     println!("DEBUG:   Line content: '{}'", lines[line_num - 1].trim());
@@ -978,8 +967,7 @@ pub fn process_file_with_results(
 
         if debug_mode {
             println!(
-                "DEBUG: Inferred node type for fallback context: {}",
-                node_type
+                "DEBUG: Inferred node type for fallback context: {node_type}"
             );
             println!(
                 "DEBUG: Using adaptive context size: lines {}-{} (size: {})",
@@ -1011,8 +999,7 @@ pub fn process_file_with_results(
         let should_include = {
             if debug_mode {
                 println!(
-                    "DEBUG: Using filter_tokenized_block for fallback context {}-{}",
-                    context_start, context_end
+                    "DEBUG: Using filter_tokenized_block for fallback context {context_start}-{context_end}"
                 );
             }
 
@@ -1022,8 +1009,7 @@ pub fn process_file_with_results(
                 // so we should include this block without re-evaluating
                 if debug_mode {
                     println!(
-                        "DEBUG: Exact mode enabled, skipping tokenization and evaluation for fallback context {}-{}",
-                        context_start, context_end
+                        "DEBUG: Exact mode enabled, skipping tokenization and evaluation for fallback context {context_start}-{context_end}"
                     );
                 }
                 true
@@ -1042,8 +1028,7 @@ pub fn process_file_with_results(
 
         if debug_mode {
             println!(
-                "DEBUG: Block at {}-{} filtered: included={}",
-                context_start, context_end, should_include
+                "DEBUG: Block at {context_start}-{context_end} filtered: included={should_include}"
             );
         }
 
@@ -1240,7 +1225,7 @@ pub fn process_file_with_results(
             println!("DEBUG:   Line range matching: {duration:?}");
         }
         if let Some(duration) = timings.result_building_result_creation {
-            println!("DEBUG:   Result creation: {:?}", duration);
+            println!("DEBUG:   Result creation: {duration:?}");
         }
         if let Some(duration) = timings.result_building_synchronization {
             println!("DEBUG:   Synchronization: {duration:?}");

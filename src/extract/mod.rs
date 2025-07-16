@@ -426,8 +426,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     let system_prompt = if let Some(prompt_template) = &options.prompt {
         if debug_mode {
             println!(
-                "[DEBUG] Processing prompt template: {prompt_template:?}",
-                prompt_template = prompt_template
+                "[DEBUG] Processing prompt template: {prompt_template:?}"
             );
         }
         match prompt_template.get_content() {
@@ -662,8 +661,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             to_retain[i] = false;
             if debug_mode {
                 println!(
-                    "[DEBUG] Removing exact duplicate: {} (lines {}-{})",
-                    file_i, start_i, end_i
+                    "[DEBUG] Removing exact duplicate: {file_i} (lines {start_i}-{end_i})"
                 );
             }
             continue;
@@ -689,8 +687,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             if start_j >= start_i && end_j <= end_i {
                 to_retain[j] = false;
                 if debug_mode {
-                    println!("[DEBUG] Removing nested duplicate: {} (lines {}-{}) contained within (lines {}-{})",
-                             file_j, start_j, end_j, start_i, end_i);
+                    println!("[DEBUG] Removing nested duplicate: {file_j} (lines {start_j}-{end_j}) contained within (lines {start_i}-{end_i})");
                 }
             }
         }

@@ -104,8 +104,7 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
             "rust" => "rust:",
             _ => {
                 return Err(format!(
-                    "Unknown language identifier in /dep/ path: {}",
-                    lang_id
+                    "Unknown language identifier in /dep/ path: {lang_id}"
                 ))
             }
         };
@@ -117,16 +116,14 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
                 let (module_name, subpath_opt) =
                     resolver.split_module_and_subpath(remainder).map_err(|e| {
                         format!(
-                            "Failed to parse path '{}' for prefix '{}': {}",
-                            remainder, prefix, e
+                            "Failed to parse path '{remainder}' for prefix '{prefix}': {e}"
                         )
                     })?;
 
                 // 2. Resolve the base directory of the module
                 let module_base_path = resolver.resolve(&module_name).map_err(|e| {
                     format!(
-                        "Failed to resolve module '{}' for prefix '{}': {}",
-                        module_name, prefix, e
+                        "Failed to resolve module '{module_name}' for prefix '{prefix}': {e}"
                     )
                 })?;
 
@@ -156,8 +153,7 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
         if !prefix.ends_with(':') {
             // Internal sanity check
             eprintln!(
-                "Warning: PathResolver prefix '{}' does not end with ':'",
-                prefix
+                "Warning: PathResolver prefix '{prefix}' does not end with ':'"
             );
             continue;
         }
@@ -168,16 +164,14 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
                 .split_module_and_subpath(full_path_after_prefix)
                 .map_err(|e| {
                     format!(
-                        "Failed to parse path '{}' for prefix '{}': {}",
-                        full_path_after_prefix, prefix, e
+                        "Failed to parse path '{full_path_after_prefix}' for prefix '{prefix}': {e}"
                     )
                 })?;
 
             // 2. Resolve the base directory of the module
             let module_base_path = resolver.resolve(&module_name).map_err(|e| {
                 format!(
-                    "Failed to resolve module '{}' for prefix '{}': {}",
-                    module_name, prefix, e
+                    "Failed to resolve module '{module_name}' for prefix '{prefix}': {e}"
                 )
             })?;
 
@@ -230,13 +224,11 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "Failed to resolve '/dep/go/fmt': {:?}",
-            result
+            "Failed to resolve '/dep/go/fmt': {result:?}"
         );
         assert!(
             traditional_result.is_ok(),
-            "Failed to resolve 'go:fmt': {:?}",
-            traditional_result
+            "Failed to resolve 'go:fmt': {traditional_result:?}"
         );
 
         // Both paths should resolve to the same location

@@ -211,7 +211,7 @@ func main() {
     // some blocks that span multiple query regions or shared blocks
 
     println!("\nVerification:");
-    println!("  Total blocks from individual queries: {}", total_blocks);
+    println!("  Total blocks from individual queries: {total_blocks}");
     println!("  Blocks from full file query: {}", blocks_all.len());
     println!("  Note: Difference may be due to overlapping blocks or shared context");
 

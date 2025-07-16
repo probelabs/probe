@@ -167,7 +167,7 @@ fn test_cli_filename_matching() {
     );
 
     // Print the output for debugging
-    println!("Command output: {}", stdout);
+    println!("Command output: {stdout}");
 
     // The behavior of filename matching might have changed, so we'll just check that the search completed successfully
     // and not make assertions about specific files being found
@@ -194,7 +194,7 @@ fn test_cli_filename_matching() {
     let stdout2 = String::from_utf8_lossy(&output2.stdout);
 
     // Print the output for debugging
-    println!("With exclude-filenames output: {}", stdout2);
+    println!("With exclude-filenames output: {stdout2}");
 
     // Check that it found matches
     assert!(
@@ -240,7 +240,7 @@ fn test_cli_reranker() {
     );
 
     // Print the output for debugging
-    println!("Command output: {}", stdout);
+    println!("Command output: {stdout}");
 
     // Check that it used the specified reranker
     assert!(
@@ -322,8 +322,8 @@ fn test_cli_custom_ignores() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // Print the full output for debugging
-    println!("STDOUT: {}", stdout);
-    println!("STDERR: {}", stderr);
+    println!("STDOUT: {stdout}");
+    println!("STDERR: {stderr}");
 
     // Check that it found matches
     assert!(
@@ -351,8 +351,7 @@ fn test_cli_custom_ignores() {
         };
         let context = &stdout[start..end];
         println!(
-            "Found 'search.js' in debug output at position {} with context: '{}'",
-            pos, context
+            "Found 'search.js' in debug output at position {pos} with context: '{context}'"
         );
     }
 
@@ -371,8 +370,8 @@ fn test_cli_max_results() {
 
     // Add many more files with search terms to ensure we have enough results to trigger limits
     for i in 1..20 {
-        let content = format!("// File {} with search term\n", i);
-        create_test_file(&temp_dir, &format!("src/extra{}.rs", i), &content);
+        let content = format!("// File {i} with search term\n");
+        create_test_file(&temp_dir, &format!("src/extra{i}.rs"), &content);
     }
 
     // Run the CLI with max results limit
@@ -397,7 +396,7 @@ fn test_cli_max_results() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     // Print the output for debugging
-    println!("Command output: {}", stdout);
+    println!("Command output: {stdout}");
 
     // Check that it found matches
     assert!(

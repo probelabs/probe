@@ -11,9 +11,9 @@ fn assert_parse_eq(input: &str, expected: Expr) {
                 assert_parse_eq_with_stemming(input, expected);
                 return;
             }
-            assert_eq!(expr, expected, "Parse result didn't match for input: {}", input)
+            assert_eq!(expr, expected, "Parse result didn't match for input: {input}")
         },
-        Err(e) => panic!("Failed to parse valid input '{}': {:?}", input, e),
+        Err(e) => panic!("Failed to parse valid input '{input}': {e:?}"),
     }
 }
 
@@ -30,9 +30,9 @@ fn assert_parse_eq_with_stemming(input: &str, expected: Expr) {
                             assert_eq!(kw1.len(), kw2.len(), "Different number of keywords for left term");
                             // For this specific test, we know the left side should be "anderson"
                             assert!(kw1[0].starts_with("anderson") || kw2[0].starts_with("anderson"),
-                                    "Left term doesn't match 'anderson': {:?} vs {:?}", kw1, kw2);
+                                    "Left term doesn't match 'anderson': {kw1:?} vs {kw2:?}");
                         },
-                        _ => assert_eq!(**left1, **left2, "Left sides don't match for input: {}", input),
+                        _ => assert_eq!(**left1, **left2, "Left sides don't match for input: {input}"),
                     }
                     
                     // Compare the right sides
@@ -42,15 +42,15 @@ fn assert_parse_eq_with_stemming(input: &str, expected: Expr) {
                             assert_eq!(kw1.len(), kw2.len(), "Different number of keywords for right term");
                             // For this specific test, we know the right side should be "orange" or "orang" (stemmed)
                             assert!(kw1[0].starts_with("orang") || kw2[0].starts_with("orang"),
-                                    "Right term doesn't match 'orange' or 'orang': {:?} vs {:?}", kw1, kw2);
+                                    "Right term doesn't match 'orange' or 'orang': {kw1:?} vs {kw2:?}");
                         },
-                        _ => assert_eq!(**right1, **right2, "Right sides don't match for input: {}", input),
+                        _ => assert_eq!(**right1, **right2, "Right sides don't match for input: {input}"),
                     }
                 },
-                _ => assert_eq!(expr, expected, "Parse result didn't match for input: {}", input),
+                _ => assert_eq!(expr, expected, "Parse result didn't match for input: {input}"),
             }
         },
-        Err(e) => panic!("Failed to parse valid input '{}': {:?}", input, e),
+        Err(e) => panic!("Failed to parse valid input '{input}': {e:?}"),
     }
 }
 
@@ -64,7 +64,7 @@ fn assert_parse_fails(input: &str) {
     
     if should_fail {
         if let Ok(expr) = parse_query_test(input) {
-            panic!("Expected parsing to fail for input: '{}', but got: {:?}", input, expr);
+            panic!("Expected parsing to fail for input: '{input}', but got: {expr:?}");
         }
         return;
     }
@@ -78,7 +78,7 @@ fn assert_parse_fails(input: &str) {
         },
         Err(e) => {
             // Only fail if we expected this to be parsed successfully
-            panic!("Expected parsing to succeed for input: '{}', but got error: {:?}", input, e);
+            panic!("Expected parsing to succeed for input: '{input}', but got error: {e:?}");
         }
     }
 }
@@ -130,10 +130,10 @@ fn assert_terms_eq(input: &str, expected_required: Vec<&str>, expected_optional:
     match parse_query_test(input) {
         Ok(expr) => {
             let (required, optional) = expr.extract_terms();
-            assert_eq!(required, expected_required, "Required terms didn't match for input: {}", input);
-            assert_eq!(optional, expected_optional, "Optional terms didn't match for input: {}", input);
+            assert_eq!(required, expected_required, "Required terms didn't match for input: {input}");
+            assert_eq!(optional, expected_optional, "Optional terms didn't match for input: {input}");
         }
-        Err(e) => panic!("Failed to parse valid input '{}': {:?}", input, e),
+        Err(e) => panic!("Failed to parse valid input '{input}': {e:?}"),
     }
 }
 

@@ -241,24 +241,21 @@ fn format_extraction_internal(
             if let Some(input) = original_input {
                 writeln!(
                     output,
-                    "  <original_input><![CDATA[{}]]></original_input>",
-                    input
+                    "  <original_input><![CDATA[{input}]]></original_input>"
                 )?;
             }
 
             if let Some(prompt) = system_prompt {
                 writeln!(
                     output,
-                    "  <system_prompt><![CDATA[{}]]></system_prompt>",
-                    prompt
+                    "  <system_prompt><![CDATA[{prompt}]]></system_prompt>"
                 )?;
             }
 
             if let Some(instructions) = user_instructions {
                 writeln!(
                     output,
-                    "  <user_instructions><![CDATA[{}]]></user_instructions>",
-                    instructions
+                    "  <user_instructions><![CDATA[{instructions}]]></user_instructions>"
                 )?;
             }
 
@@ -315,7 +312,7 @@ fn format_extraction_internal(
                         match format {
                             "markdown" => {
                                 if !language.is_empty() {
-                                    writeln!(output, "```{}", language)?;
+                                    writeln!(output, "```{language}")?;
                                 } else {
                                     writeln!(output, "```")?;
                                 }
@@ -331,7 +328,7 @@ fn format_extraction_internal(
                             }
                             "color" => {
                                 if !language.is_empty() {
-                                    writeln!(output, "```{}", language)?;
+                                    writeln!(output, "```{language}")?;
                                 } else {
                                     writeln!(output, "```")?;
                                 }
@@ -341,7 +338,7 @@ fn format_extraction_internal(
                             // "terminal" or anything else not covered
                             _ => {
                                 if !language.is_empty() {
-                                    writeln!(output, "```{}", language)?;
+                                    writeln!(output, "```{language}")?;
                                 } else {
                                     writeln!(output, "```")?;
                                 }
@@ -358,17 +355,17 @@ fn format_extraction_internal(
             // Now, print the root-level data (system prompt, user instructions, original input)
             if let Some(input) = original_input {
                 writeln!(output, "{}", "Original Input:".yellow().bold())?;
-                writeln!(output, "{}", input)?;
+                writeln!(output, "{input}")?;
             }
             if let Some(prompt) = system_prompt {
                 writeln!(output)?;
                 writeln!(output, "{}", "System Prompt:".yellow().bold())?;
-                writeln!(output, "{}", prompt)?;
+                writeln!(output, "{prompt}")?;
             }
             if let Some(instructions) = user_instructions {
                 writeln!(output)?;
                 writeln!(output, "{}", "User Instructions:".yellow().bold())?;
-                writeln!(output, "{}", instructions)?;
+                writeln!(output, "{instructions}")?;
             }
 
             // Summaries for non-JSON/XML:
@@ -401,8 +398,8 @@ fn format_extraction_internal(
 
                     let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
                     let total_tokens: usize = results.iter().map(|r| count_tokens(&r.code)).sum();
-                    writeln!(output, "Total bytes returned: {}", total_bytes)?;
-                    writeln!(output, "Total tokens returned: {}", total_tokens)?;
+                    writeln!(output, "Total bytes returned: {total_bytes}")?;
+                    writeln!(output, "Total tokens returned: {total_tokens}")?;
                 }
             }
         }

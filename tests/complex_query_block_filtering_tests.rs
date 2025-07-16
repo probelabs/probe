@@ -107,7 +107,7 @@ fn test_complex_query_filtering(_temp_path: &Path) {
 
     // Parse the query into an AST using standard Elasticsearch behavior (AND for implicit combinations)
     let ast = parse_query(query).unwrap();
-    println!("Parsed AST: {:?}", ast);
+    println!("Parsed AST: {ast:?}");
 
     // Create a QueryPlan
     let plan = create_query_plan(query, false).unwrap();

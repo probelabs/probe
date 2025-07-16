@@ -129,12 +129,11 @@ mod tests {
         let result = resolver.resolve("fmt");
         assert!(
             result.is_ok(),
-            "Failed to resolve 'fmt' package: {:?}",
-            result
+            "Failed to resolve 'fmt' package: {result:?}"
         );
 
         // The path should exist and contain the package
         let path = result.unwrap();
-        assert!(path.exists(), "Path does not exist: {:?}", path);
+        assert!(path.exists(), "Path does not exist: {path:?}");
     }
 }

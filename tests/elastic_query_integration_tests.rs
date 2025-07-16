@@ -96,7 +96,7 @@ fn test_required_term_query() {
     let custom_ignores: Vec<String> = vec![];
 
     // Print the query for debugging
-    println!("Testing query: {:?}", queries);
+    println!("Testing query: {queries:?}");
 
     // Create SearchOptions
     let options = SearchOptions {
@@ -121,7 +121,7 @@ fn test_required_term_query() {
     };
 
     // Print the temp_path for debugging
-    println!("Temp path: {:?}", temp_path);
+    println!("Temp path: {temp_path:?}");
 
     // List files in the temp directory
     println!("Files in temp directory:");
@@ -192,7 +192,7 @@ fn test_excluded_term_query() {
     let custom_ignores: Vec<String> = vec![];
 
     // Print the test files for debugging
-    println!("Test files created in: {:?}", temp_path);
+    println!("Test files created in: {temp_path:?}");
     for entry in std::fs::read_dir(temp_path).unwrap() {
         let entry = entry.unwrap();
         println!("  {:?}", entry.path());
@@ -229,7 +229,7 @@ fn test_excluded_term_query() {
     };
 
     // Print the query for debugging
-    println!("Executing search with query: {:?}", queries);
+    println!("Executing search with query: {queries:?}");
     println!(
         "Path: {:?}, frequency_search: {}",
         options.path, options.frequency_search
@@ -321,7 +321,7 @@ fn test_or_query() {
     };
 
     // Print the test files for debugging
-    println!("Test files created in: {:?}", temp_path);
+    println!("Test files created in: {temp_path:?}");
     for entry in std::fs::read_dir(temp_path).unwrap() {
         let entry = entry.unwrap();
         println!("  {:?}", entry.path());
@@ -336,7 +336,7 @@ fn test_or_query() {
     }
 
     // Print the query for debugging
-    println!("Executing search with query: {:?}", queries);
+    println!("Executing search with query: {queries:?}");
     println!(
         "Path: {:?}, frequency_search: {}",
         options.path, options.frequency_search
@@ -361,7 +361,7 @@ fn test_or_query() {
     // Debug output to see what files were found
     println!("Found files with 'keywordAlpha OR keywordBeta':");
     for name in &file_names {
-        println!("  {}", name);
+        println!("  {name}");
     }
 
     // Check that we found files with keywordAlpha OR keywordBeta
@@ -421,7 +421,7 @@ fn test_complex_query_or() {
     };
 
     // Print the test files for debugging
-    println!("Test files created in: {:?}", temp_path);
+    println!("Test files created in: {temp_path:?}");
     for entry in std::fs::read_dir(temp_path).unwrap() {
         let entry = entry.unwrap();
         println!("  {:?}", entry.path());
@@ -436,7 +436,7 @@ fn test_complex_query_or() {
     }
 
     // Print the query for debugging
-    println!("Executing search with query: {:?}", queries);
+    println!("Executing search with query: {queries:?}");
     println!(
         "Path: {:?}, frequency_search: {}",
         options.path, options.frequency_search
@@ -460,7 +460,7 @@ fn test_complex_query_or() {
     // Debug output to see what files were found
     println!("Found files with 'keywordAlpha OR keywordBeta':");
     for name in &file_names {
-        println!("  {}", name);
+        println!("  {name}");
     }
 
     // With explicit OR syntax, should find all files with keywordAlpha OR keywordBeta
@@ -519,7 +519,7 @@ fn test_complex_query_exclusion() {
     };
 
     // Print the query for debugging
-    println!("Executing search with query: {:?}", queries);
+    println!("Executing search with query: {queries:?}");
     println!(
         "Path: {:?}, frequency_search: {}",
         options.path, options.frequency_search
@@ -531,8 +531,7 @@ fn test_complex_query_exclusion() {
     // Check that we got results
     assert!(
         !search_results.results.is_empty(),
-        "Search should return results for query: {:?}",
-        queries
+        "Search should return results for query: {queries:?}"
     );
 
     let file_names: Vec<&str> = search_results
@@ -544,7 +543,7 @@ fn test_complex_query_exclusion() {
     // Debug output to see what files were found
     println!("Found files with 'keywordAlpha -keywordGamma':");
     for name in &file_names {
-        println!("  {}", name);
+        println!("  {name}");
     }
 
     // Should find file1 (has keywordAlpha and no keywordGamma)
@@ -635,7 +634,7 @@ fn test_function() {
     // Debug output to see what files were found
     println!("Found files with 'key OR word OR score':");
     for name in &file_names {
-        println!("  {}", name);
+        println!("  {name}");
     }
 
     // Should find the file with at least one of the terms: key, word, or score

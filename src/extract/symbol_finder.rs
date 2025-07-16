@@ -44,8 +44,7 @@ pub fn find_symbol_in_file(
         println!("\n[DEBUG] ===== Symbol Search =====");
         if is_nested_symbol {
             println!(
-                "[DEBUG] Searching for nested symbol '{}' in file {:?}",
-                symbol, path
+                "[DEBUG] Searching for nested symbol '{symbol}' in file {path:?}"
             );
             println!(
                 "[DEBUG] Symbol parts: {:?} (parent: '{}', child: '{}')",
@@ -55,8 +54,7 @@ pub fn find_symbol_in_file(
             );
         } else {
             println!(
-                "[DEBUG] Searching for symbol '{}' in file {:?}",
-                symbol, path
+                "[DEBUG] Searching for symbol '{symbol}' in file {path:?}"
             );
         }
         println!(
@@ -151,8 +149,7 @@ pub fn find_symbol_in_file(
                     if let Ok(name) = child.utf8_text(content) {
                         if debug_mode {
                             println!(
-                                "[DEBUG] Found identifier: '{}' (looking for '{}')",
-                                name, current_symbol
+                                "[DEBUG] Found identifier: '{name}' (looking for '{current_symbol}')"
                             );
                         }
 
@@ -377,8 +374,7 @@ pub fn find_symbol_in_file(
                                             // If this is a simple symbol, we found it
                                             if debug_mode {
                                                 println!(
-                                                    "[DEBUG] Found symbol '{}' in function_declarator",
-                                                    current_symbol
+                                                    "[DEBUG] Found symbol '{current_symbol}' in function_declarator"
                                                 );
                                                 println!(
                                                     "[DEBUG] Symbol location: {}:{} - {}:{}",
@@ -426,8 +422,7 @@ pub fn find_symbol_in_file(
         if debug_mode {
             println!("\n[DEBUG] ===== Symbol Found =====");
             println!(
-                "[DEBUG] Found symbol '{}' at lines {}-{}",
-                symbol, node_start_line, node_end_line
+                "[DEBUG] Found symbol '{symbol}' at lines {node_start_line}-{node_end_line}"
             );
             println!(
                 "[DEBUG] Node type: {node_kind}",
@@ -547,8 +542,7 @@ pub fn find_symbol_in_file(
         if debug_mode {
             println!("\n[DEBUG] ===== Symbol Found via Text Search =====");
             println!(
-                "[DEBUG] Found symbol '{}' using text search at line {}",
-                symbol, line_num
+                "[DEBUG] Found symbol '{symbol}' using text search at line {line_num}"
             );
         }
 

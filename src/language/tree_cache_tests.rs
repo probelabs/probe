@@ -278,11 +278,10 @@ fn test_tree_cache_concurrent_access() {
                 // Sample Rust code with thread-specific content
                 let content = format!(
                     r#"
-                    fn thread_function_{0}() {{
-                        println!("Hello from thread {0}");
+                    fn thread_function_{i}() {{
+                        println!("Hello from thread {i}");
                     }}
-                    "#,
-                    i
+                    "#
                 );
 
                 // Parse in a loop to test concurrent access

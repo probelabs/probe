@@ -10,10 +10,10 @@ fn create_test_files(dir: &Path, count: usize, lines_per_file: usize) -> Vec<Pat
     let mut paths = Vec::new();
 
     for i in 0..count {
-        let file_path = dir.join(format!("test_file_{}.rs", i));
+        let file_path = dir.join(format!("test_file_{i}.rs"));
 
         // Create file content with multiple functions and searchable terms
-        let mut content = format!("// Test file {}\n\n", i);
+        let mut content = format!("// Test file {i}\n\n");
 
         for j in 0..lines_per_file / 10 {
             content.push_str(&format!(
@@ -103,8 +103,7 @@ fn test_parallel_file_search() {
 
     // Print performance information
     println!(
-        "Parallel search completed in {:?} for {} files",
-        duration, file_count
+        "Parallel search completed in {duration:?} for {file_count} files"
     );
     println!("Found {} results", search_results.results.len());
 }
@@ -152,8 +151,7 @@ fn test_structured_patterns_search() {
 
     // Print performance information
     println!(
-        "Parallel structured pattern search completed in {:?} for {} files",
-        duration, file_count
+        "Parallel structured pattern search completed in {duration:?} for {file_count} files"
     );
     println!("Found matches in {} files", file_term_maps.len());
 }
@@ -237,7 +235,7 @@ fn function_{}() {{
     );
 
     // Print performance information
-    println!("AST parallel processing completed in {:?}", duration);
+    println!("AST parallel processing completed in {duration:?}");
     println!("Found {} results", search_results.results.len());
 }
 
@@ -340,6 +338,6 @@ fn function_with_blocks_{}() {{
     );
 
     // Print performance information
-    println!("Block parallel processing completed in {:?}", duration);
+    println!("Block parallel processing completed in {duration:?}");
     println!("Found {} results", search_results.results.len());
 }

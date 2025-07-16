@@ -49,8 +49,7 @@ impl RustPathResolver {
                             let path = PathBuf::from(manifest_path);
                             return path.parent().map_or(
                                 Err(format!(
-                                    "Could not determine parent directory of {}",
-                                    manifest_path
+                                    "Could not determine parent directory of {manifest_path}"
                                 )),
                                 |parent| Ok(parent.to_path_buf()),
                             );
@@ -101,8 +100,7 @@ impl RustPathResolver {
 
         if !registry_dir.exists() {
             return Err(format!(
-                "Cargo registry directory not found: {:?}",
-                registry_dir
+                "Cargo registry directory not found: {registry_dir:?}"
             ));
         }
 
@@ -220,8 +218,7 @@ edition = "2021"
 
         assert!(
             result.is_ok(),
-            "Failed to resolve directory with Cargo.toml: {:?}",
-            result
+            "Failed to resolve directory with Cargo.toml: {result:?}"
         );
         assert_eq!(result.unwrap(), temp_dir.path());
     }
@@ -246,7 +243,7 @@ edition = "2021"
         let resolver = RustPathResolver::new();
         let result = resolver.resolve(cargo_toml_path.to_str().unwrap());
 
-        assert!(result.is_ok(), "Failed to resolve Cargo.toml: {:?}", result);
+        assert!(result.is_ok(), "Failed to resolve Cargo.toml: {result:?}");
         assert_eq!(result.unwrap(), temp_dir.path());
     }
 
@@ -276,14 +273,13 @@ edition = "2021"
 
         // The result should be Ok and point to the current directory or a valid path
         if let Ok(path) = result {
-            assert!(path.exists(), "Path does not exist: {:?}", path);
+            assert!(path.exists(), "Path does not exist: {path:?}");
 
             // Check if it contains a Cargo.toml
             let cargo_toml_path = path.join("Cargo.toml");
             assert!(
                 cargo_toml_path.exists(),
-                "Cargo.toml not found: {:?}",
-                cargo_toml_path
+                "Cargo.toml not found: {cargo_toml_path:?}"
             );
         } else {
             println!("Skipping assertion for '{crate_name}': Crate not found");

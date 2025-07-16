@@ -960,8 +960,7 @@ pub fn parse_file_for_code_blocks(
 
     if debug_mode {
         println!(
-            "DEBUG: Cache miss for line_map key: {}. Generating...",
-            cache_key
+            "DEBUG: Cache miss for line_map key: {cache_key}. Generating..."
         );
     }
 
@@ -1330,8 +1329,7 @@ pub fn parse_file_for_code_blocks(
             });
         } else if debug_mode {
             println!(
-                "DEBUG: No node info found for line {} (Live NodeInfo)",
-                line
+                "DEBUG: No node info found for line {line} (Live NodeInfo)"
             );
         }
     } // End loop over line_numbers
@@ -1504,8 +1502,7 @@ pub fn parse_file_for_code_blocks(
     LINE_MAP_CACHE.insert(cache_key.clone(), cacheable_line_map);
     if debug_mode {
         println!(
-            "DEBUG: Stored generated line_map in cache key: {}",
-            cache_key
+            "DEBUG: Stored generated line_map in cache key: {cache_key}"
         );
     }
 

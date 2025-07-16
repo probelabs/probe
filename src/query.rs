@@ -502,7 +502,7 @@ pub fn handle_query(
         } else {
             // For other formats, print the "No results found" message
             println!("{}", "No results found.".yellow().bold());
-            println!("Search completed in {:.2?}", duration);
+            println!("Search completed in {duration:.2?}");
         }
     } else {
         // For non-JSON/XML formats, print search time
@@ -526,8 +526,8 @@ pub fn handle_query(
                 })
                 .sum();
 
-            println!("Total bytes returned: {}", total_bytes);
-            println!("Total tokens returned: {}", total_tokens);
+            println!("Total bytes returned: {total_bytes}");
+            println!("Total tokens returned: {total_tokens}");
         }
     }
 

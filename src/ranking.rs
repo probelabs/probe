@@ -690,8 +690,7 @@ mod tests {
             assert_eq!(
                 Some(&idx1),
                 token_map2.get(term),
-                "Term '{}' has different indices in the two maps",
-                term
+                "Term '{term}' has different indices in the two maps"
             );
         }
     }
