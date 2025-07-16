@@ -103,6 +103,15 @@ jobs:
       context_type: ${{ steps.format.outputs.context_type }}
 
     steps:
+      # --- Validate Input Parameters ---
+      - name: Validate Input Parameters
+        run: |
+          if [[ "${{ inputs.allow_edit }}" == "true" && "${{ inputs.allow_suggestions }}" == "true" ]]; then
+            echo "::error::Cannot enable both 'allow_edit' and 'allow_suggestions' simultaneously. Please choose one mode."
+            exit 1
+          fi
+          echo "Input validation passed."
+
       - name: Check for App Credentials
         id: check_app_secrets # Give this step an ID
         run: |
@@ -1164,19 +1173,21 @@ jobs:
           echo "::endgroup::"
 
       # ---------- Handle Suggestions with reviewdog ---
+      # This step uses reviewdog to create code suggestions as PR review comments
+      # instead of directly modifying files. Users can review and accept/reject suggestions.
       - name: Handle Suggestions with reviewdog
         id: handle_suggestions
         if: inputs.allow_suggestions && steps.probe.outcome == 'success' && env.FINAL_CONTEXT_TYPE == 'pr'
         uses: reviewdog/action-suggester@latest
         with:
           github_token: ${{ env.WORKFLOW_TOKEN }}
-          tool_name: 'probe-ai-suggestions'
-          level: 'info'
-          filter_mode: 'added'
-          fail_level: 'none'
-          fail_on_error: 'false'
-          reviewdog_flags: '--reporter=github-pr-review'
-          cleanup: 'true'
+          tool_name: 'Probe AI Code Suggestions'  # More descriptive name for better UX
+          level: 'warning'                        # Changed from 'info' to 'warning' for better visibility
+          filter_mode: 'added'                    # Only suggest changes for added/modified lines
+          fail_level: 'none'                      # Don't fail the workflow on suggestions
+          fail_on_error: 'false'                  # Don't fail if reviewdog encounters errors
+          reviewdog_flags: '--reporter=github-pr-review'  # Post as PR review comments
+          cleanup: 'true'                         # Clean up temporary files after processing
 
       # ---------- Read Response or Error and Format Output (fixed) ---
       - name: Read Response or Error and Format Output
@@ -1204,7 +1215,7 @@ jobs:
 
           if [[ "${{ steps.handle_suggestions.outcome }}" == "success" && "${{ inputs.allow_suggestions }}" == "true" ]]; then
             if [[ "$CONTEXT_TYPE" == "pr" ]]; then
-              RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n**Suggestions have been added to this PR for review.**"
+              RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n---\n\n### 💡 Code Suggestions Available\n\n**AI-generated code suggestions have been added to this PR as review comments.** You can:\n\n- 📝 Review each suggestion in the \"Files changed\" tab\n- ✅ Accept suggestions by clicking \"Apply suggestion\" or \"Add suggestion to batch\"\n- ❌ Dismiss suggestions that don't apply\n- 🔄 Request modifications by replying to suggestion comments"
             fi
           elif [[ "${{ steps.handle_suggestions.outcome }}" == "failure" && "${{ inputs.allow_suggestions }}" == "true" ]]; then
             if [[ "$CONTEXT_TYPE" == "pr" ]]; then
