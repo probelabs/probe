@@ -110,26 +110,35 @@ jobs:
       run: |
         # Check that the JSON output contains expected fields
         $content = Get-Content search_results.json -Raw
+        
+        # Extract JSON part by finding the first '{' character (skip debug output)
+        $jsonStart = $content.IndexOf('{')
+        if ($jsonStart -eq -1) {
+          Write-Host "Error: No JSON found in output"
+          Get-Content search_results.json
+          exit 1
+        }
+        $jsonContent = $content.Substring($jsonStart)
 
-        if (-not ($content -match '"file"')) {
+        if (-not ($jsonContent -match '"file"')) {
           Write-Host "Error: JSON output missing 'file' field"
           Get-Content search_results.json
           exit 1
         }
 
-        if (-not ($content -match '"code"')) {
+        if (-not ($jsonContent -match '"code"')) {
           Write-Host "Error: JSON output missing 'code' field"
           Get-Content search_results.json
           exit 1
         }
 
-        if (-not ($content -match 'README.md')) {
+        if (-not ($jsonContent -match 'README.md')) {
           Write-Host "Error: Search results don't contain README.md"
           Get-Content search_results.json
           exit 1
         }
 
-        if (-not ($content -match 'semantic code search')) {
+        if (-not ($jsonContent -match 'semantic code search')) {
           Write-Host "Error: Search results don't contain the search term"
           Get-Content search_results.json
           exit 1
@@ -164,14 +173,23 @@ jobs:
       run: |
         # Check that the extract output contains expected fields
         $content = Get-Content extract_results.json -Raw
+        
+        # Extract JSON part by finding the first '{' character (skip debug output)
+        $jsonStart = $content.IndexOf('{')
+        if ($jsonStart -eq -1) {
+          Write-Host "Error: No JSON found in output"
+          Get-Content extract_results.json
+          exit 1
+        }
+        $jsonContent = $content.Substring($jsonStart)
 
-        if (-not ($content -match '"file"')) {
+        if (-not ($jsonContent -match '"file"')) {
           Write-Host "Error: Extract JSON output missing 'file' field"
           Get-Content extract_results.json
           exit 1
         }
 
-        if (-not ($content -match 'README.md')) {
+        if (-not ($jsonContent -match 'README.md')) {
           Write-Host "Error: Extract results don't contain README.md"
           Get-Content extract_results.json
           exit 1
