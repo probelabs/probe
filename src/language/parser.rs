@@ -944,7 +944,7 @@ pub fn parse_file_for_code_blocks(
     // Check if we have a cached line map
     if let Some(cached_entry) = LINE_MAP_CACHE.get(&cache_key) {
         if debug_mode {
-            println!("DEBUG: Cache hit for line_map key: {}", cache_key);
+            println!("DEBUG: Cache hit for line_map key: {cache_key}");
         }
 
         // Process the cached line map
@@ -984,7 +984,7 @@ pub fn parse_file_for_code_blocks(
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: Parsing file with extension: {}", extension);
+        println!("DEBUG: Parsing file with extension: {extension}");
         println!("DEBUG: Root node type: {}", root_node.kind());
 
         // Log all node types in the file

@@ -252,12 +252,12 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                     match cache::generate_session_id() {
                         Ok((new_id, _is_new)) => {
                             if debug_mode {
-                                println!("DEBUG: Generated new session ID: {}", new_id);
+                                println!("DEBUG: Generated new session ID: {new_id}");
                             }
                             (Some(new_id), true)
                         }
                         Err(e) => {
-                            eprintln!("Error generating session ID: {}", e);
+                            eprintln!("Error generating session ID: {e}");
                             (None, false)
                         }
                     }
@@ -267,12 +267,12 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 match cache::generate_session_id() {
                     Ok((new_id, _is_new)) => {
                         if debug_mode {
-                            println!("DEBUG: Generated new session ID: {}", new_id);
+                            println!("DEBUG: Generated new session ID: {new_id}");
                         }
                         (Some(new_id), true)
                     }
                     Err(e) => {
-                        eprintln!("Error generating session ID: {}", e);
+                        eprintln!("Error generating session ID: {e}");
                         (None, false)
                     }
                 }

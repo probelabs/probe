@@ -65,7 +65,7 @@ impl SessionCache {
             Ok(f) => f,
             Err(e) => {
                 if debug_mode {
-                    println!("DEBUG: Error opening cache file: {}", e);
+                    println!("DEBUG: Error opening cache file: {e}");
                 }
                 return Ok(Self::new(session_id.to_string(), query_hash.to_string()));
             }
@@ -74,7 +74,7 @@ impl SessionCache {
         let mut contents = String::new();
         if let Err(e) = file.read_to_string(&mut contents) {
             if debug_mode {
-                println!("DEBUG: Error reading cache file: {}", e);
+                println!("DEBUG: Error reading cache file: {e}");
             }
             return Ok(Self::new(session_id.to_string(), query_hash.to_string()));
         }
@@ -93,7 +93,7 @@ impl SessionCache {
             }
             Err(e) => {
                 if debug_mode {
-                    println!("DEBUG: Error parsing cache JSON: {}", e);
+                    println!("DEBUG: Error parsing cache JSON: {e}");
                 }
                 Ok(Self::new(session_id.to_string(), query_hash.to_string()))
             }
@@ -117,7 +117,7 @@ impl SessionCache {
         if let Some(parent) = cache_path.parent() {
             if let Err(e) = create_dir_all(parent) {
                 if debug_mode {
-                    println!("DEBUG: Error creating cache directory: {}", e);
+                    println!("DEBUG: Error creating cache directory: {e}");
                 }
                 return Err(e.into());
             }
@@ -128,7 +128,7 @@ impl SessionCache {
             Ok(j) => j,
             Err(e) => {
                 if debug_mode {
-                    println!("DEBUG: Error serializing cache to JSON: {}", e);
+                    println!("DEBUG: Error serializing cache to JSON: {e}");
                 }
                 return Err(e.into());
             }
@@ -139,14 +139,14 @@ impl SessionCache {
             Ok(mut file) => {
                 if let Err(e) = file.write_all(json.as_bytes()) {
                     if debug_mode {
-                        println!("DEBUG: Error writing to cache file: {}", e);
+                        println!("DEBUG: Error writing to cache file: {e}");
                     }
                     return Err(e.into());
                 }
             }
             Err(e) => {
                 if debug_mode {
-                    println!("DEBUG: Error creating cache file: {}", e);
+                    println!("DEBUG: Error creating cache file: {e}");
                 }
                 return Err(e.into());
             }
@@ -252,7 +252,7 @@ pub fn filter_results_with_cache(
 
             if is_cached {
                 if debug_mode && skipped_count < 5 {
-                    println!("DEBUG: Skipping cached block: {}", cache_key);
+                    println!("DEBUG: Skipping cached block: {cache_key}");
                 }
                 skipped_count += 1;
                 false
@@ -376,7 +376,7 @@ pub fn filter_matched_lines_with_cache(
 
             if is_cached {
                 if debug_mode && skipped_count < 5 {
-                    println!("DEBUG: Skipping cached line: {}", line_cache_key);
+                    println!("DEBUG: Skipping cached line: {line_cache_key}");
                 }
                 lines_to_remove.insert(line_num);
                 skipped_count += 1;
@@ -452,7 +452,7 @@ pub fn add_results_to_cache(results: &[SearchResult], session_id: &str, query: &
         if !cache.is_cached(&cache_key) {
             new_entries += 1;
             if debug_mode && new_entries <= 5 {
-                println!("DEBUG: Adding new cache entry: {}", cache_key);
+                println!("DEBUG: Adding new cache entry: {cache_key}");
             }
         }
         cache.add_to_cache(cache_key);
@@ -492,7 +492,7 @@ pub fn debug_print_cache(session_id: &str, query: &str) -> Result<()> {
     );
 
     for (i, block_id) in cache.block_identifiers.iter().enumerate().take(10) {
-        println!("DEBUG: Cached block {}: {}", i, block_id);
+        println!("DEBUG: Cached block {i}: {block_id}");
     }
 
     if cache.block_identifiers.len() > 10 {
@@ -520,13 +520,13 @@ pub fn generate_session_id() -> Result<(&'static str, bool)> {
         let session_id = session_id.to_lowercase();
 
         if debug_mode {
-            println!("DEBUG: Generated session ID: {}", session_id);
+            println!("DEBUG: Generated session ID: {session_id}");
         }
 
         // We don't check for existing cache files here since we're just generating a session ID
         // The actual cache file will be created with both session ID and query hash
         if debug_mode {
-            println!("DEBUG: Generated new session ID: {}", session_id);
+            println!("DEBUG: Generated new session ID: {session_id}");
         }
         // Convert to a static string (this leaks memory, but it's a small amount and only happens once per session)
         let static_id: &'static str = Box::leak(session_id.into_boxed_str());

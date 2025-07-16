@@ -23,7 +23,7 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
             "DEBUG: Starting result ranking with {} results",
             results.len()
         );
-        println!("DEBUG: Using reranker: {}", reranker);
+        println!("DEBUG: Using reranker: {reranker}");
         println!("DEBUG: Queries: {queries:?}");
     }
 

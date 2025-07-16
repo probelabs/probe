@@ -94,7 +94,7 @@ impl TestStruct {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in rust_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Parse the code
@@ -351,7 +351,7 @@ type ModelPriceInput struct {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in go_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Create a HashSet with all line numbers to ensure we get all blocks
@@ -435,7 +435,7 @@ func HandleNotFound(c *gin.Context) {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in go_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Create a HashSet with all line numbers to ensure we get all blocks
@@ -498,7 +498,7 @@ fn test_function() {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in rust_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Create a HashSet with the line number of the comment
@@ -589,7 +589,7 @@ impl TestStruct {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in rust_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Create a HashSet with the line numbers of the comments
@@ -686,7 +686,7 @@ fn test_function() {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in rust_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Create a HashSet of line numbers

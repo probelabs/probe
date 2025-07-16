@@ -39,8 +39,8 @@ pub fn process_file_for_extraction(
         println!("[DEBUG] Start line: {:?}", start_line);
         println!("[DEBUG] End line: {:?}", end_line);
         println!("[DEBUG] Symbol: {:?}", symbol);
-        println!("[DEBUG] Allow tests: {}", allow_tests);
-        println!("[DEBUG] Context lines: {}", context_lines);
+        println!("[DEBUG] Allow tests: {allow_tests}");
+        println!("[DEBUG] Context lines: {context_lines}");
         println!("[DEBUG] Specific lines: {:?}", specific_lines);
     }
 
@@ -65,7 +65,7 @@ pub fn process_file_for_extraction(
     // If we have a symbol, find it in the file
     if let Some(symbol_name) = symbol {
         if debug_mode {
-            println!("[DEBUG] Looking for symbol: {}", symbol_name);
+            println!("[DEBUG] Looking for symbol: {symbol_name}");
         }
         // Find the symbol in the file
         return find_symbol_in_file(path, symbol_name, &content, allow_tests, context_lines);

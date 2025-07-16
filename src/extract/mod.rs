@@ -325,7 +325,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
         for file in &options.files {
             if debug_mode {
-                println!("[DEBUG] Parsing file argument: {}", file);
+                println!("[DEBUG] Parsing file argument: {file}");
             }
 
             let paths = file_paths::parse_file_with_line(file, options.allow_tests);
@@ -404,7 +404,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             Err(e) => {
                 eprintln!("{}", format!("Error loading prompt template: {}", e).red());
                 if debug_mode {
-                    println!("[DEBUG] Error loading prompt template: {}", e);
+                    println!("[DEBUG] Error loading prompt template: {e}");
                 }
                 None
             }
@@ -481,7 +481,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 // Get file extension and language
                 if let Some(ext) = params.path.extension().and_then(|e| e.to_str()) {
                     let language = formatter::get_language_from_extension(ext);
-                    println!("[DEBUG] File extension: {}", ext);
+                    println!("[DEBUG] File extension: {ext}");
                     println!(
                         "[DEBUG] Detected language: {}",
                         if language.is_empty() {
@@ -532,7 +532,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             Err(e) => {
                 let error_msg = format!("Error processing file {:?}: {}", params.path, e);
                 if params.debug_mode {
-                    println!("[DEBUG] Error: {}", error_msg);
+                    println!("[DEBUG] Error: {error_msg}");
                 }
                 // Only print error messages for non-JSON/XML formats
                 if params.format != "json" && params.format != "xml" {
@@ -724,7 +724,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 }
             } else {
                 // Print to stdout
-                println!("{}", formatted_output);
+                println!("{formatted_output}");
             }
         }
         Err(e) => {

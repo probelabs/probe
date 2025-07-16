@@ -484,7 +484,7 @@ pub fn format_and_print_extraction_results(
         system_prompt,
         user_instructions,
     )?;
-    println!("{}", output);
+    println!("{output}");
     Ok(())
 }
 

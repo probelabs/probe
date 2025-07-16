@@ -67,7 +67,7 @@ pub fn find_symbol_in_file(
     let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
     if debug_mode {
-        println!("[DEBUG] File extension: {}", extension);
+        println!("[DEBUG] File extension: {extension}");
     }
 
     // Get the language implementation for this extension
@@ -75,7 +75,7 @@ pub fn find_symbol_in_file(
         .ok_or_else(|| anyhow::anyhow!("Unsupported language extension: {}", extension))?;
 
     if debug_mode {
-        println!("[DEBUG] Language detected: {}", extension);
+        println!("[DEBUG] Language detected: {extension}");
         println!("[DEBUG] Using tree-sitter to parse file");
     }
 
@@ -543,7 +543,7 @@ pub fn find_symbol_in_file(
 
         if debug_mode {
             println!("[DEBUG] Extracting context around line {}", line_num);
-            println!("[DEBUG] Context lines: {}", context_lines);
+            println!("[DEBUG] Context lines: {context_lines}");
             println!("[DEBUG] Extracting lines {}-{}", start_line, end_line);
         }
 

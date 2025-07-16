@@ -150,12 +150,12 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
                 
                 // Print the content with or without syntax highlighting
                 if !language.is_empty() {
-                    println!("{}", format!("```{}", language).cyan());
-                    println!("{}", result.content);
+                    println!("{}", format!("```{language}").cyan());
+                    println!("{result.content}");
                     println!("{}", "```".cyan());
                 } else {
                     println!("{}", "```".cyan());
-                    println!("{}", result.content);
+                    println!("{result.content}");
                     println!("{}", "```".cyan());
                 }
             }

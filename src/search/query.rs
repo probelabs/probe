@@ -79,7 +79,7 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
             "DEBUG: AST parsing completed in {}",
             format_duration(parsing_duration)
         );
-        println!("DEBUG: Parsed AST: {}", ast);
+        println!("DEBUG: Parsed AST: {ast}");
     }
 
     // We'll walk the AST to build a set of all terms. We track excluded as well for reference.

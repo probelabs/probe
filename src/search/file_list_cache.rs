@@ -256,7 +256,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
             builder.overrides(overrides);
         }
         Err(err) => {
-            eprintln!("Error building ignore overrides: {}", err);
+            eprintln!("Error building ignore overrides: {err}");
         }
     }
 
@@ -279,7 +279,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
         let entry = match result {
             Ok(entry) => entry,
             Err(err) => {
-                eprintln!("Error walking directory: {}", err);
+                eprintln!("Error walking directory: {err}");
                 continue;
             }
         };

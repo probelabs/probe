@@ -316,7 +316,7 @@ fn merge_block_content(block1: &SearchResult, block2: &SearchResult) -> String {
                 .unwrap_or_else(|_| PathBuf::from(file_path))
         );
         println!("DEBUG: File exists: {}", file_path.exists());
-        println!("DEBUG: File can be opened: {}", file_content_available);
+        println!("DEBUG: File can be opened: {file_content_available}");
     }
 
     while current_line <= merged_end {

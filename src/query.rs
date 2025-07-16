@@ -244,7 +244,7 @@ pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
             }
             Err(err) => {
                 if std::env::var("DEBUG").unwrap_or_default() == "1" {
-                    println!("DEBUG: Failed to resolve path '{}': {}", path_str, err);
+                    println!("DEBUG: Failed to resolve path '{path_str}': {err}");
                 }
                 // Fall back to the original path
                 options.path.to_path_buf()
@@ -526,8 +526,8 @@ pub fn handle_query(
                 })
                 .sum();
 
-            println!("Total bytes returned: {}", total_bytes);
-            println!("Total tokens returned: {}", total_tokens);
+            println!("Total bytes returned: {total_bytes}");
+            println!("Total tokens returned: {total_tokens}");
         }
     }
 

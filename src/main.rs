@@ -313,7 +313,7 @@ async fn main() -> Result<()> {
             keep_input,
             prompt: prompt.map(|p| {
                 crate::extract::PromptTemplate::from_str(&p).unwrap_or_else(|e| {
-                    eprintln!("Warning: {}", e);
+                    eprintln!("Warning: {e}");
                     crate::extract::PromptTemplate::Engineer
                 })
             }),

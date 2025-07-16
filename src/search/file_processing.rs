@@ -130,7 +130,7 @@ pub fn filter_code_block_with_ast(
 
     if debug_mode {
         println!("DEBUG: ===== EVALUATION RESULT =====");
-        println!("DEBUG: AST evaluation result: {}", result);
+        println!("DEBUG: AST evaluation result: {result}");
         println!(
             "DEBUG: Block {}-{} will be {}",
             block_lines.0,
@@ -147,7 +147,7 @@ pub fn filter_code_block_with_ast(
             "DEBUG: Block {}-{} matched terms: {:?}",
             block_lines.0, block_lines.1, matched_terms
         );
-        println!("DEBUG: AST evaluation result: {}", decision);
+        println!("DEBUG: AST evaluation result: {decision}");
     }
 
     if debug_mode {
@@ -245,7 +245,7 @@ pub fn filter_tokenized_block(
 
     if debug_mode {
         println!("DEBUG: ===== EVALUATION RESULT =====");
-        println!("DEBUG: AST evaluation result: {}", result);
+        println!("DEBUG: AST evaluation result: {result}");
         println!(
             "DEBUG: Block will be {}",
             if result { "INCLUDED" } else { "EXCLUDED" }
@@ -257,7 +257,7 @@ pub fn filter_tokenized_block(
 
     if debug_mode {
         println!("DEBUG: Tokenized block matched terms: {matched_terms:?}");
-        println!("DEBUG: AST evaluation result: {}", decision);
+        println!("DEBUG: AST evaluation result: {decision}");
         println!(
             "DEBUG: filter_tokenized_block => matched {:?}, decision={}",
             matched_terms, decision

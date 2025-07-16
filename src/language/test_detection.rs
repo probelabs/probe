@@ -13,7 +13,7 @@ pub fn is_test_file(path: &Path) -> bool {
             || file_name == "tests.rs"
         {
             if _debug_mode {
-                println!("DEBUG: Test file detected (Rust pattern): {}", file_name);
+                println!("DEBUG: Test file detected (Rust pattern): {file_name}");
             }
             return true;
         }
@@ -29,7 +29,7 @@ pub fn is_test_file(path: &Path) -> bool {
             || file_name.ends_with(".spec.tsx")
         {
             if _debug_mode {
-                println!("DEBUG: Test file detected (JS/TS pattern): {}", file_name);
+                println!("DEBUG: Test file detected (JS/TS pattern): {file_name}");
             }
             return true;
         }
@@ -39,7 +39,7 @@ pub fn is_test_file(path: &Path) -> bool {
             || file_name.ends_with("_test.py")
         {
             if _debug_mode {
-                println!("DEBUG: Test file detected (Python pattern): {}", file_name);
+                println!("DEBUG: Test file detected (Python pattern): {file_name}");
             }
             return true;
         }
@@ -47,7 +47,7 @@ pub fn is_test_file(path: &Path) -> bool {
         // Go: *_test.go
         if file_name.ends_with("_test.go") {
             if _debug_mode {
-                println!("DEBUG: Test file detected (Go pattern): {}", file_name);
+                println!("DEBUG: Test file detected (Go pattern): {file_name}");
             }
             return true;
         }
@@ -67,7 +67,7 @@ pub fn is_test_file(path: &Path) -> bool {
                     || file_name.ends_with(".cxx"))
         {
             if _debug_mode {
-                println!("DEBUG: Test file detected (C/C++ pattern): {}", file_name);
+                println!("DEBUG: Test file detected (C/C++ pattern): {file_name}");
             }
             return true;
         }
@@ -77,7 +77,7 @@ pub fn is_test_file(path: &Path) -> bool {
             || file_name.starts_with("Test") && file_name.ends_with(".java")
         {
             if _debug_mode {
-                println!("DEBUG: Test file detected (Java pattern): {}", file_name);
+                println!("DEBUG: Test file detected (Java pattern): {file_name}");
             }
             return true;
         }
@@ -88,7 +88,7 @@ pub fn is_test_file(path: &Path) -> bool {
             || file_name.ends_with("_spec.rb")
         {
             if _debug_mode {
-                println!("DEBUG: Test file detected (Ruby pattern): {}", file_name);
+                println!("DEBUG: Test file detected (Ruby pattern): {file_name}");
             }
             return true;
         }
@@ -98,7 +98,7 @@ pub fn is_test_file(path: &Path) -> bool {
             || file_name.starts_with("Test") && file_name.ends_with(".php")
         {
             if _debug_mode {
-                println!("DEBUG: Test file detected (PHP pattern): {}", file_name);
+                println!("DEBUG: Test file detected (PHP pattern): {file_name}");
             }
             return true;
         }
@@ -117,8 +117,7 @@ pub fn is_test_file(path: &Path) -> bool {
     {
         if _debug_mode {
             println!(
-                "DEBUG: Test file detected (in test directory): {}",
-                path_str
+                "DEBUG: Test file detected (in test directory): {path_str}"
             );
         }
         return true;
