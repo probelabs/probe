@@ -74,9 +74,7 @@ pub fn process_file_for_extraction(
     // If we have a line range (start_line, end_line), gather AST blocks overlapping that range.
     if let (Some(start), Some(end)) = (start_line, end_line) {
         if debug_mode {
-            println!(
-                "[DEBUG] Extracting line range: {start}-{end} (with AST merging)"
-            );
+            println!("[DEBUG] Extracting line range: {start}-{end} (with AST merging)");
         }
 
         // Clamp line numbers to valid ranges instead of failing
@@ -238,9 +236,7 @@ pub fn process_file_for_extraction(
     // Single line extraction
     else if let Some(line_num) = start_line {
         if debug_mode {
-            println!(
-                "[DEBUG] Single line extraction requested: line {line_num}"
-            );
+            println!("[DEBUG] Single line extraction requested: line {line_num}");
         }
         // Clamp line number to valid range instead of failing
         let clamped_line_num = line_num.clamp(1, lines.len());

@@ -57,9 +57,7 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
     let parsing_start = Instant::now();
 
     if debug_mode {
-        println!(
-            "DEBUG: Starting AST parsing for query: '{query}', exact={exact}"
-        );
+        println!("DEBUG: Starting AST parsing for query: '{query}', exact={exact}");
     }
 
     // Parse the query into an AST with processed terms
@@ -192,9 +190,7 @@ fn collect_all_terms(
             all_terms.extend(keywords.clone());
 
             if debug_mode {
-                println!(
-                    "DEBUG: Collected keywords '{keywords:?}', excluded={is_excluded}"
-                );
+                println!("DEBUG: Collected keywords '{keywords:?}', excluded={is_excluded}");
             }
 
             if *is_excluded {
@@ -222,9 +218,7 @@ fn collect_all_terms(
             {
                 for keyword in keywords {
                     if debug_mode {
-                        println!(
-                            "DEBUG: Adding excluded term '{keyword}' from AND expression"
-                        );
+                        println!("DEBUG: Adding excluded term '{keyword}' from AND expression");
                     }
                     excluded.insert(keyword.clone());
                 }
@@ -318,12 +312,8 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
             .collect();
 
         if debug_mode {
-            println!(
-                "DEBUG: Created combined pattern for all terms: '{combined_pattern}'"
-            );
-            println!(
-                "DEBUG: Combined pattern includes indices: {all_indices:?}"
-            );
+            println!("DEBUG: Created combined pattern for all terms: '{combined_pattern}'");
+            println!("DEBUG: Combined pattern includes indices: {all_indices:?}");
         }
 
         results.push((combined_pattern, all_indices));
@@ -382,9 +372,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                         };
 
                         if debug_mode {
-                            println!(
-                                "DEBUG: Created pattern for keyword '{keyword}': '{pattern}'"
-                            );
+                            println!("DEBUG: Created pattern for keyword '{keyword}': '{pattern}'");
                         }
 
                         results.push((pattern, HashSet::from([idx])));
@@ -500,9 +488,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
         // Check if the original keyword itself is excluded before processing for compound parts
         if plan.excluded_terms.contains(keyword) {
             if debug_mode {
-                println!(
-                    "DEBUG: Skipping compound processing for excluded keyword: '{keyword}'"
-                );
+                println!("DEBUG: Skipping compound processing for excluded keyword: '{keyword}'");
             }
             continue; // Skip this keyword entirely
         }
@@ -551,9 +537,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                 }
             }
         } else if debug_mode && is_exact_search(&plan.ast) {
-            println!(
-                "DEBUG: Skipping compound word processing for exact search term: '{keyword}'"
-            );
+            println!("DEBUG: Skipping compound word processing for exact search term: '{keyword}'");
         }
     }
 

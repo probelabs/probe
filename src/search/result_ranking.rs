@@ -167,9 +167,7 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
     let updated_len = updated_results.len();
 
     if debug_mode {
-        println!(
-            "DEBUG: Score update completed - Updated {updated_len} results"
-        );
+        println!("DEBUG: Score update completed - Updated {updated_len} results");
     }
 
     // Sort updated results by BM25 score in descending order

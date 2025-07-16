@@ -20,9 +20,7 @@ fn test_ancestor_cache_performance() {
     let iterations = 10;
     let mut times = Vec::with_capacity(iterations);
 
-    println!(
-        "\nRunning {iterations} iterations of parsing with ancestor cache:"
-    );
+    println!("\nRunning {iterations} iterations of parsing with ancestor cache:");
 
     for i in 1..=iterations {
         let start = Instant::now();

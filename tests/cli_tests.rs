@@ -350,9 +350,7 @@ fn test_cli_custom_ignores() {
             stdout.len()
         };
         let context = &stdout[start..end];
-        println!(
-            "Found 'search.js' in debug output at position {pos} with context: '{context}'"
-        );
+        println!("Found 'search.js' in debug output at position {pos} with context: '{context}'");
     }
 
     // Check that the actual search results don't contain search.js

@@ -48,9 +48,7 @@ impl SessionCache {
         // If the cache file doesn't exist, create a new empty cache
         if !cache_path.exists() {
             if debug_mode {
-                println!(
-                    "DEBUG: Cache file does not exist at {cache_path:?}, creating new cache"
-                );
+                println!("DEBUG: Cache file does not exist at {cache_path:?}, creating new cache");
             }
             return Ok(Self::new(session_id.to_string(), query_hash.to_string()));
         }
@@ -481,9 +479,7 @@ pub fn debug_print_cache(session_id: &str, query: &str) -> Result<()> {
     let query_hash = hash_query(query);
     let cache = SessionCache::load(session_id, &query_hash)?;
 
-    println!(
-        "DEBUG: Cache for session {session_id} with query hash {query_hash}"
-    );
+    println!("DEBUG: Cache for session {session_id} with query hash {query_hash}");
     println!(
         "DEBUG: Contains {} cached blocks",
         cache.block_identifiers.len()

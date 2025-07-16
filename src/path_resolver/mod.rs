@@ -115,16 +115,12 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
                 // 1. Split the path into module name and optional subpath
                 let (module_name, subpath_opt) =
                     resolver.split_module_and_subpath(remainder).map_err(|e| {
-                        format!(
-                            "Failed to parse path '{remainder}' for prefix '{prefix}': {e}"
-                        )
+                        format!("Failed to parse path '{remainder}' for prefix '{prefix}': {e}")
                     })?;
 
                 // 2. Resolve the base directory of the module
                 let module_base_path = resolver.resolve(&module_name).map_err(|e| {
-                    format!(
-                        "Failed to resolve module '{module_name}' for prefix '{prefix}': {e}"
-                    )
+                    format!("Failed to resolve module '{module_name}' for prefix '{prefix}': {e}")
                 })?;
 
                 // 3. Combine base path with subpath if it exists
@@ -152,9 +148,7 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
         let prefix = resolver.prefix();
         if !prefix.ends_with(':') {
             // Internal sanity check
-            eprintln!(
-                "Warning: PathResolver prefix '{prefix}' does not end with ':'"
-            );
+            eprintln!("Warning: PathResolver prefix '{prefix}' does not end with ':'");
             continue;
         }
 
@@ -170,9 +164,7 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
 
             // 2. Resolve the base directory of the module
             let module_base_path = resolver.resolve(&module_name).map_err(|e| {
-                format!(
-                    "Failed to resolve module '{module_name}' for prefix '{prefix}': {e}"
-                )
+                format!("Failed to resolve module '{module_name}' for prefix '{prefix}': {e}")
             })?;
 
             // 3. Combine base path with subpath if it exists

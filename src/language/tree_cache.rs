@@ -75,9 +75,7 @@ pub fn get_or_parse_tree(
                 // Content changed, explicitly remove the old entry
                 cache.remove(file_path);
                 if debug_mode {
-                    println!(
-                        "[DEBUG] Cache invalidated for file: {file_path} (content changed)"
-                    );
+                    println!("[DEBUG] Cache invalidated for file: {file_path} (content changed)");
                 }
             }
         } else if debug_mode {

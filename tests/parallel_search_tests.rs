@@ -102,9 +102,7 @@ fn test_parallel_file_search() {
     );
 
     // Print performance information
-    println!(
-        "Parallel search completed in {duration:?} for {file_count} files"
-    );
+    println!("Parallel search completed in {duration:?} for {file_count} files");
     println!("Found {} results", search_results.results.len());
 }
 
@@ -150,9 +148,7 @@ fn test_structured_patterns_search() {
     assert!(!file_term_maps.is_empty(), "Search should find matches");
 
     // Print performance information
-    println!(
-        "Parallel structured pattern search completed in {duration:?} for {file_count} files"
-    );
+    println!("Parallel structured pattern search completed in {duration:?} for {file_count} files");
     println!("Found matches in {} files", file_term_maps.len());
 }
 

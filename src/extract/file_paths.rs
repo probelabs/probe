@@ -826,9 +826,7 @@ fn is_ignored_by_gitignore(path: &PathBuf) -> bool {
     for pattern in &common_ignore_patterns {
         if path_str.contains(pattern) {
             if debug_mode {
-                println!(
-                    "DEBUG: File {path:?} is ignored (contains pattern '{pattern}')"
-                );
+                println!("DEBUG: File {path:?} is ignored (contains pattern '{pattern}')");
             }
             return true;
         }
@@ -838,9 +836,7 @@ fn is_ignored_by_gitignore(path: &PathBuf) -> bool {
     for pattern in &custom_patterns {
         if path_str.contains(pattern) {
             if debug_mode {
-                println!(
-                    "DEBUG: File {path:?} is ignored (contains custom pattern '{pattern}')"
-                );
+                println!("DEBUG: File {path:?} is ignored (contains custom pattern '{pattern}')");
             }
             return true;
         }

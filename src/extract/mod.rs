@@ -425,9 +425,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     // Process prompt template and instructions if provided
     let system_prompt = if let Some(prompt_template) = &options.prompt {
         if debug_mode {
-            println!(
-                "[DEBUG] Processing prompt template: {prompt_template:?}"
-            );
+            println!("[DEBUG] Processing prompt template: {prompt_template:?}");
         }
         match prompt_template.get_content() {
             Ok(content) => {
@@ -660,9 +658,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         if !seen_exact.insert(key) {
             to_retain[i] = false;
             if debug_mode {
-                println!(
-                    "[DEBUG] Removing exact duplicate: {file_i} (lines {start_i}-{end_i})"
-                );
+                println!("[DEBUG] Removing exact duplicate: {file_i} (lines {start_i}-{end_i})");
             }
             continue;
         }

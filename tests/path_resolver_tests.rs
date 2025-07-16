@@ -116,9 +116,7 @@ fn test_go_stdlib_resolution_with_subpath_dir() {
 fn test_go_external_resolution_no_subpath() {
     let module = "github.com/stretchr/testify";
     if !check_go_module(module) {
-        println!(
-            "Skipping test_go_external_resolution_no_subpath: Go or '{module}' not available"
-        );
+        println!("Skipping test_go_external_resolution_no_subpath: Go or '{module}' not available");
         return;
     }
     let result = resolve_path(&format!("go:{module}"));
@@ -195,9 +193,7 @@ fn test_js_resolution_no_subpath() {
     // Use a commonly installed package like 'npm' itself or a dev dependency
     let module = "npm"; // Or change to a dev dep of *this* project if available
     if !check_js_module(module) {
-        println!(
-            "Skipping test_js_resolution_no_subpath: Node or '{module}' module not available"
-        );
+        println!("Skipping test_js_resolution_no_subpath: Node or '{module}' module not available");
         return;
     }
     let result = resolve_path(&format!("js:{module}"));
@@ -475,9 +471,7 @@ fn test_dep_go_resolution() {
 fn test_dep_js_resolution() {
     let module = "npm"; // Or change to a dev dep of *this* project if available
     if !check_js_module(module) {
-        println!(
-            "Skipping test_dep_js_resolution: Node or '{module}' module not available"
-        );
+        println!("Skipping test_dep_js_resolution: Node or '{module}' module not available");
         return;
     }
 

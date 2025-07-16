@@ -43,9 +43,7 @@ pub fn find_symbol_in_file(
     if debug_mode {
         println!("\n[DEBUG] ===== Symbol Search =====");
         if is_nested_symbol {
-            println!(
-                "[DEBUG] Searching for nested symbol '{symbol}' in file {path:?}"
-            );
+            println!("[DEBUG] Searching for nested symbol '{symbol}' in file {path:?}");
             println!(
                 "[DEBUG] Symbol parts: {:?} (parent: '{}', child: '{}')",
                 symbol_parts,
@@ -53,9 +51,7 @@ pub fn find_symbol_in_file(
                 symbol_parts.last().unwrap_or(&"")
             );
         } else {
-            println!(
-                "[DEBUG] Searching for symbol '{symbol}' in file {path:?}"
-            );
+            println!("[DEBUG] Searching for symbol '{symbol}' in file {path:?}");
         }
         println!(
             "[DEBUG] Content size: {content_len} bytes",
@@ -421,9 +417,7 @@ pub fn find_symbol_in_file(
 
         if debug_mode {
             println!("\n[DEBUG] ===== Symbol Found =====");
-            println!(
-                "[DEBUG] Found symbol '{symbol}' at lines {node_start_line}-{node_end_line}"
-            );
+            println!("[DEBUG] Found symbol '{symbol}' at lines {node_start_line}-{node_end_line}");
             println!(
                 "[DEBUG] Node type: {node_kind}",
                 node_kind = found_node.kind()
@@ -541,9 +535,7 @@ pub fn find_symbol_in_file(
     if let Some(line_num) = found_line {
         if debug_mode {
             println!("\n[DEBUG] ===== Symbol Found via Text Search =====");
-            println!(
-                "[DEBUG] Found symbol '{symbol}' using text search at line {line_num}"
-            );
+            println!("[DEBUG] Found symbol '{symbol}' using text search at line {line_num}");
         }
 
         // Extract context around the line

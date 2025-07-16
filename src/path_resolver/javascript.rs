@@ -242,10 +242,7 @@ mod tests {
         let resolver = JavaScriptPathResolver::new();
         let result = resolver.resolve(package_json_path.to_str().unwrap());
 
-        assert!(
-            result.is_ok(),
-            "Failed to resolve package.json: {result:?}"
-        );
+        assert!(result.is_ok(), "Failed to resolve package.json: {result:?}");
         assert_eq!(result.unwrap(), temp_dir.path());
     }
 

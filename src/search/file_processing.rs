@@ -190,9 +190,7 @@ pub fn filter_tokenized_block(
             if tokenized_content.contains(&term.to_lowercase()) {
                 matched_terms.insert(idx);
                 if debug_mode {
-                    println!(
-                        "DEBUG: Special case term '{term}' matched in tokenized content"
-                    );
+                    println!("DEBUG: Special case term '{term}' matched in tokenized content");
                 }
             }
         }
@@ -256,9 +254,7 @@ pub fn filter_tokenized_block(
     if debug_mode {
         println!("DEBUG: Tokenized block matched terms: {matched_terms:?}");
         println!("DEBUG: AST evaluation result: {decision}");
-        println!(
-            "DEBUG: filter_tokenized_block => matched {matched_terms:?}, decision={decision}"
-        );
+        println!("DEBUG: filter_tokenized_block => matched {matched_terms:?}, decision={decision}");
     }
 
     decision
@@ -862,16 +858,10 @@ pub fn process_file_with_results(
         timings.result_building_synchronization = Some(synchronization_duration_value);
 
         if debug_mode {
-            println!(
-                "DEBUG:   Block extraction time: {block_extraction_duration:?}"
-            );
-            println!(
-                "DEBUG:     - Code structure finding: {code_structure_duration_value:?}"
-            );
+            println!("DEBUG:   Block extraction time: {block_extraction_duration:?}");
+            println!("DEBUG:     - Code structure finding: {code_structure_duration_value:?}");
             println!("DEBUG:     - Filtering: {filtering_duration_value:?}");
-            println!(
-                "DEBUG:     - Result building: {result_building_duration_value:?}"
-            );
+            println!("DEBUG:     - Result building: {result_building_duration_value:?}");
         }
     }
 
@@ -880,9 +870,7 @@ pub fn process_file_with_results(
     for &line_num in params.line_numbers {
         if !covered_lines.contains(&line_num) {
             if debug_mode {
-                println!(
-                    "DEBUG: Line {line_num} not covered, will use fallback context"
-                );
+                println!("DEBUG: Line {line_num} not covered, will use fallback context");
                 if line_num <= lines.len() {
                     println!("DEBUG:   Line content: '{}'", lines[line_num - 1].trim());
                 }
@@ -966,9 +954,7 @@ pub fn process_file_with_results(
         let node_type = determine_fallback_node_type(lines[line_num - 1], Some(extension));
 
         if debug_mode {
-            println!(
-                "DEBUG: Inferred node type for fallback context: {node_type}"
-            );
+            println!("DEBUG: Inferred node type for fallback context: {node_type}");
             println!(
                 "DEBUG: Using adaptive context size: lines {}-{} (size: {})",
                 context_start,

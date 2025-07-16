@@ -959,9 +959,7 @@ pub fn parse_file_for_code_blocks(
     }
 
     if debug_mode {
-        println!(
-            "DEBUG: Cache miss for line_map key: {cache_key}. Generating..."
-        );
+        println!("DEBUG: Cache miss for line_map key: {cache_key}. Generating...");
     }
 
     // Get the tree-sitter language
@@ -1328,9 +1326,7 @@ pub fn parse_file_for_code_blocks(
                 parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
             });
         } else if debug_mode {
-            println!(
-                "DEBUG: No node info found for line {line} (Live NodeInfo)"
-            );
+            println!("DEBUG: No node info found for line {line} (Live NodeInfo)");
         }
     } // End loop over line_numbers
 
@@ -1501,9 +1497,7 @@ pub fn parse_file_for_code_blocks(
     // Store the cacheable version in the cache (as you already have)
     LINE_MAP_CACHE.insert(cache_key.clone(), cacheable_line_map);
     if debug_mode {
-        println!(
-            "DEBUG: Stored generated line_map in cache key: {cache_key}"
-        );
+        println!("DEBUG: Stored generated line_map in cache key: {cache_key}");
     }
 
     // Return the blocks generated from the LIVE data in this cache miss path
