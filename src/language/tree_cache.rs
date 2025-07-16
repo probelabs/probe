@@ -68,28 +68,25 @@ pub fn get_or_parse_tree(
                 }
 
                 if debug_mode {
-                    println!("[DEBUG] Cache hit for file: {}", file_path);
+                    println!("[DEBUG] Cache hit for file: {file_path}");
                 }
                 return Ok(cached_tree.clone());
             } else {
                 // Content changed, explicitly remove the old entry
                 cache.remove(file_path);
                 if debug_mode {
-                    println!(
-                        "[DEBUG] Cache invalidated for file: {} (content changed)",
-                        file_path
-                    );
+                    println!("[DEBUG] Cache invalidated for file: {file_path} (content changed)");
                 }
             }
         } else if debug_mode {
-            println!("[DEBUG] Cache miss for file: {}", file_path);
+            println!("[DEBUG] Cache miss for file: {file_path}");
         }
     }
 
     // Not in cache or content changed, parse and store
     let tree = parser
         .parse(content, None)
-        .context(format!("Failed to parse file: {}", file_path))?;
+        .context(format!("Failed to parse file: {file_path}"))?;
 
     // Store in cache
     {
@@ -99,7 +96,7 @@ pub fn get_or_parse_tree(
         cache.insert(file_path.to_string(), (tree.clone(), content_hash));
 
         if debug_mode {
-            println!("[DEBUG] Cached parsed tree for file: {}", file_path);
+            println!("[DEBUG] Cached parsed tree for file: {file_path}");
             println!("[DEBUG] Current cache size: {} entries", cache.len());
         }
     }
@@ -143,7 +140,7 @@ pub fn invalidate_cache_entry(file_path: &str) {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if cache.remove(file_path).is_some() && debug_mode {
-        println!("[DEBUG] Removed file from cache: {}", file_path);
+        println!("[DEBUG] Removed file from cache: {file_path}");
     }
 }
 

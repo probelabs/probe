@@ -18,7 +18,7 @@ fn main() {
         let tokens = tokenize(test_str);
 
         println!("Tokens after stop word removal and stemming:");
-        println!("{:?}", tokens);
+        println!("{tokens:?}");
         println!("Number of tokens: {}\n", tokens.len());
     }
 

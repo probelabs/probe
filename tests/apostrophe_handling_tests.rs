@@ -36,12 +36,11 @@ Here's the detailed breakdown of performance bottlenecks with full relative path
     for (path, _, _, symbol, _) in &file_paths {
         let path_str = path.to_string_lossy().to_string();
         let symbol_str = symbol.as_ref().unwrap();
-        let full_path = format!("{}#{}", path_str, symbol_str);
+        let full_path = format!("{path_str}#{symbol_str}");
 
         assert!(
             expected_paths.contains(&full_path),
-            "Unexpected path: {}",
-            full_path
+            "Unexpected path: {full_path}"
         );
     }
 }
@@ -67,10 +66,9 @@ fn test_parse_file_with_apostrophes() {
     assert_eq!(
         path,
         &PathBuf::from("src/file.rs"),
-        "Unexpected path: {:?}",
-        path
+        "Unexpected path: {path:?}"
     );
-    assert_eq!(line, &Some(10), "Unexpected line number: {:?}", line);
+    assert_eq!(line, &Some(10), "Unexpected line number: {line:?}");
 
     // Now let's test that our fix for apostrophes works by creating a test
     // that verifies apostrophes in text don't break the extract_file_paths_from_text function
@@ -89,10 +87,9 @@ fn test_parse_file_with_apostrophes() {
     assert_eq!(
         path,
         &PathBuf::from("src/file.rs"),
-        "Unexpected path: {:?}",
-        path
+        "Unexpected path: {path:?}"
     );
-    assert_eq!(line, &Some(10), "Unexpected line number: {:?}", line);
+    assert_eq!(line, &Some(10), "Unexpected line number: {line:?}");
 }
 
 #[test]
@@ -128,9 +125,7 @@ Here are some paths:
         if let Some(line_num) = line {
             assert!(
                 expected_paths.contains(&(path_str.clone(), *line_num)),
-                "Unexpected path: {} line: {}",
-                path_str,
-                line_num
+                "Unexpected path: {path_str} line: {line_num}"
             );
         }
     }

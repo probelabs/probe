@@ -22,16 +22,15 @@ fn test_go_path_resolution() {
     let result = resolve_path("go:fmt");
     assert!(
         result.is_ok(),
-        "Failed to resolve 'go:fmt' package: {:?}",
-        result
+        "Failed to resolve 'go:fmt' package: {result:?}"
     );
 
     // The path should exist and contain the package
     let path = result.unwrap();
-    assert!(path.exists(), "Path does not exist: {:?}", path);
+    assert!(path.exists(), "Path does not exist: {path:?}");
 
     // The path should be a directory
-    assert!(path.is_dir(), "Path is not a directory: {:?}", path);
+    assert!(path.is_dir(), "Path is not a directory: {path:?}");
 
     // The path should contain Go source files
     let has_go_files = std::fs::read_dir(&path)
@@ -39,7 +38,7 @@ fn test_go_path_resolution() {
         .filter_map(Result::ok)
         .any(|entry| entry.path().extension().is_some_and(|ext| ext == "go"));
 
-    assert!(has_go_files, "No Go source files found in: {:?}", path);
+    assert!(has_go_files, "No Go source files found in: {path:?}");
 }
 
 #[test]
@@ -54,8 +53,7 @@ fn test_nonexistent_go_package() {
     let result = resolve_path("go:this_package_should_not_exist_12345");
     assert!(
         result.is_err(),
-        "Expected error for non-existent package, got: {:?}",
-        result
+        "Expected error for non-existent package, got: {result:?}"
     );
 }
 
@@ -79,13 +77,12 @@ fn test_external_go_package() {
             let result = resolve_path("go:github.com/stretchr/testify");
             assert!(
                 result.is_ok(),
-                "Failed to resolve external package: {:?}",
-                result
+                "Failed to resolve external package: {result:?}"
             );
 
             let path = result.unwrap();
-            assert!(path.exists(), "Path does not exist: {:?}", path);
-            assert!(path.is_dir(), "Path is not a directory: {:?}", path);
+            assert!(path.exists(), "Path does not exist: {path:?}");
+            assert!(path.is_dir(), "Path is not a directory: {path:?}");
         } else {
             println!(
                 "Skipping test_external_go_package: github.com/stretchr/testify is not installed"

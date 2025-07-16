@@ -523,12 +523,12 @@ fn process_cached_line_map(
         let line_idx = line.saturating_sub(1); // Adjust for 0-based indexing
 
         if debug_mode {
-            println!("DEBUG: Processing line {} from cache", line);
+            println!("DEBUG: Processing line {line} from cache");
         }
 
         if line_idx >= cached_line_map.len() {
             if debug_mode {
-                println!("DEBUG: Line {} is out of bounds (Cache)", line);
+                println!("DEBUG: Line {line} is out of bounds (Cache)");
             }
             continue;
         }
@@ -557,7 +557,7 @@ fn process_cached_line_map(
             // 1. Handle Comments
             if info.is_comment {
                 if debug_mode {
-                    println!("DEBUG: Cache: Handling comment node at line {}", line);
+                    println!("DEBUG: Cache: Handling comment node at line {line}");
                 }
                 // Check for context node
                 if let (Some(ctx_rows), Some(ctx_bytes), Some(ctx_kind), Some(ctx_is_test)) = (
@@ -768,7 +768,7 @@ fn process_cached_line_map(
                 }
             }
         } else if debug_mode {
-            println!("DEBUG: Cache: No cached node info found for line {}", line);
+            println!("DEBUG: Cache: No cached node info found for line {line}");
         }
     }
 
@@ -939,12 +939,12 @@ pub fn parse_file_for_code_blocks(
 
     // Calculate content hash for cache key
     let content_hash = calculate_content_hash(content);
-    let cache_key = format!("{}_{}_{}", extension, content_hash, allow_tests);
+    let cache_key = format!("{extension}_{content_hash}_{allow_tests}");
 
     // Check if we have a cached line map
     if let Some(cached_entry) = LINE_MAP_CACHE.get(&cache_key) {
         if debug_mode {
-            println!("DEBUG: Cache hit for line_map key: {}", cache_key);
+            println!("DEBUG: Cache hit for line_map key: {cache_key}");
         }
 
         // Process the cached line map
@@ -959,10 +959,7 @@ pub fn parse_file_for_code_blocks(
     }
 
     if debug_mode {
-        println!(
-            "DEBUG: Cache miss for line_map key: {}. Generating...",
-            cache_key
-        );
+        println!("DEBUG: Cache miss for line_map key: {cache_key}. Generating...");
     }
 
     // Get the tree-sitter language
@@ -974,7 +971,7 @@ pub fn parse_file_for_code_blocks(
 
     // Use the tree cache to get or parse the tree
     // We use a stable identifier for the file
-    let tree_cache_key = format!("file_{}", extension);
+    let tree_cache_key = format!("file_{extension}");
     let tree = tree_cache::get_or_parse_tree(&tree_cache_key, content, &mut parser)
         .context("Failed to parse the file")?;
 
@@ -984,13 +981,13 @@ pub fn parse_file_for_code_blocks(
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: Parsing file with extension: {}", extension);
+        println!("DEBUG: Parsing file with extension: {extension}");
         println!("DEBUG: Root node type: {}", root_node.kind());
 
         // Log all node types in the file
         let mut node_types = HashSet::new();
         super::common::collect_node_types(root_node, &mut node_types);
-        println!("DEBUG: All node types in file: {:?}", node_types);
+        println!("DEBUG: All node types in file: {node_types:?}");
     }
 
     // Create a line-to-node map for the entire file
@@ -1041,13 +1038,13 @@ pub fn parse_file_for_code_blocks(
         let line_idx = line.saturating_sub(1);
 
         if debug_mode {
-            println!("DEBUG: Processing line {} (Live NodeInfo)", line);
+            println!("DEBUG: Processing line {line} (Live NodeInfo)");
         }
 
         // Skip if line is out of bounds
         if line_idx >= line_map.len() {
             if debug_mode {
-                println!("DEBUG: Line {} is out of bounds (Live NodeInfo)", line);
+                println!("DEBUG: Line {line} is out of bounds (Live NodeInfo)");
             }
             continue;
         }
@@ -1329,10 +1326,7 @@ pub fn parse_file_for_code_blocks(
                 parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
             });
         } else if debug_mode {
-            println!(
-                "DEBUG: No node info found for line {} (Live NodeInfo)",
-                line
-            );
+            println!("DEBUG: No node info found for line {line} (Live NodeInfo)");
         }
     } // End loop over line_numbers
 
@@ -1396,14 +1390,17 @@ pub fn parse_file_for_code_blocks(
                     // If current block is important and previous block is not, keep both
                     if is_important && !prev_is_important {
                         if debug_mode {
-                            println!("DEBUG: Keeping important block type: {}", block.node_type);
+                            println!(
+                                "DEBUG: Keeping important block type: {node_type}",
+                                node_type = block.node_type
+                            );
                         }
                         // Don't remove any blocks, don't set should_add to false
                     }
                     // If previous block is important and current block is not, skip current block
                     else if !is_important && prev_is_important {
                         if debug_mode {
-                            println!("DEBUG: Skipping non-important block in favor of important block: {}", prev_block.node_type);
+                            println!("DEBUG: Skipping non-important block in favor of important block: {node_type}", node_type = prev_block.node_type);
                         }
                         should_add = false;
                         break;
@@ -1428,14 +1425,17 @@ pub fn parse_file_for_code_blocks(
                     // If current block is important and previous block is not, keep both
                     if is_important && !prev_is_important {
                         if debug_mode {
-                            println!("DEBUG: Keeping important block type: {}", block.node_type);
+                            println!(
+                                "DEBUG: Keeping important block type: {node_type}",
+                                node_type = block.node_type
+                            );
                         }
                         // Don't set should_add to false, continue checking other blocks
                     }
                     // If previous block is important and current block is not, skip current block
                     else if !is_important && prev_is_important {
                         if debug_mode {
-                            println!("DEBUG: Skipping non-important block in favor of important block: {}", prev_block.node_type);
+                            println!("DEBUG: Skipping non-important block in favor of important block: {node_type}", node_type = prev_block.node_type);
                         }
                         should_add = false;
                         break;
@@ -1497,10 +1497,7 @@ pub fn parse_file_for_code_blocks(
     // Store the cacheable version in the cache (as you already have)
     LINE_MAP_CACHE.insert(cache_key.clone(), cacheable_line_map);
     if debug_mode {
-        println!(
-            "DEBUG: Stored generated line_map in cache key: {}",
-            cache_key
-        );
+        println!("DEBUG: Stored generated line_map in cache key: {cache_key}");
     }
 
     // Return the blocks generated from the LIVE data in this cache miss path

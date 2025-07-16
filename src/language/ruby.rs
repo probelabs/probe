@@ -58,7 +58,7 @@ impl LanguageImpl for RubyLanguage {
                     if name == "describe" || name == "it" || name == "context" || name == "specify"
                     {
                         if debug_mode {
-                            println!("DEBUG: Test node detected (Ruby): {} block", name);
+                            println!("DEBUG: Test node detected (Ruby): {name} block");
                         }
                         return true;
                     }

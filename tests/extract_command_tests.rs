@@ -266,11 +266,11 @@ fn test() {
     }
 
     // Print the output for debugging
-    println!("Command stdout: {}", stdout);
+    println!("Command stdout: {stdout}");
 
     // Extract and parse the JSON
     let json_str = extract_json_from_output(&stdout);
-    println!("Extracted JSON: {}", json_str);
+    println!("Extracted JSON: {json_str}");
     let json_value: Value = serde_json::from_str(json_str).expect("Failed to parse JSON output");
 
     // Validate the structure of the JSON output
@@ -465,11 +465,11 @@ fn test() {
     }
 
     // Print the output for debugging
-    println!("Command stdout: {}", stdout);
+    println!("Command stdout: {stdout}");
 
     // Extract and parse the XML
     let xml_str = extract_xml_from_output(&stdout);
-    println!("Extracted XML: {}", xml_str);
+    println!("Extracted XML: {xml_str}");
     let doc = Document::parse(xml_str).expect("Failed to parse XML output");
     let root = doc.root_element();
 
@@ -599,7 +599,7 @@ fn test_process_file_for_extraction_with_range() {
     let file_path = temp_dir.path().join("test_file.txt");
     let mut content = String::new();
     for i in 1..=20 {
-        content.push_str(&format!("Line {}\n", i));
+        content.push_str(&format!("Line {i}\n"));
     }
     fs::write(&file_path, &content).unwrap();
 
@@ -664,11 +664,11 @@ struct Point {
 
     // Print the current directory and file path for debugging
     println!("Current directory: {:?}", std::env::current_dir().unwrap());
-    println!("File path: {:?}", file_path);
+    println!("File path: {file_path:?}");
 
     // Get the project root directory (where Cargo.toml is)
     let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    println!("Project directory: {:?}", project_dir);
+    println!("Project directory: {project_dir:?}");
 
     // Run the extract command using cargo run from the project directory
     let output = Command::new("cargo")
@@ -1156,7 +1156,7 @@ index cb2cb64..3717769 100644
     assert!(output.status.success(), "Command failed to execute");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("Command output: {}", stdout);
+    println!("Command output: {stdout}");
 
     // The output should contain information about the extracted file
     assert!(
@@ -1222,7 +1222,7 @@ index cb2cb64..3717769 100644
     assert!(output.status.success(), "Command failed to execute");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("Command output: {}", stdout);
+    println!("Command output: {stdout}");
 
     // The output should contain information about the extracted file
     assert!(
@@ -1543,7 +1543,7 @@ fn test_tokenize_with_stemming() {
     assert!(output.status.success(), "Command failed to execute");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("Command output: {}", stdout);
+    println!("Command output: {stdout}");
 
     // The output should contain information about the diff file
     assert!(

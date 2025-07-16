@@ -43,10 +43,7 @@ pub fn find_symbol_in_file(
     if debug_mode {
         println!("\n[DEBUG] ===== Symbol Search =====");
         if is_nested_symbol {
-            println!(
-                "[DEBUG] Searching for nested symbol '{}' in file {:?}",
-                symbol, path
-            );
+            println!("[DEBUG] Searching for nested symbol '{symbol}' in file {path:?}");
             println!(
                 "[DEBUG] Symbol parts: {:?} (parent: '{}', child: '{}')",
                 symbol_parts,
@@ -54,20 +51,23 @@ pub fn find_symbol_in_file(
                 symbol_parts.last().unwrap_or(&"")
             );
         } else {
-            println!(
-                "[DEBUG] Searching for symbol '{}' in file {:?}",
-                symbol, path
-            );
+            println!("[DEBUG] Searching for symbol '{symbol}' in file {path:?}");
         }
-        println!("[DEBUG] Content size: {} bytes", content.len());
-        println!("[DEBUG] Line count: {}", content.lines().count());
+        println!(
+            "[DEBUG] Content size: {content_len} bytes",
+            content_len = content.len()
+        );
+        println!(
+            "[DEBUG] Line count: {line_count}",
+            line_count = content.lines().count()
+        );
     }
 
     // Get the file extension to determine the language
     let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
     if debug_mode {
-        println!("[DEBUG] File extension: {}", extension);
+        println!("[DEBUG] File extension: {extension}");
     }
 
     // Get the language implementation for this extension
@@ -75,7 +75,7 @@ pub fn find_symbol_in_file(
         .ok_or_else(|| anyhow::anyhow!("Unsupported language extension: {}", extension))?;
 
     if debug_mode {
-        println!("[DEBUG] Language detected: {}", extension);
+        println!("[DEBUG] Language detected: {extension}");
         println!("[DEBUG] Using tree-sitter to parse file");
     }
 
@@ -93,7 +93,10 @@ pub fn find_symbol_in_file(
 
     if debug_mode {
         println!("[DEBUG] File parsed successfully");
-        println!("[DEBUG] Root node type: {}", root_node.kind());
+        println!(
+            "[DEBUG] Root node type: {root_node_kind}",
+            root_node_kind = root_node.kind()
+        );
         println!(
             "[DEBUG] Root node range: {}:{} - {}:{}",
             root_node.start_position().row + 1,
@@ -101,7 +104,7 @@ pub fn find_symbol_in_file(
             root_node.end_position().row + 1,
             root_node.end_position().column + 1
         );
-        println!("[DEBUG] Searching for symbol '{}' in AST", symbol);
+        println!("[DEBUG] Searching for symbol '{symbol}' in AST");
     }
 
     // Function to recursively search for a node with the given symbol name
@@ -142,8 +145,7 @@ pub fn find_symbol_in_file(
                     if let Ok(name) = child.utf8_text(content) {
                         if debug_mode {
                             println!(
-                                "[DEBUG] Found identifier: '{}' (looking for '{}')",
-                                name, current_symbol
+                                "[DEBUG] Found identifier: '{name}' (looking for '{current_symbol}')"
                             );
                         }
 
@@ -336,7 +338,7 @@ pub fn find_symbol_in_file(
                             if subchild.kind() == "identifier" {
                                 if let Ok(name) = subchild.utf8_text(content) {
                                     if debug_mode {
-                                        println!("[DEBUG] Found function identifier: '{}' (looking for '{}')", name, current_symbol);
+                                        println!("[DEBUG] Found function identifier: '{name}' (looking for '{current_symbol}')");
                                     }
 
                                     if name == current_symbol {
@@ -368,8 +370,7 @@ pub fn find_symbol_in_file(
                                             // If this is a simple symbol, we found it
                                             if debug_mode {
                                                 println!(
-                                                    "[DEBUG] Found symbol '{}' in function_declarator",
-                                                    current_symbol
+                                                    "[DEBUG] Found symbol '{current_symbol}' in function_declarator"
                                                 );
                                                 println!(
                                                     "[DEBUG] Symbol location: {}:{} - {}:{}",
@@ -416,11 +417,11 @@ pub fn find_symbol_in_file(
 
         if debug_mode {
             println!("\n[DEBUG] ===== Symbol Found =====");
+            println!("[DEBUG] Found symbol '{symbol}' at lines {node_start_line}-{node_end_line}");
             println!(
-                "[DEBUG] Found symbol '{}' at lines {}-{}",
-                symbol, node_start_line, node_end_line
+                "[DEBUG] Node type: {node_kind}",
+                node_kind = found_node.kind()
             );
-            println!("[DEBUG] Node type: {}", found_node.kind());
             println!(
                 "[DEBUG] Node range: {}:{} - {}:{}",
                 found_node.start_position().row + 1,
@@ -434,10 +435,13 @@ pub fn find_symbol_in_file(
         let node_text = &content[found_node.start_byte()..found_node.end_byte()];
 
         if debug_mode {
-            println!("[DEBUG] Extracted code size: {} bytes", node_text.len());
             println!(
-                "[DEBUG] Extracted code lines: {}",
-                node_text.lines().count()
+                "[DEBUG] Extracted code size: {code_size} bytes",
+                code_size = node_text.len()
+            );
+            println!(
+                "[DEBUG] Extracted code lines: {line_count}",
+                line_count = node_text.lines().count()
             );
         }
 
@@ -480,7 +484,7 @@ pub fn find_symbol_in_file(
     // If we couldn't find the symbol using tree-sitter, try a simple text search as fallback
     if debug_mode {
         println!("\n[DEBUG] ===== Symbol Not Found in AST =====");
-        println!("[DEBUG] Symbol '{}' not found in AST", symbol);
+        println!("[DEBUG] Symbol '{symbol}' not found in AST");
         println!("[DEBUG] Trying text search fallback");
     }
 
@@ -531,10 +535,7 @@ pub fn find_symbol_in_file(
     if let Some(line_num) = found_line {
         if debug_mode {
             println!("\n[DEBUG] ===== Symbol Found via Text Search =====");
-            println!(
-                "[DEBUG] Found symbol '{}' using text search at line {}",
-                symbol, line_num
-            );
+            println!("[DEBUG] Found symbol '{symbol}' using text search at line {line_num}");
         }
 
         // Extract context around the line
@@ -542,9 +543,9 @@ pub fn find_symbol_in_file(
         let end_line = std::cmp::min(line_num + context_lines, lines.len());
 
         if debug_mode {
-            println!("[DEBUG] Extracting context around line {}", line_num);
-            println!("[DEBUG] Context lines: {}", context_lines);
-            println!("[DEBUG] Extracting lines {}-{}", start_line, end_line);
+            println!("[DEBUG] Extracting context around line {line_num}");
+            println!("[DEBUG] Context lines: {context_lines}");
+            println!("[DEBUG] Extracting lines {start_line}-{end_line}");
         }
 
         // Adjust start_line to be at least 1 (1-indexed)
@@ -553,8 +554,14 @@ pub fn find_symbol_in_file(
         let context = lines[start_idx..end_line].join("\n");
 
         if debug_mode {
-            println!("[DEBUG] Extracted {} lines of code", end_line - start_line);
-            println!("[DEBUG] Content size: {} bytes", context.len());
+            println!(
+                "[DEBUG] Extracted {line_count} lines of code",
+                line_count = end_line - start_line
+            );
+            println!(
+                "[DEBUG] Content size: {content_size} bytes",
+                content_size = context.len()
+            );
         }
 
         // Tokenize the content
@@ -594,7 +601,7 @@ pub fn find_symbol_in_file(
     // If we get here, we couldn't find the symbol
     if debug_mode {
         println!("\n[DEBUG] ===== Symbol Not Found =====");
-        println!("[DEBUG] Symbol '{}' not found in file {:?}", symbol, path);
+        println!("[DEBUG] Symbol '{symbol}' not found in file {path:?}");
         println!("[DEBUG] Neither AST parsing nor text search found the symbol");
     }
 

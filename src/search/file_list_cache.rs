@@ -26,9 +26,11 @@ lazy_static! {
 /// Helper function to format duration in a human-readable way
 fn format_duration(duration: std::time::Duration) -> String {
     if duration.as_millis() < 1000 {
-        format!("{}ms", duration.as_millis())
+        let duration_millis = duration.as_millis();
+        format!("{duration_millis}ms")
     } else {
-        format!("{:.2}s", duration.as_secs_f64())
+        let duration_secs = duration.as_secs_f64();
+        format!("{duration_secs:.2}s")
     }
 }
 
@@ -53,10 +55,10 @@ fn generate_cache_key(path: &Path, allow_tests: bool, custom_ignores: &[String])
                 hash = hash.wrapping_mul(31).wrapping_add(byte as u64);
             }
         }
-        format!("ignores_{:x}", hash)
+        format!("ignores_{hash:x}")
     };
 
-    format!("{}_{}_{}", path_str, allow_tests_str, ignores_hash)
+    format!("{path_str}_{allow_tests_str}_{ignores_hash}")
 }
 
 /// Get a list of files in a directory, respecting ignore patterns and test file exclusions.
@@ -70,9 +72,9 @@ pub fn get_file_list(
     let start_time = Instant::now();
 
     if debug_mode {
-        println!("DEBUG: Getting file list for path: {:?}", path);
-        println!("DEBUG: allow_tests: {}", allow_tests);
-        println!("DEBUG: custom_ignores: {:?}", custom_ignores);
+        println!("DEBUG: Getting file list for path: {path:?}");
+        println!("DEBUG: allow_tests: {allow_tests}");
+        println!("DEBUG: custom_ignores: {custom_ignores:?}");
     }
 
     // Create a cache key for this request
@@ -127,7 +129,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
     let start_time = Instant::now();
 
     if debug_mode {
-        println!("DEBUG: Building file list for path: {:?}", path);
+        println!("DEBUG: Building file list for path: {path:?}");
     }
 
     // Create a WalkBuilder that respects .gitignore files and common ignore patterns
@@ -245,8 +247,8 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
 
     // Add all ignore patterns to the override builder
     for pattern in &common_ignores {
-        if let Err(err) = override_builder.add(&format!("!**/{}", pattern)) {
-            eprintln!("Error adding ignore pattern {:?}: {}", pattern, err);
+        if let Err(err) = override_builder.add(&format!("!**/{pattern}")) {
+            eprintln!("Error adding ignore pattern {pattern:?}: {err}");
         }
     }
 
@@ -256,7 +258,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
             builder.overrides(overrides);
         }
         Err(err) => {
-            eprintln!("Error building ignore overrides: {}", err);
+            eprintln!("Error building ignore overrides: {err}");
         }
     }
 
@@ -279,7 +281,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
         let entry = match result {
             Ok(entry) => entry,
             Err(err) => {
-                eprintln!("Error walking directory: {}", err);
+                eprintln!("Error walking directory: {err}");
                 continue;
             }
         };
@@ -334,12 +336,12 @@ pub fn find_matching_filenames(
 
     if debug_mode {
         println!("DEBUG: Finding files with matching filenames");
-        println!("DEBUG: Queries: {:?}", queries);
+        println!("DEBUG: Queries: {queries:?}");
         println!(
             "DEBUG: Already found files count: {}",
             already_found_files.len()
         );
-        println!("DEBUG: Term indices: {:?}", term_indices);
+        println!("DEBUG: Term indices: {term_indices:?}");
     }
 
     // Get the cached file list, with language filtering if specified
@@ -359,10 +361,7 @@ pub fn find_matching_filenames(
         .collect();
 
     if debug_mode {
-        println!(
-            "DEBUG: Query tokens for filename matching: {:?}",
-            query_tokens
-        );
+        println!("DEBUG: Query tokens for filename matching: {query_tokens:?}");
     }
 
     // Search each file for matching filenames
@@ -381,10 +380,7 @@ pub fn find_matching_filenames(
         let filename_tokens = tokenization::tokenize(&relative_path);
 
         if debug_mode && !filename_tokens.is_empty() {
-            println!(
-                "DEBUG: Path '{}' tokenized as: {:?}",
-                relative_path, filename_tokens
-            );
+            println!("DEBUG: Path '{relative_path}' tokenized as: {filename_tokens:?}");
         }
         // Find which terms match the filename
         let mut matched_terms = HashSet::new();
@@ -403,8 +399,7 @@ pub fn find_matching_filenames(
                 matched_terms.insert(idx);
                 if debug_mode {
                     println!(
-                        "DEBUG: Term '{}' matched path '{}', adding index {}",
-                        term, relative_path, idx
+                        "DEBUG: Term '{term}' matched path '{relative_path}', adding index {idx}"
                     );
                 }
             }
@@ -471,10 +466,7 @@ pub fn get_file_list_by_language(
     let start_time = Instant::now();
 
     if debug_mode {
-        println!(
-            "DEBUG: Getting file list for path: {:?} with language filter: {:?}",
-            path, language
-        );
+        println!("DEBUG: Getting file list for path: {path:?} with language filter: {language:?}");
     }
 
     // Get the full file list first
@@ -484,7 +476,7 @@ pub fn get_file_list_by_language(
     let extensions = get_language_extensions(language.unwrap());
 
     if debug_mode {
-        println!("DEBUG: Filtering files by extensions: {:?}", extensions);
+        println!("DEBUG: Filtering files by extensions: {extensions:?}");
     }
 
     // Filter the files by extension
@@ -497,7 +489,8 @@ pub fn get_file_list_by_language(
             .iter()
             .filter(|file| {
                 if let Some(ext) = file.extension() {
-                    let ext_str = format!(".{}", ext.to_string_lossy());
+                    let ext_lossy = ext.to_string_lossy();
+                    let ext_str = format!(".{ext_lossy}");
                     extensions.iter().any(|e| e == &ext_str)
                 } else {
                     false

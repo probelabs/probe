@@ -79,7 +79,7 @@ function bar() {
     std::env::set_var("DEBUG", "1");
 
     // Print the line numbers we're searching for
-    println!("Searching for lines: {:?}", line_numbers);
+    println!("Searching for lines: {line_numbers:?}");
 
     // Parse the file for code blocks
     let result = parse_file_for_code_blocks(js_code, "js", &line_numbers, true, None)?;

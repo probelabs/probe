@@ -70,7 +70,7 @@ function manyLines() {
     );
 
     for i in 0..1000 {
-        many_lines_content.push_str(&format!("        \"Line {}\",\n", i));
+        many_lines_content.push_str(&format!("        \"Line {i}\",\n"));
     }
 
     many_lines_content.push_str(

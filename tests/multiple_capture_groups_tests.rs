@@ -68,8 +68,8 @@ fn test_multiple_capture_groups_in_line() {
     let pattern2 = "pattern2";
 
     // Fix the regex pattern by removing the extra closing parenthesis
-    let combined_pattern = format!("({})|({}))", pattern1, pattern2).replace("))", ")");
-    let combined_regex = Regex::new(&format!("(?i){}", combined_pattern)).unwrap();
+    let combined_pattern = format!("({pattern1})|({pattern2}))").replace("))", ")");
+    let combined_regex = Regex::new(&format!("(?i){combined_pattern}")).unwrap();
 
     // Term 0 is associated with pattern1, term 1 is associated with pattern2
     let mut pattern1_terms = HashSet::new();
@@ -127,8 +127,8 @@ fn test_overlapping_patterns() {
     let pattern2 = "patternY"; // Changed from patternXYZ to avoid overlap issues
 
     // Fix the regex pattern by removing the extra closing parenthesis
-    let combined_pattern = format!("({})|({}))", pattern1, pattern2).replace("))", ")");
-    let combined_regex = Regex::new(&format!("(?i){}", combined_pattern)).unwrap();
+    let combined_pattern = format!("({pattern1})|({pattern2}))").replace("))", ")");
+    let combined_regex = Regex::new(&format!("(?i){combined_pattern}")).unwrap();
 
     // Term 0 is associated with pattern1, term 1 is associated with pattern2
     let mut pattern1_terms = HashSet::new();

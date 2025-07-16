@@ -82,7 +82,7 @@ pub fn filter_code_block_with_ast(
             "DEBUG: Checking for terms in block {}-{}",
             block_lines.0, block_lines.1
         );
-        println!("DEBUG: Matched terms: {:?}", matched_terms);
+        println!("DEBUG: Matched terms: {matched_terms:?}");
         println!("DEBUG: Term indices: {:?}", plan.term_indices);
         println!("DEBUG: Excluded terms: {:?}", plan.excluded_terms);
         println!("DEBUG: AST: {:?}", plan.ast);
@@ -102,7 +102,7 @@ pub fn filter_code_block_with_ast(
         if matched_keywords.is_empty() {
             println!("DEBUG: No keywords matched in this block");
         } else {
-            println!("DEBUG: All matched keywords: {:?}", matched_keywords);
+            println!("DEBUG: All matched keywords: {matched_keywords:?}");
         }
         println!("DEBUG: ===================================");
     }
@@ -121,7 +121,7 @@ pub fn filter_code_block_with_ast(
     // Use the AST evaluation directly
     if debug_mode {
         println!("DEBUG: ===== AST EVALUATION =====");
-        println!("DEBUG: Matched terms: {:?}", matched_terms);
+        println!("DEBUG: Matched terms: {matched_terms:?}");
         println!("DEBUG: Term indices: {:?}", plan.term_indices);
     }
 
@@ -130,7 +130,7 @@ pub fn filter_code_block_with_ast(
 
     if debug_mode {
         println!("DEBUG: ===== EVALUATION RESULT =====");
-        println!("DEBUG: AST evaluation result: {}", result);
+        println!("DEBUG: AST evaluation result: {result}");
         println!(
             "DEBUG: Block {}-{} will be {}",
             block_lines.0,
@@ -147,13 +147,12 @@ pub fn filter_code_block_with_ast(
             "DEBUG: Block {}-{} matched terms: {:?}",
             block_lines.0, block_lines.1, matched_terms
         );
-        println!("DEBUG: AST evaluation result: {}", decision);
+        println!("DEBUG: AST evaluation result: {decision}");
     }
 
     if debug_mode {
         println!(
-            "DEBUG: filter_code_block_with_ast => lines {:?} => matched {:?}, decision={}",
-            block_lines, matched_terms, decision
+            "DEBUG: filter_code_block_with_ast => lines {block_lines:?} => matched {matched_terms:?}, decision={decision}"
         );
     }
     decision
@@ -191,10 +190,7 @@ pub fn filter_tokenized_block(
             if tokenized_content.contains(&term.to_lowercase()) {
                 matched_terms.insert(idx);
                 if debug_mode {
-                    println!(
-                        "DEBUG: Special case term '{}' matched in tokenized content",
-                        term
-                    );
+                    println!("DEBUG: Special case term '{term}' matched in tokenized content");
                 }
             }
         }
@@ -202,8 +198,8 @@ pub fn filter_tokenized_block(
 
     if debug_mode {
         println!("DEBUG: Checking for terms in tokenized block");
-        println!("DEBUG: Tokenized content: {:?}", tokenized_content);
-        println!("DEBUG: Matched terms: {:?}", matched_terms);
+        println!("DEBUG: Tokenized content: {tokenized_content:?}");
+        println!("DEBUG: Matched terms: {matched_terms:?}");
         println!("DEBUG: Term indices: {:?}", plan.term_indices);
         println!("DEBUG: Excluded terms: {:?}", plan.excluded_terms);
         println!("DEBUG: AST: {:?}", plan.ast);
@@ -214,13 +210,13 @@ pub fn filter_tokenized_block(
         for (term, &idx) in &plan.term_indices {
             if matched_terms.contains(&idx) {
                 matched_keywords.push(term);
-                println!("DEBUG: Keyword '{}' matched in tokenized block", term);
+                println!("DEBUG: Keyword '{term}' matched in tokenized block");
             }
         }
         if matched_keywords.is_empty() {
             println!("DEBUG: No keywords matched in this block");
         } else {
-            println!("DEBUG: All matched keywords: {:?}", matched_keywords);
+            println!("DEBUG: All matched keywords: {matched_keywords:?}");
         }
         println!("DEBUG: ===================================");
     }
@@ -236,7 +232,7 @@ pub fn filter_tokenized_block(
     // Use the AST evaluation directly
     if debug_mode {
         println!("DEBUG: ===== AST EVALUATION =====");
-        println!("DEBUG: Matched terms: {:?}", matched_terms);
+        println!("DEBUG: Matched terms: {matched_terms:?}");
         println!("DEBUG: Term indices: {:?}", plan.term_indices);
     }
 
@@ -245,7 +241,7 @@ pub fn filter_tokenized_block(
 
     if debug_mode {
         println!("DEBUG: ===== EVALUATION RESULT =====");
-        println!("DEBUG: AST evaluation result: {}", result);
+        println!("DEBUG: AST evaluation result: {result}");
         println!(
             "DEBUG: Block will be {}",
             if result { "INCLUDED" } else { "EXCLUDED" }
@@ -256,12 +252,9 @@ pub fn filter_tokenized_block(
     let decision = result;
 
     if debug_mode {
-        println!("DEBUG: Tokenized block matched terms: {:?}", matched_terms);
-        println!("DEBUG: AST evaluation result: {}", decision);
-        println!(
-            "DEBUG: filter_tokenized_block => matched {:?}, decision={}",
-            matched_terms, decision
-        );
+        println!("DEBUG: Tokenized block matched terms: {matched_terms:?}");
+        println!("DEBUG: AST evaluation result: {decision}");
+        println!("DEBUG: filter_tokenized_block => matched {matched_terms:?}, decision={decision}");
     }
 
     decision
@@ -416,7 +409,7 @@ pub fn process_file_with_results(
     if debug_mode {
         println!("DEBUG: Processing file: {:?}", params.path);
         println!("DEBUG:   matched lines: {:?}", params.line_numbers);
-        println!("DEBUG:   file I/O time: {:?}", file_io_duration);
+        println!("DEBUG:   file I/O time: {file_io_duration:?}");
     }
 
     // Measure AST parsing time with sub-steps
@@ -473,14 +466,11 @@ pub fn process_file_with_results(
     timings.ast_parsing = Some(ast_parsing_duration);
 
     if debug_mode {
-        println!("DEBUG:   AST parsing time: {:?}", ast_parsing_duration);
-        println!("DEBUG:     - Language init: {:?}", language_init_duration);
-        println!("DEBUG:     - Parser init: {:?}", parser_init_duration);
-        println!("DEBUG:     - Tree parsing: {:?}", tree_parsing_duration);
-        println!(
-            "DEBUG:     - Line map building: {:?}",
-            line_map_building_duration
-        );
+        println!("DEBUG:   AST parsing time: {ast_parsing_duration:?}");
+        println!("DEBUG:     - Language init: {language_init_duration:?}");
+        println!("DEBUG:     - Parser init: {parser_init_duration:?}");
+        println!("DEBUG:     - Tree parsing: {tree_parsing_duration:?}");
+        println!("DEBUG:     - Line map building: {line_map_building_duration:?}");
     }
 
     if let Ok(code_blocks) = code_blocks_result {
@@ -499,7 +489,7 @@ pub fn process_file_with_results(
             }
         }
 
-        let file_id = format!("{}", params.path.to_string_lossy());
+        let file_id = params.path.to_string_lossy().to_string();
 
         // Measure block extraction time with sub-steps
         let block_extraction_start = Instant::now();
@@ -590,8 +580,7 @@ pub fn process_file_with_results(
                 let should_include = {
                     if debug_mode {
                         println!(
-                            "DEBUG: Using filter_tokenized_block for block {}-{}",
-                            final_start_line, final_end_line
+                            "DEBUG: Using filter_tokenized_block for block {final_start_line}-{final_end_line}"
                         );
                     }
 
@@ -601,8 +590,7 @@ pub fn process_file_with_results(
                         // so we should include this block without re-evaluating
                         if debug_mode {
                             println!(
-                                "DEBUG: Exact mode enabled, skipping tokenization and evaluation for block {}-{}",
-                                final_start_line, final_end_line
+                                "DEBUG: Exact mode enabled, skipping tokenization and evaluation for block {final_start_line}-{final_end_line}"
                             );
                         }
                         true
@@ -617,8 +605,7 @@ pub fn process_file_with_results(
 
                         if debug_mode {
                             println!(
-                                "DEBUG: Block {}-{} filter result: {}",
-                                final_start_line, final_end_line, result
+                                "DEBUG: Block {final_start_line}-{final_end_line} filter result: {result}"
                             );
                         }
 
@@ -635,8 +622,7 @@ pub fn process_file_with_results(
 
                 if debug_mode {
                     println!(
-                        "DEBUG: Block lines {}-{} => should_include={}",
-                        final_start_line, final_end_line, should_include
+                        "DEBUG: Block lines {final_start_line}-{final_end_line} => should_include={should_include}"
                     );
                 }
 
@@ -872,19 +858,10 @@ pub fn process_file_with_results(
         timings.result_building_synchronization = Some(synchronization_duration_value);
 
         if debug_mode {
-            println!(
-                "DEBUG:   Block extraction time: {:?}",
-                block_extraction_duration
-            );
-            println!(
-                "DEBUG:     - Code structure finding: {:?}",
-                code_structure_duration_value
-            );
-            println!("DEBUG:     - Filtering: {:?}", filtering_duration_value);
-            println!(
-                "DEBUG:     - Result building: {:?}",
-                result_building_duration_value
-            );
+            println!("DEBUG:   Block extraction time: {block_extraction_duration:?}");
+            println!("DEBUG:     - Code structure finding: {code_structure_duration_value:?}");
+            println!("DEBUG:     - Filtering: {filtering_duration_value:?}");
+            println!("DEBUG:     - Result building: {result_building_duration_value:?}");
         }
     }
 
@@ -893,10 +870,7 @@ pub fn process_file_with_results(
     for &line_num in params.line_numbers {
         if !covered_lines.contains(&line_num) {
             if debug_mode {
-                println!(
-                    "DEBUG: Line {} not covered, will use fallback context",
-                    line_num
-                );
+                println!("DEBUG: Line {line_num} not covered, will use fallback context");
                 if line_num <= lines.len() {
                     println!("DEBUG:   Line content: '{}'", lines[line_num - 1].trim());
                 }
@@ -980,10 +954,7 @@ pub fn process_file_with_results(
         let node_type = determine_fallback_node_type(lines[line_num - 1], Some(extension));
 
         if debug_mode {
-            println!(
-                "DEBUG: Inferred node type for fallback context: {}",
-                node_type
-            );
+            println!("DEBUG: Inferred node type for fallback context: {node_type}");
             println!(
                 "DEBUG: Using adaptive context size: lines {}-{} (size: {})",
                 context_start,
@@ -1014,8 +985,7 @@ pub fn process_file_with_results(
         let should_include = {
             if debug_mode {
                 println!(
-                    "DEBUG: Using filter_tokenized_block for fallback context {}-{}",
-                    context_start, context_end
+                    "DEBUG: Using filter_tokenized_block for fallback context {context_start}-{context_end}"
                 );
             }
 
@@ -1025,8 +995,7 @@ pub fn process_file_with_results(
                 // so we should include this block without re-evaluating
                 if debug_mode {
                     println!(
-                        "DEBUG: Exact mode enabled, skipping tokenization and evaluation for fallback context {}-{}",
-                        context_start, context_end
+                        "DEBUG: Exact mode enabled, skipping tokenization and evaluation for fallback context {context_start}-{context_end}"
                     );
                 }
                 true
@@ -1045,8 +1014,7 @@ pub fn process_file_with_results(
 
         if debug_mode {
             println!(
-                "DEBUG: Block at {}-{} filtered: included={}",
-                context_start, context_end, should_include
+                "DEBUG: Block at {context_start}-{context_end} filtered: included={should_include}"
             );
         }
 
@@ -1200,33 +1168,33 @@ pub fn process_file_with_results(
     if debug_mode {
         println!("DEBUG: File processing timings:");
         if let Some(duration) = timings.file_io {
-            println!("DEBUG:   File I/O: {:?}", duration);
+            println!("DEBUG:   File I/O: {duration:?}");
         }
         if let Some(duration) = timings.ast_parsing {
-            println!("DEBUG:   AST parsing: {:?}", duration);
+            println!("DEBUG:   AST parsing: {duration:?}");
             if let Some(d) = timings.ast_parsing_language_init {
-                println!("DEBUG:     - Language init: {:?}", d);
+                println!("DEBUG:     - Language init: {d:?}");
             }
             if let Some(d) = timings.ast_parsing_parser_init {
-                println!("DEBUG:     - Parser init: {:?}", d);
+                println!("DEBUG:     - Parser init: {d:?}");
             }
             if let Some(d) = timings.ast_parsing_tree_parsing {
-                println!("DEBUG:     - Tree parsing: {:?}", d);
+                println!("DEBUG:     - Tree parsing: {d:?}");
             }
             if let Some(d) = timings.ast_parsing_line_map_building {
-                println!("DEBUG:     - Line map building: {:?}", d);
+                println!("DEBUG:     - Line map building: {d:?}");
             }
         }
         if let Some(duration) = timings.block_extraction {
-            println!("DEBUG:   Block extraction: {:?}", duration);
+            println!("DEBUG:   Block extraction: {duration:?}");
             if let Some(d) = timings.block_extraction_code_structure {
-                println!("DEBUG:     - Code structure finding: {:?}", d);
+                println!("DEBUG:     - Code structure finding: {d:?}");
             }
             if let Some(d) = timings.block_extraction_filtering {
-                println!("DEBUG:     - Filtering: {:?}", d);
+                println!("DEBUG:     - Filtering: {d:?}");
             }
             if let Some(d) = timings.block_extraction_result_building {
-                println!("DEBUG:     - Result building: {:?}", d);
+                println!("DEBUG:     - Result building: {d:?}");
             }
         }
     }
@@ -1234,22 +1202,22 @@ pub fn process_file_with_results(
     if debug_mode {
         println!("DEBUG: Detailed result building timings:");
         if let Some(duration) = timings.result_building_term_matching {
-            println!("DEBUG:   Term matching: {:?}", duration);
+            println!("DEBUG:   Term matching: {duration:?}");
         }
         if let Some(duration) = timings.result_building_compound_processing {
-            println!("DEBUG:   Compound word processing: {:?}", duration);
+            println!("DEBUG:   Compound word processing: {duration:?}");
         }
         if let Some(duration) = timings.result_building_line_matching {
-            println!("DEBUG:   Line range matching: {:?}", duration);
+            println!("DEBUG:   Line range matching: {duration:?}");
         }
         if let Some(duration) = timings.result_building_result_creation {
-            println!("DEBUG:   Result creation: {:?}", duration);
+            println!("DEBUG:   Result creation: {duration:?}");
         }
         if let Some(duration) = timings.result_building_synchronization {
-            println!("DEBUG:   Synchronization: {:?}", duration);
+            println!("DEBUG:   Synchronization: {duration:?}");
         }
         if let Some(duration) = timings.result_building_uncovered_lines {
-            println!("DEBUG:   Uncovered lines processing: {:?}", duration);
+            println!("DEBUG:   Uncovered lines processing: {duration:?}");
         }
     }
 

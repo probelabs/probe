@@ -375,8 +375,7 @@ function processResults(results) {
                 // so we'll just check that we have at least 1 unique term
                 assert!(
                     block_unique_terms >= 1,
-                    "Expected at least 1 unique term, got {}",
-                    block_unique_terms
+                    "Expected at least 1 unique term, got {block_unique_terms}"
                 );
 
                 // Check that block_total_matches is also set
@@ -395,7 +394,7 @@ fn test_long_lines_are_ignored() {
     let normal_line = "This is a normal line with reasonable length.";
     let long_line = "x".repeat(600); // Line longer than 500 characters
 
-    let content = format!("{}\n{}\n{}", normal_line, long_line, normal_line);
+    let content = format!("{normal_line}\n{long_line}\n{normal_line}");
     let file_path = create_test_file(&temp_dir, "mixed_length.txt", &content);
 
     let mut line_numbers = HashSet::new();

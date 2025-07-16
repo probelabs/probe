@@ -53,7 +53,7 @@ fn test_quoted_term_with_negative_keyword() {
     let custom_ignores: Vec<String> = vec![];
 
     // Print the test files for debugging
-    println!("Test files created in: {:?}", temp_path);
+    println!("Test files created in: {temp_path:?}");
     for entry in std::fs::read_dir(temp_path).unwrap() {
         let entry = entry.unwrap();
         println!("  {:?}", entry.path());
@@ -90,7 +90,7 @@ fn test_quoted_term_with_negative_keyword() {
     };
 
     // Print the query for debugging
-    println!("Executing search with query: {:?}", queries);
+    println!("Executing search with query: {queries:?}");
     println!(
         "Path: {:?}, frequency_search: {}",
         options.path, options.frequency_search
@@ -171,7 +171,7 @@ fn test_negative_quoted_term() {
     };
 
     // Print the query for debugging
-    println!("Executing search with query: {:?}", queries);
+    println!("Executing search with query: {queries:?}");
 
     // Run the search
     let search_results = perform_probe(&options).unwrap();

@@ -63,9 +63,11 @@ pub struct SearchTimings {
 /// Helper function to format duration in a human-readable way
 pub fn format_duration(duration: Duration) -> String {
     if duration.as_millis() < 1000 {
-        format!("{}ms", duration.as_millis())
+        let millis = duration.as_millis();
+        format!("{millis}ms")
     } else {
-        format!("{:.2}s", duration.as_secs_f64())
+        let secs = duration.as_secs_f64();
+        format!("{secs:.2}s")
     }
 }
 
@@ -239,10 +241,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             if let Ok(env_session_id) = std::env::var("PROBE_SESSION_ID") {
                 if !env_session_id.is_empty() {
                     if debug_mode {
-                        println!(
-                            "DEBUG: Using session ID from environment: {}",
-                            env_session_id
-                        );
+                        println!("DEBUG: Using session ID from environment: {env_session_id}");
                     }
                     // Convert to a static string (this leaks memory, but it's a small amount and only happens once per session)
                     let static_id: &'static str = Box::leak(env_session_id.into_boxed_str());
@@ -252,12 +251,12 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                     match cache::generate_session_id() {
                         Ok((new_id, _is_new)) => {
                             if debug_mode {
-                                println!("DEBUG: Generated new session ID: {}", new_id);
+                                println!("DEBUG: Generated new session ID: {new_id}");
                             }
                             (Some(new_id), true)
                         }
                         Err(e) => {
-                            eprintln!("Error generating session ID: {}", e);
+                            eprintln!("Error generating session ID: {e}");
                             (None, false)
                         }
                     }
@@ -267,12 +266,12 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 match cache::generate_session_id() {
                     Ok((new_id, _is_new)) => {
                         if debug_mode {
-                            println!("DEBUG: Generated new session ID: {}", new_id);
+                            println!("DEBUG: Generated new session ID: {new_id}");
                         }
                         (Some(new_id), true)
                     }
                     Err(e) => {
-                        eprintln!("Error generating session ID: {}", e);
+                        eprintln!("Error generating session ID: {e}");
                         (None, false)
                     }
                 }
@@ -285,10 +284,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         if let Ok(env_session_id) = std::env::var("PROBE_SESSION_ID") {
             if !env_session_id.is_empty() {
                 if debug_mode {
-                    println!(
-                        "DEBUG: Using session ID from environment: {}",
-                        env_session_id
-                    );
+                    println!("DEBUG: Using session ID from environment: {env_session_id}");
                 }
                 // Convert to a static string (this leaks memory, but it's a small amount and only happens once per session)
                 let static_id: &'static str = Box::leak(env_session_id.into_boxed_str());
@@ -397,7 +393,10 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             "DEBUG: Pattern generation completed in {}",
             format_duration(pg_duration)
         );
-        println!("DEBUG: Generated {} patterns", structured_patterns.len());
+        println!(
+            "DEBUG: Generated {patterns_len} patterns",
+            patterns_len = structured_patterns.len()
+        );
         if structured_patterns.len() == 1 {
             println!("DEBUG: Successfully created a single combined pattern for all terms");
         }
@@ -519,7 +518,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 Ok(path) => path,
                 Err(e) => {
                     if debug_mode {
-                        println!("DEBUG: Error resolving path for {:?}: {:?}", pathbuf, e);
+                        println!("DEBUG: Error resolving path for {pathbuf:?}: {e:?}");
                     }
                     continue;
                 }
@@ -569,7 +568,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             let line_count = file_content.lines().count();
             if line_count == 0 {
                 if debug_mode {
-                    println!("DEBUG: File {:?} is empty, skipping", pathbuf);
+                    println!("DEBUG: File {pathbuf:?} is empty, skipping");
                 }
                 continue;
             }
@@ -581,14 +580,13 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             let mut term_map = if let Some(existing_map) = file_term_map.get(pathbuf) {
                 if debug_mode {
                     println!(
-                        "DEBUG: File {:?} already has term matches from content search, extending",
-                        pathbuf
+                        "DEBUG: File {pathbuf:?} already has term matches from content search, extending"
                     );
                 }
                 existing_map.clone()
             } else {
                 if debug_mode {
-                    println!("DEBUG: Creating new term map for file {:?}", pathbuf);
+                    println!("DEBUG: Creating new term map for file {pathbuf:?}");
                 }
                 HashMap::new()
             };
@@ -602,8 +600,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
                 if debug_mode {
                     println!(
-                        "DEBUG: Added term index {} to file {:?} with all lines",
-                        term_idx, pathbuf
+                        "DEBUG: Added term index {term_idx} to file {pathbuf:?} with all lines"
                     );
                 }
             }
@@ -613,16 +610,13 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             all_files.insert(pathbuf.clone());
 
             if debug_mode {
-                println!(
-                    "DEBUG: Added file {:?} with matching terms to file_term_map",
-                    pathbuf
-                );
+                println!("DEBUG: Added file {pathbuf:?} with matching terms to file_term_map");
             }
         }
     }
 
     if debug_mode {
-        println!("DEBUG: all_files after filename matches: {:?}", all_files);
+        println!("DEBUG: all_files after filename matches: {all_files:?}");
     }
 
     // Early filtering step - filter both all_files and file_term_map using full AST evaluation (including excluded terms?).
@@ -647,13 +641,10 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 filtered_file_term_map.insert(pathbuf.clone(), term_map.clone());
                 filtered_all_files.insert(pathbuf.clone());
             } else if debug_mode {
-                println!("DEBUG: Early filtering removed file: {:?}", pathbuf);
+                println!("DEBUG: Early filtering removed file: {pathbuf:?}");
             }
         } else if debug_mode {
-            println!(
-                "DEBUG: File {:?} not found in file_term_map during early filtering",
-                pathbuf
-            );
+            println!("DEBUG: File {pathbuf:?} not found in file_term_map during early filtering");
         }
     }
 
@@ -666,7 +657,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             "DEBUG: After early filtering: {} files remain",
             all_files.len()
         );
-        println!("DEBUG: all_files after early filtering: {:?}", all_files);
+        println!("DEBUG: all_files after early filtering: {all_files:?}");
     }
 
     let early_filter_duration = early_filter_start.elapsed();
@@ -745,7 +736,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         };
 
         if debug_mode {
-            println!("DEBUG: Starting early caching for session: {session_id} with query: {raw_query}");
+            println!(
+                "DEBUG: Starting early caching for session: {session_id} with query: {raw_query}"
+            );
             // Print cache contents before filtering
             if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
                 eprintln!("Error printing cache: {e}");
@@ -874,7 +867,10 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             };
 
             if debug_mode {
-                println!("DEBUG: Processing file with params: {:?}", pparams.path);
+                println!(
+                    "DEBUG: Processing file with params: {}",
+                    pparams.path.display()
+                );
             }
 
             // Process file and track granular timings
@@ -1199,7 +1195,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         };
 
         if debug_mode {
-            println!("DEBUG: Starting final caching for session: {session_id} with query: {raw_query}");
+            println!(
+                "DEBUG: Starting final caching for session: {session_id} with query: {raw_query}"
+            );
             println!("DEBUG: Already skipped {early_skipped_count} lines in early caching");
             // Print cache contents before filtering
             if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
@@ -1212,7 +1210,10 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             Ok((_, cached_skipped)) => {
                 if debug_mode {
                     println!("DEBUG: Final caching found {cached_skipped} cached blocks");
-                    println!("DEBUG: Total skipped (early + final): {}", early_skipped_count + cached_skipped);
+                    println!(
+                        "DEBUG: Total skipped (early + final): {}",
+                        early_skipped_count + cached_skipped
+                    );
                 }
 
                 skipped_count += cached_skipped;

@@ -22,8 +22,8 @@ impl JavaScriptPathResolver {
     /// Finds the nearest node_modules directory from the current directory upwards.
     fn find_node_modules(&self) -> Result<PathBuf, String> {
         // Start from the current directory
-        let mut current_dir = std::env::current_dir()
-            .map_err(|e| format!("Failed to get current directory: {}", e))?;
+        let mut current_dir =
+            std::env::current_dir().map_err(|e| format!("Failed to get current directory: {e}"))?;
 
         // Look for node_modules in the current directory and its parents
         loop {
@@ -46,7 +46,7 @@ impl JavaScriptPathResolver {
         let output = Command::new("npm")
             .args(["root", "-g"])
             .output()
-            .map_err(|e| format!("Failed to execute 'npm root -g': {}", e))?;
+            .map_err(|e| format!("Failed to execute 'npm root -g': {e}"))?;
 
         if !output.status.success() {
             return Err(format!(
@@ -73,14 +73,13 @@ impl JavaScriptPathResolver {
 
         // If we couldn't find it, try using require.resolve
         let script = format!(
-            "try {{ console.log(require.resolve('{}')) }} catch(e) {{ process.exit(1) }}",
-            package_name
+            "try {{ console.log(require.resolve('{package_name}')) }} catch(e) {{ process.exit(1) }}"
         );
 
         let output = Command::new("node")
             .args(["-e", &script])
             .output()
-            .map_err(|e| format!("Failed to execute Node.js: {}", e))?;
+            .map_err(|e| format!("Failed to execute Node.js: {e}"))?;
 
         if output.status.success() {
             let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -97,8 +96,7 @@ impl JavaScriptPathResolver {
         }
 
         Err(format!(
-            "Could not resolve JavaScript package: {}",
-            package_name
+            "Could not resolve JavaScript package: {package_name}"
         ))
     }
 }
@@ -127,17 +125,16 @@ impl PathResolver for JavaScriptPathResolver {
             let parts: Vec<&str> = path.splitn(3, '/').collect();
             match parts.len() {
                 1 => Err(format!(
-                    "Invalid scoped package format (missing package name): {}",
-                    path
+                    "Invalid scoped package format (missing package name): {path}"
                 )), // e.g., "@scope"
                 2 => {
                     // e.g., "@scope/package"
                     let scope = parts[0];
                     let pkg = parts[1];
                     if scope.len() <= 1 || pkg.is_empty() || pkg.contains('/') {
-                        Err(format!("Invalid scoped package format: {}", path))
+                        Err(format!("Invalid scoped package format: {path}"))
                     } else {
-                        let module_name = format!("{}/{}", scope, pkg);
+                        let module_name = format!("{scope}/{pkg}");
                         Ok((module_name, None))
                     }
                 }
@@ -147,9 +144,9 @@ impl PathResolver for JavaScriptPathResolver {
                     let pkg = parts[1];
                     let sub = parts[2];
                     if scope.len() <= 1 || pkg.is_empty() || pkg.contains('/') {
-                        Err(format!("Invalid scoped package format: {}", path))
+                        Err(format!("Invalid scoped package format: {path}"))
                     } else {
-                        let module_name = format!("{}/{}", scope, pkg);
+                        let module_name = format!("{scope}/{pkg}");
                         // Handle trailing slash case "@scope/pkg/" -> subpath should be None
                         let subpath_opt = if sub.is_empty() {
                             None
@@ -167,7 +164,7 @@ impl PathResolver for JavaScriptPathResolver {
             let module_name = parts.next().unwrap().to_string(); // Cannot fail on non-empty string
             if module_name.is_empty() || module_name.starts_with('/') {
                 // Basic validation
-                Err(format!("Invalid package format: {}", path))
+                Err(format!("Invalid package format: {path}"))
             } else {
                 let subpath_opt = parts.next().filter(|s| !s.is_empty()).map(String::from); // Handle trailing slash "pkg/"
                 Ok((module_name, subpath_opt))
@@ -224,8 +221,7 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "Failed to resolve directory with package.json: {:?}",
-            result
+            "Failed to resolve directory with package.json: {result:?}"
         );
         assert_eq!(result.unwrap(), temp_dir.path());
     }
@@ -246,11 +242,7 @@ mod tests {
         let resolver = JavaScriptPathResolver::new();
         let result = resolver.resolve(package_json_path.to_str().unwrap());
 
-        assert!(
-            result.is_ok(),
-            "Failed to resolve package.json: {:?}",
-            result
-        );
+        assert!(result.is_ok(), "Failed to resolve package.json: {result:?}");
         assert_eq!(result.unwrap(), temp_dir.path());
     }
 
@@ -276,14 +268,13 @@ mod tests {
         let result = resolver.resolve("lodash");
         if result.is_ok() {
             let path = result.unwrap();
-            assert!(path.exists(), "Path does not exist: {:?}", path);
+            assert!(path.exists(), "Path does not exist: {path:?}");
 
             // Check if it contains a package.json
             let package_json = path.join("package.json");
             assert!(
                 package_json.exists(),
-                "package.json not found: {:?}",
-                package_json
+                "package.json not found: {package_json:?}"
             );
         } else {
             println!("Skipping assertion for 'lodash': Package not found");

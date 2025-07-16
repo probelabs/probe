@@ -83,8 +83,7 @@ impl LanguageImpl for RustLanguage {
                     if node_size > 5 {
                         if debug_mode {
                             println!(
-                                "DEBUG: Considering large token_tree in macro as acceptable parent (size: {} lines)",
-                                node_size
+                                "DEBUG: Considering large token_tree in macro as acceptable parent (size: {node_size} lines)"
                             );
                         }
                         return true;

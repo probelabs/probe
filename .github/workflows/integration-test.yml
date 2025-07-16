@@ -72,8 +72,39 @@ jobs:
       run: probe --version
 
     - name: Test search functionality
+      shell: bash
       run: |
-        probe search "semantic code search" README.md --format json > search_results.json
+        echo "Current directory: $(pwd)"
+        echo "Probe version:"
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          echo "Checking npm global installation:"
+          npm list -g @buger/probe
+          echo "Checking probe binary permissions:"
+          ls -la "$(which probe)" || echo "probe command not found in PATH"
+          ls -la "$(npm root -g)/@buger/probe/bin/" || echo "npm package bin directory not found"
+          probe --version
+        else
+          npm --version
+          probe --version
+        fi
+        echo "Running search command..."
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          # Try direct binary execution if npm wrapper fails
+          "$(npm root -g)/@buger/probe/bin/probe.exe" search "semantic code search" README.md --format json > search_results.json || \
+          probe search "semantic code search" README.md --format json > search_results.json
+        else
+          probe search "semantic code search" README.md --format json > search_results.json
+        fi
+        echo "Search command completed, checking file size:"
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          powershell -Command "Get-ChildItem search_results.json | Select-Object Name,Length"
+          echo "File contents (first 10 lines):"
+          powershell -Command "Get-Content search_results.json | Select-Object -First 10"
+        else
+          ls -la search_results.json
+          echo "File contents (first 10 lines):"
+          head -10 search_results.json
+        fi
 
     - name: Verify search results (Unix)
       if: runner.os != 'Windows'
@@ -109,27 +140,45 @@ jobs:
       if: runner.os == 'Windows'
       run: |
         # Check that the JSON output contains expected fields
+        if (-not (Test-Path search_results.json)) {
+          Write-Host "Error: search_results.json file not found"
+          exit 1
+        }
+        
         $content = Get-Content search_results.json -Raw
+        if (-not $content) {
+          Write-Host "Error: search_results.json file is empty"
+          exit 1
+        }
+        
+        # Extract JSON part by finding the first '{' character (skip debug output)
+        $jsonStart = $content.IndexOf('{')
+        if ($jsonStart -eq -1) {
+          Write-Host "Error: No JSON found in output"
+          Get-Content search_results.json
+          exit 1
+        }
+        $jsonContent = $content.Substring($jsonStart)
 
-        if (-not ($content -match '"file"')) {
+        if (-not ($jsonContent -match '"file"')) {
           Write-Host "Error: JSON output missing 'file' field"
           Get-Content search_results.json
           exit 1
         }
 
-        if (-not ($content -match '"code"')) {
+        if (-not ($jsonContent -match '"code"')) {
           Write-Host "Error: JSON output missing 'code' field"
           Get-Content search_results.json
           exit 1
         }
 
-        if (-not ($content -match 'README.md')) {
+        if (-not ($jsonContent -match 'README.md')) {
           Write-Host "Error: Search results don't contain README.md"
           Get-Content search_results.json
           exit 1
         }
 
-        if (-not ($content -match 'semantic code search')) {
+        if (-not ($jsonContent -match 'semantic code search')) {
           Write-Host "Error: Search results don't contain the search term"
           Get-Content search_results.json
           exit 1
@@ -138,8 +187,16 @@ jobs:
         Write-Host "✅ Search results validation passed"
 
     - name: Test extract functionality
+      shell: bash
       run: |
-        probe extract README.md:1 --format json > extract_results.json
+        echo "Running extract command..."
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          # Try direct binary execution if npm wrapper fails
+          "$(npm root -g)/@buger/probe/bin/probe.exe" extract README.md:1 --format json > extract_results.json || \
+          probe extract README.md:1 --format json > extract_results.json
+        else
+          probe extract README.md:1 --format json > extract_results.json
+        fi
 
     - name: Verify extract results (Unix)
       if: runner.os != 'Windows'
@@ -163,15 +220,33 @@ jobs:
       if: runner.os == 'Windows'
       run: |
         # Check that the extract output contains expected fields
+        if (-not (Test-Path extract_results.json)) {
+          Write-Host "Error: extract_results.json file not found"
+          exit 1
+        }
+        
         $content = Get-Content extract_results.json -Raw
+        if (-not $content) {
+          Write-Host "Error: extract_results.json file is empty"
+          exit 1
+        }
+        
+        # Extract JSON part by finding the first '{' character (skip debug output)
+        $jsonStart = $content.IndexOf('{')
+        if ($jsonStart -eq -1) {
+          Write-Host "Error: No JSON found in output"
+          Get-Content extract_results.json
+          exit 1
+        }
+        $jsonContent = $content.Substring($jsonStart)
 
-        if (-not ($content -match '"file"')) {
+        if (-not ($jsonContent -match '"file"')) {
           Write-Host "Error: Extract JSON output missing 'file' field"
           Get-Content extract_results.json
           exit 1
         }
 
-        if (-not ($content -match 'README.md')) {
+        if (-not ($jsonContent -match 'README.md')) {
           Write-Host "Error: Extract results don't contain README.md"
           Get-Content extract_results.json
           exit 1

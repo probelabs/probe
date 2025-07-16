@@ -62,7 +62,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
         advanced_options.push("Frequency search disabled".to_string());
     }
     if let Some(lang) = &params.language {
-        advanced_options.push(format!("Language: {}", lang));
+        advanced_options.push(format!("Language: {lang}"));
     }
     if params.allow_tests {
         advanced_options.push("Including tests".to_string());
@@ -71,13 +71,13 @@ fn handle_search(params: SearchParams) -> Result<()> {
         advanced_options.push("No block merging".to_string());
     }
     if let Some(threshold) = params.merge_threshold {
-        advanced_options.push(format!("Merge threshold: {}", threshold));
+        advanced_options.push(format!("Merge threshold: {threshold}"));
     }
     if params.dry_run {
         advanced_options.push("Dry run (file names and lines only)".to_string());
     }
     if let Some(session) = &params.session {
-        advanced_options.push(format!("Session: {}", session));
+        advanced_options.push(format!("Session: {session}"));
     }
 
     // Show timeout if it's not the default value of 30 seconds
@@ -145,12 +145,12 @@ fn handle_search(params: SearchParams) -> Result<()> {
         } else {
             // For other formats, print the "No results found" message
             println!("{}", "No results found.".yellow().bold());
-            println!("Search completed in {:.2?}", duration);
+            println!("Search completed in {duration:.2?}");
         }
     } else {
         // For non-JSON/XML formats, print search time
         if params.format != "json" && params.format != "xml" {
-            println!("Search completed in {:.2?}", duration);
+            println!("Search completed in {duration:.2?}");
             println!();
         }
 
@@ -166,13 +166,13 @@ fn handle_search(params: SearchParams) -> Result<()> {
                 println!();
                 println!("{}", "Limits applied:".yellow().bold());
                 if let Some(max_results) = limits.max_results {
-                    println!("  {} {}", "Max results:".yellow(), max_results);
+                    println!("  {} {max_results}", "Max results:".yellow());
                 }
                 if let Some(max_bytes) = limits.max_bytes {
-                    println!("  {} {}", "Max bytes:".yellow(), max_bytes);
+                    println!("  {} {max_bytes}", "Max bytes:".yellow());
                 }
                 if let Some(max_tokens) = limits.max_tokens {
-                    println!("  {} {}", "Max tokens:".yellow(), max_tokens);
+                    println!("  {} {max_tokens}", "Max tokens:".yellow());
                 }
 
                 println!();
@@ -313,7 +313,7 @@ async fn main() -> Result<()> {
             keep_input,
             prompt: prompt.map(|p| {
                 crate::extract::PromptTemplate::from_str(&p).unwrap_or_else(|e| {
-                    eprintln!("Warning: {}", e);
+                    eprintln!("Warning: {e}");
                     crate::extract::PromptTemplate::Engineer
                 })
             }),

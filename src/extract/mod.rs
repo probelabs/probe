@@ -73,17 +73,38 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
     if debug_mode {
         println!("\n[DEBUG] ===== Extract Command Started =====");
-        println!("[DEBUG] Files to process: {:?}", options.files);
-        println!("[DEBUG] Custom ignores: {:?}", options.custom_ignores);
-        println!("[DEBUG] Context lines: {}", options.context_lines);
-        println!("[DEBUG] Output format: {}", options.format);
-        println!("[DEBUG] Read from clipboard: {}", options.from_clipboard);
-        println!("[DEBUG] Write to clipboard: {}", options.to_clipboard);
-        println!("[DEBUG] Dry run: {}", options.dry_run);
-        println!("[DEBUG] Parse as git diff: {}", options.diff);
-        println!("[DEBUG] Allow tests: {}", options.allow_tests);
-        println!("[DEBUG] Prompt template: {:?}", options.prompt);
-        println!("[DEBUG] Instructions: {:?}", options.instructions);
+        println!("[DEBUG] Files to process: {files:?}", files = options.files);
+        println!(
+            "[DEBUG] Custom ignores: {custom_ignores:?}",
+            custom_ignores = options.custom_ignores
+        );
+        println!(
+            "[DEBUG] Context lines: {context_lines}",
+            context_lines = options.context_lines
+        );
+        println!("[DEBUG] Output format: {format}", format = options.format);
+        println!(
+            "[DEBUG] Read from clipboard: {from_clipboard}",
+            from_clipboard = options.from_clipboard
+        );
+        println!(
+            "[DEBUG] Write to clipboard: {to_clipboard}",
+            to_clipboard = options.to_clipboard
+        );
+        println!("[DEBUG] Dry run: {dry_run}", dry_run = options.dry_run);
+        println!("[DEBUG] Parse as git diff: {diff}", diff = options.diff);
+        println!(
+            "[DEBUG] Allow tests: {allow_tests}",
+            allow_tests = options.allow_tests
+        );
+        println!(
+            "[DEBUG] Prompt template: {prompt:?}",
+            prompt = options.prompt
+        );
+        println!(
+            "[DEBUG] Instructions: {instructions:?}",
+            instructions = options.instructions
+        );
     }
 
     // Set custom ignore patterns
@@ -157,7 +178,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         // Read from input file
         println!(
             "{}",
-            format!("Reading from file: {}...", input_file_path)
+            format!("Reading from file: {input_file_path}...")
                 .bold()
                 .blue()
         );
@@ -226,7 +247,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         if file_paths.is_empty() {
             println!(
                 "{}",
-                format!("No file paths found in input file: {}", input_file_path)
+                format!("No file paths found in input file: {input_file_path}")
                     .yellow()
                     .bold()
             );
@@ -325,7 +346,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
         for file in &options.files {
             if debug_mode {
-                println!("[DEBUG] Parsing file argument: {}", file);
+                println!("[DEBUG] Parsing file argument: {file}");
             }
 
             let paths = file_paths::parse_file_with_line(file, options.allow_tests);
@@ -354,42 +375,57 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
     // Only print file information for non-JSON/XML formats
     if options.format != "json" && options.format != "xml" {
-        println!("{}", "Files to extract:".bold().green());
+        println!("{text}", text = "Files to extract:".bold().green());
 
         for (path, start_line, end_line, symbol, lines) in &file_paths {
             if let (Some(start), Some(end)) = (start_line, end_line) {
-                println!("  {} (lines {}-{})", path.display(), start, end);
+                println!(
+                    "  {path} (lines {start}-{end})",
+                    path = path.display(),
+                    start = start,
+                    end = end
+                );
             } else if let Some(line_num) = start_line {
-                println!("  {} (line {})", path.display(), line_num);
+                println!(
+                    "  {path} (line {line_num})",
+                    path = path.display(),
+                    line_num = line_num
+                );
             } else if let Some(sym) = symbol {
-                println!("  {} (symbol: {})", path.display(), sym);
+                println!("  {path} (symbol: {sym})", path = path.display());
             } else if let Some(lines_set) = lines {
                 println!(
-                    "  {} (specific lines: {} lines)",
-                    path.display(),
-                    lines_set.len()
+                    "  {path} (specific lines: {count} lines)",
+                    path = path.display(),
+                    count = lines_set.len()
                 );
             } else {
-                println!("  {}", path.display());
+                println!("  {path}", path = path.display());
             }
         }
 
         if options.context_lines > 0 {
-            println!("Context lines: {}", options.context_lines);
+            println!(
+                "Context lines: {context_lines}",
+                context_lines = options.context_lines
+            );
         }
 
         if options.dry_run {
-            println!("{}", "Dry run (file names and lines only)".yellow());
+            println!(
+                "{text}",
+                text = "Dry run (file names and lines only)".yellow()
+            );
         }
 
-        println!("Format: {}", options.format);
+        println!("Format: {format}", format = options.format);
         println!();
     }
 
     // Process prompt template and instructions if provided
     let system_prompt = if let Some(prompt_template) = &options.prompt {
         if debug_mode {
-            println!("[DEBUG] Processing prompt template: {:?}", prompt_template);
+            println!("[DEBUG] Processing prompt template: {prompt_template:?}");
         }
         match prompt_template.get_content() {
             Ok(content) => {
@@ -402,9 +438,12 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 Some(content)
             }
             Err(e) => {
-                eprintln!("{}", format!("Error loading prompt template: {}", e).red());
+                eprintln!(
+                    "{text}",
+                    text = format!("Error loading prompt template: {e}").red()
+                );
                 if debug_mode {
-                    println!("[DEBUG] Error loading prompt template: {}", e);
+                    println!("[DEBUG] Error loading prompt template: {e}");
                 }
                 None
             }
@@ -481,7 +520,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 // Get file extension and language
                 if let Some(ext) = params.path.extension().and_then(|e| e.to_str()) {
                     let language = formatter::get_language_from_extension(ext);
-                    println!("[DEBUG] File extension: {}", ext);
+                    println!("[DEBUG] File extension: {ext}");
                     println!(
                         "[DEBUG] Detected language: {}",
                         if language.is_empty() {
@@ -530,9 +569,13 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 results.push(result);
             }
             Err(e) => {
-                let error_msg = format!("Error processing file {:?}: {}", params.path, e);
+                let error_msg = format!(
+                    "Error processing file {path:?}: {e}",
+                    path = params.path,
+                    e = e
+                );
                 if params.debug_mode {
-                    println!("[DEBUG] Error: {}", error_msg);
+                    println!("[DEBUG] Error: {error_msg}");
                 }
                 // Only print error messages for non-JSON/XML formats
                 if params.format != "json" && params.format != "xml" {
@@ -557,7 +600,10 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
     // Deduplicate results based on file path and line range
     if debug_mode {
-        println!("[DEBUG] Before deduplication: {} results", results.len());
+        println!(
+            "[DEBUG] Before deduplication: {len} results",
+            len = results.len()
+        );
     }
 
     // First, sort results by file path and then by line range size (largest first)
@@ -608,14 +654,11 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         let end_i = result_i.lines.1;
 
         // Check for exact duplicates first
-        let key = format!("{}:{}:{}", file_i, start_i, end_i);
+        let key = format!("{file_i}:{start_i}:{end_i}");
         if !seen_exact.insert(key) {
             to_retain[i] = false;
             if debug_mode {
-                println!(
-                    "[DEBUG] Removing exact duplicate: {} (lines {}-{})",
-                    file_i, start_i, end_i
-                );
+                println!("[DEBUG] Removing exact duplicate: {file_i} (lines {start_i}-{end_i})");
             }
             continue;
         }
@@ -640,8 +683,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             if start_j >= start_i && end_j <= end_i {
                 to_retain[j] = false;
                 if debug_mode {
-                    println!("[DEBUG] Removing nested duplicate: {} (lines {}-{}) contained within (lines {}-{})",
-                             file_j, start_j, end_j, start_i, end_i);
+                    println!("[DEBUG] Removing nested duplicate: {file_j} (lines {start_j}-{end_j}) contained within (lines {start_i}-{end_i})");
                 }
             }
         }
@@ -660,7 +702,10 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     results = new_results;
 
     if debug_mode {
-        println!("[DEBUG] After deduplication: {} results", results.len());
+        println!(
+            "[DEBUG] After deduplication: {len} results",
+            len = results.len()
+        );
     }
 
     if debug_mode {
@@ -724,16 +769,16 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 }
             } else {
                 // Print to stdout
-                println!("{}", formatted_output);
+                println!("{formatted_output}");
             }
         }
         Err(e) => {
             // Only print error messages for non-JSON/XML formats
             if options.format != "json" && options.format != "xml" {
-                eprintln!("{}", format!("Error formatting results: {}", e).red());
+                eprintln!("{}", format!("Error formatting results: {e}").red());
             }
             if debug_mode {
-                println!("[DEBUG] Error formatting results: {}", e);
+                println!("[DEBUG] Error formatting results: {e}");
             }
         }
     }

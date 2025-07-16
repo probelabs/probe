@@ -11,9 +11,9 @@ fn create_large_test_file(temp_dir: &Path) {
     let mut content = String::new();
     for i in 0..500000 {
         // Increased to 500,000 lines
-        content.push_str(&format!("// Line {} with searchable content\n", i));
-        content.push_str(&format!("fn function_{}() {{\n", i));
-        content.push_str(&format!("    let search_term = {};\n", i));
+        content.push_str(&format!("// Line {i} with searchable content\n"));
+        content.push_str(&format!("fn function_{i}() {{\n"));
+        content.push_str(&format!("    let search_term = {i};\n"));
         content.push_str("    println!(\"Found: {}\", search_term);\n");
         content.push_str("}\n\n");
     }
@@ -69,16 +69,14 @@ fn test_search_timeout() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("timeout") || stderr.contains("timed out"),
-        "Error output should mention timeout: {}",
-        stderr
+        "Error output should mention timeout: {stderr}"
     );
 
     // The elapsed time should be close to the timeout value
     assert!(
         elapsed.as_secs() >= 1 && elapsed.as_secs() <= 5,
-        "Search should have timed out after about 1 second, but took {:?}",
-        elapsed
+        "Search should have timed out after about 1 second, but took {elapsed:?}"
     );
 
-    println!("✓ Search timed out correctly after {:?}", elapsed);
+    println!("✓ Search timed out correctly after {elapsed:?}");
 }

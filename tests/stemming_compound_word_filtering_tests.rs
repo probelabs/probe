@@ -261,7 +261,7 @@ fn test_stemming_with_complex_query(_temp_path: &Path) {
     // Parse the query into an AST
     // Using standard Elasticsearch behavior (AND for implicit combinations)
     let ast = parse_query(query).unwrap();
-    println!("Parsed AST: {:?}", ast);
+    println!("Parsed AST: {ast:?}");
 
     // Create a QueryPlan
     let plan = create_query_plan(query, false).unwrap();

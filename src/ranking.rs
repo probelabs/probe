@@ -112,7 +112,10 @@ pub fn precompute_idfs(
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: Precomputing IDF values for {} terms", terms.len());
+        println!(
+            "DEBUG: Precomputing IDF values for {terms_len} terms",
+            terms_len = terms.len()
+        );
     }
 
     terms
@@ -430,7 +433,7 @@ pub fn compute_tf_df_from_tokenized(
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: Starting parallel TF-DF computation from pre-tokenized content for {} documents", tokenized_docs.len());
+        println!("DEBUG: Starting parallel TF-DF computation from pre-tokenized content for {docs_len} documents", docs_len = tokenized_docs.len());
     }
 
     // Process documents in parallel to compute term frequencies and document lengths
@@ -687,8 +690,7 @@ mod tests {
             assert_eq!(
                 Some(&idx1),
                 token_map2.get(term),
-                "Term '{}' has different indices in the two maps",
-                term
+                "Term '{term}' has different indices in the two maps"
             );
         }
     }
@@ -696,7 +698,7 @@ mod tests {
     #[test]
     fn test_generate_query_token_map_too_many_terms() {
         // Create a set with more than 256 terms
-        let query_terms: HashSet<String> = (0..257).map(|i| format!("term{}", i)).collect();
+        let query_terms: HashSet<String> = (0..257).map(|i| format!("term{i}")).collect();
 
         // Attempt to generate the token map
         let result = generate_query_token_map(&query_terms);

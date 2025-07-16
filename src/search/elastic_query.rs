@@ -256,16 +256,13 @@ impl Expr {
             }
             let required_terms = collect_required(self);
             if debug_mode && !required_terms.is_empty() {
-                println!(
-                    "DEBUG: Required terms (ignoring negatives): {:?}",
-                    required_terms
-                );
+                println!("DEBUG: Required terms (ignoring negatives): {required_terms:?}");
             }
             for term in &required_terms {
                 if let Some(&idx) = term_indices.get(term) {
                     if !matched_terms.contains(&idx) {
                         if debug_mode {
-                            println!("DEBUG: Missing required term '{}' (idx={})", term, idx);
+                            println!("DEBUG: Missing required term '{term}' (idx={idx})");
                         }
                         return false;
                     }
@@ -280,13 +277,10 @@ impl Expr {
         let has_required_anywhere = self.has_required_term();
 
         if debug_mode {
-            println!("DEBUG: Evaluating => {:?}", self);
-            println!("DEBUG: matched_terms => {:?}", matched_terms);
-            println!("DEBUG: term_indices => {:?}", term_indices);
-            println!(
-                "DEBUG: Expression has_required_anywhere? {}",
-                has_required_anywhere
-            );
+            println!("DEBUG: Evaluating => {self:?}");
+            println!("DEBUG: matched_terms => {matched_terms:?}");
+            println!("DEBUG: term_indices => {term_indices:?}");
+            println!("DEBUG: Expression has_required_anywhere? {has_required_anywhere}");
         }
 
         // Delegate final checks to our helper, which references has_required_anywhere
@@ -317,7 +311,7 @@ impl std::fmt::Display for Expr {
                     ""
                 };
                 let field_prefix = if let Some(ref field_name) = field {
-                    format!("{}:", field_name)
+                    format!("{field_name}:")
                 } else {
                     String::new()
                 };
@@ -331,8 +325,8 @@ impl std::fmt::Display for Expr {
                     write!(f, "{}{}\"{}\"", prefix, field_prefix, keywords.join(" "))
                 }
             }
-            Expr::And(left, right) => write!(f, "({} AND {})", left, right),
-            Expr::Or(left, right) => write!(f, "({} OR {})", left, right),
+            Expr::And(left, right) => write!(f, "({left} AND {right})"),
+            Expr::Or(left, right) => write!(f, "({left} OR {right})"),
         }
     }
 }
@@ -362,10 +356,10 @@ pub enum ParseError {
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseError::UnexpectedChar(c) => write!(f, "Unexpected character '{}'", c),
+            ParseError::UnexpectedChar(c) => write!(f, "Unexpected character '{c}'"),
             ParseError::UnexpectedEndOfInput => write!(f, "Unexpected end of input"),
-            ParseError::UnexpectedToken(t) => write!(f, "Unexpected token '{:?}'", t),
-            ParseError::Generic(s) => write!(f, "{}", s),
+            ParseError::UnexpectedToken(t) => write!(f, "Unexpected token '{t:?}'"),
+            ParseError::Generic(s) => write!(f, "{s}"),
         }
     }
 }
@@ -423,7 +417,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
                 } else {
                     // Skip unknown characters
                     if debug_mode {
-                        println!("DEBUG: Skipping unknown character '{}'", ch);
+                        println!("DEBUG: Skipping unknown character '{ch}'");
                     }
                     chars.next();
                 }
@@ -517,7 +511,7 @@ impl Parser {
     fn parse_or_expr(&mut self) -> Result<Expr, ParseError> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
         if debug_mode {
-            println!("DEBUG: parse_or_expr => pos={}", self.pos);
+            println!("DEBUG: parse_or_expr => pos={pos}", pos = self.pos);
         }
 
         let mut left = self.parse_and_expr()?;
@@ -527,7 +521,7 @@ impl Parser {
             let right = self.parse_and_expr()?;
             left = Expr::Or(Box::new(left), Box::new(right));
             if debug_mode {
-                println!("DEBUG: OR => {:?}", left);
+                println!("DEBUG: OR => {left:?}");
             }
         }
         Ok(left)
@@ -536,7 +530,7 @@ impl Parser {
     fn parse_and_expr(&mut self) -> Result<Expr, ParseError> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
         if debug_mode {
-            println!("DEBUG: parse_and_expr => pos={}", self.pos);
+            println!("DEBUG: parse_and_expr => pos={pos}", pos = self.pos);
         }
 
         let mut left = self.parse_factor()?;
@@ -549,7 +543,7 @@ impl Parser {
                     let right = self.parse_factor()?;
                     left = Expr::And(Box::new(left), Box::new(right));
                     if debug_mode {
-                        println!("DEBUG: AND => {:?}", left);
+                        println!("DEBUG: AND => {left:?}");
                     }
                 }
                 // If we see "OR", break so parse_or_expr can handle it
@@ -561,7 +555,7 @@ impl Parser {
                     let right = self.parse_factor()?;
                     left = Expr::And(Box::new(left), Box::new(right));
                     if debug_mode {
-                        println!("DEBUG: forced AND => {:?}", left);
+                        println!("DEBUG: forced AND => {left:?}");
                     }
                 }
                 // Otherwise (Ident, QuotedString, LParen) => implicit combos
@@ -570,7 +564,7 @@ impl Parser {
                     // Use OR for implicit combinations (space-separated terms) - Elasticsearch standard behavior
                     left = Expr::Or(Box::new(left), Box::new(right));
                     if debug_mode {
-                        println!("DEBUG: implicit OR => {:?}", left);
+                        println!("DEBUG: implicit OR => {left:?}");
                     }
                 }
                 _ => break,
@@ -639,10 +633,7 @@ impl Parser {
             };
 
             if debug_mode {
-                println!(
-                    "DEBUG: parse_prefixed_term => required={}, excluded={}, final_keywords={:?}",
-                    required, excluded, final_keywords
-                );
+                println!("DEBUG: parse_prefixed_term => required={required}, excluded={excluded}, final_keywords={final_keywords:?}");
             }
 
             Ok(Expr::Term {
@@ -667,7 +658,7 @@ impl Parser {
                 let val = s.clone();
                 self.next();
                 if debug_mode {
-                    println!("DEBUG: QuotedString => {}", val);
+                    println!("DEBUG: QuotedString => {val}");
                 }
                 Ok(Expr::Term {
                     keywords: vec![val],
@@ -683,7 +674,7 @@ impl Parser {
                     unreachable!()
                 };
                 if debug_mode {
-                    println!("DEBUG: Ident => {}", first);
+                    println!("DEBUG: Ident => {first}");
                 }
                 if let Some(Token::Colon) = self.peek() {
                     // We have "field:"
@@ -743,7 +734,7 @@ pub fn parse_query(input: &str, exact: bool) -> Result<Expr, ParseError> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: parse_query('{}', exact={})", input, exact);
+        println!("DEBUG: parse_query('{input}', exact={exact})");
     }
 
     // If exact search is enabled, treat the entire query as a single term
@@ -763,7 +754,7 @@ pub fn parse_query(input: &str, exact: bool) -> Result<Expr, ParseError> {
     // Tokenize
     let tokens_result = tokenize(input);
     if debug_mode {
-        println!("DEBUG: Tokens => {:?}", tokens_result);
+        println!("DEBUG: Tokens => {tokens_result:?}");
     }
 
     // If tokenization fails => fallback

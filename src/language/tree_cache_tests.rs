@@ -278,16 +278,15 @@ fn test_tree_cache_concurrent_access() {
                 // Sample Rust code with thread-specific content
                 let content = format!(
                     r#"
-                    fn thread_function_{0}() {{
-                        println!("Hello from thread {0}");
+                    fn thread_function_{i}() {{
+                        println!("Hello from thread {i}");
                     }}
-                    "#,
-                    i
+                    "#
                 );
 
                 // Parse in a loop to test concurrent access
                 for j in 0..10 {
-                    let file_name = format!("thread_{}_iteration_{}.rs", i, j);
+                    let file_name = format!("thread_{i}_iteration_{j}.rs");
                     tree_cache::get_or_parse_tree(&file_name, &content, &mut parser).unwrap();
 
                     // Small sleep to increase chance of thread interleaving

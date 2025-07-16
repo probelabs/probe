@@ -5,9 +5,11 @@ use std::time::Instant;
 /// Helper function to format duration in a human-readable way
 fn format_duration(duration: std::time::Duration) -> String {
     if duration.as_millis() < 1000 {
-        format!("{}ms", duration.as_millis())
+        let millis = duration.as_millis();
+        format!("{millis}ms")
     } else {
-        format!("{:.2}s", duration.as_secs_f64())
+        let secs = duration.as_secs_f64();
+        format!("{secs:.2}s")
     }
 }
 
@@ -23,8 +25,8 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
             "DEBUG: Starting result ranking with {} results",
             results.len()
         );
-        println!("DEBUG: Using reranker: {}", reranker);
-        println!("DEBUG: Queries: {:?}", queries);
+        println!("DEBUG: Using reranker: {reranker}");
+        println!("DEBUG: Queries: {queries:?}");
     }
 
     // Combine all queries into a single string for ranking
@@ -80,8 +82,7 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
             format_duration(metrics_extraction_duration)
         );
         println!(
-            "DEBUG: Extracted metrics - file_unique_terms: {:?}, file_total_matches: {:?}, block_unique_terms: {:?}, block_total_matches: {:?}",
-            file_unique_terms, file_total_matches, block_unique_terms, block_total_matches
+            "DEBUG: Extracted metrics - file_unique_terms: {file_unique_terms:?}, file_total_matches: {file_total_matches:?}, block_unique_terms: {block_unique_terms:?}, block_total_matches: {block_total_matches:?}"
         );
     }
 
@@ -166,10 +167,7 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
     let updated_len = updated_results.len();
 
     if debug_mode {
-        println!(
-            "DEBUG: Score update completed - Updated {} results",
-            updated_len
-        );
+        println!("DEBUG: Score update completed - Updated {updated_len} results");
     }
 
     // Sort updated results by BM25 score in descending order

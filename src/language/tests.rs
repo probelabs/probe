@@ -94,7 +94,7 @@ impl TestStruct {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in rust_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Parse the code
@@ -141,7 +141,7 @@ impl TestStruct {
     // Print all acceptable parents
     println!("Acceptable parents:");
     for parent in &acceptable_parents {
-        println!("  {}", parent);
+        println!("  {parent}");
     }
 
     // Verify we found at least one acceptable parent
@@ -351,7 +351,7 @@ type ModelPriceInput struct {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in go_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Create a HashSet with all line numbers to ensure we get all blocks
@@ -371,7 +371,7 @@ type ModelPriceInput struct {
     let blocks = result.unwrap();
 
     // Print the blocks for debugging
-    println!("Found {} blocks:", blocks.len());
+    println!("Found {len} blocks:", len = blocks.len());
     for (i, block) in blocks.iter().enumerate() {
         println!(
             "Block {}: type={}, lines={}-{}",
@@ -435,7 +435,7 @@ func HandleNotFound(c *gin.Context) {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in go_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Create a HashSet with all line numbers to ensure we get all blocks
@@ -455,7 +455,7 @@ func HandleNotFound(c *gin.Context) {
     let blocks = result.unwrap();
 
     // Print the blocks for debugging
-    println!("Found {} blocks:", blocks.len());
+    println!("Found {len} blocks:", len = blocks.len());
     for (i, block) in blocks.iter().enumerate() {
         println!(
             "Block {}: type={}, lines={}-{}",
@@ -498,7 +498,7 @@ fn test_function() {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in rust_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Create a HashSet with the line number of the comment
@@ -516,7 +516,7 @@ fn test_function() {
     let blocks = result.unwrap();
 
     // Print the blocks for debugging
-    println!("Found {} blocks:", blocks.len());
+    println!("Found {len} blocks:", len = blocks.len());
     for (i, block) in blocks.iter().enumerate() {
         println!(
             "Block {}: type={}, lines={}-{}",
@@ -589,7 +589,7 @@ impl TestStruct {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in rust_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Create a HashSet with the line numbers of the comments
@@ -613,7 +613,7 @@ impl TestStruct {
     let blocks = result.unwrap();
 
     // Print the blocks for debugging
-    println!("Found {} blocks:", blocks.len());
+    println!("Found {len} blocks:", len = blocks.len());
     for (i, block) in blocks.iter().enumerate() {
         println!(
             "Block {}: type={}, lines={}-{}",
@@ -639,7 +639,7 @@ impl TestStruct {
         }
     }
 
-    println!("Line to block type map: {:?}", line_to_block_type);
+    println!("Line to block type map: {line_to_block_type:?}");
 
     // Check that each comment line is included in a block
     assert!(
@@ -686,7 +686,7 @@ fn test_function() {
     // Print the code with line numbers for debugging
     println!("Code with line numbers:");
     for (i, line) in rust_code.lines().enumerate() {
-        println!("{}: {}", i + 1, line);
+        println!("{}: {line}", i + 1);
     }
 
     // Create a HashSet of line numbers
@@ -697,7 +697,7 @@ fn test_function() {
     let result = parse_file_for_code_blocks(rust_code, "rs", &line_numbers, true, None).unwrap();
 
     // Print the result for debugging
-    println!("Found {} blocks:", result.len());
+    println!("Found {len} blocks:", len = result.len());
     for (i, block) in result.iter().enumerate() {
         println!(
             "Block {}: type={}, lines={}-{}",

@@ -14,7 +14,7 @@ fn test_grouped_patterns() {
     // Print the patterns for inspection
     println!("Generated patterns:");
     for (pattern, indices) in &patterns {
-        println!("Pattern: {:?}, Indices: {:?}", pattern, indices);
+        println!("Pattern: {pattern:?}, Indices: {indices:?}");
     }
     
     // Verify we have the expected number of patterns

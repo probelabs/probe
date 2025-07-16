@@ -9,7 +9,7 @@ fn test_camel_case_splitting() {
     let input = "RPCStorageHandler";
     let camel_parts = split_camel_case(input);
 
-    println!("Direct camelCase split of '{}': {:?}", input, camel_parts);
+    println!("Direct camelCase split of '{input}': {camel_parts:?}");
 
     // We expect "RPCStorageHandler" to be split into ["rpc", "storage", "handler"]
     assert!(camel_parts.contains(&"rpc".to_string()));
@@ -33,7 +33,7 @@ fn test_compound_word_splitting() {
     let input = "httpHandler";
     let compound_parts = split_compound_word(input, &enhanced_vocab);
 
-    println!("Compound split of '{}': {:?}", input, compound_parts);
+    println!("Compound split of '{input}': {compound_parts:?}");
 
     assert!(compound_parts.contains(&"http".to_string()));
     assert!(compound_parts.contains(&"Handler".to_string()));
@@ -45,7 +45,7 @@ fn test_query_preprocessing() {
     let query = "RPCStorageHandler";
     let plan = create_query_plan(query, false).expect("Failed to create query plan");
 
-    println!("Query plan for '{}': {:?}", query, plan);
+    println!("Query plan for '{query}': {plan:?}");
 
     // Check if the term_indices include the expected parts
     let term_strings: Vec<String> = plan.term_indices.keys().cloned().collect();
@@ -55,8 +55,7 @@ fn test_query_preprocessing() {
         term_strings.contains(&"rpc".to_string())
             || term_strings.contains(&"storage".to_string())
             || term_strings.contains(&"handler".to_string()),
-        "Expected at least one of 'rpc', 'storage', or 'handler' in {:?}",
-        term_strings
+        "Expected at least one of 'rpc', 'storage', or 'handler' in {term_strings:?}"
     );
 }
 
@@ -69,7 +68,7 @@ fn test_pattern_generation() {
 
     println!("Generated patterns:");
     for (i, (pattern, indices)) in patterns.iter().enumerate() {
-        println!("Pattern {}: {} - Indices: {:?}", i, pattern, indices);
+        println!("Pattern {i}: {pattern} - Indices: {indices:?}");
     }
 
     // Check that we have patterns for the expected terms
@@ -81,8 +80,7 @@ fn test_pattern_generation() {
             let has_pattern = patterns.iter().any(|(_, indices)| indices.contains(&idx));
             assert!(
                 has_pattern,
-                "No pattern found for term '{}' at index {}",
-                term, idx
+                "No pattern found for term '{term}' at index {idx}"
             );
         }
     }
@@ -91,8 +89,7 @@ fn test_pattern_generation() {
     for (pattern, _) in &patterns {
         assert!(
             regex::Regex::new(pattern).is_ok(),
-            "Invalid regex pattern: {}",
-            pattern
+            "Invalid regex pattern: {pattern}"
         );
     }
 }
@@ -103,7 +100,7 @@ fn test_multiple_word_query() {
     let query = "ip whitelist";
     let plan = create_query_plan(query, false).expect("Failed to create query plan");
 
-    println!("Query plan for '{}': {:?}", query, plan);
+    println!("Query plan for '{query}': {plan:?}");
 
     // Check if the terms include the expected parts
     let term_strings: Vec<String> = plan.term_indices.keys().cloned().collect();
@@ -118,8 +115,7 @@ fn test_multiple_word_query() {
 
     assert!(
         has_white_and_list || has_whitelist,
-        "Expected either both 'white' and 'list', or 'whitelist' in {:?}",
-        term_strings
+        "Expected either both 'white' and 'list', or 'whitelist' in {term_strings:?}"
     );
 }
 
@@ -131,7 +127,7 @@ fn test_underscore_handling() {
     let query = "keyword_underscore";
     let plan = create_query_plan(query, false).expect("Failed to create query plan");
 
-    println!("Query plan for '{}': {:?}", query, plan);
+    println!("Query plan for '{query}': {plan:?}");
 
     // Check if the term is preserved with the underscore in the term_indices
     let term_strings: Vec<String> = plan.term_indices.keys().cloned().collect();
@@ -143,8 +139,7 @@ fn test_underscore_handling() {
 
     assert!(
         has_tokenized_parts,
-        "Expected tokenized parts of 'keyword_underscore' in {:?}",
-        term_strings
+        "Expected tokenized parts of 'keyword_underscore' in {term_strings:?}"
     );
 
     // Check if the term is properly tokenized in the elastic query parser
@@ -154,18 +149,15 @@ fn test_underscore_handling() {
         // Note: "under" might be filtered out as a stop word
         assert!(
             keywords.contains(&"key".to_string()),
-            "Expected 'key' in keywords: {:?}",
-            keywords
+            "Expected 'key' in keywords: {keywords:?}"
         );
         assert!(
             keywords.contains(&"word".to_string()),
-            "Expected 'word' in keywords: {:?}",
-            keywords
+            "Expected 'word' in keywords: {keywords:?}"
         );
         assert!(
             keywords.contains(&"score".to_string()),
-            "Expected 'score' in keywords: {:?}",
-            keywords
+            "Expected 'score' in keywords: {keywords:?}"
         );
     } else {
         panic!("Expected Term expression");
@@ -187,18 +179,15 @@ fn test_underscore_in_elastic_query() {
         // Note: "under" might be filtered out as a stop word
         assert!(
             keywords.contains(&"key".to_string()),
-            "Expected 'key' in keywords: {:?}",
-            keywords
+            "Expected 'key' in keywords: {keywords:?}"
         );
         assert!(
             keywords.contains(&"word".to_string()),
-            "Expected 'word' in keywords: {:?}",
-            keywords
+            "Expected 'word' in keywords: {keywords:?}"
         );
         assert!(
             keywords.contains(&"score".to_string()),
-            "Expected 'score' in keywords: {:?}",
-            keywords
+            "Expected 'score' in keywords: {keywords:?}"
         );
     } else {
         panic!("Expected Term expression");

@@ -311,7 +311,7 @@ fn test_search_include_filenames() {
     );
 
     // Print the file path for debugging
-    println!("Created test file at: {:?}", search_file_path);
+    println!("Created test file at: {search_file_path:?}");
 
     // Create search query
     let queries = vec!["search".to_string()];

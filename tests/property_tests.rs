@@ -28,7 +28,7 @@ proptest! {
         let special_chars = ['.', '^', '$', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '\\'];
         for c in special_chars.iter() {
             let count_in_orig = s.chars().filter(|&ch| ch == *c).count();
-            let count_in_escaped = escaped.match_indices(&format!("\\{}", c)).count();
+            let count_in_escaped = escaped.match_indices(&format!("\\{c}")).count();
 
             // All occurrences of special chars should be escaped
             assert_eq!(count_in_orig, count_in_escaped);
@@ -52,14 +52,14 @@ proptest! {
             if !plan.excluded_terms.contains(term) {
                 // Find at least one pattern that contains the term index
                 let found = patterns.iter().any(|(_, indices)| indices.contains(&idx));
-                assert!(found, "No pattern found for term '{}' at index {}", term, idx);
+                assert!(found, "No pattern found for term '{term}' at index {idx}");
             }
         }
 
         // Check that each pattern has the correct format
         for (pattern, _) in &patterns {
             // Pattern should be a valid regex
-            assert!(regex::Regex::new(pattern).is_ok(), "Invalid regex pattern: {}", pattern);
+            assert!(regex::Regex::new(pattern).is_ok(), "Invalid regex pattern: {pattern}");
         }
     }
 

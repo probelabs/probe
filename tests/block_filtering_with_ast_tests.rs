@@ -38,7 +38,7 @@ fn test_simple_and_query() {
     // Parse the query into an AST
     // Using standard Elasticsearch behavior (AND for implicit combinations)
     let ast = parse_query(query).unwrap();
-    println!("Parsed AST: {:?}", ast);
+    println!("Parsed AST: {ast:?}");
 
     // Create a QueryPlan
     let plan = create_query_plan(query, false).unwrap();
@@ -121,7 +121,7 @@ fn test_simple_or_query() {
     // Parse the query into an AST
     // Using standard Elasticsearch behavior (AND for implicit combinations)
     let ast = parse_query(query).unwrap();
-    println!("Parsed AST: {:?}", ast);
+    println!("Parsed AST: {ast:?}");
 
     // Create a QueryPlan
     let plan = create_query_plan(query, false).unwrap();
@@ -218,7 +218,7 @@ fn test_complex_query_with_negation() {
     // Parse the query into an AST
     // Using standard Elasticsearch behavior (AND for implicit combinations)
     let ast = parse_query(query).unwrap();
-    println!("Parsed AST: {:?}", ast);
+    println!("Parsed AST: {ast:?}");
 
     // Create a QueryPlan
     let plan = create_query_plan(query, false).unwrap();
@@ -419,7 +419,7 @@ fn test_required_terms_query() {
             exact: false,
         }),
     );
-    println!("Parsed AST: {:?}", ast);
+    println!("Parsed AST: {ast:?}");
 
     // Create a custom QueryPlan with our AST
     let mut indices = HashMap::new();
@@ -514,7 +514,7 @@ fn test_nested_expressions_query() {
     // Parse the query into an AST
     // Using standard Elasticsearch behavior (AND for implicit combinations)
     let ast = parse_query(query).unwrap();
-    println!("Parsed AST: {:?}", ast);
+    println!("Parsed AST: {ast:?}");
 
     // Create a QueryPlan
     let plan = create_query_plan(query, false).unwrap();

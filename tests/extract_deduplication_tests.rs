@@ -119,8 +119,8 @@ fn standalone_function() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // Print the output for debugging
-    println!("Command stdout: {}", stdout);
-    println!("Command stderr: {}", stderr);
+    println!("Command stdout: {stdout}");
+    println!("Command stderr: {stderr}");
 
     // Check for deduplication logs in stdout (not stderr)
     assert!(

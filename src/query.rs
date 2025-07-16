@@ -244,7 +244,7 @@ pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
             }
             Err(err) => {
                 if std::env::var("DEBUG").unwrap_or_default() == "1" {
-                    println!("DEBUG: Failed to resolve path '{}': {}", path_str, err);
+                    println!("DEBUG: Failed to resolve path '{path_str}': {err}");
                 }
                 // Fall back to the original path
                 options.path.to_path_buf()
@@ -349,7 +349,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
                     .and_then(|e| e.to_str())
                     .unwrap_or("");
 
-                println!("```{}", lang);
+                println!("```{lang}");
                 println!("{}", m.matched_text.trim());
                 println!("```");
                 println!();
@@ -412,14 +412,14 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             println!("  <summary>");
             println!("    <count>{}</count>", matches.len());
             println!(
-                "    <total_bytes>{}</total_bytes>",
+                "    <total_bytes>{}",
                 matches.iter().map(|m| m.matched_text.len()).sum::<usize>()
             );
 
             // Import the count_tokens function locally to avoid unused import warning
             use crate::search::search_tokens::count_tokens;
             println!(
-                "    <total_tokens>{}</total_tokens>",
+                "    <total_tokens>{}",
                 matches
                     .iter()
                     .map(|m| count_tokens(&m.matched_text))
@@ -466,7 +466,7 @@ pub fn handle_query(
             advanced_options.push("Including tests".to_string());
         }
         if let Some(max) = max_results {
-            advanced_options.push(format!("Max results: {}", max));
+            advanced_options.push(format!("Max results: {max}"));
         }
 
         if !advanced_options.is_empty() {
@@ -502,7 +502,7 @@ pub fn handle_query(
         } else {
             // For other formats, print the "No results found" message
             println!("{}", "No results found.".yellow().bold());
-            println!("Search completed in {:.2?}", duration);
+            println!("Search completed in {duration:.2?}");
         }
     } else {
         // For non-JSON/XML formats, print search time
@@ -526,8 +526,8 @@ pub fn handle_query(
                 })
                 .sum();
 
-            println!("Total bytes returned: {}", total_bytes);
-            println!("Total tokens returned: {}", total_tokens);
+            println!("Total bytes returned: {total_bytes}");
+            println!("Total tokens returned: {total_tokens}");
         }
     }
 
