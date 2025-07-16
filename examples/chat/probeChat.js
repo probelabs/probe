@@ -88,6 +88,8 @@ export class ProbeChat {
     this.promptType = options.promptType || process.env.PROMPT_TYPE || null;
 
     // Store allowEdit flag - enable if allow_edit is set or if allow_suggestions is set via environment
+    // Note: ALLOW_SUGGESTIONS also enables allowEdit because the implement tool is needed to generate
+    // code changes that reviewdog can then convert into PR review suggestions
     this.allowEdit = !!options.allowEdit || process.env.ALLOW_EDIT === '1' || process.env.ALLOW_SUGGESTIONS === '1';
 
     // Store client-provided API credentials if available
