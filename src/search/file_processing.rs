@@ -937,7 +937,7 @@ pub fn process_file_with_results(
         let context_end_idx = std::cmp::min(line_idx + default_context_size, lines.len() - 1);
 
         // Skip if we don't have enough context
-        if context_start_idx >= context_end_idx {
+        if context_start_idx > context_end_idx {
             continue;
         }
 

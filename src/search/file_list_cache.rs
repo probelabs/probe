@@ -247,7 +247,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
 
     // Add all ignore patterns to the override builder
     for pattern in &common_ignores {
-        if let Err(err) = override_builder.add(&format!("!**/{pattern}")) {
+        if let Err(err) = override_builder.add(&format!("!{pattern}")) {
             eprintln!("Error adding ignore pattern {pattern:?}: {err}");
         }
     }
@@ -515,4 +515,202 @@ pub fn get_file_list_by_language(
         files: filtered_files,
         created_at: Instant::now(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_underscore_directory_traversal_unix_paths() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create directory structure with underscores (Unix-style paths)
+        let underscore_dir = temp_dir.path().join("docs_packages").join("hello_kitty");
+        fs::create_dir_all(&underscore_dir).unwrap();
+
+        let test_file = underscore_dir.join("test.txt");
+        fs::write(&test_file, "test content with search term").unwrap();
+
+        // Also create a file in the parent underscore directory
+        let parent_file = temp_dir.path().join("docs_packages").join("parent.txt");
+        fs::write(&parent_file, "parent content").unwrap();
+
+        let file_list = get_file_list(temp_dir.path(), true, &[]).unwrap();
+
+        assert!(
+            file_list.files.iter().any(|f| f == &test_file),
+            "File in nested underscore directory should be found: {:?}",
+            test_file
+        );
+        assert!(
+            file_list.files.iter().any(|f| f == &parent_file),
+            "File in underscore directory should be found: {:?}",
+            parent_file
+        );
+    }
+
+    #[test]
+    fn test_underscore_directory_traversal_windows_style_paths() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create directory structure similar to Windows paths with underscores
+        let underscore_dir = temp_dir
+            .path()
+            .join("C_drive")
+            .join("_ai")
+            .join("docs")
+            .join("docs_packages")
+            .join("helloKitty");
+        fs::create_dir_all(&underscore_dir).unwrap();
+
+        let test_file = underscore_dir.join("dog.txt");
+        fs::write(&test_file, "bad kitty > dog.txt").unwrap();
+
+        // Create additional test files in various underscore directories
+        let ai_dir_file = temp_dir
+            .path()
+            .join("C_drive")
+            .join("_ai")
+            .join("config.txt");
+        fs::create_dir_all(ai_dir_file.parent().unwrap()).unwrap();
+        fs::write(&ai_dir_file, "ai configuration").unwrap();
+
+        let docs_packages_file = temp_dir
+            .path()
+            .join("C_drive")
+            .join("_ai")
+            .join("docs")
+            .join("docs_packages")
+            .join("readme.md");
+        fs::create_dir_all(docs_packages_file.parent().unwrap()).unwrap();
+        fs::write(&docs_packages_file, "documentation packages").unwrap();
+
+        let file_list = get_file_list(temp_dir.path(), true, &[]).unwrap();
+
+        assert!(
+            file_list.files.iter().any(|f| f == &test_file),
+            "File in deeply nested underscore directory should be found: {:?}",
+            test_file
+        );
+        assert!(
+            file_list.files.iter().any(|f| f == &ai_dir_file),
+            "File in _ai directory should be found: {:?}",
+            ai_dir_file
+        );
+        assert!(
+            file_list.files.iter().any(|f| f == &docs_packages_file),
+            "File in docs_packages directory should be found: {:?}",
+            docs_packages_file
+        );
+    }
+
+    #[test]
+    fn test_underscore_directory_with_custom_ignores() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create directory structure with underscores
+        let underscore_dir = temp_dir.path().join("test_packages").join("sub_dir");
+        fs::create_dir_all(&underscore_dir).unwrap();
+
+        let test_file = underscore_dir.join("test.rs");
+        fs::write(&test_file, "fn test() {}").unwrap();
+
+        let ignored_file = underscore_dir.join("ignored.tmp");
+        fs::write(&ignored_file, "temporary content").unwrap();
+
+        // Test with custom ignore patterns
+        let custom_ignores = vec!["*.tmp".to_string()];
+        let file_list = get_file_list(temp_dir.path(), true, &custom_ignores).unwrap();
+
+        assert!(
+            file_list.files.iter().any(|f| f == &test_file),
+            "Rust file in underscore directory should be found: {:?}",
+            test_file
+        );
+        assert!(
+            !file_list.files.iter().any(|f| f == &ignored_file),
+            "Ignored file should not be found: {:?}",
+            ignored_file
+        );
+    }
+
+    #[test]
+    fn test_multiple_underscore_patterns() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create various underscore directory patterns
+        let patterns = vec![
+            "single_underscore",
+            "multiple_under_scores",
+            "_leading_underscore",
+            "trailing_underscore_",
+            "__double__underscore__",
+            "mixed-dash_underscore",
+        ];
+
+        let mut expected_files = Vec::new();
+
+        for pattern in patterns {
+            let dir = temp_dir.path().join(pattern);
+            fs::create_dir_all(&dir).unwrap();
+
+            let file = dir.join("content.txt");
+            fs::write(&file, format!("content in {}", pattern)).unwrap();
+            expected_files.push(file);
+        }
+
+        let file_list = get_file_list(temp_dir.path(), true, &[]).unwrap();
+
+        for expected_file in &expected_files {
+            assert!(
+                file_list.files.iter().any(|f| f == expected_file),
+                "File in underscore directory should be found: {:?}",
+                expected_file
+            );
+        }
+    }
+
+    #[test]
+    fn test_underscore_directories_respect_gitignore_patterns() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create underscore directories that should be ignored by common patterns
+        let node_modules_dir = temp_dir.path().join("project_dir").join("node_modules");
+        fs::create_dir_all(&node_modules_dir).unwrap();
+        let node_file = node_modules_dir.join("package.js");
+        fs::write(&node_file, "module content").unwrap();
+
+        let target_dir = temp_dir.path().join("rust_project").join("target");
+        fs::create_dir_all(&target_dir).unwrap();
+        let target_file = target_dir.join("binary");
+        fs::write(&target_file, "binary content").unwrap();
+
+        // Create underscore directories that should NOT be ignored
+        let valid_dir = temp_dir.path().join("valid_project").join("src_files");
+        fs::create_dir_all(&valid_dir).unwrap();
+        let valid_file = valid_dir.join("main.rs");
+        fs::write(&valid_file, "fn main() {}").unwrap();
+
+        let file_list = get_file_list(temp_dir.path(), true, &[]).unwrap();
+
+        assert!(
+            !file_list.files.iter().any(|f| f == &node_file),
+            "Files in node_modules should be ignored: {:?}",
+            node_file
+        );
+        assert!(
+            !file_list.files.iter().any(|f| f == &target_file),
+            "Files in target directory should be ignored: {:?}",
+            target_file
+        );
+
+        assert!(
+            file_list.files.iter().any(|f| f == &valid_file),
+            "Files in valid underscore directories should be found: {:?}",
+            valid_file
+        );
+    }
 }
