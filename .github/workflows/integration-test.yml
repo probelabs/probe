@@ -109,7 +109,16 @@ jobs:
       if: runner.os == 'Windows'
       run: |
         # Check that the JSON output contains expected fields
+        if (-not (Test-Path search_results.json)) {
+          Write-Host "Error: search_results.json file not found"
+          exit 1
+        }
+        
         $content = Get-Content search_results.json -Raw
+        if (-not $content) {
+          Write-Host "Error: search_results.json file is empty"
+          exit 1
+        }
         
         # Extract JSON part by finding the first '{' character (skip debug output)
         $jsonStart = $content.IndexOf('{')
@@ -172,7 +181,16 @@ jobs:
       if: runner.os == 'Windows'
       run: |
         # Check that the extract output contains expected fields
+        if (-not (Test-Path extract_results.json)) {
+          Write-Host "Error: extract_results.json file not found"
+          exit 1
+        }
+        
         $content = Get-Content extract_results.json -Raw
+        if (-not $content) {
+          Write-Host "Error: extract_results.json file is empty"
+          exit 1
+        }
         
         # Extract JSON part by finding the first '{' character (skip debug output)
         $jsonStart = $content.IndexOf('{')
