@@ -50,7 +50,7 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
     let start_time = Instant::now();
 
     if debug_mode {
-        println!("DEBUG: Starting query plan creation for query: '{}'", query);
+        println!("DEBUG: Starting query plan creation for query: '{query}'");
     }
 
     // Use the regular AST parsing
@@ -202,7 +202,7 @@ fn collect_all_terms(
             if *is_excluded {
                 for keyword in keywords {
                     if debug_mode {
-                        println!("DEBUG: Adding '{}' to excluded terms set", keyword);
+                        println!("DEBUG: Adding '{keyword}' to excluded terms set");
                     }
 
                     // Add the keyword to excluded terms
@@ -418,7 +418,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                                 results.push((pattern, HashSet::from([idx])));
                             }
                         } else if debug_mode {
-                            println!("DEBUG: Skipping tokenization for exact term '{}'", keyword);
+                            println!("DEBUG: Skipping tokenization for exact term '{keyword}'");
                         }
                     }
                 }
@@ -466,7 +466,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                     }
 
                     if debug_mode {
-                        println!("DEBUG: Created combined OR pattern: '{}'", combined);
+                        println!("DEBUG: Created combined OR pattern: '{combined}'");
                         println!("DEBUG: Combined indices: {indices:?}");
                     }
 
@@ -531,7 +531,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 
             if compound_parts.len() > 1 {
                 if debug_mode {
-                    println!("DEBUG: Processing compound word: '{}'", keyword);
+                    println!("DEBUG: Processing compound word: '{keyword}'");
                 }
 
                 for part in compound_parts {

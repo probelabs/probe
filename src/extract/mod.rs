@@ -73,8 +73,11 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
     if debug_mode {
         println!("\n[DEBUG] ===== Extract Command Started =====");
-        println!("[DEBUG] Files to process: {:?}", options.files);
-        println!("[DEBUG] Custom ignores: {:?}", options.custom_ignores);
+        println!("[DEBUG] Files to process: {files:?}", files = options.files);
+        println!(
+            "[DEBUG] Custom ignores: {custom_ignores:?}",
+            custom_ignores = options.custom_ignores
+        );
         println!("[DEBUG] Context lines: {}", options.context_lines);
         println!("[DEBUG] Output format: {}", options.format);
         println!("[DEBUG] Read from clipboard: {}", options.from_clipboard);
@@ -82,8 +85,14 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         println!("[DEBUG] Dry run: {}", options.dry_run);
         println!("[DEBUG] Parse as git diff: {}", options.diff);
         println!("[DEBUG] Allow tests: {}", options.allow_tests);
-        println!("[DEBUG] Prompt template: {:?}", options.prompt);
-        println!("[DEBUG] Instructions: {:?}", options.instructions);
+        println!(
+            "[DEBUG] Prompt template: {prompt:?}",
+            prompt = options.prompt
+        );
+        println!(
+            "[DEBUG] Instructions: {instructions:?}",
+            instructions = options.instructions
+        );
     }
 
     // Set custom ignore patterns
@@ -358,19 +367,28 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
         for (path, start_line, end_line, symbol, lines) in &file_paths {
             if let (Some(start), Some(end)) = (start_line, end_line) {
-                println!("  {} (lines {}-{})", path.display(), start, end);
+                println!(
+                    "  {path} (lines {start}-{end})",
+                    path = path.display(),
+                    start = start,
+                    end = end
+                );
             } else if let Some(line_num) = start_line {
-                println!("  {} (line {})", path.display(), line_num);
+                println!(
+                    "  {path} (line {line_num})",
+                    path = path.display(),
+                    line_num = line_num
+                );
             } else if let Some(sym) = symbol {
-                println!("  {} (symbol: {})", path.display(), sym);
+                println!("  {path} (symbol: {sym})", path = path.display(), sym = sym);
             } else if let Some(lines_set) = lines {
                 println!(
-                    "  {} (specific lines: {} lines)",
-                    path.display(),
-                    lines_set.len()
+                    "  {path} (specific lines: {count} lines)",
+                    path = path.display(),
+                    count = lines_set.len()
                 );
             } else {
-                println!("  {}", path.display());
+                println!("  {path}", path = path.display());
             }
         }
 
@@ -389,7 +407,10 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     // Process prompt template and instructions if provided
     let system_prompt = if let Some(prompt_template) = &options.prompt {
         if debug_mode {
-            println!("[DEBUG] Processing prompt template: {:?}", prompt_template);
+            println!(
+                "[DEBUG] Processing prompt template: {prompt_template:?}",
+                prompt_template = prompt_template
+            );
         }
         match prompt_template.get_content() {
             Ok(content) => {
@@ -402,7 +423,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 Some(content)
             }
             Err(e) => {
-                eprintln!("{}", format!("Error loading prompt template: {}", e).red());
+                eprintln!("{}", format!("Error loading prompt template: {e}").red());
                 if debug_mode {
                     println!("[DEBUG] Error loading prompt template: {e}");
                 }
@@ -465,13 +486,16 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     // Process files in parallel
     file_params.par_iter().for_each(|params| {
         if params.debug_mode {
-            println!("\n[DEBUG] Processing file: {:?}", params.path);
-            println!("[DEBUG] Start line: {:?}", params.start_line);
-            println!("[DEBUG] End line: {:?}", params.end_line);
-            println!("[DEBUG] Symbol: {:?}", params.symbol);
+            println!("\n[DEBUG] Processing file: {path:?}", path = params.path);
             println!(
-                "[DEBUG] Specific lines: {:?}",
-                params.specific_lines.as_ref().map(|l| l.len())
+                "[DEBUG] Start line: {start_line:?}",
+                start_line = params.start_line
+            );
+            println!("[DEBUG] End line: {end_line:?}", end_line = params.end_line);
+            println!("[DEBUG] Symbol: {symbol:?}", symbol = params.symbol);
+            println!(
+                "[DEBUG] Specific lines: {specific_lines:?}",
+                specific_lines = params.specific_lines.as_ref().map(|l| l.len())
             );
 
             // Check if file exists
@@ -501,7 +525,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         // The allow_tests check is now handled in the file path extraction functions
         // We only need to check if this is a test file for debugging purposes
         if params.debug_mode && crate::language::is_test_file(&params.path) && !params.allow_tests {
-            println!("[DEBUG] Test file detected: {:?}", params.path);
+            println!("[DEBUG] Test file detected: {path:?}", path = params.path);
         }
 
         match processor::process_file_for_extraction(
@@ -515,10 +539,13 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         ) {
             Ok(result) => {
                 if params.debug_mode {
-                    println!("[DEBUG] Successfully extracted code from {:?}", params.path);
+                    println!(
+                        "[DEBUG] Successfully extracted code from {path:?}",
+                        path = params.path
+                    );
                     println!("[DEBUG] Extracted lines: {:?}", result.lines);
                     println!("[DEBUG] Node type: {}", result.node_type);
-                    println!("[DEBUG] Code length: {} bytes", result.code.len());
+                    println!("[DEBUG] Code length: {len} bytes", len = result.code.len());
                     println!(
                         "[DEBUG] Estimated tokens: {}",
                         crate::search::search_tokens::count_tokens(&result.code)
@@ -557,7 +584,10 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
     // Deduplicate results based on file path and line range
     if debug_mode {
-        println!("[DEBUG] Before deduplication: {} results", results.len());
+        println!(
+            "[DEBUG] Before deduplication: {len} results",
+            len = results.len()
+        );
     }
 
     // First, sort results by file path and then by line range size (largest first)
@@ -660,13 +690,16 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     results = new_results;
 
     if debug_mode {
-        println!("[DEBUG] After deduplication: {} results", results.len());
+        println!(
+            "[DEBUG] After deduplication: {len} results",
+            len = results.len()
+        );
     }
 
     if debug_mode {
         println!("\n[DEBUG] ===== Extraction Summary =====");
-        println!("[DEBUG] Total results: {}", results.len());
-        println!("[DEBUG] Total errors: {}", errors.len());
+        println!("[DEBUG] Total results: {len}", len = results.len());
+        println!("[DEBUG] Total errors: {len}", len = errors.len());
         println!("[DEBUG] Output format: {}", options.format);
         println!("[DEBUG] Dry run: {}", options.dry_run);
     }
@@ -730,10 +763,10 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         Err(e) => {
             // Only print error messages for non-JSON/XML formats
             if options.format != "json" && options.format != "xml" {
-                eprintln!("{}", format!("Error formatting results: {}", e).red());
+                eprintln!("{}", format!("Error formatting results: {e}").red());
             }
             if debug_mode {
-                println!("[DEBUG] Error formatting results: {}", e);
+                println!("[DEBUG] Error formatting results: {e}");
             }
         }
     }

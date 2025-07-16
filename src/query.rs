@@ -349,7 +349,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
                     .and_then(|e| e.to_str())
                     .unwrap_or("");
 
-                println!("```{}", lang);
+                println!("```{lang}");
                 println!("{}", m.matched_text.trim());
                 println!("```");
                 println!();
@@ -450,12 +450,12 @@ pub fn handle_query(
 ) -> Result<()> {
     // Only print information for non-JSON/XML formats
     if format != "json" && format != "xml" {
-        println!("{} {}", "Pattern:".bold().green(), pattern);
+        println!("{} {pattern}", "Pattern:".bold().green());
         println!("{} {}", "Path:".bold().green(), path.display());
 
         // Print language if provided, otherwise show auto-detect
         if let Some(lang) = language {
-            println!("{} {}", "Language:".bold().green(), lang);
+            println!("{} {lang}", "Language:".bold().green());
         } else {
             println!("{} auto-detect", "Language:".bold().green());
         }
@@ -502,12 +502,12 @@ pub fn handle_query(
         } else {
             // For other formats, print the "No results found" message
             println!("{}", "No results found.".yellow().bold());
-            println!("Search completed in {:.2?}", duration);
+            println!("Search completed in {duration:.2?}");
         }
     } else {
         // For non-JSON/XML formats, print search time
         if format != "json" && format != "xml" {
-            println!("Found {} matches in {:.2?}", matches.len(), duration);
+            println!("Found {} matches in {duration:.2?}", matches.len());
             println!();
         }
 

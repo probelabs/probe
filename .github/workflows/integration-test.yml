@@ -82,7 +82,7 @@ jobs:
           echo "Checking probe binary permissions:"
           ls -la "$(which probe)" || echo "probe command not found in PATH"
           ls -la "$(npm root -g)/@buger/probe/bin/" || echo "npm package bin directory not found"
-          call probe --version
+          probe --version
         else
           npm --version
           probe --version
@@ -91,7 +91,7 @@ jobs:
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           # Try direct binary execution if npm wrapper fails
           "$(npm root -g)/@buger/probe/bin/probe.exe" search "semantic code search" README.md --format json > search_results.json || \
-          call probe search "semantic code search" README.md --format json > search_results.json
+          probe search "semantic code search" README.md --format json > search_results.json
         else
           probe search "semantic code search" README.md --format json > search_results.json
         fi
@@ -193,7 +193,7 @@ jobs:
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           # Try direct binary execution if npm wrapper fails
           "$(npm root -g)/@buger/probe/bin/probe.exe" extract README.md:1 --format json > extract_results.json || \
-          call probe extract README.md:1 --format json > extract_results.json
+          probe extract README.md:1 --format json > extract_results.json
         else
           probe extract README.md:1 --format json > extract_results.json
         fi

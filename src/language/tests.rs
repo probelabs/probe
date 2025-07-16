@@ -141,7 +141,7 @@ impl TestStruct {
     // Print all acceptable parents
     println!("Acceptable parents:");
     for parent in &acceptable_parents {
-        println!("  {}", parent);
+        println!("  {parent}");
     }
 
     // Verify we found at least one acceptable parent
@@ -639,7 +639,7 @@ impl TestStruct {
         }
     }
 
-    println!("Line to block type map: {:?}", line_to_block_type);
+    println!("Line to block type map: {line_to_block_type:?}");
 
     // Check that each comment line is included in a block
     assert!(

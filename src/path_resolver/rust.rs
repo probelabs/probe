@@ -286,7 +286,7 @@ edition = "2021"
                 cargo_toml_path
             );
         } else {
-            println!("Skipping assertion for '{}': Crate not found", crate_name);
+            println!("Skipping assertion for '{crate_name}': Crate not found");
         }
     }
 }

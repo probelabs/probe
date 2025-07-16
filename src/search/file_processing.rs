@@ -214,7 +214,7 @@ pub fn filter_tokenized_block(
         for (term, &idx) in &plan.term_indices {
             if matched_terms.contains(&idx) {
                 matched_keywords.push(term);
-                println!("DEBUG: Keyword '{}' matched in tokenized block", term);
+                println!("DEBUG: Keyword '{term}' matched in tokenized block");
             }
         }
         if matched_keywords.is_empty() {
@@ -416,7 +416,7 @@ pub fn process_file_with_results(
     if debug_mode {
         println!("DEBUG: Processing file: {:?}", params.path);
         println!("DEBUG:   matched lines: {:?}", params.line_numbers);
-        println!("DEBUG:   file I/O time: {:?}", file_io_duration);
+        println!("DEBUG:   file I/O time: {file_io_duration:?}");
     }
 
     // Measure AST parsing time with sub-steps
@@ -877,7 +877,7 @@ pub fn process_file_with_results(
                 "DEBUG:     - Code structure finding: {:?}",
                 code_structure_duration_value
             );
-            println!("DEBUG:     - Filtering: {:?}", filtering_duration_value);
+            println!("DEBUG:     - Filtering: {filtering_duration_value:?}");
             println!(
                 "DEBUG:     - Result building: {:?}",
                 result_building_duration_value
@@ -1197,18 +1197,18 @@ pub fn process_file_with_results(
     if debug_mode {
         println!("DEBUG: File processing timings:");
         if let Some(duration) = timings.file_io {
-            println!("DEBUG:   File I/O: {:?}", duration);
+            println!("DEBUG:   File I/O: {duration:?}");
         }
         if let Some(duration) = timings.ast_parsing {
-            println!("DEBUG:   AST parsing: {:?}", duration);
+            println!("DEBUG:   AST parsing: {duration:?}");
             if let Some(d) = timings.ast_parsing_language_init {
-                println!("DEBUG:     - Language init: {:?}", d);
+                println!("DEBUG:     - Language init: {d:?}");
             }
             if let Some(d) = timings.ast_parsing_parser_init {
-                println!("DEBUG:     - Parser init: {:?}", d);
+                println!("DEBUG:     - Parser init: {d:?}");
             }
             if let Some(d) = timings.ast_parsing_tree_parsing {
-                println!("DEBUG:     - Tree parsing: {:?}", d);
+                println!("DEBUG:     - Tree parsing: {d:?}");
             }
             if let Some(d) = timings.ast_parsing_line_map_building {
                 println!("DEBUG:     - Line map building: {:?}", d);

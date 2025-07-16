@@ -69,7 +69,10 @@ impl LanguageImpl for GoLanguage {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
         if debug_mode {
-            println!("DEBUG: Finding parent function for {}", node.kind());
+            println!(
+                "DEBUG: Finding parent function for {node_kind}",
+                node_kind = node.kind()
+            );
         }
 
         let mut current = node;
@@ -77,7 +80,10 @@ impl LanguageImpl for GoLanguage {
         while let Some(parent) = current.parent() {
             if parent.kind() == "function_declaration" || parent.kind() == "method_declaration" {
                 if debug_mode {
-                    println!("DEBUG: Found parent function: {}", parent.kind());
+                    println!(
+                        "DEBUG: Found parent function: {parent_kind}",
+                        parent_kind = parent.kind()
+                    );
                 }
                 return Some(parent);
             }
@@ -85,7 +91,10 @@ impl LanguageImpl for GoLanguage {
         }
 
         if debug_mode {
-            println!("DEBUG: No parent function found for {}", node.kind());
+            println!(
+                "DEBUG: No parent function found for {node_kind}",
+                node_kind = node.kind()
+            );
         }
 
         None

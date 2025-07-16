@@ -145,12 +145,12 @@ fn handle_search(params: SearchParams) -> Result<()> {
         } else {
             // For other formats, print the "No results found" message
             println!("{}", "No results found.".yellow().bold());
-            println!("Search completed in {:.2?}", duration);
+            println!("Search completed in {duration:.2?}");
         }
     } else {
         // For non-JSON/XML formats, print search time
         if params.format != "json" && params.format != "xml" {
-            println!("Search completed in {:.2?}", duration);
+            println!("Search completed in {duration:.2?}");
             println!();
         }
 
@@ -166,13 +166,13 @@ fn handle_search(params: SearchParams) -> Result<()> {
                 println!();
                 println!("{}", "Limits applied:".yellow().bold());
                 if let Some(max_results) = limits.max_results {
-                    println!("  {} {}", "Max results:".yellow(), max_results);
+                    println!("  {} {max_results}", "Max results:".yellow());
                 }
                 if let Some(max_bytes) = limits.max_bytes {
-                    println!("  {} {}", "Max bytes:".yellow(), max_bytes);
+                    println!("  {} {max_bytes}", "Max bytes:".yellow());
                 }
                 if let Some(max_tokens) = limits.max_tokens {
-                    println!("  {} {}", "Max tokens:".yellow(), max_tokens);
+                    println!("  {} {max_tokens}", "Max tokens:".yellow());
                 }
 
                 println!();

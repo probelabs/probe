@@ -16,11 +16,11 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
     if !valid_results.is_empty() {
         if dry_run {
             // More compact header for dry-run mode
-            println!("{}", format!("Found {} results:", valid_results.len()).bold());
+            println!("{}", format!("Found {valid_results_len} results:", valid_results_len = valid_results.len()).bold());
         } else {
             // Full header for normal mode
             println!("{}", "╭─────────────────────────────────────────────────╮".cyan());
-            println!("{} {} {}", "│".cyan(), format!("Found {} results", valid_results.len()).bold(), "│".cyan());
+            println!("{} {} {}", "│".cyan(), format!("Found {valid_results_len} results", valid_results_len = valid_results.len()).bold(), "│".cyan());
             println!("{}", "╰─────────────────────────────────────────────────╯".cyan());
             println!();
         }
@@ -66,7 +66,7 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
             let is_full_file = result.node_type == "file";
 
             // Print result number
-            println!("{} {}", "Result".bold().blue(), format!("#{}", index + 1).bold().blue());
+            println!("{} {}", "Result".bold().blue(), format!("#{result_num}", result_num = index + 1).bold().blue());
             
             // Print the file path and node info with color
             if is_full_file {
@@ -81,33 +81,33 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
             // Print the score if available and in debug mode
             if debug_mode {
                 if let Some(score) = result.score {
-                    println!("{} {:.6}", "Score:".dimmed(), score);
+                    println!("{} {score:.6}", "Score:".dimmed());
                 }
                 if let Some(tfidf_score) = result.tfidf_score {
-                    println!("{} {:.6}", "TF-IDF Score:".dimmed(), tfidf_score);
+                    println!("{} {tfidf_score:.6}", "TF-IDF Score:".dimmed());
                 }
                 if let Some(bm25_score) = result.bm25_score {
-                    println!("{} {:.6}", "BM25 Score:".dimmed(), bm25_score);
+                    println!("{} {bm25_score:.6}", "BM25 Score:".dimmed());
                 }
                 if let Some(content_matches) = &result.content_matches {
-                    println!("{} {}", "Content matches:".dimmed(), content_matches.join(", "));
+                    println!("{} {content_matches_str}", "Content matches:".dimmed(), content_matches_str = content_matches.join(", "));
                 }
                 if let Some(filename_matches) = &result.filename_matches {
-                    println!("{} {}", "Filename matches:".dimmed(), filename_matches.join(", "));
+                    println!("{} {filename_matches_str}", "Filename matches:".dimmed(), filename_matches_str = filename_matches.join(", "));
                 }
                 if let Some(unique_terms) = result.unique_terms {
-                    println!("{} {}", "Unique terms matched:".dimmed(), unique_terms);
+                    println!("{} {unique_terms}", "Unique terms matched:".dimmed());
                 }
                 if let Some(total_matches) = result.total_matches {
-                    println!("{} {}", "Total term matches:".dimmed(), total_matches);
+                    println!("{} {total_matches}", "Total term matches:".dimmed());
                 }
                 
                 // Display block-level match statistics in debug mode
                 if let Some(block_unique_terms) = result.block_unique_terms {
-                    println!("{} {}", "Block unique terms matched:".dimmed(), block_unique_terms);
+                    println!("{} {block_unique_terms}", "Block unique terms matched:".dimmed());
                 }
                 if let Some(block_total_matches) = result.block_total_matches {
-                    println!("{} {}", "Block total term matches:".dimmed(), block_total_matches);
+                    println!("{} {block_total_matches}", "Block total term matches:".dimmed());
                 }
             }
 

@@ -301,9 +301,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                         results.push((entry, None, None, Some(symbol.to_string()), None));
                     } else if debug_mode {
                         if is_ignored_by_gitignore(&entry) {
-                            println!("DEBUG: Skipping ignored file: {:?}", entry);
+                            println!("DEBUG: Skipping ignored file: {entry:?}");
                         } else if !allow_tests && is_test {
-                            println!("DEBUG: Skipping test file: {:?}", entry);
+                            println!("DEBUG: Skipping test file: {entry:?}");
                         }
                     }
                 }
@@ -319,9 +319,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                         results.push((resolved_path, None, None, Some(symbol.to_string()), None));
                     } else if debug_mode {
                         if is_ignored_by_gitignore(&resolved_path) {
-                            println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                            println!("DEBUG: Skipping ignored file: {file_path:?}");
                         } else if !allow_tests && is_test {
-                            println!("DEBUG: Skipping test file: {:?}", file_path);
+                            println!("DEBUG: Skipping test file: {file_path:?}");
                         }
                     }
                 }
@@ -339,9 +339,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                         results.push((path, None, None, Some(symbol.to_string()), None));
                     } else if debug_mode {
                         if is_ignored_by_gitignore(&path) {
-                            println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                            println!("DEBUG: Skipping ignored file: {file_path:?}");
                         } else if !allow_tests && is_test {
-                            println!("DEBUG: Skipping test file: {:?}", file_path);
+                            println!("DEBUG: Skipping test file: {file_path:?}");
                         }
                     }
                 }
@@ -378,9 +378,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                             results.push((entry, Some(start), Some(end), None, None));
                         } else if debug_mode {
                             if is_ignored_by_gitignore(&entry) {
-                                println!("DEBUG: Skipping ignored file: {:?}", entry);
+                                println!("DEBUG: Skipping ignored file: {entry:?}");
                             } else if !allow_tests && is_test {
-                                println!("DEBUG: Skipping test file: {:?}", entry);
+                                println!("DEBUG: Skipping test file: {entry:?}");
                             }
                         }
                     }
@@ -395,9 +395,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                             results.push((resolved_path, Some(start), Some(end), None, None));
                         } else if debug_mode {
                             if is_ignored_by_gitignore(&resolved_path) {
-                                println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                                println!("DEBUG: Skipping ignored file: {file_path:?}");
                             } else if !allow_tests && is_test {
-                                println!("DEBUG: Skipping test file: {:?}", file_path);
+                                println!("DEBUG: Skipping test file: {file_path:?}");
                             }
                         }
                     }
@@ -414,9 +414,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                             results.push((path, Some(start), Some(end), None, None));
                         } else if debug_mode {
                             if is_ignored_by_gitignore(&path) {
-                                println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                                println!("DEBUG: Skipping ignored file: {file_path:?}");
                             } else if !allow_tests && is_test {
-                                println!("DEBUG: Skipping test file: {:?}", file_path);
+                                println!("DEBUG: Skipping test file: {file_path:?}");
                             }
                         }
                     }
@@ -455,9 +455,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                             results.push((entry, line_num, None, None, None));
                         } else if debug_mode {
                             if is_ignored_by_gitignore(&entry) {
-                                println!("DEBUG: Skipping ignored file: {:?}", entry);
+                                println!("DEBUG: Skipping ignored file: {entry:?}");
                             } else if !allow_tests && is_test {
-                                println!("DEBUG: Skipping test file: {:?}", entry);
+                                println!("DEBUG: Skipping test file: {entry:?}");
                             }
                         }
                     }
@@ -473,9 +473,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                         results.push((path, line_num, None, None, None));
                     } else if debug_mode {
                         if is_ignored_by_gitignore(&path) {
-                            println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                            println!("DEBUG: Skipping ignored file: {file_path:?}");
                         } else if !allow_tests && is_test {
-                            println!("DEBUG: Skipping test file: {:?}", file_path);
+                            println!("DEBUG: Skipping test file: {file_path:?}");
                         }
                     }
                 }
@@ -492,9 +492,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                         results.push((path, line_num, None, None, None));
                     } else if debug_mode {
                         if is_ignored_by_gitignore(&path) {
-                            println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                            println!("DEBUG: Skipping ignored file: {file_path:?}");
                         } else if !allow_tests && is_test {
-                            println!("DEBUG: Skipping test file: {:?}", file_path);
+                            println!("DEBUG: Skipping test file: {file_path:?}");
                         }
                     }
                 }
@@ -527,9 +527,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                                 results.push((entry, None, None, None, None));
                             } else if debug_mode {
                                 if is_ignored_by_gitignore(&entry) {
-                                    println!("DEBUG: Skipping ignored file: {:?}", entry);
+                                    println!("DEBUG: Skipping ignored file: {entry:?}");
                                 } else if !allow_tests && is_test {
-                                    println!("DEBUG: Skipping test file: {:?}", entry);
+                                    println!("DEBUG: Skipping test file: {entry:?}");
                                 }
                             }
                         }
@@ -545,9 +545,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                             processed_paths.insert(file_path.to_string());
                         } else if debug_mode {
                             if is_ignored_by_gitignore(&path) {
-                                println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                                println!("DEBUG: Skipping ignored file: {file_path:?}");
                             } else if !allow_tests && is_test {
-                                println!("DEBUG: Skipping test file: {:?}", file_path);
+                                println!("DEBUG: Skipping test file: {file_path:?}");
                             }
                         }
                     }
@@ -564,9 +564,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                             processed_paths.insert(file_path.to_string());
                         } else if debug_mode {
                             if is_ignored_by_gitignore(&path) {
-                                println!("DEBUG: Skipping ignored file: {:?}", file_path);
+                                println!("DEBUG: Skipping ignored file: {file_path:?}");
                             } else if !allow_tests && is_test {
-                                println!("DEBUG: Skipping test file: {:?}", file_path);
+                                println!("DEBUG: Skipping test file: {file_path:?}");
                             }
                         }
                     }

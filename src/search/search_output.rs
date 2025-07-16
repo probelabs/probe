@@ -203,7 +203,7 @@ fn format_and_print_color_results(
 
         // Print the file path and node info with color
         if is_full_file {
-            println!("{} {}", "File:".bold().green(), result.file.yellow());
+            println!("{} {}", "File:".bold().green().yellow(), result.file);
         } else {
             println!(
                 "{} {} ({})",
@@ -223,13 +223,13 @@ fn format_and_print_color_results(
         if debug_mode {
             // Print the same debug info that would be shown in standard mode
             if let Some(keywords) = &result.matched_keywords {
-                println!("{} {:?}", "Matched Keywords:".bold().green(), keywords);
+                println!("{} {keywords:?}", "Matched Keywords:".bold().green());
             }
             if let Some(score) = result.score {
-                println!("{} {:.4}", "Score:".bold().green(), score);
+                println!("{} {score:.4}", "Score:".bold().green());
             }
             if let Some(query_plan) = query_plan {
-                println!("{} {:?}", "Query Plan:".bold().green(), query_plan);
+                println!("{} {query_plan:?}", "Query Plan:".bold().green());
             }
         }
 
@@ -541,15 +541,15 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
         }
 
         if let Some(score) = result.score {
-            println!("    <score>{:.4}</score>", score);
+            println!("    <score>{score:.4}</score>");
         }
 
         if let Some(tfidf_score) = result.tfidf_score {
-            println!("    <tfidf_score>{:.4}</tfidf_score>", tfidf_score);
+            println!("    <tfidf_score>{tfidf_score:.4}</tfidf_score>");
         }
 
         if let Some(bm25_score) = result.bm25_score {
-            println!("    <bm25_score>{:.4}</bm25_score>", bm25_score);
+            println!("    <bm25_score>{bm25_score:.4}</bm25_score>");
         }
 
         if let Some(file_unique_terms) = result.file_unique_terms {

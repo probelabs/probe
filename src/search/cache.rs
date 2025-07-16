@@ -459,7 +459,7 @@ pub fn add_results_to_cache(results: &[SearchResult], session_id: &str, query: &
     }
 
     if debug_mode {
-        println!("DEBUG: Added {} new entries to cache", new_entries);
+        println!("DEBUG: Added {new_entries} new entries to cache");
         println!(
             "DEBUG: Cache now has {} entries",
             cache.block_identifiers.len()

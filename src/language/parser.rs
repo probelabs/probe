@@ -523,12 +523,12 @@ fn process_cached_line_map(
         let line_idx = line.saturating_sub(1); // Adjust for 0-based indexing
 
         if debug_mode {
-            println!("DEBUG: Processing line {} from cache", line);
+            println!("DEBUG: Processing line {line} from cache");
         }
 
         if line_idx >= cached_line_map.len() {
             if debug_mode {
-                println!("DEBUG: Line {} is out of bounds (Cache)", line);
+                println!("DEBUG: Line {line} is out of bounds (Cache)");
             }
             continue;
         }
@@ -557,7 +557,7 @@ fn process_cached_line_map(
             // 1. Handle Comments
             if info.is_comment {
                 if debug_mode {
-                    println!("DEBUG: Cache: Handling comment node at line {}", line);
+                    println!("DEBUG: Cache: Handling comment node at line {line}");
                 }
                 // Check for context node
                 if let (Some(ctx_rows), Some(ctx_bytes), Some(ctx_kind), Some(ctx_is_test)) = (
@@ -768,7 +768,7 @@ fn process_cached_line_map(
                 }
             }
         } else if debug_mode {
-            println!("DEBUG: Cache: No cached node info found for line {}", line);
+            println!("DEBUG: Cache: No cached node info found for line {line}");
         }
     }
 
@@ -990,7 +990,7 @@ pub fn parse_file_for_code_blocks(
         // Log all node types in the file
         let mut node_types = HashSet::new();
         super::common::collect_node_types(root_node, &mut node_types);
-        println!("DEBUG: All node types in file: {:?}", node_types);
+        println!("DEBUG: All node types in file: {node_types:?}");
     }
 
     // Create a line-to-node map for the entire file
@@ -1041,13 +1041,13 @@ pub fn parse_file_for_code_blocks(
         let line_idx = line.saturating_sub(1);
 
         if debug_mode {
-            println!("DEBUG: Processing line {} (Live NodeInfo)", line);
+            println!("DEBUG: Processing line {line} (Live NodeInfo)");
         }
 
         // Skip if line is out of bounds
         if line_idx >= line_map.len() {
             if debug_mode {
-                println!("DEBUG: Line {} is out of bounds (Live NodeInfo)", line);
+                println!("DEBUG: Line {line} is out of bounds (Live NodeInfo)");
             }
             continue;
         }

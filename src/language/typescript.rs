@@ -86,7 +86,7 @@ impl LanguageImpl for TypeScriptLanguage {
                     let name = child.utf8_text(source).unwrap_or("");
                     if name == "describe" || name == "it" || name == "test" || name == "expect" {
                         if debug_mode {
-                            println!("DEBUG: Test node detected (TypeScript): {} call", name);
+                            println!("DEBUG: Test node detected (TypeScript): {name} call");
                         }
                         return true;
                     }

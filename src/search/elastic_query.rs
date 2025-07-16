@@ -262,7 +262,7 @@ impl Expr {
                 if let Some(&idx) = term_indices.get(term) {
                     if !matched_terms.contains(&idx) {
                         if debug_mode {
-                            println!("DEBUG: Missing required term '{}' (idx={})", term, idx);
+                            println!("DEBUG: Missing required term '{term}' (idx={idx})");
                         }
                         return false;
                     }
@@ -277,9 +277,9 @@ impl Expr {
         let has_required_anywhere = self.has_required_term();
 
         if debug_mode {
-            println!("DEBUG: Evaluating => {:?}", self);
-            println!("DEBUG: matched_terms => {:?}", matched_terms);
-            println!("DEBUG: term_indices => {:?}", term_indices);
+            println!("DEBUG: Evaluating => {self:?}");
+            println!("DEBUG: matched_terms => {matched_terms:?}");
+            println!("DEBUG: term_indices => {term_indices:?}");
             println!(
                 "DEBUG: Expression has_required_anywhere? {}",
                 has_required_anywhere
@@ -420,7 +420,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
                 } else {
                     // Skip unknown characters
                     if debug_mode {
-                        println!("DEBUG: Skipping unknown character '{}'", ch);
+                        println!("DEBUG: Skipping unknown character '{ch}'");
                     }
                     chars.next();
                 }
@@ -664,7 +664,7 @@ impl Parser {
                 let val = s.clone();
                 self.next();
                 if debug_mode {
-                    println!("DEBUG: QuotedString => {}", val);
+                    println!("DEBUG: QuotedString => {val}");
                 }
                 Ok(Expr::Term {
                     keywords: vec![val],
@@ -680,7 +680,7 @@ impl Parser {
                     unreachable!()
                 };
                 if debug_mode {
-                    println!("DEBUG: Ident => {}", first);
+                    println!("DEBUG: Ident => {first}");
                 }
                 if let Some(Token::Colon) = self.peek() {
                     // We have "field:"
@@ -740,7 +740,7 @@ pub fn parse_query(input: &str, exact: bool) -> Result<Expr, ParseError> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: parse_query('{}', exact={})", input, exact);
+        println!("DEBUG: parse_query('{input}', exact={exact})");
     }
 
     // If exact search is enabled, treat the entire query as a single term

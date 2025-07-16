@@ -35,13 +35,13 @@ pub fn process_file_for_extraction(
 
     if debug_mode {
         println!("\n[DEBUG] ===== Processing File for Extraction =====");
-        println!("[DEBUG] File path: {:?}", path);
-        println!("[DEBUG] Start line: {:?}", start_line);
-        println!("[DEBUG] End line: {:?}", end_line);
-        println!("[DEBUG] Symbol: {:?}", symbol);
+        println!("[DEBUG] File path: {path:?}");
+        println!("[DEBUG] Start line: {start_line:?}");
+        println!("[DEBUG] End line: {end_line:?}");
+        println!("[DEBUG] Symbol: {symbol:?}");
         println!("[DEBUG] Allow tests: {allow_tests}");
         println!("[DEBUG] Context lines: {context_lines}");
-        println!("[DEBUG] Specific lines: {:?}", specific_lines);
+        println!("[DEBUG] Specific lines: {specific_lines:?}");
     }
 
     // Check if the file exists
@@ -398,7 +398,7 @@ pub fn process_file_for_extraction(
     } else if let Some(lines_set) = specific_lines {
         // We have specific lines to extract
         if debug_mode {
-            println!("[DEBUG] Extracting specific lines: {:?}", lines_set);
+            println!("[DEBUG] Extracting specific lines: {lines_set:?}");
         }
 
         if lines_set.is_empty() {

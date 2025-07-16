@@ -77,7 +77,7 @@ impl LanguageImpl for JavaScriptLanguage {
                     let name = child.utf8_text(source).unwrap_or("");
                     if name == "describe" || name == "it" || name == "test" || name == "expect" {
                         if debug_mode {
-                            println!("DEBUG: Test node detected (JavaScript): {} call", name);
+                            println!("DEBUG: Test node detected (JavaScript): {name} call");
                         }
                         return true;
                     }
