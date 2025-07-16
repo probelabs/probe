@@ -172,7 +172,9 @@ impl Expr {
                 if debug_mode {
                     println!(
                         "DEBUG: AND => left={}, right={}, result={}",
-                        lval, rval, lval && rval
+                        lval,
+                        rval,
+                        lval && rval
                     );
                 }
                 lval && rval
@@ -197,7 +199,9 @@ impl Expr {
                 if debug_mode {
                     println!(
                         "DEBUG: OR => left={}, right={}, result={}",
-                        lval, rval, lval || rval
+                        lval,
+                        rval,
+                        lval || rval
                     );
                 }
                 lval || rval
@@ -252,9 +256,7 @@ impl Expr {
             }
             let required_terms = collect_required(self);
             if debug_mode && !required_terms.is_empty() {
-                println!(
-                    "DEBUG: Required terms (ignoring negatives): {required_terms:?}"
-                );
+                println!("DEBUG: Required terms (ignoring negatives): {required_terms:?}");
             }
             for term in &required_terms {
                 if let Some(&idx) = term_indices.get(term) {
@@ -279,7 +281,8 @@ impl Expr {
             println!("DEBUG: matched_terms => {:?}", matched_terms);
             println!("DEBUG: term_indices => {:?}", term_indices);
             println!(
-                "DEBUG: Expression has_required_anywhere? {}", has_required_anywhere
+                "DEBUG: Expression has_required_anywhere? {}",
+                has_required_anywhere
             );
         }
 

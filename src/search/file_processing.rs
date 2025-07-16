@@ -477,9 +477,7 @@ pub fn process_file_with_results(
         println!("DEBUG:     - Language init: {language_init_duration:?}");
         println!("DEBUG:     - Parser init: {parser_init_duration:?}");
         println!("DEBUG:     - Tree parsing: {tree_parsing_duration:?}");
-        println!(
-            "DEBUG:     - Line map building: {line_map_building_duration:?}"
-        );
+        println!("DEBUG:     - Line map building: {line_map_building_duration:?}");
     }
 
     if let Ok(code_blocks) = code_blocks_result {

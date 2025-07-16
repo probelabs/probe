@@ -611,9 +611,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             all_files.insert(pathbuf.clone());
 
             if debug_mode {
-                println!(
-                    "DEBUG: Added file {pathbuf:?} with matching terms to file_term_map"
-                );
+                println!("DEBUG: Added file {pathbuf:?} with matching terms to file_term_map");
             }
         }
     }
@@ -647,9 +645,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 println!("DEBUG: Early filtering removed file: {pathbuf:?}");
             }
         } else if debug_mode {
-            println!(
-                "DEBUG: File {pathbuf:?} not found in file_term_map during early filtering"
-            );
+            println!("DEBUG: File {pathbuf:?} not found in file_term_map during early filtering");
         }
     }
 
@@ -872,7 +868,10 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             };
 
             if debug_mode {
-                println!("DEBUG: Processing file with params: {}", pparams.path.display());
+                println!(
+                    "DEBUG: Processing file with params: {}",
+                    pparams.path.display()
+                );
             }
 
             // Process file and track granular timings
