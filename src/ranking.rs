@@ -277,13 +277,12 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
         Ok(expr) => expr,
         Err(e) => {
             if debug_mode {
-                eprintln!("DEBUG: parse_query failed: {:?}", e);
+                eprintln!("DEBUG: parse_query failed: {e:?}");
             }
             // Instead of silently returning empty results, log a warning even in non-debug mode
             // to ensure errors are visible and can be addressed
             eprintln!(
-                "WARNING: Query parsing failed: {:?}. Returning empty results.",
-                e
+                "WARNING: Query parsing failed: {e:?}. Returning empty results."
             );
             // In a future version, consider changing the return type to Result<Vec<(usize, f64)>, QueryError>
             // to properly propagate errors to the caller
@@ -299,9 +298,9 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
         Ok(map) => map,
         Err(e) => {
             if debug_mode {
-                eprintln!("DEBUG: Failed to generate query token map: {}", e);
+                eprintln!("DEBUG: Failed to generate query token map: {e}");
             }
-            eprintln!("WARNING: {}", e);
+            eprintln!("WARNING: {e}");
             return vec![];
         }
     };
@@ -356,8 +355,7 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
 
     if debug_mode {
         println!(
-            "DEBUG: Starting parallel document scoring for {} documents",
-            n_docs
+            "DEBUG: Starting parallel document scoring for {n_docs} documents"
         );
     }
 
