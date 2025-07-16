@@ -48,6 +48,16 @@ on:
         required: false
         default: "<!-- probe-bot -->"
         type: string
+      failure_tag:
+        description: "Tag to detect in AI response that triggers job failure (default: <fail>)"
+        required: false
+        type: string
+        default: "<fail>"
+      failure_message:
+        description: "Message to prepend when failure tag is detected"
+        required: false
+        type: string
+        default: "🔴 **CHECK FAILED:** This review has identified issues that require attention."
     secrets:
       # ---- Existing Secrets ----
       PROBE_CHAT_COMMAND:
@@ -1201,6 +1211,23 @@ jobs:
           set -e
           RESPONSE_CONTENT=$(cat response.txt 2>/dev/null || echo "")
           ERROR_LOG_CONTENT=$(cat error.log 2>/dev/null || echo "")
+          
+          # Check for failure tag and process it
+          FAILURE_TAG="${{ inputs.failure_tag }}"
+          FAILURE_MESSAGE="${{ inputs.failure_message }}"
+          SHOULD_FAIL_JOB=false
+          
+          if [[ -n "$RESPONSE_CONTENT" && "$RESPONSE_CONTENT" == *"$FAILURE_TAG"* ]]; then
+            echo "::notice::Failure tag '$FAILURE_TAG' detected in AI response. Job will fail after posting comment."
+            SHOULD_FAIL_JOB=true
+            
+            # Strip the failure tag from the response
+            RESPONSE_CONTENT=$(echo "$RESPONSE_CONTENT" | sed "s|$FAILURE_TAG||g")
+            
+            # Prepend failure message to the response
+            RESPONSE_CONTENT="${FAILURE_MESSAGE}\n\n${RESPONSE_CONTENT}"
+          fi
+          
           FINAL_BODY=""
 
           if [[ "$HAS_CHANGES" == "true" ]]; then
@@ -1263,6 +1290,14 @@ jobs:
           # **base‑64 encode** so GH will not think it contains a secret
           ENCODED=$(printf '%s' "$FINAL_BODY" | base64 -w0)
           echo "response_body_b64=$ENCODED" >> "$GITHUB_OUTPUT"
+          echo "should_fail_job=$SHOULD_FAIL_JOB" >> "$GITHUB_OUTPUT"
+
+      # --- Fail job if failure tag was detected ---
+      - name: Fail job if failure tag detected
+        if: steps.read_response.outputs.should_fail_job == 'true'
+        run: |
+          echo "::error::Failure tag was detected in AI response. Failing the job as requested."
+          exit 1
 
   post_response:
     if: always() && needs.process_comment.result != 'skipped'
