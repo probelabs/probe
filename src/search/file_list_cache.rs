@@ -70,9 +70,9 @@ pub fn get_file_list(
     let start_time = Instant::now();
 
     if debug_mode {
-        println!("DEBUG: Getting file list for path: {:?}", path);
-        println!("DEBUG: allow_tests: {}", allow_tests);
-        println!("DEBUG: custom_ignores: {:?}", custom_ignores);
+        println!("DEBUG: Getting file list for path: {path:?}");
+        println!("DEBUG: allow_tests: {allow_tests}");
+        println!("DEBUG: custom_ignores: {custom_ignores:?}");
     }
 
     // Create a cache key for this request
@@ -127,7 +127,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
     let start_time = Instant::now();
 
     if debug_mode {
-        println!("DEBUG: Building file list for path: {:?}", path);
+        println!("DEBUG: Building file list for path: {path:?}");
     }
 
     // Create a WalkBuilder that respects .gitignore files and common ignore patterns
@@ -246,7 +246,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
     // Add all ignore patterns to the override builder
     for pattern in &common_ignores {
         if let Err(err) = override_builder.add(&format!("!**/{}", pattern)) {
-            eprintln!("Error adding ignore pattern {:?}: {}", pattern, err);
+            eprintln!("Error adding ignore pattern {pattern:?}: {err}");
         }
     }
 
@@ -334,12 +334,12 @@ pub fn find_matching_filenames(
 
     if debug_mode {
         println!("DEBUG: Finding files with matching filenames");
-        println!("DEBUG: Queries: {:?}", queries);
+        println!("DEBUG: Queries: {queries:?}");
         println!(
             "DEBUG: Already found files count: {}",
             already_found_files.len()
         );
-        println!("DEBUG: Term indices: {:?}", term_indices);
+        println!("DEBUG: Term indices: {term_indices:?}");
     }
 
     // Get the cached file list, with language filtering if specified
@@ -484,7 +484,7 @@ pub fn get_file_list_by_language(
     let extensions = get_language_extensions(language.unwrap());
 
     if debug_mode {
-        println!("DEBUG: Filtering files by extensions: {:?}", extensions);
+        println!("DEBUG: Filtering files by extensions: {extensions:?}");
     }
 
     // Filter the files by extension

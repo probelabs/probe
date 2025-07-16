@@ -24,7 +24,7 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
             results.len()
         );
         println!("DEBUG: Using reranker: {}", reranker);
-        println!("DEBUG: Queries: {:?}", queries);
+        println!("DEBUG: Queries: {queries:?}");
     }
 
     // Combine all queries into a single string for ranking

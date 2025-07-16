@@ -72,6 +72,7 @@ jobs:
       run: probe --version
 
     - name: Test search functionality
+      shell: bash
       run: |
         echo "Current directory: $(pwd)"
         echo "Probe version:"

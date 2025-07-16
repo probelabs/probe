@@ -178,7 +178,7 @@ fn collect_all_terms(
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("DEBUG: Collecting terms from expression: {:?}", expr);
+        println!("DEBUG: Collecting terms from expression: {expr:?}");
     }
 
     match expr {
@@ -246,8 +246,8 @@ fn collect_all_terms(
     }
 
     if debug_mode {
-        println!("DEBUG: Current all_terms: {:?}", all_terms);
-        println!("DEBUG: Current excluded terms: {:?}", excluded);
+        println!("DEBUG: Current all_terms: {all_terms:?}");
+        println!("DEBUG: Current excluded terms: {excluded:?}");
     }
 }
 
@@ -400,7 +400,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                             let tokens = crate::search::tokenization::tokenize_and_stem(keyword);
 
                             if debug_mode && tokens.len() > 1 {
-                                println!("DEBUG: Term '{}' tokenized into: {:?}", keyword, tokens);
+                                println!("DEBUG: Term '{keyword}' tokenized into: {tokens:?}");
                             }
 
                             // Generate a pattern for each token with the same term index
@@ -467,7 +467,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 
                     if debug_mode {
                         println!("DEBUG: Created combined OR pattern: '{}'", combined);
-                        println!("DEBUG: Combined indices: {:?}", indices);
+                        println!("DEBUG: Combined indices: {indices:?}");
                     }
 
                     results.push((combined, indices));
@@ -650,7 +650,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
             deduplicated_results.len()
         );
         for (pattern, indices) in &deduplicated_results {
-            println!("DEBUG: Pattern: '{}', Indices: {:?}", pattern, indices);
+            println!("DEBUG: Pattern: '{pattern}', Indices: {indices:?}");
         }
     }
 

@@ -57,7 +57,7 @@ impl SessionCache {
         }
 
         if debug_mode {
-            println!("DEBUG: Loading cache from {:?}", cache_path);
+            println!("DEBUG: Loading cache from {cache_path:?}");
         }
 
         // Read the cache file

@@ -519,7 +519,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 Ok(path) => path,
                 Err(e) => {
                     if debug_mode {
-                        println!("DEBUG: Error resolving path for {:?}: {:?}", pathbuf, e);
+                        println!("DEBUG: Error resolving path for {pathbuf:?}: {e:?}");
                     }
                     continue;
                 }
@@ -569,7 +569,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             let line_count = file_content.lines().count();
             if line_count == 0 {
                 if debug_mode {
-                    println!("DEBUG: File {:?} is empty, skipping", pathbuf);
+                    println!("DEBUG: File {pathbuf:?} is empty, skipping");
                 }
                 continue;
             }
@@ -581,14 +581,13 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             let mut term_map = if let Some(existing_map) = file_term_map.get(pathbuf) {
                 if debug_mode {
                     println!(
-                        "DEBUG: File {:?} already has term matches from content search, extending",
-                        pathbuf
+                        "DEBUG: File {pathbuf:?} already has term matches from content search, extending"
                     );
                 }
                 existing_map.clone()
             } else {
                 if debug_mode {
-                    println!("DEBUG: Creating new term map for file {:?}", pathbuf);
+                    println!("DEBUG: Creating new term map for file {pathbuf:?}");
                 }
                 HashMap::new()
             };
@@ -602,8 +601,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
                 if debug_mode {
                     println!(
-                        "DEBUG: Added term index {} to file {:?} with all lines",
-                        term_idx, pathbuf
+                        "DEBUG: Added term index {term_idx} to file {pathbuf:?} with all lines"
                     );
                 }
             }
@@ -614,15 +612,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
             if debug_mode {
                 println!(
-                    "DEBUG: Added file {:?} with matching terms to file_term_map",
-                    pathbuf
+                    "DEBUG: Added file {pathbuf:?} with matching terms to file_term_map"
                 );
             }
         }
     }
 
     if debug_mode {
-        println!("DEBUG: all_files after filename matches: {:?}", all_files);
+        println!("DEBUG: all_files after filename matches: {all_files:?}");
     }
 
     // Early filtering step - filter both all_files and file_term_map using full AST evaluation (including excluded terms?).
@@ -647,12 +644,11 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 filtered_file_term_map.insert(pathbuf.clone(), term_map.clone());
                 filtered_all_files.insert(pathbuf.clone());
             } else if debug_mode {
-                println!("DEBUG: Early filtering removed file: {:?}", pathbuf);
+                println!("DEBUG: Early filtering removed file: {pathbuf:?}");
             }
         } else if debug_mode {
             println!(
-                "DEBUG: File {:?} not found in file_term_map during early filtering",
-                pathbuf
+                "DEBUG: File {pathbuf:?} not found in file_term_map during early filtering"
             );
         }
     }
@@ -666,7 +662,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             "DEBUG: After early filtering: {} files remain",
             all_files.len()
         );
-        println!("DEBUG: all_files after early filtering: {:?}", all_files);
+        println!("DEBUG: all_files after early filtering: {all_files:?}");
     }
 
     let early_filter_duration = early_filter_start.elapsed();
@@ -876,7 +872,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             };
 
             if debug_mode {
-                println!("DEBUG: Processing file with params: {:?}", pparams.path);
+                println!("DEBUG: Processing file with params: {}", pparams.path.display());
             }
 
             // Process file and track granular timings

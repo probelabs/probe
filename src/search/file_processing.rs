@@ -82,7 +82,7 @@ pub fn filter_code_block_with_ast(
             "DEBUG: Checking for terms in block {}-{}",
             block_lines.0, block_lines.1
         );
-        println!("DEBUG: Matched terms: {:?}", matched_terms);
+        println!("DEBUG: Matched terms: {matched_terms:?}");
         println!("DEBUG: Term indices: {:?}", plan.term_indices);
         println!("DEBUG: Excluded terms: {:?}", plan.excluded_terms);
         println!("DEBUG: AST: {:?}", plan.ast);
@@ -102,7 +102,7 @@ pub fn filter_code_block_with_ast(
         if matched_keywords.is_empty() {
             println!("DEBUG: No keywords matched in this block");
         } else {
-            println!("DEBUG: All matched keywords: {:?}", matched_keywords);
+            println!("DEBUG: All matched keywords: {matched_keywords:?}");
         }
         println!("DEBUG: ===================================");
     }
@@ -121,7 +121,7 @@ pub fn filter_code_block_with_ast(
     // Use the AST evaluation directly
     if debug_mode {
         println!("DEBUG: ===== AST EVALUATION =====");
-        println!("DEBUG: Matched terms: {:?}", matched_terms);
+        println!("DEBUG: Matched terms: {matched_terms:?}");
         println!("DEBUG: Term indices: {:?}", plan.term_indices);
     }
 
@@ -202,8 +202,8 @@ pub fn filter_tokenized_block(
 
     if debug_mode {
         println!("DEBUG: Checking for terms in tokenized block");
-        println!("DEBUG: Tokenized content: {:?}", tokenized_content);
-        println!("DEBUG: Matched terms: {:?}", matched_terms);
+        println!("DEBUG: Tokenized content: {tokenized_content:?}");
+        println!("DEBUG: Matched terms: {matched_terms:?}");
         println!("DEBUG: Term indices: {:?}", plan.term_indices);
         println!("DEBUG: Excluded terms: {:?}", plan.excluded_terms);
         println!("DEBUG: AST: {:?}", plan.ast);
@@ -220,7 +220,7 @@ pub fn filter_tokenized_block(
         if matched_keywords.is_empty() {
             println!("DEBUG: No keywords matched in this block");
         } else {
-            println!("DEBUG: All matched keywords: {:?}", matched_keywords);
+            println!("DEBUG: All matched keywords: {matched_keywords:?}");
         }
         println!("DEBUG: ===================================");
     }
@@ -236,7 +236,7 @@ pub fn filter_tokenized_block(
     // Use the AST evaluation directly
     if debug_mode {
         println!("DEBUG: ===== AST EVALUATION =====");
-        println!("DEBUG: Matched terms: {:?}", matched_terms);
+        println!("DEBUG: Matched terms: {matched_terms:?}");
         println!("DEBUG: Term indices: {:?}", plan.term_indices);
     }
 
@@ -256,7 +256,7 @@ pub fn filter_tokenized_block(
     let decision = result;
 
     if debug_mode {
-        println!("DEBUG: Tokenized block matched terms: {:?}", matched_terms);
+        println!("DEBUG: Tokenized block matched terms: {matched_terms:?}");
         println!("DEBUG: AST evaluation result: {}", decision);
         println!(
             "DEBUG: filter_tokenized_block => matched {:?}, decision={}",
@@ -473,13 +473,12 @@ pub fn process_file_with_results(
     timings.ast_parsing = Some(ast_parsing_duration);
 
     if debug_mode {
-        println!("DEBUG:   AST parsing time: {:?}", ast_parsing_duration);
-        println!("DEBUG:     - Language init: {:?}", language_init_duration);
-        println!("DEBUG:     - Parser init: {:?}", parser_init_duration);
-        println!("DEBUG:     - Tree parsing: {:?}", tree_parsing_duration);
+        println!("DEBUG:   AST parsing time: {ast_parsing_duration:?}");
+        println!("DEBUG:     - Language init: {language_init_duration:?}");
+        println!("DEBUG:     - Parser init: {parser_init_duration:?}");
+        println!("DEBUG:     - Tree parsing: {tree_parsing_duration:?}");
         println!(
-            "DEBUG:     - Line map building: {:?}",
-            line_map_building_duration
+            "DEBUG:     - Line map building: {line_map_building_duration:?}"
         );
     }
 

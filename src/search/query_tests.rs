@@ -19,7 +19,7 @@ use std::collections::HashSet;
         let non_exact_result = preprocess_query("findAPIInCode typeIgnore", false);
         
         // Get the actual result for debugging
-        println!("Actual result: {:?}", non_exact_result);
+        println!("Actual result: {non_exact_result:?}");
         
         // The current behavior is that camelCase words are split into individual terms
         // This is the correct behavior as per the implementation
@@ -269,7 +269,7 @@ use std::collections::HashSet;
         let terms = preprocess_query(query, false); // Use non-exact mode
         
         // Print the actual result for debugging
-        println!("Processed terms for 'whitelist': {:?}", terms);
+        println!("Processed terms for 'whitelist': {terms:?}");
         
         // Check that "whitelist" is split into "white" and "list"
         let has_white = terms.iter().any(|(_, stemmed)| stemmed == "white");
@@ -287,7 +287,7 @@ use std::collections::HashSet;
         let query = "ENGLISH_STOP_WORDS";
         let terms = preprocess_query(query, false); // Use non-exact mode
         
-        println!("Preprocessed terms for 'ENGLISH_STOP_WORDS': {:?}", terms);
+        println!("Preprocessed terms for 'ENGLISH_STOP_WORDS': {terms:?}");
         
         // Check that it's stemmed correctly
         let has_english = terms.iter().any(|(_, stemmed)| stemmed == "english");
@@ -305,7 +305,7 @@ use std::collections::HashSet;
         let query = "foo AND -bar";
         let terms = preprocess_query(query, false); // Use non-exact mode
         
-        println!("Preprocessed terms for 'foo AND -bar': {:?}", terms);
+        println!("Preprocessed terms for 'foo AND -bar': {terms:?}");
         
         // Check that "foo" is included
         let has_foo = terms.iter().any(|(orig, _)| orig == "foo");
@@ -319,7 +319,7 @@ use std::collections::HashSet;
         let query = "search -test -ignore";
         let terms = preprocess_query(query, false);
         
-        println!("Preprocessed terms for 'search -test -ignore': {:?}", terms);
+        println!("Preprocessed terms for 'search -test -ignore': {terms:?}");
         
         // Check that "search" is included
         let has_search = terms.iter().any(|(orig, _)| orig == "search");

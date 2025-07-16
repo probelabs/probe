@@ -172,9 +172,7 @@ impl Expr {
                 if debug_mode {
                     println!(
                         "DEBUG: AND => left={}, right={}, result={}",
-                        lval,
-                        rval,
-                        lval && rval
+                        lval, rval, lval && rval
                     );
                 }
                 lval && rval
@@ -199,9 +197,7 @@ impl Expr {
                 if debug_mode {
                     println!(
                         "DEBUG: OR => left={}, right={}, result={}",
-                        lval,
-                        rval,
-                        lval || rval
+                        lval, rval, lval || rval
                     );
                 }
                 lval || rval
@@ -257,8 +253,7 @@ impl Expr {
             let required_terms = collect_required(self);
             if debug_mode && !required_terms.is_empty() {
                 println!(
-                    "DEBUG: Required terms (ignoring negatives): {:?}",
-                    required_terms
+                    "DEBUG: Required terms (ignoring negatives): {required_terms:?}"
                 );
             }
             for term in &required_terms {
@@ -284,8 +279,7 @@ impl Expr {
             println!("DEBUG: matched_terms => {:?}", matched_terms);
             println!("DEBUG: term_indices => {:?}", term_indices);
             println!(
-                "DEBUG: Expression has_required_anywhere? {}",
-                has_required_anywhere
+                "DEBUG: Expression has_required_anywhere? {}", has_required_anywhere
             );
         }
 
@@ -527,7 +521,7 @@ impl Parser {
             let right = self.parse_and_expr()?;
             left = Expr::Or(Box::new(left), Box::new(right));
             if debug_mode {
-                println!("DEBUG: OR => {:?}", left);
+                println!("DEBUG: OR => {left:?}");
             }
         }
         Ok(left)
@@ -549,7 +543,7 @@ impl Parser {
                     let right = self.parse_factor()?;
                     left = Expr::And(Box::new(left), Box::new(right));
                     if debug_mode {
-                        println!("DEBUG: AND => {:?}", left);
+                        println!("DEBUG: AND => {left:?}");
                     }
                 }
                 // If we see "OR", break so parse_or_expr can handle it
@@ -561,7 +555,7 @@ impl Parser {
                     let right = self.parse_factor()?;
                     left = Expr::And(Box::new(left), Box::new(right));
                     if debug_mode {
-                        println!("DEBUG: forced AND => {:?}", left);
+                        println!("DEBUG: forced AND => {left:?}");
                     }
                 }
                 // Otherwise (Ident, QuotedString, LParen) => implicit combos
@@ -570,7 +564,7 @@ impl Parser {
                     // Use OR for implicit combinations (space-separated terms) - Elasticsearch standard behavior
                     left = Expr::Or(Box::new(left), Box::new(right));
                     if debug_mode {
-                        println!("DEBUG: implicit OR => {:?}", left);
+                        println!("DEBUG: implicit OR => {left:?}");
                     }
                 }
                 _ => break,
@@ -763,7 +757,7 @@ pub fn parse_query(input: &str, exact: bool) -> Result<Expr, ParseError> {
     // Tokenize
     let tokens_result = tokenize(input);
     if debug_mode {
-        println!("DEBUG: Tokens => {:?}", tokens_result);
+        println!("DEBUG: Tokens => {tokens_result:?}");
     }
 
     // If tokenization fails => fallback
