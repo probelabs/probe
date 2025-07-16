@@ -25,8 +25,48 @@ jobs:
       with:
         node-version: ${{ matrix.node-version }}
 
-    - name: Install Probe via npm
-      run: npm install -g @buger/probe
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Setup Rust cache
+      uses: actions/cache@v4
+      timeout-minutes: 5
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain', 'rust-toolchain.toml') || 'stable' }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+          ${{ runner.os }}-cargo-
+
+    - name: Build Rust binary
+      run: cargo build --release
+
+    - name: Prepare npm package with local binary
+      shell: bash
+      run: |
+        # Create bin directory in npm package
+        mkdir -p npm/bin
+        
+        # Copy the built binary to npm package bin directory
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          cp target/release/probe.exe npm/bin/probe.exe
+        else
+          cp target/release/probe npm/bin/probe
+          chmod +x npm/bin/probe
+        fi
+        
+        # Install npm package dependencies
+        cd npm && npm install
+
+    - name: Install Probe locally
+      run: cd npm && npm install -g .
 
     - name: Verify Probe installation
       run: probe --version
@@ -45,8 +85,8 @@ jobs:
           exit 1
         fi
 
-        if ! grep -q '"content"' search_results.json; then
-          echo "Error: JSON output missing 'content' field"
+        if ! grep -q '"code"' search_results.json; then
+          echo "Error: JSON output missing 'code' field"
           cat search_results.json
           exit 1
         fi
@@ -77,8 +117,8 @@ jobs:
           exit 1
         }
 
-        if (-not ($content -match '"content"')) {
-          Write-Host "Error: JSON output missing 'content' field"
+        if (-not ($content -match '"code"')) {
+          Write-Host "Error: JSON output missing 'code' field"
           Get-Content search_results.json
           exit 1
         }

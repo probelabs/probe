@@ -480,7 +480,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 }
                 Err(err) => {
                     if debug_mode {
-                        println!("DEBUG: Failed to resolve path '{}': {}", path_str, err);
+                        println!("DEBUG: Failed to resolve path '{path_str}': {err}");
                     }
                     // Fall back to the original path
                     path.to_path_buf()
@@ -530,10 +530,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 Ok(meta) => meta,
                 Err(e) => {
                     if debug_mode {
-                        println!(
-                            "DEBUG: Error getting metadata for {:?}: {:?}",
-                            resolved_path, e
-                        );
+                        println!("DEBUG: Error getting metadata for {resolved_path:?}: {e:?}");
                     }
                     continue;
                 }
@@ -748,13 +745,10 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         };
 
         if debug_mode {
-            println!(
-                "DEBUG: Starting early caching for session: {} with query: {}",
-                session_id, raw_query
-            );
+            println!("DEBUG: Starting early caching for session: {session_id} with query: {raw_query}");
             // Print cache contents before filtering
             if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
-                eprintln!("Error printing cache: {}", e);
+                eprintln!("Error printing cache: {e}");
             }
         }
 
@@ -762,13 +756,13 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         match cache::filter_matched_lines_with_cache(&mut file_term_map, session_id, &raw_query) {
             Ok(skipped) => {
                 if debug_mode {
-                    println!("DEBUG: Early caching skipped {} matched lines", skipped);
+                    println!("DEBUG: Early caching skipped {skipped} matched lines");
                 }
                 early_skipped_count = skipped;
             }
             Err(e) => {
                 // Log the error but continue without early caching
-                eprintln!("Error applying early cache: {}", e);
+                eprintln!("Error applying early cache: {e}");
             }
         }
 
@@ -778,7 +772,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         all_files = all_files.intersection(&cached_files).cloned().collect();
 
         if debug_mode {
-            println!("DEBUG: all_files after caching: {:?}", all_files);
+            println!("DEBUG: all_files after caching: {all_files:?}");
         }
     }
 
@@ -830,13 +824,13 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let mut total_uncovered_lines_time = Duration::new(0, 0);
     for pathbuf in &all_files {
         if debug_mode {
-            println!("DEBUG: Processing file: {:?}", pathbuf);
+            println!("DEBUG: Processing file: {pathbuf:?}");
         }
 
         // Get the term map for this file
         if let Some(term_map) = file_term_map.get(pathbuf) {
             if debug_mode {
-                println!("DEBUG: Term map for file: {:?}", term_map);
+                println!("DEBUG: Term map for file: {term_map:?}");
             }
 
             // Gather matched lines - measure line collection time
@@ -1027,17 +1021,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 }
                 Err(e) => {
                     if debug_mode {
-                        println!("DEBUG: Error processing file: {:?}", e);
+                        println!("DEBUG: Error processing file: {e:?}");
                     }
                 }
             }
         } else {
             // This should never happen, but keep for safety
             if debug_mode {
-                println!(
-                    "DEBUG: ERROR - File {:?} not found in file_term_map but was in all_files",
-                    pathbuf
-                );
+                println!("DEBUG: ERROR - File {pathbuf:?} not found in file_term_map but was in all_files");
             }
         }
     }
@@ -1208,17 +1199,11 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         };
 
         if debug_mode {
-            println!(
-                "DEBUG: Starting final caching for session: {} with query: {}",
-                session_id, raw_query
-            );
-            println!(
-                "DEBUG: Already skipped {} lines in early caching",
-                early_skipped_count
-            );
+            println!("DEBUG: Starting final caching for session: {session_id} with query: {raw_query}");
+            println!("DEBUG: Already skipped {early_skipped_count} lines in early caching");
             // Print cache contents before filtering
             if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
-                eprintln!("Error printing cache: {}", e);
+                eprintln!("Error printing cache: {e}");
             }
         }
 
@@ -1226,34 +1211,28 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         match cache::filter_results_with_cache(&limited.results, session_id, &raw_query) {
             Ok((_, cached_skipped)) => {
                 if debug_mode {
-                    println!(
-                        "DEBUG: Final caching found {} cached blocks",
-                        cached_skipped
-                    );
-                    println!(
-                        "DEBUG: Total skipped (early + final): {}",
-                        early_skipped_count + cached_skipped
-                    );
+                    println!("DEBUG: Final caching found {cached_skipped} cached blocks");
+                    println!("DEBUG: Total skipped (early + final): {}", early_skipped_count + cached_skipped);
                 }
 
                 skipped_count += cached_skipped;
             }
             Err(e) => {
                 // Log the error but continue without caching
-                eprintln!("Error checking cache: {}", e);
+                eprintln!("Error checking cache: {e}");
             }
         }
 
         // Update the cache with the limited results
         if let Err(e) = cache::add_results_to_cache(&limited.results, session_id, &raw_query) {
-            eprintln!("Error adding results to cache: {}", e);
+            eprintln!("Error adding results to cache: {e}");
         }
 
         if debug_mode {
             println!("DEBUG: Added limited results to cache before merging");
             // Print cache contents after adding new results
             if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
-                eprintln!("Error printing updated cache: {}", e);
+                eprintln!("Error printing updated cache: {e}");
             }
         }
     }
@@ -1325,14 +1304,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             };
 
             if let Err(e) = cache::add_results_to_cache(&merged, session_id, &raw_query) {
-                eprintln!("Error adding merged results to cache: {}", e);
+                eprintln!("Error adding merged results to cache: {e}");
             }
 
             if debug_mode {
                 println!("DEBUG: Added merged results to cache after merging");
                 // Print cache contents after adding merged results
                 if let Err(e) = cache::debug_print_cache(session_id, &raw_query) {
-                    eprintln!("Error printing updated cache: {}", e);
+                    eprintln!("Error printing updated cache: {e}");
                 }
             }
         }
@@ -1355,12 +1334,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // Print the session ID to the console if it was generated or provided
     if let Some(session_id) = effective_session {
         if session_was_generated {
-            println!(
-                "Session ID: {} (generated - ALWAYS USE IT in future sessions for caching)",
-                session_id
-            );
+            println!("Session ID: {session_id} (generated - ALWAYS USE IT in future sessions for caching)");
         } else {
-            println!("Session ID: {}", session_id);
+            println!("Session ID: {session_id}");
         }
     }
 
@@ -1410,7 +1386,7 @@ pub fn search_with_structured_patterns(
             }
             Err(err) => {
                 if std::env::var("DEBUG").unwrap_or_default() == "1" {
-                    println!("DEBUG: Failed to resolve path '{}': {}", path_str, err);
+                    println!("DEBUG: Failed to resolve path '{path_str}': {err}");
                 }
                 // Fall back to the original path
                 root_path_str.to_path_buf()
@@ -1434,7 +1410,7 @@ pub fn search_with_structured_patterns(
     }
 
     // Extract just the patterns for the RegexSet
-    let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| format!("(?i){}", p)).collect();
+    let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| format!("(?i){p}")).collect();
 
     // Create a RegexSet for deterministic matching
     let regex_set = RegexSet::new(&pattern_strings)?;
@@ -1450,7 +1426,7 @@ pub fn search_with_structured_patterns(
     // Step 2: Get filtered file list from cache
     if debug_mode {
         println!("DEBUG: Getting filtered file list from cache");
-        println!("DEBUG: Custom ignore patterns: {:?}", custom_ignores);
+        println!("DEBUG: Custom ignore patterns: {custom_ignores:?}");
     }
 
     // Use file_list_cache to get a filtered list of files, with language filtering if specified
@@ -1508,7 +1484,7 @@ pub fn search_with_structured_patterns(
             }
             Err(e) => {
                 if debug_mode {
-                    println!("DEBUG: Error searching file {:?}: {:?}", file_path, e);
+                    println!("DEBUG: Error searching file {file_path:?}: {e:?}");
                 }
             }
         }
@@ -1556,7 +1532,7 @@ fn search_file_with_regex_set(
         Ok(path) => path,
         Err(e) => {
             if debug_mode {
-                println!("DEBUG: Error resolving path for {:?}: {:?}", file_path, e);
+                println!("DEBUG: Error resolving path for {file_path:?}: {e:?}");
             }
             return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
         }
@@ -1567,10 +1543,7 @@ fn search_file_with_regex_set(
         Ok(meta) => meta,
         Err(e) => {
             if debug_mode {
-                println!(
-                    "DEBUG: Error getting metadata for {:?}: {:?}",
-                    resolved_path, e
-                );
+                println!("DEBUG: Error getting metadata for {resolved_path:?}: {e:?}");
             }
             return Err(anyhow::anyhow!("Failed to get file metadata: {}", e));
         }

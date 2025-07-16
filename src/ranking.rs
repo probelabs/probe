@@ -123,11 +123,12 @@ pub fn precompute_idfs(
                 let numerator = (n_docs as f64 - df as f64) + 0.5;
                 let denominator = df as f64 + 0.5;
                 let idf = (1.0 + (numerator / denominator)).ln();
-                Some((term.clone(), idf))
+                Some((term.as_str(), idf))
             } else {
                 None
             }
         })
+        .map(|(term, idf)| (term.to_string(), idf))
         .collect()
 }
 
@@ -157,12 +158,12 @@ fn generate_query_token_map(query_terms: &HashSet<String>) -> Result<QueryTokenM
     let mut index: u8 = 0;
 
     // Sort terms for deterministic mapping (HashMap iteration order isn't guaranteed)
-    let mut sorted_terms: Vec<&String> = query_terms.iter().collect();
+    let mut sorted_terms: Vec<&str> = query_terms.iter().map(|s| s.as_str()).collect();
     sorted_terms.sort();
 
     // Assign each term a unique index
     for term in sorted_terms {
-        token_map.insert(term.clone(), index);
+        token_map.insert(term.to_string(), index);
         index = index.wrapping_add(1); // Use wrapping_add to handle potential overflow safely
     }
 
@@ -276,14 +277,11 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
         Ok(expr) => expr,
         Err(e) => {
             if debug_mode {
-                eprintln!("DEBUG: parse_query failed: {:?}", e);
+                eprintln!("DEBUG: parse_query failed: {e:?}");
             }
             // Instead of silently returning empty results, log a warning even in non-debug mode
             // to ensure errors are visible and can be addressed
-            eprintln!(
-                "WARNING: Query parsing failed: {:?}. Returning empty results.",
-                e
-            );
+            eprintln!("WARNING: Query parsing failed: {e:?}. Returning empty results.");
             // In a future version, consider changing the return type to Result<Vec<(usize, f64)>, QueryError>
             // to properly propagate errors to the caller
             return vec![];
@@ -298,9 +296,9 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
         Ok(map) => map,
         Err(e) => {
             if debug_mode {
-                eprintln!("DEBUG: Failed to generate query token map: {}", e);
+                eprintln!("DEBUG: Failed to generate query token map: {e}");
             }
-            eprintln!("WARNING: {}", e);
+            eprintln!("WARNING: {e}");
             return vec![];
         }
     };
@@ -354,10 +352,7 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
     let b = 0.75;
 
     if debug_mode {
-        println!(
-            "DEBUG: Starting parallel document scoring for {} documents",
-            n_docs
-        );
+        println!("DEBUG: Starting parallel document scoring for {n_docs} documents");
     }
 
     // 5) Compute BM25 bool logic score for each doc in parallel

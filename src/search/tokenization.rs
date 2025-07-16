@@ -17,7 +17,7 @@ pub fn add_special_term(term: &str) {
 
     // Debug output
     if std::env::var("DEBUG").unwrap_or_default() == "1" {
-        println!("DEBUG: Added special term: {}", term);
+        println!("DEBUG: Added special term: {term}");
     }
 }
 
@@ -349,7 +349,7 @@ pub fn is_special_case(word: &str) -> bool {
     if special_terms.contains(&lowercase) {
         // Debug output
         if std::env::var("DEBUG").unwrap_or_default() == "1" {
-            println!("DEBUG: Found dynamic special term: {}", lowercase);
+            println!("DEBUG: Found dynamic special term: {lowercase}");
         }
         return true;
     }

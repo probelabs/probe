@@ -56,12 +56,12 @@ function detectOsArch() {
 				keywords: ['darwin', 'Darwin', 'mac', 'Mac', 'apple', 'Apple', 'osx', 'OSX']
 			};
 			break;
-		case 'win32':
-			osInfo = {
-				type: 'windows',
-				keywords: ['windows', 'Windows', 'win', 'Win']
-			};
-			break;
+	case 'win32':
+		osInfo = {
+			type: 'windows',
+			keywords: ['windows', 'Windows', 'msvc', 'pc-windows']
+		};
+		break;
 		default:
 			throw new Error(`Unsupported operating system: ${osType}`);
 	}
@@ -186,12 +186,27 @@ function findBestAsset(assets, osInfo, archInfo) {
 			continue;
 		}
 
-		let score = 0;
+		if (osInfo.type === 'windows' && asset.name.match(/darwin|linux/)) {
+			console.log(`Skipping non-Windows binary: ${asset.name}`);
+			continue;
+		} else if (osInfo.type === 'darwin' && asset.name.match(/windows|msvc|linux/)) {
+			console.log(`Skipping non-macOS binary: ${asset.name}`);
+			continue;
+		} else if (osInfo.type === 'linux' && asset.name.match(/darwin|windows|msvc/)) {
+			console.log(`Skipping non-Linux binary: ${asset.name}`);
+			continue;
+		}
 
-		// Check for OS match
+		let score = 0;
+		console.log(`Evaluating asset: ${asset.name}`);
+
+		// Check for OS match - give higher priority to exact OS matches
+		let osMatched = false;
 		for (const keyword of osInfo.keywords) {
 			if (asset.name.includes(keyword)) {
-				score += 5;
+				score += 10;
+				osMatched = true;
+				console.log(`  OS match found (${keyword}): +10, score = ${score}`);
 				break;
 			}
 		}
@@ -200,6 +215,7 @@ function findBestAsset(assets, osInfo, archInfo) {
 		for (const keyword of archInfo.keywords) {
 			if (asset.name.includes(keyword)) {
 				score += 5;
+				console.log(`  Arch match found (${keyword}): +5, score = ${score}`);
 				break;
 			}
 		}
@@ -207,10 +223,18 @@ function findBestAsset(assets, osInfo, archInfo) {
 		// Prefer exact matches for binary name
 		if (asset.name.startsWith(`${BINARY_NAME}-`)) {
 			score += 3;
+			console.log(`  Binary name match: +3, score = ${score}`);
 		}
 
+		if (osMatched && score >= 15) {
+			score += 5;
+			console.log(`  OS+Arch bonus: +5, score = ${score}`);
+		}
+
+		console.log(`  Final score for ${asset.name}: ${score}`);
+
 		// If we have a perfect match, use it immediately
-		if (score === 13) {
+		if (score === 23) {
 			console.log(`Found perfect match: ${asset.name}`);
 			return asset;
 		}
@@ -219,6 +243,7 @@ function findBestAsset(assets, osInfo, archInfo) {
 		if (score > bestScore) {
 			bestScore = score;
 			bestAsset = asset;
+			console.log(`  New best asset: ${asset.name} (score: ${score})`);
 		}
 	}
 

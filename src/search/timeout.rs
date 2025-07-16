@@ -35,10 +35,7 @@ pub fn start_timeout_thread(timeout_seconds: u64) -> Arc<AtomicBool> {
         }
 
         // Timeout reached, print a message and terminate the process
-        eprintln!(
-            "Search operation timed out after {} seconds",
-            timeout_seconds
-        );
+        eprintln!("Search operation timed out after {timeout_seconds} seconds");
         std::process::exit(1);
     });
 
