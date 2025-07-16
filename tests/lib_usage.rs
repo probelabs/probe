@@ -8,7 +8,7 @@ mod tests {
         // Create search options
         let options = SearchOptions {
             path: Path::new("."),
-            queries: &vec!["function".to_string()],
+            queries: &["function".to_string()],
             files_only: false,
             custom_ignores: &[],
             exclude_filenames: false,
