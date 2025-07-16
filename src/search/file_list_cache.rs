@@ -466,10 +466,7 @@ pub fn get_file_list_by_language(
     let start_time = Instant::now();
 
     if debug_mode {
-        println!(
-            "DEBUG: Getting file list for path: {:?} with language filter: {:?}",
-            path, language
-        );
+        println!("DEBUG: Getting file list for path: {path:?} with language filter: {language:?}");
     }
 
     // Get the full file list first

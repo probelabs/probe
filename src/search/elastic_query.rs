@@ -280,10 +280,7 @@ impl Expr {
             println!("DEBUG: Evaluating => {self:?}");
             println!("DEBUG: matched_terms => {matched_terms:?}");
             println!("DEBUG: term_indices => {term_indices:?}");
-            println!(
-                "DEBUG: Expression has_required_anywhere? {}",
-                has_required_anywhere
-            );
+            println!("DEBUG: Expression has_required_anywhere? {has_required_anywhere}");
         }
 
         // Delegate final checks to our helper, which references has_required_anywhere
@@ -328,8 +325,8 @@ impl std::fmt::Display for Expr {
                     write!(f, "{}{}\"{}\"", prefix, field_prefix, keywords.join(" "))
                 }
             }
-            Expr::And(left, right) => write!(f, "({} AND {})", left, right),
-            Expr::Or(left, right) => write!(f, "({} OR {})", left, right),
+            Expr::And(left, right) => write!(f, "({left} AND {right})"),
+            Expr::Or(left, right) => write!(f, "({left} OR {right})"),
         }
     }
 }
@@ -359,10 +356,10 @@ pub enum ParseError {
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseError::UnexpectedChar(c) => write!(f, "Unexpected character '{}'", c),
+            ParseError::UnexpectedChar(c) => write!(f, "Unexpected character '{c}'"),
             ParseError::UnexpectedEndOfInput => write!(f, "Unexpected end of input"),
-            ParseError::UnexpectedToken(t) => write!(f, "Unexpected token '{:?}'", t),
-            ParseError::Generic(s) => write!(f, "{}", s),
+            ParseError::UnexpectedToken(t) => write!(f, "Unexpected token '{t:?}'"),
+            ParseError::Generic(s) => write!(f, "{s}"),
         }
     }
 }
@@ -636,10 +633,7 @@ impl Parser {
             };
 
             if debug_mode {
-                println!(
-                    "DEBUG: parse_prefixed_term => required={}, excluded={}, final_keywords={:?}",
-                    required, excluded, final_keywords
-                );
+                println!("DEBUG: parse_prefixed_term => required={required}, excluded={excluded}, final_keywords={final_keywords:?}");
             }
 
             Ok(Expr::Term {
