@@ -146,6 +146,7 @@ export function main() {
     logInfo(chalk.blue(`Enabling implement tool with --allow-edit flag`));
   }
 
+
   // Handle custom prompt if provided
   let customPrompt = null;
   if (options.prompt) {

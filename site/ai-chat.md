@@ -127,12 +127,30 @@ The terminal interface provides user-friendly colored output with syntax highlig
 
 ### Code Editing (Experimental)
 
-With the `--allow-edit` flag, you can enable the AI agent to modify your code.
+Probe can help you modify your code in two ways:
 
-*   **How it Works**: This flag enables the `implement` tool, which uses **Aider** (an external AI coding assistant) to apply changes based on your requests (e.g., "Refactor this function").
-*   **Requirements**: Requires `aider-chat` to be installed and accessible in your PATH. The chat process also needs write permissions to the target files.
-*   **Caution**: Granting AI write access to your code is powerful but carries risks. Always review changes made by Aider carefully.
-*   **More Info**: See the [CLI Reference](./cli-mode.md#enabling-code-editing---allow-edit) for detailed usage and security considerations.
+#### Local Code Editing (`--allow-edit`)
+
+When you use the `--allow-edit` flag, Probe can make changes directly to your code files.
+
+*   **What it does**: Ask Probe to "fix this bug" or "add error handling" and it will modify your files.
+*   **What you need**: Install the `aider-chat` package and make sure Probe can write to your project files.
+
+#### GitHub Integration
+
+If you're using Probe with GitHub Actions, you can set up code suggestions instead of direct changes.
+
+*   **How it works**: Probe creates suggested changes that appear in your pull requests, just like human code reviews.
+*   **Setup**: See the [GitHub Actions Integration](./integrations/github-actions.md#code-modification-options) guide for configuration details.
+
+#### Stay Safe
+
+*   **Always check changes** before keeping them
+*   **Test your code** after Probe makes modifications
+*   **Start with small requests** to see how it works
+*   **GitHub suggestions are safer** because you review changes before applying them
+
+For complete usage instructions, see the [CLI Reference](./cli-mode.md#code-editing---allow-edit).
 
 ## Configuration
 

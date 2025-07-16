@@ -29,6 +29,8 @@ jobs:
     # Pass required inputs
     with:
       command_prefix: "/probe" # Or '/ai', '/ask', etc.
+      allow_edit: false
+      # allow_suggestions: true # Set to true to use reviewdog suggestions instead of direct commits
       # Optionally override the default npx command if the secret isn't set
       # default_probe_chat_command: 'node path/to/custom/script.js'
       update_existing_comment: false # Set to true to update existing comments instead of creating new ones
