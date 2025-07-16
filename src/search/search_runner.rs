@@ -530,10 +530,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 Ok(meta) => meta,
                 Err(e) => {
                     if debug_mode {
-                        println!(
-                            "DEBUG: Error getting metadata for {:?}: {:?}",
-                            resolved_path, e
-                        );
+                        println!("DEBUG: Error getting metadata for {resolved_path:?}: {e:?}");
                     }
                     continue;
                 }
@@ -1450,7 +1447,7 @@ pub fn search_with_structured_patterns(
     // Step 2: Get filtered file list from cache
     if debug_mode {
         println!("DEBUG: Getting filtered file list from cache");
-        println!("DEBUG: Custom ignore patterns: {:?}", custom_ignores);
+        println!("DEBUG: Custom ignore patterns: {custom_ignores:?}");
     }
 
     // Use file_list_cache to get a filtered list of files, with language filtering if specified
@@ -1508,7 +1505,7 @@ pub fn search_with_structured_patterns(
             }
             Err(e) => {
                 if debug_mode {
-                    println!("DEBUG: Error searching file {:?}: {:?}", file_path, e);
+                    println!("DEBUG: Error searching file {file_path:?}: {e:?}");
                 }
             }
         }
@@ -1556,7 +1553,7 @@ fn search_file_with_regex_set(
         Ok(path) => path,
         Err(e) => {
             if debug_mode {
-                println!("DEBUG: Error resolving path for {:?}: {:?}", file_path, e);
+                println!("DEBUG: Error resolving path for {file_path:?}: {e:?}");
             }
             return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
         }

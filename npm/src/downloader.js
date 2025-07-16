@@ -59,7 +59,7 @@ function detectOsArch() {
 	case 'win32':
 		osInfo = {
 			type: 'windows',
-			keywords: ['windows', 'Windows', 'win', 'Win', 'msvc', 'pc-windows']
+			keywords: ['windows', 'Windows', 'msvc', 'pc-windows']
 		};
 		break;
 		default:
@@ -183,6 +183,17 @@ function findBestAsset(assets, osInfo, archInfo) {
 	for (const asset of assets) {
 		// Skip checksum files
 		if (asset.name.endsWith('.sha256') || asset.name.endsWith('.md5') || asset.name.endsWith('.asc')) {
+			continue;
+		}
+
+		if (osInfo.type === 'windows' && asset.name.match(/darwin|linux/)) {
+			console.log(`Skipping non-Windows binary: ${asset.name}`);
+			continue;
+		} else if (osInfo.type === 'darwin' && asset.name.match(/windows|msvc|linux/)) {
+			console.log(`Skipping non-macOS binary: ${asset.name}`);
+			continue;
+		} else if (osInfo.type === 'linux' && asset.name.match(/darwin|windows|msvc/)) {
+			console.log(`Skipping non-Linux binary: ${asset.name}`);
 			continue;
 		}
 
