@@ -1,6 +1,8 @@
 name: Probe Engineer handler
 
 on:
+  pull_request:
+    types: [opened]
   issue_comment:
     types: [created]          
 
@@ -15,7 +17,7 @@ jobs:
     uses: buger/probe/.github/workflows/probe.yml@main
     with:
       command_prefix: "/engineer" # Or '/ai', '/ask', etc.
-      allow_edit: true
+      allow_suggestions: true # Enable reviewdog suggestions instead of direct commits
       prompt: ./.prompts/engineer.md
       update_existing_comment: false
       update_comment_marker: "<!-- probe-bot -->"
