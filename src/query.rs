@@ -371,7 +371,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
                         "file": m.file_path.to_string_lossy(),
                         "lines": [m.line_start, m.line_end],
                         "node_type": "match",
-                        "code": m.matched_text,
+                        "content": m.matched_text,
                         "column_start": m.column_start,
                         "column_end": m.column_end
                     })
