@@ -116,9 +116,7 @@ pub fn is_test_file(path: &Path) -> bool {
         || path_str.contains("/__test__/")
     {
         if _debug_mode {
-            println!(
-                "DEBUG: Test file detected (in test directory): {path_str}"
-            );
+            println!("DEBUG: Test file detected (in test directory): {path_str}");
         }
         return true;
     }

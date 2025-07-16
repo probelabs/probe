@@ -177,9 +177,7 @@ pub fn extract_file_paths_from_git_diff(text: &str, allow_tests: bool) -> Vec<Fi
                     if hunk_line.starts_with('+') && !hunk_line.starts_with("+++") {
                         // This is an added/modified line in the new version
                         if debug_mode {
-                            println!(
-                                "[DEBUG] Found changed line at {current_line}: {hunk_line}"
-                            );
+                            println!("[DEBUG] Found changed line at {current_line}: {hunk_line}");
                         }
                         current_file_lines.insert(current_line);
                     }
