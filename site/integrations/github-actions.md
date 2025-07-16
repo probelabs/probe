@@ -118,33 +118,34 @@ jobs:
 
 ## Code Modification Options
 
-The reusable workflow supports two modes for AI-powered code modifications:
+Probe can help you make code changes in two ways:
 
-### Direct Code Editing (`allow_edit: true`)
+### Direct Changes (`allow_edit: true`)
 
-Setting the `allow_edit` input parameter to `true` grants the Probe AI agent the capability to modify your codebase with direct commits.
+When you set `allow_edit: true`, Probe can make changes directly to your code.
 
-*   **Functionality**: When enabled, the agent gains access to the `implement` tool. This tool utilizes **Aider** (an external command-line AI coding assistant) under the hood to apply code changes based on the provided task description (e.g., "`/engineer Refactor function X`").
-*   **Permissions**: Requires the workflow to have `contents: write` permission. Without this, Aider cannot modify files, and the `implement` tool will fail.
-*   **Output**: Changes are applied as direct commits to the repository or branch.
+*   **What it does**: Probe can modify files in your repository when you ask it to (like "Fix this bug" or "Add error handling").
+*   **Requirements**: Your workflow needs permission to write to your repository (`contents: write`).
+*   **Result**: Changes are saved directly to your code.
 
-### Code Suggestions (`allow_suggestions: true`)
+### Suggested Changes (`allow_suggestions: true`) - Recommended
 
-Setting the `allow_suggestions` input parameter to `true` enables the same `implement` tool functionality but uses reviewdog to create GitHub suggestions instead of direct commits.
+When you set `allow_suggestions: true`, Probe creates suggestions instead of making direct changes.
 
-*   **Functionality**: Internally enables the same `implement` tool as `allow_edit`, but the workflow uses `reviewdog/action-suggester` to present changes as GitHub PR suggestions rather than direct commits.
-*   **Permissions**: Requires `contents: read` and `pull-requests: write` permissions. Does not require `contents: write` since no direct commits are made.
-*   **Output**: Changes are presented as reviewable suggestions in pull request contexts using GitHub's suggestion feature.
-*   **Context**: Only works in pull request contexts. In other contexts, behaves like `allow_edit: false`.
+*   **What it does**: Probe analyzes your code and creates suggestions that appear in pull requests, just like when a human reviewer suggests changes.
+*   **Requirements**: Your workflow needs permission to read your code (`contents: read`) and comment on pull requests (`pull-requests: write`).
+*   **Result**: You see suggested changes that you can accept or reject with one click.
+*   **When it works**: Only in pull requests. For other contexts, no changes are made.
 
-### Security Considerations
+### Which Should You Choose?
 
-Both modes grant AI write access to your codebase, which carries inherent risks:
+**We recommend `allow_suggestions: true`** because:
+- You get to review changes before they're applied
+- It's safer than automatic changes
+- You maintain full control over your code
+- It works great with GitHub's built-in review tools
 
-*   **Review Required**: Always review changes made by the AI carefully before accepting them.
-*   **Understanding**: Ensure the AI understands the context and your intent correctly.
-*   **Scope**: Consider restricting these capabilities to specific triggers, branches, or trusted contributors.
-*   **Suggestions Advantage**: The `allow_suggestions` mode provides an additional review step since changes must be explicitly accepted through GitHub's suggestion interface.
+**Important**: Both options let AI modify your code, so always review the changes carefully before accepting them.
 
 ## Manual Triggering (`workflow_dispatch`)
 

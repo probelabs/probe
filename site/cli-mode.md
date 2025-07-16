@@ -258,43 +258,45 @@ probe-chat [PATH] [OPTIONS]
 | `--prompt <value>` | Use a custom prompt (`architect`, `code-review`, `support`, `engineer`, path to file, or string) |
 | `--allow-edit` | **Enable code editing via the `implement` tool (uses Aider)** |
 
-### Code Modification Options
+### Code Editing (`--allow-edit`)
 
-Probe Chat supports two modes for AI-powered code modifications:
+The `--allow-edit` flag lets Probe make changes to your code files.
 
-#### Direct Code Editing (`--allow-edit`)
+#### How It Works
 
-Using the `--allow-edit` flag enables the AI agent's `implement` tool to directly modify your codebase.
+When you enable editing, Probe can modify your code when you ask it to:
+- "Fix this bug in main.py"
+- "Add error handling to this function"
+- "Refactor this code to be cleaner"
 
-*   **Functionality**: When enabled, the agent can use the `implement` tool in response to requests like "Refactor this function" or "Add error handling here". This tool uses **Aider** (an external command-line AI coding assistant) to apply the requested changes to your files.
-*   **Requirements**:
-    *   **Aider Installation**: You must install Aider for the `implement` tool to function. Visit the [Aider project website](https://aider.chat/) for full details. A common installation method is:
-        ```bash
-        # Install the aider installer
-        python -m pip install -U aider-chat
+#### What You Need
 
-        # Run the installer (optional, installs aider command globally)
-        # aider-install
-        ```
-        Ensure the `aider` command is available in your system's PATH.
-    *   **Permissions**: The `probe-chat` process needs write permissions to the files and directories it intends to modify.
-*   **Usage**:
-    ```bash
-    # Start an interactive chat session with editing enabled
-    probe-chat --allow-edit
+1. **Install Aider**: Probe uses a tool called Aider to make code changes.
+   ```bash
+   pip install aider-chat
+   ```
 
-    # Send a single message requesting a change (non-interactive)
-    probe-chat --allow-edit --message "Add comments to the process_data function in utils.py"
-    ```
+2. **File Permissions**: Make sure Probe can write to your project files.
 
-#### Security Considerations
+#### Usage Examples
 
-Enabling code editing by an AI carries inherent risks:
+```bash
+# Start chat with editing enabled
+probe-chat --allow-edit
 
-*   **Review Required**: Always review changes made by Aider carefully before accepting them.
-*   **Understanding**: Ensure the AI understands the context and your intent correctly.
+# Ask for a specific change
+probe-chat --allow-edit --message "Add comments to the main function"
+```
 
-**Note**: For GitHub Actions workflows, use the `allow_suggestions` input parameter in the workflow configuration to enable reviewdog suggestions instead of direct commits. See the [GitHub Actions Integration](./integrations/github-actions.md#code-modification-options) documentation for details.
+#### Important Safety Notes
+
+- **Always review changes** before keeping them
+- **Test your code** after Probe makes changes
+- **Start small** - try simple changes first to see how it works
+
+#### GitHub Actions Alternative
+
+If you're using Probe in GitHub Actions, you can use `allow_suggestions` instead, which creates reviewable suggestions rather than direct changes. See the [GitHub Actions Integration](./integrations/github-actions.md#code-modification-options) guide for details.
 
 ### Chat Examples
 
