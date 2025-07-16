@@ -281,9 +281,7 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
             }
             // Instead of silently returning empty results, log a warning even in non-debug mode
             // to ensure errors are visible and can be addressed
-            eprintln!(
-                "WARNING: Query parsing failed: {e:?}. Returning empty results."
-            );
+            eprintln!("WARNING: Query parsing failed: {e:?}. Returning empty results.");
             // In a future version, consider changing the return type to Result<Vec<(usize, f64)>, QueryError>
             // to properly propagate errors to the caller
             return vec![];
@@ -354,9 +352,7 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
     let b = 0.75;
 
     if debug_mode {
-        println!(
-            "DEBUG: Starting parallel document scoring for {n_docs} documents"
-        );
+        println!("DEBUG: Starting parallel document scoring for {n_docs} documents");
     }
 
     // 5) Compute BM25 bool logic score for each doc in parallel
