@@ -59,6 +59,33 @@ if (typeof process !== 'undefined' && !process.env.PROBE_CHAT_SKIP_FOLDER_VALIDA
 
 
 /**
+ * Extract image URLs from message text
+ * @param {string} message - The message text to analyze
+ * @returns {Array} Array of { url: string, cleanedMessage: string }
+ */
+function extractImageUrls(message) {
+  // Pattern to match image URLs:
+  // 1. GitHub private-user-images URLs (always images, regardless of extension)
+  // 2. URLs with common image extensions (PNG, JPG, JPEG, WebP, GIF)
+  const imageUrlPattern = /https?:\/\/(?:private-user-images\.githubusercontent\.com\/[^\s]+|[^\s]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s]*)?)/gi;
+  
+  const urls = [];
+  let match;
+  
+  while ((match = imageUrlPattern.exec(message)) !== null) {
+    urls.push(match[0]);
+  }
+  
+  // Remove image URLs from message text
+  const cleanedMessage = message.replace(imageUrlPattern, '').trim();
+  
+  return {
+    imageUrls: urls,
+    cleanedMessage: cleanedMessage
+  };
+}
+
+/**
  * ProbeChat class to handle chat interactions with AI models
  */
 export class ProbeChat {
@@ -650,11 +677,33 @@ When troubleshooting:
       }
 
       const isFirstMessage = this.history.length === 0;
-      const wrappedMessage = isFirstMessage ? `<task>\n${message}\n</task>` : message;
+      
+      // Extract image URLs from the message
+      const { imageUrls, cleanedMessage } = extractImageUrls(message);
+      
+      if (this.debug && imageUrls.length > 0) {
+        console.log(`[DEBUG] Extracted ${imageUrls.length} image URLs from message:`, imageUrls);
+      }
+      
+      const wrappedMessage = isFirstMessage ? `<task>\n${cleanedMessage}\n</task>` : cleanedMessage;
+
+      // Create the user message with potential image attachments
+      const userMessage = { role: 'user', content: wrappedMessage };
+      
+      // Add image attachments if any URLs were found
+      if (imageUrls.length > 0) {
+        userMessage.content = [
+          { type: 'text', text: wrappedMessage },
+          ...imageUrls.map(url => ({
+            type: 'image',
+            image: url
+          }))
+        ];
+      }
 
       let currentMessages = [
         ...this.history,
-        { role: 'user', content: wrappedMessage }
+        userMessage
       ];
 
       const systemPrompt = await this.getSystemMessage();
