@@ -157,7 +157,6 @@ jobs:
   # Use ubuntu-20.04 for GLIBC compatibility with libc build scripts
   publish-crates-io:
     name: Publish to crates.io
-    needs: build-and-release
     runs-on: ubuntu-20.04
     steps:
       - name: Checkout code
