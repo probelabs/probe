@@ -16,16 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🚀 Major Features
 
 #### Implement Tool for Code Editing
-- **New `implement` tool** for AI assistants to directly edit code files
+- **New `implement` tool** for AI assistants to directly edit code files - see [CLI Mode documentation](./cli-mode.md#code-editing---allow-edit)
 - Integrated with Aider for advanced code modification capabilities
-- Configurable via `allow_edit` flag in GitHub Actions workflows
+- Configurable via `allow_edit` flag in [GitHub Actions workflows](./integrations/github-actions.md#code-modification-options)
 - Enables AI assistants to make direct code changes during conversations
 
 #### Enhanced GitHub Actions Integration
-- **Allow Suggestions Feature**: New `allow_suggestions` flag for reviewdog integration
+- **Allow Suggestions Feature**: New `allow_suggestions` flag for reviewdog integration - see [GitHub Actions Integration](./integrations/github-actions.md#suggested-changes-allow_suggestions-true---recommended)
 - **Failure Tagging**: Automatic tagging of failed GitHub Probe runs for better tracking
 - **Improved Workflows**: Enhanced probe.yml with better error handling and configuration
-- **Engineer Workflow**: New probe-engineer.yml for specialized engineering tasks
+- **Engineer Workflow**: New probe-engineer.yml for specialized engineering tasks - see [GitHub Actions examples](./integrations/github-actions.md#example-2-ai-engineer-code-editing-enabled)
 - **Integration Testing**: Comprehensive integration test workflow added
 
 #### Crates.io Publishing
@@ -36,15 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🔧 Improvements
 
 #### AI Chat Enhancements
-- **Configurable Iterations**: `MAX_TOOL_ITERATIONS` environment variable support
+- **Configurable Iterations**: `MAX_TOOL_ITERATIONS` environment variable support - see [AI Chat configuration](./ai-chat.md#configuration)
 - **Enhanced Tool Support**: New file listing and search tools
 - **Better Session Management**: Improved chat session handling and token tracking
-- **Web Interface**: Enhanced web server with better error handling
+- **Web Interface**: Enhanced web server with better error handling - see [Web Interface documentation](./web-interface.md)
 
 #### MCP Protocol Updates
-- **Mandatory Path Parameters**: Improved MCP tool definitions with required path parameters
+- **Mandatory Path Parameters**: Improved MCP tool definitions with required path parameters - see [MCP Server documentation](./mcp-server.md#available-tools)
 - **Better Error Handling**: Enhanced error messages and validation
-- **Tool Consistency**: Standardized tool interfaces across MCP implementations
+- **Tool Consistency**: Standardized tool interfaces across MCP implementations - see [MCP Integration guide](./mcp-integration.md)
 
 #### Developer Experience
 - **Windows Support**: Improved Windows compatibility for npm packages
