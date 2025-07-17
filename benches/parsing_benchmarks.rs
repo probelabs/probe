@@ -1,8 +1,8 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use probe::language::parse_file_for_code_blocks;
-use tempfile::NamedTempFile;
+use std::collections::HashSet;
 use std::fs;
-use std::collections::{HashMap, HashSet};
+use tempfile::NamedTempFile;
 
 /// Create temporary files with different language content
 fn create_temp_file(content: &str, extension: &str) -> NamedTempFile {
@@ -15,7 +15,8 @@ fn create_temp_file(content: &str, extension: &str) -> NamedTempFile {
 /// Simple sample code content for different languages
 fn get_sample_code(language: &str) -> &'static str {
     match language {
-        "rust" => r#"
+        "rust" => {
+            r#"
 use std::collections::HashMap;
 
 pub struct SearchResult {
@@ -70,8 +71,10 @@ fn main() {
     
     println!("Found {} results", results.len());
 }
-"#,
-        "javascript" => r#"
+"#
+        }
+        "javascript" => {
+            r#"
 class SearchResult {
     constructor(filePath, lineNumber, content) {
         this.filePath = filePath;
@@ -113,8 +116,10 @@ function main() {
 }
 
 main();
-"#,
-        "python" => r#"
+"#
+        }
+        "python" => {
+            r#"
 class SearchResult:
     def __init__(self, file_path, line_number, content):
         self.file_path = file_path
@@ -149,8 +154,10 @@ def main():
 
 if __name__ == "__main__":
     main()
-"#,
-        "go" => r#"
+"#
+        }
+        "go" => {
+            r#"
 package main
 
 import (
@@ -204,7 +211,8 @@ func main() {
     
     fmt.Printf("Found %d results\n", len(results))
 }
-"#,
+"#
+        }
         _ => "// Default content",
     }
 }
@@ -217,12 +225,12 @@ fn benchmark_language_parsing(c: &mut Criterion) {
         ("python", "py"),
         ("go", "go"),
     ];
-    
+
     let mut group = c.benchmark_group("language_parsing");
-    
+
     for (language, extension) in languages {
         let content = get_sample_code(language);
-        
+
         group.bench_with_input(
             BenchmarkId::new("parse_language", language),
             &(content, extension),
@@ -231,38 +239,34 @@ fn benchmark_language_parsing(c: &mut Criterion) {
                     let temp_file = create_temp_file(content, extension);
                     let path = temp_file.path().with_extension(extension);
                     let file_content = fs::read_to_string(&path).unwrap();
-                    
+
                     let result = parse_file_for_code_blocks(
                         &file_content,
                         extension,
                         &HashSet::new(),
                         false,
-                        None
+                        None,
                     );
-                    
+
                     black_box(result)
                 })
-            }
+            },
         );
     }
-    
+
     group.finish();
 }
 
 /// Benchmark parsing files of different sizes
 fn benchmark_file_sizes(c: &mut Criterion) {
     let base_content = get_sample_code("rust");
-    let sizes = vec![
-        ("small", 1),
-        ("medium", 5),
-        ("large", 20),
-    ];
-    
+    let sizes = vec![("small", 1), ("medium", 5), ("large", 20)];
+
     let mut group = c.benchmark_group("file_sizes");
-    
+
     for (size_name, multiplier) in sizes {
         let content = base_content.repeat(multiplier);
-        
+
         group.bench_with_input(
             BenchmarkId::new("parse_size", size_name),
             &content,
@@ -271,21 +275,21 @@ fn benchmark_file_sizes(c: &mut Criterion) {
                     let temp_file = create_temp_file(content, "rs");
                     let path = temp_file.path().with_extension("rs");
                     let file_content = fs::read_to_string(&path).unwrap();
-                    
+
                     let result = parse_file_for_code_blocks(
                         &file_content,
                         "rs",
                         &HashSet::new(),
                         false,
-                        None
+                        None,
                     );
-                    
+
                     black_box(result)
                 })
-            }
+            },
         );
     }
-    
+
     group.finish();
 }
 
@@ -297,9 +301,9 @@ fn benchmark_line_filtering(c: &mut Criterion) {
         ("few_lines", vec![1, 5, 10, 15, 20].into_iter().collect()),
         ("many_lines", (1..=25).collect::<HashSet<_>>()),
     ];
-    
+
     let mut group = c.benchmark_group("line_filtering");
-    
+
     for (name, line_numbers) in line_sets {
         group.bench_with_input(
             BenchmarkId::new("filter_lines", name),
@@ -309,34 +313,26 @@ fn benchmark_line_filtering(c: &mut Criterion) {
                     let temp_file = create_temp_file(content, "rs");
                     let path = temp_file.path().with_extension("rs");
                     let file_content = fs::read_to_string(&path).unwrap();
-                    
-                    let result = parse_file_for_code_blocks(
-                        &file_content,
-                        "rs",
-                        line_numbers,
-                        false,
-                        None
-                    );
-                    
+
+                    let result =
+                        parse_file_for_code_blocks(&file_content, "rs", line_numbers, false, None);
+
                     black_box(result)
                 })
-            }
+            },
         );
     }
-    
+
     group.finish();
 }
 
 /// Benchmark parsing with and without test files
 fn benchmark_test_inclusion(c: &mut Criterion) {
     let content = get_sample_code("rust");
-    let test_options = vec![
-        ("include_tests", true),
-        ("exclude_tests", false),
-    ];
-    
+    let test_options = vec![("include_tests", true), ("exclude_tests", false)];
+
     let mut group = c.benchmark_group("test_inclusion");
-    
+
     for (name, include_tests) in test_options {
         group.bench_with_input(
             BenchmarkId::new("test_option", name),
@@ -346,21 +342,21 @@ fn benchmark_test_inclusion(c: &mut Criterion) {
                     let temp_file = create_temp_file(content, "rs");
                     let path = temp_file.path().with_extension("rs");
                     let file_content = fs::read_to_string(&path).unwrap();
-                    
+
                     let result = parse_file_for_code_blocks(
                         &file_content,
                         "rs",
                         &HashSet::new(),
                         *include_tests,
-                        None
+                        None,
                     );
-                    
+
                     black_box(result)
                 })
-            }
+            },
         );
     }
-    
+
     group.finish();
 }
 

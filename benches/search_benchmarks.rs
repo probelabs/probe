@@ -1,16 +1,18 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use probe::search::{perform_probe, SearchOptions};
-use tempfile::TempDir;
 use std::fs;
+use tempfile::TempDir;
 
 /// Create a temporary directory with test files for benchmarking
 fn create_test_codebase() -> TempDir {
     let temp_dir = TempDir::new().unwrap();
     let base_path = temp_dir.path();
-    
+
     // Create different file types with varying complexity
     let test_files = vec![
-        ("src/main.rs", r#"
+        (
+            "src/main.rs",
+            r#"
 use std::collections::HashMap;
 use std::io;
 
@@ -51,8 +53,11 @@ impl DataProcessor {
         self.processed = true;
     }
 }
-"#),
-        ("src/lib.rs", r#"
+"#,
+        ),
+        (
+            "src/lib.rs",
+            r#"
 pub mod utils;
 pub mod search;
 pub mod parser;
@@ -84,8 +89,11 @@ mod tests {
         assert!(!results.is_empty());
     }
 }
-"#),
-        ("src/utils.rs", r#"
+"#,
+        ),
+        (
+            "src/utils.rs",
+            r#"
 use std::collections::HashMap;
 
 pub fn calculate_metrics(data: &[i32]) -> HashMap<String, f64> {
@@ -123,8 +131,11 @@ pub fn fibonacci(n: usize) -> u64 {
         _ => fibonacci(n - 1) + fibonacci(n - 2),
     }
 }
-"#),
-        ("src/parser.rs", r#"
+"#,
+        ),
+        (
+            "src/parser.rs",
+            r#"
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -200,8 +211,11 @@ pub fn tokenize(input: &str) -> Vec<Token> {
     
     tokens
 }
-"#),
-        ("tests/integration_tests.rs", r#"
+"#,
+        ),
+        (
+            "tests/integration_tests.rs",
+            r#"
 use probe::*;
 
 #[test]
@@ -233,8 +247,11 @@ fn test_empty_search() {
     let results = run_search("nonexistent_term", "src/");
     assert!(results.is_empty());
 }
-"#),
-        ("README.md", r#"
+"#,
+        ),
+        (
+            "README.md",
+            r#"
 # Test Project
 
 This is a test project for benchmarking the probe search tool.
@@ -286,18 +303,19 @@ Search for specific patterns:
 ```bash
 probe "process_item" src/
 ```
-"#),
+"#,
+        ),
     ];
-    
+
     // Create directory structure
     fs::create_dir_all(base_path.join("src")).unwrap();
     fs::create_dir_all(base_path.join("tests")).unwrap();
-    
+
     // Write test files
     for (path, content) in test_files {
         fs::write(base_path.join(path), content).unwrap();
     }
-    
+
     temp_dir
 }
 
@@ -305,7 +323,7 @@ probe "process_item" src/
 fn benchmark_search_patterns(c: &mut Criterion) {
     let temp_dir = create_test_codebase();
     let search_path = temp_dir.path().to_path_buf();
-    
+
     let test_patterns = vec![
         ("simple_word", "main"),
         ("function_call", "process_item"),
@@ -317,9 +335,9 @@ fn benchmark_search_patterns(c: &mut Criterion) {
         ("number", "1000"),
         ("empty_result", "nonexistent_xyz"),
     ];
-    
+
     let mut group = c.benchmark_group("search_patterns");
-    
+
     for (name, pattern) in test_patterns {
         group.bench_with_input(BenchmarkId::new("pattern", name), &pattern, |b, pattern| {
             b.iter(|| {
@@ -344,12 +362,12 @@ fn benchmark_search_patterns(c: &mut Criterion) {
                     session: None,
                     timeout: 30,
                 };
-                
+
                 black_box(perform_probe(&options).unwrap())
             })
         });
     }
-    
+
     group.finish();
 }
 
@@ -357,10 +375,10 @@ fn benchmark_search_patterns(c: &mut Criterion) {
 fn benchmark_result_limits(c: &mut Criterion) {
     let temp_dir = create_test_codebase();
     let search_path = temp_dir.path().to_path_buf();
-    
+
     let limits = vec![1, 10, 50, 100, 500];
     let mut group = c.benchmark_group("result_limits");
-    
+
     for limit in limits {
         group.bench_with_input(BenchmarkId::new("limit", limit), &limit, |b, &limit| {
             b.iter(|| {
@@ -385,12 +403,12 @@ fn benchmark_result_limits(c: &mut Criterion) {
                     session: None,
                     timeout: 30,
                 };
-                
+
                 black_box(perform_probe(&options).unwrap())
             })
         });
     }
-    
+
     group.finish();
 }
 
@@ -398,13 +416,50 @@ fn benchmark_result_limits(c: &mut Criterion) {
 fn benchmark_search_options(c: &mut Criterion) {
     let temp_dir = create_test_codebase();
     let search_path = temp_dir.path().to_path_buf();
-    
+
     let mut group = c.benchmark_group("search_options");
-    
+
     // Test different rerankers
     let rerankers = vec!["hybrid", "frequency", "semantic"];
     for reranker in rerankers {
-        group.bench_with_input(BenchmarkId::new("reranker", reranker), &reranker, |b, &reranker| {
+        group.bench_with_input(
+            BenchmarkId::new("reranker", reranker),
+            &reranker,
+            |b, &reranker| {
+                b.iter(|| {
+                    let query = vec!["HashMap".to_string()];
+                    let options = SearchOptions {
+                        path: &search_path,
+                        queries: &query,
+                        files_only: false,
+                        custom_ignores: &[],
+                        exclude_filenames: false,
+                        reranker,
+                        frequency_search: true,
+                        exact: false,
+                        language: None,
+                        max_results: Some(50),
+                        max_bytes: None,
+                        max_tokens: None,
+                        allow_tests: true,
+                        no_merge: false,
+                        merge_threshold: None,
+                        dry_run: false,
+                        session: None,
+                        timeout: 30,
+                    };
+
+                    black_box(perform_probe(&options).unwrap())
+                })
+            },
+        );
+    }
+
+    // Test with/without frequency search
+    group.bench_with_input(
+        BenchmarkId::new("frequency", "enabled"),
+        &true,
+        |b, &freq| {
             b.iter(|| {
                 let query = vec!["HashMap".to_string()];
                 let options = SearchOptions {
@@ -413,8 +468,8 @@ fn benchmark_search_options(c: &mut Criterion) {
                     files_only: false,
                     custom_ignores: &[],
                     exclude_filenames: false,
-                    reranker,
-                    frequency_search: true,
+                    reranker: "hybrid",
+                    frequency_search: freq,
                     exact: false,
                     language: None,
                     max_results: Some(50),
@@ -427,90 +482,18 @@ fn benchmark_search_options(c: &mut Criterion) {
                     session: None,
                     timeout: 30,
                 };
-                
+
                 black_box(perform_probe(&options).unwrap())
             })
-        });
-    }
-    
-    // Test with/without frequency search
-    group.bench_with_input(BenchmarkId::new("frequency", "enabled"), &true, |b, &freq| {
-        b.iter(|| {
-            let query = vec!["HashMap".to_string()];
-            let options = SearchOptions {
-                path: &search_path,
-                queries: &query,
-                files_only: false,
-                custom_ignores: &[],
-                exclude_filenames: false,
-                reranker: "hybrid",
-                frequency_search: freq,
-                exact: false,
-                language: None,
-                max_results: Some(50),
-                max_bytes: None,
-                max_tokens: None,
-                allow_tests: true,
-                no_merge: false,
-                merge_threshold: None,
-                dry_run: false,
-                session: None,
-                timeout: 30,
-            };
-            
-            black_box(perform_probe(&options).unwrap())
-        })
-    });
-    
-    group.bench_with_input(BenchmarkId::new("frequency", "disabled"), &false, |b, &freq| {
-        b.iter(|| {
-            let query = vec!["HashMap".to_string()];
-            let options = SearchOptions {
-                path: &search_path,
-                queries: &query,
-                files_only: false,
-                custom_ignores: &[],
-                exclude_filenames: false,
-                reranker: "hybrid",
-                frequency_search: freq,
-                exact: false,
-                language: None,
-                max_results: Some(50),
-                max_bytes: None,
-                max_tokens: None,
-                allow_tests: true,
-                no_merge: false,
-                merge_threshold: None,
-                dry_run: false,
-                session: None,
-                timeout: 30,
-            };
-            
-            black_box(perform_probe(&options).unwrap())
-        })
-    });
-    
-    group.finish();
-}
+        },
+    );
 
-/// Benchmark query complexity
-fn benchmark_query_complexity(c: &mut Criterion) {
-    let temp_dir = create_test_codebase();
-    let search_path = temp_dir.path().to_path_buf();
-    
-    let queries = vec![
-        ("simple", vec!["main"]),
-        ("compound", vec!["HashMap", "Vec"]),
-        ("complex", vec!["process_item", "DataProcessor", "fibonacci"]),
-        ("multi_term", vec!["fn", "struct", "impl", "use"]),
-    ];
-    
-    let mut group = c.benchmark_group("query_complexity");
-    
-    for (name, query_terms) in queries {
-        group.bench_with_input(BenchmarkId::new("complexity", name), &query_terms, |b, query_terms| {
+    group.bench_with_input(
+        BenchmarkId::new("frequency", "disabled"),
+        &false,
+        |b, &freq| {
             b.iter(|| {
-                let query: Vec<String> = query_terms.iter().map(|s| s.to_string()).collect();
+                let query = vec!["HashMap".to_string()];
                 let options = SearchOptions {
                     path: &search_path,
                     queries: &query,
@@ -518,10 +501,10 @@ fn benchmark_query_complexity(c: &mut Criterion) {
                     custom_ignores: &[],
                     exclude_filenames: false,
                     reranker: "hybrid",
-                    frequency_search: true,
+                    frequency_search: freq,
                     exact: false,
                     language: None,
-                    max_results: Some(100),
+                    max_results: Some(50),
                     max_bytes: None,
                     max_tokens: None,
                     allow_tests: true,
@@ -531,12 +514,66 @@ fn benchmark_query_complexity(c: &mut Criterion) {
                     session: None,
                     timeout: 30,
                 };
-                
+
                 black_box(perform_probe(&options).unwrap())
             })
-        });
+        },
+    );
+
+    group.finish();
+}
+
+/// Benchmark query complexity
+fn benchmark_query_complexity(c: &mut Criterion) {
+    let temp_dir = create_test_codebase();
+    let search_path = temp_dir.path().to_path_buf();
+
+    let queries = vec![
+        ("simple", vec!["main"]),
+        ("compound", vec!["HashMap", "Vec"]),
+        (
+            "complex",
+            vec!["process_item", "DataProcessor", "fibonacci"],
+        ),
+        ("multi_term", vec!["fn", "struct", "impl", "use"]),
+    ];
+
+    let mut group = c.benchmark_group("query_complexity");
+
+    for (name, query_terms) in queries {
+        group.bench_with_input(
+            BenchmarkId::new("complexity", name),
+            &query_terms,
+            |b, query_terms| {
+                b.iter(|| {
+                    let query: Vec<String> = query_terms.iter().map(|s| s.to_string()).collect();
+                    let options = SearchOptions {
+                        path: &search_path,
+                        queries: &query,
+                        files_only: false,
+                        custom_ignores: &[],
+                        exclude_filenames: false,
+                        reranker: "hybrid",
+                        frequency_search: true,
+                        exact: false,
+                        language: None,
+                        max_results: Some(100),
+                        max_bytes: None,
+                        max_tokens: None,
+                        allow_tests: true,
+                        no_merge: false,
+                        merge_threshold: None,
+                        dry_run: false,
+                        session: None,
+                        timeout: 30,
+                    };
+
+                    black_box(perform_probe(&options).unwrap())
+                })
+            },
+        );
     }
-    
+
     group.finish();
 }
 

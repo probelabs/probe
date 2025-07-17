@@ -212,15 +212,15 @@ fn handle_search(params: SearchParams) -> Result<()> {
 
 fn handle_benchmark(params: BenchmarkParams) -> Result<()> {
     use std::process::Command;
-    
+
     println!("{}", "Running performance benchmarks...".bold().green());
-    
+
     let bench_type = params.bench.as_deref().unwrap_or("all");
-    
+
     // Build the cargo bench command
     let mut cmd = Command::new("cargo");
     cmd.arg("bench");
-    
+
     // Add specific benchmark if requested
     match bench_type {
         "search" => {
@@ -240,58 +240,61 @@ fn handle_benchmark(params: BenchmarkParams) -> Result<()> {
             return Ok(());
         }
     }
-    
+
     // Add criterion options
     let mut criterion_args = Vec::new();
-    
+
     if params.fast {
         criterion_args.extend(["--", "--sample-size", "10"]);
     }
-    
+
     let sample_size_str = params.sample_size.map(|s| s.to_string());
     if let Some(ref sample_size_str) = sample_size_str {
         criterion_args.extend(["--", "--sample-size", sample_size_str]);
     }
-    
+
     if let Some(baseline) = &params.baseline {
         criterion_args.extend(["--", "--baseline", baseline]);
     }
-    
+
     if params.compare {
         criterion_args.extend(["--", "--load-baseline", "previous"]);
     }
-    
+
     if params.format != "pretty" {
         criterion_args.extend(["--", "--output-format", &params.format]);
     }
-    
+
     if !criterion_args.is_empty() {
         cmd.args(criterion_args);
     }
-    
+
     // Execute the benchmark
     let output = cmd.output()?;
-    
+
     if !output.status.success() {
         eprintln!("Benchmark failed:");
         eprintln!("{}", String::from_utf8_lossy(&output.stderr));
         return Ok(());
     }
-    
+
     // Print benchmark output
     println!("{}", String::from_utf8_lossy(&output.stdout));
-    
+
     // Save output to file if requested
     if let Some(output_file) = &params.output {
         use std::fs;
         fs::write(output_file, &output.stdout)?;
         println!("Benchmark results saved to: {}", output_file);
     }
-    
+
     println!();
     println!("{}", "Benchmark completed successfully!".bold().green());
-    println!("Results are also available in: {}", "target/criterion/".yellow());
-    
+    println!(
+        "Results are also available in: {}",
+        "target/criterion/".yellow()
+    );
+
     Ok(())
 }
 
