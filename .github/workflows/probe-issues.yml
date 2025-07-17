@@ -2,8 +2,8 @@ name: AI Comment Handler
 
 
 on:
-  pull_request:
-    types: [opened] #[opened , labeled]
+#  pull_request:
+#    types: [opened] #[opened , labeled]
   issue_comment:
     types: [created]          
   issues:
