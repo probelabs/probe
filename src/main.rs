@@ -241,7 +241,7 @@ fn handle_benchmark(params: BenchmarkParams) -> Result<()> {
             // Run all benchmarks (default)
         }
         _ => {
-            eprintln!("Unknown benchmark type: {}", bench_type);
+            eprintln!("Unknown benchmark type: {bench_type}");
             return Ok(());
         }
     }
@@ -276,7 +276,7 @@ fn handle_benchmark(params: BenchmarkParams) -> Result<()> {
     if let Some(output_file) = &params.output {
         use std::fs;
         fs::write(output_file, &output.stdout)?;
-        println!("Benchmark results saved to: {}", output_file);
+        println!("Benchmark results saved to: {output_file}");
     }
 
     println!();
