@@ -100,6 +100,9 @@ on:
       MAX_TOOL_ITERATIONS:
         required: false
         description: "Max tool iterations. Default to 30"
+      DEBUG_CHAT:
+        required: false
+        description: "Enable debug logging for chat interactions (set to '1' to enable)"
 
 jobs:
   process_comment:
@@ -945,6 +948,8 @@ jobs:
           # Pass determined GitHub token for potential use by tools/aider if needed
           GH_TOKEN: ${{ env.WORKFLOW_TOKEN }}
           MAX_TOOL_ITERATIONS: ${{ secrets.MAX_TOOL_ITERATIONS }}
+          # Debug configuration
+          DEBUG_CHAT: ${{ secrets.DEBUG_CHAT }}
         run: |
           # (Script remains the same)
           # Check and modify ANTHROPIC_API_URL to set ANTHROPIC_BASE_URL

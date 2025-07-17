@@ -43,4 +43,5 @@ jobs:
       APP_ID: ${{ secrets.PROBE_APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.PROBE_APP_PRIVATE_KEY }}
       MAX_TOOL_ITERATIONS: "60"
+      DEBUG_CHAT: ${{ secrets.DEBUG_CHAT }}
       

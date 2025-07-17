@@ -61,24 +61,40 @@ if (typeof process !== 'undefined' && !process.env.PROBE_CHAT_SKIP_FOLDER_VALIDA
 /**
  * Extract image URLs from message text
  * @param {string} message - The message text to analyze
+ * @param {boolean} debug - Whether to log debug information
  * @returns {Array} Array of { url: string, cleanedMessage: string }
  */
-function extractImageUrls(message) {
+function extractImageUrls(message, debug = false) {
   // Pattern to match image URLs:
   // 1. GitHub private-user-images URLs (always images, regardless of extension)
   // 2. GitHub user-attachments/assets URLs (always images, regardless of extension)
   // 3. URLs with common image extensions (PNG, JPG, JPEG, WebP, GIF)
   const imageUrlPattern = /https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s]+|[^\s]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s]*)?)/gi;
   
+  if (debug) {
+    console.log(`[DEBUG] Scanning message for image URLs. Message length: ${message.length}`);
+    console.log(`[DEBUG] Image URL pattern: ${imageUrlPattern.toString()}`);
+  }
+  
   const urls = [];
   let match;
   
   while ((match = imageUrlPattern.exec(message)) !== null) {
     urls.push(match[0]);
+    if (debug) {
+      console.log(`[DEBUG] Found image URL: ${match[0]}`);
+    }
   }
   
   // Remove image URLs from message text
   const cleanedMessage = message.replace(imageUrlPattern, '').trim();
+  
+  if (debug) {
+    console.log(`[DEBUG] Total image URLs found: ${urls.length}`);
+    if (urls.length > 0) {
+      console.log(`[DEBUG] Original message length: ${message.length}, cleaned message length: ${cleanedMessage.length}`);
+    }
+  }
   
   return {
     imageUrls: urls,
@@ -726,22 +742,30 @@ When troubleshooting:
       const isFirstMessage = this.history.length === 0;
       
       // Extract image URLs from the message
-      const { imageUrls, cleanedMessage } = extractImageUrls(message);
+      const { imageUrls, cleanedMessage } = extractImageUrls(message, this.debug);
       
-      if (this.debug && imageUrls.length > 0) {
-        console.log(`[DEBUG] Extracted ${imageUrls.length} image URLs from message:`, imageUrls);
+      // Always log image detection (same level as session ID logging)
+      if (imageUrls.length > 0) {
+        console.log(`Detected ${imageUrls.length} image URL(s) in message.`);
+        if (this.debug) {
+          console.log(`[DEBUG] Extracted image URLs:`, imageUrls);
+        }
       }
       
       // Validate image URLs and filter out broken ones
       const validImageUrls = await validateImageUrls(imageUrls, this.debug);
       
-      if (this.debug) {
+      // Always log validation results if images were found
+      if (imageUrls.length > 0) {
         const invalidCount = imageUrls.length - validImageUrls.length;
-        if (invalidCount > 0) {
-          console.log(`[DEBUG] Filtered out ${invalidCount} invalid image URLs`);
-        }
         if (validImageUrls.length > 0) {
-          console.log(`[DEBUG] Valid image URLs (${validImageUrls.length}):`, validImageUrls);
+          console.log(`Image validation: ${validImageUrls.length} valid, ${invalidCount} invalid/inaccessible.`);
+        } else {
+          console.log(`Image validation: All ${imageUrls.length} image URLs failed validation.`);
+        }
+        
+        if (this.debug && validImageUrls.length > 0) {
+          console.log(`[DEBUG] Valid image URLs:`, validImageUrls);
         }
       }
       
