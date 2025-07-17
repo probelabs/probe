@@ -379,7 +379,7 @@ jobs:
           CONTEXT_TYPE="$INITIAL_CONTEXT_TYPE"
           if [[ "$CONTEXT_TYPE" == "to_determine" ]]; then
             CONTEXT_TYPE="unknown"
-            ISSUE_OR_PR_NUMBER=${{ steps.set_context.outputs.issue_number }}
+            ISSUE_OR_PR_NUMBER=${{ steps.set_context.outputs.pr_issue_num }}
             echo "Detecting context for #${ISSUE_OR_PR_NUMBER} in $REPO using token type: ${{ env.WORKFLOW_TOKEN != secrets.GITHUB_TOKEN && 'App Token' || 'Default GITHUB_TOKEN' }}" # Log token type
 
             # Try viewing as PR first
@@ -420,7 +420,7 @@ jobs:
 
           echo "Final Context Type: $CONTEXT_TYPE"
           echo "FINAL_CONTEXT_TYPE=$CONTEXT_TYPE" >> $GITHUB_ENV
-          echo "ISSUE_OR_PR_NUMBER=${{ steps.set_context.outputs.issue_number }}" >> $GITHUB_ENV
+          echo "ISSUE_OR_PR_NUMBER=${{ steps.set_context.outputs.pr_issue_num }}" >> $GITHUB_ENV
           echo "::endgroup::"
 
       # --- Fetch Standard Comments using selected token ---
