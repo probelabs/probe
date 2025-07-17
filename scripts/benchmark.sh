@@ -43,7 +43,7 @@ run_benchmark() {
     
     local output_file="target/benchmark-results/${name}-$(date +%Y%m%d-%H%M%S).txt"
     
-    if cargo bench --bench "${bench_type}" -- --output-format json $extra_args > "$output_file" 2>&1; then
+    if cargo bench --bench "${bench_type}" -- $extra_args > "$output_file" 2>&1; then
         print_status "✓ $name benchmarks completed successfully"
         print_status "Results saved to: $output_file"
     else
