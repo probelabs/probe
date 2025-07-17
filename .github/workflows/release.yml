@@ -154,10 +154,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Use ubuntu-20.04 for GLIBC compatibility with libc build scripts
   publish-crates-io:
     name: Publish to crates.io
     needs: build-and-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
