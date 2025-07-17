@@ -12,6 +12,24 @@ Welcome to the Probe blog! Here you'll find the latest news, updates, and insigh
 
 <div class="blog-post-list">
   <div class="blog-post-card">
+    <h3><a href="/blog/v0.6.0-release">Probe v0.6.0 Release: Enhanced AI Integration and Code Editing Capabilities</a></h3>
+    <div class="blog-post-meta">
+      <span class="blog-post-date">July 17, 2025</span>
+      <span class="blog-post-author">By Probe Team</span>
+    </div>
+    <p>Announcing Probe v0.6.0 with the new implement tool, enhanced GitHub Actions integration, crates.io publishing, and major improvements for AI coding assistants.</p>
+    <div class="blog-post-tags">
+      <span class="blog-post-tag">release</span>
+      <span class="blog-post-tag">v0.6.0</span>
+      <span class="blog-post-tag">ai-integration</span>
+      <span class="blog-post-tag">code-editing</span>
+      <span class="blog-post-tag">github-actions</span>
+      <span class="blog-post-tag">crates-io</span>
+    </div>
+    <a href="/blog/v0.6.0-release" class="blog-post-read-more">Read More →</a>
+  </div>
+
+  <div class="blog-post-card">
     <h3><a href="/blog/agentic-flow-custom-xml-protocol">Technical Guide: Agentic Flow via Custom XML Protocol</a></h3>
     <div class="blog-post-meta">
       <span class="blog-post-date">July 4, 2025</span>

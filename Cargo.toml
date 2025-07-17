@@ -1,6 +1,6 @@
 [package]
 name = "probe"
-version = "0.3.0"
+version = "0.6.0"
 edition = "2021"
 authors = ["Leonid Bugaev <leonsbox@gmail.com>"]
 description = "AI-friendly, fully local, semantic code search tool for large codebases"

@@ -33,7 +33,8 @@ export default defineConfig({
     nav: [
       { text: 'Home', link: '/' },
       { text: 'Quick Start', link: '/quick-start' },
-      // { text: 'Blog', link: '/blog/' },
+      { text: 'Blog', link: '/blog/' },
+      { text: 'Changelog', link: '/changelog' },
       {
         text: 'Documentation',
         items: [
@@ -119,6 +120,15 @@ export default defineConfig({
           { text: 'Documentation Maintenance', link: '/contributing/documentation-maintenance' },
           { text: 'Documentation Structure', link: '/contributing/documentation-structure' },
           { text: 'Documentation Cross-References', link: '/contributing/documentation-cross-references' }
+        ]
+      },
+      {
+        text: 'Release Information',
+        collapsed: true,
+        items: [
+          { text: 'Changelog', link: '/changelog' },
+          { text: 'Blog', link: '/blog/' },
+          { text: 'GitHub Releases', link: 'https://github.com/buger/probe/releases' }
         ]
       }
     ],
