@@ -103,17 +103,17 @@ function extractImageUrls(message, debug = false) {
 }
 
 /**
- * Validate image URLs by checking if they're accessible
+ * Validate image URLs by checking if they're accessible, handling redirects
  * @param {string[]} imageUrls - Array of image URLs to validate
  * @param {boolean} debug - Whether to log debug messages
- * @returns {Promise<string[]>} Array of valid image URLs
+ * @returns {Promise<string[]>} Array of valid final image URLs (after redirects)
  */
 async function validateImageUrls(imageUrls, debug = false) {
   const validUrls = [];
   
   for (const url of imageUrls) {
     try {
-      // Simple HEAD request to check if URL is accessible
+      // Simple HEAD request to check if URL is accessible, following redirects
       const response = await fetch(url, { 
         method: 'HEAD',
         timeout: 5000, // 5 second timeout
@@ -124,9 +124,15 @@ async function validateImageUrls(imageUrls, debug = false) {
         // Check if the response has image content type
         const contentType = response.headers.get('content-type');
         if (contentType && contentType.startsWith('image/')) {
-          validUrls.push(url);
+          // Use the final URL after following redirects
+          const finalUrl = response.url;
+          validUrls.push(finalUrl);
           if (debug) {
-            console.log(`[DEBUG] Valid image URL: ${url} (${contentType})`);
+            if (finalUrl !== url) {
+              console.log(`[DEBUG] Valid image URL after redirect: ${url} -> ${finalUrl} (${contentType})`);
+            } else {
+              console.log(`[DEBUG] Valid image URL: ${finalUrl} (${contentType})`);
+            }
           }
         } else {
           if (debug) {
