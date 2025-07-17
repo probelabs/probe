@@ -87,6 +87,52 @@ function extractImageUrls(message) {
 }
 
 /**
+ * Validate image URLs by checking if they're accessible
+ * @param {string[]} imageUrls - Array of image URLs to validate
+ * @param {boolean} debug - Whether to log debug messages
+ * @returns {Promise<string[]>} Array of valid image URLs
+ */
+async function validateImageUrls(imageUrls, debug = false) {
+  const validUrls = [];
+  
+  for (const url of imageUrls) {
+    try {
+      // Simple HEAD request to check if URL is accessible
+      const response = await fetch(url, { 
+        method: 'HEAD',
+        timeout: 5000, // 5 second timeout
+        redirect: 'follow'
+      });
+      
+      if (response.ok) {
+        // Check if the response has image content type
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.startsWith('image/')) {
+          validUrls.push(url);
+          if (debug) {
+            console.log(`[DEBUG] Valid image URL: ${url} (${contentType})`);
+          }
+        } else {
+          if (debug) {
+            console.log(`[DEBUG] URL not an image: ${url} (${contentType || 'unknown type'})`);
+          }
+        }
+      } else {
+        if (debug) {
+          console.log(`[DEBUG] URL not accessible: ${url} (status: ${response.status})`);
+        }
+      }
+    } catch (error) {
+      if (debug) {
+        console.log(`[DEBUG] Error validating image URL ${url}: ${error.message}`);
+      }
+    }
+  }
+  
+  return validUrls;
+}
+
+/**
  * ProbeChat class to handle chat interactions with AI models
  */
 export class ProbeChat {
@@ -686,16 +732,29 @@ When troubleshooting:
         console.log(`[DEBUG] Extracted ${imageUrls.length} image URLs from message:`, imageUrls);
       }
       
+      // Validate image URLs and filter out broken ones
+      const validImageUrls = await validateImageUrls(imageUrls, this.debug);
+      
+      if (this.debug) {
+        const invalidCount = imageUrls.length - validImageUrls.length;
+        if (invalidCount > 0) {
+          console.log(`[DEBUG] Filtered out ${invalidCount} invalid image URLs`);
+        }
+        if (validImageUrls.length > 0) {
+          console.log(`[DEBUG] Valid image URLs (${validImageUrls.length}):`, validImageUrls);
+        }
+      }
+      
       const wrappedMessage = isFirstMessage ? `<task>\n${cleanedMessage}\n</task>` : cleanedMessage;
 
       // Create the user message with potential image attachments
       const userMessage = { role: 'user', content: wrappedMessage };
       
-      // Add image attachments if any URLs were found
-      if (imageUrls.length > 0) {
+      // Add image attachments if any valid URLs were found
+      if (validImageUrls.length > 0) {
         userMessage.content = [
           { type: 'text', text: wrappedMessage },
-          ...imageUrls.map(url => ({
+          ...validImageUrls.map(url => ({
             type: 'image',
             image: url
           }))
