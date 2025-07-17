@@ -64,13 +64,15 @@ fn benchmark_timing_overhead(c: &mut Criterion) {
 
 /// Benchmark duration formatting
 fn benchmark_duration_formatting(c: &mut Criterion) {
-    let durations = [Duration::from_nanos(500),
+    let durations = [
+        Duration::from_nanos(500),
         Duration::from_micros(100),
         Duration::from_millis(50),
         Duration::from_millis(999),
         Duration::from_secs(1),
         Duration::from_secs(10),
-        Duration::from_secs(60)];
+        Duration::from_secs(60),
+    ];
 
     let mut group = c.benchmark_group("duration_formatting");
 
