@@ -757,10 +757,16 @@ When troubleshooting:
                 ...message,
                 content: typeof message.content === 'string'
                   ? [{ type: "text", text: message.content, providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } } }]
-                  : message.content.map(content => ({
-                    ...content,
-                    providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } }
-                  }))
+                  : message.content.map((content, contentIndex) => {
+                    // Only apply cache_control to the text part, not images
+                    if (content.type === 'text' && contentIndex === 0) {
+                      return {
+                        ...content,
+                        providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } }
+                      };
+                    }
+                    return content;
+                  })
               };
             }
             return message;
