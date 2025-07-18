@@ -117,6 +117,138 @@ Token Usage: Request: 1245 Response: 1532 (Current message only: ~1532)
 Total: 2777 tokens (Cumulative for entire session)
 ```
 
+### OpenTelemetry Tracing
+
+Probe Chat includes built-in OpenTelemetry tracing support to monitor AI model interactions, performance metrics, and usage patterns:
+
+```bash
+# Enable file-based tracing
+probe-chat --trace-file ./traces.jsonl
+
+# Enable remote tracing to an OpenTelemetry collector
+probe-chat --trace-remote http://localhost:4318/v1/traces
+
+# Enable console tracing for debugging
+probe-chat --trace-console
+
+# Combine multiple tracing options
+probe-chat --trace-file --trace-remote --trace-console
+```
+
+#### What Gets Traced
+
+The tracing system captures comprehensive data about AI interactions:
+
+- **AI Model Calls**: Complete request/response cycles with timing
+- **Token Usage**: Detailed token consumption (prompt, completion, total)
+- **Performance Metrics**: Response times, request durations, and throughput
+- **Session Information**: Session IDs, iteration counts, and conversation flow
+- **Model Configuration**: Provider, model name, temperature, and other parameters
+- **Error Tracking**: Failed requests, timeouts, and error details
+
+#### File Tracing
+
+File tracing saves traces to a JSON Lines format file:
+
+```bash
+# Basic file tracing
+probe-chat --trace-file
+
+# Custom file path
+probe-chat --trace-file ./debug-traces.jsonl
+```
+
+Trace files contain one JSON object per line, making them easy to analyze:
+
+```json
+{
+  "traceId": "abc123...",
+  "name": "ai.generateText",
+  "attributes": {
+    "ai.model.id": "claude-3-7-sonnet-20250219",
+    "ai.model.provider": "anthropic",
+    "ai.usage.prompt_tokens": "15",
+    "ai.usage.completion_tokens": "8",
+    "ai.usage.total_tokens": "23"
+  },
+  "events": [
+    {
+      "name": "ai.request.start",
+      "attributes": {
+        "ai.request.messages": "[{\"role\":\"user\",\"content\":\"Hello\"}]"
+      }
+    }
+  ]
+}
+```
+
+#### Remote Tracing
+
+Send traces to any OpenTelemetry-compatible collector:
+
+```bash
+# Jaeger
+probe-chat --trace-remote http://localhost:4318/v1/traces
+
+# Custom collector
+probe-chat --trace-remote https://your-collector.com/v1/traces
+```
+
+For Jaeger setup:
+
+```bash
+# Start Jaeger with Docker
+docker run -d --name jaeger \
+  -p 16686:16686 \
+  -p 4318:4318 \
+  jaegertracing/all-in-one:latest
+
+# Use probe-chat with remote tracing
+probe-chat --trace-remote http://localhost:4318/v1/traces
+
+# View traces at http://localhost:16686
+```
+
+#### Environment Variables
+
+Configure tracing through environment variables:
+
+```bash
+# Enable file tracing
+export OTEL_ENABLE_FILE=true
+export OTEL_FILE_PATH=./traces.jsonl
+
+# Enable remote tracing
+export OTEL_ENABLE_REMOTE=true
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces
+
+# Enable console tracing
+export OTEL_ENABLE_CONSOLE=true
+
+# Service information
+export OTEL_SERVICE_NAME=probe-chat
+export OTEL_SERVICE_VERSION=1.0.0
+```
+
+#### Analyzing Traces
+
+Use standard tools to analyze trace data:
+
+```bash
+# View all traces
+cat traces.jsonl | jq '.'
+
+# Count successful vs failed requests
+cat traces.jsonl | jq -r '.status.code' | sort | uniq -c
+
+# Extract token usage statistics
+cat traces.jsonl | jq -r '.events[]? | select(.name == "ai.response.complete") | .attributes."ai.usage.total_tokens"'
+
+# Calculate average response time
+cat traces.jsonl | jq -r '((.endTimeUnixNano - .startTimeUnixNano) / 1000000)' | \
+  awk '{sum+=$1} END {print sum/NR " ms"}'
+```
+
 ### Conversation History
 
 The chat maintains context across multiple interactions, allowing for follow-up questions and deeper exploration of topics.
@@ -176,6 +308,11 @@ node index.js --web --port 3000
 
 # Specify a directory to search
 node index.js /path/to/your/project
+
+# Enable tracing
+node index.js --trace-file ./traces.jsonl
+node index.js --trace-remote http://localhost:4318/v1/traces
+node index.js --trace-console
 ```
 
 ### Environment Variables

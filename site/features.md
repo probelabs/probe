@@ -73,6 +73,7 @@ Probe offers powerful AI integration capabilities that allow you to leverage lar
 - **Structured Output**: AI-friendly formats (JSON, XML)
 - **Multi-Model Support**: Works with various LLM models
 - **Streaming Responses**: Real-time AI interaction
+- **OpenTelemetry Tracing**: Comprehensive monitoring and observability for AI interactions
 
 ## Usage Modes
 
@@ -85,6 +86,28 @@ Probe can be used in multiple ways, depending on your workflow:
 - **[Node.js SDK](./nodejs-sdk.md)**: Programmatic access
 
 ## Advanced Features
+
+### OpenTelemetry Tracing and Observability
+
+Probe provides comprehensive monitoring and observability features for AI interactions:
+
+- **Performance Monitoring**: Track AI response times, token usage, and throughput
+- **File-based Tracing**: Save traces to JSON Lines format for offline analysis
+- **Remote Tracing**: Send traces to OpenTelemetry collectors (Jaeger, Zipkin, etc.)
+- **GitHub Actions Integration**: Automatic trace collection and artifact uploads
+- **Rich Telemetry Data**: Capture model details, session information, and error tracking
+- **Cost Optimization**: Monitor and analyze token consumption patterns
+
+```bash
+# Enable file-based tracing
+probe-chat --trace-file ./traces.jsonl
+
+# Enable remote tracing to Jaeger
+probe-chat --trace-remote http://localhost:4318/v1/traces
+
+# Enable console tracing for debugging
+probe-chat --trace-console
+```
 
 ### Pattern Matching
 

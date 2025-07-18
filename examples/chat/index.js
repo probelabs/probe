@@ -62,6 +62,9 @@ export function main() {
     .option('--max-iterations <number>', 'Maximum number of tool iterations allowed (default: 30)')
     .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, support, path to a file, or arbitrary string)')
     .option('--allow-edit', 'Enable the implement tool for editing files')
+    .option('--trace-file [path]', 'Enable tracing to file (default: ./traces.jsonl)')
+    .option('--trace-remote [endpoint]', 'Enable tracing to remote endpoint (default: http://localhost:4318/v1/traces)')
+    .option('--trace-console', 'Enable tracing to console (for debugging)')
     .argument('[path]', 'Path to the codebase to search (overrides ALLOWED_FOLDERS)')
     .parse(process.argv);
 
@@ -144,6 +147,24 @@ export function main() {
   if (options.allowEdit) {
     process.env.ALLOW_EDIT = '1';
     logInfo(chalk.blue(`Enabling implement tool with --allow-edit flag`));
+  }
+
+  // Set telemetry options from command line if provided
+  if (options.traceFile !== undefined) {
+    process.env.OTEL_ENABLE_FILE = 'true';
+    process.env.OTEL_FILE_PATH = options.traceFile || './traces.jsonl';
+    logInfo(chalk.blue(`Enabling file tracing to: ${process.env.OTEL_FILE_PATH}`));
+  }
+  
+  if (options.traceRemote !== undefined) {
+    process.env.OTEL_ENABLE_REMOTE = 'true';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = options.traceRemote || 'http://localhost:4318/v1/traces';
+    logInfo(chalk.blue(`Enabling remote tracing to: ${process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT}`));
+  }
+  
+  if (options.traceConsole) {
+    process.env.OTEL_ENABLE_CONSOLE = 'true';
+    logInfo(chalk.blue(`Enabling console tracing`));
   }
 
 

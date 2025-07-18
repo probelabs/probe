@@ -23,10 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Enhanced GitHub Actions Integration
 - **Allow Suggestions Feature**: New `allow_suggestions` flag for reviewdog integration - see [GitHub Actions Integration](./integrations/github-actions.md#suggested-changes-allow_suggestions-true---recommended)
+- **OpenTelemetry Tracing**: Full tracing support for monitoring AI model interactions - see [GitHub Actions Tracing](./integrations/github-actions.md#opentelemetry-tracing)
 - **Failure Tagging**: Automatic tagging of failed GitHub Probe runs for better tracking
 - **Improved Workflows**: Enhanced probe.yml with better error handling and configuration
 - **Engineer Workflow**: New probe-engineer.yml for specialized engineering tasks - see [GitHub Actions examples](./integrations/github-actions.md#example-2-ai-engineer-code-editing-enabled)
 - **Integration Testing**: Comprehensive integration test workflow added
+
+#### OpenTelemetry Tracing Support
+- **Complete Tracing Integration**: Full OpenTelemetry support for AI model monitoring - see [AI Chat Tracing](./ai-chat.md#opentelemetry-tracing)
+- **File-based Tracing**: Save traces to JSON Lines format for offline analysis
+- **Remote Tracing**: Send traces to OpenTelemetry collectors (Jaeger, Zipkin, etc.)
+- **Performance Monitoring**: Track AI response times, token usage, and throughput
+- **GitHub Actions Integration**: Automatic trace collection and artifact upload - see [GitHub Actions Tracing](./integrations/github-actions.md#opentelemetry-tracing)
+- **Comprehensive Metrics**: Session tracking, error monitoring, and usage analytics
+- **CLI Options**: New `--trace-file`, `--trace-remote`, and `--trace-console` flags
 
 #### Crates.io Publishing
 - **Automated Publishing**: Probe is now published to crates.io as a Rust library
