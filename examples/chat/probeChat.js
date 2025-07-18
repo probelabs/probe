@@ -980,6 +980,18 @@ When troubleshooting:
                 include_usage: true
               }
             }
+          },
+          experimental_telemetry: {
+            isEnabled: true,
+            functionId: this.sessionId,
+            metadata: {
+              sessionId: this.sessionId,
+              iteration: currentIteration,
+              model: this.model,
+              apiType: this.apiType,
+              allowEdit: this.allowEdit,
+              promptType: this.promptType || 'default'
+            }
           }
         };
 
