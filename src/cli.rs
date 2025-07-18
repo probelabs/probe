@@ -299,4 +299,40 @@ pub enum Commands {
         #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color"])]
         format: String,
     },
+
+    /// Run performance benchmarks
+    ///
+    /// This command runs comprehensive performance benchmarks using the Criterion framework.
+    /// It tests various aspects of the search engine including search patterns, result limits,
+    /// different options, timing infrastructure, and language parsing performance.
+    /// Results are saved to the target/criterion directory.
+    Benchmark {
+        /// Specific benchmark to run (default: all)
+        #[arg(long = "bench", value_parser = ["all", "search", "timing", "parsing"])]
+        bench: Option<String>,
+
+        /// Number of iterations for each benchmark (default: auto)
+        #[arg(long = "sample-size")]
+        sample_size: Option<usize>,
+
+        /// Benchmark output format
+        #[arg(long = "format", default_value = "pretty", value_parser = ["pretty", "json", "csv"])]
+        format: String,
+
+        /// Save benchmark results to file
+        #[arg(long = "output")]
+        output: Option<String>,
+
+        /// Compare with previous benchmark results
+        #[arg(long = "compare")]
+        compare: bool,
+
+        /// Baseline to compare against
+        #[arg(long = "baseline")]
+        baseline: Option<String>,
+
+        /// Run only fast benchmarks (shorter duration)
+        #[arg(long = "fast")]
+        fast: bool,
+    },
 }

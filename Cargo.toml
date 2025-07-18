@@ -71,6 +71,18 @@ path = "src/lib.rs"
 name = "probe"
 path = "src/main.rs"
 
+[[bench]]
+name = "search_benchmarks"
+harness = false
+
+[[bench]]
+name = "timing_benchmarks"
+harness = false
+
+[[bench]]
+name = "parsing_benchmarks"
+harness = false
+
 [profile.release]
 opt-level = "z"  # Optimize for size ("s" also works, but "z" is smaller)
 strip = true     # Strip symbols automatically

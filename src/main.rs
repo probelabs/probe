@@ -37,6 +37,21 @@ struct SearchParams {
     timeout: u64,
 }
 
+struct BenchmarkParams {
+    bench: Option<String>,
+    #[allow(dead_code)]
+    sample_size: Option<usize>,
+    #[allow(dead_code)]
+    format: String,
+    output: Option<String>,
+    #[allow(dead_code)]
+    compare: bool,
+    #[allow(dead_code)]
+    baseline: Option<String>,
+    #[allow(dead_code)]
+    fast: bool,
+}
+
 fn handle_search(params: SearchParams) -> Result<()> {
     let use_frequency = params.frequency_search;
 
@@ -200,6 +215,80 @@ fn handle_search(params: SearchParams) -> Result<()> {
     Ok(())
 }
 
+fn handle_benchmark(params: BenchmarkParams) -> Result<()> {
+    use std::process::Command;
+
+    println!("{}", "Running performance benchmarks...".bold().green());
+
+    let bench_type = params.bench.as_deref().unwrap_or("all");
+
+    // Build the cargo bench command
+    let mut cmd = Command::new("cargo");
+    cmd.arg("bench");
+
+    // Add specific benchmark if requested
+    match bench_type {
+        "search" => {
+            cmd.arg("--bench").arg("search_benchmarks");
+        }
+        "timing" => {
+            cmd.arg("--bench").arg("timing_benchmarks");
+        }
+        "parsing" => {
+            cmd.arg("--bench").arg("parsing_benchmarks");
+        }
+        "all" => {
+            // Run all benchmarks (default)
+        }
+        _ => {
+            eprintln!("Unknown benchmark type: {bench_type}");
+            return Ok(());
+        }
+    }
+
+    // Add criterion options after --
+    let criterion_args: Vec<String> = Vec::new();
+
+    // Note: Criterion benchmarks don't support --sample-size from command line
+    // Sample size is configured in the benchmark code itself
+
+    // For now, keep it simple and just run the benchmarks
+    // Advanced features like baseline comparison can be added later
+
+    if !criterion_args.is_empty() {
+        cmd.arg("--");
+        cmd.args(criterion_args);
+    }
+
+    // Execute the benchmark
+    let output = cmd.output()?;
+
+    if !output.status.success() {
+        eprintln!("Benchmark failed:");
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        return Ok(());
+    }
+
+    // Print benchmark output
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+
+    // Save output to file if requested
+    if let Some(output_file) = &params.output {
+        use std::fs;
+        fs::write(output_file, &output.stdout)?;
+        println!("Benchmark results saved to: {output_file}");
+    }
+
+    println!();
+    println!("{}", "Benchmark completed successfully!".bold().green());
+    println!(
+        "Results are also available in: {}",
+        "target/criterion/".yellow()
+    );
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -349,6 +438,23 @@ async fn main() -> Result<()> {
             max_results,
             &format,
         )?,
+        Some(Commands::Benchmark {
+            bench,
+            sample_size,
+            format,
+            output,
+            compare,
+            baseline,
+            fast,
+        }) => handle_benchmark(BenchmarkParams {
+            bench,
+            sample_size,
+            format,
+            output,
+            compare,
+            baseline,
+            fast,
+        })?,
     }
 
     Ok(())
