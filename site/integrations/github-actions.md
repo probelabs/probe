@@ -198,6 +198,169 @@ The reusable `probe.yml` workflow needs to be designed to handle the `manual_inp
 
 ## Advanced Configuration
 
+### OpenTelemetry Tracing
+
+Probe's GitHub Actions integration supports OpenTelemetry tracing to monitor AI model interactions and performance metrics. This is particularly useful for understanding usage patterns, debugging issues, and optimizing AI interactions.
+
+#### Enable Tracing
+
+Add the `enable_tracing` parameter to your workflow:
+
+```yaml
+jobs:
+  trigger_probe_chat:
+    uses: buger/probe/.github/workflows/probe.yml@main
+    with:
+      command_prefix: "/probe"
+      enable_tracing: true # Enable OpenTelemetry tracing
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+#### File Tracing (Default)
+
+When `enable_tracing: true` is set without `TRACING_URL`, traces are saved to a file:
+
+- **Output**: `probe-traces.jsonl` file in JSON Lines format
+- **Artifact**: Automatically uploaded as `probe-traces` artifact
+- **Retention**: 30 days (configurable)
+- **Download**: Available in the Actions run artifacts section
+
+```yaml
+jobs:
+  trigger_probe_chat:
+    uses: buger/probe/.github/workflows/probe.yml@main
+    with:
+      command_prefix: "/probe"
+      enable_tracing: true
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # No TRACING_URL = file tracing
+```
+
+#### Remote Tracing
+
+For remote tracing to an OpenTelemetry collector, add the `TRACING_URL` secret:
+
+```yaml
+jobs:
+  trigger_probe_chat:
+    uses: buger/probe/.github/workflows/probe.yml@main
+    with:
+      command_prefix: "/probe"
+      enable_tracing: true
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      TRACING_URL: ${{ secrets.TRACING_URL }} # e.g., http://localhost:4318/v1/traces
+```
+
+#### What Gets Traced
+
+The tracing system captures comprehensive data about AI interactions:
+
+- **AI Model Calls**: Request/response cycles with detailed timing
+- **Token Usage**: Prompt tokens, completion tokens, and total consumption
+- **Performance Metrics**: Response times, request durations, and throughput
+- **GitHub Context**: Issue/PR numbers, repository information, and workflow details
+- **Session Information**: Unique session IDs and conversation flow
+- **Error Tracking**: Failed requests, timeouts, and error details
+
+#### Example Trace Data
+
+```json
+{
+  "traceId": "abc123def456...",
+  "spanId": "789ghi012jkl...",
+  "name": "ai.generateText",
+  "startTimeUnixNano": 1704067200000000000,
+  "endTimeUnixNano": 1704067201000000000,
+  "attributes": {
+    "ai.model.id": "claude-3-7-sonnet-20250219",
+    "ai.model.provider": "anthropic",
+    "ai.telemetry.functionId": "chat-issue-123",
+    "ai.telemetry.metadata.sessionId": "github-issue-123",
+    "ai.telemetry.metadata.iteration": "1",
+    "github.repository": "owner/repo",
+    "github.issue.number": "123",
+    "github.event": "issue_comment"
+  },
+  "events": [
+    {
+      "name": "ai.request.start",
+      "attributes": {
+        "ai.request.messages": "[{\"role\":\"user\",\"content\":\"How does X work?\"}]"
+      }
+    },
+    {
+      "name": "ai.response.complete",
+      "attributes": {
+        "ai.usage.prompt_tokens": "245",
+        "ai.usage.completion_tokens": "156",
+        "ai.usage.total_tokens": "401"
+      }
+    }
+  ]
+}
+```
+
+#### Setting Up Remote Tracing
+
+For remote tracing with Jaeger:
+
+1. **Set up Jaeger**:
+   ```bash
+   docker run -d --name jaeger \
+     -p 16686:16686 \
+     -p 4318:4318 \
+     jaegertracing/all-in-one:latest
+   ```
+
+2. **Add Repository Secret**:
+   - Go to Settings > Secrets and variables > Actions
+   - Add: `TRACING_URL` = `http://localhost:4318/v1/traces`
+
+3. **Configure Workflow**:
+   ```yaml
+   jobs:
+     trigger_probe_chat:
+       uses: buger/probe/.github/workflows/probe.yml@main
+       with:
+         enable_tracing: true
+       secrets:
+         TRACING_URL: ${{ secrets.TRACING_URL }}
+   ```
+
+#### Analyzing Traces
+
+Download and analyze trace files:
+
+```bash
+# Download artifact from GitHub Actions
+# Extract probe-traces.jsonl
+
+# View traces
+cat probe-traces.jsonl | jq '.'
+
+# Count interactions by model
+cat probe-traces.jsonl | jq -r '.attributes."ai.model.id"' | sort | uniq -c
+
+# Calculate total token usage
+cat probe-traces.jsonl | jq -r '.events[]? | select(.name == "ai.response.complete") | 
+  .attributes."ai.usage.total_tokens"' | jq -s 'add'
+
+# Find slow responses (>5 seconds)
+cat probe-traces.jsonl | jq -r 'select(((.endTimeUnixNano - .startTimeUnixNano) / 1000000000) > 5) | 
+  {duration: ((.endTimeUnixNano - .startTimeUnixNano) / 1000000000), name: .name}'
+```
+
+#### Use Cases for Tracing
+
+- **Performance Monitoring**: Track AI response times and optimize workflows
+- **Usage Analytics**: Understand token consumption patterns and costs
+- **Debugging**: Identify failed requests and troubleshoot issues
+- **Capacity Planning**: Monitor request volumes and plan scaling
+- **Cost Optimization**: Analyze token usage to optimize AI interactions
+
 ### Comment Management
 
 By default, Probe creates a new comment for each invocation. However, you can configure it to update an existing comment instead, which helps reduce comment clutter in issues and pull requests.

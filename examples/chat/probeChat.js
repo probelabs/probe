@@ -8,6 +8,8 @@ import { TokenCounter } from './tokenCounter.js';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
 import { writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { TelemetryConfig } from './telemetry.js';
+import { trace } from '@opentelemetry/api';
 // Import the tools that emit events and the listFilesByLevel utility
 import { listFilesByLevel } from '@buger/probe';
 // Import schemas and parser from common (assuming tools.js)
@@ -65,41 +67,65 @@ if (typeof process !== 'undefined' && !process.env.PROBE_CHAT_SKIP_FOLDER_VALIDA
  * @returns {Array} Array of { url: string, cleanedMessage: string }
  */
 function extractImageUrls(message, debug = false) {
-  // Pattern to match image URLs:
-  // 1. GitHub private-user-images URLs (always images, regardless of extension)
-  // 2. GitHub user-attachments/assets URLs (always images, regardless of extension)
-  // 3. URLs with common image extensions (PNG, JPG, JPEG, WebP, GIF)
-  const imageUrlPattern = /https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s]+|[^\s]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s]*)?)/gi;
-  
-  if (debug) {
-    console.log(`[DEBUG] Scanning message for image URLs. Message length: ${message.length}`);
-    console.log(`[DEBUG] Image URL pattern: ${imageUrlPattern.toString()}`);
-  }
-  
-  const urls = [];
-  let match;
-  
-  while ((match = imageUrlPattern.exec(message)) !== null) {
-    urls.push(match[0]);
-    if (debug) {
-      console.log(`[DEBUG] Found image URL: ${match[0]}`);
+  const tracer = trace.getTracer('probe-chat');
+  return tracer.startActiveSpan('extractImageUrls', (span) => {
+    try {
+      // Pattern to match image URLs:
+      // 1. GitHub private-user-images URLs (always images, regardless of extension)
+      // 2. GitHub user-attachments/assets URLs (always images, regardless of extension)
+      // 3. URLs with common image extensions (PNG, JPG, JPEG, WebP, GIF)
+      const imageUrlPattern = /https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s]+|[^\s]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s]*)?)/gi;
+      
+      span.setAttributes({
+        'message.length': message.length,
+        'debug.enabled': debug
+      });
+      
+      if (debug) {
+        console.log(`[DEBUG] Scanning message for image URLs. Message length: ${message.length}`);
+        console.log(`[DEBUG] Image URL pattern: ${imageUrlPattern.toString()}`);
+      }
+      
+      const urls = [];
+      let match;
+      
+      while ((match = imageUrlPattern.exec(message)) !== null) {
+        urls.push(match[0]);
+        if (debug) {
+          console.log(`[DEBUG] Found image URL: ${match[0]}`);
+        }
+      }
+      
+      // Remove image URLs from message text
+      const cleanedMessage = message.replace(imageUrlPattern, '').trim();
+      
+      span.setAttributes({
+        'images.found': urls.length,
+        'message.cleaned_length': cleanedMessage.length
+      });
+      
+      if (debug) {
+        console.log(`[DEBUG] Total image URLs found: ${urls.length}`);
+        if (urls.length > 0) {
+          console.log(`[DEBUG] Original message length: ${message.length}, cleaned message length: ${cleanedMessage.length}`);
+        }
+      }
+      
+      const result = {
+        imageUrls: urls,
+        cleanedMessage: cleanedMessage
+      };
+      
+      span.setStatus({ code: 1 }); // SUCCESS
+      return result;
+    } catch (error) {
+      span.recordException(error);
+      span.setStatus({ code: 2, message: error.message }); // ERROR
+      throw error;
+    } finally {
+      span.end();
     }
-  }
-  
-  // Remove image URLs from message text
-  const cleanedMessage = message.replace(imageUrlPattern, '').trim();
-  
-  if (debug) {
-    console.log(`[DEBUG] Total image URLs found: ${urls.length}`);
-    if (urls.length > 0) {
-      console.log(`[DEBUG] Original message length: ${message.length}, cleaned message length: ${cleanedMessage.length}`);
-    }
-  }
-  
-  return {
-    imageUrls: urls,
-    cleanedMessage: cleanedMessage
-  };
+  });
 }
 
 /**
@@ -229,6 +255,9 @@ export class ProbeChat {
 
     // Initialize the chat model
     this.initializeModel();
+
+    // Initialize telemetry
+    this.initializeTelemetry();
 
     // Initialize chat history
     this.history = [];
@@ -377,6 +406,41 @@ export class ProbeChat {
       console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl}, from: ${urlSource})` : ''}`);
     }
     // Note: Google's tool support might differ. Ensure XML approach works reliably.
+  }
+
+  /**
+   * Initialize telemetry configuration
+   */
+  initializeTelemetry() {
+    try {
+      // Check if telemetry is enabled via environment variables
+      const fileEnabled = process.env.OTEL_ENABLE_FILE === 'true';
+      const remoteEnabled = process.env.OTEL_ENABLE_REMOTE === 'true';
+      const consoleEnabled = process.env.OTEL_ENABLE_CONSOLE === 'true';
+      
+      if (fileEnabled || remoteEnabled || consoleEnabled) {
+        this.telemetryConfig = new TelemetryConfig({
+          enableFile: fileEnabled,
+          enableRemote: remoteEnabled,
+          enableConsole: consoleEnabled,
+          filePath: process.env.OTEL_FILE_PATH || './traces.jsonl',
+          remoteEndpoint: process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || 'http://localhost:4318/v1/traces'
+        });
+        
+        this.telemetryConfig.initialize();
+        
+        if (this.debug) {
+          console.log('[DEBUG] Telemetry initialized successfully');
+        }
+      } else {
+        if (this.debug) {
+          console.log('[DEBUG] Telemetry disabled - no exporters configured');
+        }
+      }
+    } catch (error) {
+      console.error('Failed to initialize telemetry:', error.message);
+      this.telemetryConfig = null;
+    }
   }
 
   /**
@@ -671,48 +735,83 @@ When troubleshooting:
    * @returns {Promise<string>} - The AI response
    */
   async chat(message, sessionId, apiCredentials = null) {
-    // Update client credentials if provided in this call
-    if (apiCredentials) {
-      this.clientApiProvider = apiCredentials.apiProvider || this.clientApiProvider;
-      this.clientApiKey = apiCredentials.apiKey || this.clientApiKey;
-      this.clientApiUrl = apiCredentials.apiUrl || this.clientApiUrl;
+    const tracer = trace.getTracer('probe-chat');
+    return tracer.startActiveSpan('chat', async (span) => {
+      try {
+        span.setAttributes({
+          'session.id': sessionId || this.sessionId,
+          'message.length': message.length,
+          'api.credentials_provided': !!apiCredentials,
+          'no_api_keys_mode': this.noApiKeysMode
+        });
 
-      // Re-initialize the model with the new credentials
-      if (apiCredentials.apiKey && apiCredentials.apiProvider) {
-        this.initializeModel();
+        // Update client credentials if provided in this call
+        if (apiCredentials) {
+          this.clientApiProvider = apiCredentials.apiProvider || this.clientApiProvider;
+          this.clientApiKey = apiCredentials.apiKey || this.clientApiKey;
+          this.clientApiUrl = apiCredentials.apiUrl || this.clientApiUrl;
+
+          // Re-initialize the model with the new credentials
+          if (apiCredentials.apiKey && apiCredentials.apiProvider) {
+            this.initializeModel();
+          }
+        }
+
+        // Handle no API keys mode gracefully
+        if (this.noApiKeysMode) {
+          console.error("Cannot process chat: No API keys configured.");
+          span.setAttributes({
+            'error.type': 'no_api_keys',
+            'response.type': 'error'
+          });
+          span.setStatus({ code: 2, message: 'No API keys configured' });
+          // Return structured response even for API key errors
+          return {
+            response: "Error: ProbeChat is not configured with an AI provider API key. Please set the appropriate environment variable (e.g., ANTHROPIC_API_KEY, OPENAI_API_KEY) or provide an API key in the browser.",
+            tokenUsage: { contextWindow: 0, current: {}, total: {} }
+          };
+        }
+
+        // Reset cancelled flag for the new request
+        this.cancelled = false;
+
+        // Create a new AbortController for this specific request
+        // This ensures previous cancellations don't affect new requests
+        this.abortController = new AbortController();
+
+        // If a session ID is provided and it's different from the current one, update it
+        if (sessionId && sessionId !== this.sessionId) {
+          span.setAttributes({
+            'session.switched': true,
+            'session.previous_id': this.sessionId
+          });
+          if (this.debug) {
+            console.log(`[DEBUG] Switching session ID from ${this.sessionId} to ${sessionId}`);
+          }
+          // Update the session ID for this instance
+          this.sessionId = sessionId;
+          // NOTE: History is NOT cleared automatically when session ID changes this way.
+          // Call clearHistory() explicitly if a new session should start fresh.
+        }
+
+        // Process the message using the potentially updated session ID
+        const result = await this._processChat(message);
+        
+        span.setAttributes({
+          'response.type': 'success',
+          'response.length': result.response?.length || 0
+        });
+        
+        span.setStatus({ code: 1 }); // SUCCESS
+        return result;
+      } catch (error) {
+        span.recordException(error);
+        span.setStatus({ code: 2, message: error.message });
+        throw error;
+      } finally {
+        span.end();
       }
-    }
-
-    // Handle no API keys mode gracefully
-    if (this.noApiKeysMode) {
-      console.error("Cannot process chat: No API keys configured.");
-      // Return structured response even for API key errors
-      return {
-        response: "Error: ProbeChat is not configured with an AI provider API key. Please set the appropriate environment variable (e.g., ANTHROPIC_API_KEY, OPENAI_API_KEY) or provide an API key in the browser.",
-        tokenUsage: { contextWindow: 0, current: {}, total: {} }
-      };
-    }
-
-    // Reset cancelled flag for the new request
-    this.cancelled = false;
-
-    // Create a new AbortController for this specific request
-    // This ensures previous cancellations don't affect new requests
-    this.abortController = new AbortController();
-
-    // If a session ID is provided and it's different from the current one, update it
-    if (sessionId && sessionId !== this.sessionId) {
-      if (this.debug) {
-        console.log(`[DEBUG] Switching session ID from ${this.sessionId} to ${sessionId}`);
-      }
-      // Update the session ID for this instance
-      this.sessionId = sessionId;
-      // NOTE: History is NOT cleared automatically when session ID changes this way.
-      // Call clearHistory() explicitly if a new session should start fresh.
-    }
-
-    // Process the message using the potentially updated session ID
-    return await this._processChat(message);
+    });
   }
 
   /**

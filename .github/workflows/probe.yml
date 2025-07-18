@@ -1,6 +1,14 @@
 # <gh>
 name: Probe chat Github Action
 
+# OpenTelemetry Tracing Support:
+# - enable_tracing: Set to true to enable tracing for AI model calls
+# - TRACING_URL: Optional secret for remote tracing endpoint (e.g., http://localhost:4318/v1/traces)
+# - If enable_tracing=true and TRACING_URL is set: Uses remote tracing
+# - If enable_tracing=true and TRACING_URL is not set: Uses file tracing (probe-traces.jsonl)
+# - Trace files are uploaded as artifacts when using file tracing
+# - Traces include AI model interactions, token usage, and performance metrics
+
 on:
   workflow_call:
     inputs:
@@ -58,6 +66,11 @@ on:
         required: false
         type: string
         default: "🔴 **CHECK FAILED:** This review has identified issues that require attention."
+      enable_tracing:
+        description: "Enable OpenTelemetry tracing for AI model calls"
+        required: false
+        type: boolean
+        default: false
     secrets:
       # ---- Existing Secrets ----
       PROBE_CHAT_COMMAND:
@@ -103,6 +116,10 @@ on:
       DEBUG_CHAT:
         required: false
         description: "Enable debug logging for chat interactions (set to '1' to enable)"
+      # ---- Tracing Secrets ----
+      TRACING_URL:
+        required: false
+        description: "Remote OpenTelemetry collector endpoint for tracing (e.g., http://localhost:4318/v1/traces)"
 
 jobs:
   process_comment:
@@ -997,6 +1014,17 @@ jobs:
             echo "Enabling implement tool with --allow-edit flag (suggestions mode)"
           fi
 
+          # Add tracing options
+          if [[ "${{ inputs.enable_tracing }}" == "true" ]]; then
+            if [[ -n "${{ secrets.TRACING_URL }}" ]]; then
+              COMMAND_TO_RUN="$COMMAND_TO_RUN --trace-remote '${{ secrets.TRACING_URL }}'"
+              echo "Enabling remote tracing to: ${{ secrets.TRACING_URL }}"
+            else
+              COMMAND_TO_RUN="$COMMAND_TO_RUN --trace-file ./probe-traces.jsonl"
+              echo "Enabling file tracing to: ./probe-traces.jsonl"
+            fi
+          fi
+
           if [[ -z "$COMMAND_TO_RUN" ]]; then
             echo "::error::COMMAND_TO_RUN is unexpectedly empty after building!" >&2
             echo "🤖 **Error:** Internal configuration error - AI command is missing." > "$RESPONSE_FILE"
@@ -1055,6 +1083,17 @@ jobs:
             response.txt
           if-no-files-found: ignore
           retention-days: 7
+
+      # --- Upload Trace Files (No token needed) ---
+      - name: Upload Trace Files as Artifacts
+        if: always() && inputs.enable_tracing && !secrets.TRACING_URL
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-traces
+          path: |
+            probe-traces.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Handle Git Changes
         id: handle_git

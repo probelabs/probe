@@ -257,6 +257,9 @@ probe-chat [PATH] [OPTIONS]
 | `--max-iterations <number>` | Max tool iterations allowed (default: 30) |
 | `--prompt <value>` | Use a custom prompt (`architect`, `code-review`, `support`, `engineer`, path to file, or string) |
 | `--allow-edit` | **Enable code editing via the `implement` tool (uses Aider)** |
+| `--trace-file [path]` | Enable file-based tracing (default: ./probe-traces.jsonl) |
+| `--trace-remote <url>` | Enable remote tracing to OpenTelemetry collector |
+| `--trace-console` | Enable console tracing for debugging |
 
 ### Code Editing (`--allow-edit`)
 
@@ -298,6 +301,56 @@ probe-chat --allow-edit --message "Add comments to the main function"
 
 If you're using Probe in GitHub Actions, you can use `allow_suggestions` instead, which creates reviewable suggestions rather than direct changes. See the [GitHub Actions Integration](./integrations/github-actions.md#code-modification-options) guide for details.
 
+### OpenTelemetry Tracing
+
+The `--trace-file`, `--trace-remote`, and `--trace-console` flags enable comprehensive monitoring and observability for AI interactions.
+
+#### Tracing Options
+
+**File Tracing (`--trace-file`)**
+- Saves traces to a JSON Lines format file for offline analysis
+- Default file path: `./probe-traces.jsonl`
+- Custom path: `--trace-file ./my-traces.jsonl`
+
+**Remote Tracing (`--trace-remote`)**
+- Sends traces to OpenTelemetry collectors (Jaeger, Zipkin, etc.)
+- Requires collector URL: `--trace-remote http://localhost:4318/v1/traces`
+
+**Console Tracing (`--trace-console`)**
+- Outputs traces to console for debugging
+- Useful for development and troubleshooting
+
+#### Usage Examples
+
+```bash
+# Enable file-based tracing
+probe-chat --trace-file
+
+# Enable remote tracing to Jaeger
+probe-chat --trace-remote http://localhost:4318/v1/traces
+
+# Enable console tracing for debugging
+probe-chat --trace-console
+
+# Combine multiple tracing options
+probe-chat --trace-file --trace-remote --trace-console
+
+# Use custom file path
+probe-chat --trace-file ./debug-traces.jsonl
+```
+
+#### What Gets Traced
+
+The tracing system captures detailed information about AI interactions:
+
+- **Performance Metrics**: Response times, request durations, and throughput
+- **Token Usage**: Prompt tokens, completion tokens, and total consumption
+- **Model Information**: Provider, model name, and configuration
+- **Session Data**: Session IDs, iteration counts, and conversation flow
+- **Error Tracking**: Failed requests, timeouts, and error details
+
+For more details on tracing, see the [AI Chat documentation](./ai-chat.md#opentelemetry-tracing).
+
 ### Chat Examples
 
 ```bash
@@ -315,4 +368,10 @@ probe-chat --message "Explain the auth flow in main.go" --json
 
 # Start chat with editing enabled (requires Aider)
 probe-chat /path/to/project --allow-edit
+
+# Start chat with tracing enabled
+probe-chat --trace-file ./session-traces.jsonl
+
+# Start chat with full observability
+probe-chat --trace-file --trace-remote http://localhost:4318/v1/traces --allow-edit
 ```
