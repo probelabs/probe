@@ -35,7 +35,9 @@ export class TelemetryConfig {
    */
   initialize() {
     if (this.sdk) {
-      console.warn('Telemetry already initialized');
+      if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+        console.warn('Telemetry already initialized');
+      }
       return;
     }
 
@@ -57,9 +59,13 @@ export class TelemetryConfig {
         
         const fileExporter = new FileSpanExporter(this.filePath);
         spanProcessors.push(new BatchSpanProcessor(fileExporter));
-        console.log(`[Telemetry] File exporter enabled, writing to: ${this.filePath}`);
+        if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+          console.log(`[Telemetry] File exporter enabled, writing to: ${this.filePath}`);
+        }
       } catch (error) {
-        console.error(`[Telemetry] Failed to initialize file exporter: ${error.message}`);
+        if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+          console.error(`[Telemetry] Failed to initialize file exporter: ${error.message}`);
+        }
       }
     }
 
@@ -70,9 +76,13 @@ export class TelemetryConfig {
           url: this.remoteEndpoint,
         });
         spanProcessors.push(new BatchSpanProcessor(remoteExporter));
-        console.log(`[Telemetry] Remote exporter enabled, endpoint: ${this.remoteEndpoint}`);
+        if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+          console.log(`[Telemetry] Remote exporter enabled, endpoint: ${this.remoteEndpoint}`);
+        }
       } catch (error) {
-        console.error(`[Telemetry] Failed to initialize remote exporter: ${error.message}`);
+        if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+          console.error(`[Telemetry] Failed to initialize remote exporter: ${error.message}`);
+        }
       }
     }
 
@@ -80,11 +90,15 @@ export class TelemetryConfig {
     if (this.enableConsole) {
       const consoleExporter = new ConsoleSpanExporter();
       spanProcessors.push(new BatchSpanProcessor(consoleExporter));
-      console.log(`[Telemetry] Console exporter enabled`);
+      if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+        console.log(`[Telemetry] Console exporter enabled`);
+      }
     }
 
     if (spanProcessors.length === 0) {
-      console.log('[Telemetry] No exporters configured, telemetry will not be collected');
+      if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+        console.log('[Telemetry] No exporters configured, telemetry will not be collected');
+      }
       return;
     }
 
@@ -96,9 +110,13 @@ export class TelemetryConfig {
     try {
       this.sdk.start();
       this.tracer = trace.getTracer(this.serviceName, this.serviceVersion);
-      console.log(`[Telemetry] OpenTelemetry SDK initialized successfully`);
+      if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+        console.log(`[Telemetry] OpenTelemetry SDK initialized successfully`);
+      }
     } catch (error) {
-      console.error(`[Telemetry] Failed to start OpenTelemetry SDK: ${error.message}`);
+      if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+        console.error(`[Telemetry] Failed to start OpenTelemetry SDK: ${error.message}`);
+      }
     }
   }
 
@@ -160,9 +178,13 @@ export class TelemetryConfig {
     if (this.sdk) {
       try {
         await this.sdk.shutdown();
-        console.log('[Telemetry] OpenTelemetry SDK shutdown successfully');
+        if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+          console.log('[Telemetry] OpenTelemetry SDK shutdown successfully');
+        }
       } catch (error) {
-        console.error(`[Telemetry] Failed to shutdown OpenTelemetry SDK: ${error.message}`);
+        if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+          console.error(`[Telemetry] Failed to shutdown OpenTelemetry SDK: ${error.message}`);
+        }
       }
     }
   }
