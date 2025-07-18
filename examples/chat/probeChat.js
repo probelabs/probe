@@ -849,9 +849,11 @@ When troubleshooting:
       // Extract image URLs from the message
       const { imageUrls, cleanedMessage } = extractImageUrls(message, this.debug);
       
-      // Always log image detection (same level as session ID logging)
+      // Log image detection only in interactive mode or debug mode
       if (imageUrls.length > 0) {
-        console.log(`Detected ${imageUrls.length} image URL(s) in message.`);
+        if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+          console.log(`Detected ${imageUrls.length} image URL(s) in message.`);
+        }
         if (this.debug) {
           console.log(`[DEBUG] Extracted image URLs:`, imageUrls);
         }
@@ -860,13 +862,15 @@ When troubleshooting:
       // Validate image URLs and filter out broken ones
       const validImageUrls = await validateImageUrls(imageUrls, this.debug);
       
-      // Always log validation results if images were found
+      // Log validation results only in interactive mode or debug mode
       if (imageUrls.length > 0) {
         const invalidCount = imageUrls.length - validImageUrls.length;
-        if (validImageUrls.length > 0) {
-          console.log(`Image validation: ${validImageUrls.length} valid, ${invalidCount} invalid/inaccessible.`);
-        } else {
-          console.log(`Image validation: All ${imageUrls.length} image URLs failed validation.`);
+        if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+          if (validImageUrls.length > 0) {
+            console.log(`Image validation: ${validImageUrls.length} valid, ${invalidCount} invalid/inaccessible.`);
+          } else {
+            console.log(`Image validation: All ${imageUrls.length} image URLs failed validation.`);
+          }
         }
         
         if (this.debug && validImageUrls.length > 0) {
