@@ -35,6 +35,7 @@ jobs:
       # default_probe_chat_command: 'node path/to/custom/script.js'
       update_existing_comment: false # Set to true to update existing comments instead of creating new ones
       update_comment_marker: "<!-- probe-bot -->" # Hidden marker to identify comments for updates
+      enable_tracing: true
     # Pass ALL secrets from this repository to the reusable workflow
     # This includes GITHUB_TOKEN, PROBE_CHAT_COMMAND (if set), ANTHROPIC_API_KEY, etc.
     secrets:
