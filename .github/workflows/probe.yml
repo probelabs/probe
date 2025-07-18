@@ -3,9 +3,9 @@ name: Probe chat Github Action
 
 # OpenTelemetry Tracing Support:
 # - enable_tracing: Set to true to enable tracing for AI model calls
-# - TRACING_URL: Optional secret for remote tracing endpoint (e.g., http://localhost:4318/v1/traces)
-# - If enable_tracing=true and TRACING_URL is set: Uses remote tracing
-# - If enable_tracing=true and TRACING_URL is not set: Uses file tracing (probe-traces.jsonl)
+# - tracing_url: Optional input for remote tracing endpoint (e.g., http://localhost:4318/v1/traces)
+# - If enable_tracing=true and tracing_url is set: Uses remote tracing
+# - If enable_tracing=true and tracing_url is not set: Uses file tracing (probe-traces.jsonl)
 # - Trace files are uploaded as artifacts when using file tracing
 # - Traces include AI model interactions, token usage, and performance metrics
 
@@ -71,6 +71,10 @@ on:
         required: false
         type: boolean
         default: false
+      tracing_url:
+        description: "Remote OpenTelemetry collector endpoint for tracing (e.g., http://localhost:4318/v1/traces)"
+        required: false
+        type: string
     secrets:
       # ---- Existing Secrets ----
       PROBE_CHAT_COMMAND:
@@ -116,10 +120,6 @@ on:
       DEBUG_CHAT:
         required: false
         description: "Enable debug logging for chat interactions (set to '1' to enable)"
-      # ---- Tracing Secrets ----
-      TRACING_URL:
-        required: false
-        description: "Remote OpenTelemetry collector endpoint for tracing (e.g., http://localhost:4318/v1/traces)"
 
 jobs:
   process_comment:
@@ -1028,9 +1028,9 @@ jobs:
 
           # Add tracing options
           if [[ "${{ inputs.enable_tracing }}" == "true" ]]; then
-            if [[ -n "${{ secrets.TRACING_URL }}" ]]; then
-              COMMAND_TO_RUN="$COMMAND_TO_RUN --trace-remote '${{ secrets.TRACING_URL }}'"
-              echo "Enabling remote tracing to: ${{ secrets.TRACING_URL }}"
+            if [[ -n "${{ inputs.tracing_url }}" ]]; then
+              COMMAND_TO_RUN="$COMMAND_TO_RUN --trace-remote '${{ inputs.tracing_url }}'"
+              echo "Enabling remote tracing to: ${{ inputs.tracing_url }}"
             else
               COMMAND_TO_RUN="$COMMAND_TO_RUN --trace-file ./probe-traces.jsonl"
               echo "Enabling file tracing to: ./probe-traces.jsonl"
@@ -1098,7 +1098,7 @@ jobs:
 
       # --- Upload Trace Files (No token needed) ---
       - name: Upload Trace Files as Artifacts
-        if: always() && inputs.enable_tracing && !secrets.TRACING_URL
+        if: always() && inputs.enable_tracing && inputs.tracing_url == ''
         uses: actions/upload-artifact@v4
         with:
           name: probe-traces
