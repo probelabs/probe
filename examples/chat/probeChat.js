@@ -10,6 +10,7 @@ import { writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { TelemetryConfig } from './telemetry.js';
 import { trace } from '@opentelemetry/api';
+import { appTracer } from './appTracer.js';
 // Import the tools that emit events and the listFilesByLevel utility
 import { listFilesByLevel } from '@buger/probe';
 // Import schemas and parser from common (assuming tools.js)
@@ -739,15 +740,11 @@ When troubleshooting:
    * @returns {Promise<string>} - The AI response
    */
   async chat(message, sessionId, apiCredentials = null) {
-    const tracer = trace.getTracer('probe-chat');
-    return tracer.startActiveSpan('chat', async (span) => {
-      try {
-        span.setAttributes({
-          'session.id': sessionId || this.sessionId,
-          'message.length': message.length,
-          'api.credentials_provided': !!apiCredentials,
-          'no_api_keys_mode': this.noApiKeysMode
-        });
+    // Use our custom app tracer for granular tracing
+    const effectiveSessionId = sessionId || this.sessionId;
+    const chatSessionSpan = appTracer.startChatSession(effectiveSessionId, message, this.apiType, this.model);
+    
+    try {
 
         // Update client credentials if provided in this call
         if (apiCredentials) {
@@ -764,11 +761,7 @@ When troubleshooting:
         // Handle no API keys mode gracefully
         if (this.noApiKeysMode) {
           console.error("Cannot process chat: No API keys configured.");
-          span.setAttributes({
-            'error.type': 'no_api_keys',
-            'response.type': 'error'
-          });
-          span.setStatus({ code: 2, message: 'No API keys configured' });
+          appTracer.endChatSession(effectiveSessionId, false, 0);
           // Return structured response even for API key errors
           return {
             response: "Error: ProbeChat is not configured with an AI provider API key. Please set the appropriate environment variable (e.g., ANTHROPIC_API_KEY, OPENAI_API_KEY) or provide an API key in the browser.",
@@ -785,10 +778,6 @@ When troubleshooting:
 
         // If a session ID is provided and it's different from the current one, update it
         if (sessionId && sessionId !== this.sessionId) {
-          span.setAttributes({
-            'session.switched': true,
-            'session.previous_id': this.sessionId
-          });
           if (this.debug) {
             console.log(`[DEBUG] Switching session ID from ${this.sessionId} to ${sessionId}`);
           }
@@ -799,32 +788,24 @@ When troubleshooting:
         }
 
         // Process the message using the potentially updated session ID
-        const result = await this._processChat(message);
+        const result = await this._processChat(message, effectiveSessionId);
         
-        span.setAttributes({
-          'response.type': 'success',
-          'response.length': result.response?.length || 0
-        });
-        
-        span.setStatus({ code: 1 }); // SUCCESS
+        appTracer.endChatSession(effectiveSessionId, true, result.tokenUsage?.total?.total || 0);
         return result;
       } catch (error) {
-        span.recordException(error);
-        span.setStatus({ code: 2, message: error.message });
+        appTracer.endChatSession(effectiveSessionId, false, 0);
         throw error;
-      } finally {
-        span.end();
       }
-    });
   }
 
   /**
    * Internal method to process a chat message using the XML tool loop
    * @param {string} message - The user message
+   * @param {string} sessionId - The session ID for tracing
    * @returns {Promise<string>} - The final AI response after loop completion
    * @private
    */
-  async _processChat(message) {
+  async _processChat(message, sessionId) {
     let currentIteration = 0;
     let completionAttempted = false;
     let finalResult = `Error: Max tool iterations (${MAX_TOOL_ITERATIONS}) reached without completion. You can increase this limit using the MAX_TOOL_ITERATIONS environment variable or --max-iterations flag.`; // Default error
@@ -850,8 +831,18 @@ When troubleshooting:
 
       const isFirstMessage = this.history.length === 0;
       
+      // Start user message processing trace
+      const messageId = `msg_${Date.now()}`;
+      appTracer.startUserMessageProcessing(sessionId, messageId, message);
+      
       // Extract image URLs from the message
       const { imageUrls, cleanedMessage } = extractImageUrls(message, this.debug);
+      
+      // Start image processing trace if images are found
+      if (imageUrls.length > 0) {
+        appTracer.startImageProcessing(sessionId, messageId, imageUrls, cleanedMessage.length);
+        if (this.debug) console.log(`[DEBUG] Found ${imageUrls.length} image URLs in message`);
+      }
       
       // Log image detection only in interactive mode or debug mode
       if (imageUrls.length > 0) {
@@ -864,7 +855,33 @@ When troubleshooting:
       }
       
       // Validate image URLs and filter out broken ones
-      const validImageUrls = await validateImageUrls(imageUrls, this.debug);
+      let validImageUrls = [];
+      let validationResults = null;
+      
+      if (imageUrls.length > 0) {
+        const validationStartTime = Date.now();
+        validImageUrls = await validateImageUrls(imageUrls, this.debug);
+        const validationEndTime = Date.now();
+        
+        // Record validation results in trace
+        validationResults = {
+          totalUrls: imageUrls.length,
+          validUrls: validImageUrls.length,
+          invalidUrls: imageUrls.length - validImageUrls.length,
+          redirectedUrls: 0, // TODO: capture from validateImageUrls if needed
+          timeoutUrls: 0, // TODO: capture from validateImageUrls if needed  
+          networkErrors: 0, // TODO: capture from validateImageUrls if needed
+          durationMs: validationEndTime - validationStartTime
+        };
+        
+        appTracer.recordImageValidation(sessionId, validationResults);
+        appTracer.endImageProcessing(sessionId, validImageUrls.length > 0, validImageUrls.length);
+      } else {
+        validImageUrls = await validateImageUrls(imageUrls, this.debug);
+      }
+      
+      // Start the agent loop trace
+      appTracer.startAgentLoop(sessionId, MAX_TOOL_ITERATIONS);
       
       // Log validation results only in interactive mode or debug mode
       if (imageUrls.length > 0) {
@@ -903,16 +920,32 @@ When troubleshooting:
         userMessage
       ];
 
+      const promptGenerationStart = Date.now();
       const systemPrompt = await this.getSystemMessage();
+      const promptGenerationEnd = Date.now();
+      
       if (this.debug) {
         const systemTokens = this.tokenCounter.countTokens(systemPrompt);
         this.tokenCounter.addRequestTokens(systemTokens);
         console.log(`[DEBUG] System prompt estimated tokens: ${systemTokens}`);
+        
+        // Record system prompt generation metrics
+        appTracer.recordSystemPromptGeneration(sessionId, {
+          baseLength: 11747, // Approximate base system message length
+          finalLength: systemPrompt.length,
+          filesAdded: this.history.length > 0 ? 35 : 36, // Approximate from logs
+          generationDurationMs: promptGenerationEnd - promptGenerationStart,
+          promptType: this.promptType || 'default',
+          estimatedTokens: systemTokens
+        });
       }
 
       while (currentIteration < MAX_TOOL_ITERATIONS && !completionAttempted) {
         currentIteration++;
         if (this.cancelled) throw new Error('Request was cancelled by the user');
+
+        // Start iteration trace
+        appTracer.startAgentIteration(sessionId, currentIteration, currentMessages.length, this.tokenCounter.contextSize || 0);
 
         if (this.debug) {
           console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${MAX_TOOL_ITERATIONS} ---`);
@@ -990,7 +1023,7 @@ When troubleshooting:
             }
           },
           experimental_telemetry: {
-            isEnabled: true,
+            isEnabled: false, // Disable built-in telemetry in favor of our custom tracing
             functionId: this.sessionId,
             metadata: {
               sessionId: this.sessionId,
@@ -1003,8 +1036,17 @@ When troubleshooting:
           }
         };
 
+        // Start AI generation request trace
+        const aiRequestSpan = appTracer.startAiGenerationRequest(sessionId, currentIteration, this.model, this.apiType, {
+          temperature: 0.3,
+          maxTokens: maxResponseTokens,
+          maxRetries: 2
+        });
+
         // **Streaming Response Handling**
         let assistantResponseContent = '';
+        let startTime = Date.now();
+        let firstChunkTime = null;
         try {
           if (this.debug) console.log(`[DEBUG] Calling streamText with model ${this.model}...`);
 
@@ -1015,6 +1057,9 @@ When troubleshooting:
           const { textStream } = streamText(generateOptions);
           for await (const chunk of textStream) {
             if (this.cancelled) throw new Error('Request was cancelled by the user');
+            if (firstChunkTime === null) {
+              firstChunkTime = Date.now();
+            }
             assistantResponseContent += chunk;
           }
 
@@ -1034,10 +1079,54 @@ When troubleshooting:
           this.tokenCounter.calculateContextSize(currentMessages);
           if (this.debug) console.log(`[DEBUG] Context size AFTER LLM response (Iter ${currentIteration}): ${this.tokenCounter.contextSize}`);
 
+          // Record AI response in trace
+          const endTime = Date.now();
+          appTracer.recordAiResponse(sessionId, currentIteration, {
+            responseLength: assistantResponseContent.length,
+            completionTokens: responseTokenCount,
+            promptTokens: this.tokenCounter.contextSize || 0,
+            finishReason: 'stop',
+            timeToFirstChunk: firstChunkTime ? (firstChunkTime - startTime) : 0,
+            timeToFinish: endTime - startTime
+          });
+
+          appTracer.endAiRequest(sessionId, currentIteration, true);
+
         } catch (error) {
+          // Classify and record the AI model error
+          let errorCategory = 'unknown';
+          if (this.cancelled || error.name === 'AbortError' || (error.message && error.message.includes('cancelled'))) {
+            errorCategory = 'cancellation';
+          } else if (error.message?.includes('timeout')) {
+            errorCategory = 'timeout';
+          } else if (error.message?.includes('rate limit') || error.message?.includes('quota')) {
+            errorCategory = 'api_limit';
+          } else if (error.message?.includes('network') || error.message?.includes('fetch')) {
+            errorCategory = 'network';
+          } else if (error.status >= 400 && error.status < 500) {
+            errorCategory = 'client_error';
+          } else if (error.status >= 500) {
+            errorCategory = 'server_error';
+          }
+          
+          appTracer.recordAiModelError(sessionId, currentIteration, {
+            category: errorCategory,
+            message: error.message,
+            model: this.model,
+            provider: this.apiType,
+            statusCode: error.status || 0,
+            retryAttempt: 0
+          });
+          
+          appTracer.endAiRequest(sessionId, currentIteration, false);
+          
           if (this.cancelled || error.name === 'AbortError' || (error.message && error.message.includes('cancelled'))) {
             console.log(`Chat request cancelled during LLM call (Iter ${currentIteration})`);
             this.cancelled = true;
+            appTracer.recordSessionCancellation(sessionId, 'ai_request_cancelled', {
+              currentIteration,
+              activeTool: 'ai_generation'
+            });
             throw new Error('Request was cancelled by the user');
           }
           console.error(`Error during streamText (Iter ${currentIteration}):`, error);
@@ -1049,6 +1138,9 @@ When troubleshooting:
         if (parsedTool) {
           const { toolName, params } = parsedTool;
           if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
+          
+          // Record tool call parsing in trace
+          appTracer.recordToolCallParsed(sessionId, currentIteration, toolName, params);
 
           if (toolName === 'attempt_completion') {
             completionAttempted = true;
@@ -1056,8 +1148,10 @@ When troubleshooting:
             if (!validation.success) {
               finalResult = `Error: AI attempted completion with invalid parameters: ${JSON.stringify(validation.error.issues)}`;
               console.warn(`[WARN] Invalid attempt_completion parameters:`, validation.error.issues);
+              appTracer.recordCompletionAttempt(sessionId, false);
             } else {
               finalResult = validation.data.result;
+              appTracer.recordCompletionAttempt(sessionId, true, finalResult);
               if (this.debug) {
                 console.log(`[DEBUG] Completion attempted successfully. Final Result captured.`);
 
@@ -1082,6 +1176,10 @@ When troubleshooting:
           } else if (this.toolImplementations[toolName]) {
             const toolInstance = this.toolImplementations[toolName];
             let toolResultContent = '';
+            
+            // Start tool execution trace
+            appTracer.startToolExecution(sessionId, currentIteration, toolName, params);
+            
             try {
               const enhancedParams = { ...params, sessionId: this.sessionId };
               if (this.debug) console.log(`[DEBUG] Executing tool '${toolName}' with params:`, enhancedParams);
@@ -1091,10 +1189,36 @@ When troubleshooting:
                 const preview = toolResultContent.substring(0, 200).replace(/\n/g, ' ') + (toolResultContent.length > 200 ? '...' : '');
                 console.log(`[DEBUG] Tool '${toolName}' executed successfully. Result preview: ${preview}`);
               }
+              
+              // End tool execution trace with success
+              appTracer.endToolExecution(sessionId, currentIteration, true, toolResultContent.length);
             } catch (error) {
               console.error(`Error executing tool ${toolName}:`, error);
               toolResultContent = `Error executing tool ${toolName}: ${error.message}`;
               if (this.debug) console.log(`[DEBUG] Tool '${toolName}' execution FAILED.`);
+              
+              // Classify and record tool execution error
+              let errorCategory = 'execution';
+              if (error.message?.includes('validation')) {
+                errorCategory = 'validation';
+              } else if (error.message?.includes('permission') || error.message?.includes('access')) {
+                errorCategory = 'filesystem';
+              } else if (error.message?.includes('network') || error.message?.includes('fetch')) {
+                errorCategory = 'network';
+              } else if (error.message?.includes('timeout')) {
+                errorCategory = 'timeout';
+              }
+              
+              appTracer.recordToolError(sessionId, currentIteration, toolName, {
+                category: errorCategory,
+                message: error.message,
+                exitCode: error.code || 0,
+                signal: error.signal || '',
+                params: enhancedParams
+              });
+              
+              // End tool execution trace with failure
+              appTracer.endToolExecution(sessionId, currentIteration, false, 0, error.message);
             }
 
             const toolResultMessage = `<tool_result>\n${toolResultContent}\n</tool_result>`;
@@ -1117,25 +1241,66 @@ When troubleshooting:
         }
 
         if (currentMessages.length > MAX_HISTORY_MESSAGES + 3) {
+          const messagesBefore = currentMessages.length;
           const removeCount = currentMessages.length - MAX_HISTORY_MESSAGES;
           currentMessages = currentMessages.slice(removeCount);
+          
+          // Record in-loop history management
+          appTracer.recordHistoryOperation(sessionId, 'trim', {
+            messagesBefore,
+            messagesAfter: currentMessages.length,
+            messagesRemoved: removeCount,
+            reason: 'loop_memory_limit'
+          });
+          
           if (this.debug) console.log(`[DEBUG] Trimmed 'currentMessages' within loop to ${currentMessages.length} (removed ${removeCount}).`);
           this.tokenCounter.calculateContextSize(currentMessages);
         }
+        
+        // End iteration trace
+        appTracer.endIteration(sessionId, currentIteration, true, completionAttempted ? 'completion_attempted' : 'tool_executed');
       }
 
       if (currentIteration >= MAX_TOOL_ITERATIONS && !completionAttempted) {
         console.warn(`[WARN] Max tool iterations (${MAX_TOOL_ITERATIONS}) reached for session ${this.sessionId}. Returning current error state.`);
       }
+      
+      // End agent loop trace
+      appTracer.endAgentLoop(sessionId, currentIteration, completionAttempted, completionAttempted ? 'completion' : 'max_iterations');
 
       this.history = currentMessages.map(msg => ({ ...msg }));
       if (this.history.length > MAX_HISTORY_MESSAGES) {
+        const messagesBefore = this.history.length;
         const finalRemoveCount = this.history.length - MAX_HISTORY_MESSAGES;
         this.history = this.history.slice(finalRemoveCount);
+        
+        // Record history management operation
+        appTracer.recordHistoryOperation(sessionId, 'trim', {
+          messagesBefore,
+          messagesAfter: this.history.length,
+          messagesRemoved: finalRemoveCount,
+          reason: 'max_length'
+        });
+        
         if (this.debug) console.log(`[DEBUG] Final history trim applied. Length: ${this.history.length} (removed ${finalRemoveCount})`);
       }
 
       this.tokenCounter.updateHistory(this.history);
+      
+      // Record token metrics
+      const tokenUsage = this.tokenCounter.getTokenUsage();
+      appTracer.recordTokenMetrics(sessionId, {
+        contextWindow: tokenUsage.contextWindow || 0,
+        currentTotal: tokenUsage.current?.total || 0,
+        requestTokens: tokenUsage.current?.request || 0,
+        responseTokens: tokenUsage.current?.response || 0,
+        cacheRead: tokenUsage.current?.cacheRead || 0,
+        cacheWrite: tokenUsage.current?.cacheWrite || 0
+      });
+      
+      // End user message processing trace
+      appTracer.endUserMessageProcessing(sessionId, completionAttempted);
+      
       if (this.debug) {
         console.log(`[DEBUG] Updated tokenCounter history with ${this.history.length} messages`);
         console.log(`[DEBUG] Context size after history update: ${this.tokenCounter.contextSize}`);
@@ -1160,6 +1325,27 @@ When troubleshooting:
       };
 
     } catch (error) {
+      // Record the top-level processing error
+      if (this.cancelled || (error.message && error.message.includes('cancelled'))) {
+        appTracer.recordSessionCancellation(sessionId, 'processing_cancelled', {
+          currentIteration,
+          errorMessage: error.message
+        });
+      } else {
+        // Record as a general processing error
+        appTracer.recordAiModelError(sessionId, currentIteration || 0, {
+          category: 'processing_error',
+          message: error.message,
+          model: this.model,
+          provider: this.apiType,
+          statusCode: 0,
+          retryAttempt: 0
+        });
+      }
+      
+      // Clean up any remaining spans for this session
+      appTracer.cleanup(sessionId);
+      
       console.error('Error in chat processing loop:', error);
       if (this.debug) console.error('Error in chat processing loop:', error);
 
