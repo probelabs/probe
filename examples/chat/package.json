@@ -71,6 +71,7 @@
     "cancelRequest.js",
     "telemetry.js",
     "fileSpanExporter.js",
+    "appTracer.js",
     "index.html",
     "logo.png",
     "README.md",

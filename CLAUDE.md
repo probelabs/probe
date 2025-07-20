@@ -152,3 +152,6 @@ The project includes comprehensive cross-platform build configuration:
 - Property-based testing with proptest
 - CLI integration tests
 - Performance benchmarks in `benches/`
+
+### NPM Package Management
+**IMPORTANT**: When adding new JavaScript files to `examples/chat/`, always update the `files` array in `examples/chat/package.json`. The npm package (@buger/probe-chat) is published from this directory and only includes files listed in the `files` array. Missing files will cause "Cannot find module" errors when the package is installed via npm.
