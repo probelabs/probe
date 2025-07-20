@@ -139,14 +139,18 @@ async function validateImageUrls(imageUrls, debug = false) {
   
   for (const url of imageUrls) {
     try {
-      // Simple HEAD request to check if URL is accessible, following redirects
-      const response = await fetch(url, { 
-        method: 'HEAD',
-        timeout: 5000, // 5 second timeout
+      // Always use GET request with Range header to validate and get content type
+      // This works better than HEAD for GitHub URLs and other services
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Range': 'bytes=0-1023' // Only fetch first 1KB to check content type and minimize data transfer
+        },
+        timeout: 10000, // 10 second timeout for GitHub URLs which can be slower
         redirect: 'follow'
       });
       
-      if (response.ok) {
+      if (response.ok || response.status === 206) { // 206 = Partial Content (from Range header)
         // Check if the response has image content type
         const contentType = response.headers.get('content-type');
         if (contentType && contentType.startsWith('image/')) {
