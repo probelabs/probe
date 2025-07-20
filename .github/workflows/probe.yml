@@ -197,7 +197,7 @@ jobs:
             echo "pr_issue_num=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
             echo "comment_id=${{ github.event.comment.id }}" >> $GITHUB_OUTPUT
             echo "user_request<<EOF" >> $GITHUB_OUTPUT
-            echo "${{ github.event.comment.body }}" >> $GITHUB_OUTPUT
+            printf '%s\n' "${{ github.event.comment.body }}" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
             echo "context_type=to_determine" >> $GITHUB_OUTPUT
             echo "head_ref=" >> $GITHUB_OUTPUT  # Determined later via API
@@ -211,7 +211,7 @@ jobs:
             echo "pr_issue_num=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
             echo "comment_id=" >> $GITHUB_OUTPUT
             echo "user_request<<EOF" >> $GITHUB_OUTPUT
-            echo "$PR_BODY" >> $GITHUB_OUTPUT
+            printf '%s\n' "$PR_BODY" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
             echo "context_type=pr" >> $GITHUB_OUTPUT
             echo "head_ref=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
@@ -225,7 +225,7 @@ jobs:
             echo "pr_issue_num=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
             echo "comment_id=" >> $GITHUB_OUTPUT
             echo "user_request<<EOF" >> $GITHUB_OUTPUT
-            echo "$ISSUE_BODY" >> $GITHUB_OUTPUT
+            printf '%s\n' "$ISSUE_BODY" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
             echo "context_type=issue" >> $GITHUB_OUTPUT
             echo "head_ref=" >> $GITHUB_OUTPUT  # N/A for issues
