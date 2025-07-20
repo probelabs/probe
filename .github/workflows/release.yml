@@ -187,7 +187,9 @@ jobs:
         run: cargo package --list
 
       - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
 
   publish-mcp-agent:
     name: Publish MCP Agent to npm
