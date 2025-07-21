@@ -182,105 +182,72 @@ jobs:
 
       - name: Set Context Variables
         id: set_context
-        shell: bash
         run: |
-          set -euo pipefail
-      
           EVENT_NAME="${{ github.event_name }}"
-          echo "Event: $EVENT_NAME"
-      
-          echo "skip=false" >>"$GITHUB_OUTPUT"   # default
-      
-          # ------------------------------------------------------------------
-          # Helper: write the user request (any length) as a step output
-          # ------------------------------------------------------------------
-          write_multiline_output () {
-            local name="$1" ; shift
-            local value="$*"
-            local delim="EOF_$(openssl rand -hex 6)"
-            {
-              echo "${name}<<${delim}"
-              printf '%s\n' "${value}"
-              echo "${delim}"
-            } >>"$GITHUB_OUTPUT"
-          }
-      
-          # ------------------------------------------------------------------
-          # 1. ISSUE COMMENT  – requires prefix
-          # ------------------------------------------------------------------
+          echo "Event name: $EVENT_NAME"
+          echo "skip=false" >> "$GITHUB_OUTPUT"   # Default; overridden if skipping
+
           if [[ "$EVENT_NAME" == "issue_comment" ]]; then
-            if [[ "${{ github.event.comment.user.login }}" == *"[bot]"* ]] || \
-               [[ "${{ github.event.comment.body }}" != "${{ inputs.command_prefix }}"* ]]; then
-              echo "::notice::Skipping – bot or missing prefix."
-              echo "skip=true" >>"$GITHUB_OUTPUT"
+            # Filter out bot comments and those without the required prefix
+            if [[ "${{ github.event.comment.user.login }}" == *"[bot]"* ]] || [[ "${{ github.event.comment.body }}" != ${{ inputs.command_prefix }}* ]]; then
+              echo "::notice::Skipping: Bot comment or missing prefix."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-      
-            echo "pr_issue_num=${{ github.event.issue.number }}"  >>"$GITHUB_OUTPUT"
-            echo "comment_id=${{ github.event.comment.id }}"       >>"$GITHUB_OUTPUT"
-      
-            # literal capture (no shell expansion)
-            COMMENT_BODY=$(cat <<'__PRBODY__'
-            ${{ github.event.comment.body }}
-            __PRBODY__
-            )
-      
-            write_multiline_output user_request "${COMMENT_BODY}"
-            echo "context_type=to_determine" >>"$GITHUB_OUTPUT"
-            echo "head_ref="                >>"$GITHUB_OUTPUT"
-            exit 0
-          fi
-      
-          # ------------------------------------------------------------------
-          # 2. PULL REQUEST  – no prefix required
-          # ------------------------------------------------------------------
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            RAW=$(cat <<'__PRBODY__'
-            ${{ github.event.pull_request.body }}
-            __PRBODY__
-            )
-            # GitHub sets "null" (string) when empty
-            if [[ -z "$RAW" || "$RAW" == "null" ]]; then
-              echo "::notice::PR body empty – skipping."
-              echo "skip=true" >>"$GITHUB_OUTPUT"
+
+            echo "pr_issue_num=${{ github.event.issue.number }}"   >> "$GITHUB_OUTPUT"
+            echo "comment_id=${{ github.event.comment.id }}"       >> "$GITHUB_OUTPUT"
+
+            USER_REQUEST="${{ github.event.comment.body }}"
+
+            echo "user_request<<EOF" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$USER_REQUEST"       >> "$GITHUB_OUTPUT"
+            echo "EOF"                          >> "$GITHUB_OUTPUT"
+
+            echo "context_type=to_determine"    >> "$GITHUB_OUTPUT"
+            echo "head_ref="                    >> "$GITHUB_OUTPUT"  # Determined later via API
+
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            PR_BODY="${{ github.event.pull_request.body }}"
+
+            if [[ -z "$PR_BODY" ]]; then
+              echo "::notice::PR body is empty – nothing for Probe AI to process, skipping."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-      
-            echo "pr_issue_num=${{ github.event.pull_request.number }}" >>"$GITHUB_OUTPUT"
-            echo "comment_id="                                          >>"$GITHUB_OUTPUT"
-            echo "context_type=pr"                                      >>"$GITHUB_OUTPUT"
-            echo "head_ref=${{ github.event.pull_request.head.ref }}"   >>"$GITHUB_OUTPUT"
-            write_multiline_output user_request "$RAW"
-            exit 0
-          fi
-      
-          # ------------------------------------------------------------------
-          # 3. ISSUE  – no prefix required
-          # ------------------------------------------------------------------
-          if [[ "$EVENT_NAME" == "issues" ]]; then
-            RAW=$(cat <<'__ISSUEBODY__'
-            ${{ github.event.issue.body }}
-            __ISSUEBODY__
-            )
-            if [[ -z "$RAW" || "$RAW" == "null" ]]; then
-              echo "::notice::Issue body empty – skipping."
-              echo "skip=true" >>"$GITHUB_OUTPUT"
+
+            echo "pr_issue_num=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "comment_id="                                           >> "$GITHUB_OUTPUT"
+
+            echo "user_request<<EOF" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$PR_BODY"             >> "$GITHUB_OUTPUT"
+            echo "EOF"                           >> "$GITHUB_OUTPUT"
+
+            echo "context_type=pr"               >> "$GITHUB_OUTPUT"
+            echo "head_ref=${{ github.event.pull_request.head.ref }}" >> "$GITHUB_OUTPUT"
+
+          elif [[ "$EVENT_NAME" == "issues" ]]; then
+            ISSUE_BODY="${{ github.event.issue.body }}"
+
+            if [[ -z "$ISSUE_BODY" ]]; then
+              echo "::notice::Issue body is empty – nothing for Probe AI to process, skipping."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-      
-            echo "pr_issue_num=${{ github.event.issue.number }}" >>"$GITHUB_OUTPUT"
-            echo "comment_id="                                    >>"$GITHUB_OUTPUT"
-            echo "context_type=issue"                             >>"$GITHUB_OUTPUT"
-            echo "head_ref="                                      >>"$GITHUB_OUTPUT"
-            write_multiline_output user_request "$RAW"
-            exit 0
+
+            echo "pr_issue_num=${{ github.event.issue.number }}"   >> "$GITHUB_OUTPUT"
+            echo "comment_id="                                     >> "$GITHUB_OUTPUT"
+
+            echo "user_request<<EOF" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$ISSUE_BODY"          >> "$GITHUB_OUTPUT"
+            echo "EOF"                           >> "$GITHUB_OUTPUT"
+
+            echo "context_type=issue"            >> "$GITHUB_OUTPUT"
+            echo "head_ref="                     >> "$GITHUB_OUTPUT"  # N/A for issues
+          else
+            echo "::error::Unsupported event: $EVENT_NAME"
+            exit 1
           fi
-      
-          # ------------------------------------------------------------------
-          # Unsupported event
-          # ------------------------------------------------------------------
-          echo "::error::Unsupported event: $EVENT_NAME"
-          exit 1
 
       - name: Checkout repository
         if: steps.set_context.outputs.skip != 'true'
