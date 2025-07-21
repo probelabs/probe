@@ -6,10 +6,10 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use tree_sitter::{Node, Parser as TSParser};
 
-use crate::language::factory::get_language_impl;
-use crate::language::language_trait::LanguageImpl;
-use crate::language::tree_cache;
-use crate::models::CodeBlock;
+use probe_code::language::factory::get_language_impl;
+use probe_code::language::language_trait::LanguageImpl;
+use probe_code::language::tree_cache;
+use probe_code::models::CodeBlock;
 
 // Define a static cache for line maps
 static LINE_MAP_CACHE: Lazy<DashMap<String, Vec<Option<CachedNodeInfo>>>> = Lazy::new(DashMap::new);

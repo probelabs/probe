@@ -1,7 +1,7 @@
-use crate::search::tokenization;
 use anyhow::Result;
 use ignore::WalkBuilder;
 use lazy_static::lazy_static;
+use probe_code::search::tokenization;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};

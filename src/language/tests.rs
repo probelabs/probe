@@ -1,5 +1,5 @@
-use crate::language::block_handling::merge_code_blocks;
-use crate::language::parser::parse_file_for_code_blocks;
+use probe_code::language::block_handling::merge_code_blocks;
+use probe_code::language::parser::parse_file_for_code_blocks;
 use tree_sitter::Language;
 
 // Import tree-sitter language crates
@@ -36,9 +36,9 @@ fn get_language(extension: &str) -> Option<Language> {
         _ => None,
     }
 }
-use crate::language::factory::get_language_impl;
-use crate::language::language_trait::LanguageImpl;
-use crate::models::CodeBlock;
+use probe_code::language::factory::get_language_impl;
+use probe_code::language::language_trait::LanguageImpl;
+use probe_code::models::CodeBlock;
 use std::collections::HashSet;
 
 #[test]
@@ -724,7 +724,7 @@ fn test_function() {
 #[test]
 fn test_swift_language_implementation() {
     // Import the Swift language implementation
-    use crate::language::factory::get_language_impl;
+    use probe_code::language::factory::get_language_impl;
 
     // Get the Swift language implementation through the factory
     let swift_impl = get_language_impl("swift");
@@ -746,7 +746,7 @@ fn test_swift_language_implementation() {
 #[test]
 fn test_csharp_language_implementation() {
     // Import the C# language implementation
-    use crate::language::factory::get_language_impl;
+    use probe_code::language::factory::get_language_impl;
 
     // Get the C# language implementation through the factory
     let csharp_impl = get_language_impl("cs");

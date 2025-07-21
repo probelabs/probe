@@ -25,9 +25,9 @@ pub use processor::process_file_for_extraction;
 #[allow(unused_imports)]
 pub use prompts::PromptTemplate;
 
-use crate::extract::file_paths::{set_custom_ignores, FilePathInfo};
-use crate::models::SearchResult;
 use anyhow::Result;
+use probe_code::extract::file_paths::{set_custom_ignores, FilePathInfo};
+use probe_code::models::SearchResult;
 use std::collections::HashSet;
 use std::io::Read;
 #[allow(unused_imports)]

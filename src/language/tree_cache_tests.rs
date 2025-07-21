@@ -1,4 +1,4 @@
-use crate::language::tree_cache;
+use probe_code::language::tree_cache;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;

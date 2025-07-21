@@ -1,5 +1,5 @@
-use crate::models::SearchResult;
-use crate::search::result_ranking::rank_search_results;
+use probe_code::models::SearchResult;
+use probe_code::search::result_ranking::rank_search_results;
 
 #[cfg(test)]
 mod tests {

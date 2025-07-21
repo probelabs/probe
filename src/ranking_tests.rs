@@ -1,9 +1,9 @@
-use crate::ranking::{
+use probe_code::ranking::{
     tokenize, get_stemmer, compute_tf_df,
     compute_avgdl, rank_documents, RankingParams,
     QueryTokenMap
 };
-use crate::search::tokenization::is_stop_word;
+use probe_code::search::tokenization::is_stop_word;
 
 // Helper function to adapt the old interface to the new one
 fn rank_documents(documents: &[&str], query: &str) -> Vec<(usize, f64, f64, f64, f64)> {

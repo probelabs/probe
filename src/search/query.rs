@@ -1,4 +1,4 @@
-use crate::search::elastic_query;
+use probe_code::search::elastic_query;
 // No term_exceptions import needed
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;

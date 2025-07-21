@@ -3,8 +3,8 @@
 //! This module provides functions for finding symbols (functions, structs, classes, etc.)
 //! in files using tree-sitter.
 
-use crate::models::SearchResult;
 use anyhow::Result;
+use probe_code::models::SearchResult;
 use std::path::Path;
 
 /// Find a symbol (function, struct, class, etc.) in a file by name

@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use probe::search::{perform_probe, SearchOptions};
+use probe_code::search::{perform_probe, SearchOptions};
 use std::fs;
 use tempfile::TempDir;
 
@@ -216,7 +216,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
         (
             "tests/integration_tests.rs",
             r#"
-use probe::*;
+use probe_code::*;
 
 #[test]
 fn test_basic_search() {

@@ -1,4 +1,4 @@
-use crate::search::query::{preprocess_query, create_term_patterns};
+use probe_code::search::query::{preprocess_query, create_term_patterns};
 use std::collections::HashSet;
 
 #[test]

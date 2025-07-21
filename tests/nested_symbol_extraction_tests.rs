@@ -56,7 +56,7 @@ fn extract_nested_symbol(path: &PathBuf, symbol: &str) -> Result<String> {
     let content = fs::read_to_string(path)?;
 
     // Call the symbol finder function
-    let result = probe::extract::symbol_finder::find_symbol_in_file(
+    let result = probe_code::extract::symbol_finder::find_symbol_in_file(
         path, symbol, &content, true, // allow_tests
         0,    // context_lines
     )?;

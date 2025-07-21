@@ -3,9 +3,9 @@
 //! This module provides functions for formatting and printing extraction results
 //! in various formats (terminal, markdown, plain, json, xml, color).
 
-use crate::models::SearchResult;
-use crate::search::search_tokens::count_tokens;
 use anyhow::Result;
+use probe_code::models::SearchResult;
+use probe_code::search::search_tokens::count_tokens;
 use serde::Serialize;
 use std::fmt::Write as FmtWrite;
 use std::path::Path;

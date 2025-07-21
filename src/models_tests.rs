@@ -1,4 +1,4 @@
-use crate::models::{SearchResult, CodeBlock, LimitedSearchResults, SearchLimits};
+use probe_code::models::{SearchResult, CodeBlock, LimitedSearchResults, SearchLimits};
 
 #[cfg(test)]
 mod tests {

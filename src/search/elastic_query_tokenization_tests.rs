@@ -1,5 +1,5 @@
 // No need to import HashMap and HashSet as they're already imported in the parent module
-use crate::search::tokenization::tokenize_and_stem;
+use probe_code::search::tokenization::tokenize_and_stem;
 
 /// Process the terms in an AST expression, applying tokenization and stemming
 /// to the terms unless they are marked as exact.

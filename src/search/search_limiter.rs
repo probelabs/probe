@@ -1,5 +1,5 @@
-use crate::models::{LimitedSearchResults, SearchLimits, SearchResult};
-use crate::search::search_tokens::count_tokens;
+use probe_code::models::{LimitedSearchResults, SearchLimits, SearchResult};
+use probe_code::search::search_tokens::count_tokens;
 
 /// Helper function to apply limits (max results, max bytes, max tokens) to search results
 pub fn apply_limits(

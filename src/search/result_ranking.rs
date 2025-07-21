@@ -1,5 +1,5 @@
-use crate::models::SearchResult;
-use crate::ranking;
+use probe_code::models::SearchResult;
+use probe_code::ranking;
 use std::time::Instant;
 
 /// Helper function to format duration in a human-readable way

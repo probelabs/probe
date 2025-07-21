@@ -1,7 +1,7 @@
-use crate::ranking::get_stemmer;
-use crate::search::term_exceptions::{is_exception_term, EXCEPTION_TERMS};
 use decompound::{decompound, DecompositionOptions};
 use once_cell::sync::Lazy;
+use probe_code::ranking::get_stemmer;
+use probe_code::search::term_exceptions::{is_exception_term, EXCEPTION_TERMS};
 use std::collections::HashSet;
 use std::sync::Mutex;
 

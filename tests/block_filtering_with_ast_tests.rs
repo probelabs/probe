@@ -428,7 +428,7 @@ fn test_required_terms_query() {
     indices.insert("secur".to_string(), 2);
     indices.insert("white".to_string(), 3);
 
-    let plan = probe::search::query::QueryPlan {
+    let plan = probe_code::search::query::QueryPlan {
         ast: ast.clone(),
         term_indices: indices.clone(),
         excluded_terms: HashSet::new(),

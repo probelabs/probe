@@ -1,16 +1,16 @@
-use crate::language::c::CLanguage;
-use crate::language::cpp::CppLanguage;
-use crate::language::csharp::CSharpLanguage;
-use crate::language::go::GoLanguage;
-use crate::language::java::JavaLanguage;
-use crate::language::javascript::JavaScriptLanguage;
-use crate::language::language_trait::LanguageImpl;
-use crate::language::php::PhpLanguage;
-use crate::language::python::PythonLanguage;
-use crate::language::ruby::RubyLanguage;
-use crate::language::rust::RustLanguage;
-use crate::language::swift::SwiftLanguage;
-use crate::language::typescript::TypeScriptLanguage;
+use probe_code::language::c::CLanguage;
+use probe_code::language::cpp::CppLanguage;
+use probe_code::language::csharp::CSharpLanguage;
+use probe_code::language::go::GoLanguage;
+use probe_code::language::java::JavaLanguage;
+use probe_code::language::javascript::JavaScriptLanguage;
+use probe_code::language::language_trait::LanguageImpl;
+use probe_code::language::php::PhpLanguage;
+use probe_code::language::python::PythonLanguage;
+use probe_code::language::ruby::RubyLanguage;
+use probe_code::language::rust::RustLanguage;
+use probe_code::language::swift::SwiftLanguage;
+use probe_code::language::typescript::TypeScriptLanguage;
 
 /// Factory function to get the appropriate language implementation based on file extension
 pub fn get_language_impl(extension: &str) -> Option<Box<dyn LanguageImpl>> {

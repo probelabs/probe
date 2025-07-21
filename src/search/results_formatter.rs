@@ -1,5 +1,5 @@
 use std::path::Path;
-use crate::models::SearchResult;
+use probe_code::models::SearchResult;
 use colored::*;
 
 /// Function to format and print search results according to the specified format

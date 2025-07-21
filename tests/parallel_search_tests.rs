@@ -118,12 +118,14 @@ fn test_structured_patterns_search() {
     let _file_paths = create_test_files(base_path, file_count, lines_per_file);
 
     // Create a simple query plan and patterns for testing
-    let query_plan =
-        probe::search::query::create_query_plan("search_term_alpha OR search_term_beta", false)
-            .unwrap();
+    let query_plan = probe_code::search::query::create_query_plan(
+        "search_term_alpha OR search_term_beta",
+        false,
+    )
+    .unwrap();
 
     // Create patterns from the query plan
-    let patterns = probe::search::query::create_structured_patterns(&query_plan);
+    let patterns = probe_code::search::query::create_structured_patterns(&query_plan);
 
     // Create empty custom ignores
     let custom_ignores: Vec<String> = Vec::new();

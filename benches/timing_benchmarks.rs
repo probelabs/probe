@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use probe::search::search_runner::{format_duration, SearchTimings};
+use probe_code::search::search_runner::{format_duration, SearchTimings};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 

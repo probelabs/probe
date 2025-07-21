@@ -144,7 +144,7 @@ fn test_process_file_for_extraction_fallback() {
 #[test]
 fn test_format_and_print_extraction_results() {
     // Create a simple search result
-    let result = probe::models::SearchResult {
+    let result = probe_code::models::SearchResult {
         file: "test_file.rs".to_string(),
         lines: (1, 5),
         node_type: "function".to_string(),

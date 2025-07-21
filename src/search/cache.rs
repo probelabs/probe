@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use crate::models::SearchResult;
+use probe_code::models::SearchResult;
 
 /// Generate a hash for a query string
 /// This is used to create a unique identifier for each query
@@ -537,7 +537,7 @@ pub fn generate_session_id() -> Result<(&'static str, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::SearchResult;
+    use probe_code::models::SearchResult;
 
     #[test]
     fn test_path_normalization() {

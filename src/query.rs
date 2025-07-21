@@ -3,7 +3,7 @@ use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use colored::*;
 use ignore::Walk;
-use crate::path_resolver::resolve_path;
+use probe_code::path_resolver::resolve_path;
 use rayon::prelude::*; // Added import
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -357,7 +357,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
         }
         "json" => {
             // Import the count_tokens function locally
-            use crate::search::search_tokens::count_tokens;
+            use probe_code::search::search_tokens::count_tokens;
             let total_tokens = matches
                 .iter()
                 .map(|m| count_tokens(&m.matched_text))
@@ -417,7 +417,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             );
 
             // Import the count_tokens function locally to avoid unused import warning
-            use crate::search::search_tokens::count_tokens;
+            use probe_code::search::search_tokens::count_tokens;
             println!(
                 "    <total_tokens>{}",
                 matches
@@ -521,7 +521,7 @@ pub fn handle_query(
                 .iter()
                 .map(|m| {
                     // Import the count_tokens function locally to avoid unused import warning
-                    use crate::search::search_tokens::count_tokens;
+                    use probe_code::search::search_tokens::count_tokens;
                     count_tokens(&m.matched_text)
                 })
                 .sum();

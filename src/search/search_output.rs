@@ -1,9 +1,9 @@
 use anyhow::Result;
 use std::path::Path;
 
-use crate::models::SearchResult;
-use crate::search::query::QueryPlan;
-use crate::search::search_tokens::count_tokens;
+use probe_code::models::SearchResult;
+use probe_code::search::query::QueryPlan;
+use probe_code::search::search_tokens::count_tokens;
 
 /// Function to format and print search results according to the specified format
 pub fn format_and_print_search_results(

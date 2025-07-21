@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tree_sitter;
 
-use crate::language::{is_test_file, parse_file_for_code_blocks};
-use crate::models::SearchResult;
-use crate::ranking;
-use crate::search::tokenization;
+use probe_code::language::{is_test_file, parse_file_for_code_blocks};
+use probe_code::models::SearchResult;
+use probe_code::ranking;
+use probe_code::search::tokenization;
 
 /// Structure to hold timing information for file processing stages
 pub struct FileProcessingTimings {

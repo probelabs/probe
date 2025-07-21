@@ -1,4 +1,4 @@
-use crate::models::SearchResult;
+use probe_code::models::SearchResult;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};

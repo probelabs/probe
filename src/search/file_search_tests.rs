@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-use crate::search::file_search::{search_file_for_pattern, find_files_with_pattern, find_matching_filenames};
+use probe_code::search::file_search::{search_file_for_pattern, find_files_with_pattern, find_matching_filenames};
 
 #[cfg(test)]
 mod tests {

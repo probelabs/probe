@@ -3,9 +3,9 @@ use std::fs::File;
 use std::io::Write;
 use tempfile::TempDir;
 
-use crate::search::elastic_query;
-use crate::search::file_processing::process_file_with_results;
-use crate::search::query::QueryPlan;
+use probe_code::search::elastic_query;
+use probe_code::search::file_processing::process_file_with_results;
+use probe_code::search::query::QueryPlan;
 
 // Helper function to create a test file
 pub fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> std::path::PathBuf {

@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use probe::language::parse_file_for_code_blocks;
+use probe_code::language::parse_file_for_code_blocks;
 use std::collections::HashSet;
 use std::fs;
 use tempfile::NamedTempFile;

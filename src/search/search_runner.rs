@@ -1,12 +1,13 @@
-use crate::search::file_list_cache;
 use anyhow::Result;
+use probe_code::search::file_list_cache;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 // No need for term_exceptions import
 
-use crate::models::{LimitedSearchResults, SearchResult};
-use crate::search::{
+use probe_code::models::{LimitedSearchResults, SearchResult};
+use probe_code::path_resolver::resolve_path;
+use probe_code::search::{
     cache,
     // file_list_cache, // Add the new file_list_cache module (unused)
     file_processing::{process_file_with_results, FileProcessingParams},
@@ -16,7 +17,6 @@ use crate::search::{
     search_options::SearchOptions,
     timeout,
 };
-use crate::path_resolver::resolve_path;
 
 /// Struct to hold timing information for different stages of the search process
 pub struct SearchTimings {
@@ -1273,7 +1273,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     }
 
     let final_results = if !limited.results.is_empty() && !*no_merge {
-        use crate::search::block_merging::merge_ranked_blocks;
+        use probe_code::search::block_merging::merge_ranked_blocks;
         let merged = merge_ranked_blocks(limited.results.clone(), *merge_threshold);
 
         let bm_duration = bm_start.elapsed();

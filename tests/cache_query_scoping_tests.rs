@@ -99,7 +99,7 @@ func main() {
 
     // Query 1
     let start = Instant::now();
-    let result1 = probe::language::parser::parse_file_for_code_blocks(
+    let result1 = probe_code::language::parser::parse_file_for_code_blocks(
         content,
         "go",
         &query1_lines,
@@ -121,7 +121,7 @@ func main() {
 
     // Query 2
     let start = Instant::now();
-    let result2 = probe::language::parser::parse_file_for_code_blocks(
+    let result2 = probe_code::language::parser::parse_file_for_code_blocks(
         content,
         "go",
         &query2_lines,
@@ -143,7 +143,7 @@ func main() {
 
     // Query 3
     let start = Instant::now();
-    let result3 = probe::language::parser::parse_file_for_code_blocks(
+    let result3 = probe_code::language::parser::parse_file_for_code_blocks(
         content,
         "go",
         &query3_lines,
@@ -165,7 +165,7 @@ func main() {
 
     // Query 4
     let start = Instant::now();
-    let result4 = probe::language::parser::parse_file_for_code_blocks(
+    let result4 = probe_code::language::parser::parse_file_for_code_blocks(
         content,
         "go",
         &query4_lines,
@@ -187,8 +187,9 @@ func main() {
 
     // Full file query
     let start = Instant::now();
-    let result_all =
-        probe::language::parser::parse_file_for_code_blocks(content, "go", &all_lines, true, None);
+    let result_all = probe_code::language::parser::parse_file_for_code_blocks(
+        content, "go", &all_lines, true, None,
+    );
     assert!(
         result_all.is_ok(),
         "Failed to parse file for full query: {:?}",

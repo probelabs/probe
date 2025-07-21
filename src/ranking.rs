@@ -1,6 +1,6 @@
-use crate::search::elastic_query::Expr;
-use crate::search::tokenization;
 use ahash::{AHashMap, AHashSet};
+use probe_code::search::elastic_query::Expr;
+use probe_code::search::tokenization;
 use rust_stemmers::{Algorithm, Stemmer};
 use std::sync::OnceLock;
 

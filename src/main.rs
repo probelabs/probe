@@ -5,15 +5,12 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 mod cli;
-mod extract;
-mod language;
-mod models;
-mod query;
-mod ranking;
-mod search;
 
 use cli::{Args, Commands};
-use search::{format_and_print_search_results, perform_probe, SearchOptions};
+use probe_code::{
+    extract::{handle_extract, ExtractOptions},
+    search::{format_and_print_search_results, perform_probe, SearchOptions},
+};
 
 struct SearchParams {
     pattern: String,
@@ -143,9 +140,9 @@ fn handle_search(params: SearchParams) -> Result<()> {
     let query_plan = if search_options.queries.len() > 1 {
         // Join multiple queries with AND
         let combined_query = search_options.queries.join(" AND ");
-        crate::search::query::create_query_plan(&combined_query, false).ok()
+        probe_code::search::query::create_query_plan(&combined_query, false).ok()
     } else {
-        crate::search::query::create_query_plan(&search_options.queries[0], false).ok()
+        probe_code::search::query::create_query_plan(&search_options.queries[0], false).ok()
     };
 
     if limited_results.results.is_empty() {
@@ -388,7 +385,7 @@ async fn main() -> Result<()> {
             keep_input,
             prompt,
             instructions,
-        }) => extract::handle_extract(extract::ExtractOptions {
+        }) => handle_extract(ExtractOptions {
             files,
             custom_ignores: ignore,
             context_lines,
@@ -401,9 +398,9 @@ async fn main() -> Result<()> {
             allow_tests,
             keep_input,
             prompt: prompt.map(|p| {
-                crate::extract::PromptTemplate::from_str(&p).unwrap_or_else(|e| {
+                probe_code::extract::PromptTemplate::from_str(&p).unwrap_or_else(|e| {
                     eprintln!("Warning: {e}");
-                    crate::extract::PromptTemplate::Engineer
+                    probe_code::extract::PromptTemplate::Engineer
                 })
             }),
             instructions,
@@ -416,7 +413,7 @@ async fn main() -> Result<()> {
             allow_tests,
             max_results,
             format,
-        }) => query::handle_query(
+        }) => probe_code::query::handle_query(
             &pattern,
             &path,
             language.as_deref().map(|lang| {

@@ -24,7 +24,7 @@ fn test_ancestor_cache_performance() {
 
     for i in 1..=iterations {
         let start = Instant::now();
-        let result = probe::language::parser::parse_file_for_code_blocks(
+        let result = probe_code::language::parser::parse_file_for_code_blocks(
             &content,
             "go",
             &line_numbers,

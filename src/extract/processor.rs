@@ -2,10 +2,10 @@
 //!
 //! This module provides functions for processing files and extracting code blocks
 //! based on file paths and optional line numbers.
-use crate::extract::symbol_finder::find_symbol_in_file;
-use crate::language::parser::parse_file_for_code_blocks;
-use crate::models::SearchResult;
 use anyhow::{Context, Result};
+use probe_code::extract::symbol_finder::find_symbol_in_file;
+use probe_code::language::parser::parse_file_for_code_blocks;
+use probe_code::models::SearchResult;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;

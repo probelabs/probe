@@ -1,5 +1,5 @@
-use crate::models::{LimitedSearchResults, SearchResult};
-use crate::search::token_utils::count_tokens;
+use probe_code::models::{LimitedSearchResults, SearchResult};
+use probe_code::search::token_utils::count_tokens;
 
 /// Helper function to apply limits to search results
 pub fn apply_limits(

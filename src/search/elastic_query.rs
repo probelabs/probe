@@ -472,7 +472,7 @@ fn lex_identifier(chars: &mut Peekable<Chars>) -> String {
 }
 
 // Adjust paths to match your project structure
-use crate::search::tokenization::{add_special_term, tokenize as custom_tokenize};
+use probe_code::search::tokenization::{add_special_term, tokenize as custom_tokenize};
 
 struct Parser {
     tokens: Vec<Token>,

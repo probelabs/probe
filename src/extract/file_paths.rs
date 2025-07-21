@@ -3,10 +3,10 @@
 //! This module provides functions for parsing file paths with optional line numbers,
 //! line ranges, or symbol references from text input.
 
-use crate::language::is_test_file;
 use glob::glob;
 use ignore::WalkBuilder;
-use crate::path_resolver::resolve_path;
+use probe_code::language::is_test_file;
+use probe_code::path_resolver::resolve_path;
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::PathBuf;
