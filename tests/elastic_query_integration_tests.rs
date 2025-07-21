@@ -3,9 +3,9 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-use probe::search::elastic_query::Expr;
-use probe::search::query::QueryPlan;
-use probe::search::{perform_probe, SearchOptions};
+use probe_code::search::elastic_query::Expr;
+use probe_code::search::query::QueryPlan;
+use probe_code::search::{perform_probe, SearchOptions};
 
 /// Create test files with different content for testing queries
 fn create_test_files(temp_dir: &Path) {
@@ -711,7 +711,7 @@ fn test_filter_code_block_with_ast() {
     let debug_mode = false;
 
     // Import the function from probe crate
-    use probe::search::file_processing::filter_code_block_with_ast;
+    use probe_code::search::file_processing::filter_code_block_with_ast;
 
     // The block should match because it has keywordAlpha but not keywordBeta
     assert!(
@@ -774,7 +774,7 @@ fn test_filter_tokenized_block() {
     };
 
     // Import the function from probe crate
-    use probe::search::file_processing::filter_tokenized_block;
+    use probe_code::search::file_processing::filter_tokenized_block;
 
     // Test case 1: Tokenized content with only keywordAlpha
     let tokenized_content = vec!["keywordAlpha".to_string()];

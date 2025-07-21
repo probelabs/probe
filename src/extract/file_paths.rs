@@ -6,7 +6,7 @@
 use crate::language::is_test_file;
 use glob::glob;
 use ignore::WalkBuilder;
-use probe::path_resolver::resolve_path;
+use crate::path_resolver::resolve_path;
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::PathBuf;

@@ -1,5 +1,5 @@
-use probe::ranking::{compute_avgdl, rank_documents, tokenize, RankingParams};
-use probe::search::query::{create_query_plan, create_structured_patterns, regex_escape};
+use probe_code::ranking::{compute_avgdl, rank_documents, tokenize, RankingParams};
+use probe_code::search::query::{create_query_plan, create_structured_patterns, regex_escape};
 use proptest::prelude::*;
 
 proptest! {

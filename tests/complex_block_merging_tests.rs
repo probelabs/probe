@@ -1,9 +1,9 @@
 use std::fs;
 use tempfile::TempDir;
 
-use probe::models::SearchResult;
-use probe::search::block_merging::merge_ranked_blocks;
-use probe::search::{perform_probe, SearchOptions};
+use probe_code::models::SearchResult;
+use probe_code::search::block_merging::merge_ranked_blocks;
+use probe_code::search::{perform_probe, SearchOptions};
 
 /// Test merging of blocks with different node types
 #[test]

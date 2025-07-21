@@ -1,7 +1,7 @@
 use std::fs;
 use std::process::Command;
 
-use probe::extract::{handle_extract, ExtractOptions};
+use probe_code::extract::{handle_extract, ExtractOptions};
 
 #[test]
 fn test_deduplication_of_nested_extractions() {

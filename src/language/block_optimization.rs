@@ -12,7 +12,7 @@ use std::collections::HashSet;
 /// # Example
 /// ```
 /// use std::collections::HashSet;
-/// use probe::language::block_optimization::merge_line_ranges;
+/// use crate::language::block_optimization::merge_line_ranges;
 ///
 /// let mut line_numbers = HashSet::new();
 /// line_numbers.insert(1);

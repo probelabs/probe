@@ -1,4 +1,4 @@
-use probe::search::{perform_probe, SearchOptions};
+use probe_code::search::{perform_probe, SearchOptions};
 use std::path::PathBuf;
 
 #[test]

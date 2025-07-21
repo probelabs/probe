@@ -1,4 +1,4 @@
-use probe::path_resolver::{
+use probe_code::path_resolver::{
     resolve_path, GoPathResolver, JavaScriptPathResolver, PathResolver, RustPathResolver,
 };
 use std::fs;

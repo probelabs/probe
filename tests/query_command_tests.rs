@@ -1,5 +1,5 @@
 use anyhow::Result;
-use probe::query::{perform_query, QueryOptions};
+use probe_code::query::{perform_query, QueryOptions};
 use std::fs;
 use tempfile::tempdir;
 

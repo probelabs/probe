@@ -1,7 +1,7 @@
-use probe::search::elastic_query::parse_query_test as parse_query;
+use probe_code::search::elastic_query::parse_query_test as parse_query;
 
-use probe::search::query::{create_query_plan, create_structured_patterns};
-use probe::search::tokenization::{load_vocabulary, split_camel_case, split_compound_word};
+use probe_code::search::query::{create_query_plan, create_structured_patterns};
+use probe_code::search::tokenization::{load_vocabulary, split_camel_case, split_compound_word};
 
 #[test]
 fn test_camel_case_splitting() {
@@ -121,7 +121,7 @@ fn test_multiple_word_query() {
 
 #[test]
 fn test_underscore_handling() {
-    use probe::search::elastic_query;
+    use probe_code::search::elastic_query;
 
     // Test tokenization with underscores
     let query = "keyword_underscore";
@@ -166,7 +166,7 @@ fn test_underscore_handling() {
 
 #[test]
 fn test_underscore_in_elastic_query() {
-    use probe::search::elastic_query;
+    use probe_code::search::elastic_query;
 
     // Test that the elastic query parser preserves underscores
     let query = "keyword_underscore";

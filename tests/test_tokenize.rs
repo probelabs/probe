@@ -1,6 +1,6 @@
 fn main() {
     // Import the tokenize function from our probe crate
-    use probe::ranking::tokenize;
+    use probe_code::ranking::tokenize;
 
     // Test strings
     let test_strings = ["The quick brown fox jumps over the lazy dog",

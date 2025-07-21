@@ -3,10 +3,10 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-use probe::search::elastic_query::parse_query_test as parse_query;
-use probe::search::file_processing::filter_code_block_with_ast;
-use probe::search::query::create_query_plan;
-use probe::search::{perform_probe, SearchOptions};
+use probe_code::search::elastic_query::parse_query_test as parse_query;
+use probe_code::search::file_processing::filter_code_block_with_ast;
+use probe_code::search::query::create_query_plan;
+use probe_code::search::{perform_probe, SearchOptions};
 
 /// Test stemming and compound word handling in block filtering with complex queries
 #[test]

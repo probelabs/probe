@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-use probe::search::{perform_probe, SearchOptions};
+use probe_code::search::{perform_probe, SearchOptions};
 
 /// Create test files with different content for testing queries
 fn create_test_files(temp_dir: &Path) {

@@ -1,4 +1,4 @@
-use probe::extract;
+use probe_code::extract;
 use std::collections::HashSet;
 use std::path::PathBuf;
 

@@ -1,5 +1,5 @@
-use probe::search::file_processing::filter_tokenized_block;
-use probe::search::query::create_query_plan;
+use probe_code::search::file_processing::filter_tokenized_block;
+use probe_code::search::query::create_query_plan;
 use std::collections::{HashMap, HashSet};
 
 /// Test direct usage of filter_tokenized_block with various complex queries
@@ -155,7 +155,7 @@ fn test_filter_tokenized_block_comparison_with_line_based() {
         filter_tokenized_block(&tokenized_content, &plan.term_indices, &plan, true);
 
     // Import the line-based filtering function for comparison
-    use probe::search::file_processing::filter_code_block_with_ast;
+    use probe_code::search::file_processing::filter_code_block_with_ast;
 
     // Create equivalent line-based term matches
     let mut term_matches = HashMap::new();

@@ -2,8 +2,8 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-use probe::search::query::create_query_plan;
-use probe::search::{perform_probe, SearchOptions};
+use probe_code::search::query::create_query_plan;
+use probe_code::search::{perform_probe, SearchOptions};
 
 /// Test negative compound word handling
 #[test]

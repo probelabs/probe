@@ -1,5 +1,5 @@
-use probe::search::elastic_query::Expr;
-use probe::search::query::{create_structured_patterns, QueryPlan};
+use probe_code::search::elastic_query::Expr;
+use probe_code::search::query::{create_structured_patterns, QueryPlan};
 use std::collections::{HashMap, HashSet};
 
 /// Test the pattern generation for multi-keyword terms

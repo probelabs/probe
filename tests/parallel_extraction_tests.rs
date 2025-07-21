@@ -1,4 +1,4 @@
-use probe::extract::{handle_extract, ExtractOptions};
+use probe_code::extract::{handle_extract, ExtractOptions};
 use std::fs;
 use tempfile::tempdir;
 

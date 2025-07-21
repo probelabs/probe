@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use probe::search::{perform_probe, SearchOptions};
+    use probe_code::search::{perform_probe, SearchOptions};
     use std::path::Path;
 
     #[test]
@@ -36,7 +36,7 @@ mod tests {
 
     #[test]
     fn test_query_functionality() {
-        use probe::query::{perform_query, QueryOptions};
+        use probe_code::query::{perform_query, QueryOptions};
 
         let options = QueryOptions {
             path: Path::new("."),

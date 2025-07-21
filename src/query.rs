@@ -3,7 +3,7 @@ use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use colored::*;
 use ignore::Walk;
-use probe::path_resolver::resolve_path;
+use crate::path_resolver::resolve_path;
 use rayon::prelude::*; // Added import
 use std::fs;
 use std::path::{Path, PathBuf};

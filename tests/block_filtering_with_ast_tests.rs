@@ -1,6 +1,6 @@
-use probe::search::elastic_query::{self, parse_query_test as parse_query};
-use probe::search::file_processing::filter_code_block_with_ast;
-use probe::search::query::create_query_plan;
+use probe_code::search::elastic_query::{self, parse_query_test as parse_query};
+use probe_code::search::file_processing::filter_code_block_with_ast;
+use probe_code::search::query::create_query_plan;
 use std::collections::{HashMap, HashSet};
 
 /// Test direct usage of filter_code_block_with_ast with various complex queries

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use probe::language::parser::parse_file_for_code_blocks;
+use probe_code::language::parser::parse_file_for_code_blocks;
 use std::collections::HashSet;
 
 #[test]

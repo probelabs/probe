@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 // The integration test needs access to the library crate
-use probe::search::{perform_probe, SearchOptions};
+use probe_code::search::{perform_probe, SearchOptions};
 
 // Helper function to create test files
 fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {

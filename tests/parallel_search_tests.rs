@@ -1,5 +1,5 @@
-use probe::search::search_runner::{perform_probe, search_with_structured_patterns};
-use probe::search::SearchOptions;
+use probe_code::search::search_runner::{perform_probe, search_with_structured_patterns};
+use probe_code::search::SearchOptions;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;

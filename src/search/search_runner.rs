@@ -16,7 +16,7 @@ use crate::search::{
     search_options::SearchOptions,
     timeout,
 };
-use probe::path_resolver::resolve_path;
+use crate::path_resolver::resolve_path;
 
 /// Struct to hold timing information for different stages of the search process
 pub struct SearchTimings {

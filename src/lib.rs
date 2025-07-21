@@ -16,7 +16,7 @@
 //! ### Searching for code
 //!
 //! ```no_run
-//! use probe::search::{perform_probe, SearchOptions};
+//! use crate::search::{perform_probe, SearchOptions};
 //! use std::path::Path;
 //!
 //! // Create search options
@@ -48,7 +48,7 @@
 //! ### Extracting code blocks
 //!
 //! ```no_run
-//! use probe::extract::{handle_extract, ExtractOptions};
+//! use crate::extract::{handle_extract, ExtractOptions};
 //!
 //! let options = ExtractOptions {
 //!     files: vec!["src/main.rs".to_string()],
@@ -72,7 +72,7 @@
 //! ### AST pattern matching
 //!
 //! ```no_run
-//! use probe::query::{perform_query, QueryOptions};
+//! use crate::query::{perform_query, QueryOptions};
 //! use std::path::Path;
 //!
 //! // Using the lower-level perform_query function
@@ -90,8 +90,7 @@
 //! println!("Found {} matches", matches.len());
 //! ```
 
-// Make the library available as `probe` within itself
-extern crate self as probe;
+// Re-export for internal use
 
 pub mod extract;
 pub mod language;

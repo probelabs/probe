@@ -1,5 +1,5 @@
 [package]
-name = "probe"
+name = "probe-code"
 version = "0.6.0"
 edition = "2021"
 authors = ["Leonid Bugaev <leonsbox@gmail.com>"]
@@ -64,7 +64,7 @@ jsonschema = "0.17.1"
 xml-schema = "0.2.0"
 
 [lib]
-name = "probe"
+name = "probe_code"
 path = "src/lib.rs"
 
 [[bin]]

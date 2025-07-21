@@ -1,4 +1,4 @@
-use probe::path_resolver::resolve_path;
+use probe_code::path_resolver::resolve_path;
 use std::path::PathBuf;
 use std::process::Command;
 

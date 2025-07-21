@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 // Import the necessary functions from the extract module
-use probe::extract::{
+use probe_code::extract::{
     extract_file_paths_from_git_diff, format_and_print_extraction_results, is_git_diff_format,
     process_file_for_extraction,
 };

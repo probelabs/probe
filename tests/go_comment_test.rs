@@ -2,7 +2,7 @@ use anyhow::Result;
 
 #[test]
 fn test_go_struct_comments() -> Result<()> {
-    use probe::language::parser::parse_file_for_code_blocks;
+    use probe_code::language::parser::parse_file_for_code_blocks;
     use std::collections::HashSet;
 
     let code = r#"
@@ -71,7 +71,7 @@ type Second struct {
 
 #[test]
 fn test_go_nested_structs() -> Result<()> {
-    use probe::language::parser::parse_file_for_code_blocks;
+    use probe_code::language::parser::parse_file_for_code_blocks;
     use std::collections::HashSet;
 
     let code = r#"
@@ -116,7 +116,7 @@ type OuterType struct {
 
 #[test]
 fn test_go_mixed_declarations() -> Result<()> {
-    use probe::language::parser::parse_file_for_code_blocks;
+    use probe_code::language::parser::parse_file_for_code_blocks;
     use std::collections::HashSet;
 
     let code = r#"
@@ -185,7 +185,7 @@ type StructB struct {
 
 #[test]
 fn test_go_comment_code_block_extraction() -> Result<()> {
-    use probe::language::parser::parse_file_for_code_blocks;
+    use probe_code::language::parser::parse_file_for_code_blocks;
     use std::collections::HashSet;
 
     // Sample code with a comment and struct
