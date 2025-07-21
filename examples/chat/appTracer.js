@@ -5,30 +5,68 @@
  * replacing the generic Vercel AI SDK tracing with application-specific spans.
  */
 
-import { trace, SpanStatusCode, SpanKind } from '@opentelemetry/api';
-import { randomUUID } from 'crypto';
+import { trace, SpanStatusCode, SpanKind, context, TraceFlags } from '@opentelemetry/api';
+import { randomUUID, createHash } from 'crypto';
+
+/**
+ * Convert a session ID to a valid OpenTelemetry trace ID (32-char hex)
+ */
+function sessionIdToTraceId(sessionId) {
+  // Create a hash of the session ID and take first 32 chars
+  const hash = createHash('sha256').update(sessionId).digest('hex');
+  return hash.substring(0, 32);
+}
 
 class AppTracer {
   constructor() {
-    this.tracer = trace.getTracer('probe-chat-app', '1.0.0');
+    // Use consistent tracer name across the application
+    this.tracer = trace.getTracer('probe-chat', '1.0.0');
     this.activeSpans = new Map();
     this.sessionSpans = new Map();
   }
 
   /**
-   * Start a chat session span
+   * Get the shared tracer instance
+   */
+  getTracer() {
+    return this.tracer;
+  }
+
+  /**
+   * Start a chat session span with custom trace ID based on session ID
    */
   startChatSession(sessionId, userMessage, provider, model) {
-    const span = this.tracer.startSpan('chat_session_start', {
-      kind: SpanKind.SERVER,
-      attributes: {
-        'app.session.id': sessionId,
-        'app.user.message': userMessage.substring(0, 200), // Truncate long messages
-        'app.user.message.length': userMessage.length,
-        'app.ai.provider': provider,
-        'app.ai.model': model,
-        'app.session.start_time': Date.now()
-      }
+    // Create a custom trace ID from the session ID
+    const traceId = sessionIdToTraceId(sessionId);
+    
+    // Generate a span ID for the root span
+    const spanId = randomUUID().replace(/-/g, '').substring(0, 16);
+    
+    // Create trace context with custom trace ID
+    const spanContext = {
+      traceId: traceId,
+      spanId: spanId,
+      traceFlags: TraceFlags.SAMPLED,
+      isRemote: false
+    };
+    
+    // Create a new context with our custom trace context
+    const activeContext = trace.setSpanContext(context.active(), spanContext);
+    
+    // Start the span within this custom context
+    const span = context.with(activeContext, () => {
+      return this.tracer.startSpan('chat_session_start', {
+        kind: SpanKind.SERVER,
+        attributes: {
+          'app.session.id': sessionId,
+          'app.user.message': userMessage.substring(0, 200), // Truncate long messages
+          'app.user.message.length': userMessage.length,
+          'app.ai.provider': provider,
+          'app.ai.model': model,
+          'app.session.start_time': Date.now(),
+          'app.trace.custom_id': true // Mark that we're using custom trace ID
+        }
+      });
     });
 
     this.sessionSpans.set(sessionId, span);
@@ -36,11 +74,28 @@ class AppTracer {
   }
 
   /**
+   * Execute a function within the context of a session span
+   */
+  withSessionContext(sessionId, fn) {
+    const sessionSpan = this.sessionSpans.get(sessionId);
+    if (sessionSpan) {
+      return context.with(trace.setSpan(context.active(), sessionSpan), fn);
+    }
+    return fn();
+  }
+
+  /**
+   * Get the trace ID for a session (derived from session ID)
+   */
+  getTraceIdForSession(sessionId) {
+    return sessionIdToTraceId(sessionId);
+  }
+
+  /**
    * Start processing a user message
    */
   startUserMessageProcessing(sessionId, messageId, message, imageUrlsFound = 0) {
-    const sessionSpan = this.sessionSpans.get(sessionId);
-    const spanOptions = {
+    const span = this.tracer.startSpan('user_message_processing', {
       kind: SpanKind.INTERNAL,
       attributes: {
         'app.session.id': sessionId,
@@ -50,47 +105,56 @@ class AppTracer {
         'app.message.image_urls_found': imageUrlsFound,
         'app.processing.start_time': Date.now()
       }
-    };
+    });
 
-    // Set parent context if session span exists
-    if (sessionSpan) {
-      spanOptions.parent = sessionSpan.spanContext();
-    }
-
-    const span = this.tracer.startSpan('user_message_processing', spanOptions);
     this.activeSpans.set(`${sessionId}_user_processing`, span);
     return span;
+  }
+
+  /**
+   * Execute a function within the context of user message processing span
+   */
+  withUserProcessingContext(sessionId, fn) {
+    const span = this.activeSpans.get(`${sessionId}_user_processing`);
+    if (span) {
+      return context.with(trace.setSpan(context.active(), span), fn);
+    }
+    return fn();
   }
 
   /**
    * Start the agent loop
    */
   startAgentLoop(sessionId, maxIterations) {
-    const userProcessingSpan = this.activeSpans.get(`${sessionId}_user_processing`);
-    const spanOptions = {
+    const span = this.tracer.startSpan('agent_loop_start', {
       kind: SpanKind.INTERNAL,
       attributes: {
         'app.session.id': sessionId,
         'app.loop.max_iterations': maxIterations,
         'app.loop.start_time': Date.now()
       }
-    };
+    });
 
-    if (userProcessingSpan) {
-      spanOptions.parent = userProcessingSpan.spanContext();
-    }
-
-    const span = this.tracer.startSpan('agent_loop_start', spanOptions);
     this.activeSpans.set(`${sessionId}_agent_loop`, span);
     return span;
+  }
+
+  /**
+   * Execute a function within the context of agent loop span
+   */
+  withAgentLoopContext(sessionId, fn) {
+    const span = this.activeSpans.get(`${sessionId}_agent_loop`);
+    if (span) {
+      return context.with(trace.setSpan(context.active(), span), fn);
+    }
+    return fn();
   }
 
   /**
    * Start a single iteration of the agent loop
    */
   startAgentIteration(sessionId, iterationNumber, messagesCount, contextTokens) {
-    const agentLoopSpan = this.activeSpans.get(`${sessionId}_agent_loop`);
-    const spanOptions = {
+    const span = this.tracer.startSpan('agent_loop_iteration', {
       kind: SpanKind.INTERNAL,
       attributes: {
         'app.session.id': sessionId,
@@ -99,23 +163,28 @@ class AppTracer {
         'app.iteration.context_tokens': contextTokens,
         'app.iteration.start_time': Date.now()
       }
-    };
+    });
 
-    if (agentLoopSpan) {
-      spanOptions.parent = agentLoopSpan.spanContext();
-    }
-
-    const span = this.tracer.startSpan('agent_loop_iteration', spanOptions);
     this.activeSpans.set(`${sessionId}_iteration_${iterationNumber}`, span);
     return span;
+  }
+
+  /**
+   * Execute a function within the context of agent iteration span
+   */
+  withIterationContext(sessionId, iterationNumber, fn) {
+    const span = this.activeSpans.get(`${sessionId}_iteration_${iterationNumber}`);
+    if (span) {
+      return context.with(trace.setSpan(context.active(), span), fn);
+    }
+    return fn();
   }
 
   /**
    * Start an AI generation request
    */
   startAiGenerationRequest(sessionId, iterationNumber, model, provider, settings = {}) {
-    const iterationSpan = this.activeSpans.get(`${sessionId}_iteration_${iterationNumber}`);
-    const spanOptions = {
+    const span = this.tracer.startSpan('ai_generation_request', {
       kind: SpanKind.CLIENT,
       attributes: {
         'app.session.id': sessionId,
@@ -126,13 +195,8 @@ class AppTracer {
         'app.ai.max_retries': settings.maxRetries || 0,
         'app.ai.request_start_time': Date.now()
       }
-    };
+    });
 
-    if (iterationSpan) {
-      spanOptions.parent = iterationSpan.spanContext();
-    }
-
-    const span = this.tracer.startSpan('ai_generation_request', spanOptions);
     this.activeSpans.set(`${sessionId}_ai_request_${iterationNumber}`, span);
     return span;
   }
@@ -201,8 +265,7 @@ class AppTracer {
    * Start tool execution
    */
   startToolExecution(sessionId, iterationNumber, toolName, toolParams) {
-    const aiRequestSpan = this.activeSpans.get(`${sessionId}_ai_request_${iterationNumber}`);
-    const spanOptions = {
+    const span = this.tracer.startSpan('tool_execution', {
       kind: SpanKind.INTERNAL,
       attributes: {
         'app.session.id': sessionId,
@@ -213,13 +276,8 @@ class AppTracer {
         ...(toolName === 'extract' && toolParams.file_path ? { 'app.tool.extract.file_path': toolParams.file_path } : {}),
         ...(toolName === 'query' && toolParams.pattern ? { 'app.tool.query.pattern': toolParams.pattern } : {}),
       }
-    };
+    });
 
-    if (aiRequestSpan) {
-      spanOptions.parent = aiRequestSpan.spanContext();
-    }
-
-    const span = this.tracer.startSpan('tool_execution', spanOptions);
     this.activeSpans.set(`${sessionId}_tool_execution_${iterationNumber}`, span);
     return span;
   }

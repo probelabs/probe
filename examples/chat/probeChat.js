@@ -68,7 +68,8 @@ if (typeof process !== 'undefined' && !process.env.PROBE_CHAT_SKIP_FOLDER_VALIDA
  * @returns {Array} Array of { url: string, cleanedMessage: string }
  */
 function extractImageUrls(message, debug = false) {
-  const tracer = trace.getTracer('probe-chat');
+  // Use the shared tracer name consistently
+  const tracer = trace.getTracer('probe-chat', '1.0.0');
   return tracer.startActiveSpan('extractImageUrls', (span) => {
     try {
       // Pattern to match image URLs:
@@ -835,8 +836,10 @@ When troubleshooting:
       const messageId = `msg_${Date.now()}`;
       appTracer.startUserMessageProcessing(sessionId, messageId, message);
       
-      // Extract image URLs from the message
-      const { imageUrls, cleanedMessage } = extractImageUrls(message, this.debug);
+      // Extract image URLs from the message within the processing context
+      const { imageUrls, cleanedMessage } = appTracer.withUserProcessingContext(sessionId, () => 
+        extractImageUrls(message, this.debug)
+      );
       
       // Start image processing trace if images are found
       if (imageUrls.length > 0) {
@@ -880,8 +883,10 @@ When troubleshooting:
         validImageUrls = await validateImageUrls(imageUrls, this.debug);
       }
       
-      // Start the agent loop trace
-      appTracer.startAgentLoop(sessionId, MAX_TOOL_ITERATIONS);
+      // Start the agent loop trace within user processing context
+      appTracer.withUserProcessingContext(sessionId, () => {
+        appTracer.startAgentLoop(sessionId, MAX_TOOL_ITERATIONS);
+      });
       
       // Log validation results only in interactive mode or debug mode
       if (imageUrls.length > 0) {
@@ -944,8 +949,10 @@ When troubleshooting:
         currentIteration++;
         if (this.cancelled) throw new Error('Request was cancelled by the user');
 
-        // Start iteration trace
-        appTracer.startAgentIteration(sessionId, currentIteration, currentMessages.length, this.tokenCounter.contextSize || 0);
+        // Start iteration trace within agent loop context
+        appTracer.withAgentLoopContext(sessionId, () => {
+          appTracer.startAgentIteration(sessionId, currentIteration, currentMessages.length, this.tokenCounter.contextSize || 0);
+        });
 
         if (this.debug) {
           console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${MAX_TOOL_ITERATIONS} ---`);
@@ -1036,11 +1043,13 @@ When troubleshooting:
           }
         };
 
-        // Start AI generation request trace
-        const aiRequestSpan = appTracer.startAiGenerationRequest(sessionId, currentIteration, this.model, this.apiType, {
+        // Start AI generation request trace within iteration context
+        const aiRequestSpan = appTracer.withIterationContext(sessionId, currentIteration, () => {
+          return appTracer.startAiGenerationRequest(sessionId, currentIteration, this.model, this.apiType, {
           temperature: 0.3,
           maxTokens: maxResponseTokens,
           maxRetries: 2
+          });
         });
 
         // **Streaming Response Handling**
@@ -1177,8 +1186,10 @@ When troubleshooting:
             const toolInstance = this.toolImplementations[toolName];
             let toolResultContent = '';
             
-            // Start tool execution trace
-            appTracer.startToolExecution(sessionId, currentIteration, toolName, params);
+            // Start tool execution trace within iteration context
+            appTracer.withIterationContext(sessionId, currentIteration, () => {
+              appTracer.startToolExecution(sessionId, currentIteration, toolName, params);
+            });
             
             try {
               const enhancedParams = { ...params, sessionId: this.sessionId };
@@ -1437,3 +1448,6 @@ When troubleshooting:
     return this.sessionId;
   }
 }
+
+// Export the extractImageUrls function for testing
+export { extractImageUrls };
