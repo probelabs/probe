@@ -31,12 +31,41 @@ export class FileSpanExporter {
     try {
       const timestamp = Date.now();
       
-      spans.forEach((span) => {
+      spans.forEach((span, index) => {
+        // Debug: Log first span's properties to understand structure
+        if (index === 0 && process.env.DEBUG_CHAT === '1') {
+          console.log('[FileSpanExporter] First span properties:');
+          const keys = Object.getOwnPropertyNames(span);
+          keys.forEach(key => {
+            if (key.toLowerCase().includes('parent') || key === '_spanContext' || key === 'parentContext') {
+              console.log(`  ${key}:`, span[key]);
+            }
+          });
+        }
+        
+        // Extract parent span ID - check various possible properties
+        let parentSpanId = undefined;
+        
+        // Check if there's a parent span context in the span
+        if (span.parentSpanContext) {
+          parentSpanId = span.parentSpanContext.spanId;
+        } else if (span._parentSpanContext) {
+          parentSpanId = span._parentSpanContext.spanId;
+        } else if (span.parent) {
+          parentSpanId = span.parent.spanId;
+        } else if (span._parent) {
+          parentSpanId = span._parent.spanId;
+        } else if (span._parentId) {
+          parentSpanId = span._parentId;
+        } else if (span.parentSpanId) {
+          parentSpanId = span.parentSpanId;
+        }
+        
         // Convert span to OTLP JSON format
         const spanData = {
           traceId: span.spanContext().traceId,
           spanId: span.spanContext().spanId,
-          parentSpanId: span.parentSpanId,
+          parentSpanId: parentSpanId,
           name: span.name,
           kind: span.kind,
           startTimeUnixNano: span.startTime[0] * 1_000_000_000 + span.startTime[1],
@@ -119,12 +148,32 @@ export class FileSpanExporter {
    * @returns {Promise<void>}
    */
   async forceFlush() {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       if (this.stream) {
-        this.stream.once('drain', resolve);
-        // If stream is not busy, resolve immediately
-        if (!this.stream.writableNeedDrain) {
+        // CRITICAL FIX: Force the stream to flush all buffered data
+        // Use both drain event and explicit cork/uncork to ensure data is written
+        const flushTimeout = setTimeout(() => {
+          console.warn('[FileSpanExporter] Flush timeout after 5 seconds');
           resolve();
+        }, 5000);
+        
+        // Uncork the stream to force buffered writes
+        if (this.stream.writableCorked) {
+          this.stream.uncork();
+        }
+        
+        // If there's buffered data, wait for drain event
+        if (this.stream.writableNeedDrain) {
+          this.stream.once('drain', () => {
+            clearTimeout(flushTimeout);
+            resolve();
+          });
+        } else {
+          // No buffered data, but still give it a moment to ensure writes complete
+          setImmediate(() => {
+            clearTimeout(flushTimeout);
+            resolve();
+          });
         }
       } else {
         resolve();

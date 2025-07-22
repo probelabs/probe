@@ -68,9 +68,9 @@ if (typeof process !== 'undefined' && !process.env.PROBE_CHAT_SKIP_FOLDER_VALIDA
  * @returns {Array} Array of { url: string, cleanedMessage: string }
  */
 function extractImageUrls(message, debug = false) {
-  // Use the shared tracer name consistently
+  // This function should be called within the session context, so it will inherit the trace ID
   const tracer = trace.getTracer('probe-chat', '1.0.0');
-  return tracer.startActiveSpan('extractImageUrls', (span) => {
+  return tracer.startActiveSpan('content.image.extract', (span) => {
     try {
       // Pattern to match image URLs:
       // 1. GitHub private-user-images URLs (always images, regardless of extension)
@@ -743,7 +743,12 @@ When troubleshooting:
   async chat(message, sessionId, apiCredentials = null) {
     // Use our custom app tracer for granular tracing
     const effectiveSessionId = sessionId || this.sessionId;
+    
+    // Start the chat session span first, then execute the entire chat flow within the session context
     const chatSessionSpan = appTracer.startChatSession(effectiveSessionId, message, this.apiType, this.model);
+    
+    // Execute the entire chat flow within the session context
+    return await appTracer.withSessionContext(effectiveSessionId, async () => {
     
     try {
 
@@ -792,11 +797,60 @@ When troubleshooting:
         const result = await this._processChat(message, effectiveSessionId);
         
         appTracer.endChatSession(effectiveSessionId, true, result.tokenUsage?.total?.total || 0);
+        
+        // CRITICAL FIX: Ensure all spans are properly exported before returning
+        if (this.telemetryConfig) {
+          try {
+            // First, ensure the session span is ended within its context
+            await appTracer.withSessionContext(effectiveSessionId, async () => {
+              // Small delay to ensure all child spans are ended
+              await new Promise(resolve => setTimeout(resolve, 50));
+            });
+            
+            // Give BatchSpanProcessor time to process the ended spans
+            // BatchSpanProcessor has a scheduledDelayMillis of 500ms (reduced from default 5000ms)
+            await new Promise(resolve => setTimeout(resolve, 600));
+            
+            // Force flush all pending spans
+            await this.telemetryConfig.forceFlush();
+            
+            // Additional delay to ensure file writes complete
+            await new Promise(resolve => setTimeout(resolve, 100));
+          } catch (flushError) {
+            if (this.debug) console.log('[DEBUG] Telemetry flush warning:', flushError.message);
+          }
+        }
+        
         return result;
       } catch (error) {
         appTracer.endChatSession(effectiveSessionId, false, 0);
+        
+        // CRITICAL FIX: Ensure all spans are properly exported even on error
+        if (this.telemetryConfig) {
+          try {
+            // First, ensure the session span is ended within its context
+            await appTracer.withSessionContext(effectiveSessionId, async () => {
+              // Small delay to ensure all child spans are ended
+              await new Promise(resolve => setTimeout(resolve, 50));
+            });
+            
+            // Give BatchSpanProcessor time to process the ended spans
+            // BatchSpanProcessor has a scheduledDelayMillis of 500ms (reduced from default 5000ms)
+            await new Promise(resolve => setTimeout(resolve, 600));
+            
+            // Force flush all pending spans
+            await this.telemetryConfig.forceFlush();
+            
+            // Additional delay to ensure file writes complete
+            await new Promise(resolve => setTimeout(resolve, 100));
+          } catch (flushError) {
+            if (this.debug) console.log('[DEBUG] Telemetry flush warning:', flushError.message);
+          }
+        }
+        
         throw error;
       }
+    }); // End withSessionContext
   }
 
   /**
@@ -1091,6 +1145,7 @@ When troubleshooting:
           // Record AI response in trace
           const endTime = Date.now();
           appTracer.recordAiResponse(sessionId, currentIteration, {
+            response: assistantResponseContent, // Include actual response content
             responseLength: assistantResponseContent.length,
             completionTokens: responseTokenCount,
             promptTokens: this.tokenCounter.contextSize || 0,
@@ -1202,7 +1257,7 @@ When troubleshooting:
               }
               
               // End tool execution trace with success
-              appTracer.endToolExecution(sessionId, currentIteration, true, toolResultContent.length);
+              appTracer.endToolExecution(sessionId, currentIteration, true, toolResultContent.length, null, toolResultContent);
             } catch (error) {
               console.error(`Error executing tool ${toolName}:`, error);
               toolResultContent = `Error executing tool ${toolName}: ${error.message}`;
@@ -1229,7 +1284,7 @@ When troubleshooting:
               });
               
               // End tool execution trace with failure
-              appTracer.endToolExecution(sessionId, currentIteration, false, 0, error.message);
+              appTracer.endToolExecution(sessionId, currentIteration, false, 0, error.message, toolResultContent);
             }
 
             const toolResultMessage = `<tool_result>\n${toolResultContent}\n</tool_result>`;
@@ -1354,7 +1409,10 @@ When troubleshooting:
         });
       }
       
-      // Clean up any remaining spans for this session
+      // End chat session before cleanup to ensure span is properly captured
+      appTracer.endChatSession(sessionId, false, 0);
+      
+      // Clean up any remaining spans for this session (but session span is already ended)
       appTracer.cleanup(sessionId);
       
       console.error('Error in chat processing loop:', error);

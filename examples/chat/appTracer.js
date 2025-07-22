@@ -17,12 +17,46 @@ function sessionIdToTraceId(sessionId) {
   return hash.substring(0, 32);
 }
 
+// OpenTelemetry semantic conventions and custom attributes
+const OTEL_ATTRS = {
+  // Standard semantic conventions
+  SERVICE_NAME: 'service.name',
+  SERVICE_VERSION: 'service.version',
+  HTTP_METHOD: 'http.method',
+  HTTP_STATUS_CODE: 'http.status_code',
+  ERROR_TYPE: 'error.type',
+  ERROR_MESSAGE: 'error.message',
+  
+  // Custom application attributes following OpenTelemetry naming conventions
+  APP_SESSION_ID: 'app.session.id',
+  APP_MESSAGE_TYPE: 'app.message.type',
+  APP_MESSAGE_CONTENT: 'app.message.content',
+  APP_MESSAGE_LENGTH: 'app.message.length',
+  APP_MESSAGE_HASH: 'app.message.hash',
+  APP_AI_PROVIDER: 'app.ai.provider',
+  APP_AI_MODEL: 'app.ai.model',
+  APP_AI_TEMPERATURE: 'app.ai.temperature',
+  APP_AI_MAX_TOKENS: 'app.ai.max_tokens',
+  APP_AI_RESPONSE_CONTENT: 'app.ai.response.content',
+  APP_AI_RESPONSE_LENGTH: 'app.ai.response.length',
+  APP_AI_RESPONSE_HASH: 'app.ai.response.hash',
+  APP_AI_COMPLETION_TOKENS: 'app.ai.completion_tokens',
+  APP_AI_PROMPT_TOKENS: 'app.ai.prompt_tokens',
+  APP_AI_FINISH_REASON: 'app.ai.finish_reason',
+  APP_TOOL_NAME: 'app.tool.name',
+  APP_TOOL_PARAMS: 'app.tool.params',
+  APP_TOOL_RESULT: 'app.tool.result',
+  APP_TOOL_SUCCESS: 'app.tool.success',
+  APP_ITERATION_NUMBER: 'app.iteration.number'
+};
+
 class AppTracer {
   constructor() {
     // Use consistent tracer name across the application
     this.tracer = trace.getTracer('probe-chat', '1.0.0');
     this.activeSpans = new Map();
     this.sessionSpans = new Map();
+    this.sessionContexts = new Map(); // Store active context for each session
   }
 
   /**
@@ -33,9 +67,34 @@ class AppTracer {
   }
 
   /**
+   * Hash a string for deduplication purposes
+   */
+  _hashString(str) {
+    let hash = 0;
+    if (str.length === 0) return hash;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash.toString();
+  }
+
+  /**
+   * Get the active context for a session, creating spans within the session trace
+   */
+  _getSessionContext(sessionId) {
+    return this.sessionContexts.get(sessionId) || context.active();
+  }
+
+  /**
    * Start a chat session span with custom trace ID based on session ID
    */
   startChatSession(sessionId, userMessage, provider, model) {
+    if (process.env.DEBUG_CHAT === '1') {
+      console.log(`[DEBUG] AppTracer: Starting chat session span for ${sessionId}`);
+    }
+    
     // Create a custom trace ID from the session ID
     const traceId = sessionIdToTraceId(sessionId);
     
@@ -55,33 +114,43 @@ class AppTracer {
     
     // Start the span within this custom context
     const span = context.with(activeContext, () => {
-      return this.tracer.startSpan('chat_session_start', {
+      return this.tracer.startSpan('messaging.process', {
         kind: SpanKind.SERVER,
         attributes: {
-          'app.session.id': sessionId,
-          'app.user.message': userMessage.substring(0, 200), // Truncate long messages
-          'app.user.message.length': userMessage.length,
-          'app.ai.provider': provider,
-          'app.ai.model': model,
+          [OTEL_ATTRS.APP_SESSION_ID]: sessionId,
+          [OTEL_ATTRS.APP_MESSAGE_CONTENT]: userMessage.substring(0, 500), // Capture more message content
+          [OTEL_ATTRS.APP_MESSAGE_LENGTH]: userMessage.length,
+          [OTEL_ATTRS.APP_MESSAGE_HASH]: this._hashString(userMessage), // Add hash for deduplication
+          [OTEL_ATTRS.APP_AI_PROVIDER]: provider,
+          [OTEL_ATTRS.APP_AI_MODEL]: model,
           'app.session.start_time': Date.now(),
           'app.trace.custom_id': true // Mark that we're using custom trace ID
         }
       });
     });
 
+    if (process.env.DEBUG_CHAT === '1') {
+      console.log(`[DEBUG] AppTracer: Created chat session span ${span.spanContext().spanId} in trace ${span.spanContext().traceId}`);
+    }
+
+    // Create session context with the span as the active span
+    const sessionContext = trace.setSpan(context.active(), span);
+    this.sessionContexts.set(sessionId, sessionContext);
     this.sessionSpans.set(sessionId, span);
+    
+    if (process.env.DEBUG_CHAT === '1') {
+      console.log(`[DEBUG] AppTracer: Session context established for ${sessionId}`);
+    }
+    
     return span;
   }
 
   /**
-   * Execute a function within the context of a session span
+   * Execute a function within the session context to ensure proper trace correlation
    */
   withSessionContext(sessionId, fn) {
-    const sessionSpan = this.sessionSpans.get(sessionId);
-    if (sessionSpan) {
-      return context.with(trace.setSpan(context.active(), sessionSpan), fn);
-    }
-    return fn();
+    const sessionContext = this._getSessionContext(sessionId);
+    return context.with(sessionContext, fn);
   }
 
   /**
@@ -95,20 +164,48 @@ class AppTracer {
    * Start processing a user message
    */
   startUserMessageProcessing(sessionId, messageId, message, imageUrlsFound = 0) {
-    const span = this.tracer.startSpan('user_message_processing', {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        'app.session.id': sessionId,
-        'app.message.id': messageId,
-        'app.message.type': 'user',
-        'app.message.content.length': message.length,
-        'app.message.image_urls_found': imageUrlsFound,
-        'app.processing.start_time': Date.now()
+    if (process.env.DEBUG_CHAT === '1') {
+      console.log(`[DEBUG] AppTracer: Starting user message processing span for ${sessionId}`);
+    }
+    
+    const sessionContext = this._getSessionContext(sessionId);
+    
+    return context.with(sessionContext, () => {
+      // Get the parent span (should be the session span) from the context
+      const parentSpan = trace.getActiveSpan();
+      const spanOptions = {
+        kind: SpanKind.INTERNAL,
+        attributes: {
+          [OTEL_ATTRS.APP_SESSION_ID]: sessionId,
+          'app.message.id': messageId,
+          [OTEL_ATTRS.APP_MESSAGE_TYPE]: 'user',
+          [OTEL_ATTRS.APP_MESSAGE_CONTENT]: message.substring(0, 1000), // Include actual message content
+          [OTEL_ATTRS.APP_MESSAGE_LENGTH]: message.length,
+          [OTEL_ATTRS.APP_MESSAGE_HASH]: this._hashString(message),
+          'app.message.image_urls_found': imageUrlsFound,
+          'app.processing.start_time': Date.now()
+        }
+      };
+      
+      // Explicitly set the parent if available
+      if (parentSpan) {
+        spanOptions.parent = parentSpan.spanContext();
       }
+      
+      const span = this.tracer.startSpan('messaging.message.process', spanOptions);
+      
+      if (process.env.DEBUG_CHAT === '1') {
+        console.log(`[DEBUG] AppTracer: Created user message processing span ${span.spanContext().spanId} with parent ${parentSpan?.spanContext().spanId}`);
+      }
+      
+      this.activeSpans.set(`${sessionId}_user_processing`, span);
+      // DO NOT overwrite the session context - this breaks parent-child relationships
+      // Instead, create a temporary context for this message processing without storing it
+      const messageContext = trace.setSpan(sessionContext, span);
+      // Store the message context temporarily for child operations, but keep session context intact
+      this.sessionContexts.set(`${sessionId}_message_processing`, messageContext);
+      return span;
     });
-
-    this.activeSpans.set(`${sessionId}_user_processing`, span);
-    return span;
   }
 
   /**
@@ -126,17 +223,33 @@ class AppTracer {
    * Start the agent loop
    */
   startAgentLoop(sessionId, maxIterations) {
-    const span = this.tracer.startSpan('agent_loop_start', {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        'app.session.id': sessionId,
-        'app.loop.max_iterations': maxIterations,
-        'app.loop.start_time': Date.now()
+    const sessionContext = this._getSessionContext(sessionId);
+    
+    return context.with(sessionContext, () => {
+      // Get the parent span from the context
+      const parentSpan = trace.getActiveSpan();
+      const spanOptions = {
+        kind: SpanKind.INTERNAL,
+        attributes: {
+          'app.session.id': sessionId,
+          'app.loop.max_iterations': maxIterations,
+          'app.loop.start_time': Date.now()
+        }
+      };
+      
+      // Explicitly set the parent if available
+      if (parentSpan) {
+        spanOptions.parent = parentSpan.spanContext();
       }
+      
+      const span = this.tracer.startSpan('agent.loop.start', spanOptions);
+      
+      this.activeSpans.set(`${sessionId}_agent_loop`, span);
+      // DO NOT overwrite the session context - store agent loop context separately
+      const agentLoopContext = trace.setSpan(sessionContext, span);
+      this.sessionContexts.set(`${sessionId}_agent_loop`, agentLoopContext);
+      return span;
     });
-
-    this.activeSpans.set(`${sessionId}_agent_loop`, span);
-    return span;
   }
 
   /**
@@ -154,19 +267,26 @@ class AppTracer {
    * Start a single iteration of the agent loop
    */
   startAgentIteration(sessionId, iterationNumber, messagesCount, contextTokens) {
-    const span = this.tracer.startSpan('agent_loop_iteration', {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        'app.session.id': sessionId,
-        'app.iteration.number': iterationNumber,
-        'app.iteration.messages_count': messagesCount,
-        'app.iteration.context_tokens': contextTokens,
-        'app.iteration.start_time': Date.now()
-      }
+    const sessionContext = this._getSessionContext(sessionId);
+    
+    return context.with(sessionContext, () => {
+      const span = this.tracer.startSpan('agent.loop.iteration', {
+        kind: SpanKind.INTERNAL,
+        attributes: {
+          'app.session.id': sessionId,
+          'app.iteration.number': iterationNumber,
+          'app.iteration.messages_count': messagesCount,
+          'app.iteration.context_tokens': contextTokens,
+          'app.iteration.start_time': Date.now()
+        }
+      });
+      
+      this.activeSpans.set(`${sessionId}_iteration_${iterationNumber}`, span);
+      // DO NOT overwrite the session context - store iteration context separately
+      const iterationContext = trace.setSpan(sessionContext, span);
+      this.sessionContexts.set(`${sessionId}_iteration_${iterationNumber}`, iterationContext);
+      return span;
     });
-
-    this.activeSpans.set(`${sessionId}_iteration_${iterationNumber}`, span);
-    return span;
   }
 
   /**
@@ -183,54 +303,72 @@ class AppTracer {
   /**
    * Start an AI generation request
    */
-  startAiGenerationRequest(sessionId, iterationNumber, model, provider, settings = {}) {
-    const span = this.tracer.startSpan('ai_generation_request', {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        'app.session.id': sessionId,
-        'app.ai.model': model,
-        'app.ai.provider': provider,
-        'app.ai.temperature': settings.temperature || 0,
-        'app.ai.max_tokens': settings.maxTokens || 0,
-        'app.ai.max_retries': settings.maxRetries || 0,
-        'app.ai.request_start_time': Date.now()
+  startAiGenerationRequest(sessionId, iterationNumber, model, provider, settings = {}, messagesContext = []) {
+    if (process.env.DEBUG_CHAT === '1') {
+      console.log(`[DEBUG] AppTracer: Starting AI generation request span for session ${sessionId}, iteration ${iterationNumber}`);
+    }
+    
+    // Get the most appropriate context - prefer iteration context over session context
+    const iterationContext = this.sessionContexts.get(`${sessionId}_iteration_${iterationNumber}`);
+    const sessionContext = iterationContext || this._getSessionContext(sessionId);
+    
+    return context.with(sessionContext, () => {
+      const span = this.tracer.startSpan('ai.generation.request', {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          [OTEL_ATTRS.APP_SESSION_ID]: sessionId,
+          [OTEL_ATTRS.APP_ITERATION_NUMBER]: iterationNumber,
+          [OTEL_ATTRS.APP_AI_MODEL]: model,
+          [OTEL_ATTRS.APP_AI_PROVIDER]: provider,
+          [OTEL_ATTRS.APP_AI_TEMPERATURE]: settings.temperature || 0,
+          [OTEL_ATTRS.APP_AI_MAX_TOKENS]: settings.maxTokens || 0,
+          'app.ai.max_retries': settings.maxRetries || 0,
+          'app.ai.messages_count': messagesContext.length,
+          'app.ai.request_start_time': Date.now()
+        }
+      });
+      
+      if (process.env.DEBUG_CHAT === '1') {
+        console.log(`[DEBUG] AppTracer: Created AI generation span ${span.spanContext().spanId}`);
       }
+      
+      this.activeSpans.set(`${sessionId}_ai_request_${iterationNumber}`, span);
+      // Store AI request context separately, don't overwrite session context
+      const aiRequestContext = trace.setSpan(sessionContext, span);
+      this.sessionContexts.set(`${sessionId}_ai_request_${iterationNumber}`, aiRequestContext);
+      return span;
     });
-
-    this.activeSpans.set(`${sessionId}_ai_request_${iterationNumber}`, span);
-    return span;
   }
 
   /**
    * Record AI response received
    */
   recordAiResponse(sessionId, iterationNumber, responseData) {
-    const aiRequestSpan = this.activeSpans.get(`${sessionId}_ai_request_${iterationNumber}`);
-    const spanOptions = {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        'app.session.id': sessionId,
-        'app.ai.response.length': responseData.responseLength || 0,
-        'app.ai.response.completion_tokens': responseData.completionTokens || 0,
-        'app.ai.response.prompt_tokens': responseData.promptTokens || 0,
-        'app.ai.response.finish_reason': responseData.finishReason || 'unknown',
-        'app.ai.response.time_to_first_chunk_ms': responseData.timeToFirstChunk || 0,
-        'app.ai.response.time_to_finish_ms': responseData.timeToFinish || 0,
-        'app.ai.response.received_time': Date.now()
-      }
-    };
-
-    if (aiRequestSpan) {
-      spanOptions.parent = aiRequestSpan.spanContext();
-    }
-
-    const span = this.tracer.startSpan('ai_response_received', spanOptions);
+    const sessionContext = this._getSessionContext(sessionId);
     
-    // End the span immediately since this is just recording the response
-    span.setStatus({ code: SpanStatusCode.OK });
-    span.end();
-
-    return span;
+    return context.with(sessionContext, () => {
+      const span = this.tracer.startSpan('ai.generation.response', {
+        kind: SpanKind.INTERNAL,
+        attributes: {
+          [OTEL_ATTRS.APP_SESSION_ID]: sessionId,
+          [OTEL_ATTRS.APP_ITERATION_NUMBER]: iterationNumber,
+          [OTEL_ATTRS.APP_AI_RESPONSE_CONTENT]: responseData.response ? responseData.response.substring(0, 2000) : '', // Include actual response content
+          [OTEL_ATTRS.APP_AI_RESPONSE_LENGTH]: responseData.responseLength || (responseData.response ? responseData.response.length : 0),
+          [OTEL_ATTRS.APP_AI_RESPONSE_HASH]: responseData.response ? this._hashString(responseData.response) : '',
+          [OTEL_ATTRS.APP_AI_COMPLETION_TOKENS]: responseData.completionTokens || 0,
+          [OTEL_ATTRS.APP_AI_PROMPT_TOKENS]: responseData.promptTokens || 0,
+          [OTEL_ATTRS.APP_AI_FINISH_REASON]: responseData.finishReason || 'unknown',
+          'app.ai.response.time_to_first_chunk_ms': responseData.timeToFirstChunk || 0,
+          'app.ai.response.time_to_finish_ms': responseData.timeToFinish || 0,
+          'app.ai.response.received_time': Date.now()
+        }
+      });
+      
+      // End the span immediately since this is just recording the response
+      span.setStatus({ code: SpanStatusCode.OK });
+      span.end();
+      return span;
+    });
   }
 
   /**
@@ -252,7 +390,7 @@ class AppTracer {
       spanOptions.parent = aiRequestSpan.spanContext();
     }
 
-    const span = this.tracer.startSpan('tool_call_parsed', spanOptions);
+    const span = this.tracer.startSpan('tool.call.parse', spanOptions);
     
     // End immediately since this is just recording the parsing
     span.setStatus({ code: SpanStatusCode.OK });
@@ -265,36 +403,54 @@ class AppTracer {
    * Start tool execution
    */
   startToolExecution(sessionId, iterationNumber, toolName, toolParams) {
-    const span = this.tracer.startSpan('tool_execution', {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        'app.session.id': sessionId,
-        'app.tool.name': toolName,
-        'app.tool.execution_start_time': Date.now(),
-        // Add specific attributes based on tool type
-        ...(toolName === 'search' && toolParams.query ? { 'app.tool.search.query': toolParams.query } : {}),
-        ...(toolName === 'extract' && toolParams.file_path ? { 'app.tool.extract.file_path': toolParams.file_path } : {}),
-        ...(toolName === 'query' && toolParams.pattern ? { 'app.tool.query.pattern': toolParams.pattern } : {}),
-      }
+    // Get the most appropriate context - prefer AI request context over session context  
+    const aiRequestContext = this.sessionContexts.get(`${sessionId}_ai_request_${iterationNumber}`);
+    const sessionContext = aiRequestContext || this._getSessionContext(sessionId);
+    
+    return context.with(sessionContext, () => {
+      const span = this.tracer.startSpan('tool.call', {
+        kind: SpanKind.INTERNAL,
+        attributes: {
+          [OTEL_ATTRS.APP_SESSION_ID]: sessionId,
+          [OTEL_ATTRS.APP_ITERATION_NUMBER]: iterationNumber,
+          [OTEL_ATTRS.APP_TOOL_NAME]: toolName,
+          [OTEL_ATTRS.APP_TOOL_PARAMS]: JSON.stringify(toolParams).substring(0, 1000), // Include actual tool parameters
+          'app.tool.params.hash': this._hashString(JSON.stringify(toolParams)),
+          'app.tool.execution_start_time': Date.now(),
+          // Add specific attributes based on tool type
+          ...(toolName === 'search' && toolParams.query ? { 'app.tool.search.query': toolParams.query } : {}),
+          ...(toolName === 'extract' && toolParams.file_path ? { 'app.tool.extract.file_path': toolParams.file_path } : {}),
+          ...(toolName === 'query' && toolParams.pattern ? { 'app.tool.query.pattern': toolParams.pattern } : {}),
+        }
+      });
+      
+      this.activeSpans.set(`${sessionId}_tool_execution_${iterationNumber}`, span);
+      // Store tool execution context separately, don't overwrite session context
+      const toolExecutionContext = trace.setSpan(sessionContext, span);
+      this.sessionContexts.set(`${sessionId}_tool_execution_${iterationNumber}`, toolExecutionContext);
+      return span;
     });
-
-    this.activeSpans.set(`${sessionId}_tool_execution_${iterationNumber}`, span);
-    return span;
   }
 
   /**
    * End tool execution with results
    */
-  endToolExecution(sessionId, iterationNumber, success, resultLength = 0, errorMessage = null) {
+  endToolExecution(sessionId, iterationNumber, success, resultLength = 0, errorMessage = null, result = null) {
     const span = this.activeSpans.get(`${sessionId}_tool_execution_${iterationNumber}`);
     if (!span) return;
 
-    span.setAttributes({
-      'app.tool.success': success,
+    const attributes = {
+      [OTEL_ATTRS.APP_TOOL_SUCCESS]: success,
       'app.tool.result_length': resultLength,
       'app.tool.execution_end_time': Date.now(),
-      ...(errorMessage ? { 'app.tool.error_message': errorMessage } : {})
-    });
+      ...(errorMessage ? { [OTEL_ATTRS.ERROR_MESSAGE]: errorMessage } : {}),
+      ...(result ? { 
+        [OTEL_ATTRS.APP_TOOL_RESULT]: typeof result === 'string' ? result.substring(0, 2000) : JSON.stringify(result).substring(0, 2000),
+        'app.tool.result.hash': this._hashString(typeof result === 'string' ? result : JSON.stringify(result))
+      } : {})
+    };
+
+    span.setAttributes(attributes);
 
     span.setStatus({
       code: success ? SpanStatusCode.OK : SpanStatusCode.ERROR,
@@ -347,7 +503,16 @@ class AppTracer {
    */
   endUserMessageProcessing(sessionId, success = true) {
     const span = this.activeSpans.get(`${sessionId}_user_processing`);
-    if (!span) return;
+    if (!span) {
+      if (process.env.DEBUG_CHAT === '1') {
+        console.log(`[DEBUG] AppTracer: No user message processing span found for ${sessionId}`);
+      }
+      return;
+    }
+
+    if (process.env.DEBUG_CHAT === '1') {
+      console.log(`[DEBUG] AppTracer: Ending user message processing span ${span.spanContext().spanId} for ${sessionId}`);
+    }
 
     span.setAttributes({
       'app.processing.success': success,
@@ -356,7 +521,10 @@ class AppTracer {
 
     span.setStatus({ code: success ? SpanStatusCode.OK : SpanStatusCode.ERROR });
     span.end();
+    
     this.activeSpans.delete(`${sessionId}_user_processing`);
+    // Clean up the message processing context
+    this.sessionContexts.delete(`${sessionId}_message_processing`);
   }
 
   /**
@@ -364,7 +532,16 @@ class AppTracer {
    */
   endChatSession(sessionId, success = true, totalTokensUsed = 0) {
     const span = this.sessionSpans.get(sessionId);
-    if (!span) return;
+    if (!span) {
+      if (process.env.DEBUG_CHAT === '1') {
+        console.log(`[DEBUG] AppTracer: No chat session span found for ${sessionId}`);
+      }
+      return;
+    }
+
+    if (process.env.DEBUG_CHAT === '1') {
+      console.log(`[DEBUG] AppTracer: Ending chat session span ${span.spanContext().spanId} for ${sessionId}`);
+    }
 
     span.setAttributes({
       'app.session.success': success,
@@ -374,7 +551,10 @@ class AppTracer {
 
     span.setStatus({ code: success ? SpanStatusCode.OK : SpanStatusCode.ERROR });
     span.end();
+    
     this.sessionSpans.delete(sessionId);
+    // Clean up the session context after ending the span
+    this.sessionContexts.delete(sessionId);
   }
 
   /**
@@ -382,7 +562,16 @@ class AppTracer {
    */
   endAiRequest(sessionId, iterationNumber, success = true) {
     const span = this.activeSpans.get(`${sessionId}_ai_request_${iterationNumber}`);
-    if (!span) return;
+    if (!span) {
+      if (process.env.DEBUG_CHAT === '1') {
+        console.log(`[DEBUG] AppTracer: No AI request span found for ${sessionId}_ai_request_${iterationNumber}`);
+      }
+      return;
+    }
+
+    if (process.env.DEBUG_CHAT === '1') {
+      console.log(`[DEBUG] AppTracer: Ending AI request span ${span.spanContext().spanId} for ${sessionId}, iteration ${iterationNumber}`);
+    }
 
     span.setAttributes({
       'app.ai.request_success': success,
@@ -413,7 +602,7 @@ class AppTracer {
       spanOptions.parent = sessionSpan.spanContext();
     }
 
-    const span = this.tracer.startSpan('completion_attempt', spanOptions);
+    const span = this.tracer.startSpan('agent.completion.attempt', spanOptions);
     
     span.setStatus({ code: success ? SpanStatusCode.OK : SpanStatusCode.ERROR });
     span.end();
@@ -442,7 +631,7 @@ class AppTracer {
       spanOptions.parent = userProcessingSpan.spanContext();
     }
 
-    const span = this.tracer.startSpan('image_url_processing', spanOptions);
+    const span = this.tracer.startSpan('content.image.processing', spanOptions);
     this.activeSpans.set(`${sessionId}_image_processing`, span);
     return span;
   }
@@ -471,7 +660,7 @@ class AppTracer {
       spanOptions.parent = imageProcessingSpan.spanContext();
     }
 
-    const span = this.tracer.startSpan('image_url_validation', spanOptions);
+    const span = this.tracer.startSpan('content.image.validation', spanOptions);
     span.setStatus({ 
       code: validationResults.validUrls > 0 ? SpanStatusCode.OK : SpanStatusCode.ERROR,
       message: `${validationResults.validUrls}/${validationResults.totalUrls} URLs validated successfully`
@@ -522,7 +711,7 @@ class AppTracer {
       spanOptions.parent = aiRequestSpan.spanContext();
     }
 
-    const span = this.tracer.startSpan('ai_model_error', spanOptions);
+    const span = this.tracer.startSpan('ai.generation.error', spanOptions);
     span.setStatus({ code: SpanStatusCode.ERROR, message: errorDetails.message });
     span.end();
     return span;
@@ -552,7 +741,7 @@ class AppTracer {
       spanOptions.parent = toolExecutionSpan.spanContext();
     }
 
-    const span = this.tracer.startSpan('tool_execution_error', spanOptions);
+    const span = this.tracer.startSpan('tool.call.error', spanOptions);
     span.setStatus({ code: SpanStatusCode.ERROR, message: errorDetails.message });
     span.end();
     return span;
@@ -579,7 +768,7 @@ class AppTracer {
       spanOptions.parent = sessionSpan.spanContext();
     }
 
-    const span = this.tracer.startSpan('session_cancellation', spanOptions);
+    const span = this.tracer.startSpan('messaging.session.cancel', spanOptions);
     span.setStatus({ code: SpanStatusCode.ERROR, message: `Session cancelled: ${reason}` });
     span.end();
     return span;
@@ -610,7 +799,7 @@ class AppTracer {
       spanOptions.parent = sessionSpan.spanContext();
     }
 
-    const span = this.tracer.startSpan('token_metrics', spanOptions);
+    const span = this.tracer.startSpan('ai.token.metrics', spanOptions);
     span.setStatus({ code: SpanStatusCode.OK });
     span.end();
     return span;
@@ -638,7 +827,7 @@ class AppTracer {
       spanOptions.parent = sessionSpan.spanContext();
     }
 
-    const span = this.tracer.startSpan('history_management', spanOptions);
+    const span = this.tracer.startSpan('messaging.history.manage', spanOptions);
     span.setStatus({ code: SpanStatusCode.OK });
     span.end();
     return span;
@@ -667,7 +856,7 @@ class AppTracer {
       spanOptions.parent = sessionSpan.spanContext();
     }
 
-    const span = this.tracer.startSpan('system_prompt_generation', spanOptions);
+    const span = this.tracer.startSpan('ai.prompt.generate', spanOptions);
     span.setStatus({ code: SpanStatusCode.OK });
     span.end();
     return span;
@@ -697,7 +886,7 @@ class AppTracer {
       spanOptions.parent = activeSpan.spanContext();
     }
 
-    const span = this.tracer.startSpan('filesystem_operation', spanOptions);
+    const span = this.tracer.startSpan('fs.operation', spanOptions);
     span.setStatus({ 
       code: details.success !== false ? SpanStatusCode.OK : SpanStatusCode.ERROR,
       message: details.errorMessage
@@ -710,10 +899,17 @@ class AppTracer {
    * Clean up any remaining active spans for a session
    */
   cleanup(sessionId) {
+    if (process.env.DEBUG_CHAT === '1') {
+      console.log(`[DEBUG] AppTracer: Cleaning up session ${sessionId}`);
+    }
+    
     // End any remaining active spans
     const keysToDelete = [];
     for (const [key, span] of this.activeSpans.entries()) {
       if (key.includes(sessionId)) {
+        if (process.env.DEBUG_CHAT === '1') {
+          console.log(`[DEBUG] AppTracer: Cleaning up active span ${key}`);
+        }
         span.setStatus({ code: SpanStatusCode.ERROR, message: 'Session cleanup' });
         span.end();
         keysToDelete.push(key);
@@ -721,12 +917,28 @@ class AppTracer {
     }
     keysToDelete.forEach(key => this.activeSpans.delete(key));
 
-    // End session span if still active
+    // Only clean up session span if it still exists (wasn't properly ended by endChatSession)
     const sessionSpan = this.sessionSpans.get(sessionId);
     if (sessionSpan) {
-      sessionSpan.setStatus({ code: SpanStatusCode.ERROR, message: 'Session cleanup' });
+      if (process.env.DEBUG_CHAT === '1') {
+        console.log(`[DEBUG] AppTracer: Cleaning up orphaned session span for ${sessionId}`);
+      }
+      sessionSpan.setStatus({ code: SpanStatusCode.ERROR, message: 'Session cleanup - orphaned span' });
       sessionSpan.end();
       this.sessionSpans.delete(sessionId);
+    }
+
+    // Clean up all session-related contexts (session, message processing, iterations, AI requests, tool executions)
+    const contextKeysToDelete = [];
+    for (const [key] of this.sessionContexts.entries()) {
+      if (key.includes(sessionId)) {
+        contextKeysToDelete.push(key);
+      }
+    }
+    contextKeysToDelete.forEach(key => this.sessionContexts.delete(key));
+    
+    if (process.env.DEBUG_CHAT === '1') {
+      console.log(`[DEBUG] AppTracer: Session cleanup completed for ${sessionId}, cleaned ${contextKeysToDelete.length} contexts`);
     }
   }
 }

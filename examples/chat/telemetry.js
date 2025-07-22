@@ -58,7 +58,17 @@ export class TelemetryConfig {
         }
         
         const fileExporter = new FileSpanExporter(this.filePath);
-        spanProcessors.push(new BatchSpanProcessor(fileExporter));
+        // CRITICAL FIX: Configure BatchSpanProcessor with shorter delays for better span export
+        spanProcessors.push(new BatchSpanProcessor(fileExporter, {
+          // The maximum queue size. After the size is reached spans are dropped.
+          maxQueueSize: 2048,
+          // The maximum batch size of every export. It must be smaller or equal to maxQueueSize.
+          maxExportBatchSize: 512,
+          // The interval between two consecutive exports
+          scheduledDelayMillis: 500, // Reduced from default 5000ms
+          // How long the export can run before it is cancelled
+          exportTimeoutMillis: 30000,
+        }));
         if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
           console.log(`[Telemetry] File exporter enabled, writing to: ${this.filePath}`);
         }
@@ -75,7 +85,13 @@ export class TelemetryConfig {
         const remoteExporter = new OTLPTraceExporter({
           url: this.remoteEndpoint,
         });
-        spanProcessors.push(new BatchSpanProcessor(remoteExporter));
+        // Configure BatchSpanProcessor with shorter delays for better span export
+        spanProcessors.push(new BatchSpanProcessor(remoteExporter, {
+          maxQueueSize: 2048,
+          maxExportBatchSize: 512,
+          scheduledDelayMillis: 500, // Reduced from default 5000ms
+          exportTimeoutMillis: 30000,
+        }));
         if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
           console.log(`[Telemetry] Remote exporter enabled, endpoint: ${this.remoteEndpoint}`);
         }
@@ -89,7 +105,13 @@ export class TelemetryConfig {
     // Add console exporter if enabled (useful for debugging)
     if (this.enableConsole) {
       const consoleExporter = new ConsoleSpanExporter();
-      spanProcessors.push(new BatchSpanProcessor(consoleExporter));
+      // Configure BatchSpanProcessor with shorter delays for better span export
+      spanProcessors.push(new BatchSpanProcessor(consoleExporter, {
+        maxQueueSize: 2048,
+        maxExportBatchSize: 512,
+        scheduledDelayMillis: 500, // Reduced from default 5000ms
+        exportTimeoutMillis: 30000,
+      }));
       if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
         console.log(`[Telemetry] Console exporter enabled`);
       }
@@ -169,6 +191,57 @@ export class TelemetryConfig {
         span.end();
       }
     };
+  }
+
+  /**
+   * Force flush all pending spans
+   */
+  async forceFlush() {
+    if (this.sdk) {
+      try {
+        // Get the active tracer provider
+        const tracerProvider = trace.getTracerProvider();
+        
+        if (tracerProvider && typeof tracerProvider.forceFlush === 'function') {
+          // Call forceFlush on the tracer provider
+          await tracerProvider.forceFlush();
+          
+          if (process.env.DEBUG_CHAT === '1') {
+            console.log('[Telemetry] TracerProvider flushed successfully');
+          }
+        }
+        
+        // Also try to access registered span processors directly for better control
+        if (tracerProvider._registeredSpanProcessors) {
+          const flushPromises = [];
+          
+          for (const processor of tracerProvider._registeredSpanProcessors) {
+            if (typeof processor.forceFlush === 'function') {
+              flushPromises.push(processor.forceFlush());
+            }
+          }
+          
+          if (flushPromises.length > 0) {
+            await Promise.all(flushPromises);
+            
+            if (process.env.DEBUG_CHAT === '1') {
+              console.log(`[Telemetry] Directly flushed ${flushPromises.length} span processors`);
+            }
+          }
+        }
+        
+        // Add a small delay to ensure file writes complete
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        if (process.env.DEBUG_CHAT === '1') {
+          console.log('[Telemetry] OpenTelemetry spans flushed successfully');
+        }
+      } catch (error) {
+        if (process.env.PROBE_NON_INTERACTIVE !== '1' || process.env.DEBUG_CHAT === '1') {
+          console.error(`[Telemetry] Failed to flush OpenTelemetry spans: ${error.message}`);
+        }
+      }
+    }
   }
 
   /**
