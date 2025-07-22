@@ -28,7 +28,7 @@
     "@ai-sdk/anthropic": "^1.2.0",
     "@ai-sdk/google": "^1.2.1",
     "@ai-sdk/openai": "^1.3.0",
-    "@buger/probe": "file:../../npm/buger-probe-1.0.0.tgz",
+    "@buger/probe": "*",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
     "@opentelemetry/resources": "^2.0.1",
