@@ -1,0 +1,12 @@
+<github_context type="issue" number="63">
+  <details><title><![CDATA[Image test]]></title><body><![CDATA[<img width="1078" height="1872" alt="Image" src="https://github.com/user-attachments/assets/6c1292af-3e0b-4f45-8ef9-609102dea5fb" />
+
+https://private-user-images.githubusercontent.com/221343105/467536716-0b9bb81b-8b8a-4b00-aae7-0d8d109e28ce.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTI3NjEwNTgsIm5iZiI6MTc1Mjc2MDc1OCwicGF0aCI6Ii8yMjEzNDMxMDUvNDY3NTM2NzE2LTBiOWJiODFiLThiOGEtNGIwMC1hYWU3LTBkOGQxMDllMjhjZS5wbmc_WC1BbXotQWxnb3JpdGhtPUFXUzQtSE1BQy1TSEEyNTYmWC1BbXotQ3JlZGVudGlhbD1BS0lBVkNPRFlMU0E1M1BRSzRaQSUyRjIwMjUwNzE3JTJGdXMtZWFzdC0xJTJGczMlMkZhd3M0X3JlcXVlc3QmWC1BbXotRGF0ZT0yMDI1MDcxN1QxMzU5MThaJlgtQW16LUV4cGlyZXM9MzAwJlgtQW16LVNpZ25hdHVyZT0xMzJjOWJlZGEzZmEyZjEyNWQxNDRkZDI5Y2RkNTdhZDk2ZWExMzZhY2RlYTI0M2M2MjlkMTEyYTQzYWE0ODY1JlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCJ9.VanGvZZNDqamBAjEBaCjsMJusej89OjHxwY8O2R72i4
+
+Probe - I want you to tell what you see on each image.]]></body></details>
+  
+  <comments><comment type="issue"><author>buger</author><timestamp>2025-07-21T08:41:45Z</timestamp><content><![CDATA[/probe - I want you to tell what you see on each image ?]]></content></comment><comment type="issue"><author>buger</author><timestamp>2025-07-22T15:42:14Z</timestamp><content><![CDATA[/probe - I want you to tell what you see on each image ?]]></content></comment></comments>
+  <user_request author="buger" timestamp="2025-07-22T15:42:14Z"><![CDATA[- I want you to tell what you see on each image ?]]></user_request>
+  </github_context>
+  
+  <instructions><![CDATA[You are an AI assistant analyzing a GitHub Issue...]]></instructions>

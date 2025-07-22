@@ -76,7 +76,8 @@ function extractImageUrls(message, debug = false) {
       // 1. GitHub private-user-images URLs (always images, regardless of extension)
       // 2. GitHub user-attachments/assets URLs (always images, regardless of extension)
       // 3. URLs with common image extensions (PNG, JPG, JPEG, WebP, GIF)
-      const imageUrlPattern = /https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s]+|[^\s]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s]*)?)/gi;
+      // Updated to stop at quotes, spaces, or common HTML/XML delimiters
+      const imageUrlPattern = /https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s"'<>]*)?)/gi;
       
       span.setAttributes({
         'message.length': message.length,
