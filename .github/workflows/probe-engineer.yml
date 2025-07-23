@@ -20,6 +20,7 @@ jobs:
       # Enable reviewdog suggestions instead of direct commits for better code review workflow
       # Suggestions allow reviewers to see proposed changes before they're applied
       allow_suggestions: true
+      allow_edit: true
       prompt: ./.prompts/engineer.md
       update_existing_comment: false
       update_comment_marker: "<!-- probe-bot -->"
