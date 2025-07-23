@@ -1,8 +1,6 @@
 name: Probe Engineer handler
 
 on:
-  pull_request:
-    types: [opened]
   issue_comment:
     types: [created]          
 
@@ -20,24 +18,6 @@ jobs:
       # Enable reviewdog suggestions instead of direct commits for better code review workflow
       # Suggestions allow reviewers to see proposed changes before they're applied
       allow_edit: true
-      prompt: ./.prompts/engineer.md
-      update_existing_comment: false
-      update_comment_marker: "<!-- probe-bot -->"
-      enable_tracing: true
-    secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
-      APP_ID: ${{ secrets.PROBE_APP_ID }}
-      APP_PRIVATE_KEY: ${{ secrets.PROBE_APP_PRIVATE_KEY }}
-      MAX_TOOL_ITERATIONS: "60"
-
-  trigger_probe_review:
-    uses: buger/probe/.github/workflows/probe.yml@main
-    with:
-      command_prefix: "/review" # Or '/ai', '/ask', etc.
-      # Enable reviewdog suggestions instead of direct commits for better code review workflow
-      # Suggestions allow reviewers to see proposed changes before they're applied
-      allow_suggestions: true
       prompt: ./.prompts/engineer.md
       update_existing_comment: false
       update_comment_marker: "<!-- probe-bot -->"
