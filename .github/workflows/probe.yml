@@ -927,13 +927,13 @@ jobs:
 
       # --- Setup Python and Install Aider (No token needed) ---
       - name: Set up Python and Install Aider
-        if: inputs.allow_edit
+        if: inputs.allow_edit || inputs.allow_suggestions
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
       - name: Install Aider
-        if: inputs.allow_edit
+        if: inputs.allow_edit || inputs.allow_suggestions
         run: |
           # (Script remains the same)
           echo "Installing aider for code editing capabilities..."
