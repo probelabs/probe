@@ -77,7 +77,7 @@ function MyComponent() {
     let expected_outputs = vec![
         (1, 1, 1), // initial blank line
         (2, 2, 2), // import statement
-        // BUG? (3, 2, 37), // blank line -> entire module
+        (3, 3, 3), // blank line should just be blank line
         (4, 4, 7), // comment + type ComplexObject
         (5, 5, 7), // type ComplexObject
         (6, 5, 7), // type ComplexObject
