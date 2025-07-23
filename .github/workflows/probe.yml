@@ -985,8 +985,8 @@ jobs:
           MODEL_NAME: ${{ secrets.MODEL_NAME }}
           FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
           # Aider/Edit Config
-          ALLOW_EDIT: ${{ inputs.allow_edit == 'true' && '1' || '0' }}
-          ALLOW_SUGGESTIONS: ${{ inputs.allow_suggestions == 'true' && '1' || '0' }}
+          ALLOW_EDIT: ${{ inputs.allow_edit && '1' || '0' }}
+          ALLOW_SUGGESTIONS: ${{ inputs.allow_suggestions && '1' || '0' }}
           # Pass determined GitHub token for potential use by tools/aider if needed
           GH_TOKEN: ${{ env.WORKFLOW_TOKEN }}
           MAX_TOOL_ITERATIONS: ${{ secrets.MAX_TOOL_ITERATIONS }}
