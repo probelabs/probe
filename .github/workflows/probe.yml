@@ -1309,9 +1309,14 @@ jobs:
             fi
           fi
 
+          # Check if response contains actual code suggestions before showing the template
           if [[ "${{ steps.handle_suggestions.outcome }}" == "success" && "${{ inputs.allow_suggestions }}" == "true" ]]; then
             if [[ "$CONTEXT_TYPE" == "pr" ]]; then
-              RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n---\n\n### 💡 Code Suggestions Available\n\n**AI-generated code suggestions have been added to this PR as review comments.** You can:\n\n- 📝 Review each suggestion in the \"Files changed\" tab\n- ✅ Accept suggestions by clicking \"Apply suggestion\" or \"Add suggestion to batch\"\n- ❌ Dismiss suggestions that don't apply\n- 🔄 Request modifications by replying to suggestion comments"
+              # Only show the template if the response contains patterns indicating code suggestions
+              # Look for common patterns like code blocks, diff markers, or specific suggestion language
+              if echo "$RESPONSE_CONTENT" | grep -qE '```|(\+\+\+|---|\@\@)|suggestion:|modify file|change file|update.*code|replace.*with'; then
+                RESPONSE_CONTENT="${RESPONSE_CONTENT}\n\n---\n\n### 💡 Code Suggestions Available\n\n**AI-generated code suggestions have been added to this PR as review comments.** You can:\n\n- 📝 Review each suggestion in the \"Files changed\" tab\n- ✅ Accept suggestions by clicking \"Apply suggestion\" or \"Add suggestion to batch\"\n- ❌ Dismiss suggestions that don't apply\n- 🔄 Request modifications by replying to suggestion comments"
+              fi
             fi
           elif [[ "${{ steps.handle_suggestions.outcome }}" == "failure" && "${{ inputs.allow_suggestions }}" == "true" ]]; then
             if [[ "$CONTEXT_TYPE" == "pr" ]]; then
@@ -1353,11 +1358,14 @@ jobs:
 
           echo "Final response body prepared. Length: ${#FINAL_BODY}"
 
+          # Convert \n escape sequences to actual newlines using printf
+          FINAL_BODY_WITH_NEWLINES=$(printf "%b" "$FINAL_BODY")
+
           # write to file for debugging
-          printf '%s' "$FINAL_BODY" > full_response.md
+          printf '%s' "$FINAL_BODY_WITH_NEWLINES" > full_response.md
 
           # **base‑64 encode** so GH will not think it contains a secret
-          ENCODED=$(printf '%s' "$FINAL_BODY" | base64 -w0)
+          ENCODED=$(printf '%s' "$FINAL_BODY_WITH_NEWLINES" | base64 -w0 2>/dev/null || printf '%s' "$FINAL_BODY_WITH_NEWLINES" | base64)
           echo "response_body_b64=$ENCODED" >> "$GITHUB_OUTPUT"
           echo "should_fail_job=$SHOULD_FAIL_JOB" >> "$GITHUB_OUTPUT"
 
