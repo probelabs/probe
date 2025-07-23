@@ -1094,7 +1094,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: probe-debug-files
+          name: probe-debug-files-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
           path: |
             error.log
             formatted_prompt.txt
@@ -1114,7 +1114,7 @@ jobs:
         if: always() && inputs.enable_tracing && inputs.tracing_url == ''
         uses: actions/upload-artifact@v4
         with:
-          name: probe-traces
+          name: probe-traces-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
           path: |
             probe-traces.jsonl
           if-no-files-found: ignore
