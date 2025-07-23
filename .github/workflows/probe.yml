@@ -182,14 +182,18 @@ jobs:
 
       - name: Set Context Variables
         id: set_context
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          EVENT_NAME="${{ github.event_name }}"
           echo "Event name: $EVENT_NAME"
           echo "skip=false" >> "$GITHUB_OUTPUT"   # Default; overridden if skipping
 
           if [[ "$EVENT_NAME" == "issue_comment" ]]; then
             # Filter out bot comments and those without the required prefix
-            if [[ "${{ github.event.comment.user.login }}" == *"[bot]"* ]] || [[ "${{ github.event.comment.body }}" != ${{ inputs.command_prefix }}* ]]; then
+            if [[ "${{ github.event.comment.user.login }}" == *"[bot]"* ]] || [[ "$COMMENT_BODY" != ${{ inputs.command_prefix }}* ]]; then
               echo "::notice::Skipping: Bot comment or missing prefix."
               echo "skip=true" >> "$GITHUB_OUTPUT"
               exit 0
@@ -198,18 +202,14 @@ jobs:
             echo "pr_issue_num=${{ github.event.issue.number }}"   >> "$GITHUB_OUTPUT"
             echo "comment_id=${{ github.event.comment.id }}"       >> "$GITHUB_OUTPUT"
 
-            USER_REQUEST="${{ github.event.comment.body }}"
-
             echo "user_request<<EOF" >> "$GITHUB_OUTPUT"
-            printf '%s\n' "$USER_REQUEST"       >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$COMMENT_BODY"       >> "$GITHUB_OUTPUT"
             echo "EOF"                          >> "$GITHUB_OUTPUT"
 
             echo "context_type=to_determine"    >> "$GITHUB_OUTPUT"
             echo "head_ref="                    >> "$GITHUB_OUTPUT"  # Determined later via API
 
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
-            PR_BODY="${{ github.event.pull_request.body }}"
-
             if [[ -z "$PR_BODY" ]]; then
               echo "::notice::PR body is empty – nothing for Probe AI to process, skipping."
               echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -227,8 +227,6 @@ jobs:
             echo "head_ref=${{ github.event.pull_request.head.ref }}" >> "$GITHUB_OUTPUT"
 
           elif [[ "$EVENT_NAME" == "issues" ]]; then
-            ISSUE_BODY="${{ github.event.issue.body }}"
-
             if [[ -z "$ISSUE_BODY" ]]; then
               echo "::notice::Issue body is empty – nothing for Probe AI to process, skipping."
               echo "skip=true" >> "$GITHUB_OUTPUT"
