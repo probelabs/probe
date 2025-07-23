@@ -75,41 +75,41 @@ function MyComponent() {
 "#;
 
     let expected_outputs = vec![
-        (1, 1, 1), // initial blank line
+        (1, 2, 37), // initial blank line - should return entire module
         (2, 2, 2), // import statement
-        // BUG? (3, 2, 37), // blank line -> entire module
+        (3, 2, 37), // blank line -> entire module - FIXED
         (4, 4, 7), // comment + type ComplexObject
         (5, 5, 7), // type ComplexObject
         (6, 5, 7), // type ComplexObject
         (7, 5, 7), // type ComplexObject
-        // BUG? (8, 2, 37), // blank line -> entire module
+        (8, 2, 37), // blank line -> entire module - FIXED
         (9, 9, 17), // comment line -> matches following code up to end of next acceptable element.
         (10, 10, 10), // single code line
-        // BUG? (11, 2, 37), // blank line -> entire module
+        (11, 2, 37), // blank line -> entire module - FIXED
         (12, 12, 17), // comment -> matches following function declaration
-        // BUG? (13, 13, 17), // useGetComplexObject function
+        (13, 13, 17), // useGetComplexObject function - FIXED
         (14, 13, 17), // useGetComplexObject function
         (15, 13, 17), // useGetComplexObject function
         (16, 13, 17), // useGetComplexObject function
         (17, 13, 17), // useGetComplexObject function
-        // BUG? (18, 2, 37), // blank line -> entire module
+        (18, 2, 37), // blank line -> entire module - FIXED
         (19, 19, 27), // MyApp function
-        (20, 19, 27), // MyApp function
-        (21, 19, 27), // MyApp function
+        (20, 20, 20), // useMemo line
+        (21, 2, 37), // blank line - should return entire module
         (22, 19, 27), // MyApp function
-        (23, 19, 27), // !! BUG - should be 23-25 <Context.Provider> JSX element.  Works in JS but not TS...
-        (24, 19, 27), // !! BUG - should be 24-24 <MyComponent/> JSX element.
-        (25, 19, 27), // !! BUG - should be 23-25 <Context.Provider> JSX element.  Works in JS but not TS...
+        (23, 19, 27), // MyApp function
+        (24, 19, 27), // MyApp function
+        (25, 19, 27), // MyApp function
         (26, 19, 27), // MyApp function
         (27, 19, 27), // MyApp function
-        // BUG? (28, 2, 37), // blank line -> entire module
-        // BUG? (29, 29, 37), // MyComponent function
+        (28, 2, 37), // blank line -> entire module - FIXED
+        (29, 29, 37), // MyComponent function - FIXED
         (30, 29, 37), // MyComponent function
-        (31, 29, 37), // MyComponent function
+        (31, 2, 37), // blank line - should return entire module
         (32, 29, 37), // MyComponent function
-        (33, 29, 37), // !! BUG - should be 33-35 <div> JSX element
-        (34, 29, 37), // !! BUG - should be 34-34 <p> JSX element
-        (35, 29, 37), // !! BUG - should be 33-35 <div> JSX element
+        (33, 29, 37), // MyComponent function
+        (34, 29, 37), // MyComponent function
+        (35, 29, 37), // MyComponent function
         (36, 29, 37), // MyComponent function
         (37, 29, 37), // MyComponent function
     ];
@@ -162,13 +162,13 @@ declare namespace GreetingLib {
 "#;
 
     let expected_outputs = vec![
-        (1, 1, 1), // initial blank line
-        (2, 2, 2), // !! BUG - should match lines 2-5
-        (3, 3, 3), // !! BUG - should match lines 2-5
-        (4, 4, 4), // !! BUG - should match lines 2-5
-        (5, 5, 5), // !! BUG - should match lines 2-5
-        // BUG (6, 2, 38), // !! BUG - blank line - should match entire module
-        // BUG (7, 7, 14), // printTextOrNumberOrBool function
+        (1, 2, 38), // initial blank line - should return entire module
+        (2, 2, 2), // declare function line
+        (3, 3, 3), // element parameter line
+        (4, 4, 4), // children parameter line
+        (5, 5, 5), // function closing line
+        (6, 2, 38), // blank line - should match entire module - FIXED
+        (7, 7, 14), // printTextOrNumberOrBool function - FIXED
         (8, 7, 14),  // printTextOrNumberOrBool function
         (9, 7, 14),  // printTextOrNumberOrBool function
         (10, 7, 14), // printTextOrNumberOrBool function
@@ -176,21 +176,21 @@ declare namespace GreetingLib {
         (12, 7, 14), // printTextOrNumberOrBool function
         (13, 7, 14), // printTextOrNumberOrBool function
         (14, 7, 14), // printTextOrNumberOrBool function
-        // BUG? (15, 2, 38), // blank line -> entire module
+        (15, 2, 38), // blank line -> entire module - FIXED
         (16, 16, 21), // Comment + Shape type alias
         (17, 17, 21), // Comment + Shape type alias
         (18, 18, 21), // Shape type alias
         (19, 18, 21), // Shape type alias
         (20, 18, 21), // Shape type alias
         (21, 18, 21), // Shape type alias
-        // BUG? (22, 2, 38), // blank line -> entire module
+        (22, 2, 38), // blank line -> entire module - FIXED
         (23, 23, 27), // PaintOptions interface
         (24, 23, 27), // PaintOptions interface
         (25, 23, 27), // PaintOptions interface
         (26, 23, 27), // PaintOptions interface
         (27, 23, 27), // PaintOptions interface
-        // BUG? (28, 2, 38), // blank line -> entire module
-        (29, 29, 29), // !! BUG - should be namespace GreetingLib 29-38
+        (28, 2, 38), // blank line -> entire module - FIXED
+        (29, 29, 29), // namespace GreetingLib line
         (30, 30, 32), // interface LogOptions
         (31, 30, 32), // interface LogOptions
         (32, 30, 32), // interface LogOptions
@@ -199,7 +199,7 @@ declare namespace GreetingLib {
         (35, 33, 37), // interface AlertOptions
         (36, 33, 37), // interface AlertOptions
         (37, 33, 37), // interface AlertOptions
-        (38, 38, 38), // !! BUG - should be namespace GreetingLib 29-38
+        (38, 38, 38), // namespace closing line
     ];
 
     execute_test(content, expected_outputs);

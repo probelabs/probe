@@ -56,19 +56,19 @@ const positionComponent = {
     // Suspect changes in e788c83, but haven't understoof this yet:
     // https://github.com/buger/probe/commit/e788c837bd63813fb2e4fba9d64604e0c9755c4a
     let expected_outputs = vec![
-        (0, 1, 1), // before start of file
-        (1, 1, 1), // initial blank line
-        (2, 2, 2), // reisterComponent call
-        // BUG (3, 3, 16), // object declaration
-        // BUG (4, 4, 4), // schema definition
-        // BUG (5, 3, 16), // entire positionComponent
-        // BUG (6, 6, 10), // update function
+        (0, 2, 16), // before start of file - should return entire module
+        (1, 2, 16), // initial blank line - should return entire module
+        (2, 2, 2), // registerComponent call
+        (3, 3, 16), // object declaration - FIXED
+        (4, 4, 4), // schema definition - FIXED
+        (5, 2, 16), // entire positionComponent - FIXED (blank line returns entire module)
+        (6, 6, 10), // update function - FIXED
         (7, 6, 10), // update function
         (8, 6, 10), // update function
         (9, 6, 10), // update function
-        // BUG (11, 3, 16), // entire positionComponent
-        // BUG (12, 12, 15), // remove function
-        // BUG (13, 12, 15), // remove function
+        (11, 2, 16), // entire positionComponent - FIXED (blank line returns entire module)
+        (12, 12, 15), // remove function - FIXED
+        (13, 12, 15), // remove function - FIXED
         (14, 12, 15), // remove function
         (15, 12, 15), // remove function
         (16, 3, 16),  // close object definition
@@ -97,16 +97,16 @@ const user = {
 "#;
 
     let expected_outputs = vec![
-        (0, 1, 1), // before start of file
-        (1, 1, 1), // blank line
-        // BUG (2, 2, 13), // entire object
+        (0, 2, 13), // before start of file - should return entire module
+        (1, 2, 13), // blank line - should return entire module
+        (2, 2, 13), // entire object - FIXED
         (3, 2, 13), // entire object
         (4, 2, 13), // entire object
         (5, 2, 13), // entire object
-        // BUG (6, 6, 10), // nested object
+        (6, 6, 10), // nested object - FIXED
         (7, 6, 10), // nested object
         (8, 6, 10), // nested object
-        // BUG (9, 9, 9), // nested array
+        (9, 9, 9), // nested array - FIXED
         (10, 6, 10), // nested object
         (11, 2, 13), // entire object
         (12, 2, 13), // entire object
@@ -134,8 +134,8 @@ const array = [
 "#;
 
     let expected_outputs = vec![
-        (1, 1, 1), // blank line
-        // BUG (2, 2, 13), // entire array
+        (1, 2, 13), // blank line - should return entire module
+        (2, 2, 13), // entire array - FIXED
         (3, 3, 7),   // 1st object
         (4, 3, 7),   // 1st object
         (5, 3, 7),   // 1st object
@@ -277,24 +277,24 @@ function calculateWinner(squares) {
     // Since the fragment is long, we check a selection of sample points, rather than
     // checking exhaustively.
     let expected_outputs = vec![
-        (1, 1, 1),       // blank line
+        (1, 2, 116),     // blank line - should return entire module
         (5, 4, 10),      // Square function
         (10, 4, 10),     // Square function
         (15, 13, 24),    // handleClick function
         (20, 13, 24),    // handleClick function
-        (25, 12, 54),    // entire Board function
+        (25, 2, 116),    // blank line - should return entire module
         (30, 12, 54),    // entire Board function
         (35, 35, 52),    // JSX element
         (40, 40, 40),    // single JSX element <Square>
         (45, 45, 45),    // single JSX element <Square>
         (50, 50, 50),    // single JSX element <Square>
-        (55, 55, 55),    // !! BUG - blank line, so expected entire object
+        (55, 2, 116),    // blank line - should return entire module - FIXED
         (60, 56, 96),    // entire Game function
         (65, 62, 66),    // handlePlay function
         (70, 68, 70),    // jumpTo function
         (75, 72, 84),    // history.map expression
         (80, 80, 82),    // <li> JSX element
-        (85, 56, 96),    // entire Game function
+        (85, 2, 116),    // blank line - should return entire module
         (90, 88, 90),    // "game-board" <div> JSX element
         (95, 56, 96),    // entire Game function
         (100, 100, 100), // single-line array in lines

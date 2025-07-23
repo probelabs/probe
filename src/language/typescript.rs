@@ -43,7 +43,6 @@ impl LanguageImpl for TypeScriptLanguage {
                 | "method_definition"
                 | "class_declaration"
                 | "arrow_function"
-                | "function"
                 | "export_statement"
                 | "jsx_element"
                 | "jsx_self_closing_element"

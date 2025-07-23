@@ -27,6 +27,7 @@ fn should_update_line_map<'a>(
     is_comment: bool,
     context_node: Option<Node<'a>>,
     specificity: usize,
+    language_impl: &dyn LanguageImpl,
 ) -> bool {
     match &line_map[line] {
         None => true, // No existing node, always update
@@ -51,7 +52,19 @@ fn should_update_line_map<'a>(
                 }
             }
 
-            // Otherwise use specificity to decide
+            // Check if nodes are acceptable parents
+            let current_is_acceptable = language_impl.is_acceptable_parent(&current.node);
+            let new_is_acceptable = language_impl.is_acceptable_parent(&node);
+
+            // Prefer acceptable parent nodes over non-acceptable ones
+            if new_is_acceptable && !current_is_acceptable {
+                return true; // Replace non-acceptable with acceptable
+            }
+            if !new_is_acceptable && current_is_acceptable {
+                return false; // Keep acceptable over non-acceptable
+            }
+
+            // If both are acceptable or both are non-acceptable, use specificity to decide
             specificity < current.specificity
         }
     }
@@ -372,9 +385,10 @@ fn process_node<'a>(
             break;
         }
 
+
         // Determine if we should update the line map for this line
         let should_update =
-            should_update_line_map(line_map, line, node, is_comment, context_node, specificity);
+            should_update_line_map(line_map, line, node, is_comment, context_node, specificity, language_impl);
 
         if should_update {
             line_map[line] = Some(NodeInfo {
@@ -497,6 +511,44 @@ pub fn parse_file_for_code_blocks(
         if line_idx >= line_map.len() {
             if debug_mode {
                 println!("DEBUG: Line {} is out of bounds", line);
+            }
+            continue;
+        }
+
+        // Check if this line is blank/whitespace-only first
+        let line_content = content.lines().nth(line_idx).unwrap_or("");
+        if line_content.trim().is_empty() {
+            // This is a blank line, return the entire module/program context
+            let root_start_pos = root_node.start_position();
+            let root_end_pos = root_node.end_position();
+            let root_key = (root_start_pos.row, root_end_pos.row);
+            
+            // Skip if we've already processed the root node
+            if !seen_nodes.contains(&root_key) {
+                seen_nodes.insert(root_key);
+                
+                code_blocks.push(CodeBlock {
+                    start_row: root_start_pos.row,
+                    end_row: root_end_pos.row,
+                    start_byte: root_node.start_byte(),
+                    end_byte: root_node.end_byte(),
+                    node_type: root_node.kind().to_string(),
+                    parent_node_type: None,
+                    parent_start_row: None,
+                    parent_end_row: None,
+                });
+                
+                if debug_mode {
+                    println!(
+                        "DEBUG: Added root node for blank line {}: type='{}', lines={}-{}",
+                        line,
+                        root_node.kind(),
+                        root_start_pos.row + 1,
+                        root_end_pos.row + 1
+                    );
+                }
+            } else if debug_mode {
+                println!("DEBUG: Root node already processed for blank line {}", line);
             }
             continue;
         }
@@ -797,8 +849,50 @@ pub fn parse_file_for_code_blocks(
                     parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
                 });
             }
-        } else if debug_mode {
-            println!("DEBUG: No node found for line {}", line);
+        } else {
+            // Check if this line is blank/whitespace-only
+            let line_idx = line - 1;
+            if line_idx < content.lines().count() {
+                let line_content = content.lines().nth(line_idx).unwrap_or("");
+                if line_content.trim().is_empty() {
+                    // This is a blank line, return the entire module/program context
+                    let root_start_pos = root_node.start_position();
+                    let root_end_pos = root_node.end_position();
+                    let root_key = (root_start_pos.row, root_end_pos.row);
+                    
+                    // Skip if we've already processed the root node
+                    if !seen_nodes.contains(&root_key) {
+                        seen_nodes.insert(root_key);
+                        
+                        code_blocks.push(CodeBlock {
+                            start_row: root_start_pos.row,
+                            end_row: root_end_pos.row,
+                            start_byte: root_node.start_byte(),
+                            end_byte: root_node.end_byte(),
+                            node_type: root_node.kind().to_string(),
+                            parent_node_type: None,
+                            parent_start_row: None,
+                            parent_end_row: None,
+                        });
+                        
+                        if debug_mode {
+                            println!(
+                                "DEBUG: Added root node for blank line {}: type='{}', lines={}-{}",
+                                line,
+                                root_node.kind(),
+                                root_start_pos.row + 1,
+                                root_end_pos.row + 1
+                            );
+                        }
+                    } else if debug_mode {
+                        println!("DEBUG: Root node already processed for blank line {}", line);
+                    }
+                } else if debug_mode {
+                    println!("DEBUG: No node found for non-blank line {}", line);
+                }
+            } else if debug_mode {
+                println!("DEBUG: Line {} is out of bounds", line);
+            }
         }
     }
 
