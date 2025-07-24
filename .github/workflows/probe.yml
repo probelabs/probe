@@ -1245,28 +1245,16 @@ jobs:
           fi
           echo "::endgroup::"
 
-      # ---------- Handle Suggestions with reviewdog ---
-      # This step uses reviewdog to create code suggestions as PR review comments
+      # ---------- Handle Suggestions with suggest-changes ---
+      # This step uses suggest-changes to create code suggestions as PR review comments
       # instead of directly modifying files. Users can review and accept/reject suggestions.
-      - name: Handle Suggestions with reviewdog
+      - name: Handle Suggestions with suggest-changes
         id: handle_suggestions
         if: inputs.allow_suggestions && steps.probe.outcome == 'success' && env.FINAL_CONTEXT_TYPE == 'pr'
-        env:
-          CI_PULL_REQUEST: ${{ env.ISSUE_OR_PR_NUMBER }}
-          CI_COMMIT: ${{ env.HEAD_SHA }}
-          CI_REPO_OWNER: ${{ github.repository_owner }}
-          CI_REPO_NAME: ${{ github.event.repository.name }}
-          CI_BRANCH: ${{ env.HEAD_REF_NAME }}
-          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        uses: reviewdog/action-suggester@v1.21.0
+        uses: parkerbxyz/suggest-changes@v1
         with:
-          github_token: ${{ env.WORKFLOW_TOKEN }}
-          tool_name: 'Probe AI Code Suggestions'  # More descriptive name for better UX
-          level: 'warning'                        # Changed from 'info' to 'warning' for better visibility
-          filter_mode: 'added'                    # Only suggest changes for added/modified lines
-          fail_level: 'none'                      # Don't fail the workflow on suggestions
-          fail_on_error: 'false'                  # Don't fail if reviewdog encounters errors
-          cleanup: 'true'                         # Clean up temporary files after processing
+          comment: 'Please commit the suggested changes from Probe AI.'
+          event: 'REQUEST_CHANGES'
 
       # ---------- Read Response or Error and Format Output (fixed) ---
       - name: Read Response or Error and Format Output

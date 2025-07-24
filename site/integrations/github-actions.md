@@ -88,7 +88,7 @@ jobs:
       # Define the command prefix
       command_prefix: "/engineer" # Specific prefix for this persona
       # --- Enable Code Modifications ---
-      allow_suggestions: true # Enable suggestions via reviewdog (recommended for PR contexts)
+      allow_suggestions: true # Enable suggestions via suggest-changes (recommended for PR contexts)
       # allow_edit: true # Alternative: enable direct commits
       # --- Set AI Persona ---
       prompt: engineer # Use the 'engineer' predefined prompt
