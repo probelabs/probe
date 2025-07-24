@@ -1257,6 +1257,7 @@ jobs:
           CI_REPO_OWNER: ${{ github.repository_owner }}
           CI_REPO_NAME: ${{ github.event.repository.name }}
           CI_BRANCH: ${{ env.HEAD_REF_NAME }}
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         uses: reviewdog/action-suggester@v1.21.0
         with:
           github_token: ${{ env.WORKFLOW_TOKEN }}
@@ -1265,7 +1266,6 @@ jobs:
           filter_mode: 'added'                    # Only suggest changes for added/modified lines
           fail_level: 'none'                      # Don't fail the workflow on suggestions
           fail_on_error: 'false'                  # Don't fail if reviewdog encounters errors
-          reviewdog_flags: '--reporter=github-pr-review'  # Post as PR review comments
           cleanup: 'true'                         # Clean up temporary files after processing
 
       # ---------- Read Response or Error and Format Output (fixed) ---
