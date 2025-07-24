@@ -1251,7 +1251,7 @@ jobs:
       - name: Handle Suggestions with suggest-changes
         id: handle_suggestions
         if: inputs.allow_suggestions && steps.probe.outcome == 'success' && env.FINAL_CONTEXT_TYPE == 'pr'
-        uses: parkerbxyz/suggest-changes@v1
+        uses: buger/suggest-changes@v1
         with:
           comment: 'Please commit the suggested changes from Probe AI.'
           event: 'REQUEST_CHANGES'
