@@ -1251,6 +1251,12 @@ jobs:
       - name: Handle Suggestions with reviewdog
         id: handle_suggestions
         if: inputs.allow_suggestions && steps.probe.outcome == 'success' && env.FINAL_CONTEXT_TYPE == 'pr'
+        env:
+          CI_PULL_REQUEST: ${{ env.ISSUE_OR_PR_NUMBER }}
+          CI_COMMIT: ${{ env.HEAD_SHA }}
+          CI_REPO_OWNER: ${{ github.repository_owner }}
+          CI_REPO_NAME: ${{ github.event.repository.name }}
+          CI_BRANCH: ${{ env.HEAD_REF_NAME }}
         uses: reviewdog/action-suggester@v1.21.0
         with:
           github_token: ${{ env.WORKFLOW_TOKEN }}
