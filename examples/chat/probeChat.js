@@ -1392,6 +1392,9 @@ When troubleshooting:
       };
 
     } catch (error) {
+      // Check if this is a critical API error that should cause process exit
+      const isCriticalApiError = this._isCriticalApiError(error);
+      
       // Record the top-level processing error
       if (this.cancelled || (error.message && error.message.includes('cancelled'))) {
         appTracer.recordSessionCancellation(sessionId, 'processing_cancelled', {
@@ -1401,11 +1404,11 @@ When troubleshooting:
       } else {
         // Record as a general processing error
         appTracer.recordAiModelError(sessionId, currentIteration || 0, {
-          category: 'processing_error',
+          category: isCriticalApiError ? 'critical_api_error' : 'processing_error',
           message: error.message,
           model: this.model,
           provider: this.apiType,
-          statusCode: 0,
+          statusCode: error.statusCode || 0,
           retryAttempt: 0
         });
       }
@@ -1432,6 +1435,12 @@ When troubleshooting:
       if (this.cancelled || (error.message && error.message.includes('cancelled'))) {
         return { response: "Request cancelled.", tokenUsage: updatedTokenUsage };
       }
+      
+      // Re-throw critical API errors so the process exits with code 1
+      if (isCriticalApiError) {
+        throw error;
+      }
+      
       return {
         response: `Error during chat processing: ${error.message || 'An unexpected error occurred.'}`,
         tokenUsage: updatedTokenUsage
@@ -1441,6 +1450,47 @@ When troubleshooting:
     }
   }
 
+  /**
+   * Check if an error is a critical API error that should cause process exit
+   * @param {Error} error - The error to check
+   * @returns {boolean} - True if this is a critical API error
+   * @private
+   */
+  _isCriticalApiError(error) {
+    // Check for AI SDK API call errors
+    if (error[Symbol.for('vercel.ai.error.AI_APICallError')]) {
+      const statusCode = error.statusCode;
+      const errorMessage = error.message?.toLowerCase() || '';
+      
+      // Critical HTTP status codes that indicate configuration issues
+      if (statusCode === 401 || statusCode === 403) {
+        return true; // Unauthorized/Forbidden - bad API key
+      }
+      if (statusCode === 404) {
+        return true; // Not Found - wrong URL or model not found
+      }
+      if (statusCode >= 500 && statusCode < 600) {
+        return false; // Server errors - could be temporary, don't exit
+      }
+    }
+    
+    // Check for specific error messages that indicate configuration issues
+    const errorMessage = error.message?.toLowerCase() || '';
+    if (errorMessage.includes('not found')) {
+      return true; // API endpoint not found
+    }
+    if (errorMessage.includes('unauthorized') || errorMessage.includes('invalid api key')) {
+      return true; // Authentication issues
+    }
+    if (errorMessage.includes('forbidden') || errorMessage.includes('access denied')) {
+      return true; // Permission issues
+    }
+    if (errorMessage.includes('empty response from ai model')) {
+      return true; // Indicates API connection/configuration issue
+    }
+    
+    return false; // Other errors are not critical
+  }
 
   /**
    * Get the current token usage summary
