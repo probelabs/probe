@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🔧 Improvements
 
 #### AI Chat Enhancements
+- **Chat History & Session Persistence**: Full session persistence with history dropdown navigation - see [Web Interface documentation](./web-interface.md#chat-history)
+- **URL-based Session Routing**: Share and bookmark chat sessions with unique URLs (`/chat/session-id`)
+- **Session Storage**: Automatic session storage to `~/.probe/sessions/` directory with JSON-based persistence
+- **History Navigation**: Interactive history dropdown with session previews and metadata
+- **Enhanced UI**: Always-visible header with clickable logo and improved navigation
 - **Configurable Iterations**: `MAX_TOOL_ITERATIONS` environment variable support - see [AI Chat configuration](./ai-chat.md#configuration)
 - **Enhanced Tool Support**: New file listing and search tools
 - **Better Session Management**: Improved chat session handling and token tracking
