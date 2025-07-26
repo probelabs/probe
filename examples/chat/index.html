@@ -39,6 +39,7 @@
 		.header {
 			padding: 10px 0;
 			border-bottom: 1px solid #eee;
+			display: block; /* Ensure header is visible by default */
 		}
 
 		.header-container {
@@ -56,6 +57,16 @@
 			height: 30px;
 			margin-right: 10px;
 		}
+		
+		.header-left a {
+			text-decoration: none;
+			display: inline-block;
+		}
+		
+		.header-left a:hover .header-logo {
+			opacity: 0.8;
+			transition: opacity 0.2s ease;
+		}
 
 		.new-chat-link {
 			font-size: 15px;
@@ -72,6 +83,130 @@
 		.new-chat-link:hover {
 			background-color: #f5f5f5;
 			border-color: #ccc;
+		}
+
+		/* History dropdown styles */
+		.history-dropdown {
+			position: relative;
+			display: inline-block;
+			margin-right: 5px;
+		}
+
+		.history-button {
+			font-size: 15px;
+			color: #555;
+			background: none;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			padding: 5px 10px;
+			cursor: pointer;
+			display: flex;
+			align-items: center;
+			gap: 5px;
+			font-weight: 500;
+			transition: all 0.2s ease;
+		}
+
+		.history-button:hover {
+			background-color: #f5f5f5;
+			border-color: #ccc;
+		}
+
+		.history-button svg {
+			width: 16px;
+			height: 16px;
+		}
+
+		.history-dropdown-menu {
+			position: absolute;
+			top: 100%;
+			left: 0;
+			background: white;
+			border: 1px solid #ddd;
+			border-radius: 6px;
+			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+			z-index: 1000;
+			min-width: 320px;
+			max-width: 400px;
+			max-height: 400px;
+			overflow-y: auto;
+			display: none;
+			margin-top: 2px;
+		}
+
+		.history-dropdown-menu.show {
+			display: block;
+		}
+
+		.history-dropdown-header {
+			padding: 12px 16px 8px;
+			font-size: 14px;
+			font-weight: 600;
+			color: #333;
+			border-bottom: 1px solid #eee;
+		}
+
+		.history-loading {
+			padding: 16px;
+			text-align: center;
+			color: #666;
+			font-size: 14px;
+		}
+
+		.history-empty {
+			padding: 16px;
+			text-align: center;
+			color: #666;
+			font-size: 14px;
+		}
+
+		.history-list {
+			padding: 8px 0;
+		}
+
+		.history-item {
+			padding: 12px 16px;
+			cursor: pointer;
+			border-bottom: 1px solid #f5f5f5;
+			transition: background-color 0.2s ease;
+		}
+
+		.history-item:last-child {
+			border-bottom: none;
+		}
+
+		.history-item:hover {
+			background-color: #f8f9fa;
+		}
+
+		.history-item-preview {
+			font-size: 14px;
+			color: #333;
+			margin-bottom: 4px;
+			line-height: 1.4;
+			display: -webkit-box;
+			-webkit-line-clamp: 2;
+			-webkit-box-orient: vertical;
+			overflow: hidden;
+		}
+
+		.history-item-meta {
+			font-size: 12px;
+			color: #666;
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+		}
+
+		.history-item-time {
+			font-size: 11px;
+		}
+
+		.history-item-count {
+			font-size: 11px;
+			background: #e9ecef;
+			padding: 2px 6px;
+			border-radius: 10px;
 		}
 
 		#messages {
@@ -951,7 +1086,24 @@
 		<div class="header">
 			<div class="header-container">
 				<div class="header-left">
-					<img src="logo.png" alt="Probe Logo" class="header-logo">
+					<a href="/" title="Go to Home Page">
+						<img src="/logo.png" alt="Probe Logo" class="header-logo">
+					</a>
+					<div class="history-dropdown">
+						<button id="history-button" class="history-button" title="Chat History">
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+								<path d="M12 1v6l4-4"></path>
+								<path d="M21 12c0 5-4 9-9 9s-9-4-9-9 4-9 9-9c2.5 0 4.8 1 6.5 2.8"></path>
+							</svg>
+							History
+						</button>
+						<div id="history-dropdown-menu" class="history-dropdown-menu">
+							<div class="history-dropdown-header">Recent Chats</div>
+							<div id="history-loading" class="history-loading">Loading...</div>
+							<div id="history-list" class="history-list"></div>
+							<div id="history-empty" class="history-empty" style="display: none;">No recent chats</div>
+						</div>
+					</div>
 					<a href="#" class="new-chat-link">New chat</a>
 				</div>
 				<div id="api-settings">
@@ -962,7 +1114,7 @@
 		</div>
 
 		<div id="empty-state-logo" class="centered-logo-container">
-			<h1><img src="logo.png" alt="Probe Logo"><a href="https://probeai.dev/"
+			<h1><img src="/logo.png" alt="Probe Logo"><a href="https://probeai.dev/"
 					style="color: inherit; text-decoration: none;">Probe </a>&nbsp;- AI-Native Code Understanding</h1>
 		</div>
 
@@ -1376,9 +1528,21 @@
 			// Show dialog
 			dialog.classList.add('active');
 		}
-		// Generate a new session ID on every page load, store only in memory
-		let sessionId = crypto.randomUUID();
-		console.log(`Initialized new session with ID: ${sessionId}`);
+		// Initialize session ID - either from URL or generate new one
+		let sessionId;
+		
+		// Check if session ID is provided via URL (from server-side injection)
+		const sessionIdFromUrl = document.body.getAttribute('data-session-id');
+		if (sessionIdFromUrl) {
+			sessionId = sessionIdFromUrl;
+			console.log(`Using session ID from URL: ${sessionId}`);
+			// Restore session history for existing sessions
+			restoreSessionHistory(sessionId);
+		} else {
+			// Generate new session ID for root path visits
+			sessionId = crypto.randomUUID();
+			console.log(`Generated new session ID: ${sessionId}`);
+		}
 
 		// Make session ID available to other scripts
 		// We use both direct property assignment and event dispatch for compatibility
@@ -1389,6 +1553,435 @@
 		window.dispatchEvent(new MessageEvent('message', {
 			data: { sessionId: sessionId }
 		}));
+
+		// Helper function to extract content from XML-wrapped messages
+		function extractContentFromXML(content) {
+			// Handle different XML patterns used by the assistant
+			const patterns = [
+				/<task>([\s\S]*?)<\/task>/,
+				/<attempt_completion>\s*<result>([\s\S]*?)<\/result>\s*<\/attempt_completion>/,
+				/<result>([\s\S]*?)<\/result>/
+			];
+			
+			for (const pattern of patterns) {
+				const match = content.match(pattern);
+				if (match) {
+					return match[1].trim();
+				}
+			}
+			
+			// Remove all internal reasoning and tool call XML tags
+			let cleanContent = content;
+			
+			// Remove thinking tags (internal reasoning) - these are never shown to users
+			cleanContent = cleanContent.replace(/<thinking>[\s\S]*?<\/thinking>/gs, '');
+			
+			// Remove all tool calls - these are rendered separately as tool call boxes
+			cleanContent = cleanContent.replace(/<search>\s*<query>.*?<\/query>\s*(?:<path>.*?<\/path>)?\s*(?:<allow_tests>.*?<\/allow_tests>)?\s*<\/search>/gs, '');
+			cleanContent = cleanContent.replace(/<extract>\s*<file_path>.*?<\/file_path>\s*(?:<line>.*?<\/line>)?\s*(?:<end_line>.*?<\/end_line>)?\s*<\/extract>/gs, '');
+			cleanContent = cleanContent.replace(/<query>\s*<pattern>.*?<\/pattern>\s*(?:<path>.*?<\/path>)?\s*(?:<language>.*?<\/language>)?\s*<\/query>/gs, '');
+			cleanContent = cleanContent.replace(/<listFiles>\s*<directory>.*?<\/directory>\s*(?:<pattern>.*?<\/pattern>)?\s*<\/listFiles>/gs, '');
+			cleanContent = cleanContent.replace(/<searchFiles>\s*<pattern>.*?<\/pattern>\s*(?:<directory>.*?<\/directory>)?\s*<\/searchFiles>/gs, '');
+			
+			// Clean up extra whitespace and empty lines
+			cleanContent = cleanContent.replace(/\n\s*\n\s*\n/g, '\n\n').replace(/^\s+|\s+$/g, '');
+			
+			// If after cleaning there's no meaningful content, return empty string
+			if (!cleanContent || cleanContent.trim().length < 3) {
+				return '';
+			}
+			
+			return cleanContent;
+		}
+
+		// Function to add a user message to the chat display
+		function addUserMessage(content, images = []) {
+			const userMsgDiv = document.createElement('div');
+			userMsgDiv.className = 'user-message markdown-content';
+			
+			// Extract content from XML if wrapped
+			const cleanContent = extractContentFromXML(content);
+			
+			// Render the text message
+			userMsgDiv.innerHTML = renderMarkdown(cleanContent);
+			
+			// Handle images if present
+			if (images && images.length > 0) {
+				images.forEach(imageData => {
+					const img = document.createElement('img');
+					img.src = imageData.url || imageData;
+					img.style.maxWidth = '100%';
+					img.style.marginTop = '10px';
+					userMsgDiv.appendChild(img);
+				});
+			}
+			
+			messagesDiv.appendChild(userMsgDiv);
+			
+			// Apply syntax highlighting to code blocks
+			userMsgDiv.querySelectorAll('pre code').forEach((block) => {
+				hljs.highlightElement(block);
+			});
+		}
+
+		// Function to parse and extract tool calls from assistant message content
+		function parseToolCallsFromContent(content) {
+			const toolCalls = [];
+			
+			// Pattern to match actual tool call formats that are sent via SSE
+			// These are the tool calls that users see in real-time, not internal reasoning
+			const toolPatterns = [
+				{ name: 'search', pattern: /<search>\s*<query>(.*?)<\/query>\s*(?:<path>(.*?)<\/path>)?\s*(?:<allow_tests>(.*?)<\/allow_tests>)?\s*<\/search>/s },
+				{ name: 'extract', pattern: /<extract>\s*<file_path>(.*?)<\/file_path>\s*(?:<line>(.*?)<\/line>)?\s*(?:<end_line>(.*?)<\/end_line>)?\s*<\/extract>/s },
+				{ name: 'query', pattern: /<query>\s*<pattern>(.*?)<\/pattern>\s*(?:<path>(.*?)<\/path>)?\s*(?:<language>(.*?)<\/language>)?\s*<\/query>/s },
+				{ name: 'listFiles', pattern: /<listFiles>\s*<directory>(.*?)<\/directory>\s*(?:<pattern>(.*?)<\/pattern>)?\s*<\/listFiles>/s },
+				{ name: 'searchFiles', pattern: /<searchFiles>\s*<pattern>(.*?)<\/pattern>\s*(?:<directory>(.*?)<\/directory>)?\s*<\/searchFiles>/s },
+			];
+			
+			toolPatterns.forEach(({ name, pattern }) => {
+				const matches = content.matchAll(new RegExp(pattern.source, pattern.flags + 'g'));
+				for (const match of matches) {
+					const toolCall = {
+						name: name,
+						timestamp: new Date().toISOString(),
+						status: 'completed',
+						args: {}
+					};
+					
+					// Map captured groups to appropriate argument names
+					if (name === 'search') {
+						toolCall.args.query = match[1]?.trim() || '';
+						toolCall.args.path = match[2]?.trim() || '.';
+						toolCall.args.allow_tests = match[3]?.trim() === 'true';
+					} else if (name === 'extract') {
+						toolCall.args.file_path = match[1]?.trim() || '';
+						toolCall.args.line = match[2] ? parseInt(match[2].trim()) : undefined;
+						toolCall.args.end_line = match[3] ? parseInt(match[3].trim()) : undefined;
+					} else if (name === 'query') {
+						toolCall.args.pattern = match[1]?.trim() || '';
+						toolCall.args.path = match[2]?.trim() || '.';
+						toolCall.args.language = match[3]?.trim() || '';
+					} else if (name === 'listFiles') {
+						toolCall.args.directory = match[1]?.trim() || '.';
+						toolCall.args.pattern = match[2]?.trim() || '';
+					} else if (name === 'searchFiles') {
+						toolCall.args.pattern = match[1]?.trim() || '';
+						toolCall.args.directory = match[2]?.trim() || '.';
+					}
+					
+					toolCalls.push(toolCall);
+				}
+			});
+			
+			return toolCalls;
+		}
+
+		// Function to add an assistant message to the chat display
+		function addAssistantMessage(content) {
+			const aiMsgDiv = document.createElement('div');
+			aiMsgDiv.className = 'ai-message markdown-content';
+			
+			// Parse tool calls from the content first
+			const toolCalls = parseToolCallsFromContent(content);
+			
+			// Add tool calls to the message if any exist
+			toolCalls.forEach(toolCall => {
+				addToolCallToMessage(aiMsgDiv, toolCall);
+			});
+			
+			// Extract final result content (skip tool call XML tags)
+			const cleanContent = extractContentFromXML(content);
+			
+			// Only add text content if there's actual result content
+			if (cleanContent && cleanContent.trim()) {
+				// Store the original message for copying
+				aiMsgDiv.setAttribute('data-original-markdown', cleanContent);
+				
+				// Process and render the content
+				const processedContent = processMessageForDisplay(cleanContent);
+				const contentDiv = document.createElement('div');
+				contentDiv.innerHTML = renderMarkdown(processedContent);
+				aiMsgDiv.appendChild(contentDiv);
+				
+				// Apply syntax highlighting to code blocks
+				contentDiv.querySelectorAll('pre code').forEach((block) => {
+					hljs.highlightElement(block);
+				});
+				
+				// Apply Mermaid rendering to diagrams
+				const mermaidElements = contentDiv.querySelectorAll('.mermaid, .language-mermaid');
+				if (mermaidElements.length > 0) {
+					console.log(`Found ${mermaidElements.length} mermaid diagrams in restored message`);
+					try {
+						if (typeof mermaid.run === 'function') {
+							mermaid.run({ nodes: mermaidElements });
+						} else if (typeof mermaid.init === 'function') {
+							mermaid.init(undefined, mermaidElements);
+						}
+					} catch (error) {
+						console.error('Error rendering mermaid in restored message:', error);
+					}
+				}
+			}
+			
+			// Add to messages container
+			messagesDiv.appendChild(aiMsgDiv);
+		}
+
+		// Function to restore session history from server
+		async function restoreSessionHistory(sessionId) {
+			try {
+				console.log(`Restoring session history for: ${sessionId}`);
+				const response = await fetch(`/api/session/${sessionId}/history`);
+				const data = await response.json();
+				
+				if (data.exists && data.history && data.history.length > 0) {
+					console.log(`Restored ${data.history.length} messages for session: ${sessionId}`);
+					
+					// Render restored messages
+					data.history.forEach(message => {
+						if (message.role === 'user') {
+							addUserMessage(message.content, message.images || []);
+						} else if (message.role === 'assistant') {
+							addAssistantMessage(message.content);
+						}
+					});
+					
+					// Update token usage if available
+					if (data.tokenUsage && window.tokenUsageDisplay) {
+						window.tokenUsageDisplay.update(data.tokenUsage);
+					}
+					
+					// Update UI to reflect restored chat state
+					positionInputForm();
+					
+					// Hide search suggestions when loading from history
+					const searchSuggestions = document.querySelector('.search-suggestions');
+					if (searchSuggestions) {
+						searchSuggestions.style.display = 'none';
+					}
+					
+					// Ensure all Mermaid diagrams are rendered after restoration
+					setTimeout(() => {
+						const allMermaidElements = document.querySelectorAll('.mermaid:not([data-processed]), .language-mermaid:not([data-processed])');
+						if (allMermaidElements.length > 0) {
+							console.log(`Rendering ${allMermaidElements.length} unprocessed mermaid diagrams after session restoration`);
+							try {
+								if (typeof mermaid.run === 'function') {
+									mermaid.run({ nodes: allMermaidElements });
+								} else if (typeof mermaid.init === 'function') {
+									mermaid.init(undefined, allMermaidElements);
+								}
+							} catch (error) {
+								console.error('Error rendering mermaid after session restoration:', error);
+							}
+						}
+					}, 100); // Small delay to ensure DOM is fully updated
+				} else {
+					console.log(`No history found for session: ${sessionId}`);
+					// Show user-friendly message for session not found
+					showSessionNotFoundMessage(sessionId);
+				}
+			} catch (error) {
+				console.error('Error restoring session history:', error);
+				// Show error message for network or other errors
+				showSessionNotFoundMessage(sessionId);
+			}
+		}
+
+		// Function to show session not found message
+		function showSessionNotFoundMessage(sessionId) {
+			const messageDiv = document.createElement('div');
+			messageDiv.className = 'ai-message markdown-content';
+			messageDiv.style.borderLeft = '4px solid #ff6b6b';
+			messageDiv.style.backgroundColor = '#fff5f5';
+			messageDiv.innerHTML = `
+				<div style="padding: 15px;">
+					<h3 style="margin-top: 0; color: #c92a2a;">Session Not Found</h3>
+					<p>The chat session with ID <code>${sessionId}</code> was not found or has expired.</p>
+					<p>This could happen if:</p>
+					<ul>
+						<li>The session has been inactive for more than 2 hours</li>
+						<li>The server was restarted</li>
+						<li>The session ID is invalid</li>
+					</ul>
+					<p>You can start a new conversation by <a href="/" style="color: #1976d2;">returning to the home page</a>.</p>
+				</div>
+			`;
+			messagesDiv.appendChild(messageDiv);
+			
+			// Update UI to show the message
+			positionInputForm();
+		}
+
+		// Function to update URL when session changes (for new chats)
+		function updateUrlForSession(sessionId) {
+			const newUrl = `/chat/${sessionId}`;
+			if (window.location.pathname !== newUrl) {
+				window.history.pushState({ sessionId }, '', newUrl);
+				console.log(`Updated URL to: ${newUrl}`);
+			}
+		}
+
+		// Handle browser back/forward navigation
+		window.addEventListener('popstate', (event) => {
+			if (event.state && event.state.sessionId) {
+				// User navigated to a different session
+				console.log(`Navigating to session: ${event.state.sessionId}`);
+				window.location.reload(); // Reload to restore the session
+			}
+		});
+
+		// History dropdown functionality
+		class HistoryDropdown {
+			constructor() {
+				this.button = document.getElementById('history-button');
+				this.menu = document.getElementById('history-dropdown-menu');
+				this.loading = document.getElementById('history-loading');
+				this.list = document.getElementById('history-list');
+				this.empty = document.getElementById('history-empty');
+				this.isOpen = false;
+				
+				this.init();
+			}
+
+			init() {
+				// Button click handler
+				this.button.addEventListener('click', (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					this.toggle();
+				});
+
+				// Close dropdown when clicking outside
+				document.addEventListener('click', (e) => {
+					if (!this.menu.contains(e.target) && !this.button.contains(e.target)) {
+						this.close();
+					}
+				});
+
+				// Prevent dropdown from closing when clicking inside
+				this.menu.addEventListener('click', (e) => {
+					e.stopPropagation();
+				});
+			}
+
+			async toggle() {
+				if (this.isOpen) {
+					this.close();
+				} else {
+					await this.open();
+				}
+			}
+
+			async open() {
+				this.isOpen = true;
+				this.menu.classList.add('show');
+				this.showLoading();
+				
+				try {
+					await this.loadSessions();
+				} catch (error) {
+					console.error('Error loading sessions:', error);
+					this.showError();
+				}
+			}
+
+			close() {
+				this.isOpen = false;
+				this.menu.classList.remove('show');
+			}
+
+			showLoading() {
+				this.loading.style.display = 'block';
+				this.list.style.display = 'none';
+				this.empty.style.display = 'none';
+			}
+
+			showList() {
+				this.loading.style.display = 'none';
+				this.list.style.display = 'block';
+				this.empty.style.display = 'none';
+			}
+
+			showEmpty() {
+				this.loading.style.display = 'none';
+				this.list.style.display = 'none';
+				this.empty.style.display = 'block';
+			}
+
+			showError() {
+				this.loading.textContent = 'Error loading history';
+				this.loading.style.color = '#f44336';
+			}
+
+			async loadSessions() {
+				try {
+					const response = await fetch('/api/sessions');
+					const data = await response.json();
+					
+					if (data.sessions && data.sessions.length > 0) {
+						this.renderSessions(data.sessions);
+						this.showList();
+					} else {
+						this.showEmpty();
+					}
+				} catch (error) {
+					console.error('Error fetching sessions:', error);
+					throw error;
+				}
+			}
+
+			renderSessions(sessions) {
+				this.list.innerHTML = '';
+				
+				sessions.forEach(session => {
+					const item = document.createElement('div');
+					item.className = 'history-item';
+					item.dataset.sessionId = session.sessionId;
+					
+					// Check if this is the current session
+					const isCurrent = session.sessionId === window.sessionId;
+					if (isCurrent) {
+						item.style.backgroundColor = '#e3f2fd';
+					}
+					
+					item.innerHTML = `
+						<div class="history-item-preview">${this.escapeHtml(session.preview)}</div>
+						<div class="history-item-meta">
+							<span class="history-item-time">${session.relativeTime}</span>
+							<span class="history-item-count">${session.messageCount} messages</span>
+						</div>
+					`;
+
+					item.addEventListener('click', () => {
+						if (!isCurrent) {
+							this.navigateToSession(session.sessionId);
+						}
+						this.close();
+					});
+
+					this.list.appendChild(item);
+				});
+			}
+
+			navigateToSession(sessionId) {
+				const url = `/chat/${sessionId}`;
+				console.log(`Navigating to session: ${sessionId}`);
+				window.location.href = url;
+			}
+
+			escapeHtml(text) {
+				const div = document.createElement('div');
+				div.textContent = text;
+				return div.innerHTML;
+			}
+		}
+
+		// Initialize history dropdown
+		document.addEventListener('DOMContentLoaded', () => {
+			new HistoryDropdown();
+		});
 		const messagesDiv = document.getElementById('messages');
 		const form = document.getElementById('input-form');
 		const searchSuggestionsDiv = document.querySelector('.search-suggestions');
@@ -1408,9 +2001,9 @@
 				if (footer) {
 					footer.style.display = 'block';
 				}
-				// Hide the top header and show the centered logo
+				// Always show the header (it contains the history dropdown)
 				if (header) {
-					header.style.display = 'none';
+					header.style.display = 'block';
 				}
 				if (emptyStateLogo) {
 					emptyStateLogo.style.display = 'block';
@@ -2024,6 +2617,9 @@
 					sessionId = crypto.randomUUID();
 					console.log(`New chat started in current window. New session ID: ${sessionId}`);
 
+					// Update URL to reflect new session
+					updateUrlForSession(sessionId);
+
 					// Make session ID available to other scripts
 					// We use both direct property assignment and event dispatch for compatibility
 					window.sessionId = sessionId;
@@ -2152,6 +2748,11 @@
 
 			// Check if this is the first message
 			const isFirstMessage = messagesDiv.children.length === 0;
+			
+			// Update URL for first message if we're on root path
+			if (isFirstMessage && window.location.pathname === '/') {
+				updateUrlForSession(sessionId);
+			}
 
 			// Display user message with proper image handling
 			const userMsgDiv = document.createElement('div');

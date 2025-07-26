@@ -252,6 +252,17 @@ Usage Example:
 
 
 
+# CRITICAL: XML Tool Format Required
+
+Even when processing images or visual content, you MUST respond using the XML tool format. Do not provide direct answers about images - instead use the appropriate tool (usually <attempt_completion>) with your analysis inside the <result> tag.
+
+Example when analyzing an image:
+<attempt_completion>
+<result>
+I can see this is a promotional image from Tyk showing... [your analysis here]
+</result>
+</attempt_completion>
+
 
 Current path: /Users/leonidbugaev/go/src/code-search/examples/chat. When using tools, specify paths like '.' for the current directory, 'src/utils', etc., within the 'path' parameter. Dependencies are located in /dep folder: "/dep/go/github.com/user/repo", "/dep/js/<package>", "/dep/rust/crate_name".
 
@@ -264,7 +275,7 @@ Current path: /Users/leonidbugaev/go/src/code-search/examples/chat. When using t
 - Be direct and technical. Use exactly ONE tool call per response in the specified XML format. Prefer using search tool.
 
 
-# Project Files (Sample of up to 43 files in /Users/leonidbugaev/go/src/code-search/examples/chat):
+# Project Files (Sample of up to 45 files in /Users/leonidbugaev/go/src/code-search/examples/chat):
 - .DS_Store
 - .env
 - README.md
@@ -299,6 +310,7 @@ Current path: /Users/leonidbugaev/go/src/code-search/examples/chat. When using t
 - trace_output_1.log
 - trace_output_2.log
 - webServer.js
+- .claude/settings.local.json
 - bin/probe-chat.js
 - npm/.DS_Store
 - npm/.npmignore
@@ -307,80 +319,579 @@ Current path: /Users/leonidbugaev/go/src/code-search/examples/chat. When using t
 - npm/index.js
 - npm/package-lock.json
 - npm/package.json
+- storage/JsonChatStorage.js
 - npm/bin/probe-chat.js
 
-user: [object Object],[object Object]
+user: <task>
+test
+</task>
 
-assistant: This image displays a JSON configuration file, likely for an API gateway. Here's a breakdown of what the configuration specifies:
+assistant: <searchFiles>
+<pattern>test*</pattern>
+</searchFiles>
 
-*   **API Definition**:
-    *   The API is named `httpbin_api` with a matching `api_id`.
-    *   It's configured for `keyless` access, meaning clients don't need an API key to use it.
+user: <tool_result>
+{
+  "success": true,
+  "directory": "/Users/leonidbugaev/go/src/code-search/examples/chat",
+  "pattern": "test*",
+  "recursive": true,
+  "files": [
+    "test-ai-sdk-telemetry.js",
+    "test-chat-tracing.js",
+    "test-direct-function.js",
+    "test-github-context.txt",
+    "test-hierarchy.js",
+    "test-image-spans.js",
+    "test-prompt-file.log",
+    "test-simple-tracing.js",
+    "test-trace-verification.js",
+    "test-tracing.js"
+  ],
+  "count": 10,
+  "totalMatches": 10,
+  "limited": false,
+  "timestamp": "2025-07-26T15:15:56.215Z"
+}
+</tool_result>
 
-*   **Versioning**:
-    *   The API is `not_versioned`.
-    *   It has a `Default` version configuration with a very distant `expires` date ("3000-01-02 15:04").
+assistant: <extract>
+<file_path>test-tracing.js</file_path>
+</extract>
 
-*   **Go Plugin Middleware**:
-    *   The configuration uses a Go plugin for custom logic, indicated by `"driver": "goplugin"`.
-    *   **Extended Path**: There's an `extended_path` defined for the path `/clear` using the `POST` method. This path triggers the `ClearRate` function within the `plugins/tyk_plugins.so` Go plugin.
-    *   **Custom Middleware**: A `RateLimit` middleware is configured to run *before* the request is proxied (`pre`). This middleware is also located in `plugins/tyk_plugins.so` and does not require a session.
+user: <tool_result>
+Files to extract:
+  test-tracing.js
+Format: color
 
-*   **Proxy Settings**:
-    *   The `proxy` section defines how incoming requests are handled.
-    *   `listen_path`: The gateway listens on a path defined by the `API_LISTEN_PATH` environment variable.
-    *   `target_url`: Requests are forwarded to a target URL specified by the `API_URL` environment variable.
-    *   `strip_listen_path`: The `listen_path` is removed from the request path before it's forwarded to the `target_url`.
+File: test-tracing.js
+```javascript
+#!/usr/bin/env node
 
-In summary, this file configures an API endpoint that uses a Go plugin for rate limiting and to expose a custom function at `/clear`. The actual listen path and target URL are dynamically configured via environment variables.
+import { TelemetryConfig } from './telemetry.js';
+import { existsSync, unlinkSync } from 'fs';
+
+/**
+ * Simple test script to verify tracing functionality
+ */
+
+console.log('Testing OpenTelemetry tracing setup...\n');
+
+// Test 1: File tracing
+console.log('🔍 Test 1: File tracing');
+const testFile = './test-traces.jsonl';
+
+// Clean up previous test file
+if (existsSync(testFile)) {
+  unlinkSync(testFile);
+}
+
+const fileConfig = new TelemetryConfig({
+  serviceName: 'probe-chat-test',
+  serviceVersion: '1.0.0',
+  enableFile: true,
+  enableConsole: false,
+  enableRemote: false,
+  filePath: testFile,
+});
+
+fileConfig.initialize();
+
+// Create a test span
+const span = fileConfig.createSpan('test-operation', {
+  'test.attribute': 'test-value',
+  'session.id': 'test-session-123'
+});
+
+if (span) {
+  console.log('✅ Span created successfully');
+  span.addEvent('Test event', { 'event.data': 'test-data' });
+  span.end();
+  
+  // Give it a moment to write to file
+  setTimeout(() => {
+    if (existsSync(testFile)) {
+      console.log('✅ Trace file created successfully');
+      console.log(`📄 Trace file location: ${testFile}`);
+      
+      // Clean up
+      unlinkSync(testFile);
+      console.log('🧹 Test file cleaned up');
+    } else {
+      console.log('❌ Trace file not created');
+    }
+    
+    // Test 2: Console tracing
+    console.log('\n🔍 Test 2: Console tracing');
+    
+    const consoleConfig = new TelemetryConfig({
+      serviceName: 'probe-chat-test',
+      serviceVersion: '1.0.0',
+      enableFile: false,
+      enableConsole: true,
+      enableRemote: false,
+    });
+    
+    consoleConfig.initialize();
+    
+    const consoleSpan = consoleConfig.createSpan('console-test-operation', {
+      'console.test': 'true'
+    });
+    
+    if (consoleSpan) {
+      console.log('✅ Console span created successfully');
+      consoleSpan.addEvent('Console test event');
+      consoleSpan.end();
+    } else {
+      console.log('❌ Console span creation failed');
+    }
+    
+    // Test 3: Disabled tracing
+    console.log('\n🔍 Test 3: Disabled tracing');
+    
+    const disabledConfig = new TelemetryConfig({
+      serviceName: 'probe-chat-test',
+      serviceVersion: '1.0.0',
+      enableFile: false,
+      enableConsole: false,
+      enableRemote: false,
+    });
+    
+    disabledConfig.initialize();
+    
+    const disabledSpan = disabledConfig.createSpan('disabled-operation');
+    
+    if (disabledSpan === null) {
+      console.log('✅ Disabled tracing correctly returns null span');
+    } else {
+      console.log('❌ Disabled tracing should return null span');
+    }
+    
+    console.log('\n🎉 All tests completed!');
+    console.log('\nTo test with actual AI calls, run:');
+    console.log('node index.js --trace-file --trace-console --message "Hello world"');
+    
+    // Shutdown telemetry
+    fileConfig.shutdown();
+    consoleConfig.shutdown();
+    disabledConfig.shutdown();
+  }, 1000);
+} else {
+  console.log('❌ Span creation failed');
+  fileConfig.shutdown();
+}
+```
+
+
+Extracted 1 result
+Total bytes returned: 3029
+Total tokens returned: 920
+
+
+Token Usage:
+  Request tokens: 3.75
+  Response tokens: 920
+  Total tokens: 923.75
+
+</tool_result>
+
+assistant: <extract>
+<file_path>test-chat-tracing.js</file_path>
+</extract>
+
+user: <tool_result>
+Files to extract:
+  test-chat-tracing.js
+Format: color
+
+File: test-chat-tracing.js
+```javascript
+import { ProbeChat } from './probeChat.js';
+
+// Test chat function tracing
+async function testChatTracing() {
+  console.log('Testing chat tracing...\n');
+  
+  try {
+    // Create a ProbeChat instance with debug enabled
+    const probeChat = new ProbeChat({
+      debug: true,
+      noApiKeysMode: true
+    });
+    
+    // Test message with images
+    const testMessage = 'Here is an image: https://github.com/user-attachments/assets/example.png and some text.';
+    
+    console.log('🔍 Testing chat function with tracing...');
+    console.log('Message:', testMessage);
+    
+    // Call the chat function - this should create spans
+    const result = await probeChat.chat(testMessage);
+    
+    console.log('✅ Chat completed successfully');
+    console.log('📄 Response length:', result.response.length);
+    console.log('📄 Response preview:', result.response.substring(0, 100) + '...');
+    
+    console.log('🎉 Test completed! Check simple-traces.jsonl for trace data.');
+    
+    // Wait a bit for telemetry to flush
+    console.log('⏳ Waiting for telemetry to flush...');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+  } catch (error) {
+    console.error('❌ Test failed:', error.message);
+  }
+}
+
+testChatTracing().catch(console.error);
+```
+
+
+Extracted 1 result
+Total bytes returned: 1275
+Total tokens returned: 368
+
+
+Token Usage:
+  Request tokens: 5
+  Response tokens: 368
+  Total tokens: 373
+
+</tool_result>
+
+assistant: This project contains several test files to verify different aspects of its functionality, primarily focusing on OpenTelemetry tracing and the core chat features.
+
+### Tracing Infrastructure Tests (`test-tracing.js`)
+
+This script performs fundamental checks on the telemetry and tracing setup. It ensures that traces can be correctly exported to different destinations.
+
+The test is divided into three main parts:
+1.  **File Tracing**: It initializes telemetry to write spans to a local file (`./test-traces.jsonl`). It creates a test span, verifies the span is created, and then checks if the output file is generated.
+2.  **Console Tracing**: It reconfigures telemetry to output spans to the console and confirms that a span can be created.
+3.  **Disabled Tracing**: It tests the "off" switch by disabling all telemetry outputs and verifies that attempting to create a span correctly returns `null`.
+
+Here is a relevant snippet from `test-tracing.js`:
+```javascript
+// test-tracing.js
+
+// Test 1: File tracing
+const fileConfig = new TelemetryConfig({
+  serviceName: 'probe-chat-test',
+  enableFile: true,
+  filePath: testFile,
+});
+fileConfig.initialize();
+const span = fileConfig.createSpan('test-operation', ...);
+span.end();
+
+// Test 2: Console tracing
+const consoleConfig = new TelemetryConfig({
+  serviceName: 'probe-chat-test',
+  enableConsole: true,
+});
+consoleConfig.initialize();
+const consoleSpan = consoleConfig.createSpan('console-test-operation', ...);
+consoleSpan.end();
+
+// Test 3: Disabled tracing
+const disabledConfig = new TelemetryConfig({
+  enableFile: false,
+  enableConsole: false,
+});
+disabledConfig.initialize();
+const disabledSpan = disabledConfig.createSpan('disabled-operation');
+// ... asserts disabledSpan is null
+```
+
+### Chat Functionality Tracing (`test-chat-tracing.js`)
+
+This test focuses on the integration of tracing within the main `ProbeChat.chat()` method. It verifies that when the chat function is called, the appropriate traces and spans are generated.
+
+The script works as follows:
+1.  It creates an instance of `ProbeChat` with debugging enabled.
+2.  It calls the `chat()` method with a sample message.
+3.  It confirms that the chat call completes successfully and prints a preview of the response.
+4.  The user is expected to manually inspect the output trace file (`simple-traces.jsonl`) to verify the trace data.
+
+```javascript
+// test-chat-tracing.js
+
+async function testChatTracing() {
+  // Create a ProbeChat instance with debug enabled
+  const probeChat = new ProbeChat({
+    debug: true,
+    noApiKeysMode: true
+  });
+  
+  const testMessage = 'Here is an image: ...';
+  
+  // Call the chat function - this should create spans
+  const result = await probeChat.chat(testMessage);
+  
+  console.log('🎉 Test completed! Check simple-traces.jsonl for trace data.');
+}
+```
+
+### Other Test Files
+
+The project includes several other test files, each likely targeting a specific feature:
+*   `test-ai-sdk-telemetry.js`: Tests telemetry related to the AI SDK.
+*   `test-direct-function.js`: Appears to test direct function calls, possibly bypassing the main chat loop.
+*   `test-hierarchy.js`: Could be for testing the hierarchical structure of spans (parent-child relationships).
+*   `test-image-spans.js`: Likely tests the specific spans created when processing images in messages.
+*   `test-simple-tracing.js`: A simplified version of the main tracing test.
+*   `test-trace-verification.js`: A script to verify the contents of a trace file.
+
+### Test Flow Diagram
+
+Here is a diagram illustrating the flow of the main tests:
+
+```mermaid
+graph TD
+    A[Start Tests] --> B{test-tracing.js};
+    B --> C["Test 1: File Tracing"];
+    C --> C1["Initialize Telemetry (File)"];
+    C1 --> C2["Create Span"];
+    C2 --> C3["Verify File Exists"];
+    B --> D["Test 2: Console Tracing"];
+    D --> D1["Initialize Telemetry (Console)"];
+    D1 --> D2["Create Span"];
+    D2 --> D3["Verify Span in Console Output"];
+    B --> E["Test 3: Disabled Tracing"];
+    E --> E1["Initialize Telemetry (Disabled)"];
+    E1 --> E2["Attempt to Create Span"];
+    E2 --> E3["Verify Span is null"];
+    
+    A --> F{test-chat-tracing.js};
+    F --> G["Initialize ProbeChat (Debug Mode)"];
+    G --> H["Call chat()"];
+    H --> I["Verify Chat Completes"];
+    I --> J["Manual Check: simple-traces.jsonl"];
+```
 
 user: Your response did not contain a valid tool call in the required XML format. You MUST respond with exactly one tool call (e.g., <search>...</search> or <attempt_completion>...</attempt_completion>) based on the previous steps and the user's goal. Analyze the situation and choose the appropriate next tool.
 
 assistant: <attempt_completion>
-<result>This image displays a JSON configuration file, likely for an API gateway. Here's a breakdown of what the configuration specifies:
+<result>
+This project contains several test files to verify different aspects of its functionality, primarily focusing on OpenTelemetry tracing and the core chat features.
 
-*   **API Definition**:
-    *   The API is named `httpbin_api` with a matching `api_id`.
-    *   It's configured for `keyless` access, meaning clients don't need an API key to use it.
+### Tracing Infrastructure Tests (`test-tracing.js`)
 
-*   **Versioning**:
-    *   The API is `not_versioned`.
-    *   It has a `Default` version configuration with a very distant `expires` date ("3000-01-02 15:04").
+This script performs fundamental checks on the telemetry and tracing setup. It ensures that traces can be correctly exported to different destinations.
 
-*   **Go Plugin Middleware**:
-    *   The configuration uses a Go plugin for custom logic, indicated by `"driver": "goplugin"`.
-    *   **Extended Path**: There's an `extended_path` defined for the path `/clear` using the `POST` method. This path triggers the `ClearRate` function within the `plugins/tyk_plugins.so` Go plugin.
-    *   **Custom Middleware**: A `RateLimit` middleware is configured to run *before* the request is proxied (`pre`). This middleware is also located in `plugins/tyk_plugins.so` and does not require a session.
+The test is divided into three main parts:
+1.  **File Tracing**: It initializes telemetry to write spans to a local file (`./test-traces.jsonl`). It creates a test span, verifies the span is created, and then checks if the output file is generated.
+2.  **Console Tracing**: It reconfigures telemetry to output spans to the console and confirms that a span can be created.
+3.  **Disabled Tracing**: It tests the "off" switch by disabling all telemetry outputs and verifies that attempting to create a span correctly returns `null`.
 
-*   **Proxy Settings**:
-    *   The `proxy` section defines how incoming requests are handled.
-    *   `listen_path`: The gateway listens on a path defined by the `API_LISTEN_PATH` environment variable.
-    *   `target_url`: Requests are forwarded to a target URL specified by the `API_URL` environment variable.
-    *   `strip_listen_path`: The `listen_path` is removed from the request path before it's forwarded to the `target_url`.
+Here is a relevant snippet from `test-tracing.js`:
+```javascript
+// test-tracing.js
 
-In summary, this file configures an API endpoint that uses a Go plugin for rate limiting and to expose a custom function at `/clear`. The actual listen path and target URL are dynamically configured via environment variables.</result>
+// Test 1: File tracing
+const fileConfig = new TelemetryConfig({
+  serviceName: 'probe-chat-test',
+  enableFile: true,
+  filePath: testFile,
+});
+fileConfig.initialize();
+const span = fileConfig.createSpan('test-operation');
+span.end();
+
+// Test 2: Console tracing
+const consoleConfig = new TelemetryConfig({
+  serviceName: 'probe-chat-test',
+  enableConsole: true,
+});
+consoleConfig.initialize();
+const consoleSpan = consoleConfig.createSpan('console-test-operation');
+consoleSpan.end();
+
+// Test 3: Disabled tracing
+const disabledConfig = new TelemetryConfig({
+  enableFile: false,
+  enableConsole: false,
+});
+disabledConfig.initialize();
+const disabledSpan = disabledConfig.createSpan('disabled-operation');
+// ... asserts disabledSpan is null
+```
+
+### Chat Functionality Tracing (`test-chat-tracing.js`)
+
+This test focuses on the integration of tracing within the main `ProbeChat.chat()` method. It verifies that when the chat function is called, the appropriate traces and spans are generated.
+
+The script works as follows:
+1.  It creates an instance of `ProbeChat` with debugging enabled.
+2.  It calls the `chat()` method with a sample message.
+3.  It confirms that the chat call completes successfully and prints a preview of the response.
+4.  The user is expected to manually inspect the output trace file (`simple-traces.jsonl`) to verify the trace data.
+
+```javascript
+// test-chat-tracing.js
+
+async function testChatTracing() {
+  // Create a ProbeChat instance with debug enabled
+  const probeChat = new ProbeChat({
+    debug: true,
+    noApiKeysMode: true
+  });
+  
+  const testMessage = 'Here is an image: https://github.com/user-attachments/assets/example.png and some text.';
+  
+  // Call the chat function - this should create spans
+  const result = await probeChat.chat(testMessage);
+  
+  console.log('🎉 Test completed! Check simple-traces.jsonl for trace data.');
+}
+```
+
+### Other Test Files
+
+The project includes several other test files, each likely targeting a specific feature:
+*   `test-ai-sdk-telemetry.js`: Tests telemetry related to the AI SDK.
+*   `test-direct-function.js`: Appears to test direct function calls, possibly bypassing the main chat loop.
+*   `test-hierarchy.js`: Could be for testing the hierarchical structure of spans (parent-child relationships).
+*   `test-image-spans.js`: Likely tests the specific spans created when processing images in messages.
+*   `test-simple-tracing.js`: A simplified version of the main tracing test.
+*   `test-trace-verification.js`: A script to verify the contents of a trace file.
+
+### Test Flow Diagram
+
+Here is a diagram illustrating the flow of the main tests:
+
+```mermaid
+graph TD
+    A["Start Tests"] --> B["test-tracing.js"];
+    B --> C["Test 1: File Tracing"];
+    C --> C1["Initialize Telemetry (File)"];
+    C1 --> C2["Create Span"];
+    C2 --> C3["Verify File Exists"];
+    B --> D["Test 2: Console Tracing"];
+    D --> D1["Initialize Telemetry (Console)"];
+    D1 --> D2["Create Span"];
+    D2 --> D3["Verify Span in Console Output"];
+    B --> E["Test 3: Disabled Tracing"];
+    E --> E1["Initialize Telemetry (Disabled)"];
+    E1 --> E2["Attempt to Create Span"];
+    E2 --> E3["Verify Span is null"];
+    
+    A --> F["test-chat-tracing.js"];
+    F --> G["Initialize ProbeChat (Debug Mode)"];
+    G --> H["Call chat()"];
+    H --> I["Verify Chat Completes"];
+    I --> J["Manual Check: simple-traces.jsonl"];
+```
+</result>
 </attempt_completion>
 
-assistant (final result): This image displays a JSON configuration file, likely for an API gateway. Here's a breakdown of what the configuration specifies:
+assistant (final result): This project contains several test files to verify different aspects of its functionality, primarily focusing on OpenTelemetry tracing and the core chat features.
 
-*   **API Definition**:
-    *   The API is named `httpbin_api` with a matching `api_id`.
-    *   It's configured for `keyless` access, meaning clients don't need an API key to use it.
+### Tracing Infrastructure Tests (`test-tracing.js`)
 
-*   **Versioning**:
-    *   The API is `not_versioned`.
-    *   It has a `Default` version configuration with a very distant `expires` date ("3000-01-02 15:04").
+This script performs fundamental checks on the telemetry and tracing setup. It ensures that traces can be correctly exported to different destinations.
 
-*   **Go Plugin Middleware**:
-    *   The configuration uses a Go plugin for custom logic, indicated by `"driver": "goplugin"`.
-    *   **Extended Path**: There's an `extended_path` defined for the path `/clear` using the `POST` method. This path triggers the `ClearRate` function within the `plugins/tyk_plugins.so` Go plugin.
-    *   **Custom Middleware**: A `RateLimit` middleware is configured to run *before* the request is proxied (`pre`). This middleware is also located in `plugins/tyk_plugins.so` and does not require a session.
+The test is divided into three main parts:
+1.  **File Tracing**: It initializes telemetry to write spans to a local file (`./test-traces.jsonl`). It creates a test span, verifies the span is created, and then checks if the output file is generated.
+2.  **Console Tracing**: It reconfigures telemetry to output spans to the console and confirms that a span can be created.
+3.  **Disabled Tracing**: It tests the "off" switch by disabling all telemetry outputs and verifies that attempting to create a span correctly returns `null`.
 
-*   **Proxy Settings**:
-    *   The `proxy` section defines how incoming requests are handled.
-    *   `listen_path`: The gateway listens on a path defined by the `API_LISTEN_PATH` environment variable.
-    *   `target_url`: Requests are forwarded to a target URL specified by the `API_URL` environment variable.
-    *   `strip_listen_path`: The `listen_path` is removed from the request path before it's forwarded to the `target_url`.
+Here is a relevant snippet from `test-tracing.js`:
+```javascript
+// test-tracing.js
 
-In summary, this file configures an API endpoint that uses a Go plugin for rate limiting and to expose a custom function at `/clear`. The actual listen path and target URL are dynamically configured via environment variables.
+// Test 1: File tracing
+const fileConfig = new TelemetryConfig({
+  serviceName: 'probe-chat-test',
+  enableFile: true,
+  filePath: testFile,
+});
+fileConfig.initialize();
+const span = fileConfig.createSpan('test-operation');
+span.end();
+
+// Test 2: Console tracing
+const consoleConfig = new TelemetryConfig({
+  serviceName: 'probe-chat-test',
+  enableConsole: true,
+});
+consoleConfig.initialize();
+const consoleSpan = consoleConfig.createSpan('console-test-operation');
+consoleSpan.end();
+
+// Test 3: Disabled tracing
+const disabledConfig = new TelemetryConfig({
+  enableFile: false,
+  enableConsole: false,
+});
+disabledConfig.initialize();
+const disabledSpan = disabledConfig.createSpan('disabled-operation');
+// ... asserts disabledSpan is null
+```
+
+### Chat Functionality Tracing (`test-chat-tracing.js`)
+
+This test focuses on the integration of tracing within the main `ProbeChat.chat()` method. It verifies that when the chat function is called, the appropriate traces and spans are generated.
+
+The script works as follows:
+1.  It creates an instance of `ProbeChat` with debugging enabled.
+2.  It calls the `chat()` method with a sample message.
+3.  It confirms that the chat call completes successfully and prints a preview of the response.
+4.  The user is expected to manually inspect the output trace file (`simple-traces.jsonl`) to verify the trace data.
+
+```javascript
+// test-chat-tracing.js
+
+async function testChatTracing() {
+  // Create a ProbeChat instance with debug enabled
+  const probeChat = new ProbeChat({
+    debug: true,
+    noApiKeysMode: true
+  });
+  
+  const testMessage = 'Here is an image: https://github.com/user-attachments/assets/example.png and some text.';
+  
+  // Call the chat function - this should create spans
+  const result = await probeChat.chat(testMessage);
+  
+  console.log('🎉 Test completed! Check simple-traces.jsonl for trace data.');
+}
+```
+
+### Other Test Files
+
+The project includes several other test files, each likely targeting a specific feature:
+*   `test-ai-sdk-telemetry.js`: Tests telemetry related to the AI SDK.
+*   `test-direct-function.js`: Appears to test direct function calls, possibly bypassing the main chat loop.
+*   `test-hierarchy.js`: Could be for testing the hierarchical structure of spans (parent-child relationships).
+*   `test-image-spans.js`: Likely tests the specific spans created when processing images in messages.
+*   `test-simple-tracing.js`: A simplified version of the main tracing test.
+*   `test-trace-verification.js`: A script to verify the contents of a trace file.
+
+### Test Flow Diagram
+
+Here is a diagram illustrating the flow of the main tests:
+
+```mermaid
+graph TD
+    A["Start Tests"] --> B["test-tracing.js"];
+    B --> C["Test 1: File Tracing"];
+    C --> C1["Initialize Telemetry (File)"];
+    C1 --> C2["Create Span"];
+    C2 --> C3["Verify File Exists"];
+    B --> D["Test 2: Console Tracing"];
+    D --> D1["Initialize Telemetry (Console)"];
+    D1 --> D2["Create Span"];
+    D2 --> D3["Verify Span in Console Output"];
+    B --> E["Test 3: Disabled Tracing"];
+    E --> E1["Initialize Telemetry (Disabled)"];
+    E1 --> E2["Attempt to Create Span"];
+    E2 --> E3["Verify Span is null"];
+    
+    A --> F["test-chat-tracing.js"];
+    F --> G["Initialize ProbeChat (Debug Mode)"];
+    G --> H["Call chat()"];
+    H --> I["Verify Chat Completes"];
+    I --> J["Manual Check: simple-traces.jsonl"];
+```
 

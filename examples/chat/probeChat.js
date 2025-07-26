@@ -305,6 +305,12 @@ export class ProbeChat {
 
     // Initialize chat history
     this.history = [];
+    
+    // Initialize display history - tracks what users actually see
+    this.displayHistory = [];
+    
+    // Store persistent storage instance if provided
+    this.storage = options.storage || null;
   }
 
   /**
@@ -1010,6 +1016,15 @@ When troubleshooting:
       // Create the user message with potential image attachments
       const userMessage = { role: 'user', content: wrappedMessage };
       
+      // Store user message in display history (always visible to users)
+      const displayUserMessage = { 
+        role: 'user', 
+        content: message, // Store original unwrapped message
+        visible: true, 
+        displayType: 'user',
+        timestamp: new Date().toISOString()
+      };
+      
       // Add image attachments if any images are present
       if (allImages.length > 0) {
         userMessage.content = [
@@ -1020,9 +1035,33 @@ When troubleshooting:
           }))
         ];
         
+        // Add images to display message as well
+        displayUserMessage.images = allImages;
+        
         if (this.debug) {
           console.log(`[DEBUG] Created message with ${allImages.length} images (${validImageUrls.length} from URLs, ${images.length} uploaded)`);
         }
+      }
+      
+      // Add user message to display history
+      if (!this.displayHistory) {
+        this.displayHistory = [];
+      }
+      this.displayHistory.push(displayUserMessage);
+      
+      // Save user message to persistent storage
+      if (this.storage) {
+        this.storage.saveMessage(this.sessionId, {
+          role: 'user',
+          content: message, // Original message
+          timestamp: Date.now(),
+          displayType: 'user',
+          visible: 1,
+          images: allImages,
+          metadata: {}
+        }).catch(err => {
+          console.error('Failed to save user message to persistent storage:', err);
+        });
       }
 
       let currentMessages = [
@@ -1266,6 +1305,32 @@ When troubleshooting:
               appTracer.recordCompletionAttempt(sessionId, false);
             } else {
               finalResult = validation.data.result;
+              
+              // Store final assistant response in display history
+              const displayAssistantMessage = {
+                role: 'assistant', 
+                content: finalResult,
+                visible: true, 
+                displayType: 'final',
+                timestamp: new Date().toISOString()
+              };
+              this.displayHistory.push(displayAssistantMessage);
+              
+              // Save final response to persistent storage
+              if (this.storage) {
+                this.storage.saveMessage(this.sessionId, {
+                  role: 'assistant',
+                  content: finalResult,
+                  timestamp: Date.now(),
+                  displayType: 'final',
+                  visible: 1,
+                  images: [],
+                  metadata: {}
+                }).catch(err => {
+                  console.error('Failed to save final response to persistent storage:', err);
+                });
+              }
+              
               appTracer.recordCompletionAttempt(sessionId, true, finalResult);
               if (this.debug) {
                 console.log(`[DEBUG] Completion attempted successfully. Final Result captured.`);

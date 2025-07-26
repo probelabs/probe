@@ -60,6 +60,7 @@
   },
   "files": [
     "bin/",
+    "storage/",
     "index.js",
     "probeChat.js",
     "tokenCounter.js",

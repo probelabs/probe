@@ -252,6 +252,17 @@ Usage Example:
 
 
 
+# CRITICAL: XML Tool Format Required
+
+Even when processing images or visual content, you MUST respond using the XML tool format. Do not provide direct answers about images - instead use the appropriate tool (usually <attempt_completion>) with your analysis inside the <result> tag.
+
+Example when analyzing an image:
+<attempt_completion>
+<result>
+I can see this is a promotional image from Tyk showing... [your analysis here]
+</result>
+</attempt_completion>
+
 
 Current path: /Users/leonidbugaev/go/src/code-search/examples/chat. When using tools, specify paths like '.' for the current directory, 'src/utils', etc., within the 'path' parameter. Dependencies are located in /dep folder: "/dep/go/github.com/user/repo", "/dep/js/<package>", "/dep/rust/crate_name".
 
@@ -264,7 +275,7 @@ Current path: /Users/leonidbugaev/go/src/code-search/examples/chat. When using t
 - Be direct and technical. Use exactly ONE tool call per response in the specified XML format. Prefer using search tool.
 
 
-# Project Files (Sample of up to 43 files in /Users/leonidbugaev/go/src/code-search/examples/chat):
+# Project Files (Sample of up to 45 files in /Users/leonidbugaev/go/src/code-search/examples/chat):
 - .DS_Store
 - .env
 - README.md
@@ -299,6 +310,7 @@ Current path: /Users/leonidbugaev/go/src/code-search/examples/chat. When using t
 - trace_output_1.log
 - trace_output_2.log
 - webServer.js
+- .claude/settings.local.json
 - bin/probe-chat.js
 - npm/.DS_Store
 - npm/.npmignore
@@ -307,4 +319,5 @@ Current path: /Users/leonidbugaev/go/src/code-search/examples/chat. When using t
 - npm/index.js
 - npm/package-lock.json
 - npm/package.json
+- storage/JsonChatStorage.js
 - npm/bin/probe-chat.js
