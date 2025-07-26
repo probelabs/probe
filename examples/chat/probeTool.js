@@ -268,11 +268,19 @@ const baseImplementTool = {
 
 			// Build the aider command with the message-file argument
 			const autoCommitsFlag = '';
-			const aiderCommand = `aider --yes --no-check-update --no-auto-commits --no-analytics ${autoCommitsFlag} --message-file "${tempFilePath}"`;
+			
+			// Add --model gemini flag if Google API key is available
+			const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+			const modelFlag = geminiApiKey ? '--model gemini' : '';
+			
+			const aiderCommand = `aider --yes --no-check-update --no-auto-commits --no-analytics ${autoCommitsFlag} ${modelFlag} --message-file "${tempFilePath}"`.replace(/\s+/g, ' ').trim();
 
 			console.error("Task:", task.substring(0, 100) + (task.length > 100 ? "..." : ""));
 			console.error("Working directory:", currentWorkingDir);
 			console.error("Temp file:", tempFilePath);
+			if (geminiApiKey && debug) {
+				console.log(`[DEBUG] Using Gemini model for aider (API key available)`);
+			}
 
 			// Use a safer approach that won't interfere with other tools
 			// We'll use child_process.spawn but in a way that's compatible with the existing code
