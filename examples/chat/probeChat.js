@@ -72,12 +72,13 @@ function extractImageUrls(message, debug = false) {
   const tracer = trace.getTracer('probe-chat', '1.0.0');
   return tracer.startActiveSpan('content.image.extract', (span) => {
     try {
-      // Pattern to match image URLs:
+      // Pattern to match image URLs and base64 data:
       // 1. GitHub private-user-images URLs (always images, regardless of extension)
       // 2. GitHub user-attachments/assets URLs (always images, regardless of extension)
       // 3. URLs with common image extensions (PNG, JPG, JPEG, WebP, GIF)
+      // 4. Base64 data URLs (data:image/...)
       // Updated to stop at quotes, spaces, or common HTML/XML delimiters
-      const imageUrlPattern = /https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s"'<>]*)?)/gi;
+      const imageUrlPattern = /(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s"'<>]*)?))/gi;
       
       span.setAttributes({
         'message.length': message.length,
@@ -142,39 +143,75 @@ async function validateImageUrls(imageUrls, debug = false) {
   
   for (const url of imageUrls) {
     try {
-      // Always use GET request with Range header to validate and get content type
-      // This works better than HEAD for GitHub URLs and other services
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Range': 'bytes=0-1023' // Only fetch first 1KB to check content type and minimize data transfer
-        },
-        timeout: 10000, // 10 second timeout for GitHub URLs which can be slower
-        redirect: 'follow'
-      });
-      
-      if (response.ok || response.status === 206) { // 206 = Partial Content (from Range header)
-        // Check if the response has image content type
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.startsWith('image/')) {
-          // Use the final URL after following redirects
-          const finalUrl = response.url;
-          validUrls.push(finalUrl);
-          if (debug) {
-            if (finalUrl !== url) {
-              console.log(`[DEBUG] Valid image URL after redirect: ${url} -> ${finalUrl} (${contentType})`);
+      // Check if it's a base64 data URL
+      if (url.startsWith('data:image/')) {
+        // Validate base64 data URL format
+        const dataUrlMatch = url.match(/^data:image\/([a-zA-Z]*);base64,([A-Za-z0-9+/=]+)$/);
+        if (dataUrlMatch) {
+          const [, imageType, base64Data] = dataUrlMatch;
+          
+          // Basic validation of base64 data
+          if (base64Data.length > 0 && imageType) {
+            // Estimate file size from base64 (rough approximation: base64 is ~1.33x original size)
+            const estimatedSize = (base64Data.length * 3) / 4;
+            
+            // Check size limit (10MB)
+            if (estimatedSize <= 10 * 1024 * 1024) {
+              validUrls.push(url);
+              if (debug) {
+                console.log(`[DEBUG] Valid base64 image: ${imageType} (~${(estimatedSize / 1024).toFixed(1)}KB)`);
+              }
             } else {
-              console.log(`[DEBUG] Valid image URL: ${finalUrl} (${contentType})`);
+              if (debug) {
+                console.log(`[DEBUG] Base64 image too large: ~${(estimatedSize / 1024 / 1024).toFixed(1)}MB (max 10MB)`);
+              }
+            }
+          } else {
+            if (debug) {
+              console.log(`[DEBUG] Invalid base64 data URL format: ${url.substring(0, 50)}...`);
             }
           }
         } else {
           if (debug) {
-            console.log(`[DEBUG] URL not an image: ${url} (${contentType || 'unknown type'})`);
+            console.log(`[DEBUG] Invalid data URL format: ${url.substring(0, 50)}...`);
           }
         }
       } else {
-        if (debug) {
-          console.log(`[DEBUG] URL not accessible: ${url} (status: ${response.status})`);
+        // Handle regular HTTP/HTTPS URLs
+        // Always use GET request with Range header to validate and get content type
+        // This works better than HEAD for GitHub URLs and other services
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Range': 'bytes=0-1023' // Only fetch first 1KB to check content type and minimize data transfer
+          },
+          timeout: 10000, // 10 second timeout for GitHub URLs which can be slower
+          redirect: 'follow'
+        });
+        
+        if (response.ok || response.status === 206) { // 206 = Partial Content (from Range header)
+          // Check if the response has image content type
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.startsWith('image/')) {
+            // Use the final URL after following redirects
+            const finalUrl = response.url;
+            validUrls.push(finalUrl);
+            if (debug) {
+              if (finalUrl !== url) {
+                console.log(`[DEBUG] Valid image URL after redirect: ${url} -> ${finalUrl} (${contentType})`);
+              } else {
+                console.log(`[DEBUG] Valid image URL: ${finalUrl} (${contentType})`);
+              }
+            }
+          } else {
+            if (debug) {
+              console.log(`[DEBUG] URL not an image: ${url} (${contentType || 'unknown type'})`);
+            }
+          }
+        } else {
+          if (debug) {
+            console.log(`[DEBUG] URL not accessible: ${url} (status: ${response.status})`);
+          }
         }
       }
     } catch (error) {
@@ -643,6 +680,9 @@ When troubleshooting:
     // Add Tool Definitions
     systemMessage += `\n# Tools Available\n${toolDefinitions}\n`;
 
+    // Add special emphasis for image handling
+    systemMessage += `\n# CRITICAL: XML Tool Format Required\n\nEven when processing images or visual content, you MUST respond using the XML tool format. Do not provide direct answers about images - instead use the appropriate tool (usually <attempt_completion>) with your analysis inside the <result> tag.\n\nExample when analyzing an image:\n<attempt_completion>\n<result>\nI can see this is a promotional image from Tyk showing... [your analysis here]\n</result>\n</attempt_completion>\n`;
+
 
     const searchDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
     if (this.debug) {
@@ -739,9 +779,11 @@ When troubleshooting:
    * Process a user message and get a response
    * @param {string} message - The user message
    * @param {string} [sessionId] - Optional session ID to use for this chat (overrides the default)
+   * @param {Object} [apiCredentials] - Optional API credentials for this call
+   * @param {string[]} [images] - Optional array of base64 image URLs
    * @returns {Promise<string>} - The AI response
    */
-  async chat(message, sessionId, apiCredentials = null) {
+  async chat(message, sessionId, apiCredentials = null, images = []) {
     // Use our custom app tracer for granular tracing
     const effectiveSessionId = sessionId || this.sessionId;
     
@@ -795,7 +837,7 @@ When troubleshooting:
         }
 
         // Process the message using the potentially updated session ID
-        const result = await this._processChat(message, effectiveSessionId);
+        const result = await this._processChat(message, effectiveSessionId, images);
         
         appTracer.endChatSession(effectiveSessionId, true, result.tokenUsage?.total?.total || 0);
         
@@ -858,10 +900,11 @@ When troubleshooting:
    * Internal method to process a chat message using the XML tool loop
    * @param {string} message - The user message
    * @param {string} sessionId - The session ID for tracing
+   * @param {string[]} images - Array of base64 image URLs
    * @returns {Promise<string>} - The final AI response after loop completion
    * @private
    */
-  async _processChat(message, sessionId) {
+  async _processChat(message, sessionId, images = []) {
     let currentIteration = 0;
     let completionAttempted = false;
     let finalResult = `Error: Max tool iterations (${MAX_TOOL_ITERATIONS}) reached without completion. You can increase this limit using the MAX_TOOL_ITERATIONS environment variable or --max-iterations flag.`; // Default error
@@ -961,18 +1004,25 @@ When troubleshooting:
       
       const wrappedMessage = isFirstMessage ? `<task>\n${cleanedMessage}\n</task>` : cleanedMessage;
 
+      // Combine extracted URL images with uploaded base64 images
+      const allImages = [...validImageUrls, ...images];
+      
       // Create the user message with potential image attachments
       const userMessage = { role: 'user', content: wrappedMessage };
       
-      // Add image attachments if any valid URLs were found
-      if (validImageUrls.length > 0) {
+      // Add image attachments if any images are present
+      if (allImages.length > 0) {
         userMessage.content = [
           { type: 'text', text: wrappedMessage },
-          ...validImageUrls.map(url => ({
+          ...allImages.map(imageUrl => ({
             type: 'image',
-            image: url
+            image: imageUrl
           }))
         ];
+        
+        if (this.debug) {
+          console.log(`[DEBUG] Created message with ${allImages.length} images (${validImageUrls.length} from URLs, ${images.length} uploaded)`);
+        }
       }
 
       let currentMessages = [

@@ -1,7 +1,7 @@
 use std::fs;
 
 // Import necessary functions from the extract module
-use probe::extract::process_file_for_extraction;
+use probe_code::extract::process_file_for_extraction;
 
 fn execute_test(content: &str, expected_outputs: Vec<(usize, usize, usize)>) {
     // Create a temporary file with JavaScript code for testing

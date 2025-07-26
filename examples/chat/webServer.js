@@ -397,6 +397,7 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 				handlePostRequest(req, res, async (requestData) => {
 					const {
 						message,
+						images = [], // Array of base64 image URLs
 						sessionId: reqSessionId,
 						clearHistory,
 						apiProvider,
@@ -482,7 +483,7 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 					try {
 						// Pass API credentials to the chat method if provided
 						const apiCredentials = apiKey ? { apiProvider, apiKey, apiUrl } : null;
-						const result = await chatInstance.chat(message, chatSessionId, apiCredentials); // Pass session ID and API credentials
+						const result = await chatInstance.chat(message, chatSessionId, apiCredentials, images); // Pass session ID, API credentials, and images
 
 						// Check if cancelled *during* the chat call (ProbeChat throws error)
 						// Error handled in catch block

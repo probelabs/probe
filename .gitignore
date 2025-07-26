@@ -107,3 +107,6 @@ mcp/bin/probe
 
 .vitepress
 .aider*
+
+# Chat debug files
+examples/chat/probe-debug*.txt

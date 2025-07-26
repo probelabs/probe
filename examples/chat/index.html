@@ -275,7 +275,7 @@
 		#message-input {
 			resize: none;
 			flex: 1;
-			padding: 12px 16px;
+			padding: 12px 40px 12px 16px;
 			border: 1px solid #ddd;
 			border-radius: 8px;
 			font-size: 14px;
@@ -283,6 +283,8 @@
 			resize: none;
 			overflow-y: auto;
 			height: 1.5em;
+			width: 100%;
+			box-sizing: border-box;
 			/* Changed from 44px to auto */
 			min-height: 44px;
 			/* Ensures 1 row minimum */
@@ -313,6 +315,22 @@
 
 		button:hover {
 			background-color: #2bb5db;
+		}
+
+		#search-button {
+			padding: 12px 20px;
+			background-color: #44CDF3;
+			color: white;
+			border: none;
+			border-radius: 8px;
+			cursor: pointer;
+			font-weight: 500;
+			transition: all 0.2s ease;
+			white-space: nowrap;
+			flex-shrink: 0;
+			align-self: flex-start;
+			margin-left: 0;
+			height: auto;
 		}
 
 
@@ -430,7 +448,7 @@
 			background-color: #f1f1f1;
 			padding: 10px 14px;
 			border-radius: 18px;
-			margin-bottom: 12px;
+			margin-bottom: 6px;
 			max-width: 80%;
 			align-self: flex-end;
 			font-weight: 500;
@@ -656,6 +674,164 @@
 			font-size: 11px;
 			margin-left: 5px;
 		}
+
+		/* New minimal image upload styles */
+		.input-wrapper {
+			display: flex;
+			align-items: flex-start;
+			gap: 8px;
+			width: 100%;
+		}
+
+		.textarea-container {
+			position: relative;
+			flex: 1;
+			display: flex;
+			align-items: flex-start;
+		}
+
+		#message-input {
+			flex: 1;
+			min-height: 40px;
+			padding-right: 40px; /* Make space for upload icon */
+		}
+
+		.image-upload-icon {
+			position: absolute;
+			right: 12px;
+			top: 50%;
+			transform: translateY(-50%);
+			width: 24px;
+			height: 24px;
+			background: none !important;
+			border: none !important;
+			cursor: pointer;
+			color: #999 !important;
+			padding: 4px !important;
+			border-radius: 4px !important;
+			transition: all 0.2s ease;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			z-index: 10;
+			margin: 0 !important;
+			font-size: inherit !important;
+			font-weight: normal !important;
+			box-shadow: none !important;
+		}
+
+		.image-upload-icon:hover {
+			color: #666 !important;
+			background-color: rgba(0, 0, 0, 0.05) !important;
+		}
+
+		.image-upload-icon svg {
+			width: 16px;
+			height: 16px;
+		}
+
+		/* Floating thumbnails */
+		.floating-thumbnails {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			margin-bottom: 8px;
+			padding: 0;
+			position: absolute;
+			bottom: 100%;
+			left: 0;
+			right: 0;
+			z-index: 101;
+			justify-content: flex-start;
+		}
+
+		.floating-thumbnail {
+			position: relative;
+			width: 60px;
+			height: 60px;
+		}
+
+		.floating-thumbnail img {
+			width: 100%;
+			height: 100%;
+			object-fit: cover;
+			border-radius: 6px;
+			border: 1px solid #e0e0e0;
+			box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+		}
+
+		.floating-thumbnail-remove {
+			position: absolute;
+			top: 0px;
+			right: -16px;
+			width: 16px;
+			height: 16px;
+			background: none !important;
+			color: #000;
+			border: none;
+			cursor: pointer;
+			font-size: 12px;
+			font-weight: bold;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			line-height: 1;
+			transition: opacity 0.2s ease;
+			opacity: 0.6;
+			text-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
+		}
+
+		.floating-thumbnail-remove:hover {
+			opacity: 1;
+		}
+
+		/* Drag and drop styles */
+		.textarea-container.drag-over textarea {
+			background-color: #e3f2fd;
+			border-color: #2196f3;
+		}
+
+		/* Image display in messages */
+		.user-message img,
+		.ai-message img {
+			max-width: 100%;
+			max-height: 300px;
+			border-radius: 8px;
+			margin: 8px 0;
+			border: 1px solid #e0e0e0;
+			box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+			cursor: pointer;
+			transition: transform 0.2s ease;
+		}
+
+		.user-message img:hover,
+		.ai-message img:hover {
+			transform: scale(1.02);
+		}
+
+		/* Mobile responsive adjustments */
+		@media (max-width: 768px) {
+			.floating-thumbnails {
+				gap: 6px;
+			}
+			
+			.floating-thumbnail {
+				width: 50px;
+				height: 50px;
+			}
+
+			.user-message img,
+			.ai-message img {
+				max-height: 200px;
+			}
+
+			.image-upload-icon {
+				right: 10px;
+			}
+			#message-input {
+				padding: 12px 36px 12px 16px;
+			}
+		}
 	</style>
 	<style>
 		/* Styles for the API key setup message */
@@ -854,9 +1030,22 @@
 		</div>
 		<div id="messages" class="message-container"></div>
 	</div>
+	
 	<form id="input-form" onsubmit="return false;">
-		<textarea id="message-input" placeholder="Ask about code..." required rows="1"></textarea>
-		<button type="button" id="search-button">Search</button>
+		<div class="input-wrapper">
+			<div class="textarea-container">
+				<!-- Floating image thumbnails - positioned above textarea -->
+				<div id="floating-thumbnails" class="floating-thumbnails" style="display: none;"></div>
+				<textarea id="message-input" placeholder="Ask about code..." required rows="1"></textarea>
+				<input type="file" id="image-upload" accept="image/*" multiple style="display: none;">
+				<button type="button" id="image-upload-button" class="image-upload-icon" title="Upload images">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.64 16.2a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+					</svg>
+				</button>
+			</div>
+			<button type="button" id="search-button">Search</button>
+		</div>
 	</form>
 	<div class="search-suggestions">
 		<ul>
@@ -1964,10 +2153,34 @@
 			// Check if this is the first message
 			const isFirstMessage = messagesDiv.children.length === 0;
 
-			// Display user message
+			// Display user message with proper image handling
 			const userMsgDiv = document.createElement('div');
 			userMsgDiv.className = 'user-message markdown-content'; // Add markdown-content class
-			userMsgDiv.innerHTML = renderMarkdown(message); // Render as markdown
+			
+			// Render the text message
+			userMsgDiv.innerHTML = renderMarkdown(message);
+			
+			// Get uploaded images for display in user message
+			const userMessageImages = window.getUploadedImagesForChat ? window.getUploadedImagesForChat() : [];
+			
+			// Add uploaded images if any
+			if (userMessageImages.length > 0) {
+				userMessageImages.forEach(imageUrl => {
+					const imgElement = document.createElement('img');
+					imgElement.src = imageUrl;
+					imgElement.alt = 'Uploaded image';
+					imgElement.style.maxWidth = '100%';
+					imgElement.style.maxHeight = '300px';
+					imgElement.style.borderRadius = '8px';
+					imgElement.style.margin = '8px 0';
+					imgElement.style.border = '1px solid #e0e0e0';
+					imgElement.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.1)';
+					imgElement.style.cursor = 'pointer';
+					imgElement.style.transition = 'transform 0.2s ease';
+					userMsgDiv.appendChild(imgElement);
+				});
+			}
+			
 			messagesDiv.appendChild(userMsgDiv);
 
 			// Apply syntax highlighting to code blocks in user message
@@ -2059,13 +2272,21 @@
 				const storedApiKey = localStorage.getItem('probeApiKey');
 				const storedApiUrl = localStorage.getItem('probeApiUrl');
 
+				// Get uploaded images as base64 data URLs
+				const uploadedImageUrls = window.getUploadedImagesForChat ? window.getUploadedImagesForChat() : [];
+				
 				const requestData = {
-					message,
+					message: message, // Keep text separate from images
+					images: uploadedImageUrls, // Send images separately
 					sessionId, // Include session ID with the request
 					apiProvider: storedApiProvider,
 					apiKey: storedApiKey,
 					apiUrl: storedApiUrl
 				};
+				
+				if (uploadedImageUrls.length > 0) {
+					console.log(`Including ${uploadedImageUrls.length} uploaded image(s) with message`);
+				}
 				console.log('Sending chat request with data:', requestData);
 
 				// Add a visual indicator that we're using this session ID
@@ -2331,6 +2552,11 @@
 					window.tokenUsageDisplay.fetch(sessionId);
 				}
 
+				// Clear uploaded images after successful send
+				if (window.clearUploadedImagesAfterSend) {
+					window.clearUploadedImagesAfterSend();
+				}
+
 				// Reset button to "Search" and enable input
 				searchButton.textContent = 'Search';
 				searchButton.style.backgroundColor = '#44CDF3';
@@ -2561,6 +2787,298 @@
 				}
 			});
 		});
+
+		// Image Upload Functionality
+		(function() {
+			// Global state to track uploaded images
+			window.uploadedImages = window.uploadedImages || [];
+			
+			// Get DOM elements
+			const imageUploadButton = document.getElementById('image-upload-button');
+			const imageUploadInput = document.getElementById('image-upload');
+			const messageInput = document.getElementById('message-input');
+			const textareaContainer = document.querySelector('.textarea-container');
+			const floatingThumbnails = document.getElementById('floating-thumbnails');
+
+			// Image upload button click handler
+			imageUploadButton.addEventListener('click', function() {
+				imageUploadInput.click();
+			});
+
+			// File input change handler
+			imageUploadInput.addEventListener('change', function(e) {
+				const files = Array.from(e.target.files);
+				handleImageFiles(files);
+			});
+
+			// Drag and drop functionality
+			textareaContainer.addEventListener('dragover', function(e) {
+				e.preventDefault();
+				textareaContainer.classList.add('drag-over');
+			});
+
+			textareaContainer.addEventListener('dragleave', function(e) {
+				e.preventDefault();
+				textareaContainer.classList.remove('drag-over');
+			});
+
+			textareaContainer.addEventListener('drop', function(e) {
+				e.preventDefault();
+				textareaContainer.classList.remove('drag-over');
+				
+				const files = Array.from(e.dataTransfer.files).filter(file => 
+					file.type.startsWith('image/')
+				);
+				
+				if (files.length > 0) {
+					handleImageFiles(files);
+				}
+			});
+
+			// Clipboard paste functionality
+			messageInput.addEventListener('paste', function(e) {
+				const clipboardItems = e.clipboardData.items;
+				const imageFiles = [];
+
+				for (let i = 0; i < clipboardItems.length; i++) {
+					const item = clipboardItems[i];
+					if (item.type.startsWith('image/')) {
+						const file = item.getAsFile();
+						if (file) {
+							imageFiles.push(file);
+						}
+					}
+				}
+
+				if (imageFiles.length > 0) {
+					e.preventDefault(); // Prevent default paste behavior
+					handleImageFiles(imageFiles);
+				}
+			});
+
+			// Handle image files
+			function handleImageFiles(files) {
+				files.forEach(file => {
+					// Validate file size (10MB limit)
+					if (file.size > 10 * 1024 * 1024) {
+						showImageError(`File "${file.name}" is too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Maximum size is 10MB.`);
+						return;
+					}
+
+					// Validate file type
+					if (!file.type.startsWith('image/')) {
+						showImageError(`File "${file.name}" is not a valid image file.`);
+						return;
+					}
+
+					// Convert to base64 and add to uploaded images
+					const reader = new FileReader();
+					reader.onload = function(e) {
+						const base64Data = e.target.result;
+						const imageInfo = {
+							id: Date.now() + Math.random(),
+							name: file.name,
+							size: file.size,
+							type: file.type,
+							base64: base64Data
+						};
+
+						window.uploadedImages.push(imageInfo);
+						addImagePreview(imageInfo);
+						updateThumbnailsVisibility();
+					};
+
+					reader.onerror = function() {
+						showImageError(`Failed to read file "${file.name}".`);
+					};
+
+					reader.readAsDataURL(file);
+				});
+			}
+
+			// Add image preview
+			function addImagePreview(imageInfo) {
+				const thumbnailItem = document.createElement('div');
+				thumbnailItem.className = 'floating-thumbnail';
+				thumbnailItem.dataset.imageId = imageInfo.id;
+
+				thumbnailItem.innerHTML = `
+					<img src="${imageInfo.base64}" alt="${imageInfo.name}">
+					<button type="button" class="floating-thumbnail-remove" onclick="removeImagePreview('${imageInfo.id}')">×</button>
+				`;
+
+				floatingThumbnails.appendChild(thumbnailItem);
+			}
+
+			// Remove image preview
+			window.removeImagePreview = function(imageId) {
+				// Remove from uploaded images array
+				window.uploadedImages = window.uploadedImages.filter(img => img.id != imageId);
+				
+				// Remove from DOM
+				const thumbnailItem = document.querySelector(`[data-image-id="${imageId}"]`);
+				if (thumbnailItem) {
+					thumbnailItem.remove();
+				}
+
+				updateThumbnailsVisibility();
+			};
+
+			// Clear all images (internal function)
+			function clearAllImages() {
+				window.uploadedImages = [];
+				floatingThumbnails.innerHTML = '';
+				updateThumbnailsVisibility();
+			}
+
+			// Update thumbnails container visibility
+			function updateThumbnailsVisibility() {
+				if (window.uploadedImages.length > 0) {
+					floatingThumbnails.style.display = 'flex';
+				} else {
+					floatingThumbnails.style.display = 'none';
+				}
+			}
+
+			// Show image error
+			function showImageError(message) {
+				console.error('[Image Upload]', message);
+				
+				// Create error notification
+				const errorDiv = document.createElement('div');
+				errorDiv.style.position = 'fixed';
+				errorDiv.style.top = '20px';
+				errorDiv.style.right = '20px';
+				errorDiv.style.backgroundColor = '#dc3545';
+				errorDiv.style.color = 'white';
+				errorDiv.style.padding = '12px 16px';
+				errorDiv.style.borderRadius = '6px';
+				errorDiv.style.zIndex = '9999';
+				errorDiv.style.maxWidth = '300px';
+				errorDiv.style.fontSize = '14px';
+				errorDiv.textContent = message;
+
+				document.body.appendChild(errorDiv);
+
+				// Auto-remove after 5 seconds
+				setTimeout(() => {
+					if (errorDiv.parentNode) {
+						errorDiv.parentNode.removeChild(errorDiv);
+					}
+				}, 5000);
+			}
+
+			// Function to get images as base64 data URLs for chat
+			window.getUploadedImagesForChat = function() {
+				return window.uploadedImages.map(img => img.base64);
+			};
+
+			// Function to clear images after successful send
+			window.clearUploadedImagesAfterSend = function() {
+				clearAllImages();
+			};
+		})();
+
+		// Function to process message for display (handle base64 images)
+		function processMessageForDisplay(message) {
+			// Pattern to match base64 data URLs
+			const base64ImagePattern = /data:image\/([a-zA-Z]*);base64,([A-Za-z0-9+/=]+)/g;
+			
+			// Replace base64 data URLs with proper img tags
+			const processedMessage = message.replace(base64ImagePattern, (match, imageType, base64Data) => {
+				// Estimate file size for display
+				const estimatedSize = (base64Data.length * 3) / 4;
+				const sizeText = estimatedSize > 1024 * 1024 
+					? `${(estimatedSize / 1024 / 1024).toFixed(1)}MB`
+					: `${(estimatedSize / 1024).toFixed(1)}KB`;
+				
+				// Create an image markdown with the base64 data
+				return `![Uploaded image (${imageType}, ${sizeText})](${match})`;
+			});
+			
+			return processedMessage;
+		}
+
+		// Make the function globally available
+		window.processMessageForDisplay = processMessageForDisplay;
+
+		// Add click-to-zoom functionality for images in messages
+		document.addEventListener('click', function(e) {
+			if (e.target.tagName === 'IMG' && (e.target.closest('.user-message') || e.target.closest('.ai-message'))) {
+				e.preventDefault();
+				showImageDialog(e.target.src, e.target.alt || 'Image');
+			}
+		});
+
+		// Function to show image in full-screen dialog
+		function showImageDialog(imageSrc, imageAlt) {
+			// Create dialog overlay
+			const overlay = document.createElement('div');
+			overlay.style.position = 'fixed';
+			overlay.style.top = '0';
+			overlay.style.left = '0';
+			overlay.style.width = '100%';
+			overlay.style.height = '100%';
+			overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+			overlay.style.zIndex = '10000';
+			overlay.style.display = 'flex';
+			overlay.style.alignItems = 'center';
+			overlay.style.justifyContent = 'center';
+			overlay.style.cursor = 'pointer';
+
+			// Create image container
+			const imageContainer = document.createElement('div');
+			imageContainer.style.position = 'relative';
+			imageContainer.style.maxWidth = '90%';
+			imageContainer.style.maxHeight = '90%';
+
+			// Create image element
+			const img = document.createElement('img');
+			img.src = imageSrc;
+			img.alt = imageAlt;
+			img.style.maxWidth = '100%';
+			img.style.maxHeight = '100%';
+			img.style.objectFit = 'contain';
+			img.style.borderRadius = '8px';
+
+			// Create close button
+			const closeButton = document.createElement('button');
+			closeButton.innerHTML = '×';
+			closeButton.style.position = 'absolute';
+			closeButton.style.top = '-10px';
+			closeButton.style.right = '-10px';
+			closeButton.style.width = '30px';
+			closeButton.style.height = '30px';
+			closeButton.style.borderRadius = '50%';
+			closeButton.style.border = 'none';
+			closeButton.style.backgroundColor = '#fff';
+			closeButton.style.color = '#333';
+			closeButton.style.fontSize = '18px';
+			closeButton.style.cursor = 'pointer';
+			closeButton.style.zIndex = '10001';
+
+			// Add elements to DOM
+			imageContainer.appendChild(img);
+			imageContainer.appendChild(closeButton);
+			overlay.appendChild(imageContainer);
+			document.body.appendChild(overlay);
+
+			// Close on overlay click or close button click
+			overlay.addEventListener('click', function(e) {
+				if (e.target === overlay || e.target === closeButton) {
+					document.body.removeChild(overlay);
+				}
+			});
+
+			// Close on escape key
+			const escapeHandler = function(e) {
+				if (e.key === 'Escape') {
+					document.body.removeChild(overlay);
+					document.removeEventListener('keydown', escapeHandler);
+				}
+			};
+			document.addEventListener('keydown', escapeHandler);
+		}
 	</script>
 </body>
 
