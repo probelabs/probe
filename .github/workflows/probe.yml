@@ -1119,6 +1119,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+      # --- Clean up artifact files before git operations ---
+      - name: Clean up artifact files
+        if: inputs.allow_edit || inputs.allow_suggestions
+        run: |
+          echo "::group::Cleaning up artifact files"
+          # Remove all workflow artifact files to prevent them from interfering with git operations
+          rm -f error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt probe-traces.jsonl full_response.md
+          echo "Artifact files cleaned up"
+          echo "::endgroup::"
+
       - name: Handle Git Changes
         id: handle_git
         if: inputs.allow_edit && steps.probe.outcome == 'success'
@@ -1161,7 +1171,7 @@ jobs:
           echo "Staging all detected changes..."
           git add --all
           echo "Unstaging workflow artifacts..."
-          git reset HEAD -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt probe-traces.jsonl || echo "::warning::Failed to unstage some artifacts, continuing..."
+          git reset HEAD -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt probe-traces.jsonl full_response.md || echo "::warning::Failed to unstage some artifacts, continuing..."
 
           echo "Checking for staged code changes after unstaging artifacts..."
           git status --porcelain
