@@ -39,7 +39,7 @@ pub fn calculate_file_md5(file_path: &Path) -> Result<String> {
     let mut file = File::open(file_path)?;
     let mut contents = Vec::new();
     file.read_to_end(&mut contents)?;
-    
+
     let digest = md5::compute(&contents);
     Ok(format!("{:x}", digest))
 }
@@ -195,11 +195,14 @@ impl SessionCache {
         // Check each cached file's MD5 hash
         for (file_path, cached_md5) in &self.file_md5_hashes {
             let current_path = Path::new(file_path);
-            
+
             // Skip if file no longer exists
             if !current_path.exists() {
                 if debug_mode {
-                    println!("DEBUG: File no longer exists, invalidating cache: {}", file_path);
+                    println!(
+                        "DEBUG: File no longer exists, invalidating cache: {}",
+                        file_path
+                    );
                 }
                 invalidated_files.insert(file_path.clone());
                 continue;
@@ -218,7 +221,10 @@ impl SessionCache {
                 }
                 Err(e) => {
                     if debug_mode {
-                        println!("DEBUG: Error calculating MD5 for {}, invalidating cache: {}", file_path, e);
+                        println!(
+                            "DEBUG: Error calculating MD5 for {}, invalidating cache: {}",
+                            file_path, e
+                        );
                     }
                     invalidated_files.insert(file_path.clone());
                 }
@@ -228,13 +234,13 @@ impl SessionCache {
         // Remove block identifiers from invalidated files
         for file_path in &invalidated_files {
             let normalized_path = normalize_path(file_path);
-            
+
             // Find all block identifiers that belong to this file
             for block_id in &self.block_identifiers {
                 if let Some(colon_pos) = block_id.find(':') {
                     let block_file_part = &block_id[..colon_pos];
                     let normalized_block_file = normalize_path(block_file_part);
-                    
+
                     if normalized_block_file == normalized_path {
                         blocks_to_remove.insert(block_id.clone());
                     }
@@ -267,12 +273,12 @@ impl SessionCache {
     pub fn update_file_md5(&mut self, file_path: &str) -> Result<()> {
         let normalized_path = normalize_path(file_path);
         let path = Path::new(&normalized_path);
-        
+
         if path.exists() {
             let md5_hash = calculate_file_md5(path)?;
             self.file_md5_hashes.insert(normalized_path, md5_hash);
         }
-        
+
         Ok(())
     }
 
@@ -566,7 +572,7 @@ pub fn add_results_to_cache(results: &[SearchResult], session_id: &str, query: &
             }
         }
         cache.add_to_cache(cache_key);
-        
+
         // Track this file for MD5 update
         unique_files.insert(normalize_path(&result.file));
     }
@@ -582,10 +588,7 @@ pub fn add_results_to_cache(results: &[SearchResult], session_id: &str, query: &
 
     if debug_mode {
         println!("DEBUG: Added {new_entries} new entries to cache");
-        println!(
-            "DEBUG: Updated MD5 hashes for {} files",
-            unique_files.len()
-        );
+        println!("DEBUG: Updated MD5 hashes for {} files", unique_files.len());
         println!(
             "DEBUG: Cache now has {} entries and {} file hashes",
             cache.block_identifiers.len(),
