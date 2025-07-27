@@ -183,6 +183,7 @@ jobs:
           ISSUE_BODY: ${{ github.event.issue.body }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
+          # shellcheck disable=SC2086,SC2129,SC2193
           echo "Event name: $EVENT_NAME"
           echo "skip=false" >> "$GITHUB_OUTPUT"   # Default; overridden if skipping
 
@@ -655,6 +656,7 @@ jobs:
           HEAD_SHA: ${{ env.HEAD_SHA }}
           LAST_PROBE_TIMESTAMP: ${{ env.LAST_PROBE_TIMESTAMP }}
         run: |
+          # shellcheck disable=SC2086,SC2129,SC2295
           # (Script remains the same)
           echo "::group::Fetch & Filter PR Diff"
           set -e
@@ -940,6 +942,7 @@ jobs:
           ISSUE_TITLE: ${{ env.ISSUE_TITLE }}
           ISSUE_BODY: ${{ env.ISSUE_BODY }}
         run: |
+          # shellcheck disable=SC2086,SC2129
           # (Script remains the same)
           echo "::group::Assemble Final Prompt & Set Outputs"
           set -e

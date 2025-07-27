@@ -154,7 +154,9 @@ jobs:
 
     - name: Verify search results (Windows)
       if: runner.os == 'Windows'
+      shell: pwsh
       run: |
+        # shellcheck disable=SC1009,SC1073,SC1065,SC1064,SC1072
         # Check that the JSON output contains expected fields
         if (-not (Test-Path search_results.json)) {
           Write-Host "Error: search_results.json file not found"
@@ -234,7 +236,9 @@ jobs:
 
     - name: Verify extract results (Windows)
       if: runner.os == 'Windows'
+      shell: pwsh
       run: |
+        # shellcheck disable=SC1009,SC1073,SC1065,SC1064,SC1072
         # Check that the extract output contains expected fields
         if (-not (Test-Path extract_results.json)) {
           Write-Host "Error: extract_results.json file not found"
