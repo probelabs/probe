@@ -20,10 +20,13 @@ import {
 	isSessionCancelled
 } from './probeTool.js';
 import { registerRequest, cancelRequest, clearRequest, isRequestActive } from './cancelRequest.js';
+import { JsonChatStorage } from './storage/JsonChatStorage.js';
 
 // Get the directory name of the current module
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Global storage instance - will be initialized when web server starts
+let globalStorage = null;
 
 // Map to store chat instances by session ID
 const chatSessions = new Map();
@@ -37,8 +40,17 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
 		sessionId = randomUUID(); // Use crypto.randomUUID() if available/preferred
 		console.warn(`[WARN] Missing sessionId, generated fallback: ${sessionId}`);
 	}
+	
+	// Check in-memory cache first
 	if (chatSessions.has(sessionId)) {
-		return chatSessions.get(sessionId);
+		const existingChat = chatSessions.get(sessionId);
+		// Update activity timestamp in persistent storage
+		if (globalStorage) {
+			globalStorage.updateSessionActivity(sessionId).catch(err => {
+				console.error('Failed to update session activity:', err);
+			});
+		}
+		return existingChat;
 	}
 
 	// Create options object with sessionId and API credentials if provided
@@ -48,9 +60,37 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
 		options.apiKey = apiCredentials.apiKey;
 		options.apiUrl = apiCredentials.apiUrl;
 	}
+	
+	// Pass storage instance for persistent storage
+	if (globalStorage) {
+		options.storage = globalStorage;
+	}
 
 	const newChat = new ProbeChat(options);
+	
+	// Add timestamps for session tracking
+	const now = Date.now();
+	newChat.createdAt = now;
+	newChat.lastActivity = now;
+	
+	// Store in memory cache
 	chatSessions.set(sessionId, newChat);
+	
+	// Save session metadata to persistent storage
+	if (globalStorage) {
+		globalStorage.saveSession({
+			id: sessionId,
+			createdAt: now,
+			lastActivity: now,
+			firstMessagePreview: null, // Will be updated when first message is sent
+			metadata: {
+				apiProvider: apiCredentials?.apiProvider || null
+			}
+		}).catch(err => {
+			console.error('Failed to save session to persistent storage:', err);
+		});
+	}
+	
 	if (process.env.DEBUG_CHAT === '1') {
 		console.log(`[DEBUG] Created and stored new chat instance for session: ${sessionId}. Total sessions: ${chatSessions.size}`);
 		if (apiCredentials && apiCredentials.apiKey) {
@@ -83,6 +123,23 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 	} else {
 		console.log('Authentication disabled');
 	}
+
+	// Initialize persistent storage for web mode
+	globalStorage = new JsonChatStorage({ 
+		webMode: true, 
+		verbose: process.env.DEBUG_CHAT === '1' 
+	});
+	
+	// Initialize storage asynchronously
+	(async () => {
+		try {
+			await globalStorage.initialize();
+			const stats = await globalStorage.getStats();
+			console.log(`Chat history storage: ${stats.storage_type} (${stats.session_count} sessions, ${stats.visible_message_count} messages)`);
+		} catch (error) {
+			console.warn('Failed to initialize chat history storage:', error.message);
+		}
+	})();
 
 	// Map to store SSE clients by session ID
 	const sseClients = new Map();
@@ -164,6 +221,7 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 		const routes = {
 			// Handle OPTIONS requests for CORS preflight (Common)
 			'OPTIONS /api/token-usage': (req, res) => handleOptions(res),
+			'OPTIONS /api/sessions': (req, res) => handleOptions(res),
 			'OPTIONS /chat': (req, res) => handleOptions(res),
 			'OPTIONS /api/search': (req, res) => handleOptions(res),
 			'OPTIONS /api/query': (req, res) => handleOptions(res),
@@ -204,12 +262,190 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 				// The client-side JavaScript will handle formatting
 				sendJson(res, 200, tokenUsage);
 			},
+
+			// Session history API endpoint for URL-based session restoration
+			'GET /api/session/:sessionId/history': async (req, res) => {
+				const sessionId = extractSessionIdFromHistoryPath(req.url);
+				if (!sessionId) return sendError(res, 400, 'Missing sessionId in URL path');
+
+				const DEBUG = process.env.DEBUG_CHAT === '1';
+				if (DEBUG) {
+					console.log(`[DEBUG] Fetching history for session: ${sessionId}`);
+				}
+
+				try {
+					// First check if session is in memory cache
+					const chatInstance = chatSessions.get(sessionId);
+					let history = [];
+					let tokenUsage = null;
+					let exists = false;
+
+					if (chatInstance) {
+						// Session is active - use in-memory display history for consistency
+						history = chatInstance.displayHistory || [];
+						tokenUsage = chatInstance.getTokenUsage();
+						exists = true;
+					} else if (globalStorage) {
+						// Session not in memory - try loading from persistent storage
+						const persistentHistory = await globalStorage.getSessionHistory(sessionId);
+						if (persistentHistory && persistentHistory.length > 0) {
+							// Convert stored messages to display format
+							history = persistentHistory.map(msg => ({
+								role: msg.role,
+								content: msg.content,
+								timestamp: new Date(msg.timestamp).toISOString(),
+								displayType: msg.display_type,
+								visible: msg.visible,
+								images: msg.images || []
+							}));
+							exists = true;
+						}
+					}
+
+					sendJson(res, 200, {
+						history: history,
+						tokenUsage: tokenUsage,
+						sessionId: sessionId,
+						exists: exists,
+						timestamp: new Date().toISOString()
+					});
+				} catch (error) {
+					console.error('Error fetching session history:', error);
+					sendJson(res, 200, {
+						history: [],
+						tokenUsage: null,
+						sessionId: sessionId,
+						exists: false,
+						timestamp: new Date().toISOString()
+					});
+				}
+			},
+
+			// Sessions list endpoint for history dropdown
+			'GET /api/sessions': async (req, res) => {
+				const DEBUG = process.env.DEBUG_CHAT === '1';
+				if (DEBUG) {
+					console.log(`[DEBUG] Fetching sessions list`);
+				}
+
+				try {
+					const sessions = [];
+					const now = Date.now();
+					const maxAge = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
+
+					if (globalStorage) {
+						// Get sessions from persistent storage
+						const storedSessions = await globalStorage.listSessions(50);
+						
+						for (const session of storedSessions) {
+							// Skip inactive sessions older than 2 hours
+							if (now - session.last_activity > maxAge) {
+								continue;
+							}
+
+							// Use stored preview or generate from session metadata
+							let preview = session.first_message_preview;
+							if (!preview) {
+								// If no preview stored, try to get first message from history
+								const history = await globalStorage.getSessionHistory(session.id, 1);
+								if (history.length > 0 && history[0].role === 'user') {
+									const cleanContent = extractContentFromMessage(history[0].content);
+									preview = cleanContent.length > 100 
+										? cleanContent.substring(0, 100) + '...' 
+										: cleanContent;
+								}
+							}
+
+							if (preview) {
+								sessions.push({
+									sessionId: session.id,
+									preview: preview,
+									messageCount: 0, // We could calculate this but it's not critical
+									createdAt: new Date(session.created_at).toISOString(),
+									lastActivity: new Date(session.last_activity).toISOString(),
+									relativeTime: getRelativeTime(session.last_activity)
+								});
+							}
+						}
+					} else {
+						// Fallback to in-memory sessions
+						for (const [sessionId, chatInstance] of chatSessions.entries()) {
+							// Skip sessions without any history
+							if (!chatInstance.history || chatInstance.history.length === 0) {
+								continue;
+							}
+
+							// Get session metadata
+							const createdAt = chatInstance.createdAt || now;
+							const lastActivity = chatInstance.lastActivity || createdAt;
+							
+							// Skip inactive sessions older than 2 hours
+							if (now - lastActivity > maxAge) {
+								continue;
+							}
+
+							// Find the first user message for preview
+							const firstUserMessage = chatInstance.history.find(msg => msg.role === 'user');
+							if (!firstUserMessage) {
+								continue;
+							}
+
+							// Extract clean content and create preview
+							const cleanContent = extractContentFromMessage(firstUserMessage.content);
+							const preview = cleanContent.length > 100 
+								? cleanContent.substring(0, 100) + '...' 
+								: cleanContent;
+
+							sessions.push({
+								sessionId: sessionId,
+								preview: preview,
+								messageCount: chatInstance.history.length,
+								createdAt: new Date(createdAt).toISOString(),
+								lastActivity: new Date(lastActivity).toISOString(),
+								relativeTime: getRelativeTime(lastActivity)
+							});
+						}
+					}
+
+					if (DEBUG) {
+						console.log(`[DEBUG] Returning ${sessions.length} sessions`);
+					}
+
+					sendJson(res, 200, {
+						sessions: sessions,
+						total: sessions.length,
+						timestamp: new Date().toISOString()
+					});
+				} catch (error) {
+					console.error('Error fetching sessions list:', error);
+					sendJson(res, 500, { error: 'Failed to fetch sessions' });
+				}
+			},
 			// Static file routes
 			'GET /logo.png': (req, res) => serveStatic(res, join(__dirname, 'logo.png'), 'image/png'),
 			// UI Routes
 			'GET /': (req, res) => {
 				const htmlPath = join(__dirname, 'index.html');
 				serveHtml(res, htmlPath, { 'data-no-api-keys': noApiKeysMode ? 'true' : 'false' });
+			},
+
+			// Chat session route - serves HTML with injected session ID
+			'GET /chat/:sessionId': (req, res) => {
+				const sessionId = extractSessionIdFromPath(req.url);
+				if (!sessionId) {
+					return sendError(res, 400, 'Invalid session ID in URL');
+				}
+				
+				// Validate that session exists or at least has a valid UUID format
+				if (!isValidUUID(sessionId)) {
+					return sendError(res, 400, 'Invalid session ID format');
+				}
+
+				const htmlPath = join(__dirname, 'index.html');
+				serveHtml(res, htmlPath, { 
+					'data-no-api-keys': noApiKeysMode ? 'true' : 'false',
+					'data-session-id': sessionId
+				});
 			},
 
 			'GET /folders': (req, res) => {
@@ -260,6 +496,47 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 					if (DEBUG) {
 						// console.log(`[DEBUG] SSE: Handling tool call event for session ${sessionId}: ${toolCall.name}`); // Noisy
 					}
+					
+					// Store tool call in chat session's display history
+					const chatInstance = chatSessions.get(sessionId);
+					if (chatInstance && toolCall.status === 'completed') {
+						// Only store completed tool calls that users see
+						const displayToolCall = {
+							role: 'toolCall',
+							name: toolCall.name,
+							args: toolCall.args || {},
+							timestamp: toolCall.timestamp || new Date().toISOString(),
+							visible: true,
+							displayType: 'toolCall'
+						};
+						
+						if (!chatInstance.displayHistory) {
+							chatInstance.displayHistory = [];
+						}
+						chatInstance.displayHistory.push(displayToolCall);
+						
+						// Also save to persistent storage
+						if (globalStorage) {
+							globalStorage.saveMessage(sessionId, {
+								role: 'toolCall',
+								content: `Tool: ${toolCall.name}\nArgs: ${JSON.stringify(toolCall.args || {}, null, 2)}`,
+								timestamp: toolCall.timestamp ? new Date(toolCall.timestamp).getTime() : Date.now(),
+								displayType: 'toolCall',
+								visible: 1,
+								metadata: {
+									name: toolCall.name,
+									args: toolCall.args || {}
+								}
+							}).catch(err => {
+								console.error('Failed to save tool call to persistent storage:', err);
+							});
+						}
+						
+						if (DEBUG) {
+							console.log(`[DEBUG] Stored tool call in display history: ${toolCall.name}`);
+						}
+					}
+					
 					// Ensure data is serializable and add timestamp if missing
 					const serializableCall = {
 						...toolCall,
@@ -397,6 +674,7 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 				handlePostRequest(req, res, async (requestData) => {
 					const {
 						message,
+						images = [], // Array of base64 image URLs
 						sessionId: reqSessionId,
 						clearHistory,
 						apiProvider,
@@ -423,6 +701,9 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 
 					// Get or create chat instance with API credentials
 					const chatInstance = getOrCreateChat(chatSessionId, apiCredentials);
+
+					// Update last activity timestamp
+					chatInstance.lastActivity = Date.now();
 
 					// Check if API keys are needed but missing
 					if (chatInstance.noApiKeysMode) {
@@ -482,7 +763,7 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 					try {
 						// Pass API credentials to the chat method if provided
 						const apiCredentials = apiKey ? { apiProvider, apiKey, apiUrl } : null;
-						const result = await chatInstance.chat(message, chatSessionId, apiCredentials); // Pass session ID and API credentials
+						const result = await chatInstance.chat(message, chatSessionId, apiCredentials, images); // Pass session ID, API credentials, and images
 
 						// Check if cancelled *during* the chat call (ProbeChat throws error)
 						// Error handled in catch block
@@ -604,12 +885,28 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 		// --- Request Routing ---
 		const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
 		const routeKey = `${req.method} ${parsedUrl.pathname}`;
-		const handler = routes[routeKey];
+		let handler = routes[routeKey];
+
+		// Handle dynamic routes if no exact match found
+		if (!handler) {
+			// Check for /chat/:sessionId pattern
+			if (req.method === 'GET' && parsedUrl.pathname.match(/^\/chat\/[^/?]+$/)) {
+				handler = routes['GET /chat/:sessionId'];
+			}
+			// Check for /api/session/:sessionId/history pattern
+			else if (req.method === 'GET' && parsedUrl.pathname.match(/^\/api\/session\/[^/?]+\/history$/)) {
+				handler = routes['GET /api/session/:sessionId/history'];
+			}
+		}
 
 		if (handler) {
 			// Skip auth for specific public routes
 			const publicRoutes = ['GET /openapi.yaml', 'GET /api/tool-events', 'GET /logo.png', 'GET /', 'GET /folders', 'OPTIONS']; // Add OPTIONS
-			if (publicRoutes.includes(routeKey) || req.method === 'OPTIONS') {
+			const isPublicRoute = publicRoutes.includes(routeKey) || req.method === 'OPTIONS' || 
+								  parsedUrl.pathname.match(/^\/chat\/[^/?]+$/) || // Chat sessions are public
+								  parsedUrl.pathname.match(/^\/api\/session\/[^/?]+\/history$/); // History API is public
+			
+			if (isPublicRoute) {
 				handler(req, res);
 			} else {
 				processRequest(handler); // Apply auth middleware
@@ -756,4 +1053,56 @@ async function executeDirectTool(res, toolInstance, toolName, toolParams, sessio
 		// Add more specific error handling if needed
 		sendError(res, statusCode, `${errorMessage}: ${error.message}`);
 	}
+}
+
+function extractSessionIdFromPath(url) {
+	// Extract session ID from URLs like /chat/session-id
+	const match = url.match(/^\/chat\/([^/?]+)/);
+	return match ? match[1] : null;
+}
+
+function isValidUUID(str) {
+	// Basic UUID validation (any version, with or without hyphens)
+	const uuidRegex = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
+	return uuidRegex.test(str);
+}
+
+function extractSessionIdFromHistoryPath(url) {
+	// Extract session ID from URLs like /api/session/session-id/history
+	const match = url.match(/^\/api\/session\/([^/?]+)\/history/);
+	return match ? match[1] : null;
+}
+
+function extractContentFromMessage(content) {
+	// Handle different XML patterns used by the assistant and clean user messages
+	const patterns = [
+		/<task>([\s\S]*?)<\/task>/,
+		/<attempt_completion>\s*<result>([\s\S]*?)<\/result>\s*<\/attempt_completion>/,
+		/<result>([\s\S]*?)<\/result>/
+	];
+	
+	for (const pattern of patterns) {
+		const match = content.match(pattern);
+		if (match) {
+			return match[1].trim();
+		}
+	}
+	
+	// If no XML pattern matches, return the content as-is
+	return content.trim();
+}
+
+function getRelativeTime(timestamp) {
+	const now = Date.now();
+	const diff = now - timestamp;
+	
+	const seconds = Math.floor(diff / 1000);
+	const minutes = Math.floor(seconds / 60);
+	const hours = Math.floor(minutes / 60);
+	const days = Math.floor(hours / 24);
+	
+	if (days > 0) return `${days}d ago`;
+	if (hours > 0) return `${hours}h ago`;
+	if (minutes > 0) return `${minutes}m ago`;
+	return 'just now';
 }

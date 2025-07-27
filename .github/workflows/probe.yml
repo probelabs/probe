@@ -125,12 +125,6 @@ jobs:
   process_comment:
     runs-on: ubuntu-latest
     if: (github.event_name != 'issue_comment') || (github.event_name == 'issue_comment' && !contains(github.event.comment.user.login, '[bot]') && contains(github.event.comment.body, inputs.command_prefix))
-    # NEW — response is returned base‑64 encoded so it won’t be quarantined
-    outputs:
-      response_body_b64: ${{ steps.read_response.outputs.response_body_b64 }}
-      pr_issue_num: ${{ steps.set_context.outputs.pr_issue_num }}
-      probe_succeeded: ${{ steps.probe.outcome == 'success' }}
-      context_type: ${{ steps.format.outputs.context_type }}
 
     steps:
       # --- Validate Input Parameters ---
@@ -977,6 +971,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GOOGLE_API_KEY }}  # Aider expects GEMINI_API_KEY for Google API access
           ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_API_URL }} # Will be modified below if needed
           OPENAI_API_URL: ${{ secrets.OPENAI_API_URL }}
@@ -985,8 +980,8 @@ jobs:
           MODEL_NAME: ${{ secrets.MODEL_NAME }}
           FORCE_PROVIDER: ${{ secrets.FORCE_PROVIDER }}
           # Aider/Edit Config
-          ALLOW_EDIT: ${{ inputs.allow_edit == 'true' && '1' || '0' }}
-          ALLOW_SUGGESTIONS: ${{ inputs.allow_suggestions == 'true' && '1' || '0' }}
+          ALLOW_EDIT: ${{ inputs.allow_edit && '1' || '0' }}
+          ALLOW_SUGGESTIONS: ${{ inputs.allow_suggestions && '1' || '0' }}
           # Pass determined GitHub token for potential use by tools/aider if needed
           GH_TOKEN: ${{ env.WORKFLOW_TOKEN }}
           MAX_TOOL_ITERATIONS: ${{ secrets.MAX_TOOL_ITERATIONS }}
@@ -1089,12 +1084,16 @@ jobs:
             echo "🤖 AI command ran successfully but generated no response." > "$RESPONSE_FILE"
           fi
 
+          echo "::group::Debug: Git Status After Probe Chat"
+          git status
+          echo "::endgroup::"
+
       # --- Upload Debug Files (No token needed) ---
       - name: Upload Debug Files as Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: probe-debug-files
+          name: probe-debug-files-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
           path: |
             error.log
             formatted_prompt.txt
@@ -1114,7 +1113,7 @@ jobs:
         if: always() && inputs.enable_tracing && inputs.tracing_url == ''
         uses: actions/upload-artifact@v4
         with:
-          name: probe-traces
+          name: probe-traces-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
           path: |
             probe-traces.jsonl
           if-no-files-found: ignore
@@ -1162,7 +1161,7 @@ jobs:
           echo "Staging all detected changes..."
           git add --all
           echo "Unstaging workflow artifacts..."
-          git reset HEAD -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt || echo "::warning::Failed to unstage some artifacts, continuing..."
+          git reset HEAD -- error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt probe-traces.jsonl full_response.md || echo "::warning::Failed to unstage some artifacts, continuing..."
 
           echo "Checking for staged code changes after unstaging artifacts..."
           git status --porcelain
@@ -1251,22 +1250,16 @@ jobs:
           fi
           echo "::endgroup::"
 
-      # ---------- Handle Suggestions with reviewdog ---
-      # This step uses reviewdog to create code suggestions as PR review comments
+      # ---------- Handle Suggestions with suggest-changes ---
+      # This step uses suggest-changes to create code suggestions as PR review comments
       # instead of directly modifying files. Users can review and accept/reject suggestions.
-      - name: Handle Suggestions with reviewdog
+      - name: Handle Suggestions with suggest-changes
         id: handle_suggestions
         if: inputs.allow_suggestions && steps.probe.outcome == 'success' && env.FINAL_CONTEXT_TYPE == 'pr'
-        uses: reviewdog/action-suggester@v1.21.0
+        uses: buger/suggest-changes@main
         with:
-          github_token: ${{ env.WORKFLOW_TOKEN }}
-          tool_name: 'Probe AI Code Suggestions'  # More descriptive name for better UX
-          level: 'warning'                        # Changed from 'info' to 'warning' for better visibility
-          filter_mode: 'added'                    # Only suggest changes for added/modified lines
-          fail_level: 'none'                      # Don't fail the workflow on suggestions
-          fail_on_error: 'false'                  # Don't fail if reviewdog encounters errors
-          reviewdog_flags: '--reporter=github-pr-review'  # Post as PR review comments
-          cleanup: 'true'                         # Clean up temporary files after processing
+          comment: 'Please commit the suggested changes from Probe AI.'
+          event: 'REQUEST_CHANGES'
 
       # ---------- Read Response or Error and Format Output (fixed) ---
       - name: Read Response or Error and Format Output
@@ -1369,95 +1362,67 @@ jobs:
           echo "response_body_b64=$ENCODED" >> "$GITHUB_OUTPUT"
           echo "should_fail_job=$SHOULD_FAIL_JOB" >> "$GITHUB_OUTPUT"
 
+      # --- Post Response Steps (always run) ---
+      - name: Prepare workspace for comment posting
+        if: always()
+        run: mkdir -p /tmp/artifacts
+
+      - name: Decode AI response
+        id: decode
+        if: always()
+        run: |
+          printf '%s' "${{ steps.read_response.outputs.response_body_b64 }}" | base64 -d > /tmp/artifacts/comment_body.md
+          echo "body_path=/tmp/artifacts/comment_body.md" >> $GITHUB_OUTPUT
+
+      # ---------- Find existing comment (if update mode enabled) ----
+      - name: Find Comment
+        id: find_comment
+        if: always() && inputs.update_existing_comment == 'true'
+        uses: peter-evans/find-comment@v3
+        with:
+          token: ${{ env.WORKFLOW_TOKEN }}
+          repository: ${{ github.repository }}
+          issue-number: ${{ steps.set_context.outputs.pr_issue_num }}
+          body-includes: ${{ inputs.update_comment_marker }}
+
+      # ---------- Create new comment (if not updating or no existing comment found) ----
+      - name: Post Response Comment
+        if: always() && (inputs.update_existing_comment != 'true' || steps.find_comment.outputs.comment-id == '')
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ env.WORKFLOW_TOKEN }}
+          repository: ${{ github.repository }}
+          issue-number: ${{ steps.set_context.outputs.pr_issue_num }}
+          body-path: ${{ steps.decode.outputs.body_path }}
+          reactions: ${{ steps.probe.outcome == 'success' && '+1' || '-1' }}
+
+      # ---------- Update existing comment (if found) ----------------
+      - name: Update Comment
+        if: always() && inputs.update_existing_comment == 'true' && steps.find_comment.outputs.comment-id != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ env.WORKFLOW_TOKEN }}
+          repository: ${{ github.repository }}
+          issue-number: ${{ steps.set_context.outputs.pr_issue_num }}
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          body-path: ${{ steps.decode.outputs.body_path }}
+          reactions: ${{ steps.probe.outcome == 'success' && '+1' || '-1' }}
+          edit-mode: replace
+
+      # --- Clean up artifact files after all operations complete ---
+      - name: Clean up artifact files
+        if: always() && (inputs.allow_edit || inputs.allow_suggestions)
+        run: |
+          echo "::group::Final cleanup of artifact files"
+          # Remove all workflow artifact files after all git and comment operations are complete
+          rm -f error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt probe-traces.jsonl full_response.md
+          echo "Artifact files cleaned up"
+          echo "::endgroup::"
+
       # --- Fail job if failure tag was detected ---
       - name: Fail job if failure tag detected
         if: steps.read_response.outputs.should_fail_job == 'true'
         run: |
           echo "::error::Failure tag was detected in AI response. Failing the job as requested."
           exit 1
-
-  post_response:
-    if: always() && needs.process_comment.result != 'skipped'
-    runs-on: ubuntu-latest
-    needs: [process_comment]
-
-    steps:
-      # --- Check for App Credentials (copied logic, adjust ID if needed) ---
-      - name: Check for App Credentials Post
-        id: check_app_secrets_post # Ensure this ID is unique if needed across jobs
-        run: |
-          if [[ -n "${{ secrets.APP_ID }}" && -n "${{ secrets.APP_PRIVATE_KEY }}" ]]; then
-            echo "App credentials provided for posting."
-            echo "use_app_token=true" >> $GITHUB_OUTPUT
-          else
-            echo "App credentials not provided for posting."
-            echo "use_app_token=false" >> $GITHUB_OUTPUT
-          fi
-      # --- Generate GitHub App Token (if applicable) - REPEAT FOR THIS JOB ---
-      - name: Generate GitHub App Token Post
-        id: generate_app_token_post
-        if: steps.check_app_secrets_post.outputs.use_app_token == 'true'
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
-      # ---------- Determine token (same empty‑check as above) -------
-      - name: Determine Workflow Token
-        id: set_token_post
-        run: |
-          if [[ -n "${{ steps.generate_app_token_post.outputs.token }}" ]]; then
-            echo "WORKFLOW_TOKEN_POST=${{ steps.generate_app_token_post.outputs.token }}" >> $GITHUB_ENV
-          else
-            echo "WORKFLOW_TOKEN_POST=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
-          fi
-          if [[ -n "${{ env.WORKFLOW_TOKEN_POST }}" ]]; then
-            echo "::add-mask::${{ env.WORKFLOW_TOKEN_POST }}"
-          fi
-
-      # ---------- make sure we have a working directory -------------
-      - name: Prepare workspace for artifact download
-        run: mkdir -p /tmp/artifacts
-
-      # ---------- Decode the base‑64 body ---------------------------
-      - name: Decode AI response
-        id: decode
-        run: |
-          printf '%s' "${{ needs.process_comment.outputs.response_body_b64 }}" | base64 -d > /tmp/artifacts/comment_body.md
-          echo "body_path=/tmp/artifacts/comment_body.md" >> $GITHUB_OUTPUT
-
-      # ---------- Find existing comment (if update mode enabled) ----
-      - name: Find Comment
-        id: find_comment
-        if: inputs.update_existing_comment == 'true'
-        uses: peter-evans/find-comment@v3
-        with:
-          token: ${{ env.WORKFLOW_TOKEN_POST }}
-          repository: ${{ github.repository }}
-          issue-number: ${{ needs.process_comment.outputs.pr_issue_num }}
-          body-includes: ${{ inputs.update_comment_marker }}
-
-      # ---------- Create new comment (if not updating or no existing comment found) ----
-      - name: Post Response Comment
-        if: inputs.update_existing_comment != 'true' || steps.find_comment.outputs.comment-id == ''
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          token: ${{ env.WORKFLOW_TOKEN_POST }}
-          repository: ${{ github.repository }}
-          issue-number: ${{ needs.process_comment.outputs.pr_issue_num }}
-          body-path: ${{ steps.decode.outputs.body_path }}
-          reactions: ${{ needs.process_comment.outputs.probe_succeeded == 'true' && '+1' || '-1' }}
-
-      # ---------- Update existing comment (if found) ----------------
-      - name: Update Comment
-        if: inputs.update_existing_comment == 'true' && steps.find_comment.outputs.comment-id != ''
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          token: ${{ env.WORKFLOW_TOKEN_POST }}
-          repository: ${{ github.repository }}
-          issue-number: ${{ needs.process_comment.outputs.pr_issue_num }}
-          comment-id: ${{ steps.find_comment.outputs.comment-id }}
-          body-path: ${{ steps.decode.outputs.body_path }}
-          reactions: ${{ needs.process_comment.outputs.probe_succeeded == 'true' && '+1' || '-1' }}
-          edit-mode: replace
 # </gh>

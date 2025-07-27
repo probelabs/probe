@@ -226,12 +226,24 @@ export class TokenCounter {
       if (typeof msg.content === 'string') {
         messageTokens += this.countTokens(msg.content);
       } else if (Array.isArray(msg.content)) {
-        // Handle array content (e.g., Vercel AI SDK tool usage format)
+        // Handle array content (e.g., Vercel AI SDK tool usage format with images)
         for (const item of msg.content) {
           if (item.type === 'text' && typeof item.text === 'string') {
             messageTokens += this.countTokens(item.text);
+          } else if (item.type === 'image' && item.image) {
+            // For images, estimate token cost based on Anthropic/OpenAI pricing
+            // Base64 images typically cost ~1000-2000 tokens depending on size
+            if (item.image.startsWith('data:image/')) {
+              // Estimate based on base64 length - very rough approximation
+              const base64Length = item.image.length;
+              const estimatedImageTokens = Math.min(Math.max(Math.floor(base64Length / 1000), 500), 2000);
+              messageTokens += estimatedImageTokens;
+            } else {
+              // URL images, estimate moderate token cost
+              messageTokens += 1000;
+            }
           } else {
-            // Estimate tokens for non-text parts (tool calls/results embedded)
+            // Estimate tokens for other non-text parts (tool calls/results)
             messageTokens += this.countTokens(JSON.stringify(item));
           }
         }

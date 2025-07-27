@@ -51,6 +51,7 @@ package-lock.json
 # Logs
 logs
 *.log
+*.jsonl
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -106,3 +107,6 @@ mcp/bin/probe
 
 .vitepress
 .aider*
+
+# Chat debug files
+examples/chat/probe-debug*.txt

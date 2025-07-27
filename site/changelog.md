@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enables AI assistants to make direct code changes during conversations
 
 #### Enhanced GitHub Actions Integration
-- **Allow Suggestions Feature**: New `allow_suggestions` flag for reviewdog integration - see [GitHub Actions Integration](./integrations/github-actions.md#suggested-changes-allow_suggestions-true---recommended)
+- **Allow Suggestions Feature**: New `allow_suggestions` flag for suggest-changes integration - see [GitHub Actions Integration](./integrations/github-actions.md#suggested-changes-allow_suggestions-true---recommended)
 - **OpenTelemetry Tracing**: Full tracing support for monitoring AI model interactions - see [GitHub Actions Tracing](./integrations/github-actions.md#opentelemetry-tracing)
 - **Failure Tagging**: Automatic tagging of failed GitHub Probe runs for better tracking
 - **Improved Workflows**: Enhanced probe.yml with better error handling and configuration
@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🔧 Improvements
 
 #### AI Chat Enhancements
+- **Chat History & Session Persistence**: Full session persistence with history dropdown navigation - see [Web Interface documentation](./web-interface.md#chat-history)
+- **URL-based Session Routing**: Share and bookmark chat sessions with unique URLs (`/chat/session-id`)
+- **Session Storage**: Automatic session storage to `~/.probe/sessions/` directory with JSON-based persistence
+- **History Navigation**: Interactive history dropdown with session previews and metadata
+- **Enhanced UI**: Always-visible header with clickable logo and improved navigation
 - **Configurable Iterations**: `MAX_TOOL_ITERATIONS` environment variable support - see [AI Chat configuration](./ai-chat.md#configuration)
 - **Enhanced Tool Support**: New file listing and search tools
 - **Better Session Management**: Improved chat session handling and token tracking
@@ -70,7 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### GitHub Actions
 - **Output Masking**: Fixed issue_number output to avoid GitHub Actions masking
-- **Reviewdog Integration**: Updated to stable reviewdog action version v1.21.0
+- **Suggest-changes Integration**: Updated from reviewdog to suggest-changes action for better GitHub integration
 - **Workflow Stability**: Multiple fixes for workflow reliability and error handling
 
 #### Build and CI
