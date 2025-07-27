@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{create_dir_all, File};
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use probe_code::models::SearchResult;
 
@@ -28,7 +28,23 @@ pub struct SessionCache {
     /// Set of block identifiers that have been seen in this session
     /// Format: "file.rs:23-45" (file path with start-end line numbers)
     pub block_identifiers: HashSet<String>,
+    /// Map of file paths to their MD5 hashes for cache invalidation
+    /// Key: normalized file path, Value: MD5 hash of file contents
+    #[serde(default)]
+    pub file_md5_hashes: HashMap<String, String>,
 }
+
+/// Calculate MD5 hash of a file's contents
+pub fn calculate_file_md5(file_path: &Path) -> Result<String> {
+    let mut file = File::open(file_path)?;
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)?;
+    
+    let digest = md5::compute(&contents);
+    Ok(format!("{:x}", digest))
+}
+
+// Test comment to trigger MD5 change
 
 impl SessionCache {
     /// Create a new session cache with the given ID and query hash
@@ -37,10 +53,11 @@ impl SessionCache {
             session_id,
             query_hash,
             block_identifiers: HashSet::new(),
+            file_md5_hashes: HashMap::new(),
         }
     }
 
-    /// Load a session cache from disk
+    /// Load a session cache from disk and validate file MD5 hashes
     pub fn load(session_id: &str, query_hash: &str) -> Result<Self> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
         let cache_path = Self::get_cache_path(session_id, query_hash);
@@ -77,24 +94,28 @@ impl SessionCache {
         }
 
         // Parse the JSON
-        match serde_json::from_str(&contents) {
-            Ok(cache) => {
-                let cache: SessionCache = cache;
-                if debug_mode {
-                    println!(
-                        "DEBUG: Successfully loaded cache with {} entries",
-                        cache.block_identifiers.len()
-                    );
-                }
-                Ok(cache)
-            }
+        let mut cache: SessionCache = match serde_json::from_str(&contents) {
+            Ok(cache) => cache,
             Err(e) => {
                 if debug_mode {
                     println!("DEBUG: Error parsing cache JSON: {e}");
                 }
-                Ok(Self::new(session_id.to_string(), query_hash.to_string()))
+                return Ok(Self::new(session_id.to_string(), query_hash.to_string()));
             }
+        };
+
+        if debug_mode {
+            println!(
+                "DEBUG: Successfully loaded cache with {} entries and {} file hashes",
+                cache.block_identifiers.len(),
+                cache.file_md5_hashes.len()
+            );
         }
+
+        // Validate and invalidate cache entries based on file MD5 changes
+        cache.validate_and_invalidate_cache(debug_mode)?;
+
+        Ok(cache)
     }
 
     /// Save the session cache to disk
@@ -164,6 +185,95 @@ impl SessionCache {
     /// Add a block identifier to the cache
     pub fn add_to_cache(&mut self, block_id: String) {
         self.block_identifiers.insert(block_id);
+    }
+
+    /// Validate cache entries against current file MD5 hashes and invalidate if changed
+    pub fn validate_and_invalidate_cache(&mut self, debug_mode: bool) -> Result<()> {
+        let mut invalidated_files = HashSet::new();
+        let mut blocks_to_remove = HashSet::new();
+
+        // Check each cached file's MD5 hash
+        for (file_path, cached_md5) in &self.file_md5_hashes {
+            let current_path = Path::new(file_path);
+            
+            // Skip if file no longer exists
+            if !current_path.exists() {
+                if debug_mode {
+                    println!("DEBUG: File no longer exists, invalidating cache: {}", file_path);
+                }
+                invalidated_files.insert(file_path.clone());
+                continue;
+            }
+
+            // Calculate current MD5
+            match calculate_file_md5(current_path) {
+                Ok(current_md5) => {
+                    if &current_md5 != cached_md5 {
+                        if debug_mode {
+                            println!("DEBUG: File MD5 changed, invalidating cache: {} (was: {}, now: {})", 
+                                    file_path, cached_md5, current_md5);
+                        }
+                        invalidated_files.insert(file_path.clone());
+                    }
+                }
+                Err(e) => {
+                    if debug_mode {
+                        println!("DEBUG: Error calculating MD5 for {}, invalidating cache: {}", file_path, e);
+                    }
+                    invalidated_files.insert(file_path.clone());
+                }
+            }
+        }
+
+        // Remove block identifiers from invalidated files
+        for file_path in &invalidated_files {
+            let normalized_path = normalize_path(file_path);
+            
+            // Find all block identifiers that belong to this file
+            for block_id in &self.block_identifiers {
+                if let Some(colon_pos) = block_id.find(':') {
+                    let block_file_part = &block_id[..colon_pos];
+                    let normalized_block_file = normalize_path(block_file_part);
+                    
+                    if normalized_block_file == normalized_path {
+                        blocks_to_remove.insert(block_id.clone());
+                    }
+                }
+            }
+        }
+
+        // Remove invalidated blocks from cache
+        for block_id in &blocks_to_remove {
+            self.block_identifiers.remove(block_id);
+        }
+
+        // Remove invalidated file hashes
+        for file_path in &invalidated_files {
+            self.file_md5_hashes.remove(file_path);
+        }
+
+        if debug_mode && (!invalidated_files.is_empty() || !blocks_to_remove.is_empty()) {
+            println!(
+                "DEBUG: Invalidated {} files and removed {} cached blocks due to MD5 changes",
+                invalidated_files.len(),
+                blocks_to_remove.len()
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Update the MD5 hash for a file
+    pub fn update_file_md5(&mut self, file_path: &str) -> Result<()> {
+        let normalized_path = normalize_path(file_path);
+        let path = Path::new(&normalized_path);
+        
+        if path.exists() {
+            let md5_hash = calculate_file_md5(path)?;
+            self.file_md5_hashes.insert(normalized_path, md5_hash);
+        }
+        
+        Ok(())
     }
 
     /// Get the path to the cache file
@@ -442,6 +552,9 @@ pub fn add_results_to_cache(results: &[SearchResult], session_id: &str, query: &
         );
     }
 
+    // Track unique files to update MD5 hashes
+    let mut unique_files = HashSet::new();
+
     // Add all results to the cache
     let mut new_entries = 0;
     for result in results {
@@ -453,13 +566,30 @@ pub fn add_results_to_cache(results: &[SearchResult], session_id: &str, query: &
             }
         }
         cache.add_to_cache(cache_key);
+        
+        // Track this file for MD5 update
+        unique_files.insert(normalize_path(&result.file));
+    }
+
+    // Update MD5 hashes for all files in this batch
+    for file_path in &unique_files {
+        if let Err(e) = cache.update_file_md5(file_path) {
+            if debug_mode {
+                println!("DEBUG: Failed to update MD5 for {}: {}", file_path, e);
+            }
+        }
     }
 
     if debug_mode {
         println!("DEBUG: Added {new_entries} new entries to cache");
         println!(
-            "DEBUG: Cache now has {} entries",
-            cache.block_identifiers.len()
+            "DEBUG: Updated MD5 hashes for {} files",
+            unique_files.len()
+        );
+        println!(
+            "DEBUG: Cache now has {} entries and {} file hashes",
+            cache.block_identifiers.len(),
+            cache.file_md5_hashes.len()
         );
     }
 

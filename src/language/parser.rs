@@ -1208,51 +1208,44 @@ pub fn parse_file_for_code_blocks(
                 let rel_end_pos = context_node.end_position();
                 let rel_key = (rel_start_pos.row, rel_end_pos.row);
 
-                // Ensure content is available if needed by is_test_node
-                if !allow_tests && language_impl.is_test_node(&context_node, content.as_bytes()) {
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Skipping test context node (ancestor) at lines {}-{}",
-                            rel_start_pos.row + 1,
-                            rel_end_pos.row + 1
-                        );
-                    }
-                } else {
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Using context node (ancestor) at lines {}-{}",
-                            rel_start_pos.row + 1,
-                            rel_end_pos.row + 1
-                        );
-                    }
-                    seen_nodes.insert(rel_key); // Mark context as seen
-
-                    // Get parent function info if applicable (e.g., for struct_type nodes)
-                    let parent_info = if context_node.kind() == "struct_type" {
-                        language_impl
-                            .find_parent_function(context_node)
-                            .map(|parent_node| {
-                                let parent_type = parent_node.kind().to_string();
-                                let parent_start = parent_node.start_position().row;
-                                let parent_end = parent_node.end_position().row;
-                                (parent_type, parent_start, parent_end)
-                            })
-                    } else {
-                        None
-                    };
-
-                    code_blocks.push(CodeBlock {
-                        start_row: rel_start_pos.row,
-                        end_row: rel_end_pos.row,
-                        start_byte: context_node.start_byte(),
-                        end_byte: context_node.end_byte(),
-                        node_type: context_node.kind().to_string(),
-                        parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
-                        parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
-                        parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
-                    });
-                    continue; // Skip adding target_node if context was added
+                // For caching purposes, always use the context node regardless of test status
+                // Test filtering should only apply to search results, not cache context determination
+                if debug_mode {
+                    let is_test = language_impl.is_test_node(&context_node, content.as_bytes());
+                    println!(
+                        "DEBUG: Using context node (ancestor) at lines {}-{} (test: {})",
+                        rel_start_pos.row + 1,
+                        rel_end_pos.row + 1,
+                        is_test
+                    );
                 }
+                seen_nodes.insert(rel_key); // Mark context as seen
+
+                // Get parent function info if applicable (e.g., for struct_type nodes)
+                let parent_info = if context_node.kind() == "struct_type" {
+                    language_impl
+                        .find_parent_function(context_node)
+                        .map(|parent_node| {
+                            let parent_type = parent_node.kind().to_string();
+                            let parent_start = parent_node.start_position().row;
+                            let parent_end = parent_node.end_position().row;
+                            (parent_type, parent_start, parent_end)
+                        })
+                } else {
+                    None
+                };
+
+                code_blocks.push(CodeBlock {
+                    start_row: rel_start_pos.row,
+                    end_row: rel_end_pos.row,
+                    start_byte: context_node.start_byte(),
+                    end_byte: context_node.end_byte(),
+                    node_type: context_node.kind().to_string(),
+                    parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
+                    parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
+                    parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
+                });
+                continue; // Skip adding target_node if context was added
             }
 
             // Check if target_node itself is acceptable (using live check)
