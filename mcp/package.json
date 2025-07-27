@@ -31,7 +31,7 @@
   "description": "MCP server for probe CLI",
   "dependencies": {
     "@buger/probe": "*",
-    "@modelcontextprotocol/sdk": "^1.6.0",
+    "@modelcontextprotocol/sdk": "^1.17.0",
     "axios": "^1.6.0",
     "fs-extra": "^11.1.1",
     "tar": "^6.2.0"
