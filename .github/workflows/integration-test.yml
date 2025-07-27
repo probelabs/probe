@@ -7,6 +7,22 @@ on:
     branches: [ main ]
 
 jobs:
+  actionlint:
+    name: Lint GitHub Actions workflows
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download actionlint
+      id: get_actionlint
+      run: bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+      shell: bash
+
+    - name: Check workflow files
+      run: ${{ steps.get_actionlint.outputs.executable }} -color
+      shell: bash
+
   integration-test:
     name: Test npm installation on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -138,7 +154,9 @@ jobs:
 
     - name: Verify search results (Windows)
       if: runner.os == 'Windows'
+      shell: pwsh
       run: |
+        # shellcheck disable=SC1009,SC1073,SC1065,SC1064,SC1072
         # Check that the JSON output contains expected fields
         if (-not (Test-Path search_results.json)) {
           Write-Host "Error: search_results.json file not found"
@@ -218,7 +236,9 @@ jobs:
 
     - name: Verify extract results (Windows)
       if: runner.os == 'Windows'
+      shell: pwsh
       run: |
+        # shellcheck disable=SC1009,SC1073,SC1065,SC1064,SC1072
         # Check that the extract output contains expected fields
         if (-not (Test-Path extract_results.json)) {
           Write-Host "Error: extract_results.json file not found"

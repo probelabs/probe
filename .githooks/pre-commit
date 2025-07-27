@@ -20,37 +20,69 @@ if git diff --cached --quiet; then
     exit 0
 fi
 
-# Run format check
-echo "${YELLOW}Checking code formatting...${NC}"
-make check-format
-if [ $? -ne 0 ]; then
-    echo "${RED}Code formatting check failed.${NC}"
-    echo "Run 'make format' to format your code."
-    status=1
+# Check if any Rust-related files are staged for commit
+rust_files_changed=$(git diff --cached --name-only | grep -E '\.(rs|toml)$|^Cargo\.(toml|lock)$')
+
+# Check if any GitHub workflow files are staged for commit
+workflow_files_changed=$(git diff --cached --name-only | grep -E '^\.github/workflows/.*\.ya?ml$')
+
+if [ -z "$rust_files_changed" ] && [ -z "$workflow_files_changed" ]; then
+    echo "${YELLOW}No Rust or workflow files changed. Skipping checks.${NC}"
+    exit 0
 fi
 
-# Run clippy
-echo "${YELLOW}Running linter...${NC}"
-make lint
-if [ $? -ne 0 ]; then
-    echo "${RED}Linting failed.${NC}"
-    status=1
+# Run actionlint if workflow files changed
+if [ -n "$workflow_files_changed" ]; then
+    echo "${YELLOW}GitHub workflow files detected. Running actionlint...${NC}"
+    if command -v actionlint >/dev/null 2>&1; then
+        actionlint
+        if [ $? -ne 0 ]; then
+            echo "${RED}actionlint failed.${NC}"
+            status=1
+        fi
+    else
+        echo "${RED}actionlint not found. Please install it: https://github.com/rhysd/actionlint${NC}"
+        echo "${YELLOW}You can install it with: go install github.com/rhysd/actionlint/cmd/actionlint@latest${NC}"
+        status=1
+    fi
 fi
 
-# Run unit tests
-echo "${YELLOW}Running unit tests...${NC}"
-make test-unit
-if [ $? -ne 0 ]; then
-    echo "${RED}Unit tests failed.${NC}"
-    status=1
-fi
+# Run Rust checks if Rust files changed
+if [ -n "$rust_files_changed" ]; then
+    echo "${YELLOW}Rust files detected in commit. Running Rust checks...${NC}"
 
-# Run integration tests
-echo "${YELLOW}Running integration tests...${NC}"
-make test-integration
-if [ $? -ne 0 ]; then
-    echo "${RED}Integration tests failed.${NC}"
-    status=1
+    # Run format check
+    echo "${YELLOW}Checking code formatting...${NC}"
+    make check-format
+    if [ $? -ne 0 ]; then
+        echo "${RED}Code formatting check failed.${NC}"
+        echo "Run 'make format' to format your code."
+        status=1
+    fi
+
+    # Run clippy
+    echo "${YELLOW}Running linter...${NC}"
+    make lint
+    if [ $? -ne 0 ]; then
+        echo "${RED}Linting failed.${NC}"
+        status=1
+    fi
+
+    # Run unit tests
+    echo "${YELLOW}Running unit tests...${NC}"
+    make test-unit
+    if [ $? -ne 0 ]; then
+        echo "${RED}Unit tests failed.${NC}"
+        status=1
+    fi
+
+    # Run integration tests
+    echo "${YELLOW}Running integration tests...${NC}"
+    make test-integration
+    if [ $? -ne 0 ]; then
+        echo "${RED}Integration tests failed.${NC}"
+        status=1
+    fi
 fi
 
 # Print summary

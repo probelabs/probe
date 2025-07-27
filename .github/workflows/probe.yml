@@ -15,7 +15,7 @@ on:
       command_prefix:
         description: "The prefix required on comments to trigger the AI (e.g., /probe, /ai, etc)"
         default: "/probe"
-        required: true
+        required: false
         type: string
       default_probe_chat_command:
         description: "The default probe-chat command if PROBE_CHAT_COMMAND secret is not set"
@@ -141,10 +141,10 @@ jobs:
         run: |
           if [[ -n "${{ secrets.APP_ID }}" && -n "${{ secrets.APP_PRIVATE_KEY }}" ]]; then
             echo "App credentials provided."
-            echo "use_app_token=true" >> $GITHUB_OUTPUT
+            echo "use_app_token=true" >> "$GITHUB_OUTPUT"
           else
             echo "App credentials not provided."
-            echo "use_app_token=false" >> $GITHUB_OUTPUT
+            echo "use_app_token=false" >> "$GITHUB_OUTPUT"
           fi
       # --- Generate GitHub App Token (if applicable) ---
       - name: Generate GitHub App Token
@@ -164,10 +164,10 @@ jobs:
         run: |
           if [[ -n "${{ steps.generate_app_token.outputs.token }}" ]]; then
             echo "Using GitHub App token for authentication."
-            echo "WORKFLOW_TOKEN=${{ steps.generate_app_token.outputs.token }}" >> $GITHUB_ENV
+            echo "WORKFLOW_TOKEN=${{ steps.generate_app_token.outputs.token }}" >> "$GITHUB_ENV"
           else
             echo "Using default GITHUB_TOKEN for authentication."
-            echo "WORKFLOW_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+            echo "WORKFLOW_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> "$GITHUB_ENV"
           fi
           # only mask if we actually have a value
           if [[ -n "${{ env.WORKFLOW_TOKEN }}" ]]; then
@@ -179,29 +179,35 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
+          # shellcheck disable=SC2086,SC2129,SC2193
           echo "Event name: $EVENT_NAME"
           echo "skip=false" >> "$GITHUB_OUTPUT"   # Default; overridden if skipping
 
           if [[ "$EVENT_NAME" == "issue_comment" ]]; then
             # Filter out bot comments and those without the required prefix
-            if [[ "${{ github.event.comment.user.login }}" == *"[bot]"* ]] || [[ "$COMMENT_BODY" != ${{ inputs.command_prefix }}* ]]; then
+            # shellcheck disable=SC2193
+            if [[ "${{ github.event.comment.user.login }}" == *"[bot]"* ]] || [[ "$COMMENT_BODY" != "${{ inputs.command_prefix }}"* ]]; then
               echo "::notice::Skipping: Bot comment or missing prefix."
               echo "skip=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
 
-            echo "pr_issue_num=${{ github.event.issue.number }}"   >> "$GITHUB_OUTPUT"
-            echo "comment_id=${{ github.event.comment.id }}"       >> "$GITHUB_OUTPUT"
+            {
+              echo "pr_issue_num=${{ github.event.issue.number }}"
+              echo "comment_id=${{ github.event.comment.id }}"
+              echo "user_request<<EOF"
+              printf '%s\n' "$COMMENT_BODY"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
 
-            echo "user_request<<EOF" >> "$GITHUB_OUTPUT"
-            printf '%s\n' "$COMMENT_BODY"       >> "$GITHUB_OUTPUT"
-            echo "EOF"                          >> "$GITHUB_OUTPUT"
-
-            echo "context_type=to_determine"    >> "$GITHUB_OUTPUT"
-            echo "head_ref="                    >> "$GITHUB_OUTPUT"  # Determined later via API
+            {
+              echo "context_type=to_determine"
+              echo "head_ref="  # Determined later via API
+            } >> "$GITHUB_OUTPUT"
 
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
             if [[ -z "$PR_BODY" ]]; then
@@ -210,15 +216,18 @@ jobs:
               exit 0
             fi
 
-            echo "pr_issue_num=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
-            echo "comment_id="                                           >> "$GITHUB_OUTPUT"
+            {
+              echo "pr_issue_num=${{ github.event.pull_request.number }}"
+              echo "comment_id="
+              echo "user_request<<EOF"
+              printf '%s\n' "$PR_BODY"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
 
-            echo "user_request<<EOF" >> "$GITHUB_OUTPUT"
-            printf '%s\n' "$PR_BODY"             >> "$GITHUB_OUTPUT"
-            echo "EOF"                           >> "$GITHUB_OUTPUT"
-
-            echo "context_type=pr"               >> "$GITHUB_OUTPUT"
-            echo "head_ref=${{ github.event.pull_request.head.ref }}" >> "$GITHUB_OUTPUT"
+            {
+              echo "context_type=pr"
+              echo "head_ref=${PR_HEAD_REF}"
+            } >> "$GITHUB_OUTPUT"
 
           elif [[ "$EVENT_NAME" == "issues" ]]; then
             if [[ -z "$ISSUE_BODY" ]]; then
@@ -227,15 +236,18 @@ jobs:
               exit 0
             fi
 
-            echo "pr_issue_num=${{ github.event.issue.number }}"   >> "$GITHUB_OUTPUT"
-            echo "comment_id="                                     >> "$GITHUB_OUTPUT"
+            {
+              echo "pr_issue_num=${{ github.event.issue.number }}"
+              echo "comment_id="
+              echo "user_request<<EOF"
+              printf '%s\n' "$ISSUE_BODY"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
 
-            echo "user_request<<EOF" >> "$GITHUB_OUTPUT"
-            printf '%s\n' "$ISSUE_BODY"          >> "$GITHUB_OUTPUT"
-            echo "EOF"                           >> "$GITHUB_OUTPUT"
-
-            echo "context_type=issue"            >> "$GITHUB_OUTPUT"
-            echo "head_ref="                     >> "$GITHUB_OUTPUT"  # N/A for issues
+            {
+              echo "context_type=issue"
+              echo "head_ref="  # N/A for issues
+            } >> "$GITHUB_OUTPUT"
           else
             echo "::error::Unsupported event: $EVENT_NAME"
             exit 1
@@ -285,10 +297,12 @@ jobs:
           fi
 
           # Set outputs for use in later steps
-          echo "node_found=$NODE_FOUND" >> $GITHUB_OUTPUT
-          echo "go_found=$GO_FOUND" >> $GITHUB_OUTPUT
-          echo "rust_found=$RUST_FOUND" >> $GITHUB_OUTPUT
-          echo "python_found=$PYTHON_FOUND" >> $GITHUB_OUTPUT
+          {
+            echo "node_found=$NODE_FOUND"
+            echo "go_found=$GO_FOUND"
+            echo "rust_found=$RUST_FOUND"
+            echo "python_found=$PYTHON_FOUND"
+          } >> "$GITHUB_OUTPUT"
 
       # --- Language Setup and Caching (Conditional) ---
       # (These setup steps generally don't need the token, leaving them as is)
@@ -402,15 +416,17 @@ jobs:
             exit 0
           fi
           if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
-            USER_REQUEST_BODY_RAW="${RAW_COMMENT_BODY#$COMMAND_PREFIX}"
+            USER_REQUEST_BODY_RAW="${RAW_COMMENT_BODY#"$COMMAND_PREFIX"}"
             USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW##*( )}"
             USER_REQUEST_BODY_RAW="${USER_REQUEST_BODY_RAW%%*( )}"
           else
             USER_REQUEST_BODY_RAW="$RAW_COMMENT_BODY"  # No prefix for creation events
           fi
-          echo "USER_REQUEST_BODY<<EOF_USER_REQUEST" >> "$GITHUB_ENV"
-          printf '%s\n' "$USER_REQUEST_BODY_RAW" >> "$GITHUB_ENV"
-          echo "EOF_USER_REQUEST" >> "$GITHUB_ENV"
+          {
+            echo "USER_REQUEST_BODY<<EOF_USER_REQUEST"
+            printf '%s\n' "$USER_REQUEST_BODY_RAW"
+            echo "EOF_USER_REQUEST"
+          } >> "$GITHUB_ENV"
           echo "User request extracted (first 100 chars): [${USER_REQUEST_BODY_RAW:0:100}]"
           echo "::endgroup::"
 
@@ -419,7 +435,8 @@ jobs:
           if [[ "$CONTEXT_TYPE" == "to_determine" ]]; then
             CONTEXT_TYPE="unknown"
             ISSUE_OR_PR_NUMBER=${{ steps.set_context.outputs.pr_issue_num }}
-            echo "Detecting context for #${ISSUE_OR_PR_NUMBER} in $REPO using token type: ${{ env.WORKFLOW_TOKEN != secrets.GITHUB_TOKEN && 'App Token' || 'Default GITHUB_TOKEN' }}" # Log token type
+            TOKEN_TYPE="${{ env.WORKFLOW_TOKEN != secrets.GITHUB_TOKEN && 'App Token' || 'Default GITHUB_TOKEN' }}"
+            echo "Detecting context for #${ISSUE_OR_PR_NUMBER} in $REPO using token type: ${TOKEN_TYPE}" # Log token type
 
             # Try viewing as PR first
             echo "Checking if #${ISSUE_OR_PR_NUMBER} is a Pull Request using 'gh pr view'..."
@@ -458,8 +475,10 @@ jobs:
           fi
 
           echo "Final Context Type: $CONTEXT_TYPE"
-          echo "FINAL_CONTEXT_TYPE=$CONTEXT_TYPE" >> $GITHUB_ENV
-          echo "ISSUE_OR_PR_NUMBER=${{ steps.set_context.outputs.pr_issue_num }}" >> $GITHUB_ENV
+          {
+            echo "FINAL_CONTEXT_TYPE=$CONTEXT_TYPE"
+            echo "ISSUE_OR_PR_NUMBER=${{ steps.set_context.outputs.pr_issue_num }}"
+          } >> "$GITHUB_ENV"
           echo "::endgroup::"
 
       # --- Fetch Standard Comments using selected token ---
@@ -505,9 +524,11 @@ jobs:
               fi
           fi
           echo "Standard comments processed. Current XML length: ${#COMMENTS_XML}"
-          echo "COMMENTS_XML<<EOF_COMMENTS_XML" >> $GITHUB_ENV
-          echo "$COMMENTS_XML" >> $GITHUB_ENV
-          echo "EOF_COMMENTS_XML" >> $GITHUB_ENV
+          {
+            echo "COMMENTS_XML<<EOF_COMMENTS_XML"
+            echo "$COMMENTS_XML"
+            echo "EOF_COMMENTS_XML"
+          } >> "$GITHUB_ENV"
           echo "::endgroup::"
 
       # --- Fetch PR Details (Title, Body, SHAs, RefName) ---
@@ -568,13 +589,17 @@ jobs:
               echo "Head Ref Name: $HEAD_REF_NAME"
               echo "Head Repo Owner: $HEAD_REPO_OWNER"
               echo "Head Repo Name: $HEAD_REPO_NAME"
-              echo "HEAD_REF_NAME=$HEAD_REF_NAME" >> $GITHUB_ENV
-              echo "HEAD_REPO_OWNER=$HEAD_REPO_OWNER" >> $GITHUB_ENV
-              echo "HEAD_REPO_NAME=$HEAD_REPO_NAME" >> $GITHUB_ENV
+              {
+                echo "HEAD_REF_NAME=$HEAD_REF_NAME"
+                echo "HEAD_REPO_OWNER=$HEAD_REPO_OWNER"
+                echo "HEAD_REPO_NAME=$HEAD_REPO_NAME"
+              } >> "$GITHUB_ENV"
             fi
           fi
-          echo "BASE_SHA=$BASE_SHA" >> $GITHUB_ENV
-          echo "HEAD_SHA=$HEAD_SHA" >> $GITHUB_ENV
+          {
+            echo "BASE_SHA=$BASE_SHA"
+            echo "HEAD_SHA=$HEAD_SHA"
+          } >> "$GITHUB_ENV"
 
           echo "Fetching PR Title and Body..."
           PR_DATA=$(gh pr view "$ISSUE_OR_PR_NUMBER" --json title,body --repo "${REPO}" 2>/dev/null || echo 'FETCH_FAILED')
@@ -591,12 +616,60 @@ jobs:
             PR_BODY=$(echo "$PR_DATA" | jq -r --arg default "$PR_BODY_DEFAULT" '.body // $default')
           fi
 
-          echo "PR_TITLE<<EOF_PR_TITLE" >> $GITHUB_ENV
-          echo "$PR_TITLE" >> $GITHUB_ENV
-          echo "EOF_PR_TITLE" >> $GITHUB_ENV
-          echo "PR_BODY<<EOF_PR_BODY" >> $GITHUB_ENV
-          echo "$PR_BODY" >> $GITHUB_ENV
-          echo "EOF_PR_BODY" >> $GITHUB_ENV
+          {
+            echo "PR_TITLE<<EOF_PR_TITLE"
+            echo "$PR_TITLE"
+            echo "EOF_PR_TITLE"
+            echo "PR_BODY<<EOF_PR_BODY"
+            echo "$PR_BODY"
+            echo "EOF_PR_BODY"
+          } >> "$GITHUB_ENV"
+          echo "::endgroup::"
+
+      # --- Detect Previous Probe Comments for State Tracking ---
+      - name: Format - Detect Previous Probe State
+        id: format_probe_state
+        if: env.FINAL_CONTEXT_TYPE == 'pr'
+        env:
+          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
+          COMMAND_PREFIX: ${{ inputs.command_prefix }}
+        run: |
+          echo "::group::Detect Previous Probe State"
+          set -e
+          
+          echo "Searching for previous probe comments to detect state..."
+          
+          # Fetch all comments and find the most recent probe comment timestamp
+          COMMENTS_JSON=$(gh api "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER/comments" --paginate || echo "FETCH_FAILED")
+          LAST_PROBE_TIMESTAMP=""
+          
+          if [[ "$COMMENTS_JSON" != "FETCH_FAILED" && -n "$COMMENTS_JSON" ]]; then
+            echo "Analyzing comments for probe signatures..."
+            
+            # Look for comments containing the probe signature pattern
+            # Pattern: "Tip: Mention me again using `<prefix> <request>`"
+            PROBE_PATTERN="Tip: Mention me again using.*$COMMAND_PREFIX"
+            
+            # Extract timestamp from most recent probe comment
+            LAST_PROBE_TIMESTAMP=$(echo "$COMMENTS_JSON" | jq -r --arg pattern "$PROBE_PATTERN" '
+              .[] | select(.body | test($pattern)) | .created_at
+            ' | sort | tail -1)
+            
+            if [[ -n "$LAST_PROBE_TIMESTAMP" && "$LAST_PROBE_TIMESTAMP" != "null" ]]; then
+              echo "Found previous probe comment from: $LAST_PROBE_TIMESTAMP"
+              echo "This is a subsequent probe call - will generate incremental diff"
+            else
+              echo "No previous probe comments found - this is the first probe call"
+              LAST_PROBE_TIMESTAMP=""
+            fi
+          else
+            echo "::warning::Could not fetch comments for probe state detection"
+            LAST_PROBE_TIMESTAMP=""
+          fi
+          
+          echo "LAST_PROBE_TIMESTAMP=$LAST_PROBE_TIMESTAMP" >> "$GITHUB_ENV"
           echo "::endgroup::"
 
       # --- Fetch & Filter PR Diff (Uses git, relies on checkout token setup) ---
@@ -606,11 +679,14 @@ jobs:
         env:
           BASE_SHA: ${{ env.BASE_SHA }}
           HEAD_SHA: ${{ env.HEAD_SHA }}
+          LAST_PROBE_TIMESTAMP: ${{ env.LAST_PROBE_TIMESTAMP }}
         run: |
+          # shellcheck disable=SC2086,SC2129,SC2295
           # (Script remains the same)
           echo "::group::Fetch & Filter PR Diff"
           set -e
           FILTERED_PR_DIFF="<!-- Diff generation skipped or failed -->" # Default value
+          FILTERED_INCREMENTAL_DIFF=""
 
           if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
               echo "::error::Cannot run git diff without valid base/head SHAs. Skipping diff generation."
@@ -628,10 +704,51 @@ jobs:
                   '.*rc' '*.conf' '*.cfg' '*.ini' '*.toml' '*.properties'
                   'README.*' 'LICENSE*' 'CONTRIBUTING.*' 'CHANGELOG.*' '*.rst' '*.adoc'
               )
+              
+              # Generate incremental diff if we have a previous probe timestamp
+              if [[ -n "$LAST_PROBE_TIMESTAMP" ]]; then
+                echo "Generating incremental diff since last probe call: $LAST_PROBE_TIMESTAMP"
+                
+                # Get commit SHA from timestamp for more precise diff
+                PROBE_COMMIT_SHA=$(git log --since="$LAST_PROBE_TIMESTAMP" --format="%H" --reverse | head -1)
+                
+                if [[ -n "$PROBE_COMMIT_SHA" ]]; then
+                  echo "Using commit SHA $PROBE_COMMIT_SHA as base for incremental diff"
+                  INCREMENTAL_BASE="$PROBE_COMMIT_SHA"
+                else
+                  echo "No commits found since timestamp, using timestamp directly"
+                  INCREMENTAL_BASE="$LAST_PROBE_TIMESTAMP"
+                fi
+                
+                echo "Running incremental git diff since $INCREMENTAL_BASE..."
+                set +e
+                if [[ "$INCREMENTAL_BASE" =~ ^[0-9a-f]{40}$ ]]; then
+                  # Use commit SHA
+                  git diff "${INCREMENTAL_BASE}..${HEAD_SHA}" -- "${ALLOWED_PATTERNS[@]}" > incremental_diff_output.txt 2> git_incremental_stderr.log
+                else
+                  # Use timestamp with git log to find commits
+                  git log --since="$INCREMENTAL_BASE" --oneline --format="%H" | tail -1 | xargs -I {} git diff {}..HEAD -- "${ALLOWED_PATTERNS[@]}" > incremental_diff_output.txt 2> git_incremental_stderr.log
+                fi
+                INCREMENTAL_EXIT_CODE=$?
+                set -e
+                
+                INCREMENTAL_RAW_CONTENT=$(cat incremental_diff_output.txt 2>/dev/null || echo "")
+                
+                if [[ $INCREMENTAL_EXIT_CODE -eq 0 && -n "$INCREMENTAL_RAW_CONTENT" ]]; then
+                  echo "Incremental diff generated successfully. Size: ${#INCREMENTAL_RAW_CONTENT} bytes"
+                  FILTERED_INCREMENTAL_DIFF="$INCREMENTAL_RAW_CONTENT"
+                else
+                  echo "::warning::Incremental diff generation failed or empty (exit code: $INCREMENTAL_EXIT_CODE)"
+                  FILTERED_INCREMENTAL_DIFF=""
+                fi
+              else
+                echo "No previous probe timestamp - first probe call, skipping incremental diff"
+              fi
+              
               RAW_DIFF_CONTENT=""
               GIT_DIFF_EXIT_CODE=1
 
-              echo "Running: git diff '${BASE_SHA}...${HEAD_SHA}' -- ${ALLOWED_PATTERNS[*]}"
+              echo "Running full PR diff: git diff '${BASE_SHA}...${HEAD_SHA}' -- ${ALLOWED_PATTERNS[*]}"
               set +e
               git diff "${BASE_SHA}...${HEAD_SHA}" -- "${ALLOWED_PATTERNS[@]}" > raw_diff_output.txt 2> git_diff_stderr.log
               GIT_DIFF_EXIT_CODE=$?
@@ -704,9 +821,14 @@ jobs:
               FILTERED_PR_DIFF="<!-- Error fetching or generating diff -->"
           fi
 
-          echo "FILTERED_PR_DIFF<<EOF_PR_DIFF" >> $GITHUB_ENV
-          echo "$FILTERED_PR_DIFF" >> $GITHUB_ENV
-          echo "EOF_PR_DIFF" >> $GITHUB_ENV
+          {
+            echo "FILTERED_PR_DIFF<<EOF_PR_DIFF"
+            echo "$FILTERED_PR_DIFF"
+            echo "EOF_PR_DIFF"
+            echo "FILTERED_INCREMENTAL_DIFF<<EOF_INCREMENTAL_DIFF"
+            echo "$FILTERED_INCREMENTAL_DIFF"
+            echo "EOF_INCREMENTAL_DIFF"
+          } >> "$GITHUB_ENV"
           echo "::endgroup::"
 
       # --- Fetch PR Review Comments & Bodies using selected token ---
@@ -782,9 +904,11 @@ jobs:
                fi
           fi
           echo "Review bodies processed. Final XML length: ${#CURRENT_COMMENTS_XML}"
-          echo "COMMENTS_XML<<EOF_COMMENTS_XML_UPDATED" >> $GITHUB_ENV
-          echo "$CURRENT_COMMENTS_XML" >> $GITHUB_ENV
-          echo "EOF_COMMENTS_XML_UPDATED" >> $GITHUB_ENV
+          {
+            echo "COMMENTS_XML<<EOF_COMMENTS_XML_UPDATED"
+            echo "$CURRENT_COMMENTS_XML"
+            echo "EOF_COMMENTS_XML_UPDATED"
+          } >> "$GITHUB_ENV"
           echo "::endgroup::"
 
       # --- Fetch Issue Details using selected token ---
@@ -822,12 +946,14 @@ jobs:
             echo "::warning::Failed Issue details fetch (gh command failed or returned empty)."
           fi
 
-          echo "ISSUE_TITLE<<EOF_ISSUE_TITLE" >> $GITHUB_ENV
-          echo "$ISSUE_TITLE" >> $GITHUB_ENV
-          echo "EOF_ISSUE_TITLE" >> $GITHUB_ENV
-          echo "ISSUE_BODY<<EOF_ISSUE_BODY" >> $GITHUB_ENV
-          echo "$ISSUE_BODY" >> $GITHUB_ENV
-          echo "EOF_ISSUE_BODY" >> $GITHUB_ENV
+          {
+            echo "ISSUE_TITLE<<EOF_ISSUE_TITLE"
+            echo "$ISSUE_TITLE"
+            echo "EOF_ISSUE_TITLE"
+            echo "ISSUE_BODY<<EOF_ISSUE_BODY"
+            echo "$ISSUE_BODY"
+            echo "EOF_ISSUE_BODY"
+          } >> "$GITHUB_ENV"
           echo "::endgroup::"
 
       # --- Format - Assemble Final Prompt (No token needed here) ---
@@ -842,9 +968,11 @@ jobs:
           PR_TITLE: ${{ env.PR_TITLE }}
           PR_BODY: ${{ env.PR_BODY }}
           FILTERED_PR_DIFF: ${{ env.FILTERED_PR_DIFF }}
+          FILTERED_INCREMENTAL_DIFF: ${{ env.FILTERED_INCREMENTAL_DIFF }}
           ISSUE_TITLE: ${{ env.ISSUE_TITLE }}
           ISSUE_BODY: ${{ env.ISSUE_BODY }}
         run: |
+          # shellcheck disable=SC2086,SC2129
           # (Script remains the same)
           echo "::group::Assemble Final Prompt & Set Outputs"
           set -e
@@ -855,7 +983,17 @@ jobs:
 
           if [[ "$FINAL_CONTEXT_TYPE" == "pr" ]]; then
               CONTEXT_DETAILS_XML="<details><title><![CDATA[$PR_TITLE]]></title><body><![CDATA[$PR_BODY]]></body></details>"
+              
+              # Build diff XML with both full and incremental diffs
               DIFF_XML="<diff><![CDATA[$FILTERED_PR_DIFF]]></diff>"
+              
+              if [[ -n "$FILTERED_INCREMENTAL_DIFF" ]]; then
+                DIFF_XML="${DIFF_XML}"$'\n'"<new_diff_since_last_run><![CDATA[$FILTERED_INCREMENTAL_DIFF]]></new_diff_since_last_run>"
+                echo "Including both full PR diff and incremental diff since last probe call"
+              else
+                echo "Only including full PR diff (first probe call or no incremental changes)"
+              fi
+              
               PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request..."
           elif [[ "$FINAL_CONTEXT_TYPE" == "issue" ]]; then
               CONTEXT_DETAILS_XML="<details><title><![CDATA[$ISSUE_TITLE]]></title><body><![CDATA[$ISSUE_BODY]]></body></details>"
@@ -947,15 +1085,13 @@ jobs:
 
           # FIX: Fetch the PR head ref instead of the branch ref (works even if branch deleted, and for forks)
           echo "Fetching PR #${PR_NUMBER} head commit to local branch '$PR_BRANCH_NAME' from origin..."
-          git fetch origin "refs/pull/${PR_NUMBER}/head:refs/heads/${PR_BRANCH_NAME}"
-          if [[ $? -ne 0 ]]; then
+          if ! git fetch origin "refs/pull/${PR_NUMBER}/head:refs/heads/${PR_BRANCH_NAME}"; then
             echo "::error::Failed to fetch PR #${PR_NUMBER} head."
             exit 1
           fi
 
           echo "Checking out local branch '$PR_BRANCH_NAME'..."
-          git checkout "$PR_BRANCH_NAME"
-          if [[ $? -ne 0 ]]; then
+          if ! git checkout "$PR_BRANCH_NAME"; then
             echo "::error::Failed to checkout '$PR_BRANCH_NAME' even after fetch."
             exit 1
           fi
@@ -1005,19 +1141,20 @@ jobs:
           COMMAND_BASE="${{ steps.determine_command.outputs.command }}"
           RESPONSE_FILE="response.txt"
           ERROR_LOG="error.log"
-          COMMAND_TO_RUN="$COMMAND_BASE"
+          # Build command as array to handle quotes properly
+          read -ra COMMAND_ARGS <<< "$COMMAND_BASE"
 
           if [[ -n "${{ inputs.prompt }}" ]]; then
             PROMPT_VALUE="${{ inputs.prompt }}"
-            COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt '$PROMPT_VALUE'"
+            COMMAND_ARGS+=(--prompt "$PROMPT_VALUE")
             echo "Using custom prompt from workflow input (properly quoted for multiline support)"
           else
             CONTEXT_TYPE="${{ steps.format.outputs.context_type }}"
             if [[ "$CONTEXT_TYPE" == "pr" ]]; then
-              COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt code-review"
+              COMMAND_ARGS+=(--prompt code-review)
               echo "Using code-review prompt for pull request context"
             elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
-              COMMAND_TO_RUN="$COMMAND_TO_RUN --prompt support"
+              COMMAND_ARGS+=(--prompt support)
               echo "Using support prompt for issue context"
             else
               echo "::warning:: Unknown context type '$CONTEXT_TYPE', not adding specific prompt flag."
@@ -1025,28 +1162,28 @@ jobs:
           fi
 
           if [[ "${{ inputs.allow_edit }}" == "true" ]]; then
-            COMMAND_TO_RUN="$COMMAND_TO_RUN --allow-edit"
+            COMMAND_ARGS+=(--allow-edit)
             echo "Enabling implement tool with --allow-edit flag"
           fi
 
           if [[ "${{ inputs.allow_suggestions }}" == "true" ]]; then
-            COMMAND_TO_RUN="$COMMAND_TO_RUN --allow-edit"
+            COMMAND_ARGS+=(--allow-edit)
             echo "Enabling implement tool with --allow-edit flag (suggestions mode)"
           fi
 
           # Add tracing options
           if [[ "${{ inputs.enable_tracing }}" == "true" ]]; then
             if [[ -n "${{ inputs.tracing_url }}" ]]; then
-              COMMAND_TO_RUN="$COMMAND_TO_RUN --trace-remote '${{ inputs.tracing_url }}'"
+              COMMAND_ARGS+=(--trace-remote "${{ inputs.tracing_url }}")
               echo "Enabling remote tracing to: ${{ inputs.tracing_url }}"
             else
-              COMMAND_TO_RUN="$COMMAND_TO_RUN --trace-file ./probe-traces.jsonl"
+              COMMAND_ARGS+=(--trace-file ./probe-traces.jsonl)
               echo "Enabling file tracing to: ./probe-traces.jsonl"
             fi
           fi
 
-          if [[ -z "$COMMAND_TO_RUN" ]]; then
-            echo "::error::COMMAND_TO_RUN is unexpectedly empty after building!" >&2
+          if [[ ${#COMMAND_ARGS[@]} -eq 0 ]]; then
+            echo "::error::COMMAND_ARGS is unexpectedly empty after building!" >&2
             echo "🤖 **Error:** Internal configuration error - AI command is missing." > "$RESPONSE_FILE"
             exit 1
           fi
@@ -1059,13 +1196,13 @@ jobs:
 
           echo "Prompt file: $PROMPT_FILE"
           echo "Prompt file size: $(wc -c < "$PROMPT_FILE") bytes"
-          echo "Command to run: $COMMAND_TO_RUN"
+          echo "Command to run: ${COMMAND_ARGS[*]}"
           echo "Running probe-chat..."
 
-          cat "$PROMPT_FILE" | $COMMAND_TO_RUN > "$RESPONSE_FILE" 2> >(tee "$ERROR_LOG" >&2)
-          EXIT_CODE=${PIPESTATUS[1]}
+          "${COMMAND_ARGS[@]}" < "$PROMPT_FILE" > "$RESPONSE_FILE" 2> >(tee "$ERROR_LOG" >&2)
+          EXIT_CODE=$?
 
-          if [ $EXIT_CODE -ne 0 ]; then
+          if [ "$EXIT_CODE" -ne 0 ]; then
             echo "::error::probe-chat command failed with exit code $EXIT_CODE." >&2
             if [ -s "$ERROR_LOG" ]; then
               echo "--- probe-chat stderr ---" >&2
@@ -1079,7 +1216,7 @@ jobs:
             echo "probe-chat command finished successfully (Exit code: 0)."
           fi
 
-          if [ $EXIT_CODE -eq 0 ] && [ ! -s "$RESPONSE_FILE" ]; then
+          if [ "$EXIT_CODE" -eq 0 ] && [ ! -s "$RESPONSE_FILE" ]; then
             echo "::warning::probe-chat command succeeded but produced an empty response."
             echo "🤖 AI command ran successfully but generated no response." > "$RESPONSE_FILE"
           fi
@@ -1102,7 +1239,9 @@ jobs:
             jq_rev_error.log
             pr_refs_stderr.log
             raw_diff_output.txt
+            incremental_diff_output.txt
             git_diff_stderr.log
+            git_incremental_stderr.log
             filter_stderr.log
             response.txt
           if-no-files-found: ignore
@@ -1143,13 +1282,13 @@ jobs:
           git status --porcelain
           if [[ -z $(git status --porcelain) ]]; then
             echo "No file changes detected by AI. Nothing to commit."
-            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
             echo "::endgroup::"
             exit 0
           fi
 
           echo "File changes detected."
-          echo "has_changes=true" >> $GITHUB_OUTPUT
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
 
           # Extract a short summary from the AI response for the commit message
           RESPONSE_SUMMARY=$(head -n 1 response.txt 2>/dev/null || echo "AI code modification")
@@ -1165,16 +1304,15 @@ jobs:
 
           echo "Checking for staged code changes after unstaging artifacts..."
           git status --porcelain
-          if [[ -z $(git status --porcelain | grep -v '??') ]]; then
+          if ! git status --porcelain | grep -q -v '??'; then
             echo "No actual code changes left after unstaging artifacts. Nothing to commit."
-            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
             echo "::endgroup::"
             exit 0
           fi
 
           echo "Committing staged changes locally..."
-          git commit -m "$COMMIT_MSG"
-          if [[ $? -ne 0 ]]; then
+          if ! git commit -m "$COMMIT_MSG"; then
               echo "::error::Git commit failed."
               git status; git diff --staged
               exit 1
@@ -1195,15 +1333,12 @@ jobs:
 
             TARGET_REF="refs/heads/${TARGET_BRANCH_NAME}"
             echo "Executing: git push origin HEAD:${TARGET_REF}"
-            git push origin "HEAD:${TARGET_REF}"
-            PUSH_EXIT_CODE=$?
-
-            if [[ $PUSH_EXIT_CODE -ne 0 ]]; then
-                echo "::error::Git push failed (Exit code: $PUSH_EXIT_CODE). The remote branch '${TARGET_BRANCH_NAME}' might have new changes (non-fast-forward). Manual intervention required."
+            if ! git push origin "HEAD:${TARGET_REF}"; then
+                echo "::error::Git push failed. The remote branch '${TARGET_BRANCH_NAME}' might have new changes (non-fast-forward). Manual intervention required."
                 exit 1 # Fail the step
             fi
             echo "Changes successfully pushed to the PR branch '${TARGET_BRANCH_NAME}'."
-            echo "pr_url=" >> $GITHUB_OUTPUT
+            echo "pr_url=" >> "$GITHUB_OUTPUT"
 
           elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
             # Issue context - create a NEW branch from the current HEAD (which should be 'main' or default)
@@ -1212,18 +1347,15 @@ jobs:
             BRANCH_NAME="probe-ai/issue-${ISSUE_NUMBER}-${TIMESTAMP}"
 
             echo "Creating new branch '$BRANCH_NAME' pointing to current commit $NEW_COMMIT..."
-            git branch "$BRANCH_NAME" HEAD
-             if [[ $? -ne 0 ]]; then
+            if ! git branch "$BRANCH_NAME" HEAD; then
                 echo "::error::Failed create branch '$BRANCH_NAME'."
                 exit 1
             fi
 
             echo "Pushing new branch '$BRANCH_NAME' to origin..."
             echo "Executing: git push origin ${NEW_COMMIT}:refs/heads/${BRANCH_NAME}"
-            git push origin "${NEW_COMMIT}:refs/heads/${BRANCH_NAME}"
-            PUSH_EXIT_CODE=$?
-            if [[ $PUSH_EXIT_CODE -ne 0 ]]; then
-                echo "::error::Git push failed for new branch '$BRANCH_NAME' (Exit code: $PUSH_EXIT_CODE)."
+            if ! git push origin "${NEW_COMMIT}:refs/heads/${BRANCH_NAME}"; then
+                echo "::error::Git push failed for new branch '$BRANCH_NAME'."
                 exit 1
             fi
 
@@ -1233,16 +1365,15 @@ jobs:
             PR_BODY=$(printf "This PR was automatically created by Probe AI in response to issue #%s.\n\n**AI Response Summary:**\n\n%s" "$ISSUE_NUMBER" "$PR_BODY_CONTENT")
 
             echo "Creating Pull Request..."
-            DEFAULT_BRANCH=$(gh repo view $GITHUB_REPOSITORY --json defaultBranchRef -q .defaultBranchRef.name || echo "main")
+            DEFAULT_BRANCH=$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef -q .defaultBranchRef.name || echo "main")
             echo "Using base branch '$DEFAULT_BRANCH' for PR."
-            PR_URL=$(gh pr create --title "$PR_TITLE" --body "$PR_BODY" --base "$DEFAULT_BRANCH" --head "$BRANCH_NAME" --repo "$GITHUB_REPOSITORY")
-            if [[ $? -ne 0 || -z "$PR_URL" ]]; then
+            if PR_URL=$(gh pr create --title "$PR_TITLE" --body "$PR_BODY" --base "$DEFAULT_BRANCH" --head "$BRANCH_NAME" --repo "$GITHUB_REPOSITORY") && [[ -n "$PR_URL" ]]; then
+               echo "Successfully created PR: $PR_URL"
+            else
                echo "::warning::Failed to create PR using 'gh pr create'. PR URL will be empty."
                PR_URL=""
-            else
-               echo "Successfully created PR: $PR_URL"
             fi
-            echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
 
           else
              echo "::error::Unhandled context type '$CONTEXT_TYPE' for pushing changes. Commit $NEW_COMMIT was created locally but not pushed."
@@ -1284,7 +1415,7 @@ jobs:
             SHOULD_FAIL_JOB=true
             
             # Strip the failure tag from the response
-            RESPONSE_CONTENT=$(echo "$RESPONSE_CONTENT" | sed "s|$FAILURE_TAG||g")
+            RESPONSE_CONTENT="${RESPONSE_CONTENT//$FAILURE_TAG/}"
             
             # Prepend failure message to the response
             RESPONSE_CONTENT="${FAILURE_MESSAGE}\n\n${RESPONSE_CONTENT}"
@@ -1372,7 +1503,7 @@ jobs:
         if: always()
         run: |
           printf '%s' "${{ steps.read_response.outputs.response_body_b64 }}" | base64 -d > /tmp/artifacts/comment_body.md
-          echo "body_path=/tmp/artifacts/comment_body.md" >> $GITHUB_OUTPUT
+          echo "body_path=/tmp/artifacts/comment_body.md" >> "$GITHUB_OUTPUT"
 
       # ---------- Find existing comment (if update mode enabled) ----
       - name: Find Comment
@@ -1415,7 +1546,7 @@ jobs:
         run: |
           echo "::group::Final cleanup of artifact files"
           # Remove all workflow artifact files after all git and comment operations are complete
-          rm -f error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt probe-traces.jsonl full_response.md
+          rm -f error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt incremental_diff_output.txt git_diff_stderr.log git_incremental_stderr.log filter_stderr.log response.txt probe-traces.jsonl full_response.md
           echo "Artifact files cleaned up"
           echo "::endgroup::"
 
