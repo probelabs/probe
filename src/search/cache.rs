@@ -41,7 +41,7 @@ pub fn calculate_file_md5(file_path: &Path) -> Result<String> {
     file.read_to_end(&mut contents)?;
 
     let digest = md5::compute(&contents);
-    Ok(format!("{:x}", digest))
+    Ok(format!("{digest:x}"))
 }
 
 // Test comment to trigger MD5 change
@@ -199,10 +199,7 @@ impl SessionCache {
             // Skip if file no longer exists
             if !current_path.exists() {
                 if debug_mode {
-                    println!(
-                        "DEBUG: File no longer exists, invalidating cache: {}",
-                        file_path
-                    );
+                    println!("DEBUG: File no longer exists, invalidating cache: {file_path}");
                 }
                 invalidated_files.insert(file_path.clone());
                 continue;
@@ -213,8 +210,7 @@ impl SessionCache {
                 Ok(current_md5) => {
                     if &current_md5 != cached_md5 {
                         if debug_mode {
-                            println!("DEBUG: File MD5 changed, invalidating cache: {} (was: {}, now: {})", 
-                                    file_path, cached_md5, current_md5);
+                            println!("DEBUG: File MD5 changed, invalidating cache: {file_path} (was: {cached_md5}, now: {current_md5})");
                         }
                         invalidated_files.insert(file_path.clone());
                     }
@@ -222,8 +218,7 @@ impl SessionCache {
                 Err(e) => {
                     if debug_mode {
                         println!(
-                            "DEBUG: Error calculating MD5 for {}, invalidating cache: {}",
-                            file_path, e
+                            "DEBUG: Error calculating MD5 for {file_path}, invalidating cache: {e}"
                         );
                     }
                     invalidated_files.insert(file_path.clone());
@@ -581,7 +576,7 @@ pub fn add_results_to_cache(results: &[SearchResult], session_id: &str, query: &
     for file_path in &unique_files {
         if let Err(e) = cache.update_file_md5(file_path) {
             if debug_mode {
-                println!("DEBUG: Failed to update MD5 for {}: {}", file_path, e);
+                println!("DEBUG: Failed to update MD5 for {file_path}: {e}");
             }
         }
     }
