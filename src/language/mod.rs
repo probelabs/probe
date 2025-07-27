@@ -32,3 +32,9 @@ pub use tree_cache::{clear_tree_cache, get_cache_size, invalidate_cache_entry};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod javascript_specific_tests;
+
+#[cfg(test)]
+mod typescript_specific_tests;
