@@ -148,6 +148,39 @@ User: Find all markdown files in the docs directory, but only at the top level.
 </examples>
 `;
 
+// Define the suggest tool XML definition
+export const suggestToolDefinition = `
+## suggest
+Description: Generate code suggestions that can be processed by reviewdog for PR review comments. This tool creates structured diff output that reviewdog can convert into GitHub PR suggestions.
+
+Parameters:
+- filePath: (required) The path to the file being modified
+- changes: (required) Description of the changes to be made
+- lineNumber: (optional) Specific line number where the suggestion applies
+- reasoning: (optional) Explanation of why this change is being suggested
+
+Usage Example:
+
+<examples>
+
+User: Can you suggest an improvement to the error handling in src/utils.js?
+<suggest>
+<filePath>src/utils.js</filePath>
+<changes>Add try-catch block around the API call to handle network errors gracefully</changes>
+<lineNumber>42</lineNumber>
+<reasoning>Current code doesn't handle network failures, which could cause the application to crash</reasoning>
+</suggest>
+
+User: Suggest adding input validation to the login function.
+<suggest>
+<filePath>auth/login.js</filePath>
+<changes>Add email format validation and password length check before making the authentication request</changes>
+<reasoning>Input validation improves security and provides better user feedback</reasoning>
+</suggest>
+
+</examples>
+`;
+
 
 // Import the XML parser function from @buger/probe
 import { parseXmlToolCall } from '@buger/probe';

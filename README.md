@@ -510,6 +510,9 @@ export ANTHROPIC_API_KEY=your_api_key
 
 # Or specify a directory to search
 npx -y @buger/probe-chat /path/to/your/project
+
+# Enable suggestions mode (allows AI to suggest code changes)
+npx -y @buger/probe-chat --allow-suggestions /path/to/your/project
 ~~~
 
 #### Using the npm package
@@ -571,6 +574,10 @@ export OPENAI_API_URL=https://your-openai-proxy.com/v1
 # Enable debug mode for detailed logging
 export DEBUG=1
 ~~~
+
+#### Command Line Options
+
+- `--allow-suggestions`: Enable the AI to suggest code changes and improvements. When enabled, the AI can use a `suggest` tool to propose specific code modifications with file locations and line numbers.
 
 #### Example Usage
 

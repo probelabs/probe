@@ -459,6 +459,129 @@ const baseListFilesTool = {
 	}
 };
 
+// Create the suggest tool
+const baseSuggestTool = {
+	name: "suggest",
+	description: 'Generate code suggestions that can be processed by reviewdog for PR review comments',
+	parameters: {
+		type: 'object',
+		properties: {
+			filePath: {
+				type: 'string',
+				description: 'The path to the file being modified'
+			},
+			changes: {
+				type: 'string',
+				description: 'Description of the changes to be made'
+			},
+			lineNumber: {
+				type: 'string',
+				description: 'Specific line number where the suggestion applies (optional)'
+			},
+			reasoning: {
+				type: 'string',
+				description: 'Explanation of why this change is being suggested (optional)'
+			}
+		},
+		required: ['filePath', 'changes']
+	},
+	execute: async ({ filePath, changes, lineNumber, reasoning, sessionId }) => {
+		const debug = process.env.DEBUG_CHAT === '1';
+		
+		try {
+			// Check if suggestions are allowed
+			if (process.env.ALLOW_SUGGESTIONS !== '1') {
+				return {
+					success: false,
+					error: 'Code suggestions are not allowed. Use --allow-suggestions flag to enable.',
+					timestamp: new Date().toISOString()
+				};
+			}
+			
+			if (debug) {
+				console.log(`[DEBUG] Creating suggestion for ${filePath}`);
+				console.log(`[DEBUG] Changes: ${changes}`);
+				if (lineNumber) console.log(`[DEBUG] Line number: ${lineNumber}`);
+				if (reasoning) console.log(`[DEBUG] Reasoning: ${reasoning}`);
+			}
+			
+			// Create a temporary file with the suggestion in a format that reviewdog could process
+			const tempFile = path.join(os.tmpdir(), `probe-suggestion-${Date.now()}.diff`);
+			
+			// Format the diff content in a way that's compatible with reviewdog/action-suggester
+			// In a real GitHub Actions environment, this would be processed by reviewdog to create
+			// suggested changes in the PR
+			let diffContent = `--- a/${filePath}\n+++ b/${filePath}\n`;
+			
+			// Add line number information if provided
+			if (lineNumber) {
+				diffContent += `@@ -${lineNumber},1 +${lineNumber},1 @@\n`;
+			} else {
+				diffContent += `@@ -1,1 +1,1 @@\n`;
+			}
+			
+			// Add the changes
+			diffContent += changes + '\n';
+			
+			// Add reasoning as a comment if provided
+			if (reasoning) {
+				diffContent += `\n# Reasoning: ${reasoning}\n`;
+			}
+			
+			await fsPromises.writeFile(tempFile, diffContent);
+			
+			try {
+				// In a real implementation with GitHub Actions, this would be handled by reviewdog/action-suggester
+				// which would parse the diff file and create suggestions in the PR
+				// Here we're just simulating the behavior for local development
+				console.error(`Created suggestion for ${filePath}${lineNumber ? ` at line ${lineNumber}` : ''}`);
+				console.error(`Changes: ${changes}`);
+				if (reasoning) {
+					console.error(`Reasoning: ${reasoning}`);
+				}
+				
+				const result = `Suggestion created for ${filePath}${lineNumber ? ` at line ${lineNumber}` : ''}:
+
+\`\`\`diff
+${diffContent}
+\`\`\`
+
+This suggestion would be processed by reviewdog/action-suggester in a GitHub Actions environment
+to create a suggested change in the PR that can be accepted or rejected.`;
+
+				return {
+					success: true,
+					filePath: filePath,
+					changes: changes,
+					lineNumber: lineNumber || null,
+					reasoning: reasoning || null,
+					diffContent: diffContent,
+					result: result,
+					timestamp: new Date().toISOString()
+				};
+			} finally {
+				// Clean up the temporary file
+				try {
+					await fsPromises.unlink(tempFile);
+					if (debug) {
+						console.log(`[DEBUG] Removed temporary file: ${tempFile}`);
+					}
+				} catch (err) {
+					console.error(`Error removing temporary file ${tempFile}:`, err);
+				}
+			}
+		} catch (error) {
+			console.error(`Error creating suggestion:`, error);
+			return {
+				success: false,
+				filePath: filePath,
+				error: error.message || 'Unknown error creating suggestion',
+				timestamp: new Date().toISOString()
+			};
+		}
+	}
+};
+
 // Create the searchFiles tool
 const baseSearchFilesTool = {
 	name: "searchFiles",
@@ -667,6 +790,7 @@ export const extractToolInstance = wrapToolWithEmitter(baseExtractTool, 'extract
 export const implementToolInstance = wrapToolWithEmitter(baseImplementTool, 'implement', baseImplementTool.execute);
 export const listFilesToolInstance = wrapToolWithEmitter(baseListFilesTool, 'listFiles', baseListFilesTool.execute);
 export const searchFilesToolInstance = wrapToolWithEmitter(baseSearchFilesTool, 'searchFiles', baseSearchFilesTool.execute);
+export const suggestToolInstance = wrapToolWithEmitter(baseSuggestTool, 'suggest', baseSuggestTool.execute);
 
 // --- Backward Compatibility Layer (probeTool mapping to searchToolInstance) ---
 // This might be less relevant if the AI is strictly using the new XML format,
@@ -734,5 +858,6 @@ export const toolCapabilities = {
 	extract: "Extract code blocks and context from files",
 	implement: "Implement features or fix bugs using aider (requires --allow-edit)",
 	listFiles: "List files and directories in a specified location",
-	searchFiles: "Find files matching a glob pattern with recursive search capability"
+	searchFiles: "Find files matching a glob pattern with recursive search capability",
+	suggest: "Generate code suggestions that can be processed by reviewdog for PR review comments (requires --allow-suggestions)"
 };
