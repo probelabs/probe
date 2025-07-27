@@ -4,6 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ALWAYS use code-search-agent to navigate the codebase and ask questions about it.
 
+## GitHub Integration
+
+ALWAYS use the `gh` tool for GitHub interactions instead of web URLs or other methods:
+- View issues: `gh issue view <number> --comments` (always include --comments to see all discussion)
+- View pull requests: `gh pr view <number> --comments` (always include --comments to see all discussion)
+- List issues/PRs: `gh issue list` or `gh pr list`
+- Check releases: `gh release list`
+- Any other GitHub operations should use the `gh` CLI tool
+
 ## Project Overview
 
 Probe is an AI-friendly, fully local, semantic code search tool built in Rust that combines ripgrep's speed with tree-sitter's AST parsing. It's designed to power AI coding assistants with precise, context-aware code search and extraction capabilities.
