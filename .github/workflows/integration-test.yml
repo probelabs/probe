@@ -7,6 +7,22 @@ on:
     branches: [ main ]
 
 jobs:
+  actionlint:
+    name: Lint GitHub Actions workflows
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download actionlint
+      id: get_actionlint
+      run: bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+      shell: bash
+
+    - name: Check workflow files
+      run: ${{ steps.get_actionlint.outputs.executable }} -color
+      shell: bash
+
   integration-test:
     name: Test npm installation on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

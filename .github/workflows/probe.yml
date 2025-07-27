@@ -15,7 +15,7 @@ on:
       command_prefix:
         description: "The prefix required on comments to trigger the AI (e.g., /probe, /ai, etc)"
         default: "/probe"
-        required: true
+        required: false
         type: string
       default_probe_chat_command:
         description: "The default probe-chat command if PROBE_CHAT_COMMAND secret is not set"
@@ -179,6 +179,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
@@ -218,7 +219,7 @@ jobs:
             echo "EOF"                           >> "$GITHUB_OUTPUT"
 
             echo "context_type=pr"               >> "$GITHUB_OUTPUT"
-            echo "head_ref=${{ github.event.pull_request.head.ref }}" >> "$GITHUB_OUTPUT"
+            echo "head_ref=${PR_HEAD_REF}" >> "$GITHUB_OUTPUT"
 
           elif [[ "$EVENT_NAME" == "issues" ]]; then
             if [[ -z "$ISSUE_BODY" ]]; then
@@ -599,6 +600,52 @@ jobs:
           echo "EOF_PR_BODY" >> $GITHUB_ENV
           echo "::endgroup::"
 
+      # --- Detect Previous Probe Comments for State Tracking ---
+      - name: Format - Detect Previous Probe State
+        id: format_probe_state
+        if: env.FINAL_CONTEXT_TYPE == 'pr'
+        env:
+          GH_TOKEN: ${{ env.WORKFLOW_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_OR_PR_NUMBER: ${{ env.ISSUE_OR_PR_NUMBER }}
+          COMMAND_PREFIX: ${{ inputs.command_prefix }}
+        run: |
+          echo "::group::Detect Previous Probe State"
+          set -e
+          
+          echo "Searching for previous probe comments to detect state..."
+          
+          # Fetch all comments and find the most recent probe comment timestamp
+          COMMENTS_JSON=$(gh api "/repos/${REPO}/issues/$ISSUE_OR_PR_NUMBER/comments" --paginate || echo "FETCH_FAILED")
+          LAST_PROBE_TIMESTAMP=""
+          
+          if [[ "$COMMENTS_JSON" != "FETCH_FAILED" && -n "$COMMENTS_JSON" ]]; then
+            echo "Analyzing comments for probe signatures..."
+            
+            # Look for comments containing the probe signature pattern
+            # Pattern: "Tip: Mention me again using `<prefix> <request>`"
+            PROBE_PATTERN="Tip: Mention me again using.*$COMMAND_PREFIX"
+            
+            # Extract timestamp from most recent probe comment
+            LAST_PROBE_TIMESTAMP=$(echo "$COMMENTS_JSON" | jq -r --arg pattern "$PROBE_PATTERN" '
+              .[] | select(.body | test($pattern)) | .created_at
+            ' | sort | tail -1)
+            
+            if [[ -n "$LAST_PROBE_TIMESTAMP" && "$LAST_PROBE_TIMESTAMP" != "null" ]]; then
+              echo "Found previous probe comment from: $LAST_PROBE_TIMESTAMP"
+              echo "This is a subsequent probe call - will generate incremental diff"
+            else
+              echo "No previous probe comments found - this is the first probe call"
+              LAST_PROBE_TIMESTAMP=""
+            fi
+          else
+            echo "::warning::Could not fetch comments for probe state detection"
+            LAST_PROBE_TIMESTAMP=""
+          fi
+          
+          echo "LAST_PROBE_TIMESTAMP=$LAST_PROBE_TIMESTAMP" >> $GITHUB_ENV
+          echo "::endgroup::"
+
       # --- Fetch & Filter PR Diff (Uses git, relies on checkout token setup) ---
       - name: Format - Fetch & Filter PR Diff
         id: format_pr_diff
@@ -606,11 +653,13 @@ jobs:
         env:
           BASE_SHA: ${{ env.BASE_SHA }}
           HEAD_SHA: ${{ env.HEAD_SHA }}
+          LAST_PROBE_TIMESTAMP: ${{ env.LAST_PROBE_TIMESTAMP }}
         run: |
           # (Script remains the same)
           echo "::group::Fetch & Filter PR Diff"
           set -e
           FILTERED_PR_DIFF="<!-- Diff generation skipped or failed -->" # Default value
+          FILTERED_INCREMENTAL_DIFF=""
 
           if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
               echo "::error::Cannot run git diff without valid base/head SHAs. Skipping diff generation."
@@ -628,10 +677,51 @@ jobs:
                   '.*rc' '*.conf' '*.cfg' '*.ini' '*.toml' '*.properties'
                   'README.*' 'LICENSE*' 'CONTRIBUTING.*' 'CHANGELOG.*' '*.rst' '*.adoc'
               )
+              
+              # Generate incremental diff if we have a previous probe timestamp
+              if [[ -n "$LAST_PROBE_TIMESTAMP" ]]; then
+                echo "Generating incremental diff since last probe call: $LAST_PROBE_TIMESTAMP"
+                
+                # Get commit SHA from timestamp for more precise diff
+                PROBE_COMMIT_SHA=$(git log --since="$LAST_PROBE_TIMESTAMP" --format="%H" --reverse | head -1)
+                
+                if [[ -n "$PROBE_COMMIT_SHA" ]]; then
+                  echo "Using commit SHA $PROBE_COMMIT_SHA as base for incremental diff"
+                  INCREMENTAL_BASE="$PROBE_COMMIT_SHA"
+                else
+                  echo "No commits found since timestamp, using timestamp directly"
+                  INCREMENTAL_BASE="$LAST_PROBE_TIMESTAMP"
+                fi
+                
+                echo "Running incremental git diff since $INCREMENTAL_BASE..."
+                set +e
+                if [[ "$INCREMENTAL_BASE" =~ ^[0-9a-f]{40}$ ]]; then
+                  # Use commit SHA
+                  git diff "${INCREMENTAL_BASE}..${HEAD_SHA}" -- "${ALLOWED_PATTERNS[@]}" > incremental_diff_output.txt 2> git_incremental_stderr.log
+                else
+                  # Use timestamp with git log to find commits
+                  git log --since="$INCREMENTAL_BASE" --oneline --format="%H" | tail -1 | xargs -I {} git diff {}..HEAD -- "${ALLOWED_PATTERNS[@]}" > incremental_diff_output.txt 2> git_incremental_stderr.log
+                fi
+                INCREMENTAL_EXIT_CODE=$?
+                set -e
+                
+                INCREMENTAL_RAW_CONTENT=$(cat incremental_diff_output.txt 2>/dev/null || echo "")
+                
+                if [[ $INCREMENTAL_EXIT_CODE -eq 0 && -n "$INCREMENTAL_RAW_CONTENT" ]]; then
+                  echo "Incremental diff generated successfully. Size: ${#INCREMENTAL_RAW_CONTENT} bytes"
+                  FILTERED_INCREMENTAL_DIFF="$INCREMENTAL_RAW_CONTENT"
+                else
+                  echo "::warning::Incremental diff generation failed or empty (exit code: $INCREMENTAL_EXIT_CODE)"
+                  FILTERED_INCREMENTAL_DIFF=""
+                fi
+              else
+                echo "No previous probe timestamp - first probe call, skipping incremental diff"
+              fi
+              
               RAW_DIFF_CONTENT=""
               GIT_DIFF_EXIT_CODE=1
 
-              echo "Running: git diff '${BASE_SHA}...${HEAD_SHA}' -- ${ALLOWED_PATTERNS[*]}"
+              echo "Running full PR diff: git diff '${BASE_SHA}...${HEAD_SHA}' -- ${ALLOWED_PATTERNS[*]}"
               set +e
               git diff "${BASE_SHA}...${HEAD_SHA}" -- "${ALLOWED_PATTERNS[@]}" > raw_diff_output.txt 2> git_diff_stderr.log
               GIT_DIFF_EXIT_CODE=$?
@@ -707,6 +797,10 @@ jobs:
           echo "FILTERED_PR_DIFF<<EOF_PR_DIFF" >> $GITHUB_ENV
           echo "$FILTERED_PR_DIFF" >> $GITHUB_ENV
           echo "EOF_PR_DIFF" >> $GITHUB_ENV
+          
+          echo "FILTERED_INCREMENTAL_DIFF<<EOF_INCREMENTAL_DIFF" >> $GITHUB_ENV
+          echo "$FILTERED_INCREMENTAL_DIFF" >> $GITHUB_ENV
+          echo "EOF_INCREMENTAL_DIFF" >> $GITHUB_ENV
           echo "::endgroup::"
 
       # --- Fetch PR Review Comments & Bodies using selected token ---
@@ -842,6 +936,7 @@ jobs:
           PR_TITLE: ${{ env.PR_TITLE }}
           PR_BODY: ${{ env.PR_BODY }}
           FILTERED_PR_DIFF: ${{ env.FILTERED_PR_DIFF }}
+          FILTERED_INCREMENTAL_DIFF: ${{ env.FILTERED_INCREMENTAL_DIFF }}
           ISSUE_TITLE: ${{ env.ISSUE_TITLE }}
           ISSUE_BODY: ${{ env.ISSUE_BODY }}
         run: |
@@ -855,7 +950,17 @@ jobs:
 
           if [[ "$FINAL_CONTEXT_TYPE" == "pr" ]]; then
               CONTEXT_DETAILS_XML="<details><title><![CDATA[$PR_TITLE]]></title><body><![CDATA[$PR_BODY]]></body></details>"
+              
+              # Build diff XML with both full and incremental diffs
               DIFF_XML="<diff><![CDATA[$FILTERED_PR_DIFF]]></diff>"
+              
+              if [[ -n "$FILTERED_INCREMENTAL_DIFF" ]]; then
+                DIFF_XML="${DIFF_XML}"$'\n'"<new_diff_since_last_run><![CDATA[$FILTERED_INCREMENTAL_DIFF]]></new_diff_since_last_run>"
+                echo "Including both full PR diff and incremental diff since last probe call"
+              else
+                echo "Only including full PR diff (first probe call or no incremental changes)"
+              fi
+              
               PROMPT_INSTRUCTION="You are an AI assistant analyzing a GitHub Pull Request..."
           elif [[ "$FINAL_CONTEXT_TYPE" == "issue" ]]; then
               CONTEXT_DETAILS_XML="<details><title><![CDATA[$ISSUE_TITLE]]></title><body><![CDATA[$ISSUE_BODY]]></body></details>"
@@ -1102,7 +1207,9 @@ jobs:
             jq_rev_error.log
             pr_refs_stderr.log
             raw_diff_output.txt
+            incremental_diff_output.txt
             git_diff_stderr.log
+            git_incremental_stderr.log
             filter_stderr.log
             response.txt
           if-no-files-found: ignore
@@ -1415,7 +1522,7 @@ jobs:
         run: |
           echo "::group::Final cleanup of artifact files"
           # Remove all workflow artifact files after all git and comment operations are complete
-          rm -f error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt probe-traces.jsonl full_response.md
+          rm -f error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt incremental_diff_output.txt git_diff_stderr.log git_incremental_stderr.log filter_stderr.log response.txt probe-traces.jsonl full_response.md
           echo "Artifact files cleaned up"
           echo "::endgroup::"
 

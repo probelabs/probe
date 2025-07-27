@@ -23,7 +23,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
           toolchain: stable
           components: rustfmt, clippy
 
@@ -43,42 +42,22 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check formatting
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+        run: cargo fmt --all -- --check
 
       - name: Lint with clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: -- -D warnings
+        run: cargo clippy -- -D warnings
 
       - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
+        run: cargo build
 
       - name: Run unit tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --lib
+        run: cargo test --lib
 
       - name: Run integration tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --test integration_tests
+        run: cargo test --test integration_tests
 
       - name: Run property tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --test property_tests
+        run: cargo test --test property_tests
 
       - name: Run CLI tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --test cli_tests
+        run: cargo test --test cli_tests
