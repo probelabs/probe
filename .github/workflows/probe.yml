@@ -1119,16 +1119,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # --- Clean up artifact files before git operations ---
-      - name: Clean up artifact files
-        if: inputs.allow_edit || inputs.allow_suggestions
-        run: |
-          echo "::group::Cleaning up artifact files"
-          # Remove all workflow artifact files to prevent them from interfering with git operations
-          rm -f error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt probe-traces.jsonl full_response.md
-          echo "Artifact files cleaned up"
-          echo "::endgroup::"
-
       - name: Handle Git Changes
         id: handle_git
         if: inputs.allow_edit && steps.probe.outcome == 'success'
@@ -1418,6 +1408,16 @@ jobs:
           body-path: ${{ steps.decode.outputs.body_path }}
           reactions: ${{ steps.probe.outcome == 'success' && '+1' || '-1' }}
           edit-mode: replace
+
+      # --- Clean up artifact files after all operations complete ---
+      - name: Clean up artifact files
+        if: always() && (inputs.allow_edit || inputs.allow_suggestions)
+        run: |
+          echo "::group::Final cleanup of artifact files"
+          # Remove all workflow artifact files after all git and comment operations are complete
+          rm -f error.log formatted_prompt.txt jq_std_error.log jq_rev_com_error.log jq_rev_error.log pr_refs_stderr.log raw_diff_output.txt git_diff_stderr.log filter_stderr.log response.txt probe-traces.jsonl full_response.md
+          echo "Artifact files cleaned up"
+          echo "::endgroup::"
 
       # --- Fail job if failure tag was detected ---
       - name: Fail job if failure tag detected
