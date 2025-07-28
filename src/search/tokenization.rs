@@ -365,6 +365,11 @@ pub fn is_special_case(word: &str) -> bool {
 /// - special cases like OAuth2 -> ["oauth2"]
 /// - also attempts to split lowercase identifiers that might have been camelCase originally
 pub fn split_camel_case(input: &str) -> Vec<String> {
+    // Check if SIMD tokenization is enabled
+    if crate::search::simd_tokenization::is_simd_enabled() {
+        return crate::search::simd_tokenization::simd_split_camel_case(input);
+    }
+
     let _debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if input.is_empty() {

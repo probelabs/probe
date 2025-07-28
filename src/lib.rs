@@ -10,6 +10,7 @@
 //! - Semantic code search with intelligent ranking
 //! - Code block extraction with language-aware parsing
 //! - AST-based pattern matching for precise code structure search
+//! - SIMD-accelerated vector operations for improved performance
 //!
 //! ## Examples
 //!
@@ -100,6 +101,8 @@ pub mod path_resolver;
 pub mod query;
 pub mod ranking;
 pub mod search;
+pub mod simd_ranking;
+pub mod simd_test;
 
 // Re-export commonly used types for convenience
 pub use extract::{

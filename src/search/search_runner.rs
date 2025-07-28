@@ -15,6 +15,7 @@ use probe_code::search::{
     result_ranking::rank_search_results,
     search_limiter::apply_limits,
     search_options::SearchOptions,
+    simd_pattern_matching::SimdPatternMatcher,
     timeout,
 };
 
@@ -1404,17 +1405,34 @@ pub fn search_with_structured_patterns(
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let search_start = Instant::now();
 
-    // Step 1: Create RegexSet for deterministic pattern matching
+    // Step 1: Create pattern matching infrastructure (SIMD or RegexSet)
     if debug_mode {
-        println!("DEBUG: Starting parallel structured pattern search with RegexSet...");
-        println!("DEBUG: Creating RegexSet from {} patterns", patterns.len());
+        println!("DEBUG: Starting parallel structured pattern search...");
+        println!("DEBUG: Creating pattern matcher from {} patterns", patterns.len());
     }
 
-    // Extract just the patterns for the RegexSet
-    let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| format!("(?i){p}")).collect();
+    // Extract just the patterns for matching
+    let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| p.clone()).collect();
 
-    // Create a RegexSet for deterministic matching
-    let regex_set = RegexSet::new(&pattern_strings)?;
+    // Try to use SIMD pattern matching if enabled and patterns are simple enough
+    let use_simd = crate::search::simd_pattern_matching::is_simd_pattern_matching_enabled() 
+        && pattern_strings.iter().all(|p| !p.contains(r"\b") && !p.contains("(?i)"));
+    
+    let simd_matcher = if use_simd {
+        if debug_mode {
+            println!("DEBUG: Using SIMD pattern matching for {} patterns", pattern_strings.len());
+        }
+        Some(SimdPatternMatcher::with_patterns(pattern_strings.clone()))
+    } else {
+        if debug_mode {
+            println!("DEBUG: Using RegexSet for complex patterns");
+        }
+        None
+    };
+
+    // Create RegexSet as fallback or primary matcher
+    let pattern_strings_regex: Vec<String> = patterns.iter().map(|(p, _)| format!("(?i){p}")).collect();
+    let regex_set = RegexSet::new(&pattern_strings_regex)?;
 
     // Create a mapping from pattern index to term indices
     let pattern_to_terms: Vec<HashSet<usize>> =
@@ -1447,10 +1465,11 @@ pub fn search_with_structured_patterns(
     // Create thread-safe shared resources
     let regex_set = Arc::new(regex_set);
     let pattern_to_terms = Arc::new(pattern_to_terms);
+    let simd_matcher = Arc::new(simd_matcher);
     let file_term_maps = Arc::new(Mutex::new(HashMap::new()));
 
     // Also create individual regexes for line number extraction
-    let individual_regexes: Vec<regex::Regex> = pattern_strings
+    let individual_regexes: Vec<regex::Regex> = pattern_strings_regex
         .iter()
         .map(|p| regex::Regex::new(p).unwrap())
         .collect();
@@ -1460,12 +1479,14 @@ pub fn search_with_structured_patterns(
         let regex_set = Arc::clone(&regex_set);
         let pattern_to_terms = Arc::clone(&pattern_to_terms);
         let individual_regexes = Arc::clone(&individual_regexes);
+        let simd_matcher = Arc::clone(&simd_matcher);
 
         // Search file with RegexSet for deterministic matching
         match search_file_with_regex_set(
             file_path,
             &regex_set,
             &individual_regexes,
+            &*simd_matcher,
             &pattern_to_terms,
         ) {
             Ok(term_map) => {
@@ -1520,6 +1541,7 @@ fn search_file_with_regex_set(
     file_path: &Path,
     regex_set: &regex::RegexSet,
     individual_regexes: &[regex::Regex],
+    simd_matcher: &Option<SimdPatternMatcher>,
     pattern_to_terms: &[HashSet<usize>],
 ) -> Result<HashMap<usize, HashSet<usize>>> {
     let mut term_map = HashMap::new();
@@ -1598,13 +1620,37 @@ fn search_file_with_regex_set(
             continue;
         }
 
-        // First check if any pattern matches using the RegexSet
-        let matches = regex_set.matches(line);
-        if matches.matched_any() {
-            // For each matched pattern, find the specific line numbers using individual regexes
-            for pattern_idx in matches.iter() {
-                // Use the individual regex to find all matches in the line
-                if individual_regexes[pattern_idx].is_match(line) {
+        // First check if any pattern matches using SIMD or RegexSet
+        let mut matched_patterns = Vec::new();
+        
+        if let Some(ref simd_matcher) = simd_matcher {
+            // Use SIMD pattern matching for fast multi-pattern search
+            if simd_matcher.has_match(line) {
+                let simd_matches = simd_matcher.find_all_matches(line);
+                for simd_match in simd_matches {
+                    matched_patterns.push(simd_match.pattern_index);
+                }
+            }
+        } else {
+            // Fallback to RegexSet
+            let matches = regex_set.matches(line);
+            if matches.matched_any() {
+                matched_patterns.extend(matches.iter());
+            }
+        }
+
+        if !matched_patterns.is_empty() {
+            // For each matched pattern, process the matches
+            for pattern_idx in matched_patterns {
+                // For SIMD matches, we already know there's a match
+                // For regex matches, double-check with individual regex
+                let has_match = if simd_matcher.is_some() {
+                    true
+                } else {
+                    individual_regexes[pattern_idx].is_match(line)
+                };
+                
+                if has_match {
                     // Add matches for all terms associated with this pattern
                     for &term_idx in &pattern_to_terms[pattern_idx] {
                         term_map

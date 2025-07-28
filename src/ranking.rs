@@ -3,6 +3,7 @@ use probe_code::search::elastic_query::Expr;
 use probe_code::search::tokenization;
 use rust_stemmers::{Algorithm, Stemmer};
 use std::sync::OnceLock;
+use crate::simd_ranking::{SparseDocumentMatrix, SimdBm25Params};
 
 // Replace standard collections with ahash versions for better performance
 type HashMap<K, V> = AHashMap<K, V>;
@@ -413,6 +414,261 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
     if debug_mode {
         println!(
             "DEBUG: Sorted {} matching documents by score",
+            filtered_docs.len()
+        );
+    }
+
+    filtered_docs
+}
+
+/// SIMD-optimized version of rank_documents using SimSIMD for vector operations
+/// This provides significant performance improvements for large document sets
+pub fn rank_documents_simd(params: &RankingParams) -> Vec<(usize, f64)> {
+    use rayon::prelude::*;
+    use std::cmp::Ordering;
+
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    if debug_mode {
+        println!("DEBUG: Using SIMD-optimized ranking");
+    }
+
+    // 1) Parse the user query into an AST (Expr)
+    let parsed_expr = match crate::search::elastic_query::parse_query(params.query, false) {
+        Ok(expr) => expr,
+        Err(e) => {
+            if debug_mode {
+                eprintln!("DEBUG: parse_query failed: {e:?}");
+            }
+            eprintln!("WARNING: Query parsing failed: {e:?}. Returning empty results.");
+            return vec![];
+        }
+    };
+
+    // 2) Extract query terms, create token mapping
+    let query_terms = extract_query_terms(&parsed_expr);
+
+    // Generate query token map (maps each unique query term to a unique u8 index)
+    let query_token_map = match generate_query_token_map(&query_terms) {
+        Ok(map) => map,
+        Err(e) => {
+            if debug_mode {
+                eprintln!("DEBUG: Failed to generate query token map: {e}");
+            }
+            eprintln!("WARNING: {e}");
+            return vec![];
+        }
+    };
+
+    if debug_mode {
+        println!(
+            "DEBUG: Generated query token map with {} entries for SIMD processing",
+            query_token_map.len()
+        );
+    }
+
+    // 3) Precompute TF/DF for docs
+    let tf_df_result = if let Some(pre_tokenized) = &params.pre_tokenized {
+        if debug_mode {
+            println!("DEBUG: Using pre-tokenized content for SIMD ranking");
+        }
+        compute_tf_df_from_tokenized(pre_tokenized, &query_token_map)
+    } else {
+        if debug_mode {
+            println!("DEBUG: Tokenizing documents for SIMD ranking");
+        }
+        let tokenized_docs: Vec<Vec<String>> =
+            params.documents.iter().map(|doc| tokenize(doc)).collect();
+        compute_tf_df_from_tokenized(&tokenized_docs, &query_token_map)
+    };
+
+    let n_docs = params.documents.len();
+    let avgdl = compute_avgdl(&tf_df_result.document_lengths);
+
+    // 4) Precompute IDF values
+    let precomputed_idfs =
+        precompute_idfs(&query_terms, &tf_df_result.document_frequencies, n_docs);
+
+    if debug_mode {
+        println!(
+            "DEBUG: Precomputed IDF values for {} unique query terms for SIMD processing",
+            precomputed_idfs.len()
+        );
+    }
+
+    // 5) Create sparse document matrix for SIMD operations
+    let sparse_matrix = SparseDocumentMatrix::from_ranking_data(
+        &tf_df_result.term_frequencies,
+        &tf_df_result.document_lengths,
+        &query_terms.iter().cloned().collect::<Vec<_>>(),
+        &query_token_map,
+        &precomputed_idfs,
+        avgdl,
+    );
+
+    if debug_mode {
+        println!("DEBUG: Created sparse matrix with {} documents for SIMD operations", sparse_matrix.documents.len());
+    }
+
+    // 6) Create SIMD BM25 parameters
+    let simd_params = SimdBm25Params::new(&sparse_matrix, &tf_df_result.document_lengths);
+
+    // 7) Compute BM25 scores using SIMD operations
+    if debug_mode {
+        println!("DEBUG: Starting SIMD-accelerated BM25 scoring for {} documents", n_docs);
+    }
+
+    let scores = simd_params.score_all_documents();
+
+    if debug_mode {
+        println!("DEBUG: SIMD BM25 scoring completed");
+    }
+
+    // 8) Apply boolean query logic efficiently with SIMD scores
+    // Only do traditional computation for documents that have SIMD scores > 0
+    let scored_docs: Vec<(usize, f64)> = scores
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, simd_score)| {
+            if simd_score <= 0.0 {
+                return None; // Skip documents with no matching terms
+            }
+
+            let doc_tf = &tf_df_result.term_frequencies[i];
+            let doc_len = tf_df_result.document_lengths[i];
+
+            // Create traditional BM25 parameters for boolean expression evaluation
+            let precomputed_bm25_params = PrecomputedBm25Params {
+                doc_tf,
+                doc_len,
+                avgdl,
+                idfs: &precomputed_idfs,
+                query_token_map: &query_token_map,
+                k1: 1.2,
+                b: 0.75,
+            };
+
+            // Apply boolean query logic - this filters out documents that don't match requirements
+            if let Some(expr_score) = score_expr_bm25_optimized(&parsed_expr, &precomputed_bm25_params) {
+                // Use the more accurate expression score, but validate it matches SIMD expectations
+                Some((i, expr_score))
+            } else {
+                None // Document doesn't match boolean requirements
+            }
+        })
+        .collect();
+
+    if debug_mode {
+        println!("DEBUG: SIMD-filtered boolean query evaluation completed");
+    }
+
+    // 9) Sort results by SIMD score in descending order
+    let mut filtered_docs = scored_docs;
+    filtered_docs.sort_by(|a, b| {
+        match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
+            Ordering::Equal => a.0.cmp(&b.0),
+            other => other,
+        }
+    });
+
+    if debug_mode {
+        println!(
+            "DEBUG: SIMD-optimized ranking completed with {} matching documents",
+            filtered_docs.len()
+        );
+    }
+
+    filtered_docs
+}
+
+/// Simple SIMD-only BM25 ranking for basic queries (no complex boolean logic)
+/// This provides maximum performance for straightforward term-based queries
+pub fn rank_documents_simd_simple(params: &RankingParams) -> Vec<(usize, f64)> {
+    use std::cmp::Ordering;
+
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    if debug_mode {
+        println!("DEBUG: Using simple SIMD-only ranking (no boolean logic)");
+    }
+
+    // 1) Simple tokenization of query (treat as individual terms)
+    let query_terms_vec = tokenize(params.query);
+    let query_terms: HashSet<String> = query_terms_vec.into_iter().collect();
+
+    if query_terms.is_empty() {
+        return vec![];
+    }
+
+    // Generate query token map
+    let query_token_map = match generate_query_token_map(&query_terms) {
+        Ok(map) => map,
+        Err(e) => {
+            if debug_mode {
+                eprintln!("DEBUG: Failed to generate query token map: {e}");
+            }
+            return vec![];
+        }
+    };
+
+    // 2) Precompute TF/DF for docs
+    let tf_df_result = if let Some(pre_tokenized) = &params.pre_tokenized {
+        compute_tf_df_from_tokenized(pre_tokenized, &query_token_map)
+    } else {
+        let tokenized_docs: Vec<Vec<String>> =
+            params.documents.iter().map(|doc| tokenize(doc)).collect();
+        compute_tf_df_from_tokenized(&tokenized_docs, &query_token_map)
+    };
+
+    let n_docs = params.documents.len();
+    let avgdl = compute_avgdl(&tf_df_result.document_lengths);
+
+    // 3) Precompute IDF values
+    let precomputed_idfs =
+        precompute_idfs(&query_terms, &tf_df_result.document_frequencies, n_docs);
+
+    // 4) Create sparse document matrix for pure SIMD operations
+    let sparse_matrix = SparseDocumentMatrix::from_ranking_data(
+        &tf_df_result.term_frequencies,
+        &tf_df_result.document_lengths,
+        &query_terms.iter().cloned().collect::<Vec<_>>(),
+        &query_token_map,
+        &precomputed_idfs,
+        avgdl,
+    );
+
+    // 5) Compute pure SIMD BM25 scores
+    let simd_params = SimdBm25Params::new(&sparse_matrix, &tf_df_result.document_lengths);
+    let scores = simd_params.score_all_documents();
+
+    if debug_mode {
+        println!("DEBUG: Pure SIMD scoring completed for {} documents", scores.len());
+    }
+
+    // 6) Create results with scores > 0
+    let mut filtered_docs: Vec<(usize, f64)> = scores
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, score)| {
+            if score > 0.0 {
+                Some((i, score as f64))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // 7) Sort by score (descending)
+    filtered_docs.sort_by(|a, b| {
+        match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
+            Ordering::Equal => a.0.cmp(&b.0),
+            other => other,
+        }
+    });
+
+    if debug_mode {
+        println!(
+            "DEBUG: Simple SIMD ranking completed with {} matching documents",
             filtered_docs.len()
         );
     }

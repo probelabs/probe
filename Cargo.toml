@@ -55,6 +55,10 @@ rand = "0.8.5"
 glob = "0.3.1"
 arboard = "3.4.1"
 md5 = "0.7.0"
+simsimd = "6.1.0"  # SIMD-accelerated similarity metrics for vector operations
+memchr = "2.7"  # SIMD-accelerated string searching and processing
+wide = "0.7"  # Portable SIMD operations for text processing
+aho-corasick = "1.1"  # SIMD-accelerated multi-pattern string matching
 
 [dev-dependencies]
 tempfile = "3.10.1"
@@ -82,6 +86,10 @@ harness = false
 
 [[bench]]
 name = "parsing_benchmarks"
+harness = false
+
+[[bench]]
+name = "simd_benchmarks"
 harness = false
 
 [profile.release]

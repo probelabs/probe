@@ -14,6 +14,8 @@ pub mod search_tokens;
 pub mod term_exceptions; // New module for term exceptions
 pub mod timeout; // New module for timeout functionality
 pub mod tokenization; // New elastic search query parser
+pub mod simd_tokenization; // SIMD-accelerated tokenization
+pub mod simd_pattern_matching; // SIMD-accelerated pattern matching
                       // Temporarily commented out due to compilation issues
                       // mod temp_frequency_search;
 
