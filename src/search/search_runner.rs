@@ -815,11 +815,11 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let mut total_result_creation_time = Duration::new(0, 0);
     let mut total_synchronization_time = Duration::new(0, 0);
     let mut total_uncovered_lines_time = Duration::new(0, 0);
-    
+
     // Convert HashSet to sorted Vec for deterministic processing order
     let mut sorted_files: Vec<_> = all_files.iter().cloned().collect();
     sorted_files.sort();
-    
+
     for pathbuf in &sorted_files {
         if debug_mode {
             println!("DEBUG: Processing file: {pathbuf:?}");
@@ -1156,7 +1156,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     if !*exact {
         // Only perform ranking if exact flag is not set
         rank_search_results(&mut final_results, queries, reranker);
-        
+
         // Apply deterministic secondary sort to ensure consistent ordering for results with equal scores
         // This prevents non-deterministic behavior when results have the same ranking score
         final_results.sort_by(|a, b| {
@@ -1437,7 +1437,10 @@ pub fn search_with_structured_patterns(
     // Step 1: Create RipgrepSearcher for optimized pattern matching
     if debug_mode {
         println!("DEBUG: Starting parallel structured pattern search with ripgrep...");
-        println!("DEBUG: Creating RipgrepSearcher from {} patterns", patterns.len());
+        println!(
+            "DEBUG: Creating RipgrepSearcher from {} patterns",
+            patterns.len()
+        );
     }
 
     // Extract just the patterns for the RipgrepSearcher
@@ -1488,7 +1491,6 @@ pub fn search_with_structured_patterns(
 
     Ok(result)
 }
-
 
 /// Normalize language aliases to their canonical names
 /// This function maps language aliases like "ts" to their canonical names like "typescript"

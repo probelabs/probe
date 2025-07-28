@@ -21,10 +21,10 @@ pub struct IOConfig {
 impl Default for IOConfig {
     fn default() -> Self {
         IOConfig {
-            buffer_size: 64 * 1024,      // 64KB default buffer
-            use_memory_map: true,        // Enable memory mapping by default
-            max_file_size: 100 * 1024 * 1024, // 100MB max file size
-            streaming_threshold: 10 * 1024 * 1024, // 10MB streaming threshold
+            buffer_size: 64 * 1024,                 // 64KB default buffer
+            use_memory_map: true,                   // Enable memory mapping by default
+            max_file_size: 100 * 1024 * 1024,       // 100MB max file size
+            streaming_threshold: 10 * 1024 * 1024,  // 10MB streaming threshold
             large_file_threshold: 50 * 1024 * 1024, // 50MB large file threshold
             force_mmap_threshold: 20 * 1024 * 1024, // 20MB force memory mapping
         }
@@ -35,24 +35,24 @@ impl IOConfig {
     /// Create a configuration optimized for large files
     pub fn large_files() -> Self {
         IOConfig {
-            buffer_size: 256 * 1024,      // 256KB buffer for large files
+            buffer_size: 256 * 1024, // 256KB buffer for large files
             use_memory_map: true,
             max_file_size: 1024 * 1024 * 1024, // 1GB max file size
-            streaming_threshold: 5 * 1024 * 1024,  // 5MB streaming threshold
+            streaming_threshold: 5 * 1024 * 1024, // 5MB streaming threshold
             large_file_threshold: 100 * 1024 * 1024, // 100MB large file threshold
-            force_mmap_threshold: 50 * 1024 * 1024,  // 50MB force memory mapping
+            force_mmap_threshold: 50 * 1024 * 1024, // 50MB force memory mapping
         }
     }
 
     /// Create a configuration optimized for small files
     pub fn small_files() -> Self {
         IOConfig {
-            buffer_size: 8 * 1024,       // 8KB buffer for small files
-            use_memory_map: false,       // Disable memory mapping for small files
-            max_file_size: 10 * 1024 * 1024, // 10MB max file size
-            streaming_threshold: 1024 * 1024, // 1MB streaming threshold
+            buffer_size: 8 * 1024,                 // 8KB buffer for small files
+            use_memory_map: false,                 // Disable memory mapping for small files
+            max_file_size: 10 * 1024 * 1024,       // 10MB max file size
+            streaming_threshold: 1024 * 1024,      // 1MB streaming threshold
             large_file_threshold: 5 * 1024 * 1024, // 5MB large file threshold
-            force_mmap_threshold: u64::MAX, // Never force memory mapping
+            force_mmap_threshold: u64::MAX,        // Never force memory mapping
         }
     }
 }
@@ -78,20 +78,25 @@ impl RipgrepSearcher {
     }
 
     /// Create a new RipgrepSearcher with custom I/O configuration
-    pub fn with_config(patterns: &[String], enable_simd: bool, io_config: IOConfig) -> Result<Self> {
+    pub fn with_config(
+        patterns: &[String],
+        enable_simd: bool,
+        io_config: IOConfig,
+    ) -> Result<Self> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-        
+
         if debug_mode {
-            println!("DEBUG: Creating RipgrepSearcher with {} patterns", patterns.len());
+            println!(
+                "DEBUG: Creating RipgrepSearcher with {} patterns",
+                patterns.len()
+            );
             println!("DEBUG: SIMD enabled: {}", enable_simd);
             println!("DEBUG: I/O config: {:?}", io_config);
         }
 
         // Pre-compile RegexSet for efficient pattern matching
-        let case_insensitive_patterns: Vec<String> = patterns
-            .iter()
-            .map(|p| format!("(?i){}", p))
-            .collect();
+        let case_insensitive_patterns: Vec<String> =
+            patterns.iter().map(|p| format!("(?i){}", p)).collect();
         let regex_set = regex::RegexSet::new(&case_insensitive_patterns)
             .context("Failed to build RegexSet during initialization")?;
 
@@ -174,14 +179,13 @@ impl RipgrepSearcher {
         }
 
         // Check file size before processing
-        let metadata = std::fs::metadata(file_path)
-            .context("Failed to get file metadata")?;
-        
+        let metadata = std::fs::metadata(file_path).context("Failed to get file metadata")?;
+
         if metadata.len() > self.io_config.max_file_size {
             if self.debug_mode {
                 println!(
-                    "DEBUG: Skipping large file: {:?} ({} bytes > {} bytes limit)", 
-                    file_path, 
+                    "DEBUG: Skipping large file: {:?} ({} bytes > {} bytes limit)",
+                    file_path,
                     metadata.len(),
                     self.io_config.max_file_size
                 );
@@ -233,7 +237,7 @@ impl RipgrepSearcher {
         let mut collected_matches = matches.lock().unwrap().clone();
         // Sort matches by line number for deterministic processing
         collected_matches.sort_by_key(|m| m.line_number);
-        
+
         // Use pre-compiled RegexSet for efficient multi-pattern matching
         for line_match in collected_matches.iter() {
             // Use RegexSet to efficiently find which patterns match this line
@@ -278,7 +282,10 @@ impl RipgrepSearcher {
         let start_time = Instant::now();
 
         if self.debug_mode {
-            println!("DEBUG: Starting parallel ripgrep search on {} files", file_paths.len());
+            println!(
+                "DEBUG: Starting parallel ripgrep search on {} files",
+                file_paths.len()
+            );
         }
 
         // Use par_iter().map() to collect results in deterministic order
@@ -312,8 +319,8 @@ impl RipgrepSearcher {
         for (file_path, term_map) in results {
             ordered_results.insert(file_path, term_map);
         }
-        
-        let final_results: HashMap<PathBuf, HashMap<usize, HashSet<usize>>> = 
+
+        let final_results: HashMap<PathBuf, HashMap<usize, HashSet<usize>>> =
             ordered_results.into_iter().collect();
 
         if self.debug_mode {
@@ -350,11 +357,7 @@ impl RipgrepSink {
 impl Sink for RipgrepSink {
     type Error = std::io::Error;
 
-    fn matched(
-        &mut self,
-        _searcher: &Searcher,
-        mat: &SinkMatch<'_>,
-    ) -> Result<bool, Self::Error> {
+    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
         let line_number = mat.line_number().unwrap_or(0) as usize;
         let line_content = String::from_utf8_lossy(mat.bytes()).to_string();
 
@@ -384,7 +387,7 @@ mod tests {
 
         let patterns = vec!["fn main".to_string()];
         let searcher = RipgrepSearcher::new(&patterns, true).unwrap();
-        
+
         let pattern_to_terms = vec![{
             let mut set = HashSet::new();
             set.insert(0);
@@ -392,7 +395,7 @@ mod tests {
         }];
 
         let result = searcher.search_file(&file_path, &pattern_to_terms).unwrap();
-        
+
         assert!(!result.is_empty());
         assert!(result.contains_key(&0));
         assert!(result[&0].contains(&1)); // Line 1 should match
@@ -403,13 +406,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let file1 = dir.path().join("test1.rs");
         let file2 = dir.path().join("test2.rs");
-        
+
         fs::write(&file1, "fn test1() {}").unwrap();
         fs::write(&file2, "fn test2() {}").unwrap();
 
         let patterns = vec!["fn test".to_string()];
         let searcher = RipgrepSearcher::new(&patterns, true).unwrap();
-        
+
         let files = vec![file1.clone(), file2.clone()];
         let pattern_to_terms = vec![{
             let mut set = HashSet::new();
@@ -417,8 +420,10 @@ mod tests {
             set
         }];
 
-        let results = searcher.search_files_parallel(&files, &pattern_to_terms).unwrap();
-        
+        let results = searcher
+            .search_files_parallel(&files, &pattern_to_terms)
+            .unwrap();
+
         assert_eq!(results.len(), 2);
         assert!(results.contains_key(&file1));
         assert!(results.contains_key(&file2));
