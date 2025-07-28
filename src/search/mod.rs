@@ -6,6 +6,7 @@ pub mod block_merging;
 pub mod cache; // New module for caching search results
 pub mod elastic_query;
 pub mod file_list_cache; // New module for caching file lists
+pub mod ripgrep_searcher;
 mod search_limiter;
 mod search_options;
 mod search_output;
@@ -13,7 +14,7 @@ pub mod search_runner;
 pub mod search_tokens;
 pub mod term_exceptions; // New module for term exceptions
 pub mod timeout; // New module for timeout functionality
-pub mod tokenization; // New elastic search query parser
+pub mod tokenization; // New elastic search query parser // New high-performance ripgrep-based searcher
                       // Temporarily commented out due to compilation issues
                       // mod temp_frequency_search;
 

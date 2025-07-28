@@ -815,7 +815,12 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let mut total_result_creation_time = Duration::new(0, 0);
     let mut total_synchronization_time = Duration::new(0, 0);
     let mut total_uncovered_lines_time = Duration::new(0, 0);
-    for pathbuf in &all_files {
+
+    // Convert HashSet to sorted Vec for deterministic processing order
+    let mut sorted_files: Vec<_> = all_files.iter().cloned().collect();
+    sorted_files.sort();
+
+    for pathbuf in &sorted_files {
         if debug_mode {
             println!("DEBUG: Processing file: {pathbuf:?}");
         }
@@ -1151,6 +1156,33 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     if !*exact {
         // Only perform ranking if exact flag is not set
         rank_search_results(&mut final_results, queries, reranker);
+
+        // Apply deterministic secondary sort to ensure consistent ordering for results with equal scores
+        // This prevents non-deterministic behavior when results have the same ranking score
+        final_results.sort_by(|a, b| {
+            // First sort by score (if available), then by file path, then by line number
+            match (a.rank, b.rank) {
+                (Some(rank_a), Some(rank_b)) => {
+                    // If ranks are different, use rank ordering
+                    match rank_a.cmp(&rank_b) {
+                        std::cmp::Ordering::Equal => {
+                            // If ranks are equal, use deterministic secondary sort
+                            (&a.file, a.lines.0).cmp(&(&b.file, b.lines.0))
+                        }
+                        other => other,
+                    }
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => {
+                    // If no ranks, sort by file path and line number
+                    (&a.file, a.lines.0).cmp(&(&b.file, b.lines.0))
+                }
+            }
+        });
+    } else {
+        // For exact searches, always apply deterministic sort
+        final_results.sort_by(|a, b| (&a.file, a.lines.0).cmp(&(&b.file, b.lines.0)));
     }
 
     let rr_duration = rr_start.elapsed();
@@ -1354,7 +1386,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 }
 
 /// Helper function to search files using structured patterns from a QueryPlan.
-/// This function uses a RegexSet approach for deterministic pattern matching
+/// This function uses ripgrep's optimized search engine for maximum performance
 /// and collects matches by term indices. It uses the file_list_cache to get a filtered
 /// list of files respecting ignore patterns.
 ///
@@ -1397,31 +1429,32 @@ pub fn search_with_structured_patterns(
         // If we can't convert the path to a string, use it as is
         root_path_str.to_path_buf()
     };
-    use rayon::prelude::*;
-    use regex::RegexSet;
-    use std::sync::{Arc, Mutex};
+    use crate::search::ripgrep_searcher::RipgrepSearcher;
 
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let search_start = Instant::now();
 
-    // Step 1: Create RegexSet for deterministic pattern matching
+    // Step 1: Create RipgrepSearcher for optimized pattern matching
     if debug_mode {
-        println!("DEBUG: Starting parallel structured pattern search with RegexSet...");
-        println!("DEBUG: Creating RegexSet from {} patterns", patterns.len());
+        println!("DEBUG: Starting parallel structured pattern search with ripgrep...");
+        println!(
+            "DEBUG: Creating RipgrepSearcher from {} patterns",
+            patterns.len()
+        );
     }
 
-    // Extract just the patterns for the RegexSet
+    // Extract just the patterns for the RipgrepSearcher
     let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| format!("(?i){p}")).collect();
 
-    // Create a RegexSet for deterministic matching
-    let regex_set = RegexSet::new(&pattern_strings)?;
+    // Create a RipgrepSearcher with SIMD optimizations enabled
+    let searcher = RipgrepSearcher::new(&pattern_strings, true)?;
 
     // Create a mapping from pattern index to term indices
     let pattern_to_terms: Vec<HashSet<usize>> =
         patterns.iter().map(|(_, terms)| terms.clone()).collect();
 
     if debug_mode {
-        println!("DEBUG: RegexSet created successfully");
+        println!("DEBUG: RipgrepSearcher created successfully with SIMD optimizations");
     }
 
     // Step 2: Get filtered file list from cache
@@ -1440,184 +1473,23 @@ pub fn search_with_structured_patterns(
 
     if debug_mode {
         println!("DEBUG: Got {} files from cache", file_list.files.len());
-        println!("DEBUG: Starting parallel file processing with RegexSet");
+        println!("DEBUG: Starting parallel file processing with ripgrep");
     }
 
-    // Step 3: Process files in parallel
-    // Create thread-safe shared resources
-    let regex_set = Arc::new(regex_set);
-    let pattern_to_terms = Arc::new(pattern_to_terms);
-    let file_term_maps = Arc::new(Mutex::new(HashMap::new()));
-
-    // Also create individual regexes for line number extraction
-    let individual_regexes: Vec<regex::Regex> = pattern_strings
-        .iter()
-        .map(|p| regex::Regex::new(p).unwrap())
-        .collect();
-    let individual_regexes = Arc::new(individual_regexes);
-
-    file_list.files.par_iter().for_each(|file_path| {
-        let regex_set = Arc::clone(&regex_set);
-        let pattern_to_terms = Arc::clone(&pattern_to_terms);
-        let individual_regexes = Arc::clone(&individual_regexes);
-
-        // Search file with RegexSet for deterministic matching
-        match search_file_with_regex_set(
-            file_path,
-            &regex_set,
-            &individual_regexes,
-            &pattern_to_terms,
-        ) {
-            Ok(term_map) => {
-                if !term_map.is_empty() {
-                    if debug_mode {
-                        println!(
-                            "DEBUG: File {:?} matched patterns with {} term indices",
-                            file_path,
-                            term_map.len()
-                        );
-                    }
-
-                    // Add to results with proper locking
-                    let mut maps = file_term_maps.lock().unwrap();
-                    maps.insert(file_path.clone(), term_map);
-                }
-            }
-            Err(e) => {
-                if debug_mode {
-                    println!("DEBUG: Error searching file {file_path:?}: {e:?}");
-                }
-            }
-        }
-    });
+    // Step 3: Process files in parallel using ripgrep's optimized engine
+    let result = searcher.search_files_parallel(&file_list.files, &pattern_to_terms)?;
 
     let total_duration = search_start.elapsed();
 
-    // Extract the results from the Arc<Mutex<>>
-    let result = Arc::try_unwrap(file_term_maps)
-        .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
-        .into_inner()
-        .unwrap();
-
     if debug_mode {
         println!(
-            "DEBUG: Parallel search completed in {} - Found matches in {} files",
+            "DEBUG: Parallel ripgrep search completed in {} - Found matches in {} files",
             format_duration(total_duration),
             result.len()
         );
     }
 
     Ok(result)
-}
-
-/// Helper function to search a file with a RegexSet for deterministic pattern matching
-/// This function searches a file for matches against a RegexSet and individual regexes
-/// to map the matches to their corresponding term indices.
-///
-/// Using RegexSet ensures deterministic pattern matching across multiple runs,
-/// avoiding the non-deterministic behavior of capturing groups in a combined regex.
-fn search_file_with_regex_set(
-    file_path: &Path,
-    regex_set: &regex::RegexSet,
-    individual_regexes: &[regex::Regex],
-    pattern_to_terms: &[HashSet<usize>],
-) -> Result<HashMap<usize, HashSet<usize>>> {
-    let mut term_map = HashMap::new();
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    // Define a reasonable maximum file size (e.g., 1MB)
-    const MAX_FILE_SIZE: u64 = 1024 * 1024;
-
-    // Check file metadata and resolve symlinks before reading
-    let resolved_path = match std::fs::canonicalize(file_path) {
-        Ok(path) => path,
-        Err(e) => {
-            if debug_mode {
-                println!("DEBUG: Error resolving path for {file_path:?}: {e:?}");
-            }
-            return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
-        }
-    };
-
-    // Get file metadata to check size and file type
-    let metadata = match std::fs::metadata(&resolved_path) {
-        Ok(meta) => meta,
-        Err(e) => {
-            if debug_mode {
-                println!("DEBUG: Error getting metadata for {resolved_path:?}: {e:?}");
-            }
-            return Err(anyhow::anyhow!("Failed to get file metadata: {}", e));
-        }
-    };
-
-    // Check if the file is too large
-    if metadata.len() > MAX_FILE_SIZE {
-        if debug_mode {
-            println!(
-                "DEBUG: Skipping file {:?} - file too large ({} bytes > {} bytes limit)",
-                resolved_path,
-                metadata.len(),
-                MAX_FILE_SIZE
-            );
-        }
-        return Err(anyhow::anyhow!(
-            "File too large: {} bytes (limit: {} bytes)",
-            metadata.len(),
-            MAX_FILE_SIZE
-        ));
-    }
-
-    // Read the file content with proper error handling
-    let content = match std::fs::read_to_string(&resolved_path) {
-        Ok(content) => content,
-        Err(e) => {
-            if debug_mode {
-                println!(
-                    "DEBUG: Error reading file {:?}: {:?} (size: {} bytes)",
-                    resolved_path,
-                    e,
-                    metadata.len()
-                );
-            }
-            return Err(anyhow::anyhow!("Failed to read file: {}", e));
-        }
-    };
-
-    // Process each line
-    for (line_number, line) in content.lines().enumerate() {
-        // Skip lines that are too long
-        if line.len() > 2000 {
-            if debug_mode {
-                println!(
-                    "DEBUG: Skipping line {} in file {:?} - line too long ({} characters)",
-                    line_number + 1,
-                    file_path,
-                    line.len()
-                );
-            }
-            continue;
-        }
-
-        // First check if any pattern matches using the RegexSet
-        let matches = regex_set.matches(line);
-        if matches.matched_any() {
-            // For each matched pattern, find the specific line numbers using individual regexes
-            for pattern_idx in matches.iter() {
-                // Use the individual regex to find all matches in the line
-                if individual_regexes[pattern_idx].is_match(line) {
-                    // Add matches for all terms associated with this pattern
-                    for &term_idx in &pattern_to_terms[pattern_idx] {
-                        term_map
-                            .entry(term_idx)
-                            .or_insert_with(HashSet::new)
-                            .insert(line_number + 1); // Convert to 1-based line numbers
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(term_map)
 }
 
 /// Normalize language aliases to their canonical names
