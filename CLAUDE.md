@@ -78,6 +78,21 @@ probe extract src/main.rs:42
 probe search "error handling" --max-tokens 5000
 ```
 
+### Performance Monitoring
+```bash
+# Get detailed timing information (DEBUG mode required)
+DEBUG=1 probe search "query" ./path --max-results 10
+
+# Extract only timing data (single command, filters out verbose debug output)
+DEBUG=1 probe search "query" ./path --max-results 10 2>/dev/null | sed -n '/=== SEARCH TIMING INFORMATION ===/,/====================================/p'
+
+# Alternative using grep (may include extra lines)
+DEBUG=1 probe search "query" ./path --max-results 10 | grep -A 50 "=== SEARCH TIMING INFORMATION ==="
+
+# Example timing extraction for performance analysis
+DEBUG=1 probe search "agent workflow" ~/go/src/semantic-kernel/ --max-results 10 --timeout 120 2>/dev/null | sed -n '/=== SEARCH TIMING INFORMATION ===/,/====================================/p'
+```
+
 ### Testing Chat Example with Image Support
 ```bash
 # First, set your API key (choose one):
