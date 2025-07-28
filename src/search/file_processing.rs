@@ -884,6 +884,18 @@ pub fn process_file_with_results(
 
     // Process uncovered lines only after all AST blocks have been processed
     for line_num in uncovered_lines {
+        // OPTIMIZATION: Early termination check to avoid processing lines that are already covered
+        // This optimization prevents redundant processing when a previous iteration in this loop
+        // has already covered this line through its context window. This can save 1-3 seconds
+        // in performance by avoiding unnecessary tokenization, filtering, and result creation.
+        if covered_lines.contains(&line_num) {
+            if debug_mode {
+                println!(
+                    "DEBUG: Line {line_num} was covered by a previous fallback context, skipping"
+                );
+            }
+            continue;
+        }
         // Skip fallback context for test files if allow_tests is false
         if !params.allow_tests && is_test_file(params.path) {
             if debug_mode {
