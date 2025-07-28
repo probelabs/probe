@@ -1408,19 +1408,27 @@ pub fn search_with_structured_patterns(
     // Step 1: Create pattern matching infrastructure (SIMD or RegexSet)
     if debug_mode {
         println!("DEBUG: Starting parallel structured pattern search...");
-        println!("DEBUG: Creating pattern matcher from {} patterns", patterns.len());
+        println!(
+            "DEBUG: Creating pattern matcher from {} patterns",
+            patterns.len()
+        );
     }
 
     // Extract just the patterns for matching
     let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| p.clone()).collect();
 
     // Try to use SIMD pattern matching if enabled and patterns are simple enough
-    let use_simd = crate::search::simd_pattern_matching::is_simd_pattern_matching_enabled() 
-        && pattern_strings.iter().all(|p| !p.contains(r"\b") && !p.contains("(?i)"));
-    
+    let use_simd = crate::search::simd_pattern_matching::is_simd_pattern_matching_enabled()
+        && pattern_strings
+            .iter()
+            .all(|p| !p.contains(r"\b") && !p.contains("(?i)"));
+
     let simd_matcher = if use_simd {
         if debug_mode {
-            println!("DEBUG: Using SIMD pattern matching for {} patterns", pattern_strings.len());
+            println!(
+                "DEBUG: Using SIMD pattern matching for {} patterns",
+                pattern_strings.len()
+            );
         }
         Some(SimdPatternMatcher::with_patterns(pattern_strings.clone()))
     } else {
@@ -1431,7 +1439,8 @@ pub fn search_with_structured_patterns(
     };
 
     // Create RegexSet as fallback or primary matcher
-    let pattern_strings_regex: Vec<String> = patterns.iter().map(|(p, _)| format!("(?i){p}")).collect();
+    let pattern_strings_regex: Vec<String> =
+        patterns.iter().map(|(p, _)| format!("(?i){p}")).collect();
     let regex_set = RegexSet::new(&pattern_strings_regex)?;
 
     // Create a mapping from pattern index to term indices
@@ -1486,7 +1495,7 @@ pub fn search_with_structured_patterns(
             file_path,
             &regex_set,
             &individual_regexes,
-            &*simd_matcher,
+            &simd_matcher,
             &pattern_to_terms,
         ) {
             Ok(term_map) => {
@@ -1622,7 +1631,7 @@ fn search_file_with_regex_set(
 
         // First check if any pattern matches using SIMD or RegexSet
         let mut matched_patterns = Vec::new();
-        
+
         if let Some(ref simd_matcher) = simd_matcher {
             // Use SIMD pattern matching for fast multi-pattern search
             if simd_matcher.has_match(line) {
@@ -1649,7 +1658,7 @@ fn search_file_with_regex_set(
                 } else {
                     individual_regexes[pattern_idx].is_match(line)
                 };
-                
+
                 if has_match {
                     // Add matches for all terms associated with this pattern
                     for &term_idx in &pattern_to_terms[pattern_idx] {

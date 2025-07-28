@@ -1,9 +1,10 @@
+use crate::simd_ranking::{SimdBm25Params, SparseDocumentMatrix};
 use ahash::{AHashMap, AHashSet};
 use probe_code::search::elastic_query::Expr;
 use probe_code::search::tokenization;
+use rayon::prelude::*;
 use rust_stemmers::{Algorithm, Stemmer};
 use std::sync::OnceLock;
-use crate::simd_ranking::{SparseDocumentMatrix, SimdBm25Params};
 
 // Replace standard collections with ahash versions for better performance
 type HashMap<K, V> = AHashMap<K, V>;
@@ -270,7 +271,6 @@ pub fn score_expr_bm25_optimized(expr: &Expr, params: &PrecomputedBm25Params) ->
 // This is your main entry point for ranking. It now does "pure BM25 like ES."
 // -------------------------------------------------------------------------
 pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
-    use rayon::prelude::*;
     use std::cmp::Ordering;
 
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -424,7 +424,6 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
 /// SIMD-optimized version of rank_documents using SimSIMD for vector operations
 /// This provides significant performance improvements for large document sets
 pub fn rank_documents_simd(params: &RankingParams) -> Vec<(usize, f64)> {
-    use rayon::prelude::*;
     use std::cmp::Ordering;
 
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -507,7 +506,10 @@ pub fn rank_documents_simd(params: &RankingParams) -> Vec<(usize, f64)> {
     );
 
     if debug_mode {
-        println!("DEBUG: Created sparse matrix with {} documents for SIMD operations", sparse_matrix.documents.len());
+        println!(
+            "DEBUG: Created sparse matrix with {} documents for SIMD operations",
+            sparse_matrix.documents.len()
+        );
     }
 
     // 6) Create SIMD BM25 parameters
@@ -515,7 +517,10 @@ pub fn rank_documents_simd(params: &RankingParams) -> Vec<(usize, f64)> {
 
     // 7) Compute BM25 scores using SIMD operations
     if debug_mode {
-        println!("DEBUG: Starting SIMD-accelerated BM25 scoring for {} documents", n_docs);
+        println!(
+            "DEBUG: Starting SIMD-accelerated BM25 scoring for {} documents",
+            n_docs
+        );
     }
 
     let scores = simd_params.score_all_documents();
@@ -549,12 +554,8 @@ pub fn rank_documents_simd(params: &RankingParams) -> Vec<(usize, f64)> {
             };
 
             // Apply boolean query logic - this filters out documents that don't match requirements
-            if let Some(expr_score) = score_expr_bm25_optimized(&parsed_expr, &precomputed_bm25_params) {
-                // Use the more accurate expression score, but validate it matches SIMD expectations
-                Some((i, expr_score))
-            } else {
-                None // Document doesn't match boolean requirements
-            }
+            score_expr_bm25_optimized(&parsed_expr, &precomputed_bm25_params)
+                .map(|expr_score| (i, expr_score))
         })
         .collect();
 
@@ -564,12 +565,12 @@ pub fn rank_documents_simd(params: &RankingParams) -> Vec<(usize, f64)> {
 
     // 9) Sort results by SIMD score in descending order
     let mut filtered_docs = scored_docs;
-    filtered_docs.sort_by(|a, b| {
-        match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
+    filtered_docs.sort_by(
+        |a, b| match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
             Ordering::Equal => a.0.cmp(&b.0),
             other => other,
-        }
-    });
+        },
+    );
 
     if debug_mode {
         println!(
@@ -642,7 +643,10 @@ pub fn rank_documents_simd_simple(params: &RankingParams) -> Vec<(usize, f64)> {
     let scores = simd_params.score_all_documents();
 
     if debug_mode {
-        println!("DEBUG: Pure SIMD scoring completed for {} documents", scores.len());
+        println!(
+            "DEBUG: Pure SIMD scoring completed for {} documents",
+            scores.len()
+        );
     }
 
     // 6) Create results with scores > 0
@@ -659,12 +663,12 @@ pub fn rank_documents_simd_simple(params: &RankingParams) -> Vec<(usize, f64)> {
         .collect();
 
     // 7) Sort by score (descending)
-    filtered_docs.sort_by(|a, b| {
-        match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
+    filtered_docs.sort_by(
+        |a, b| match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
             Ordering::Equal => a.0.cmp(&b.0),
             other => other,
-        }
-    });
+        },
+    );
 
     if debug_mode {
         println!(
@@ -684,8 +688,6 @@ pub fn compute_tf_df_from_tokenized(
     tokenized_docs: &[Vec<String>],
     query_token_map: &QueryTokenMap,
 ) -> TfDfResult {
-    use rayon::prelude::*;
-
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {

@@ -34,11 +34,8 @@ impl SparseVector {
     pub fn from_tf_map(tf_map: &HashMap<u8, usize>) -> Self {
         let mut indices: Vec<u8> = tf_map.keys().copied().collect();
         indices.sort_unstable(); // SimSIMD requires sorted indices
-        
-        let values: Vec<f32> = indices
-            .iter()
-            .map(|&idx| tf_map[&idx] as f32)
-            .collect();
+
+        let values: Vec<f32> = indices.iter().map(|&idx| tf_map[&idx] as f32).collect();
 
         Self { indices, values }
     }
@@ -51,15 +48,8 @@ impl SparseVector {
     ) -> Self {
         let mut indices: Vec<u8> = tf_map.keys().copied().collect();
         indices.sort_unstable();
-        
-        let values: Vec<f32> = indices
-            .iter()
-            .map(|&idx| {
-                let tf = tf_map[&idx] as f32;
-                // Simplified for now - will be properly implemented later
-                tf
-            })
-            .collect();
+
+        let values: Vec<f32> = indices.iter().map(|&idx| tf_map[&idx] as f32).collect();
 
         Self { indices, values }
     }
@@ -82,18 +72,22 @@ impl SparseVector {
 
         // Use optimized intersection that returns values directly (no binary search needed)
         let (self_values, other_values) = self.intersect_with_values(other);
-        
+
         if self_values.is_empty() {
             return 0.0;
         }
 
         // Use SimSIMD's direct dot product function - this is the real SIMD acceleration!
-        if let Some(dot_result) = f32::dot(&self_values, &other_values) {
-            dot_result as f32
-        } else {
-            // Fallback to manual computation if SimSIMD fails
-            self_values.iter().zip(other_values.iter()).map(|(&a, &b)| a * b).sum()
-        }
+        f32::dot(&self_values, &other_values)
+            .map(|x| x as f32)
+            .unwrap_or_else(|| {
+                // Fallback to manual computation if SimSIMD fails
+                self_values
+                    .iter()
+                    .zip(other_values.iter())
+                    .map(|(&a, &b)| a * b)
+                    .sum::<f32>()
+            })
     }
 
     /// Direct SIMD dot product for dense vectors (when we know intersection already)
@@ -103,12 +97,10 @@ impl SparseVector {
         }
 
         // Use SimSIMD's direct dot product function - this is the real SIMD acceleration!
-        if let Some(dot_result) = f32::dot(a, b) {
-            dot_result as f32
-        } else {
+        f32::dot(a, b).map(|x| x as f32).unwrap_or_else(|| {
             // Manual fallback
-            a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
-        }
+            a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum::<f32>()
+        })
     }
 
     /// Manual dot product computation as fallback
@@ -214,7 +206,7 @@ impl SparseDocumentMatrix {
         // Convert document term frequencies to sparse vectors
         let documents: Vec<SparseVector> = term_frequencies
             .iter()
-            .map(|tf_map| SparseVector::from_tf_map(tf_map))
+            .map(SparseVector::from_tf_map)
             .collect();
 
         // Create query sparse vector (all terms have frequency 1 for boolean queries)
@@ -249,10 +241,10 @@ impl SparseDocumentMatrix {
         }
 
         let doc = &self.documents[doc_index];
-        
+
         // Find intersecting terms between query and document
         let common_indices = self.query.intersect_indices(doc);
-        
+
         if common_indices.is_empty() {
             return 0.0;
         }
@@ -261,18 +253,19 @@ impl SparseDocumentMatrix {
         let mut tf_values = Vec::with_capacity(common_indices.len());
         let mut idf_values = Vec::with_capacity(common_indices.len());
         let mut query_weights = Vec::with_capacity(common_indices.len()); // Usually 1.0 for boolean queries
-        
+
         let doc_len_norm = (1.0 - self.b + self.b * (doc_length as f64 / self.avgdl)) as f32;
-        
+
         // Extract values for vectorized computation
         for &idx in &common_indices {
             if let Ok(pos) = doc.indices.binary_search(&idx) {
                 let tf = doc.values[pos];
                 let idf = self.idf_values[idx as usize];
-                
+
                 // Apply BM25 TF normalization: tf * (k1 + 1) / (tf + k1 * doc_len_norm)
-                let tf_normalized = (tf * (self.k1 as f32 + 1.0)) / (tf + self.k1 as f32 * doc_len_norm);
-                
+                let tf_normalized =
+                    (tf * (self.k1 as f32 + 1.0)) / (tf + self.k1 as f32 * doc_len_norm);
+
                 tf_values.push(tf_normalized);
                 idf_values.push(idf);
                 query_weights.push(1.0f32); // Boolean query weight
@@ -286,10 +279,10 @@ impl SparseDocumentMatrix {
         // Use SIMD operations for the final BM25 computation
         // This computes the dot product of (tf_normalized * idf) * query_weights
         // Which is equivalent to sum(tf_normalized[i] * idf[i] * query_weights[i])
-        
+
         // Element-wise multiplication: tf_normalized * idf using SIMD
         let bm25_components = Self::simd_element_wise_multiply(&tf_values, &idf_values);
-        
+
         // Final dot product with query weights using SIMD
         SparseVector::simd_dot_product_dense(&bm25_components, &query_weights)
     }
@@ -306,17 +299,14 @@ impl SparseDocumentMatrix {
         // We'll have to do this manually since SimSIMD doesn't have element-wise multiply
         // But we can still benefit from SIMD in the final dot product
         a.iter().zip(b.iter()).map(|(&x, &y)| x * y).collect()
-        
+
         // TODO: In future, we could use std::simd for element-wise operations if available
         // or implement custom SIMD element-wise multiplication
     }
 
     /// Compute BM25 scores for all documents in parallel using SIMD
     pub fn compute_all_scores(&self, document_lengths: &[usize]) -> Vec<f32> {
-        use rayon::prelude::*;
-        
         (0..self.documents.len())
-            .into_par_iter()
             .map(|i| self.compute_bm25_score(i, document_lengths[i]))
             .collect()
     }
@@ -332,12 +322,16 @@ pub struct SimdBm25Params<'a> {
 
 impl<'a> SimdBm25Params<'a> {
     pub fn new(matrix: &'a SparseDocumentMatrix, doc_lengths: &'a [usize]) -> Self {
-        Self { matrix, doc_lengths }
+        Self {
+            matrix,
+            doc_lengths,
+        }
     }
 
     /// Compute BM25 score for a single document
     pub fn score_document(&self, doc_index: usize) -> f32 {
-        self.matrix.compute_bm25_score(doc_index, self.doc_lengths[doc_index])
+        self.matrix
+            .compute_bm25_score(doc_index, self.doc_lengths[doc_index])
     }
 
     /// Compute scores for all documents
@@ -358,7 +352,7 @@ mod tests {
         tf_map.insert(1u8, 7);
 
         let sparse = SparseVector::from_tf_map(&tf_map);
-        
+
         // Should be sorted by indices
         assert_eq!(sparse.indices, vec![0, 1, 2]);
         assert_eq!(sparse.values, vec![5.0, 7.0, 3.0]);
@@ -408,7 +402,7 @@ mod tests {
     fn test_empty_sparse_vectors() {
         let empty1 = SparseVector::new();
         let empty2 = SparseVector::new();
-        
+
         assert!(empty1.is_empty());
         assert_eq!(empty1.len(), 0);
         assert_eq!(empty1.dot_product(&empty2), 0.0);

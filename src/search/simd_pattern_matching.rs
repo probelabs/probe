@@ -3,16 +3,16 @@ use memchr::memmem;
 use std::collections::HashMap;
 
 /// SIMD-accelerated multi-pattern string matching
-/// 
+///
 /// This module provides high-performance pattern matching using SIMD instructions
 /// for multi-term search operations. Uses memchr for simple patterns and
 /// aho-corasick for complex multi-pattern scenarios.
-
+///
 /// Configuration for SIMD pattern matching
 pub struct SimdPatternConfig {
     /// Use memchr for single patterns (fastest)
     pub use_memchr_single: bool,
-    /// Use memchr2/memchr3 for 2-3 patterns 
+    /// Use memchr2/memchr3 for 2-3 patterns
     pub use_memchr_multi: bool,
     /// Use aho-corasick for complex patterns
     pub use_aho_corasick: bool,
@@ -83,7 +83,7 @@ impl SimdPatternMatcher {
             } else {
                 patterns[0].clone()
             };
-            
+
             // Use static lifetime by leaking the string (for performance)
             let static_pattern: &'static str = Box::leak(pattern.into_boxed_str());
             self.single_searcher = Some(memmem::Finder::new(static_pattern));
@@ -134,7 +134,11 @@ impl SimdPatternMatcher {
     }
 
     /// Find matches using single pattern SIMD search
-    fn find_single_pattern_matches(&self, text: &str, searcher: &memmem::Finder) -> Vec<PatternMatch> {
+    fn find_single_pattern_matches(
+        &self,
+        text: &str,
+        searcher: &memmem::Finder,
+    ) -> Vec<PatternMatch> {
         let mut matches = Vec::new();
         let mut start = 0;
 
@@ -216,7 +220,7 @@ impl SimdPatternMatcher {
             return searcher.find(search_text.as_bytes()).is_some();
         }
 
-        // Use multi-pattern searcher if available  
+        // Use multi-pattern searcher if available
         if let Some(ref searcher) = self.multi_searcher {
             return searcher.is_match(&search_text);
         }
@@ -277,23 +281,23 @@ impl SimdBoundaryDetector {
     /// Create a new boundary detector
     pub fn new() -> Self {
         let mut char_classes = [0u8; 256];
-        
+
         // Set character classes
-        for i in 0..256 {
+        for (i, char_class) in char_classes.iter_mut().enumerate() {
             let ch = i as u8;
             let mut class = 0u8;
-            
+
             if ch.is_ascii_alphabetic() {
                 class |= 1; // ALPHA_MASK
             }
             if ch.is_ascii_digit() {
-                class |= 2; // DIGIT_MASK  
+                class |= 2; // DIGIT_MASK
             }
             if ch.is_ascii_whitespace() {
                 class |= 4; // SPACE_MASK
             }
-            
-            char_classes[i] = class;
+
+            *char_class = class;
         }
 
         Self { char_classes }
@@ -306,24 +310,24 @@ impl SimdBoundaryDetector {
         }
 
         let curr_class = self.char_classes[text[pos] as usize];
-        
+
         if pos == 0 {
             return (curr_class & 3) != 0; // Start of text, current is alphanumeric
         }
 
         let prev_class = self.char_classes[text[pos - 1] as usize];
-        
+
         // Boundary if transition between alphanumeric and non-alphanumeric
         let prev_alnum = (prev_class & 3) != 0;
         let curr_alnum = (curr_class & 3) != 0;
-        
+
         prev_alnum != curr_alnum
     }
 
     /// Find all word boundaries in the text using vectorized processing
     pub fn find_word_boundaries(&self, text: &[u8]) -> Vec<usize> {
         let mut boundaries = Vec::new();
-        
+
         if text.is_empty() {
             return boundaries;
         }
@@ -389,7 +393,7 @@ pub mod utils {
     /// Count occurrences of patterns using SIMD
     pub fn simd_count_matches(text: &str, patterns: &[String]) -> HashMap<String, usize> {
         let mut counts = HashMap::new();
-        
+
         if patterns.is_empty() {
             return counts;
         }
@@ -401,7 +405,7 @@ pub mod utils {
 
         let matcher = SimdPatternMatcher::with_patterns(patterns.to_vec());
         let matches = matcher.find_all_matches(text);
-        
+
         for match_info in matches {
             *counts.entry(match_info.pattern).or_insert(0) += 1;
         }
@@ -418,7 +422,7 @@ mod tests {
     fn test_single_pattern_matching() {
         let patterns = vec!["test".to_string()];
         let matcher = SimdPatternMatcher::with_patterns(patterns);
-        
+
         let text = "This is a test string with test pattern";
         let matches = matcher.find_all_matches(text);
         assert_eq!(matches.len(), 2);
@@ -431,7 +435,7 @@ mod tests {
     fn test_multi_pattern_matching() {
         let patterns = vec!["foo".to_string(), "bar".to_string(), "baz".to_string()];
         let matcher = SimdPatternMatcher::with_patterns(patterns);
-        
+
         let matches = matcher.find_all_matches("foo bar baz foo");
         assert_eq!(matches.len(), 4);
         assert_eq!(matches[0].pattern, "foo");
@@ -442,12 +446,14 @@ mod tests {
 
     #[test]
     fn test_case_insensitive_matching() {
-        let mut config = SimdPatternConfig::default();
-        config.case_insensitive = true;
-        
+        let config = SimdPatternConfig {
+            case_insensitive: true,
+            ..Default::default()
+        };
+
         let patterns = vec!["Test".to_string()];
         let matcher = SimdPatternMatcher::new(patterns, config);
-        
+
         let matches = matcher.find_all_matches("test TEST Test");
         assert_eq!(matches.len(), 3);
     }
@@ -456,7 +462,7 @@ mod tests {
     fn test_boolean_matching() {
         let patterns = vec!["function".to_string(), "class".to_string()];
         let matcher = SimdPatternMatcher::with_patterns(patterns);
-        
+
         assert!(matcher.has_match("function test() {}"));
         assert!(matcher.has_match("class MyClass {}"));
         assert!(!matcher.has_match("const variable = 5;"));
@@ -467,28 +473,28 @@ mod tests {
         let detector = SimdBoundaryDetector::new();
         let text = "hello world 123";
         let boundaries = detector.find_word_boundaries(text.as_bytes());
-        
-        // Should find boundaries at: 0 (start), 5 (space), 6 (start of 'world'), 11 (space), 
+
+        // Should find boundaries at: 0 (start), 5 (space), 6 (start of 'world'), 11 (space),
         // 12 (start of '123'), 15 (end)
-        assert!(boundaries.contains(&0));   // start of "hello"
-        assert!(boundaries.contains(&6));   // start of "world"  
-        assert!(boundaries.contains(&12));  // start of "123"
+        assert!(boundaries.contains(&0)); // start of "hello"
+        assert!(boundaries.contains(&6)); // start of "world"
+        assert!(boundaries.contains(&12)); // start of "123"
     }
 
     #[test]
     fn test_simd_vs_fallback_equivalence() {
         let patterns = vec!["parse".to_string(), "user".to_string(), "email".to_string()];
         let test_text = "parseUserEmail function processes user email addresses";
-        
+
         // Test with SIMD enabled
         std::env::set_var("USE_SIMD_PATTERN_MATCHING", "1");
         let matcher = SimdPatternMatcher::with_patterns(patterns.clone());
         let simd_matches = matcher.find_all_matches(test_text);
-        
+
         // Test with SIMD disabled
         std::env::remove_var("USE_SIMD_PATTERN_MATCHING");
         let fallback_matches = matcher.find_all_matches(test_text);
-        
+
         // Results should be equivalent
         assert_eq!(simd_matches.len(), fallback_matches.len());
         for (simd, fallback) in simd_matches.iter().zip(fallback_matches.iter()) {
@@ -496,7 +502,7 @@ mod tests {
             assert_eq!(simd.end, fallback.end);
             assert_eq!(simd.pattern, fallback.pattern);
         }
-        
+
         // Clean up
         std::env::remove_var("USE_SIMD_PATTERN_MATCHING");
     }
@@ -505,16 +511,16 @@ mod tests {
     fn test_utility_functions() {
         let patterns = vec!["test".to_string(), "pattern".to_string()];
         let text = "This is a test pattern matching test";
-        
+
         // Test contains_any
         assert!(utils::simd_contains_any(text, &patterns));
-        assert!(!utils::simd_contains_any(text, &vec!["missing".to_string()]));
-        
+        assert!(!utils::simd_contains_any(text, &["missing".to_string()]));
+
         // Test find_first
         let first_match = utils::simd_find_first(text, &patterns);
         assert!(first_match.is_some());
         assert_eq!(first_match.unwrap().start, 10); // "test" at position 10
-        
+
         // Test count_matches
         let counts = utils::simd_count_matches(text, &patterns);
         assert_eq!(counts.get("test"), Some(&2));

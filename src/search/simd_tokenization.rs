@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 
 /// SIMD-accelerated camelCase splitting and tokenization
-/// 
+///
 /// This module provides high-performance string processing using SIMD instructions
 /// for character classification and boundary detection. Falls back to scalar
 /// implementation for non-ASCII or short strings.
-
+///
 /// Threshold for SIMD processing - strings shorter than this use scalar fallback
 const SIMD_THRESHOLD: usize = 8;
 
@@ -65,10 +65,10 @@ pub fn simd_split_camel_case(s: &str) -> Vec<String> {
     let bytes = s.as_bytes();
     let mut result = Vec::new();
     let mut current_start = 0;
-    
+
     // Find all camelCase boundaries using SIMD
     let boundaries = find_camel_boundaries_simd(bytes);
-    
+
     for &boundary in &boundaries {
         if boundary > current_start {
             let part = &s[current_start..boundary];
@@ -78,7 +78,7 @@ pub fn simd_split_camel_case(s: &str) -> Vec<String> {
         }
         current_start = boundary;
     }
-    
+
     // Add the final part
     if current_start < s.len() {
         let part = &s[current_start..];
@@ -86,7 +86,7 @@ pub fn simd_split_camel_case(s: &str) -> Vec<String> {
             result.push(part.to_lowercase());
         }
     }
-    
+
     // Return original string if no boundaries found
     if result.is_empty() {
         vec![s.to_lowercase()]
@@ -99,22 +99,22 @@ pub fn simd_split_camel_case(s: &str) -> Vec<String> {
 fn find_camel_boundaries_simd(bytes: &[u8]) -> Vec<usize> {
     let mut boundaries = Vec::new();
     let len = bytes.len();
-    
+
     if len < 2 {
         return boundaries;
     }
-    
+
     // Process byte by byte for now, but using SIMD character classification
     // This is simpler and more correct than chunked processing
     for i in 1..len {
         let prev_class = CHAR_CLASS_TABLE[bytes[i - 1] as usize];
         let curr_class = CHAR_CLASS_TABLE[bytes[i] as usize];
-        
+
         if should_split_at_boundary(prev_class, curr_class) {
             boundaries.push(i);
         }
     }
-    
+
     boundaries
 }
 
@@ -125,17 +125,17 @@ fn should_split_at_boundary(prev_class: u8, curr_class: u8) -> bool {
     if (prev_class & LOWERCASE_MASK) != 0 && (curr_class & UPPERCASE_MASK) != 0 {
         return true;
     }
-    
+
     // letter -> digit
     if ((prev_class & (UPPERCASE_MASK | LOWERCASE_MASK)) != 0) && (curr_class & DIGIT_MASK) != 0 {
         return true;
     }
-    
+
     // digit -> letter
     if (prev_class & DIGIT_MASK) != 0 && ((curr_class & (UPPERCASE_MASK | LOWERCASE_MASK)) != 0) {
         return true;
     }
-    
+
     false
 }
 
@@ -245,7 +245,8 @@ pub fn simd_tokenize(text: &str, vocabulary: &HashSet<String>) -> Vec<String> {
             }
 
             // Try compound word splitting
-            let compound_parts = crate::search::tokenization::split_compound_word(&lowercase_part, vocabulary);
+            let compound_parts =
+                crate::search::tokenization::split_compound_word(&lowercase_part, vocabulary);
 
             for compound_part in compound_parts {
                 if crate::search::tokenization::is_stop_word(&compound_part)
@@ -263,7 +264,9 @@ pub fn simd_tokenize(text: &str, vocabulary: &HashSet<String>) -> Vec<String> {
 
                 // Add stemmed version
                 let stemmed_part = stemmer.stem(&compound_part).to_string();
-                if !negated_terms.contains(&stemmed_part) && processed_tokens.insert(stemmed_part.clone()) {
+                if !negated_terms.contains(&stemmed_part)
+                    && processed_tokens.insert(stemmed_part.clone())
+                {
                     result.push(stemmed_part);
                 }
             }
@@ -304,12 +307,24 @@ mod tests {
     #[test]
     fn test_char_classification() {
         // Test uppercase
-        assert_eq!(CHAR_CLASS_TABLE[b'A' as usize] & UPPERCASE_MASK, UPPERCASE_MASK);
-        assert_eq!(CHAR_CLASS_TABLE[b'Z' as usize] & UPPERCASE_MASK, UPPERCASE_MASK);
+        assert_eq!(
+            CHAR_CLASS_TABLE[b'A' as usize] & UPPERCASE_MASK,
+            UPPERCASE_MASK
+        );
+        assert_eq!(
+            CHAR_CLASS_TABLE[b'Z' as usize] & UPPERCASE_MASK,
+            UPPERCASE_MASK
+        );
 
         // Test lowercase
-        assert_eq!(CHAR_CLASS_TABLE[b'a' as usize] & LOWERCASE_MASK, LOWERCASE_MASK);
-        assert_eq!(CHAR_CLASS_TABLE[b'z' as usize] & LOWERCASE_MASK, LOWERCASE_MASK);
+        assert_eq!(
+            CHAR_CLASS_TABLE[b'a' as usize] & LOWERCASE_MASK,
+            LOWERCASE_MASK
+        );
+        assert_eq!(
+            CHAR_CLASS_TABLE[b'z' as usize] & LOWERCASE_MASK,
+            LOWERCASE_MASK
+        );
 
         // Test digits
         assert_eq!(CHAR_CLASS_TABLE[b'0' as usize] & DIGIT_MASK, DIGIT_MASK);
@@ -320,15 +335,15 @@ mod tests {
     fn test_boundary_detection() {
         // lowercase -> uppercase
         assert!(should_split_at_boundary(LOWERCASE_MASK, UPPERCASE_MASK));
-        
+
         // letter -> digit
         assert!(should_split_at_boundary(LOWERCASE_MASK, DIGIT_MASK));
         assert!(should_split_at_boundary(UPPERCASE_MASK, DIGIT_MASK));
-        
+
         // digit -> letter
         assert!(should_split_at_boundary(DIGIT_MASK, LOWERCASE_MASK));
         assert!(should_split_at_boundary(DIGIT_MASK, UPPERCASE_MASK));
-        
+
         // No split for same types
         assert!(!should_split_at_boundary(LOWERCASE_MASK, LOWERCASE_MASK));
         assert!(!should_split_at_boundary(UPPERCASE_MASK, UPPERCASE_MASK));
@@ -339,7 +354,7 @@ mod tests {
         // Test cases where both SIMD and scalar should agree
         let test_cases = vec![
             "parseUserEmail",
-            "ParseUserEmail", 
+            "ParseUserEmail",
             "XMLHttpRequest",
             "getElementById",
             "",
@@ -352,11 +367,11 @@ mod tests {
             let scalar_result = scalar_split_camel_case(case);
             assert_eq!(simd_result, scalar_result, "Mismatch for input: {}", case);
         }
-        
+
         // Test that SIMD handles complex cases better than scalar
         let complex_result = simd_split_camel_case("parseJSON2HTML5");
         assert_eq!(complex_result, vec!["parse", "json", "2", "html", "5"]);
-        
+
         let complex_result2 = simd_split_camel_case("HTML5Parser");
         // SIMD should handle number transitions better
         assert!(complex_result2.len() >= 2);
@@ -366,19 +381,19 @@ mod tests {
     #[test]
     fn test_simd_tokenization() {
         let vocab = HashSet::new();
-        
+
         // Test with SIMD disabled (should fall back to original)
         std::env::remove_var("USE_SIMD_TOKENIZATION");
         let result1 = simd_tokenize("parseUserEmail", &vocab);
-        
+
         // Test with SIMD enabled
         std::env::set_var("USE_SIMD_TOKENIZATION", "1");
         let result2 = simd_tokenize("parseUserEmail", &vocab);
-        
+
         // Results should be functionally equivalent (may differ in order)
         assert!(!result1.is_empty());
         assert!(!result2.is_empty());
-        
+
         // Clean up
         std::env::remove_var("USE_SIMD_TOKENIZATION");
     }
