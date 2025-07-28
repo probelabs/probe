@@ -24,7 +24,7 @@ impl SimdConfig {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     /// Create a config with SIMD disabled
     pub fn disabled() -> Self {
         Self {
@@ -32,7 +32,7 @@ impl SimdConfig {
             in_recursive_call: false,
         }
     }
-    
+
     /// Create a config for recursive calls (disables SIMD to prevent infinite recursion)
     pub fn for_recursive_call(self) -> Self {
         Self {
@@ -40,7 +40,7 @@ impl SimdConfig {
             in_recursive_call: true,
         }
     }
-    
+
     /// Check if SIMD should be used based on current config
     pub fn should_use_simd(self) -> bool {
         self.simd_enabled && !self.in_recursive_call
@@ -320,9 +320,9 @@ pub fn simd_tokenize(text: &str, vocabulary: &HashSet<String>) -> Vec<String> {
 
 /// SIMD tokenization with explicit configuration (thread-safe)
 pub fn simd_tokenize_with_config(
-    text: &str, 
-    vocabulary: &HashSet<String>, 
-    config: SimdConfig
+    text: &str,
+    vocabulary: &HashSet<String>,
+    config: SimdConfig,
 ) -> Vec<String> {
     if !config.should_use_simd() {
         return crate::search::tokenization::tokenize(text);
@@ -510,7 +510,10 @@ mod tests {
 
         for case in complex_cases {
             // Use disabled config to get the expected result
-            let expected_result = crate::search::tokenization::split_camel_case_with_config(case, SimdConfig::disabled());
+            let expected_result = crate::search::tokenization::split_camel_case_with_config(
+                case,
+                SimdConfig::disabled(),
+            );
 
             let simd_result = simd_split_camel_case(case);
             assert_eq!(
@@ -554,7 +557,7 @@ mod tests {
             "OAuth2Provider",
             "parseXMLHttpRequest",
             "getUserEmailAddress",
-            "HTML5Parser", 
+            "HTML5Parser",
             "parseJSON2HTML5",
             "GraphQLEndpoint",
         ]);
@@ -564,7 +567,7 @@ mod tests {
                 let cases = Arc::clone(&test_cases);
                 thread::spawn(move || {
                     let mut results = Vec::new();
-                    
+
                     for (i, case) in cases.iter().enumerate() {
                         // Use different configs in different threads to test concurrency
                         let config = if thread_id % 2 == 0 {
@@ -572,21 +575,33 @@ mod tests {
                         } else {
                             SimdConfig::disabled()
                         };
-                        
+
                         let result = simd_split_camel_case_with_config(case, config);
                         results.push((i, case, result));
                     }
-                    
+
                     // Verify all results are consistent and non-empty
                     for (i, case, result) in results {
-                        assert!(!result.is_empty(), "Empty result for case {} in thread {}: {}", i, thread_id, case);
-                        
+                        assert!(
+                            !result.is_empty(),
+                            "Empty result for case {} in thread {}: {}",
+                            i,
+                            thread_id,
+                            case
+                        );
+
                         // Verify that complex cases fall back correctly
-                        if case.contains("OAuth2") || case.contains("XML") || case.contains("HTML5") {
-                            assert!(result.len() >= 2, "Complex case {} should split into multiple parts: {:?}", case, result);
+                        if case.contains("OAuth2") || case.contains("XML") || case.contains("HTML5")
+                        {
+                            assert!(
+                                result.len() >= 2,
+                                "Complex case {} should split into multiple parts: {:?}",
+                                case,
+                                result
+                            );
                         }
                     }
-                    
+
                     thread_id
                 })
             })
@@ -594,7 +609,7 @@ mod tests {
 
         // Wait for all threads to complete
         let thread_results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-        
+
         // Verify all threads completed successfully
         assert_eq!(thread_results.len(), 8);
         for i in 0..8 {
