@@ -1440,19 +1440,27 @@ pub fn search_with_structured_patterns(
     // Step 1: Create pattern matching infrastructure (SIMD, RipgrepSearcher, or RegexSet)
     if debug_mode {
         println!("DEBUG: Starting parallel structured pattern search...");
-        println!("DEBUG: Creating pattern matcher from {} patterns", patterns.len());
+        println!(
+            "DEBUG: Creating pattern matcher from {} patterns",
+            patterns.len()
+        );
     }
 
     // Extract just the patterns for matching
     let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| p.clone()).collect();
-    
+
     // Try to use SIMD pattern matching first if enabled and patterns are simple enough
-    let use_simd = crate::search::simd_pattern_matching::is_simd_pattern_matching_enabled() 
-        && pattern_strings.iter().all(|p| !p.contains(r"\b") && !p.contains("(?i)"));
-    
+    let use_simd = crate::search::simd_pattern_matching::is_simd_pattern_matching_enabled()
+        && pattern_strings
+            .iter()
+            .all(|p| !p.contains(r"\b") && !p.contains("(?i)"));
+
     let simd_matcher = if use_simd {
         if debug_mode {
-            println!("DEBUG: Using SIMD pattern matching for {} patterns", pattern_strings.len());
+            println!(
+                "DEBUG: Using SIMD pattern matching for {} patterns",
+                pattern_strings.len()
+            );
         }
         Some(SimdPatternMatcher::with_patterns(pattern_strings.clone()))
     } else {
@@ -1465,7 +1473,8 @@ pub fn search_with_structured_patterns(
     // Create RipgrepSearcher as fallback when SIMD is not available
     let searcher = if !use_simd {
         // Format patterns for case-insensitive ripgrep search
-        let formatted_patterns: Vec<String> = pattern_strings.iter().map(|p| format!("(?i){p}")).collect();
+        let formatted_patterns: Vec<String> =
+            pattern_strings.iter().map(|p| format!("(?i){p}")).collect();
         Some(RipgrepSearcher::new(&formatted_patterns, true)?)
     } else {
         None
@@ -1513,17 +1522,12 @@ pub fn search_with_structured_patterns(
         let pattern_to_terms = Arc::new(pattern_to_terms);
         let file_term_maps = Arc::new(std::sync::Mutex::new(HashMap::new()));
 
-        
         file_list.files.par_iter().for_each(|file_path| {
             let simd_matcher = Arc::clone(&simd_matcher);
             let pattern_to_terms = Arc::clone(&pattern_to_terms);
-            
+
             // Search file with SIMD pattern matching
-            match search_file_with_simd(
-                file_path,
-                &*simd_matcher,
-                &pattern_to_terms,
-            ) {
+            match search_file_with_simd(file_path, &simd_matcher, &pattern_to_terms) {
                 Ok(term_map) => {
                     if !term_map.is_empty() {
                         if debug_mode {
@@ -1546,12 +1550,18 @@ pub fn search_with_structured_patterns(
                 }
             }
         });
-        
+
         // Extract results from the shared map
-        Arc::try_unwrap(file_term_maps).unwrap().into_inner().unwrap()
+        Arc::try_unwrap(file_term_maps)
+            .unwrap()
+            .into_inner()
+            .unwrap()
     } else {
         // Use ripgrep-based search
-        searcher.as_ref().unwrap().search_files_parallel(&file_list.files, &pattern_to_terms)?
+        searcher
+            .as_ref()
+            .unwrap()
+            .search_files_parallel(&file_list.files, &pattern_to_terms)?
     };
 
     let total_duration = search_start.elapsed();
