@@ -90,13 +90,13 @@ impl RipgrepSearcher {
                 "DEBUG: Creating RipgrepSearcher with {} patterns",
                 patterns.len()
             );
-            println!("DEBUG: SIMD enabled: {}", enable_simd);
-            println!("DEBUG: I/O config: {:?}", io_config);
+            println!("DEBUG: SIMD enabled: {enable_simd}");
+            println!("DEBUG: I/O config: {io_config:?}");
         }
 
         // Pre-compile RegexSet for efficient pattern matching
         let case_insensitive_patterns: Vec<String> =
-            patterns.iter().map(|p| format!("(?i){}", p)).collect();
+            patterns.iter().map(|p| format!("(?i){p}")).collect();
         let regex_set = RegexSet::new(&case_insensitive_patterns)
             .context("Failed to build RegexSet during initialization")?;
 
@@ -121,7 +121,7 @@ impl RipgrepSearcher {
         };
 
         if self.debug_mode {
-            println!("DEBUG: Combined pattern: {}", combined_pattern);
+            println!("DEBUG: Combined pattern: {combined_pattern}");
         }
 
         // Build regex matcher with optimizations
@@ -175,7 +175,7 @@ impl RipgrepSearcher {
         let mut term_map = HashMap::new();
 
         if self.debug_mode {
-            println!("DEBUG: Searching file with ripgrep: {:?}", file_path);
+            println!("DEBUG: Searching file with ripgrep: {file_path:?}");
         }
 
         // Check file size before processing
@@ -231,7 +231,7 @@ impl RipgrepSearcher {
         // Perform the search using ripgrep's optimized engine
         searcher
             .search_path(&matcher, file_path, sink)
-            .with_context(|| format!("Failed to search file: {:?}", file_path))?;
+            .with_context(|| format!("Failed to search file: {file_path:?}"))?;
 
         // Process matches to build term map with deterministic ordering
         let mut collected_matches = matches.lock().unwrap().clone();
@@ -305,7 +305,7 @@ impl RipgrepSearcher {
                     }
                     Err(e) => {
                         if self.debug_mode {
-                            println!("DEBUG: Error searching file {:?}: {}", file_path, e);
+                            println!("DEBUG: Error searching file {file_path:?}: {e}");
                         }
                         None
                     }
