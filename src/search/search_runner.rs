@@ -1,7 +1,9 @@
 use anyhow::Result;
 use probe_code::search::file_list_cache;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 // No need for term_exceptions import
 
@@ -15,6 +17,7 @@ use probe_code::search::{
     result_ranking::rank_search_results,
     search_limiter::apply_limits,
     search_options::SearchOptions,
+    simd_pattern_matching::SimdPatternMatcher,
     timeout,
 };
 
@@ -1434,27 +1437,59 @@ pub fn search_with_structured_patterns(
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let search_start = Instant::now();
 
-    // Step 1: Create RipgrepSearcher for optimized pattern matching
+    // Step 1: Create pattern matching infrastructure (SIMD, RipgrepSearcher, or RegexSet)
     if debug_mode {
-        println!("DEBUG: Starting parallel structured pattern search with ripgrep...");
+        println!("DEBUG: Starting parallel structured pattern search...");
         println!(
-            "DEBUG: Creating RipgrepSearcher from {} patterns",
+            "DEBUG: Creating pattern matcher from {} patterns",
             patterns.len()
         );
     }
 
-    // Extract just the patterns for the RipgrepSearcher
-    let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| format!("(?i){p}")).collect();
+    // Extract just the patterns for matching
+    let pattern_strings: Vec<String> = patterns.iter().map(|(p, _)| p.clone()).collect();
 
-    // Create a RipgrepSearcher with SIMD optimizations enabled
-    let searcher = RipgrepSearcher::new(&pattern_strings, true)?;
+    // Try to use SIMD pattern matching first if enabled and patterns are simple enough
+    let use_simd = crate::search::simd_pattern_matching::is_simd_pattern_matching_enabled()
+        && pattern_strings
+            .iter()
+            .all(|p| !p.contains(r"\b") && !p.contains("(?i)"));
+
+    let simd_matcher = if use_simd {
+        if debug_mode {
+            println!(
+                "DEBUG: Using SIMD pattern matching for {} patterns",
+                pattern_strings.len()
+            );
+        }
+        Some(SimdPatternMatcher::with_patterns(pattern_strings.clone()))
+    } else {
+        if debug_mode {
+            println!("DEBUG: Using RipgrepSearcher for complex patterns");
+        }
+        None
+    };
+
+    // Create RipgrepSearcher as fallback when SIMD is not available
+    let searcher = if !use_simd {
+        // Format patterns for case-insensitive ripgrep search
+        let formatted_patterns: Vec<String> =
+            pattern_strings.iter().map(|p| format!("(?i){p}")).collect();
+        Some(RipgrepSearcher::new(&formatted_patterns, true)?)
+    } else {
+        None
+    };
 
     // Create a mapping from pattern index to term indices
     let pattern_to_terms: Vec<HashSet<usize>> =
         patterns.iter().map(|(_, terms)| terms.clone()).collect();
 
     if debug_mode {
-        println!("DEBUG: RipgrepSearcher created successfully with SIMD optimizations");
+        if use_simd {
+            println!("DEBUG: SIMD pattern matcher created successfully");
+        } else {
+            println!("DEBUG: RipgrepSearcher created successfully with SIMD optimizations");
+        }
     }
 
     // Step 2: Get filtered file list from cache
@@ -1473,11 +1508,61 @@ pub fn search_with_structured_patterns(
 
     if debug_mode {
         println!("DEBUG: Got {} files from cache", file_list.files.len());
-        println!("DEBUG: Starting parallel file processing with ripgrep");
+        if use_simd {
+            println!("DEBUG: Starting parallel file processing with SIMD");
+        } else {
+            println!("DEBUG: Starting parallel file processing with ripgrep");
+        }
     }
 
-    // Step 3: Process files in parallel using ripgrep's optimized engine
-    let result = searcher.search_files_parallel(&file_list.files, &pattern_to_terms)?;
+    // Step 3: Process files in parallel using either SIMD or ripgrep
+    let result = if use_simd {
+        // Use SIMD-based search
+        let simd_matcher = Arc::new(simd_matcher);
+        let pattern_to_terms = Arc::new(pattern_to_terms);
+        let file_term_maps = Arc::new(std::sync::Mutex::new(HashMap::new()));
+
+        file_list.files.par_iter().for_each(|file_path| {
+            let simd_matcher = Arc::clone(&simd_matcher);
+            let pattern_to_terms = Arc::clone(&pattern_to_terms);
+
+            // Search file with SIMD pattern matching
+            match search_file_with_simd(file_path, &simd_matcher, &pattern_to_terms) {
+                Ok(term_map) => {
+                    if !term_map.is_empty() {
+                        if debug_mode {
+                            println!(
+                                "DEBUG: File {:?} matched patterns with {} term indices",
+                                file_path,
+                                term_map.len()
+                            );
+                        }
+
+                        // Add to results with proper locking
+                        let mut maps = file_term_maps.lock().unwrap();
+                        maps.insert(file_path.clone(), term_map);
+                    }
+                }
+                Err(e) => {
+                    if debug_mode {
+                        println!("DEBUG: Error searching file {file_path:?}: {e:?}");
+                    }
+                }
+            }
+        });
+
+        // Extract results from the shared map
+        Arc::try_unwrap(file_term_maps)
+            .unwrap()
+            .into_inner()
+            .unwrap()
+    } else {
+        // Use ripgrep-based search
+        searcher
+            .as_ref()
+            .unwrap()
+            .search_files_parallel(&file_list.files, &pattern_to_terms)?
+    };
 
     let total_duration = search_start.elapsed();
 
@@ -1490,6 +1575,110 @@ pub fn search_with_structured_patterns(
     }
 
     Ok(result)
+}
+
+/// Helper function to search a file with SIMD pattern matching
+/// This function uses SIMD optimizations for fast multi-pattern searching
+fn search_file_with_simd(
+    file_path: &Path,
+    simd_matcher: &Option<SimdPatternMatcher>,
+    pattern_to_terms: &[HashSet<usize>],
+) -> Result<HashMap<usize, HashSet<usize>>> {
+    let mut term_map = HashMap::new();
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Define a reasonable maximum file size (e.g., 1MB)
+    const MAX_FILE_SIZE: u64 = 1024 * 1024;
+
+    // Check file metadata and resolve symlinks before reading
+    let resolved_path = match std::fs::canonicalize(file_path) {
+        Ok(path) => path,
+        Err(e) => {
+            if debug_mode {
+                println!("DEBUG: Error resolving path for {file_path:?}: {e:?}");
+            }
+            return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
+        }
+    };
+
+    // Get file metadata to check size and file type
+    let metadata = match std::fs::metadata(&resolved_path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            if debug_mode {
+                println!("DEBUG: Error getting metadata for {resolved_path:?}: {e:?}");
+            }
+            return Err(anyhow::anyhow!("Failed to get file metadata: {}", e));
+        }
+    };
+
+    // Check if the file is too large
+    if metadata.len() > MAX_FILE_SIZE {
+        if debug_mode {
+            println!(
+                "DEBUG: Skipping file {:?} - file too large ({} bytes > {} bytes limit)",
+                resolved_path,
+                metadata.len(),
+                MAX_FILE_SIZE
+            );
+        }
+        return Err(anyhow::anyhow!(
+            "File too large: {} bytes (limit: {} bytes)",
+            metadata.len(),
+            MAX_FILE_SIZE
+        ));
+    }
+
+    // Read the file content with proper error handling
+    let content = match std::fs::read_to_string(&resolved_path) {
+        Ok(content) => content,
+        Err(e) => {
+            if debug_mode {
+                println!(
+                    "DEBUG: Error reading file {:?}: {:?} (size: {} bytes)",
+                    resolved_path,
+                    e,
+                    metadata.len()
+                );
+            }
+            return Err(anyhow::anyhow!("Failed to read file: {}", e));
+        }
+    };
+
+    // Process each line
+    for (line_number, line) in content.lines().enumerate() {
+        // Skip lines that are too long
+        if line.len() > 2000 {
+            if debug_mode {
+                println!(
+                    "DEBUG: Skipping line {} in file {:?} - line too long ({} characters)",
+                    line_number + 1,
+                    file_path,
+                    line.len()
+                );
+            }
+            continue;
+        }
+
+        // Use SIMD pattern matching if available
+        if let Some(ref simd_matcher) = simd_matcher {
+            if simd_matcher.has_match(line) {
+                let simd_matches = simd_matcher.find_all_matches(line);
+                for simd_match in simd_matches {
+                    let pattern_idx = simd_match.pattern_index;
+                    // Add matches for all terms associated with this pattern
+                    for &term_idx in &pattern_to_terms[pattern_idx] {
+                        term_map
+                            .entry(term_idx)
+                            .or_insert_with(HashSet::new)
+                            .insert(line_number + 1); // Convert to 1-based line numbers
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(term_map)
 }
 
 /// Normalize language aliases to their canonical names

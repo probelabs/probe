@@ -1,6 +1,7 @@
 use decompound::{decompound, DecompositionOptions};
 use once_cell::sync::Lazy;
 use probe_code::ranking::get_stemmer;
+use probe_code::search::simd_tokenization::SimdConfig;
 use probe_code::search::term_exceptions::{is_exception_term, EXCEPTION_TERMS};
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -365,6 +366,16 @@ pub fn is_special_case(word: &str) -> bool {
 /// - special cases like OAuth2 -> ["oauth2"]
 /// - also attempts to split lowercase identifiers that might have been camelCase originally
 pub fn split_camel_case(input: &str) -> Vec<String> {
+    split_camel_case_with_config(input, SimdConfig::new())
+}
+
+/// Thread-safe camelCase splitting with explicit SIMD configuration
+pub fn split_camel_case_with_config(input: &str, config: SimdConfig) -> Vec<String> {
+    // Check if SIMD tokenization should be used based on config
+    if config.should_use_simd() {
+        return crate::search::simd_tokenization::simd_split_camel_case_with_config(input, config);
+    }
+
     let _debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if input.is_empty() {
@@ -384,7 +395,7 @@ pub fn split_camel_case(input: &str) -> Vec<String> {
         let remaining = &input[6..]; // "oauth2".len() = 6
         if !remaining.is_empty() {
             let mut result = vec!["oauth2".to_string()];
-            result.extend(split_camel_case(remaining));
+            result.extend(split_camel_case_with_config(remaining, config));
             return result;
         }
     }
@@ -403,7 +414,7 @@ pub fn split_camel_case(input: &str) -> Vec<String> {
 
             if !remaining.is_empty() {
                 let mut result = vec![special_case.clone()];
-                result.extend(split_camel_case(remaining));
+                result.extend(split_camel_case_with_config(remaining, config));
 
                 return result;
             }
@@ -1059,7 +1070,7 @@ pub fn tokenize_and_stem(keyword: &str) -> Vec<String> {
     let vocabulary = load_vocabulary();
 
     // First try camel case splitting
-    let camel_parts = split_camel_case(keyword);
+    let camel_parts = split_camel_case_with_config(keyword, SimdConfig::new());
 
     if camel_parts.len() > 1 {
         // Return stemmed camel case parts, filtering out stop words
@@ -1156,7 +1167,7 @@ pub fn tokenize(text: &str) -> Vec<String> {
     for token in tokens {
         // Always try to split using camel case rules, even for lowercase tokens
         // This allows us to handle tokens that were already lowercased
-        let parts = split_camel_case(&token);
+        let parts = split_camel_case_with_config(&token, SimdConfig::new());
 
         // Process each part
         for part in parts {

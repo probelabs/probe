@@ -516,6 +516,7 @@ pub fn get_language_from_extension(extension: &str) -> &'static str {
         "sql" => "sql",
         "kt" | "kts" => "kotlin",
         "swift" => "swift",
+        "cs" => "csharp",
         "scala" => "scala",
         "dart" => "dart",
         "ex" | "exs" => "elixir",

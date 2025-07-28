@@ -135,7 +135,19 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
     }
 
     // Get ranked indices from the ranking module (BM25 scores)
-    let ranked_indices = ranking::rank_documents(&ranking_params);
+    // Use SIMD-optimized ranking by default, can be disabled with DISABLE_SIMD_RANKING=1
+    let use_simd = std::env::var("DISABLE_SIMD_RANKING").unwrap_or_default() != "1";
+    let ranked_indices = if use_simd {
+        if debug_mode {
+            println!("DEBUG: Using SIMD-optimized ranking (default)");
+        }
+        ranking::rank_documents_simd(&ranking_params)
+    } else {
+        if debug_mode {
+            println!("DEBUG: Using traditional ranking (SIMD disabled)");
+        }
+        ranking::rank_documents(&ranking_params)
+    };
 
     let document_ranking_duration = document_ranking_start.elapsed();
 
