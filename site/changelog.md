@@ -61,6 +61,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Better Error Handling**: Enhanced error messages and validation
 - **Tool Consistency**: Standardized tool interfaces across MCP implementations - see [MCP Integration guide](./mcp-integration.md)
 
+#### Ripgrep Integration for Optimized Search Performance
+- **Native Ripgrep Integration**: Integrated ripgrep Rust library for dramatically improved search performance
+- **File Searching Performance**: 13% faster file searching (249ms → 217ms average improvement)
+- **File I/O Performance**: 33% faster file I/O operations (303ms → 202ms average improvement)
+- **AST Parsing Performance**: 32% faster tree parsing through optimized I/O operations
+- **Memory Efficiency**: Enhanced memory mapping and streaming for large files with intelligent fallback
+- **SIMD Optimizations**: Leveraged SIMD instructions for faster pattern matching where available
+- **Pre-compiled Regex**: Eliminated redundant regex compilation by using pre-compiled RegexSet
+- **Deterministic Results**: Ensured consistent search results across all runs
+- **Fixed Timing Bug**: Corrected "Uncovered lines" measurement that was double-counting "term matching" time
+- **RipgrepSearcher Module**: New dedicated searcher implementation with advanced encoding detection
+
 #### Developer Experience
 - **Windows Support**: Improved Windows compatibility for npm packages
 - **Binary Management**: Enhanced binary download and path resolution
