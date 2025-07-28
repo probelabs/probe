@@ -15,8 +15,8 @@ pub mod search_tokens;
 pub mod term_exceptions; // New module for term exceptions
 pub mod timeout; // New module for timeout functionality
 pub mod tokenization; // New elastic search query parser // New high-performance ripgrep-based searcher
-                                                         // Temporarily commented out due to compilation issues
-                                                         // mod temp_frequency_search;
+                      // Temporarily commented out due to compilation issues
+                      // mod temp_frequency_search;
 
 #[cfg(test)]
 mod file_processing_tests;
