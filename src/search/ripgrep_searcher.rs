@@ -281,43 +281,24 @@ impl RipgrepSearcher {
             println!("DEBUG: Starting parallel ripgrep search on {} files", file_paths.len());
         }
 
-        // Clone the configuration for parallel processing
-        let patterns = self.patterns.clone();
-        let enable_simd = self.enable_simd;
-        let debug_mode = self.debug_mode;
-        let io_config = self.io_config.clone();
-
         // Use par_iter().map() to collect results in deterministic order
         // This preserves the original file order from file_paths
         let results: Vec<(PathBuf, HashMap<usize, HashSet<usize>>)> = file_paths
             .par_iter()
             .filter_map(|file_path| {
-                // Create a new searcher instance for each thread
-                match RipgrepSearcher::with_config(&patterns, enable_simd, io_config.clone()) {
-                    Ok(searcher) => {
-                        // Disable debug output in parallel mode to avoid race conditions
-                        let mut thread_searcher = searcher;
-                        thread_searcher.debug_mode = false;
-                        
-                        match thread_searcher.search_file(file_path, pattern_to_terms) {
-                            Ok(term_map) => {
-                                if !term_map.is_empty() {
-                                    Some((file_path.clone(), term_map))
-                                } else {
-                                    None
-                                }
-                            }
-                            Err(e) => {
-                                if debug_mode {
-                                    println!("DEBUG: Error searching file {:?}: {}", file_path, e);
-                                }
-                                None
-                            }
+                // Reuse the existing searcher instance (thread-safe)
+                // The search_file method creates thread-local Matcher and Searcher instances
+                match self.search_file(file_path, pattern_to_terms) {
+                    Ok(term_map) => {
+                        if !term_map.is_empty() {
+                            Some((file_path.clone(), term_map))
+                        } else {
+                            None
                         }
                     }
                     Err(e) => {
-                        if debug_mode {
-                            println!("DEBUG: Failed to create searcher for {:?}: {}", file_path, e);
+                        if self.debug_mode {
+                            println!("DEBUG: Error searching file {:?}: {}", file_path, e);
                         }
                         None
                     }
