@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
-use regex;
+use regex::RegexSet;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -68,7 +68,7 @@ pub struct RipgrepSearcher {
     enable_simd: bool,
     debug_mode: bool,
     io_config: IOConfig,
-    regex_set: regex::RegexSet,
+    regex_set: RegexSet,
 }
 
 impl RipgrepSearcher {
@@ -97,7 +97,7 @@ impl RipgrepSearcher {
         // Pre-compile RegexSet for efficient pattern matching
         let case_insensitive_patterns: Vec<String> =
             patterns.iter().map(|p| format!("(?i){}", p)).collect();
-        let regex_set = regex::RegexSet::new(&case_insensitive_patterns)
+        let regex_set = RegexSet::new(&case_insensitive_patterns)
             .context("Failed to build RegexSet during initialization")?;
 
         Ok(RipgrepSearcher {
