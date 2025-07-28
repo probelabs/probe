@@ -143,7 +143,7 @@ impl SimdPatternMatcher {
         let mut matches = Vec::new();
         let mut start = 0;
 
-        while let Some(pos) = searcher.find(text[start..].as_bytes()) {
+        while let Some(pos) = searcher.find(&text.as_bytes()[start..]) {
             let absolute_pos = start + pos;
             matches.push(PatternMatch {
                 pattern_index: 0,

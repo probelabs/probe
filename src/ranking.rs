@@ -517,10 +517,7 @@ pub fn rank_documents_simd(params: &RankingParams) -> Vec<(usize, f64)> {
 
     // 7) Compute BM25 scores using SIMD operations
     if debug_mode {
-        println!(
-            "DEBUG: Starting SIMD-accelerated BM25 scoring for {} documents",
-            n_docs
-        );
+        println!("DEBUG: Starting SIMD-accelerated BM25 scoring for {n_docs} documents");
     }
 
     let scores = simd_params.score_all_documents();
