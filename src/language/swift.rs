@@ -18,8 +18,7 @@ impl SwiftLanguage {
 
 impl LanguageImpl for SwiftLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        // Create a new instance of the Language type from the current tree-sitter version
-        unsafe { std::mem::transmute(tree_sitter_swift::LANGUAGE) }
+        tree_sitter_swift::LANGUAGE.into()
     }
 
     fn get_extension(&self) -> &'static str {

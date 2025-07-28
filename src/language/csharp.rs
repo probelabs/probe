@@ -18,8 +18,7 @@ impl CSharpLanguage {
 
 impl LanguageImpl for CSharpLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        // Create a new instance of the Language type from the current tree-sitter version
-        unsafe { std::mem::transmute(tree_sitter_c_sharp::LANGUAGE) }
+        tree_sitter_c_sharp::LANGUAGE.into()
     }
 
     fn get_extension(&self) -> &'static str {
