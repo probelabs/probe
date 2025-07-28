@@ -35,8 +35,9 @@ impl Default for SimdPatternConfig {
 }
 
 /// Check if SIMD pattern matching is enabled via environment variable
+/// SIMD is enabled by default, can be disabled with DISABLE_SIMD_PATTERN_MATCHING=1
 pub fn is_simd_pattern_matching_enabled() -> bool {
-    std::env::var("USE_SIMD_PATTERN_MATCHING").unwrap_or_default() == "1"
+    std::env::var("DISABLE_SIMD_PATTERN_MATCHING").unwrap_or_default() != "1"
 }
 
 /// SIMD-accelerated pattern matcher for multiple search terms
@@ -486,13 +487,13 @@ mod tests {
         let patterns = vec!["parse".to_string(), "user".to_string(), "email".to_string()];
         let test_text = "parseUserEmail function processes user email addresses";
 
-        // Test with SIMD enabled
-        std::env::set_var("USE_SIMD_PATTERN_MATCHING", "1");
+        // Test with SIMD enabled (default behavior)
+        std::env::remove_var("DISABLE_SIMD_PATTERN_MATCHING");
         let matcher = SimdPatternMatcher::with_patterns(patterns.clone());
         let simd_matches = matcher.find_all_matches(test_text);
 
         // Test with SIMD disabled
-        std::env::remove_var("USE_SIMD_PATTERN_MATCHING");
+        std::env::set_var("DISABLE_SIMD_PATTERN_MATCHING", "1");
         let fallback_matches = matcher.find_all_matches(test_text);
 
         // Results should be equivalent
@@ -504,7 +505,7 @@ mod tests {
         }
 
         // Clean up
-        std::env::remove_var("USE_SIMD_PATTERN_MATCHING");
+        std::env::remove_var("DISABLE_SIMD_PATTERN_MATCHING");
     }
 
     #[test]

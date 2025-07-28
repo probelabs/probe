@@ -77,11 +77,12 @@ probe search "function name" ./src
 probe extract src/main.rs:42
 probe search "error handling" --max-tokens 5000
 
-# Enable SIMD-optimized ranking for better performance
-USE_SIMD_RANKING=1 probe search "function process" ./src
+# SIMD optimizations are enabled by default for better performance
+# Disable SIMD optimizations if needed
+DISABLE_SIMD_RANKING=1 probe search "function process" ./src
 
 # Enable debug mode to see SIMD vs traditional ranking
-DEBUG=1 USE_SIMD_RANKING=1 probe search "function process" ./src
+DEBUG=1 probe search "function process" ./src
 ```
 
 ### Performance Monitoring
@@ -197,14 +198,18 @@ The project includes comprehensive cross-platform build configuration:
 
 ### SIMD Optimization Usage
 
-**Enable SIMD ranking:**
+**SIMD optimizations (enabled by default):**
 ```bash
-# Enable SIMD-optimized ranking (environment variable)
-export USE_SIMD_RANKING=1
+# SIMD optimizations are enabled by default for better performance
 probe search "function process data" ./src
 
-# Or for a single command
-USE_SIMD_RANKING=1 probe search "function process data" ./src
+# Disable specific SIMD optimizations if needed
+DISABLE_SIMD_RANKING=1 probe search "function process data" ./src
+DISABLE_SIMD_TOKENIZATION=1 probe search "function process data" ./src
+DISABLE_SIMD_PATTERN_MATCHING=1 probe search "function process data" ./src
+
+# Disable all SIMD optimizations
+DISABLE_SIMD_RANKING=1 DISABLE_SIMD_TOKENIZATION=1 DISABLE_SIMD_PATTERN_MATCHING=1 probe search "function process data" ./src
 ```
 
 **Benchmark SIMD performance:**
