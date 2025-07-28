@@ -1,5 +1,52 @@
 use std::collections::HashSet;
 
+/// Configuration for SIMD tokenization operations
+/// This replaces the previous unsafe environment variable approach
+#[derive(Debug, Clone, Copy)]
+pub struct SimdConfig {
+    /// Whether SIMD tokenization is enabled globally
+    pub simd_enabled: bool,
+    /// Whether we're currently in a recursive call (prevents infinite recursion)
+    pub in_recursive_call: bool,
+}
+
+impl Default for SimdConfig {
+    fn default() -> Self {
+        Self {
+            simd_enabled: is_simd_enabled_from_env(),
+            in_recursive_call: false,
+        }
+    }
+}
+
+impl SimdConfig {
+    /// Create a new config with SIMD enabled
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    /// Create a config with SIMD disabled
+    pub fn disabled() -> Self {
+        Self {
+            simd_enabled: false,
+            in_recursive_call: false,
+        }
+    }
+    
+    /// Create a config for recursive calls (disables SIMD to prevent infinite recursion)
+    pub fn for_recursive_call(self) -> Self {
+        Self {
+            simd_enabled: self.simd_enabled,
+            in_recursive_call: true,
+        }
+    }
+    
+    /// Check if SIMD should be used based on current config
+    pub fn should_use_simd(self) -> bool {
+        self.simd_enabled && !self.in_recursive_call
+    }
+}
+
 /// SIMD-accelerated camelCase splitting and tokenization
 ///
 /// This module provides high-performance string processing using SIMD instructions
@@ -51,13 +98,26 @@ const DIGIT_MASK: u8 = 4;
 
 /// Check if SIMD tokenization is enabled via environment variable
 /// SIMD is enabled by default, can be disabled with DISABLE_SIMD_TOKENIZATION=1
-pub fn is_simd_enabled() -> bool {
+/// This function only reads the environment variable and doesn't modify it
+fn is_simd_enabled_from_env() -> bool {
     std::env::var("DISABLE_SIMD_TOKENIZATION").unwrap_or_default() != "1"
+}
+
+/// Legacy function for backward compatibility
+/// Prefer using SimdConfig::new() for new code
+pub fn is_simd_enabled() -> bool {
+    is_simd_enabled_from_env()
 }
 
 /// Fast SIMD-accelerated camelCase splitting for ASCII strings
 /// Falls back to scalar implementation for Unicode, short strings, or complex cases
 pub fn simd_split_camel_case(s: &str) -> Vec<String> {
+    simd_split_camel_case_with_config(s, SimdConfig::new())
+}
+
+/// SIMD-accelerated camelCase splitting with explicit configuration
+/// This is the thread-safe version that doesn't use environment variable manipulation
+pub fn simd_split_camel_case_with_config(s: &str, config: SimdConfig) -> Vec<String> {
     // Use scalar fallback for short strings or non-ASCII
     if s.len() < SIMD_THRESHOLD || !s.is_ascii() {
         return scalar_split_camel_case(s);
@@ -67,11 +127,9 @@ pub fn simd_split_camel_case(s: &str) -> Vec<String> {
     // This includes common patterns like OAuth2, IPv4, GraphQL, etc.
     let lowercase = s.to_lowercase();
     if contains_special_patterns(&lowercase) {
-        // Temporarily disable SIMD to avoid infinite recursion
-        std::env::set_var("DISABLE_SIMD_TOKENIZATION", "1");
-        let result = crate::search::tokenization::split_camel_case(s);
-        std::env::remove_var("DISABLE_SIMD_TOKENIZATION");
-        return result;
+        // Use recursive call prevention instead of environment variable manipulation
+        let recursive_config = config.for_recursive_call();
+        return crate::search::tokenization::split_camel_case_with_config(s, recursive_config);
     }
 
     let bytes = s.as_bytes();
@@ -257,7 +315,16 @@ pub fn scalar_split_camel_case(s: &str) -> Vec<String> {
 
 /// Enhanced SIMD tokenization with camelCase splitting and compound word detection
 pub fn simd_tokenize(text: &str, vocabulary: &HashSet<String>) -> Vec<String> {
-    if !is_simd_enabled() {
+    simd_tokenize_with_config(text, vocabulary, SimdConfig::new())
+}
+
+/// SIMD tokenization with explicit configuration (thread-safe)
+pub fn simd_tokenize_with_config(
+    text: &str, 
+    vocabulary: &HashSet<String>, 
+    config: SimdConfig
+) -> Vec<String> {
+    if !config.should_use_simd() {
         return crate::search::tokenization::tokenize(text);
     }
 
@@ -297,8 +364,8 @@ pub fn simd_tokenize(text: &str, vocabulary: &HashSet<String>) -> Vec<String> {
     let mut result = Vec::new();
 
     for token in tokens {
-        // Use SIMD camelCase splitting
-        let parts = simd_split_camel_case(&token);
+        // Use SIMD camelCase splitting with config
+        let parts = simd_split_camel_case_with_config(&token, config);
 
         for part in parts {
             let lowercase_part = part.to_lowercase();
@@ -442,10 +509,8 @@ mod tests {
         let complex_cases = vec!["XMLHttpRequest", "OAuth2Provider", "parseJSON2HTML5"];
 
         for case in complex_cases {
-            // Temporarily disable SIMD to get the expected result
-            std::env::set_var("DISABLE_SIMD_TOKENIZATION", "1");
-            let expected_result = crate::search::tokenization::split_camel_case(case);
-            std::env::remove_var("DISABLE_SIMD_TOKENIZATION");
+            // Use disabled config to get the expected result
+            let expected_result = crate::search::tokenization::split_camel_case_with_config(case, SimdConfig::disabled());
 
             let simd_result = simd_split_camel_case(case);
             assert_eq!(
@@ -470,18 +535,70 @@ mod tests {
         let vocab = HashSet::new();
 
         // Test with SIMD enabled (default behavior)
-        std::env::remove_var("DISABLE_SIMD_TOKENIZATION");
-        let result1 = simd_tokenize("parseUserEmail", &vocab);
+        let result1 = simd_tokenize_with_config("parseUserEmail", &vocab, SimdConfig::new());
 
         // Test with SIMD disabled
-        std::env::set_var("DISABLE_SIMD_TOKENIZATION", "1");
-        let result2 = simd_tokenize("parseUserEmail", &vocab);
+        let result2 = simd_tokenize_with_config("parseUserEmail", &vocab, SimdConfig::disabled());
 
         // Results should be functionally equivalent (may differ in order)
         assert!(!result1.is_empty());
         assert!(!result2.is_empty());
+    }
 
-        // Clean up
-        std::env::remove_var("DISABLE_SIMD_TOKENIZATION");
+    #[test]
+    fn test_thread_safety() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let test_cases = Arc::new(vec![
+            "OAuth2Provider",
+            "parseXMLHttpRequest",
+            "getUserEmailAddress",
+            "HTML5Parser", 
+            "parseJSON2HTML5",
+            "GraphQLEndpoint",
+        ]);
+
+        let handles: Vec<_> = (0..8)
+            .map(|thread_id| {
+                let cases = Arc::clone(&test_cases);
+                thread::spawn(move || {
+                    let mut results = Vec::new();
+                    
+                    for (i, case) in cases.iter().enumerate() {
+                        // Use different configs in different threads to test concurrency
+                        let config = if thread_id % 2 == 0 {
+                            SimdConfig::new()
+                        } else {
+                            SimdConfig::disabled()
+                        };
+                        
+                        let result = simd_split_camel_case_with_config(case, config);
+                        results.push((i, case, result));
+                    }
+                    
+                    // Verify all results are consistent and non-empty
+                    for (i, case, result) in results {
+                        assert!(!result.is_empty(), "Empty result for case {} in thread {}: {}", i, thread_id, case);
+                        
+                        // Verify that complex cases fall back correctly
+                        if case.contains("OAuth2") || case.contains("XML") || case.contains("HTML5") {
+                            assert!(result.len() >= 2, "Complex case {} should split into multiple parts: {:?}", case, result);
+                        }
+                    }
+                    
+                    thread_id
+                })
+            })
+            .collect();
+
+        // Wait for all threads to complete
+        let thread_results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        
+        // Verify all threads completed successfully
+        assert_eq!(thread_results.len(), 8);
+        for i in 0..8 {
+            assert!(thread_results.contains(&i), "Thread {} did not complete", i);
+        }
     }
 }
