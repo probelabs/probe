@@ -23,8 +23,8 @@ jobs:
       update_comment_marker: "<!-- probe-bot -->"
       enable_tracing: true
     secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      MODEL_NAME: ${{ secrets.MODEL_NAME }}
       APP_ID: ${{ secrets.PROBE_APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.PROBE_APP_PRIVATE_KEY }}
       MAX_TOOL_ITERATIONS: "60"
