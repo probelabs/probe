@@ -963,20 +963,9 @@ pub fn process_file_with_results(
             );
         }
 
-        // Start measuring term matching time for uncovered lines
-        let term_matching_start = Instant::now();
-
         // Early tokenization for fallback context
         let context_terms =
             ranking::preprocess_text_with_filename(&context_code, &params.path.to_string_lossy());
-
-        // Add to term matching time
-        let term_matching_duration_value = term_matching_start.elapsed();
-        if let Some(duration) = timings.result_building_term_matching {
-            timings.result_building_term_matching = Some(duration + term_matching_duration_value);
-        } else {
-            timings.result_building_term_matching = Some(term_matching_duration_value);
-        }
 
         // Start measuring filtering time for uncovered lines
         let filtering_start = Instant::now();
