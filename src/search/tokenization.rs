@@ -3,7 +3,7 @@ use once_cell::sync::Lazy;
 use probe_code::ranking::get_stemmer;
 use probe_code::search::simd_tokenization::SimdConfig;
 use probe_code::search::term_exceptions::{is_exception_term, EXCEPTION_TERMS};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 // Dynamic set of special terms that should not be tokenized
@@ -358,6 +358,216 @@ pub fn is_special_case(word: &str) -> bool {
     false
 }
 
+/// Static pre-computed compound word splits for common programming terms
+/// This cache eliminates the need to call the decompound crate for known terms,
+/// providing significant performance improvements for frequently used compound words.
+static PRECOMPUTED_COMPOUND_SPLITS: Lazy<HashMap<String, Vec<String>>> = Lazy::new(|| {
+    let mut cache = HashMap::new();
+    
+    // Pre-compute splits for common programming compound words
+    // These are based on real-world usage patterns in codebases
+    
+    // Common data structures and algorithms
+    cache.insert("hashmap".to_string(), vec!["hash".to_string(), "map".to_string()]);
+    cache.insert("hashtable".to_string(), vec!["hash".to_string(), "table".to_string()]);
+    cache.insert("hashset".to_string(), vec!["hash".to_string(), "set".to_string()]);
+    cache.insert("arraylist".to_string(), vec!["array".to_string(), "list".to_string()]);
+    cache.insert("linkedlist".to_string(), vec!["linked".to_string(), "list".to_string()]);
+    cache.insert("treemap".to_string(), vec!["tree".to_string(), "map".to_string()]);
+    cache.insert("treeset".to_string(), vec!["tree".to_string(), "set".to_string()]);
+    cache.insert("quicksort".to_string(), vec!["quick".to_string(), "sort".to_string()]);
+    cache.insert("mergesort".to_string(), vec!["merge".to_string(), "sort".to_string()]);
+    cache.insert("heapsort".to_string(), vec!["heap".to_string(), "sort".to_string()]);
+    cache.insert("bubblesort".to_string(), vec!["bubble".to_string(), "sort".to_string()]);
+    cache.insert("binarysearch".to_string(), vec!["binary".to_string(), "search".to_string()]);
+    cache.insert("breadthfirst".to_string(), vec!["breadth".to_string(), "first".to_string()]);
+    cache.insert("depthfirst".to_string(), vec!["depth".to_string(), "first".to_string()]);
+    
+    // File and I/O operations
+    cache.insert("filename".to_string(), vec!["file".to_string(), "name".to_string()]);
+    cache.insert("filepath".to_string(), vec!["file".to_string(), "path".to_string()]);
+    cache.insert("filesize".to_string(), vec!["file".to_string(), "size".to_string()]);
+    cache.insert("filetype".to_string(), vec!["file".to_string(), "type".to_string()]);
+    cache.insert("filestream".to_string(), vec!["file".to_string(), "stream".to_string()]);
+    cache.insert("filesystem".to_string(), vec!["file".to_string(), "system".to_string()]);
+    cache.insert("pathname".to_string(), vec!["path".to_string(), "name".to_string()]);
+    cache.insert("dirname".to_string(), vec!["dir".to_string(), "name".to_string()]);
+    cache.insert("basename".to_string(), vec!["base".to_string(), "name".to_string()]);
+    cache.insert("username".to_string(), vec!["user".to_string(), "name".to_string()]);
+    cache.insert("hostname".to_string(), vec!["host".to_string(), "name".to_string()]);
+    cache.insert("domainname".to_string(), vec!["domain".to_string(), "name".to_string()]);
+    
+    // Database and storage
+    cache.insert("database".to_string(), vec!["data".to_string(), "base".to_string()]);
+    cache.insert("datastore".to_string(), vec!["data".to_string(), "store".to_string()]);
+    cache.insert("dataset".to_string(), vec!["data".to_string(), "set".to_string()]);
+    cache.insert("datatype".to_string(), vec!["data".to_string(), "type".to_string()]);
+    cache.insert("dataframe".to_string(), vec!["data".to_string(), "frame".to_string()]);
+    cache.insert("datatable".to_string(), vec!["data".to_string(), "table".to_string()]);
+    cache.insert("tablename".to_string(), vec!["table".to_string(), "name".to_string()]);
+    cache.insert("indexname".to_string(), vec!["index".to_string(), "name".to_string()]);
+    cache.insert("keyvalue".to_string(), vec!["key".to_string(), "value".to_string()]);
+    cache.insert("primarykey".to_string(), vec!["primary".to_string(), "key".to_string()]);
+    cache.insert("foreignkey".to_string(), vec!["foreign".to_string(), "key".to_string()]);
+    
+    // Network and protocols
+    cache.insert("hostname".to_string(), vec!["host".to_string(), "name".to_string()]);
+    cache.insert("endpoint".to_string(), vec!["end".to_string(), "point".to_string()]);
+    cache.insert("baseurl".to_string(), vec!["base".to_string(), "url".to_string()]);
+    cache.insert("webhook".to_string(), vec!["web".to_string(), "hook".to_string()]);
+    cache.insert("websocket".to_string(), vec!["web".to_string(), "socket".to_string()]);
+    cache.insert("webserver".to_string(), vec!["web".to_string(), "server".to_string()]);
+    cache.insert("webservice".to_string(), vec!["web".to_string(), "service".to_string()]);
+    cache.insert("restapi".to_string(), vec!["rest".to_string(), "api".to_string()]);
+    cache.insert("graphql".to_string(), vec!["graph".to_string(), "ql".to_string()]);
+    
+    // UI and frontend
+    cache.insert("username".to_string(), vec!["user".to_string(), "name".to_string()]);
+    cache.insert("userinfo".to_string(), vec!["user".to_string(), "info".to_string()]);
+    cache.insert("userdata".to_string(), vec!["user".to_string(), "data".to_string()]);
+    cache.insert("userinput".to_string(), vec!["user".to_string(), "input".to_string()]);
+    cache.insert("userinterface".to_string(), vec!["user".to_string(), "interface".to_string()]);
+    cache.insert("frontend".to_string(), vec!["front".to_string(), "end".to_string()]);
+    cache.insert("backend".to_string(), vec!["back".to_string(), "end".to_string()]);
+    cache.insert("fullstack".to_string(), vec!["full".to_string(), "stack".to_string()]);
+    cache.insert("stylesheet".to_string(), vec!["style".to_string(), "sheet".to_string()]);
+    cache.insert("javascript".to_string(), vec!["java".to_string(), "script".to_string()]);
+    cache.insert("typescript".to_string(), vec!["type".to_string(), "script".to_string()]);
+    
+    // Development and tooling
+    cache.insert("codebase".to_string(), vec!["code".to_string(), "base".to_string()]);
+    cache.insert("codegen".to_string(), vec!["code".to_string(), "gen".to_string()]);
+    cache.insert("codepoint".to_string(), vec!["code".to_string(), "point".to_string()]);
+    cache.insert("sourcecode".to_string(), vec!["source".to_string(), "code".to_string()]);
+    cache.insert("sourcemap".to_string(), vec!["source".to_string(), "map".to_string()]);
+    cache.insert("sourcefile".to_string(), vec!["source".to_string(), "file".to_string()]);
+    cache.insert("buildtime".to_string(), vec!["build".to_string(), "time".to_string()]);
+    cache.insert("buildpath".to_string(), vec!["build".to_string(), "path".to_string()]);
+    cache.insert("runtime".to_string(), vec!["run".to_string(), "time".to_string()]);
+    cache.insert("compile".to_string(), vec!["compile".to_string()]); // Single word
+    cache.insert("compiler".to_string(), vec!["compiler".to_string()]); // Single word
+    cache.insert("compiletime".to_string(), vec!["compile".to_string(), "time".to_string()]);
+    cache.insert("debugger".to_string(), vec!["debug".to_string(), "ger".to_string()]);
+    cache.insert("debuginfo".to_string(), vec!["debug".to_string(), "info".to_string()]);
+    
+    // Testing and quality
+    cache.insert("unittest".to_string(), vec!["unit".to_string(), "test".to_string()]);
+    cache.insert("testcase".to_string(), vec!["test".to_string(), "case".to_string()]);
+    cache.insert("testdata".to_string(), vec!["test".to_string(), "data".to_string()]);
+    cache.insert("testfile".to_string(), vec!["test".to_string(), "file".to_string()]);
+    cache.insert("testsuit".to_string(), vec!["test".to_string(), "suit".to_string()]);
+    cache.insert("benchmark".to_string(), vec!["bench".to_string(), "mark".to_string()]);
+    cache.insert("codereview".to_string(), vec!["code".to_string(), "review".to_string()]);
+    cache.insert("lintcheck".to_string(), vec!["lint".to_string(), "check".to_string()]);
+    
+    // Version control and project management
+    cache.insert("checkpoint".to_string(), vec!["check".to_string(), "point".to_string()]);
+    cache.insert("savepoint".to_string(), vec!["save".to_string(), "point".to_string()]);
+    cache.insert("breakpoint".to_string(), vec!["break".to_string(), "point".to_string()]);
+    cache.insert("entrypoint".to_string(), vec!["entry".to_string(), "point".to_string()]);
+    cache.insert("startpoint".to_string(), vec!["start".to_string(), "point".to_string()]);
+    cache.insert("endpoint".to_string(), vec!["end".to_string(), "point".to_string()]);
+    cache.insert("timestamp".to_string(), vec!["time".to_string(), "stamp".to_string()]);
+    cache.insert("milestone".to_string(), vec!["mile".to_string(), "stone".to_string()]);
+    cache.insert("roadmap".to_string(), vec!["road".to_string(), "map".to_string()]);
+    cache.insert("workflow".to_string(), vec!["work".to_string(), "flow".to_string()]);
+    cache.insert("workload".to_string(), vec!["work".to_string(), "load".to_string()]);
+    cache.insert("workqueue".to_string(), vec!["work".to_string(), "queue".to_string()]);
+    cache.insert("workspace".to_string(), vec!["work".to_string(), "space".to_string()]);
+    
+    // Security and authentication
+    cache.insert("password".to_string(), vec!["pass".to_string(), "word".to_string()]);
+    cache.insert("passphrase".to_string(), vec!["pass".to_string(), "phrase".to_string()]);
+    cache.insert("passcode".to_string(), vec!["pass".to_string(), "code".to_string()]);
+    cache.insert("username".to_string(), vec!["user".to_string(), "name".to_string()]);
+    cache.insert("userid".to_string(), vec!["user".to_string(), "id".to_string()]);
+    cache.insert("sessionid".to_string(), vec!["session".to_string(), "id".to_string()]);
+    cache.insert("tokenid".to_string(), vec!["token".to_string(), "id".to_string()]);
+    cache.insert("keychain".to_string(), vec!["key".to_string(), "chain".to_string()]);
+    cache.insert("keystore".to_string(), vec!["key".to_string(), "store".to_string()]);
+    cache.insert("keyring".to_string(), vec!["key".to_string(), "ring".to_string()]);
+    cache.insert("keypair".to_string(), vec!["key".to_string(), "pair".to_string()]);
+    cache.insert("publickey".to_string(), vec!["public".to_string(), "key".to_string()]);
+    cache.insert("privatekey".to_string(), vec!["private".to_string(), "key".to_string()]);
+    cache.insert("secretkey".to_string(), vec!["secret".to_string(), "key".to_string()]);
+    
+    // Error handling and logging
+    cache.insert("errorcode".to_string(), vec!["error".to_string(), "code".to_string()]);
+    cache.insert("errormsg".to_string(), vec!["error".to_string(), "msg".to_string()]);
+    cache.insert("errorlog".to_string(), vec!["error".to_string(), "log".to_string()]);
+    cache.insert("stacktrace".to_string(), vec!["stack".to_string(), "trace".to_string()]);
+    cache.insert("backtrace".to_string(), vec!["back".to_string(), "trace".to_string()]);
+    cache.insert("logfile".to_string(), vec!["log".to_string(), "file".to_string()]);
+    cache.insert("logdata".to_string(), vec!["log".to_string(), "data".to_string()]);
+    cache.insert("loglevel".to_string(), vec!["log".to_string(), "level".to_string()]);
+    cache.insert("logmsg".to_string(), vec!["log".to_string(), "msg".to_string()]);
+    
+    // Performance and monitoring
+    cache.insert("benchmark".to_string(), vec!["bench".to_string(), "mark".to_string()]);
+    cache.insert("throughput".to_string(), vec!["through".to_string(), "put".to_string()]);
+    cache.insert("bandwidth".to_string(), vec!["band".to_string(), "width".to_string()]);
+    cache.insert("latency".to_string(), vec!["latency".to_string()]); // Single word
+    cache.insert("timeout".to_string(), vec!["time".to_string(), "out".to_string()]);
+    cache.insert("deadline".to_string(), vec!["dead".to_string(), "line".to_string()]);
+    cache.insert("heartbeat".to_string(), vec!["heart".to_string(), "beat".to_string()]);
+    cache.insert("healthcheck".to_string(), vec!["health".to_string(), "check".to_string()]);
+    cache.insert("statuscheck".to_string(), vec!["status".to_string(), "check".to_string()]);
+    
+    cache
+});
+
+/// Runtime LRU cache for dynamically discovered compound word splits
+/// This provides fast lookup for compound words discovered during execution
+/// while maintaining a bounded memory footprint through LRU eviction.
+#[derive(Debug)]
+struct CompoundCache {
+    cache: HashMap<String, Vec<String>>,
+    access_order: Vec<String>,
+    max_size: usize,
+}
+
+impl CompoundCache {
+    fn new(max_size: usize) -> Self {
+        Self {
+            cache: HashMap::new(),
+            access_order: Vec::new(),
+            max_size,
+        }
+    }
+    
+    fn get(&mut self, key: &str) -> Option<&Vec<String>> {
+        if self.cache.contains_key(key) {
+            // Move to end (most recently used)
+            self.access_order.retain(|k| k != key);
+            self.access_order.push(key.to_string());
+            self.cache.get(key)
+        } else {
+            None
+        }
+    }
+    
+    fn insert(&mut self, key: String, value: Vec<String>) {
+        // Remove if already exists
+        if self.cache.contains_key(&key) {
+            self.access_order.retain(|k| k != &key);
+        } else if self.cache.len() >= self.max_size {
+            // Evict least recently used
+            if let Some(lru_key) = self.access_order.first().cloned() {
+                self.cache.remove(&lru_key);
+                self.access_order.retain(|k| k != &lru_key);
+            }
+        }
+        
+        self.cache.insert(key.clone(), value);
+        self.access_order.push(key);
+    }
+}
+
+/// Runtime cache for compound word splits (thread-safe)
+static RUNTIME_COMPOUND_CACHE: Lazy<Mutex<CompoundCache>> = Lazy::new(|| {
+    Mutex::new(CompoundCache::new(1000)) // Cache up to 1000 compound word splits
+});
+
 /// Splits a string on camel case boundaries
 /// This function handles:
 /// - camelCase -> ["camel", "case"]
@@ -532,6 +742,11 @@ pub fn is_stop_word(word: &str) -> bool {
 
 /// Attempts to split a compound word into its constituent parts using a vocabulary
 /// Returns the original word if it cannot be split
+/// 
+/// Performance optimization: Uses a three-tier caching strategy:
+/// 1. Pre-computed cache for common programming terms (fastest)
+/// 2. Runtime LRU cache for dynamically discovered splits (fast)
+/// 3. Decompound crate as fallback for unknown terms (slower)
 pub fn split_compound_word(word: &str, vocab: &HashSet<String>) -> Vec<String> {
     // First check if this is a special case word that should never be split
     if is_special_case(word) {
@@ -556,12 +771,38 @@ pub fn split_compound_word(word: &str, vocab: &HashSet<String>) -> Vec<String> {
         return vec![word.to_string()];
     }
 
+    let lowercase_word = word.to_lowercase();
+    
+    // PERFORMANCE OPTIMIZATION: Three-tier caching strategy
+    
+    // Tier 1: Check pre-computed cache for common programming terms (fastest)
+    if let Some(cached_splits) = PRECOMPUTED_COMPOUND_SPLITS.get(&lowercase_word) {
+        return cached_splits.clone();
+    }
+    
+    // Tier 2: Check runtime LRU cache for dynamically discovered splits (fast)
+    if let Ok(mut cache) = RUNTIME_COMPOUND_CACHE.try_lock() {
+        if let Some(cached_splits) = cache.get(&lowercase_word) {
+            return cached_splits.clone();
+        }
+    }
+    
+    // Tier 3: Use decompound crate as fallback for unknown terms (slower)
     let is_valid_word = |w: &str| vocab.contains(&w.to_lowercase());
 
-    match decompound(word, &is_valid_word, DecompositionOptions::empty()) {
+    let result = match decompound(word, &is_valid_word, DecompositionOptions::empty()) {
         Ok(parts) if !parts.is_empty() => parts,
         _ => vec![word.to_string()],
+    };
+    
+    // Cache the result for future lookups if it's a compound word (more than one part)
+    if result.len() > 1 {
+        if let Ok(mut cache) = RUNTIME_COMPOUND_CACHE.try_lock() {
+            cache.insert(lowercase_word, result.clone());
+        }
     }
+    
+    result
 }
 
 /// Loads a vocabulary for compound word splitting
