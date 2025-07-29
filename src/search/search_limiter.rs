@@ -1,5 +1,5 @@
 use probe_code::models::{LimitedSearchResults, SearchLimits, SearchResult};
-use probe_code::search::search_tokens::count_tokens;
+use probe_code::search::search_tokens::count_block_tokens;
 
 /// Helper function to apply limits (max results, max bytes, max tokens) to search results
 ///
@@ -111,15 +111,16 @@ pub fn apply_limits(
             {
                 token_counting_started = true;
                 // When we start counting, we need to recalculate tokens for already included results
+                // Use block-level caching for better performance on code blocks
                 running_tokens = limited
                     .iter()
-                    .map(|result: &SearchResult| count_tokens(&result.code))
+                    .map(|result: &SearchResult| count_block_tokens(&result.code))
                     .sum();
-                // Now count this result precisely too
-                count_tokens(&r.code)
+                // Now count this result precisely too using block-level caching
+                count_block_tokens(&r.code)
             } else if token_counting_started {
-                // We've already started precise counting
-                count_tokens(&r.code)
+                // We've already started precise counting - use block-level caching
+                count_block_tokens(&r.code)
             } else {
                 // Still using estimation
                 estimated_tokens
@@ -153,9 +154,10 @@ pub fn apply_limits(
         if max_tokens.is_some() && !token_counting_started && !limited.is_empty() {
             // We only used estimations, but we need to provide accurate final count for the user
             // This is still more efficient than counting every result during the loop
+            // Use block-level caching for final token count calculation
             limited
                 .iter()
-                .map(|result: &SearchResult| count_tokens(&result.code))
+                .map(|result: &SearchResult| count_block_tokens(&result.code))
                 .sum()
         } else {
             running_tokens

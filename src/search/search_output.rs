@@ -3,7 +3,7 @@ use std::path::Path;
 
 use probe_code::models::SearchResult;
 use probe_code::search::query::QueryPlan;
-use probe_code::search::search_tokens::count_tokens;
+use probe_code::search::search_tokens::count_block_tokens;
 
 /// Function to format and print search results according to the specified format
 pub fn format_and_print_search_results(
@@ -162,7 +162,7 @@ pub fn format_and_print_search_results(
     println!("Found {count} search results", count = valid_results.len());
 
     let total_bytes: usize = valid_results.iter().map(|r| r.code.len()).sum();
-    let total_tokens: usize = valid_results.iter().map(|r| count_tokens(&r.code)).sum();
+    let total_tokens: usize = valid_results.iter().map(|r| count_block_tokens(&r.code)).sum();
     println!("Total bytes returned: {total_bytes}");
     println!("Total tokens returned: {total_tokens}");
 }
@@ -518,7 +518,7 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
         "summary": {
             "count": results.len(),
             "total_bytes": results.iter().map(|r| r.code.len()).sum::<usize>(),
-            "total_tokens": results.iter().map(|r| count_tokens(&r.code)).sum::<usize>(),
+            "total_tokens": results.iter().map(|r| count_block_tokens(&r.code)).sum::<usize>(),
         }
     });
 
@@ -596,7 +596,7 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
     );
     println!(
         "    <total_tokens>{total_tokens}</total_tokens>",
-        total_tokens = results.iter().map(|r| count_tokens(&r.code)).sum::<usize>()
+        total_tokens = results.iter().map(|r| count_block_tokens(&r.code)).sum::<usize>()
     );
     println!("  </summary>");
 

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use probe_code::models::SearchResult;
-use probe_code::search::search_tokens::count_tokens;
+use probe_code::search::search_tokens::count_block_tokens;
 use serde::Serialize;
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
@@ -140,7 +140,7 @@ fn format_extraction_internal(
                     "summary": {
                         "count": results.len(),
                         "total_bytes": results.iter().map(|r| r.code.len()).sum::<usize>(),
-                        "total_tokens": results.iter().map(|r| count_tokens(&r.code)).sum::<usize>(),
+                        "total_tokens": results.iter().map(|r| count_block_tokens(&r.code)).sum::<usize>(),
                     }
                 });
 
@@ -232,7 +232,7 @@ fn format_extraction_internal(
                 writeln!(
                     output,
                     "    <total_tokens>{}</total_tokens>",
-                    results.iter().map(|r| count_tokens(&r.code)).sum::<usize>()
+                    results.iter().map(|r| count_block_tokens(&r.code)).sum::<usize>()
                 )?;
                 writeln!(output, "  </summary>")?;
             }
@@ -397,7 +397,7 @@ fn format_extraction_internal(
                     )?;
 
                     let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
-                    let total_tokens: usize = results.iter().map(|r| count_tokens(&r.code)).sum();
+                    let total_tokens: usize = results.iter().map(|r| count_block_tokens(&r.code)).sum();
                     writeln!(output, "Total bytes returned: {total_bytes}")?;
                     writeln!(output, "Total tokens returned: {total_tokens}")?;
                 }
