@@ -359,7 +359,8 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for query JSON output:
             // Process all matched text in batch to leverage content deduplication
             use probe_code::search::search_tokens::sum_tokens_with_deduplication;
-            let matched_texts: Vec<&str> = matches.iter().map(|m| m.matched_text.as_str()).collect();
+            let matched_texts: Vec<&str> =
+                matches.iter().map(|m| m.matched_text.as_str()).collect();
             let total_tokens = sum_tokens_with_deduplication(&matched_texts);
 
             // Create standardized results
@@ -418,9 +419,10 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for query XML output:
             // Process all matched text in batch to leverage content deduplication
             use probe_code::search::search_tokens::sum_tokens_with_deduplication;
-            let matched_texts: Vec<&str> = matches.iter().map(|m| m.matched_text.as_str()).collect();
+            let matched_texts: Vec<&str> =
+                matches.iter().map(|m| m.matched_text.as_str()).collect();
             let total_tokens = sum_tokens_with_deduplication(&matched_texts);
-            
+
             println!("    <total_tokens>{total_tokens}");
             println!("  </summary>");
 

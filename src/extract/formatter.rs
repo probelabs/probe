@@ -138,7 +138,7 @@ fn format_extraction_internal(
                 // Process all code blocks in batch to leverage content deduplication
                 let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
                 let total_tokens = sum_tokens_with_deduplication(&code_blocks);
-                
+
                 // Create a wrapper object with results and summary
                 let mut wrapper = serde_json::json!({
                     "results": json_results,
@@ -238,7 +238,7 @@ fn format_extraction_internal(
                 // Process all code blocks in batch to leverage content deduplication
                 let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
                 let total_tokens = sum_tokens_with_deduplication(&code_blocks);
-                
+
                 writeln!(output, "    <total_tokens>{total_tokens}</total_tokens>")?;
                 writeln!(output, "  </summary>")?;
             }
@@ -403,7 +403,7 @@ fn format_extraction_internal(
                     )?;
 
                     let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
-                    
+
                     // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for extract terminal output:
                     // Process all code blocks in batch to leverage content deduplication
                     let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();

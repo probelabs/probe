@@ -406,46 +406,46 @@ pub fn count_block_tokens(block_content: &str) -> usize {
 }
 
 /// BATCH TOKENIZATION WITH CONTENT DEDUPLICATION OPTIMIZATION
-/// 
+///
 /// This function implements batch tokenization with content deduplication to improve performance
 /// by 1.2+ seconds in scenarios where identical code blocks are tokenized multiple times.
-/// 
+///
 /// Key optimizations:
 /// 1. **Content Deduplication**: Uses efficient MD5 hashing to identify identical content blocks
 /// 2. **Batch Processing**: Groups identical content together for single tokenization operation
 /// 3. **Result Sharing**: Distributes tokenization results across all instances of duplicate content
 /// 4. **Memory Efficiency**: Processes unique content only once while maintaining result accuracy
-/// 
+///
 /// Use cases:
 /// - Output formatting where same code blocks appear in JSON/XML summaries
 /// - Search limiting where results are processed multiple times
 /// - Multi-format output where content is tokenized for different formats
-/// 
+///
 /// Expected performance improvement: 1.2+ seconds for workloads with repetitive code patterns
 pub fn batch_count_tokens_with_deduplication(content_blocks: &[&str]) -> Vec<usize> {
     use std::collections::HashMap;
-    
+
     // Early return for empty input
     if content_blocks.is_empty() {
         return vec![];
     }
-    
+
     // If only one block, use standard path for efficiency
     if content_blocks.len() == 1 {
         return vec![count_block_tokens(content_blocks[0])];
     }
-    
+
     // CONTENT DEDUPLICATION PHASE:
     // Group identical content blocks together using efficient hashing
     let mut content_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
     let mut unique_contents: Vec<&str> = Vec::new();
     let mut content_hashes: Vec<String> = Vec::new();
-    
+
     // Build deduplication map: hash -> list of indices with that content
     for (index, &content) in content_blocks.iter().enumerate() {
         // Use MD5 hash for fast content identification (collision risk is minimal for code blocks)
         let content_hash = TokenCountCache::hash_content(content);
-        
+
         if let Some(indices) = content_to_indices.get_mut(&content_hash) {
             // Found duplicate content - add index to existing list
             indices.push(index);
@@ -456,15 +456,15 @@ pub fn batch_count_tokens_with_deduplication(content_blocks: &[&str]) -> Vec<usi
             content_hashes.push(content_hash);
         }
     }
-    
+
     // BATCH TOKENIZATION PHASE:
     // Process only unique content blocks to minimize expensive tiktoken calls
     let mut unique_token_counts: Vec<usize> = Vec::with_capacity(unique_contents.len());
-    
+
     // Get tokenizer and block cache references once for efficiency
     let tokenizer = get_tokenizer();
     let block_cache = get_block_token_cache();
-    
+
     for &unique_content in &unique_contents {
         // Use existing block-level caching for each unique content piece
         // This ensures compatibility with existing cache infrastructure
@@ -473,14 +473,14 @@ pub fn batch_count_tokens_with_deduplication(content_blocks: &[&str]) -> Vec<usi
         });
         unique_token_counts.push(token_count);
     }
-    
+
     // RESULT DISTRIBUTION PHASE:
     // Map tokenization results back to original input positions
     let mut results: Vec<usize> = vec![0; content_blocks.len()];
-    
+
     for (unique_index, content_hash) in content_hashes.iter().enumerate() {
         let token_count = unique_token_counts[unique_index];
-        
+
         // Distribute this token count to all indices that had this content
         if let Some(indices) = content_to_indices.get(content_hash) {
             for &original_index in indices {
@@ -488,29 +488,31 @@ pub fn batch_count_tokens_with_deduplication(content_blocks: &[&str]) -> Vec<usi
             }
         }
     }
-    
+
     results
 }
 
 /// Helper function to sum tokens from multiple content blocks with deduplication
-/// 
+///
 /// This function provides a convenient interface for calculating total token counts
 /// across multiple code blocks while leveraging content deduplication for performance.
 /// It's particularly useful for output formatting and summary calculations.
-/// 
+///
 /// # Arguments
 /// * `content_blocks` - Slice of string references to tokenize and sum
-/// 
+///
 /// # Returns
 /// * Total token count across all blocks (duplicates are processed only once)
-/// 
+///
 /// # Example Usage
 /// ```rust
 /// let blocks = vec!["fn main() {}", "fn test() {}", "fn main() {}"]; // Note duplicate
 /// let total = sum_tokens_with_deduplication(&blocks.iter().collect::<Vec<_>>());
 /// ```
 pub fn sum_tokens_with_deduplication(content_blocks: &[&str]) -> usize {
-    batch_count_tokens_with_deduplication(content_blocks).iter().sum()
+    batch_count_tokens_with_deduplication(content_blocks)
+        .iter()
+        .sum()
 }
 
 #[cfg(test)]
@@ -520,24 +522,24 @@ mod tests {
     #[test]
     fn test_batch_tokenization_with_deduplication() {
         // Test with duplicate content to verify deduplication works
-        let content_blocks = vec![
+        let content_blocks = [
             "fn main() { println!(\"Hello world\"); }",
             "fn test() { assert_eq!(1, 1); }",
             "fn main() { println!(\"Hello world\"); }", // Duplicate of first
             "fn helper() { /* some helper code */ }",
             "fn test() { assert_eq!(1, 1); }", // Duplicate of second
         ];
-        
-        let refs: Vec<&str> = content_blocks.iter().map(|s| *s).collect();
+
+        let refs = content_blocks.to_vec();
         let batch_results = batch_count_tokens_with_deduplication(&refs);
-        
+
         // Verify we get the right number of results
         assert_eq!(batch_results.len(), 5);
-        
+
         // Verify duplicates have same token counts
         assert_eq!(batch_results[0], batch_results[2]); // Both "fn main()" blocks
         assert_eq!(batch_results[1], batch_results[4]); // Both "fn test()" blocks
-        
+
         // Verify against individual tokenization (should match)
         for (i, &content) in content_blocks.iter().enumerate() {
             let individual_count = count_block_tokens(content);
@@ -554,30 +556,31 @@ mod tests {
 
     #[test]
     fn test_batch_tokenization_single_input() {
-        let single_block = vec!["fn single() { return 42; }"];
-        let refs: Vec<&str> = single_block.iter().map(|s| *s).collect();
+        let single_block = ["fn single() { return 42; }"];
+        let refs = single_block.to_vec();
         let results = batch_count_tokens_with_deduplication(&refs);
-        
+
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], count_block_tokens(single_block[0]));
     }
 
     #[test]
     fn test_sum_tokens_with_deduplication() {
-        let content_blocks = vec![
+        let content_blocks = [
             "fn duplicate() { return 1; }",
             "fn unique() { return 2; }",
             "fn duplicate() { return 1; }", // Duplicate
         ];
-        
-        let refs: Vec<&str> = content_blocks.iter().map(|s| *s).collect();
+
+        let refs = content_blocks.to_vec();
         let total = sum_tokens_with_deduplication(&refs);
-        
+
         // Total should be sum of all three, even though one is duplicate
-        let individual_sum: usize = content_blocks.iter()
+        let individual_sum: usize = content_blocks
+            .iter()
             .map(|content| count_block_tokens(content))
             .sum();
-        
+
         assert_eq!(total, individual_sum);
     }
 
@@ -585,34 +588,34 @@ mod tests {
     fn test_batch_tokenization_all_identical() {
         // All blocks are identical - should see significant deduplication benefit
         let identical_content = "fn identical() { println!(\"same\"); }";
-        let content_blocks = vec![identical_content; 10]; // 10 identical blocks
-        
-        let refs: Vec<&str> = content_blocks.iter().map(|s| *s).collect();
+        let content_blocks = [identical_content; 10]; // 10 identical blocks
+
+        let refs = content_blocks.to_vec();
         let results = batch_count_tokens_with_deduplication(&refs);
-        
+
         assert_eq!(results.len(), 10);
-        
+
         // All results should be identical
         let expected_count = count_block_tokens(identical_content);
         for result in results {
             assert_eq!(result, expected_count);
         }
     }
-    
+
     #[test]
     fn test_batch_tokenization_no_duplicates() {
         // No duplicates - should work like individual tokenization
-        let content_blocks = vec![
+        let content_blocks = [
             "fn first() { return 1; }",
-            "fn second() { return 2; }", 
+            "fn second() { return 2; }",
             "fn third() { return 3; }",
         ];
-        
-        let refs: Vec<&str> = content_blocks.iter().map(|s| *s).collect();
+
+        let refs = content_blocks.to_vec();
         let batch_results = batch_count_tokens_with_deduplication(&refs);
-        
+
         assert_eq!(batch_results.len(), 3);
-        
+
         // Each should match individual tokenization
         for (i, &content) in content_blocks.iter().enumerate() {
             assert_eq!(batch_results[i], count_block_tokens(content));

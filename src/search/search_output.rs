@@ -162,7 +162,7 @@ pub fn format_and_print_search_results(
     println!("Found {count} search results", count = valid_results.len());
 
     let total_bytes: usize = valid_results.iter().map(|r| r.code.len()).sum();
-    
+
     // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION:
     // Use batch processing with content deduplication for improved performance
     // when multiple identical code blocks need tokenization (common in search results)
@@ -521,7 +521,7 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
     // Process all code blocks in batch to leverage content deduplication
     let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
     let total_tokens = sum_tokens_with_deduplication(&code_blocks);
-    
+
     // Create a wrapper object with results and summary
     let wrapper = serde_json::json!({
         "results": json_results,
@@ -605,10 +605,10 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
         total_bytes = results.iter().map(|r| r.code.len()).sum::<usize>()
     );
     // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for XML output:
-    // Process all code blocks in batch to leverage content deduplication  
+    // Process all code blocks in batch to leverage content deduplication
     let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
     let total_tokens = sum_tokens_with_deduplication(&code_blocks);
-    
+
     println!("    <total_tokens>{total_tokens}</total_tokens>");
     println!("  </summary>");
 
