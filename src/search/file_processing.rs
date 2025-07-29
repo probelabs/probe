@@ -518,7 +518,7 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                     ));
 
                     if ctx.debug_mode && gap > 1 {
-                        println!("DEBUG: SMART MERGING: Merged contexts with gap of {} lines (threshold: {})", gap, dynamic_merge_threshold);
+                        println!("DEBUG: SMART MERGING: Merged contexts with gap of {gap} lines (threshold: {dynamic_merge_threshold})");
                     }
                 } else {
                     // Gap too large, finalize current window and start new one
@@ -532,7 +532,7 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                     ));
 
                     if ctx.debug_mode {
-                        println!("DEBUG: SMART MERGING: Gap of {} lines exceeds threshold {}, creating new window", gap, dynamic_merge_threshold);
+                        println!("DEBUG: SMART MERGING: Gap of {gap} lines exceeds threshold {dynamic_merge_threshold}, creating new window");
                     }
                 }
             }
@@ -595,10 +595,7 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         let cache_key = (context_start_idx, context_end_idx);
         let context_terms = if let Some(cached_terms) = tokenization_cache.get(&cache_key) {
             if ctx.debug_mode {
-                println!(
-                    "DEBUG: TOKENIZATION CACHE: Using cached tokenization for context {}-{}",
-                    context_start, context_end
-                );
+                println!("DEBUG: TOKENIZATION CACHE: Using cached tokenization for context {context_start}-{context_end}");
             }
             cached_terms.clone()
         } else {
@@ -609,10 +606,7 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             );
             tokenization_cache.insert(cache_key, terms.clone());
             if ctx.debug_mode {
-                println!(
-                    "DEBUG: TOKENIZATION CACHE: Cached tokenization for context {}-{}",
-                    context_start, context_end
-                );
+                println!("DEBUG: TOKENIZATION CACHE: Cached tokenization for context {context_start}-{context_end}");
             }
             terms
         };
