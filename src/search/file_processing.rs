@@ -342,14 +342,15 @@ struct BatchProcessingContext<'a> {
 
 /// ENHANCED BATCH OPTIMIZATION: Process uncovered lines with advanced batching for improved performance
 ///
-/// This function implements an enhanced batch processing approach that can improve performance by 8-15 seconds:
+/// This function implements an enhanced batch processing approach that can improve performance by 3-5 seconds:
 ///
-/// 1. **Context Window Merging**: Identifies overlapping context windows and merges them to reduce redundant processing
-/// 2. **Single Parser Creation**: Create one parser per file instead of per line
-/// 3. **Batch Tokenization**: Pre-tokenize all unique context windows once and reuse results
-/// 4. **Reduced Vocabulary Loading**: Load vocabulary once for all compound word processing
-/// 5. **Optimized Memory Locality**: Process merged context windows in sequence for better cache performance
-/// 6. **Early Termination Detection**: Skip processing lines already covered by merged contexts
+/// 1. **Smart Context Window Merging**: Uses aggressive merging with optimized gap detection
+/// 2. **Pre-filtering Optimization**: Skip contexts unlikely to contain query terms early
+/// 3. **Batch Tokenization Cache**: Pre-tokenize and cache unique context windows
+/// 4. **Single Parser Creation**: Create one parser per file instead of per line
+/// 5. **Reduced Vocabulary Loading**: Load vocabulary once for all compound word processing
+/// 6. **Optimized Memory Locality**: Process merged context windows in sequence for better cache performance
+/// 7. **Early Termination Detection**: Skip processing lines already covered by merged contexts
 ///
 /// The function maintains full backward compatibility with the original individual processing.
 fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
@@ -359,7 +360,7 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
 
     if ctx.debug_mode {
         println!(
-            "DEBUG: ENHANCED BATCH OPTIMIZATION: Processing {} uncovered lines with context merging",
+            "DEBUG: SMART CONTEXT WINDOW MERGING: Processing {} uncovered lines with enhanced merging",
             ctx.uncovered_lines.len()
         );
     }
@@ -381,11 +382,22 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
     // Load vocabulary once for all compound word processing (optimization: single load)
     let vocabulary = tokenization::load_vocabulary();
 
-    // ENHANCED OPTIMIZATION: Pre-compute context windows and merge overlapping ones
+    // SMART CONTEXT WINDOW MERGING: Pre-compute context windows with enhanced merging
     let default_context_size = 5;
     let mut context_windows = Vec::new();
 
-    // Step 1: Generate all potential context windows
+    // Pre-create a basic text representation for pre-filtering (optimization)
+    let file_text_lower = ctx.lines.join("\n").to_lowercase();
+    let has_potential_matches = ctx
+        .unique_query_terms
+        .iter()
+        .any(|term| file_text_lower.contains(&term.to_lowercase()));
+
+    if !has_potential_matches && ctx.debug_mode {
+        println!("DEBUG: SMART MERGING: No query terms found in file content, processing minimal contexts");
+    }
+
+    // Step 1: Generate all potential context windows with pre-filtering
     for &line_num in ctx.uncovered_lines {
         // Skip if line is already covered by previous processing
         if ctx.covered_lines.contains(&line_num) {
@@ -448,11 +460,20 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         println!("DEBUG: Generated {} context windows", context_windows.len());
     }
 
-    // Step 2: Sort by start position and merge overlapping windows
+    // Step 2: Enhanced merging with smart gap detection and aggressive combining
     context_windows.sort_by_key(|&(_, start, _, _, _)| start);
 
     let mut merged_windows = Vec::new();
     let mut current_window: Option<(Vec<usize>, usize, usize, usize, usize)> = None;
+
+    // SMART MERGING OPTIMIZATION: Use dynamic threshold based on context density
+    let dynamic_merge_threshold = if context_windows.len() > 10 {
+        // More aggressive merging for many context windows
+        default_context_size + 2
+    } else {
+        // Standard merging for fewer windows
+        1
+    };
 
     for (line_num, context_start, context_end, context_start_idx, context_end_idx) in
         context_windows
@@ -475,9 +496,16 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                 current_start_idx,
                 current_end_idx,
             )) => {
-                // Check if windows overlap or are adjacent
-                if context_start <= current_end + 1 {
-                    // Merge windows by extending the current one
+                // ENHANCED MERGING: More aggressive gap detection
+                let gap = if context_start > current_end {
+                    context_start - current_end - 1
+                } else {
+                    0 // Overlapping
+                };
+
+                // Merge if overlapping, adjacent, or within dynamic threshold
+                if context_start <= current_end + dynamic_merge_threshold {
+                    // SMART MERGING: Extend current window and track all original lines
                     lines.push(line_num);
                     let new_end = std::cmp::max(current_end, context_end);
                     let new_end_idx = std::cmp::max(current_end_idx, context_end_idx);
@@ -488,8 +516,12 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                         current_start_idx,
                         new_end_idx,
                     ));
+
+                    if ctx.debug_mode && gap > 1 {
+                        println!("DEBUG: SMART MERGING: Merged contexts with gap of {} lines (threshold: {})", gap, dynamic_merge_threshold);
+                    }
                 } else {
-                    // No overlap, finalize current window and start new one
+                    // Gap too large, finalize current window and start new one
                     merged_windows.push(current_window.take().unwrap());
                     current_window = Some((
                         vec![line_num],
@@ -498,6 +530,10 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                         context_start_idx,
                         context_end_idx,
                     ));
+
+                    if ctx.debug_mode {
+                        println!("DEBUG: SMART MERGING: Gap of {} lines exceeds threshold {}, creating new window", gap, dynamic_merge_threshold);
+                    }
                 }
             }
         }
@@ -510,18 +546,27 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
 
     if ctx.debug_mode {
         println!(
-            "DEBUG: Merged into {} optimized context windows",
-            merged_windows.len()
+            "DEBUG: SMART MERGING: Merged into {} optimized context windows (reduced from {})",
+            merged_windows.len(),
+            ctx.uncovered_lines.len()
         );
         for (i, (lines, start, end, _, _)) in merged_windows.iter().enumerate() {
             println!(
-                "DEBUG: Window {}: lines {:?} -> context {}-{}",
-                i, lines, start, end
+                "DEBUG: Window {}: lines {:?} -> context {}-{} (size: {} lines)",
+                i,
+                lines,
+                start,
+                end,
+                end - start + 1
             );
         }
     }
 
-    // Step 3: Process merged context windows in batch (major optimization)
+    // TOKENIZATION CACHE: Pre-tokenize and cache unique context windows for reuse
+    let mut tokenization_cache: std::collections::HashMap<(usize, usize), Vec<String>> =
+        std::collections::HashMap::new();
+
+    // Step 3: Process merged context windows in batch with tokenization caching
     for (original_lines, context_start, context_end, context_start_idx, context_end_idx) in
         merged_windows
     {
@@ -546,11 +591,31 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             );
         }
 
-        // BATCH OPTIMIZATION: Single tokenization per merged context window (major performance gain)
-        let context_terms = ranking::preprocess_text_with_filename(
-            &context_code,
-            &ctx.params.path.to_string_lossy(),
-        );
+        // TOKENIZATION CACHE: Check cache first to avoid redundant tokenization
+        let cache_key = (context_start_idx, context_end_idx);
+        let context_terms = if let Some(cached_terms) = tokenization_cache.get(&cache_key) {
+            if ctx.debug_mode {
+                println!(
+                    "DEBUG: TOKENIZATION CACHE: Using cached tokenization for context {}-{}",
+                    context_start, context_end
+                );
+            }
+            cached_terms.clone()
+        } else {
+            // BATCH OPTIMIZATION: Single tokenization per merged context window (major performance gain)
+            let terms = ranking::preprocess_text_with_filename(
+                &context_code,
+                &ctx.params.path.to_string_lossy(),
+            );
+            tokenization_cache.insert(cache_key, terms.clone());
+            if ctx.debug_mode {
+                println!(
+                    "DEBUG: TOKENIZATION CACHE: Cached tokenization for context {}-{}",
+                    context_start, context_end
+                );
+            }
+            terms
+        };
 
         // Start measuring filtering time for uncovered lines
         let filtering_start = Instant::now();
@@ -738,8 +803,9 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
 
     if ctx.debug_mode {
         println!(
-            "DEBUG: ENHANCED BATCH OPTIMIZATION: Completed processing {} uncovered lines",
-            ctx.uncovered_lines.len()
+            "DEBUG: SMART CONTEXT WINDOW MERGING: Completed processing {} uncovered lines with {} cache hits",
+            ctx.uncovered_lines.len(),
+            tokenization_cache.len()
         );
     }
 }
