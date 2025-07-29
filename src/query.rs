@@ -356,12 +356,11 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             }
         }
         "json" => {
-            // Import the count_tokens function locally
-            use probe_code::search::search_tokens::count_tokens;
-            let total_tokens = matches
-                .iter()
-                .map(|m| count_tokens(&m.matched_text))
-                .sum::<usize>();
+            // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for query JSON output:
+            // Process all matched text in batch to leverage content deduplication
+            use probe_code::search::search_tokens::sum_tokens_with_deduplication;
+            let matched_texts: Vec<&str> = matches.iter().map(|m| m.matched_text.as_str()).collect();
+            let total_tokens = sum_tokens_with_deduplication(&matched_texts);
 
             // Create standardized results
             let json_matches_standardized: Vec<_> = matches
@@ -416,15 +415,13 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
                 matches.iter().map(|m| m.matched_text.len()).sum::<usize>()
             );
 
-            // Import the count_tokens function locally to avoid unused import warning
-            use probe_code::search::search_tokens::count_tokens;
-            println!(
-                "    <total_tokens>{}",
-                matches
-                    .iter()
-                    .map(|m| count_tokens(&m.matched_text))
-                    .sum::<usize>()
-            );
+            // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for query XML output:
+            // Process all matched text in batch to leverage content deduplication
+            use probe_code::search::search_tokens::sum_tokens_with_deduplication;
+            let matched_texts: Vec<&str> = matches.iter().map(|m| m.matched_text.as_str()).collect();
+            let total_tokens = sum_tokens_with_deduplication(&matched_texts);
+            
+            println!("    <total_tokens>{total_tokens}");
             println!("  </summary>");
 
             println!("</probe_results>");
