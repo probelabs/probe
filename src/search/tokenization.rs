@@ -937,24 +937,36 @@ static RUNTIME_COMPOUND_CACHE: Lazy<Mutex<CompoundCache>> = Lazy::new(|| {
 static COMMON_NON_COMPOUND_WORDS: Lazy<HashSet<String>> = Lazy::new(|| {
     vec![
         // Very common English words that are rarely compound
-        "the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "her", "was", "one", "our", "out", "day", "get", "has", "him", "his", "how", "man", "new", "now", "old", "see", "two", "way", "who", "boy", "did", "its", "let", "put", "say", "she", "too", "use",
-        
+        "the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "her", "was", "one",
+        "our", "out", "day", "get", "has", "him", "his", "how", "man", "new", "now", "old", "see",
+        "two", "way", "who", "boy", "did", "its", "let", "put", "say", "she", "too", "use",
         // Common programming keywords and identifiers that are rarely compound
-        "var", "let", "fun", "def", "int", "str", "obj", "val", "ref", "mut", "pub", "mod", "use", "as", "if", "do", "go", "js", "py", "rs", "ts", "cs", "cpp", "java", "php", "sql", "xml", "css", "html", "json", "yaml", "toml", "cfg", "log", "env", "bin", "lib", "src", "doc", "test", "spec", "tmp", "temp", "path", "file", "dir", "url", "uri", "http", "https", "tcp", "udp", "ftp", "ssh", "ssl", "tls", "auth", "user", "admin", "root", "sudo", "exec", "run", "start", "stop", "init", "main", "app", "api", "web", "net", "sys", "os", "io", "fs", "db", "sql", "orm", "mvc", "gui", "cli", "tui", "ui", "ux", "css", "js", "ts", "html", "xml", "json", "yaml", "toml", "csv", "txt", "md", "pdf", "png", "jpg", "gif", "svg", "zip", "tar", "gz", "bz2", "xz", "rpm", "deb", "dmg", "exe", "dll", "so", "dylib", "jar", "war", "ear", "zip", "rar", "7z",
-        
-        // Common single-letter and two-letter terms
-        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
-        "id", "ip", "ok", "no", "on", "in", "at", "is", "to", "by", "up", "my", "we", "me", "he", "it", "of", "or", "so", "be", "do", "go", "if", "an", "as", "am", "us", "vs",
-        
-        // Numbers and common numeric suffixes
-        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "100", "1000", "v1", "v2", "v3", "v4", "v5", "2d", "3d", "4k", "8k", "x64", "x86", "64bit", "32bit",
-    ].into_iter().map(|s| s.to_string()).collect()
+        "var", "let", "fun", "def", "int", "str", "obj", "val", "ref", "mut", "pub", "mod", "use",
+        "as", "if", "do", "go", "js", "py", "rs", "ts", "cs", "cpp", "java", "php", "sql", "xml",
+        "css", "html", "json", "yaml", "toml", "cfg", "log", "env", "bin", "lib", "src", "doc",
+        "test", "spec", "tmp", "temp", "path", "file", "dir", "url", "uri", "http", "https", "tcp",
+        "udp", "ftp", "ssh", "ssl", "tls", "auth", "user", "admin", "root", "sudo", "exec", "run",
+        "start", "stop", "init", "main", "app", "api", "web", "net", "sys", "os", "io", "fs", "db",
+        "sql", "orm", "mvc", "gui", "cli", "tui", "ui", "ux", "css", "js", "ts", "html", "xml",
+        "json", "yaml", "toml", "csv", "txt", "md", "pdf", "png", "jpg", "gif", "svg", "zip",
+        "tar", "gz", "bz2", "xz", "rpm", "deb", "dmg", "exe", "dll", "so", "dylib", "jar", "war",
+        "ear", "zip", "rar", "7z", // Common single-letter and two-letter terms
+        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r",
+        "s", "t", "u", "v", "w", "x", "y", "z", "id", "ip", "ok", "no", "on", "in", "at", "is",
+        "to", "by", "up", "my", "we", "me", "he", "it", "of", "or", "so", "be", "do", "go", "if",
+        "an", "as", "am", "us", "vs", // Numbers and common numeric suffixes
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "100", "1000", "v1", "v2", "v3",
+        "v4", "v5", "2d", "3d", "4k", "8k", "x64", "x86", "64bit", "32bit",
+    ]
+    .into_iter()
+    .map(|s| s.to_string())
+    .collect()
 });
 
 /// Determines if a word should skip compound processing based on heuristics
 /// This optimization improves performance by avoiding expensive compound word
 /// processing for words that are unlikely to be compound words.
-/// 
+///
 /// Heuristics used:
 /// - Length: Words shorter than 6 characters are unlikely to be compound
 /// - Patterns: Words with numbers or special characters are unlikely to be compound  
@@ -962,22 +974,25 @@ static COMMON_NON_COMPOUND_WORDS: Lazy<HashSet<String>> = Lazy::new(|| {
 /// - Frequency: High-frequency terms are often single words, not compounds
 fn should_skip_compound_processing(word: &str) -> bool {
     let lowercase_word = word.to_lowercase();
-    
+
     // Skip very short words (less than 6 characters) - unlikely to be compound
     if word.len() < 6 {
         return true;
     }
-    
+
     // Skip words with numbers or special characters (except underscores/hyphens)
-    if word.chars().any(|c| c.is_numeric() || (c.is_ascii_punctuation() && c != '_' && c != '-')) {
+    if word
+        .chars()
+        .any(|c| c.is_numeric() || (c.is_ascii_punctuation() && c != '_' && c != '-'))
+    {
         return true;
     }
-    
+
     // Skip words in the common non-compound list
     if COMMON_NON_COMPOUND_WORDS.contains(&lowercase_word) {
         return true;
     }
-    
+
     // Additional heuristic: Skip words with repeated character patterns (like "aaa", "xxx")
     // These are often abbreviations or special identifiers, not compound words
     let chars: Vec<char> = word.chars().collect();
@@ -993,7 +1008,7 @@ fn should_skip_compound_processing(word: &str) -> bool {
             return true;
         }
     }
-    
+
     false
 }
 
@@ -1095,8 +1110,10 @@ pub fn split_camel_case_with_config(input: &str, config: SimdConfig) -> Vec<Stri
     }
 
     let chars: Vec<char> = input.chars().collect();
-    let mut result = Vec::new();
-    let mut current_word = String::new();
+    // OPTIMIZATION: Pre-allocate Vec capacity based on input length heuristics
+    let estimated_parts = (input.len() / 4).clamp(2, 8); // Typical camelCase has 2-4 parts
+    let mut result = Vec::with_capacity(estimated_parts);
+    let mut current_word = String::with_capacity(input.len() / 2); // Pre-allocate string capacity
 
     // State tracking
     let mut prev_is_lower = false;
@@ -1177,10 +1194,10 @@ pub fn is_stop_word(word: &str) -> bool {
 /// 2. Runtime LRU cache for dynamically discovered splits (fast)
 /// 3. Decompound crate as fallback for unknown terms (slower)
 ///
-/// SELECTIVE COMPOUND PROCESSING OPTIMIZATION: 
+/// SELECTIVE COMPOUND PROCESSING OPTIMIZATION:
 /// Skips compound processing for words unlikely to be compound based on heuristics:
 /// - Length (< 6 characters), patterns (numbers/special chars), common word lists
-/// This optimization improves performance by 0.5-0.8s while maintaining accuracy
+///   This optimization improves performance by 0.5-0.8s while maintaining accuracy
 pub fn split_compound_word(word: &str, vocab: &HashSet<String>) -> Vec<String> {
     // OPTIMIZATION: Skip compound processing for words unlikely to be compound
     // This heuristic-based optimization improves performance significantly
@@ -1801,7 +1818,9 @@ pub fn tokenize(text: &str) -> Vec<String> {
     // println!("Tokenizing text: {}", text);
 
     // Split by whitespace and collect words
-    let mut tokens = Vec::new();
+    // OPTIMIZATION: Pre-allocate Vec capacity based on text length heuristics
+    let estimated_tokens = (text.len() / 8).clamp(4, 32); // Estimate ~8 chars per token on average
+    let mut tokens = Vec::with_capacity(estimated_tokens);
     for word in text.split_whitespace() {
         // Check if this is a negated term
         let is_negated = word.starts_with('-');
@@ -1841,8 +1860,9 @@ pub fn tokenize(text: &str) -> Vec<String> {
     }
 
     // Create a set to track unique tokens after processing
-    let mut processed_tokens = HashSet::new();
-    let mut result = Vec::new();
+    // OPTIMIZATION: Pre-allocate capacity to reduce allocations
+    let mut processed_tokens = HashSet::with_capacity(tokens.len() * 2); // Pre-allocate HashSet capacity
+    let mut result = Vec::with_capacity(tokens.len() * 2); // Allow for compound word expansion
 
     // Process each token: filter stop words, apply stemming, and add to result if unique
     for token in tokens {
@@ -2087,8 +2107,8 @@ mod tests {
 
         // Long words that are not in common lists should still be processed
         let parts = split_compound_word("customwordprocessing", vocab);
-        // This would normally be processed, but since it's not in vocabulary, 
+        // This would normally be processed, but since it's not in vocabulary,
         // returns as single word - behavior is preserved
-        assert!(parts.len() >= 1);
+        assert!(!parts.is_empty());
     }
 }
