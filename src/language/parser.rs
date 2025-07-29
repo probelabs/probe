@@ -423,7 +423,7 @@ fn process_node<'a>(
     debug_mode: bool,
     current_ancestor: Option<Node<'a>>, // The nearest acceptable ancestor found so far
     target_line_ranges: &[(usize, usize)], // OPTIMIZATION: Ranges of lines we actually need to process
-    line_map_base_offset: usize, // OPTIMIZATION: Base offset for the line_map indexing
+    line_map_base_offset: usize,           // OPTIMIZATION: Base offset for the line_map indexing
 ) {
     let start_row = node.start_position().row;
     let end_row = node.end_position().row;
@@ -437,7 +437,7 @@ fn process_node<'a>(
             break;
         }
     }
-    
+
     if !intersects_target {
         if debug_mode {
             println!(
@@ -493,7 +493,7 @@ fn process_node<'a>(
     for adjusted_line in adjusted_start_row..=effective_end_row {
         // Convert back to original line number for should_update_line_map call
         let original_line = adjusted_line + line_map_base_offset;
-        
+
         // Skip if original line is outside target ranges (additional safety check)
         let mut line_in_target = false;
         for &(range_start, range_end) in target_line_ranges {
@@ -505,10 +505,16 @@ fn process_node<'a>(
         if !line_in_target {
             continue;
         }
-        
+
         // Determine if this node is a better fit for the line than the current entry
-        let should_update =
-            should_update_line_map(line_map, adjusted_line, node, is_comment, context_node, specificity);
+        let should_update = should_update_line_map(
+            line_map,
+            adjusted_line,
+            node,
+            is_comment,
+            context_node,
+            specificity,
+        );
 
         if should_update {
             // Store info about the node covering this line
@@ -542,8 +548,8 @@ fn process_node<'a>(
             content,
             allow_tests,
             debug_mode,
-            next_ancestor, // Pass the determined ancestor context down
-            target_line_ranges, // OPTIMIZATION: Pass target ranges for filtering
+            next_ancestor,        // Pass the determined ancestor context down
+            target_line_ranges,   // OPTIMIZATION: Pass target ranges for filtering
             line_map_base_offset, // OPTIMIZATION: Pass base offset for indexing
         );
     }
@@ -1038,19 +1044,19 @@ pub fn parse_file_for_code_blocks(
     // This allows us to skip AST nodes that don't intersect with any requested lines
     let mut sorted_lines: Vec<usize> = line_numbers.iter().cloned().collect();
     sorted_lines.sort();
-    
+
     // Build contiguous ranges with a small buffer for context (e.g., 10 lines on each side)
     const CONTEXT_BUFFER: usize = 10;
     let mut target_ranges: Vec<(usize, usize)> = Vec::new();
-    
+
     if !sorted_lines.is_empty() {
         let mut range_start = sorted_lines[0].saturating_sub(CONTEXT_BUFFER);
         let mut range_end = sorted_lines[0] + CONTEXT_BUFFER;
-        
+
         for &line in &sorted_lines[1..] {
             let buffered_line_start = line.saturating_sub(CONTEXT_BUFFER);
             let buffered_line_end = line + CONTEXT_BUFFER;
-            
+
             // If this line is close to the current range, extend the range
             // Otherwise, finalize the current range and start a new one
             if buffered_line_start <= range_end + CONTEXT_BUFFER {
@@ -1063,20 +1069,23 @@ pub fn parse_file_for_code_blocks(
         }
         target_ranges.push((range_start, range_end));
     }
-    
+
     // Calculate the total size needed for the line map (only covering target ranges)
     let file_line_count = content.lines().count();
     let mut adjusted_ranges: Vec<(usize, usize)> = Vec::new();
-    
+
     for &(start, end) in &target_ranges {
         // Clamp ranges to file bounds
         let clamped_start = start.min(file_line_count.saturating_sub(1));
         let clamped_end = end.min(file_line_count.saturating_sub(1));
         adjusted_ranges.push((clamped_start, clamped_end));
     }
-    
+
     // Use the first range's start as the base offset for indexing
-    let line_map_base_offset = adjusted_ranges.first().map(|(start, _)| *start).unwrap_or(0);
+    let line_map_base_offset = adjusted_ranges
+        .first()
+        .map(|(start, _)| *start)
+        .unwrap_or(0);
     let line_map_size = if adjusted_ranges.is_empty() {
         file_line_count // Fallback to full file if no ranges
     } else {
@@ -1084,7 +1093,7 @@ pub fn parse_file_for_code_blocks(
         let last_range_end = adjusted_ranges.last().unwrap().1;
         last_range_end.saturating_sub(line_map_base_offset) + 1
     };
-    
+
     // Create a more efficient line-to-node map covering only the target ranges
     let mut line_map: Vec<Option<NodeInfo>> = vec![None; line_map_size];
 
@@ -1092,7 +1101,12 @@ pub fn parse_file_for_code_blocks(
         println!("DEBUG: OPTIMIZATION - Building line-to-node map for {} target ranges (total size: {}, base offset: {})", 
                 adjusted_ranges.len(), line_map_size, line_map_base_offset);
         for (i, &(start, end)) in adjusted_ranges.iter().enumerate() {
-            println!("DEBUG: OPTIMIZATION - Target range {}: lines {}-{}", i + 1, start + 1, end + 1);
+            println!(
+                "DEBUG: OPTIMIZATION - Target range {}: lines {}-{}",
+                i + 1,
+                start + 1,
+                end + 1
+            );
         }
         println!("DEBUG: OPTIMIZATION - Using optimized AST node filtering (expected 2-3s performance improvement)");
     }
@@ -1106,8 +1120,8 @@ pub fn parse_file_for_code_blocks(
         content.as_bytes(),
         allow_tests,
         debug_mode,
-        None, // Initial ancestor context is None
-        &adjusted_ranges, // OPTIMIZATION: Pass target ranges for filtering
+        None,                 // Initial ancestor context is None
+        &adjusted_ranges,     // OPTIMIZATION: Pass target ranges for filtering
         line_map_base_offset, // OPTIMIZATION: Pass base offset for indexing
     );
 

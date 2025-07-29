@@ -28,8 +28,8 @@ struct BlockTokenCacheConfig {
 impl Default for BlockTokenCacheConfig {
     fn default() -> Self {
         Self {
-            max_entries: 2000,     // Larger cache for blocks since they're more expensive to compute
-            min_block_size: 20,    // Cache smaller blocks since they represent meaningful code units
+            max_entries: 2000, // Larger cache for blocks since they're more expensive to compute
+            min_block_size: 20, // Cache smaller blocks since they represent meaningful code units
             max_age_seconds: 7200, // 2 hour cache lifetime for blocks (longer than content cache)
         }
     }
@@ -74,7 +74,7 @@ struct TokenCountCache {
 }
 
 /// Thread-safe block-level token cache with content hashing and pre-tokenization
-/// 
+///
 /// This cache is specifically designed for code blocks and provides significant performance
 /// improvements by pre-computing and caching tokenization results for entire code blocks.
 /// Key features:
@@ -197,7 +197,7 @@ impl BlockTokenCache {
     fn hash_block_content(content: &str) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         // Use a simple but fast hash for caching purposes
         // SHA-256 would be more secure but is overkill for cache keys and slower
         let mut hasher = DefaultHasher::new();
@@ -244,7 +244,7 @@ impl BlockTokenCache {
     }
 
     /// Get or compute token count for a block with block-level caching
-    /// 
+    ///
     /// This method implements the core block-level pre-tokenization caching optimization.
     /// It caches tokenization results for entire code blocks, providing significant
     /// performance improvements when the same blocks are tokenized multiple times
@@ -332,7 +332,7 @@ pub fn get_tokenizer() -> &'static CoreBPE {
 
 /// Helper function to count tokens in a string using tiktoken (same tokenizer as GPT models)
 ///
-/// This function implements both content-level and block-level token count caching to improve 
+/// This function implements both content-level and block-level token count caching to improve
 /// performance for repeated tokenization. The caching strategy is optimized based on content size:
 ///
 /// **Block-level caching (for larger content >= 100 bytes):**

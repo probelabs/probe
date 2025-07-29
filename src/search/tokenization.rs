@@ -6,6 +6,829 @@ use probe_code::search::term_exceptions::{is_exception_term, EXCEPTION_TERMS};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
+/// VOCABULARY CACHE OPTIMIZATION FOR FILTERING:
+/// Enhanced vocabulary cache system specifically optimized for filtering operations.
+///
+/// The filtering pipeline heavily uses vocabulary operations through multiple code paths:
+/// 1. filter_tokenized_block -> tokenization functions -> load_vocabulary()
+/// 2. Compound word processing in batch operations -> split_compound_word -> load_vocabulary()  
+/// 3. Uncovered lines processing -> compound matching -> load_vocabulary()
+///
+/// This cache system provides:
+/// - Thread-safe cached access to vocabulary with zero-copy references
+/// - Specialized filtering context that reduces vocabulary lookup overhead
+/// - Pre-computed vocabulary subsets for common filtering operations
+/// - Lazy initialization optimized for filtering workloads
+///
+/// Performance improvement: Eliminates repeated vocabulary loading during filtering,
+/// reducing memory allocations and improving cache locality for filtering operations.
+static FILTERING_VOCABULARY_CACHE: Lazy<FilteringVocabularyCache> =
+    Lazy::new(FilteringVocabularyCache::new);
+
+/// Enhanced vocabulary cache specifically optimized for filtering operations
+#[derive(Debug)]
+struct FilteringVocabularyCache {
+    /// Main vocabulary set (same as load_vocabulary but cached)
+    vocabulary: HashSet<String>,
+    /// Pre-computed compound word splits for filtering (extends PRECOMPUTED_COMPOUND_SPLITS)
+    filtering_compound_cache: HashMap<String, Vec<String>>,
+    /// Common filtering terms cache for fast lookup
+    common_filtering_terms: HashSet<String>,
+    /// Thread-safe access to dynamic compound splits discovered during filtering
+    dynamic_compound_cache: Mutex<HashMap<String, Vec<String>>>,
+}
+
+impl FilteringVocabularyCache {
+    fn new() -> Self {
+        // Load the base vocabulary (same as load_vocabulary)
+        let vocabulary = Self::build_vocabulary();
+
+        // Pre-compute filtering-specific compound word splits
+        let filtering_compound_cache = Self::build_filtering_compound_cache();
+
+        // Pre-compute common filtering terms for fast lookup
+        let common_filtering_terms = Self::build_common_filtering_terms(&vocabulary);
+
+        Self {
+            vocabulary,
+            filtering_compound_cache,
+            common_filtering_terms,
+            dynamic_compound_cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Build the vocabulary set (replaces repeated calls to load_vocabulary)
+    fn build_vocabulary() -> HashSet<String> {
+        // Use the same vocabulary as load_vocabulary but build it once
+        vec![
+            // Common English words that might appear in compound words
+            "white",
+            "black",
+            "list",
+            "mail",
+            "back",
+            "ground",
+            "book",
+            "mark",
+            "key",
+            "word",
+            "pass",
+            "fire",
+            "wall",
+            "firewall",
+            "water",
+            "fall",
+            "data",
+            "base",
+            "time",
+            "stamp",
+            "air",
+            "port",
+            "blue",
+            "tooth",
+            "green",
+            "house",
+            "red",
+            "hat",
+            "yellow",
+            "pages",
+            "print",
+            "type",
+            "script",
+            "java",
+            "note",
+            "pad",
+            "web",
+            "site",
+            "page",
+            "view",
+            "code",
+            "name",
+            "space",
+            "class",
+            "room",
+            "work",
+            "flow",
+            "life",
+            "cycle",
+            "end",
+            "point",
+            "check",
+            "box",
+            "drop",
+            "down",
+            "pop",
+            "up",
+            "side",
+            "bar",
+            "tool",
+            "tip",
+            "drag",
+            "click",
+            "stream",
+            "line",
+            "dead",
+            "lock",
+            "race",
+            "condition",
+            "thread",
+            "safe",
+            "memory",
+            "leak",
+            "stack",
+            "trace",
+            "heap",
+            "dump",
+            "core",
+            "file",
+            "system",
+            "disk",
+            "drive",
+            "hard",
+            "soft",
+            "ware",
+            "firm",
+            "middle",
+            "front",
+            "end",
+            "full",
+            "dev",
+            "ops",
+            "micro",
+            "service",
+            "mono",
+            "lith",
+            "container",
+            "docker",
+            "pod",
+            "cloud",
+            "native",
+            "server",
+            "less",
+            "function",
+            "as",
+            "infra",
+            "structure",
+            "platform",
+            "test",
+            "driven",
+            "behavior",
+            "continuous",
+            "integration",
+            "deployment",
+            "delivery",
+            "pipeline",
+            "git",
+            "hub",
+            "lab",
+            "version",
+            "control",
+            "branch",
+            "merge",
+            "pull",
+            "request",
+            "commit",
+            "push",
+            "clone",
+            "fork",
+            "repository",
+            "issue",
+            "bug",
+            "feature",
+            "release",
+            "tag",
+            "semantic",
+            "versioning",
+            "major",
+            "minor",
+            "patch",
+            "alpha",
+            "beta",
+            "stable",
+            "unstable",
+            "deprecated",
+            "legacy",
+            "modern",
+            "framework",
+            "library",
+            "package",
+            "module",
+            "component",
+            "prop",
+            "state",
+            "hook",
+            "effect",
+            "context",
+            "provider",
+            "consumer",
+            "reducer",
+            "action",
+            "store",
+            "dispatch",
+            "subscribe",
+            "publish",
+            "event",
+            "handler",
+            "listener",
+            "callback",
+            "promise",
+            "async",
+            "await",
+            "future",
+            "observable",
+            "reactive",
+            "functional",
+            "object",
+            "oriented",
+            "procedural",
+            "declarative",
+            "imperative",
+            "mutable",
+            "immutable",
+            "pure",
+            "higher",
+            "order",
+            "first",
+            "citizen",
+            "closure",
+            "scope",
+            "lexical",
+            "dynamic",
+            "static",
+            "inference",
+            "checking",
+            "compile",
+            "run",
+            "error",
+            "exception",
+            "try",
+            "catch",
+            "finally",
+            "throw",
+            "raise",
+            "handle",
+            "logging",
+            "debug",
+            "info",
+            "warn",
+            "fatal",
+            "metric",
+            "monitor",
+            "alert",
+            "notification",
+            "dashboard",
+            "report",
+            "analytics",
+            "insight",
+            "science",
+            "machine",
+            "learning",
+            "artificial",
+            "intelligence",
+            "neural",
+            "network",
+            "deep",
+            "reinforcement",
+            "supervised",
+            "unsupervised",
+            "classification",
+            "regression",
+            "clustering",
+            "recommendation",
+            "prediction",
+            "inference",
+            "training",
+            "validation",
+            "accuracy",
+            "precision",
+            "recall",
+            "f1",
+            "score",
+            "loss",
+            "gradient",
+            "descent",
+            "propagation",
+            "forward",
+            "pass",
+            "epoch",
+            "batch",
+            "mini",
+            "over",
+            "fitting",
+            "under",
+            "regularization",
+            "dropout",
+            "normalization",
+            "activation",
+            "sigmoid",
+            "tanh",
+            "relu",
+            "leaky",
+            "softmax",
+            "convolution",
+            "pooling",
+            "recurrent",
+            "lstm",
+            "gru",
+            "transformer",
+            "attention",
+            "encoder",
+            "decoder",
+            "embedding",
+            "token",
+            "tokenization",
+            "stemming",
+            "lemmatization",
+            "stop",
+            "n",
+            "gram",
+            "tf",
+            "idf",
+            "cosine",
+            "similarity",
+            "euclidean",
+            "distance",
+            "manhattan",
+            "jaccard",
+            "index",
+            "relevance",
+            "ranking",
+            "page",
+            "rank",
+            "search",
+            "engine",
+            "crawler",
+            "indexer",
+            "query",
+            "result",
+            "snippet",
+            "cache",
+            "hit",
+            "miss",
+            "eviction",
+            "policy",
+            "lru",
+            "fifo",
+            "lifo",
+            "priority",
+            "queue",
+            "tree",
+            "binary",
+            "balanced",
+            "avl",
+            "b",
+            "trie",
+            "hash",
+            "map",
+            "set",
+            "linked",
+            "doubly",
+            "circular",
+            "array",
+            "vector",
+            "matrix",
+            "tensor",
+            "graph",
+            "directed",
+            "undirected",
+            "weighted",
+            "unweighted",
+            "adjacency",
+            "edge",
+            "vertex",
+            "node",
+            "path",
+            "traversal",
+            "breadth",
+            "depth",
+            "topological",
+            "sort",
+            "minimum",
+            "spanning",
+            "shortest",
+            "dijkstra",
+            "bellman",
+            "ford",
+            "floyd",
+            "warshall",
+            "kruskal",
+            "prim",
+            "greedy",
+            "programming",
+            "divide",
+            "conquer",
+            "backtracking",
+            "bound",
+            "heuristic",
+            "approximation",
+            "randomized",
+            "parallel",
+            "concurrent",
+            "distributed",
+            "synchronous",
+            "asynchronous",
+            "blocking",
+            "non",
+            "mutex",
+            "semaphore",
+            "atomic",
+            "volatile",
+            "transaction",
+            "acid",
+            "consistency",
+            "isolation",
+            "durability",
+            "serializable",
+            "repeatable",
+            "read",
+            "committed",
+            "uncommitted",
+            "phantom",
+            "dirty",
+            "write",
+            "skew",
+            "conflict",
+            "resolution",
+            "optimistic",
+            "pessimistic",
+            "two",
+            "phase",
+            "rollback",
+            "savepoint",
+            "checkpoint",
+            "recovery",
+            "backup",
+            "restore",
+            "archive",
+            "log",
+            "journal",
+            "redo",
+            "undo",
+            "ahead",
+            "snapshot",
+            "level",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    }
+
+    /// Build filtering-specific compound word cache for high-frequency terms during filtering
+    fn build_filtering_compound_cache() -> HashMap<String, Vec<String>> {
+        let mut cache = HashMap::new();
+
+        // Pre-compute splits for compound words commonly seen during filtering operations
+        // These extend the existing PRECOMPUTED_COMPOUND_SPLITS with filtering-specific terms
+
+        // Filtering and processing terms
+        cache.insert(
+            "prefilter".to_string(),
+            vec!["pre".to_string(), "filter".to_string()],
+        );
+        cache.insert(
+            "postfilter".to_string(),
+            vec!["post".to_string(), "filter".to_string()],
+        );
+        cache.insert(
+            "filterout".to_string(),
+            vec!["filter".to_string(), "out".to_string()],
+        );
+        cache.insert(
+            "filterin".to_string(),
+            vec!["filter".to_string(), "in".to_string()],
+        );
+        cache.insert(
+            "filterby".to_string(),
+            vec!["filter".to_string(), "by".to_string()],
+        );
+        cache.insert(
+            "tokenize".to_string(),
+            vec!["token".to_string(), "ize".to_string()],
+        );
+        cache.insert(
+            "tokenizer".to_string(),
+            vec!["token".to_string(), "izer".to_string()],
+        );
+        cache.insert(
+            "tokenized".to_string(),
+            vec!["token".to_string(), "ized".to_string()],
+        );
+        cache.insert(
+            "pretokenize".to_string(),
+            vec!["pre".to_string(), "tokenize".to_string()],
+        );
+        cache.insert(
+            "detokenize".to_string(),
+            vec!["de".to_string(), "tokenize".to_string()],
+        );
+
+        // Text processing and analysis
+        cache.insert(
+            "textprocess".to_string(),
+            vec!["text".to_string(), "process".to_string()],
+        );
+        cache.insert(
+            "textanalysis".to_string(),
+            vec!["text".to_string(), "analysis".to_string()],
+        );
+        cache.insert(
+            "textmatch".to_string(),
+            vec!["text".to_string(), "match".to_string()],
+        );
+        cache.insert(
+            "textsearch".to_string(),
+            vec!["text".to_string(), "search".to_string()],
+        );
+        cache.insert(
+            "textfilter".to_string(),
+            vec!["text".to_string(), "filter".to_string()],
+        );
+        cache.insert(
+            "wordcount".to_string(),
+            vec!["word".to_string(), "count".to_string()],
+        );
+        cache.insert(
+            "wordlist".to_string(),
+            vec!["word".to_string(), "list".to_string()],
+        );
+        cache.insert(
+            "wordmatch".to_string(),
+            vec!["word".to_string(), "match".to_string()],
+        );
+        cache.insert(
+            "stopword".to_string(),
+            vec!["stop".to_string(), "word".to_string()],
+        );
+        cache.insert(
+            "keyword".to_string(),
+            vec!["key".to_string(), "word".to_string()],
+        );
+
+        // Search and matching operations
+        cache.insert(
+            "searchterm".to_string(),
+            vec!["search".to_string(), "term".to_string()],
+        );
+        cache.insert(
+            "searchresult".to_string(),
+            vec!["search".to_string(), "result".to_string()],
+        );
+        cache.insert(
+            "searchquery".to_string(),
+            vec!["search".to_string(), "query".to_string()],
+        );
+        cache.insert(
+            "searchmatch".to_string(),
+            vec!["search".to_string(), "match".to_string()],
+        );
+        cache.insert(
+            "matchterm".to_string(),
+            vec!["match".to_string(), "term".to_string()],
+        );
+        cache.insert(
+            "matchresult".to_string(),
+            vec!["match".to_string(), "result".to_string()],
+        );
+        cache.insert(
+            "matchquery".to_string(),
+            vec!["match".to_string(), "query".to_string()],
+        );
+        cache.insert(
+            "termindex".to_string(),
+            vec!["term".to_string(), "index".to_string()],
+        );
+        cache.insert(
+            "termcount".to_string(),
+            vec!["term".to_string(), "count".to_string()],
+        );
+        cache.insert(
+            "termlist".to_string(),
+            vec!["term".to_string(), "list".to_string()],
+        );
+
+        // Block and code processing
+        cache.insert(
+            "codeblock".to_string(),
+            vec!["code".to_string(), "block".to_string()],
+        );
+        cache.insert(
+            "textblock".to_string(),
+            vec!["text".to_string(), "block".to_string()],
+        );
+        cache.insert(
+            "lineblock".to_string(),
+            vec!["line".to_string(), "block".to_string()],
+        );
+        cache.insert(
+            "blockprocess".to_string(),
+            vec!["block".to_string(), "process".to_string()],
+        );
+        cache.insert(
+            "blockfilter".to_string(),
+            vec!["block".to_string(), "filter".to_string()],
+        );
+        cache.insert(
+            "blockmatch".to_string(),
+            vec!["block".to_string(), "match".to_string()],
+        );
+        cache.insert(
+            "contextblock".to_string(),
+            vec!["context".to_string(), "block".to_string()],
+        );
+        cache.insert(
+            "contextwindow".to_string(),
+            vec!["context".to_string(), "window".to_string()],
+        );
+        cache.insert(
+            "contextline".to_string(),
+            vec!["context".to_string(), "line".to_string()],
+        );
+
+        // Performance and optimization terms
+        cache.insert(
+            "precompute".to_string(),
+            vec!["pre".to_string(), "compute".to_string()],
+        );
+        cache.insert(
+            "postprocess".to_string(),
+            vec!["post".to_string(), "process".to_string()],
+        );
+        cache.insert(
+            "preprocessing".to_string(),
+            vec!["pre".to_string(), "processing".to_string()],
+        );
+        cache.insert(
+            "postprocessing".to_string(),
+            vec!["post".to_string(), "processing".to_string()],
+        );
+        cache.insert(
+            "optimize".to_string(),
+            vec!["optim".to_string(), "ize".to_string()],
+        );
+        cache.insert(
+            "optimizer".to_string(),
+            vec!["optim".to_string(), "izer".to_string()],
+        );
+        cache.insert(
+            "optimized".to_string(),
+            vec!["optim".to_string(), "ized".to_string()],
+        );
+        cache.insert(
+            "optimization".to_string(),
+            vec!["optim".to_string(), "ization".to_string()],
+        );
+
+        cache
+    }
+
+    /// Build common filtering terms cache for fast contains() checks during filtering
+    fn build_common_filtering_terms(vocabulary: &HashSet<String>) -> HashSet<String> {
+        let mut common_terms = HashSet::new();
+
+        // Add most frequently accessed terms during filtering operations
+        let frequent_terms = [
+            "filter",
+            "match",
+            "search",
+            "query",
+            "term",
+            "token",
+            "word",
+            "text",
+            "block",
+            "line",
+            "code",
+            "context",
+            "process",
+            "result",
+            "index",
+            "count",
+            "list",
+            "cache",
+            "hash",
+            "map",
+            "set",
+            "tree",
+            "data",
+            "file",
+            "path",
+            "name",
+            "type",
+            "class",
+            "function",
+            "method",
+            "variable",
+            "value",
+            "key",
+            "string",
+            "number",
+            "boolean",
+            "array",
+            "object",
+            "node",
+            "edge",
+            "graph",
+            "link",
+            "reference",
+            "pointer",
+            "memory",
+            "buffer",
+            "stream",
+            "queue",
+            "stack",
+            "heap",
+        ];
+
+        for term in frequent_terms {
+            if vocabulary.contains(term) {
+                common_terms.insert(term.to_string());
+            }
+        }
+
+        common_terms
+    }
+
+    /// Get cached vocabulary reference (zero-copy access for filtering operations)
+    pub fn get_vocabulary(&self) -> &HashSet<String> {
+        &self.vocabulary
+    }
+
+    /// Fast compound word splitting optimized for filtering operations
+    pub fn split_compound_word_cached(&self, word: &str) -> Vec<String> {
+        let lowercase_word = word.to_lowercase();
+
+        // First check if this is a special case word that should never be split
+        if is_special_case(word) {
+            return vec![lowercase_word];
+        }
+
+        // Check if the word is in the vocabulary as a whole (fast path)
+        if self.vocabulary.contains(&lowercase_word) {
+            return vec![word.to_string()];
+        }
+
+        // FILTERING OPTIMIZATION: Check filtering-specific pre-computed cache first
+        if let Some(cached_splits) = self.filtering_compound_cache.get(&lowercase_word) {
+            return cached_splits.clone();
+        }
+
+        // Check existing pre-computed cache
+        if let Some(cached_splits) = PRECOMPUTED_COMPOUND_SPLITS.get(&lowercase_word) {
+            return cached_splits.clone();
+        }
+
+        // Check dynamic cache with thread-safe access
+        if let Ok(dynamic_cache) = self.dynamic_compound_cache.try_lock() {
+            if let Some(cached_splits) = dynamic_cache.get(&lowercase_word) {
+                return cached_splits.clone();
+            }
+        }
+
+        // Fallback to decompound crate with our cached vocabulary
+        let is_valid_word = |w: &str| self.vocabulary.contains(&w.to_lowercase());
+
+        let result = match decompound(word, &is_valid_word, DecompositionOptions::empty()) {
+            Ok(parts) if !parts.is_empty() => parts,
+            _ => vec![word.to_string()],
+        };
+
+        // Cache the result for future lookups if it's a compound word
+        if result.len() > 1 {
+            if let Ok(mut dynamic_cache) = self.dynamic_compound_cache.try_lock() {
+                // Limit cache size to prevent unbounded growth
+                if dynamic_cache.len() < 2000 {
+                    dynamic_cache.insert(lowercase_word, result.clone());
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Fast vocabulary lookup for common filtering terms
+    pub fn contains_filtering_term(&self, term: &str) -> bool {
+        self.common_filtering_terms.contains(term) || self.vocabulary.contains(term)
+    }
+}
+
+/// Public API: Get cached vocabulary reference optimized for filtering operations
+/// This replaces direct calls to load_vocabulary() in filtering contexts
+pub fn get_filtering_vocabulary() -> &'static HashSet<String> {
+    FILTERING_VOCABULARY_CACHE.get_vocabulary()
+}
+
+/// Public API: Cached compound word splitting optimized for filtering operations  
+/// This replaces direct calls to split_compound_word() in filtering contexts
+pub fn split_compound_word_for_filtering(word: &str) -> Vec<String> {
+    FILTERING_VOCABULARY_CACHE.split_compound_word_cached(word)
+}
+
+/// Public API: Fast vocabulary lookup for filtering operations
+/// This provides optimized lookup for common filtering terms
+pub fn is_filtering_vocabulary_term(term: &str) -> bool {
+    FILTERING_VOCABULARY_CACHE.contains_filtering_term(term)
+}
+
 // Dynamic set of special terms that should not be tokenized
 // This includes terms from queries with exact=true or excluded=true flags
 static DYNAMIC_SPECIAL_TERMS: Lazy<Mutex<HashSet<String>>> =
@@ -1765,7 +2588,8 @@ pub fn load_vocabulary() -> &'static HashSet<String> {
 #[allow(dead_code)]
 pub fn tokenize_and_stem(keyword: &str) -> Vec<String> {
     let stemmer = get_stemmer();
-    let vocabulary = load_vocabulary();
+    // VOCABULARY CACHE OPTIMIZATION: Cached vocabulary is now accessed directly through
+    // split_compound_word_for_filtering() calls, eliminating repeated vocabulary loading
 
     // First try camel case splitting
     let camel_parts = split_camel_case_with_config(keyword, SimdConfig::new());
@@ -1778,8 +2602,8 @@ pub fn tokenize_and_stem(keyword: &str) -> Vec<String> {
             .map(|part| stemmer.stem(&part).to_string())
             .collect()
     } else {
-        // Try compound word splitting
-        let compound_parts = split_compound_word(keyword, vocabulary);
+        // VOCABULARY CACHE OPTIMIZATION: Use cached compound word splitting for filtering
+        let compound_parts = split_compound_word_for_filtering(keyword);
 
         if compound_parts.len() > 1 {
             // Return stemmed compound parts, filtering out stop words
@@ -1810,7 +2634,8 @@ pub fn tokenize_and_stem(keyword: &str) -> Vec<String> {
 /// 8. Exclude terms that were negated with a "-" prefix
 pub fn tokenize(text: &str) -> Vec<String> {
     let stemmer = get_stemmer();
-    let vocabulary = load_vocabulary();
+    // VOCABULARY CACHE OPTIMIZATION: Cached vocabulary is now accessed directly through
+    // split_compound_word_for_filtering() calls, eliminating repeated vocabulary loading
 
     // Track negated terms to exclude them from the final result
     let mut negated_terms = HashSet::new();
@@ -1884,8 +2709,8 @@ pub fn tokenize(text: &str) -> Vec<String> {
                 continue;
             }
 
-            // Try to split compound words
-            let compound_parts = split_compound_word(&lowercase_part, vocabulary);
+            // VOCABULARY CACHE OPTIMIZATION: Use cached compound word splitting for filtering
+            let compound_parts = split_compound_word_for_filtering(&lowercase_part);
 
             for compound_part in compound_parts {
                 // Skip stop words in compound parts

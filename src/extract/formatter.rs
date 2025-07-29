@@ -232,7 +232,10 @@ fn format_extraction_internal(
                 writeln!(
                     output,
                     "    <total_tokens>{}</total_tokens>",
-                    results.iter().map(|r| count_block_tokens(&r.code)).sum::<usize>()
+                    results
+                        .iter()
+                        .map(|r| count_block_tokens(&r.code))
+                        .sum::<usize>()
                 )?;
                 writeln!(output, "  </summary>")?;
             }
@@ -397,7 +400,8 @@ fn format_extraction_internal(
                     )?;
 
                     let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
-                    let total_tokens: usize = results.iter().map(|r| count_block_tokens(&r.code)).sum();
+                    let total_tokens: usize =
+                        results.iter().map(|r| count_block_tokens(&r.code)).sum();
                     writeln!(output, "Total bytes returned: {total_bytes}")?;
                     writeln!(output, "Total tokens returned: {total_tokens}")?;
                 }

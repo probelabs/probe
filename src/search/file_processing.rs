@@ -379,8 +379,8 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         }
     }
 
-    // Load vocabulary once for all compound word processing (optimization: single load)
-    let vocabulary = tokenization::load_vocabulary();
+    // VOCABULARY CACHE OPTIMIZATION: Cached vocabulary is now accessed directly through
+    // tokenization::split_compound_word_for_filtering() calls, eliminating repeated vocabulary loading
 
     // SMART CONTEXT WINDOW MERGING: Pre-compute context windows with enhanced merging
     let default_context_size = 5;
@@ -676,12 +676,13 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                 .collect();
 
             let mut compound_matches = HashSet::new();
-            // Use pre-loaded vocabulary (optimization: vocabulary loaded once per batch)
+            // VOCABULARY CACHE OPTIMIZATION: Use cached vocabulary for filtering compound word processing
             for qterm in ctx.unique_query_terms {
                 if context_terms.iter().any(|bt| bt == qterm) {
                     continue;
                 }
-                let parts = tokenization::split_compound_word(qterm, vocabulary);
+                // Use cached compound word splitting optimized for filtering operations
+                let parts = tokenization::split_compound_word_for_filtering(qterm);
                 if parts.len() > 1 && parts.iter().all(|part| context_terms.contains(part)) {
                     compound_matches.insert(qterm);
                 }

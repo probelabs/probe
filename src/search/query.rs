@@ -500,10 +500,8 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
             let camel_parts = crate::search::tokenization::split_camel_case(keyword);
             let compound_parts = if camel_parts.len() <= 1 {
                 // Not a camelCase word, check if it's in vocabulary
-                crate::search::tokenization::split_compound_word(
-                    keyword,
-                    crate::search::tokenization::load_vocabulary(),
-                )
+                // VOCABULARY CACHE OPTIMIZATION: Use cached compound word splitting for filtering
+                crate::search::tokenization::split_compound_word_for_filtering(keyword)
             } else {
                 camel_parts
             };

@@ -162,7 +162,10 @@ pub fn format_and_print_search_results(
     println!("Found {count} search results", count = valid_results.len());
 
     let total_bytes: usize = valid_results.iter().map(|r| r.code.len()).sum();
-    let total_tokens: usize = valid_results.iter().map(|r| count_block_tokens(&r.code)).sum();
+    let total_tokens: usize = valid_results
+        .iter()
+        .map(|r| count_block_tokens(&r.code))
+        .sum();
     println!("Total bytes returned: {total_bytes}");
     println!("Total tokens returned: {total_tokens}");
 }
@@ -596,7 +599,10 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
     );
     println!(
         "    <total_tokens>{total_tokens}</total_tokens>",
-        total_tokens = results.iter().map(|r| count_block_tokens(&r.code)).sum::<usize>()
+        total_tokens = results
+            .iter()
+            .map(|r| count_block_tokens(&r.code))
+            .sum::<usize>()
     );
     println!("  </summary>");
 
