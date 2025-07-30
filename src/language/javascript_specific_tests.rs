@@ -518,12 +518,12 @@ const obj = { prop: function() { return 42; } };
 
     println!("All nodes found:");
     for node in &all_nodes {
-        println!("  {}", node);
+        println!("  {node}");
     }
 
     println!("Acceptable parent nodes:");
     for node in &acceptable_nodes {
-        println!("  {}", node);
+        println!("  {node}");
     }
 
     // Verify function_expression is acceptable

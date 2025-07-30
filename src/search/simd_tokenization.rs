@@ -500,8 +500,7 @@ mod tests {
             let scalar_result = scalar_split_camel_case(case);
             assert_eq!(
                 simd_result, scalar_result,
-                "Mismatch for simple input: {}",
-                case
+                "Mismatch for simple input: {case}"
             );
         }
 
@@ -518,8 +517,7 @@ mod tests {
             let simd_result = simd_split_camel_case(case);
             assert_eq!(
                 simd_result, expected_result,
-                "Mismatch for complex input: {}",
-                case
+                "Mismatch for complex input: {case}"
             );
         }
 
@@ -584,10 +582,7 @@ mod tests {
                     for (i, case, result) in results {
                         assert!(
                             !result.is_empty(),
-                            "Empty result for case {} in thread {}: {}",
-                            i,
-                            thread_id,
-                            case
+                            "Empty result for case {i} in thread {thread_id}: {case}"
                         );
 
                         // Verify that complex cases fall back correctly
@@ -595,9 +590,7 @@ mod tests {
                         {
                             assert!(
                                 result.len() >= 2,
-                                "Complex case {} should split into multiple parts: {:?}",
-                                case,
-                                result
+                                "Complex case {case} should split into multiple parts: {result:?}"
                             );
                         }
                     }
@@ -613,7 +606,7 @@ mod tests {
         // Verify all threads completed successfully
         assert_eq!(thread_results.len(), 8);
         for i in 0..8 {
-            assert!(thread_results.contains(&i), "Thread {} did not complete", i);
+            assert!(thread_results.contains(&i), "Thread {i} did not complete");
         }
     }
 }
