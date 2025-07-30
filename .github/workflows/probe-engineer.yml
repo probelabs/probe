@@ -22,6 +22,16 @@ jobs:
       update_existing_comment: false
       update_comment_marker: "<!-- probe-bot -->"
       enable_tracing: true
+      # Use Claude Code as the primary implementation backend
+      # Claude Code provides advanced AI coding capabilities with better context understanding
+      implement_tool_backend: "claude-code"
+      # Fallback to aider if Claude Code is unavailable
+      implement_tool_fallbacks: "aider"
+      # Use Claude Opus 4 for best code generation quality
+      # This is the most capable model for complex engineering tasks
+      claude_code_model: "claude-opus-4-20250514"
+      # Set temperature to 0.2 for more consistent and focused code generation
+      claude_code_temperature: "0.2"
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}
