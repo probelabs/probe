@@ -107,6 +107,25 @@ on:
       FORCE_PROVIDER:
         required: false
         description: "Force the use of a specific provider"
+      # ---- Implementation Backend Secrets (Optional) ----
+      IMPLEMENT_TOOL_BACKEND:
+        required: false
+        description: "Implementation backend to use (aider, claude-code)"
+      IMPLEMENT_TOOL_FALLBACKS:
+        required: false
+        description: "Comma-separated list of fallback backends"
+      IMPLEMENT_TOOL_TIMEOUT:
+        required: false
+        description: "Implementation timeout in milliseconds"
+      AIDER_MODEL:
+        required: false
+        description: "Model to use for aider backend"
+      CLAUDE_CODE_MODEL:
+        required: false
+        description: "Model to use for Claude Code backend"
+      CLAUDE_CODE_TEMPERATURE:
+        required: false
+        description: "Temperature for Claude Code model"
       # ---- GitHub App Authentication Secrets (Optional) ----
       APP_ID:
         required: false
@@ -1057,21 +1076,34 @@ jobs:
           echo "Determined command base: $COMMAND_VAR"
           echo "command=$COMMAND_VAR" >> "$GITHUB_OUTPUT"
 
-      # --- Setup Python and Install Aider (No token needed) ---
-      - name: Set up Python and Install Aider
+      # --- Setup Implementation Backends ---
+      - name: Setup Implementation Backends
         if: inputs.allow_edit || inputs.allow_suggestions
+        run: |
+          echo "Setting up implementation backends..."
+          
+          # Install Claude Code SDK if using Claude backend
+          if [[ "${{ secrets.IMPLEMENT_TOOL_BACKEND }}" == "claude-code" || -z "${{ secrets.IMPLEMENT_TOOL_BACKEND }}" ]]; then
+            echo "Installing Claude Code SDK..."
+            npm install -g @anthropic-ai/claude-code || echo "::warning::Failed to install Claude Code SDK globally, will rely on probe-chat bundled version"
+          fi
+          
+          # Install aider if using aider backend (default)
+          if [[ "${{ secrets.IMPLEMENT_TOOL_BACKEND }}" == "aider" || -z "${{ secrets.IMPLEMENT_TOOL_BACKEND }}" ]]; then
+            echo "Setting up Python for aider..."
+            # Note: Python setup is handled by a previous step if needed
+            echo "Installing aider for code editing capabilities..."
+            python -m pip install aider-install || echo "::warning::Failed to install aider-install"
+            aider-install || echo "::warning::Failed to run aider-install"
+            echo "Aider installation attempted."
+          fi
+
+      # --- Setup Python (if needed for aider) ---
+      - name: Set up Python
+        if: (inputs.allow_edit || inputs.allow_suggestions) && (secrets.IMPLEMENT_TOOL_BACKEND == 'aider' || secrets.IMPLEMENT_TOOL_BACKEND == '')
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-
-      - name: Install Aider
-        if: inputs.allow_edit || inputs.allow_suggestions
-        run: |
-          # (Script remains the same)
-          echo "Installing aider for code editing capabilities..."
-          python -m pip install aider-install
-          aider-install
-          echo "Aider installation completed."
 
       - name: Switch to PR Branch (if applicable)
         # Only run if context is PR and we have the branch name
@@ -1123,6 +1155,13 @@ jobs:
           MAX_TOOL_ITERATIONS: ${{ secrets.MAX_TOOL_ITERATIONS }}
           # Debug configuration
           DEBUG_CHAT: ${{ secrets.DEBUG_CHAT }}
+          # Implementation backend configuration
+          IMPLEMENT_TOOL_BACKEND: ${{ secrets.IMPLEMENT_TOOL_BACKEND }}
+          IMPLEMENT_TOOL_FALLBACKS: ${{ secrets.IMPLEMENT_TOOL_FALLBACKS }}
+          IMPLEMENT_TOOL_TIMEOUT: ${{ secrets.IMPLEMENT_TOOL_TIMEOUT }}
+          AIDER_MODEL: ${{ secrets.AIDER_MODEL }}
+          CLAUDE_CODE_MODEL: ${{ secrets.CLAUDE_CODE_MODEL }}
+          CLAUDE_CODE_TEMPERATURE: ${{ secrets.CLAUDE_CODE_TEMPERATURE }}
         run: |
           # (Script remains the same)
           # Check and modify ANTHROPIC_API_URL to set ANTHROPIC_BASE_URL
