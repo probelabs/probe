@@ -53,6 +53,8 @@ pub static EXCEPTION_TERMS: Lazy<HashSet<String>> = Lazy::new(|| {
         "decoder",
         "reader",
         "writer",
+        // Common programming workflow terms
+        "workflow",
     ]
     .into_iter()
     .map(String::from)

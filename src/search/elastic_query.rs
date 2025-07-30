@@ -461,7 +461,7 @@ fn lex_quoted_string(chars: &mut Peekable<Chars>) -> Result<String, ParseError> 
 fn lex_identifier(chars: &mut Peekable<Chars>) -> String {
     let mut buf = String::new();
     while let Some(&ch) = chars.peek() {
-        if ch.is_alphanumeric() || ch == '_' || ch == '.' {
+        if ch.is_alphanumeric() || ch == '_' || ch == '.' || ch == '-' {
             buf.push(ch);
             chars.next();
         } else {
