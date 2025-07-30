@@ -89,14 +89,11 @@ class ClaudeCodeBackend extends BaseBackend {
       // Check if claude-code CLI is available
       await execPromise('which claude-code', { timeout: 5000 });
       
-      // Quick test to ensure API key is valid using secure spawn
-      if (this.sdkType === 'cli') {
-        try {
-          await this.testApiKeySecurely();
-        } catch (error) {
-          this.log('warn', 'API key validation failed', { error: error.message });
-          return false;
-        }
+      // Just verify the API key exists and has valid format
+      // Don't make actual API calls during availability check
+      if (!this.isValidApiKey(this.config.apiKey)) {
+        this.log('warn', 'API key format is invalid');
+        return false;
       }
       
       return true;
@@ -550,45 +547,6 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
     });
   }
 
-  /**
-   * Test API key securely without shell injection
-   * @private
-   */
-  async testApiKeySecurely() {
-    return new Promise((resolve, reject) => {
-      const child = spawn('claude-code', ['--non-interactive', '--max-turns', '1'], {
-        env: { ...process.env, ANTHROPIC_API_KEY: this.config.apiKey },
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-
-      let stderr = '';
-
-      child.stdin.write('test');
-      child.stdin.end();
-
-      child.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      child.on('close', (code) => {
-        if (stderr.includes('authentication') || stderr.includes('401') || stderr.includes('invalid')) {
-          reject(new Error('API key appears to be invalid'));
-        } else {
-          resolve();
-        }
-      });
-
-      child.on('error', (error) => {
-        reject(error);
-      });
-
-      // Timeout after 10 seconds
-      setTimeout(() => {
-        child.kill('SIGTERM');
-        reject(new Error('API key test timed out'));
-      }, 10000);
-    });
-  }
 
   /**
    * Build secure command arguments
