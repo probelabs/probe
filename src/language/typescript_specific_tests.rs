@@ -48,7 +48,7 @@ interface MyInterface { prop: number; }
 
     println!("TypeScript acceptable parent nodes:");
     for node in &acceptable_nodes {
-        println!("  {}", node);
+        println!("  {node}");
     }
 
     // Verify function_expression is acceptable

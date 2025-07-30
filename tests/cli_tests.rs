@@ -343,12 +343,8 @@ fn test_cli_custom_ignores() {
 
     // Find where "search.js" appears in the debug output
     if let Some(pos) = stdout.find("search.js") {
-        let start = if pos > 50 { pos - 50 } else { 0 };
-        let end = if pos + 50 < stdout.len() {
-            pos + 50
-        } else {
-            stdout.len()
-        };
+        let start = pos.saturating_sub(50);
+        let end = (pos + 50).min(stdout.len());
         let context = &stdout[start..end];
         println!("Found 'search.js' in debug output at position {pos} with context: '{context}'");
     }
