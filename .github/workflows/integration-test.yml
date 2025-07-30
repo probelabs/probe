@@ -283,3 +283,81 @@ jobs:
           search_results.json
           extract_results.json
         retention-days: 7
+
+  chat-integration-test:
+    name: Test chat example on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: [20]
+      fail-fast: false
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Setup Rust cache
+      uses: actions/cache@v4
+      timeout-minutes: 5
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain', 'rust-toolchain.toml') || 'stable' }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+          ${{ runner.os }}-cargo-
+
+    - name: Build Rust binary
+      run: cargo build --release
+
+    - name: Install chat example dependencies
+      run: |
+        cd examples/chat
+        npm install
+
+    - name: Register mock backend
+      run: |
+        cd examples/chat
+        # The mock backend is automatically available in the implement/backends directory
+        echo "Mock backend is available at: implement/backends/MockBackend.js"
+
+    - name: Run chat flow integration tests
+      run: |
+        cd examples/chat
+        npm test -- test/integration/chatFlows.test.js
+
+    - name: Run tool calling integration tests
+      run: |
+        cd examples/chat
+        npm test -- test/integration/toolCalling.test.js
+
+    - name: Run all chat tests
+      run: |
+        cd examples/chat
+        npm test
+
+    - name: Upload test artifacts on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: chat-test-results-${{ matrix.os }}-node${{ matrix.node-version }}
+        path: |
+          examples/chat/test-results/
+          examples/chat/npm-debug.log
+        retention-days: 7

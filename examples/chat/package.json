@@ -11,7 +11,9 @@
   "scripts": {
     "start": "node index.js",
     "web": "node index.js --web",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test test/**/*.test.js",
+    "test:chat": "node --test test/integration/chatFlows.test.js",
+    "test:tools": "node --test test/integration/toolCalling.test.js",
     "prepublishOnly": "chmod +x ./bin/probe-chat.js"
   },
   "keywords": [
@@ -73,6 +75,7 @@
     "bin/",
     "storage/",
     "implement/",
+    "test/",
     "index.js",
     "probeChat.js",
     "tokenCounter.js",
