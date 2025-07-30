@@ -89,10 +89,10 @@ class ClaudeCodeBackend extends BaseBackend {
       // Check if claude-code CLI is available
       await execPromise('which claude-code', { timeout: 5000 });
       
-      // Just verify the API key exists and has valid format
-      // Don't make actual API calls during availability check
-      if (!this.isValidApiKey(this.config.apiKey)) {
-        this.log('warn', 'API key format is invalid');
+      // Just verify the API key exists (non-empty)
+      // Don't validate format as it can vary
+      if (!this.config.apiKey || this.config.apiKey.trim() === '') {
+        this.log('warn', 'API key is not configured');
         return false;
       }
       
@@ -237,22 +237,8 @@ class ClaudeCodeBackend extends BaseBackend {
       throw new Error('API key is required. Set ANTHROPIC_API_KEY environment variable or provide apiKey in config');
     }
     
-    // Validate API key format (basic validation)
-    if (!this.isValidApiKey(this.config.apiKey)) {
-      throw new Error('Invalid API key format');
-    }
-    
-    // Validate model name
-    const validModels = [
-      'claude-3-5-sonnet-20241022',
-      'claude-3-5-haiku-20241022',
-      'claude-3-opus-20240229'
-    ];
-    
-    if (this.config.model && !validModels.includes(this.config.model)) {
-      this.log('warn', `Unknown model: ${this.config.model}. Using default.`);
-      this.config.model = 'claude-3-5-sonnet-20241022';
-    }
+    // No format validation - API key formats can vary
+    // Model validation removed - model names change frequently
     
     // Validate tools list
     if (this.config.tools && Array.isArray(this.config.tools)) {
@@ -605,18 +591,9 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
    * @private
    */
   isValidApiKey(apiKey) {
-    if (!apiKey || typeof apiKey !== 'string') {
-      return false;
-    }
-
-    // Basic validation: should start with sk- and contain only safe characters
-    const validKeyPattern = /^sk-[a-zA-Z0-9_-]+$/;
-    const maxLength = 200; // Reasonable limit for API keys
-
-    return validKeyPattern.test(apiKey) && 
-           apiKey.length >= 20 && 
-           apiKey.length <= maxLength &&
-           !this.containsControlCharacters(apiKey);
+    // Just check if it's a non-empty string
+    // API key formats can vary between providers and versions
+    return apiKey && typeof apiKey === 'string' && apiKey.trim().length > 0;
   }
 
   /**
@@ -626,17 +603,9 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
    * @private
    */
   isValidModelName(model) {
-    if (!model || typeof model !== 'string') {
-      return false;
-    }
-
-    // Allow alphanumeric, hyphens, and dots only
-    const validModelPattern = /^[a-zA-Z0-9.-]+$/;
-    const maxLength = 100;
-
-    return validModelPattern.test(model) && 
-           model.length <= maxLength &&
-           !this.containsControlCharacters(model);
+    // Just check if it's a non-empty string
+    // Model names change frequently and formats vary
+    return model && typeof model === 'string' && model.trim().length > 0;
   }
 
   /**

@@ -330,16 +330,9 @@ class AiderBackend extends BaseBackend {
    * @private
    */
   isValidModelName(model) {
-    if (!model || typeof model !== 'string') {
-      return false;
-    }
-    
-    // Allow alphanumeric, hyphens, underscores, dots, and forward slashes
-    // Block shell metacharacters and control characters
-    const validModelPattern = /^[a-zA-Z0-9._/-]+$/;
-    const maxLength = 100; // Reasonable limit for model names
-    
-    return validModelPattern.test(model) && model.length <= maxLength && !this.containsShellMetacharacters(model);
+    // Just check if it's a non-empty string
+    // Model names change frequently and formats vary
+    return model && typeof model === 'string' && model.trim().length > 0;
   }
 
   /**
