@@ -75,6 +75,36 @@ on:
         description: "Remote OpenTelemetry collector endpoint for tracing (e.g., http://localhost:4318/v1/traces)"
         required: false
         type: string
+      implement_tool_backend:
+        description: "Implementation backend to use (aider, claude-code, or empty for default)"
+        required: false
+        type: string
+        default: ""
+      implement_tool_fallbacks:
+        description: "Comma-separated list of fallback backends to try if primary fails"
+        required: false
+        type: string
+        default: ""
+      implement_tool_timeout:
+        description: "Timeout in seconds for implementation tool operations"
+        required: false
+        type: string
+        default: "300"
+      aider_model:
+        description: "Model to use with aider backend"
+        required: false
+        type: string
+        default: ""
+      claude_code_model:
+        description: "Model to use with Claude Code backend"
+        required: false
+        type: string
+        default: ""
+      claude_code_temperature:
+        description: "Temperature for Claude Code model (0.0-1.0)"
+        required: false
+        type: string
+        default: ""
     secrets:
       # ---- Existing Secrets ----
       PROBE_CHAT_COMMAND:
@@ -107,25 +137,6 @@ on:
       FORCE_PROVIDER:
         required: false
         description: "Force the use of a specific provider"
-      # ---- Implementation Backend Secrets (Optional) ----
-      IMPLEMENT_TOOL_BACKEND:
-        required: false
-        description: "Implementation backend to use (aider, claude-code)"
-      IMPLEMENT_TOOL_FALLBACKS:
-        required: false
-        description: "Comma-separated list of fallback backends"
-      IMPLEMENT_TOOL_TIMEOUT:
-        required: false
-        description: "Implementation timeout in milliseconds"
-      AIDER_MODEL:
-        required: false
-        description: "Model to use for aider backend"
-      CLAUDE_CODE_MODEL:
-        required: false
-        description: "Model to use for Claude Code backend"
-      CLAUDE_CODE_TEMPERATURE:
-        required: false
-        description: "Temperature for Claude Code model"
       # ---- GitHub App Authentication Secrets (Optional) ----
       APP_ID:
         required: false
@@ -1090,13 +1101,13 @@ jobs:
           echo "Setting up implementation backends..."
           
           # Install Claude Code SDK if using Claude backend
-          if [[ "${{ secrets.IMPLEMENT_TOOL_BACKEND }}" == "claude-code" || -z "${{ secrets.IMPLEMENT_TOOL_BACKEND }}" ]]; then
+          if [[ "${{ inputs.implement_tool_backend }}" == "claude-code" || -z "${{ inputs.implement_tool_backend }}" ]]; then
             echo "Installing Claude Code SDK..."
             npm install -g @anthropic-ai/claude-code || echo "::warning::Failed to install Claude Code SDK globally, will rely on probe-chat bundled version"
           fi
           
           # Install aider if using aider backend (default)
-          if [[ "${{ secrets.IMPLEMENT_TOOL_BACKEND }}" == "aider" || -z "${{ secrets.IMPLEMENT_TOOL_BACKEND }}" ]]; then
+          if [[ "${{ inputs.implement_tool_backend }}" == "aider" || -z "${{ inputs.implement_tool_backend }}" ]]; then
             echo "Installing aider for code editing capabilities..."
             python -m pip install aider-install || echo "::warning::Failed to install aider-install"
             aider-install || echo "::warning::Failed to run aider-install"
@@ -1154,12 +1165,12 @@ jobs:
           # Debug configuration
           DEBUG_CHAT: ${{ secrets.DEBUG_CHAT }}
           # Implementation backend configuration
-          IMPLEMENT_TOOL_BACKEND: ${{ secrets.IMPLEMENT_TOOL_BACKEND }}
-          IMPLEMENT_TOOL_FALLBACKS: ${{ secrets.IMPLEMENT_TOOL_FALLBACKS }}
-          IMPLEMENT_TOOL_TIMEOUT: ${{ secrets.IMPLEMENT_TOOL_TIMEOUT }}
-          AIDER_MODEL: ${{ secrets.AIDER_MODEL }}
-          CLAUDE_CODE_MODEL: ${{ secrets.CLAUDE_CODE_MODEL }}
-          CLAUDE_CODE_TEMPERATURE: ${{ secrets.CLAUDE_CODE_TEMPERATURE }}
+          IMPLEMENT_TOOL_BACKEND: ${{ inputs.implement_tool_backend }}
+          IMPLEMENT_TOOL_FALLBACKS: ${{ inputs.implement_tool_fallbacks }}
+          IMPLEMENT_TOOL_TIMEOUT: ${{ inputs.implement_tool_timeout }}
+          AIDER_MODEL: ${{ inputs.aider_model }}
+          CLAUDE_CODE_MODEL: ${{ inputs.claude_code_model }}
+          CLAUDE_CODE_TEMPERATURE: ${{ inputs.claude_code_temperature }}
         run: |
           # (Script remains the same)
           # Check and modify ANTHROPIC_API_URL to set ANTHROPIC_BASE_URL
