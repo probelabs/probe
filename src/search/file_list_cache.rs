@@ -598,8 +598,7 @@ mod tests {
         );
         assert!(
             file_list.files.iter().any(|f| f == &docs_packages_file),
-            "File in docs_packages directory should be found: {:?}",
-            docs_packages_file
+            "File in docs_packages directory should be found: {docs_packages_file:?}"
         );
     }
 
@@ -623,13 +622,11 @@ mod tests {
 
         assert!(
             file_list.files.iter().any(|f| f == &test_file),
-            "Rust file in underscore directory should be found: {:?}",
-            test_file
+            "Rust file in underscore directory should be found: {test_file:?}"
         );
         assert!(
             !file_list.files.iter().any(|f| f == &ignored_file),
-            "Ignored file should not be found: {:?}",
-            ignored_file
+            "Ignored file should not be found: {ignored_file:?}"
         );
     }
 
