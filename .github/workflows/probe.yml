@@ -76,10 +76,10 @@ on:
         required: false
         type: string
       implement_tool_backend:
-        description: "Implementation backend to use (aider, claude-code, or empty for default)"
+        description: "Implementation backend to use (aider, claude-code). Default: aider"
         required: false
         type: string
-        default: ""
+        default: "aider"
       implement_tool_fallbacks:
         description: "Comma-separated list of fallback backends to try if primary fails"
         required: false
@@ -1090,7 +1090,7 @@ jobs:
       # --- Setup Implementation Backends ---
       # --- Setup Python (if needed for aider) ---
       - name: Set up Python
-        if: inputs.allow_edit || inputs.allow_suggestions
+        if: (inputs.allow_edit || inputs.allow_suggestions) && (inputs.implement_tool_backend == 'aider' || contains(inputs.implement_tool_fallbacks, 'aider'))
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
@@ -1100,17 +1100,11 @@ jobs:
         run: |
           echo "Setting up implementation backends..."
           
-          # Determine which backend to install
+          # Get backend configuration
           BACKEND="${{ inputs.implement_tool_backend }}"
           FALLBACKS="${{ inputs.implement_tool_fallbacks }}"
           
-          # If no backend specified, default to aider
-          if [[ -z "$BACKEND" ]]; then
-            BACKEND="aider"
-            echo "No backend specified, defaulting to: $BACKEND"
-          else
-            echo "Primary backend: $BACKEND"
-          fi
+          echo "Primary backend: $BACKEND"
           
           if [[ -n "$FALLBACKS" ]]; then
             echo "Fallback backends: $FALLBACKS"
