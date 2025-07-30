@@ -1077,6 +1077,13 @@ jobs:
           echo "command=$COMMAND_VAR" >> "$GITHUB_OUTPUT"
 
       # --- Setup Implementation Backends ---
+      # --- Setup Python (if needed for aider) ---
+      - name: Set up Python
+        if: inputs.allow_edit || inputs.allow_suggestions
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
       - name: Setup Implementation Backends
         if: inputs.allow_edit || inputs.allow_suggestions
         run: |
@@ -1090,20 +1097,11 @@ jobs:
           
           # Install aider if using aider backend (default)
           if [[ "${{ secrets.IMPLEMENT_TOOL_BACKEND }}" == "aider" || -z "${{ secrets.IMPLEMENT_TOOL_BACKEND }}" ]]; then
-            echo "Setting up Python for aider..."
-            # Note: Python setup is handled by a previous step if needed
             echo "Installing aider for code editing capabilities..."
             python -m pip install aider-install || echo "::warning::Failed to install aider-install"
             aider-install || echo "::warning::Failed to run aider-install"
             echo "Aider installation attempted."
           fi
-
-      # --- Setup Python (if needed for aider) ---
-      - name: Set up Python
-        if: (inputs.allow_edit || inputs.allow_suggestions) && (secrets.IMPLEMENT_TOOL_BACKEND == 'aider' || secrets.IMPLEMENT_TOOL_BACKEND == '')
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
 
       - name: Switch to PR Branch (if applicable)
         # Only run if context is PR and we have the branch name
