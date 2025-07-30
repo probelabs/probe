@@ -2942,7 +2942,7 @@ mod tests {
     fn test_heuristic_impact_on_programming_terms() {
         println!("\n🔍 COMPREHENSIVE PROGRAMMING TERM COVERAGE ANALYSIS");
         println!("====================================================");
-        
+
         // Important programming terms that are commonly used
         let programming_terms = vec![
             // Short critical terms (< 6 characters) - these will be skipped
@@ -2972,7 +2972,6 @@ mod tests {
             ("git", "Version control system"),
             ("npm", "Node Package Manager"),
             ("pip", "Python Package Installer"),
-            
             // Terms with numbers - these will be skipped
             ("http2", "HTTP version 2"),
             ("http3", "HTTP version 3"),
@@ -2986,7 +2985,6 @@ mod tests {
             ("oauth2", "OAuth 2.0 authentication"),
             ("v1api", "Version 1 API"),
             ("v2api", "Version 2 API"),
-            
             // Terms with special characters - these will be skipped
             ("c++", "C++ programming language"),
             ("c#", "C# programming language"),
@@ -2999,127 +2997,161 @@ mod tests {
             ("#pragma", "Compiler directive"),
             ("$scope", "AngularJS scope"),
         ];
-        
+
         let mut total_terms = 0;
         let mut skipped_terms = 0;
         let mut critical_misses = Vec::new();
-        
+
         for (term, description) in &programming_terms {
             total_terms += 1;
             let is_skipped = should_skip_compound_processing(term);
-            
+
             if is_skipped {
                 skipped_terms += 1;
                 critical_misses.push(*term);
-                
+
                 // Determine why it was skipped
                 let reason = if term.len() < 6 {
                     "length < 6"
                 } else if term.chars().any(|c| c.is_numeric()) {
                     "contains numbers"
-                } else if term.chars().any(|c| c.is_ascii_punctuation() && c != '_' && c != '-') {
+                } else if term
+                    .chars()
+                    .any(|c| c.is_ascii_punctuation() && c != '_' && c != '-')
+                {
                     "contains special chars"
                 } else {
                     "in common word list"
                 };
-                
-                println!("❌ SKIPPED: '{}' ({}) - reason: {}", term, description, reason);
+
+                println!(
+                    "❌ SKIPPED: '{}' ({}) - reason: {}",
+                    term, description, reason
+                );
             } else {
                 println!("✅ PROCESSED: '{}' ({})", term, description);
             }
         }
-        
+
         let skip_rate = (skipped_terms as f64 / total_terms as f64) * 100.0;
-        
+
         println!("\n📊 SUMMARY STATISTICS:");
-        println!("  Total important programming terms tested: {}", total_terms);
-        println!("  Terms skipped by heuristics: {} ({:.1}%)", skipped_terms, skip_rate);
-        println!("  Terms that would be processed: {} ({:.1}%)", 
-            total_terms - skipped_terms, 100.0 - skip_rate);
-            
+        println!(
+            "  Total important programming terms tested: {}",
+            total_terms
+        );
+        println!(
+            "  Terms skipped by heuristics: {} ({:.1}%)",
+            skipped_terms, skip_rate
+        );
+        println!(
+            "  Terms that would be processed: {} ({:.1}%)",
+            total_terms - skipped_terms,
+            100.0 - skip_rate
+        );
+
         println!("\n🚨 CRITICAL ANALYSIS:");
-        println!("  The current heuristics are skipping {} critical programming terms!", skipped_terms);
+        println!(
+            "  The current heuristics are skipping {} critical programming terms!",
+            skipped_terms
+        );
         println!("  This means compound words containing these terms may not be found:");
-        
+
         for term in &critical_misses[..critical_misses.len().min(10)] {
-            println!("    - Searches for '{}' might miss '{}Handler', '{}Client', '{}Parser'", 
-                term, term, term, term);
+            println!(
+                "    - Searches for '{}' might miss '{}Handler', '{}Client', '{}Parser'",
+                term, term, term, term
+            );
         }
-        
+
         if critical_misses.len() > 10 {
-            println!("    ... and {} more terms with similar issues", critical_misses.len() - 10);
+            println!(
+                "    ... and {} more terms with similar issues",
+                critical_misses.len() - 10
+            );
         }
-        
+
         println!("\n💡 SPECIFIC EXAMPLES OF MISSED COMPOUND WORDS:");
         println!("  - 'ioHandler' might not be found when searching for 'io'");
         println!("  - 'apiClient' might not be found when searching for 'api'");
         println!("  - 'jsonParser' might not be found when searching for 'json'");
         println!("  - 'http2Server' might not be found when searching for 'http2'");
         println!("  - 'oauth2Provider' might not be found when searching for 'oauth2'");
-        
+
         // This assertion will fail, demonstrating the problem
         if skip_rate > 50.0 {
-            panic!("CRITICAL ISSUE: {:.1}% of important programming terms are being skipped! \
+            panic!(
+                "CRITICAL ISSUE: {:.1}% of important programming terms are being skipped! \
                    This creates significant false negatives in search results. \
-                   Terms affected: {:?}", skip_rate, critical_misses);
+                   Terms affected: {:?}",
+                skip_rate, critical_misses
+            );
         }
     }
-    
+
     /// Test demonstrating real-world search query failures
     #[test]
     fn test_real_world_search_query_impact() {
         println!("\n🔍 TESTING IMPACT ON REAL SEARCH QUERIES");
         println!("=========================================");
-        
+
         let search_queries = vec![
             "io operations async",
             "api client http",
-            "json parsing error", 
+            "json parsing error",
             "css styling responsive",
             "sql query optimization",
             "http2 server implementation",
             "oauth2 authentication flow",
             "c++ template metaprogramming",
             ".net framework migration",
-            "node.js express middleware"
+            "node.js express middleware",
         ];
-        
+
         let mut total_queries = 0;
         let mut queries_with_issues = 0;
-        
+
         for query in &search_queries {
             total_queries += 1;
             println!("\nQuery: \"{}\"", query);
-            
+
             let words: Vec<&str> = query.split_whitespace().collect();
             let mut problematic_terms = Vec::new();
             let mut processed_terms = Vec::new();
-            
+
             for word in words {
                 let clean_word = word.trim_end_matches(&[',', '.', '!', '?', ';', ':'][..]);
-                
+
                 if should_skip_compound_processing(clean_word) {
                     problematic_terms.push(clean_word);
                 } else {
                     processed_terms.push(clean_word);
                 }
             }
-            
+
             if !problematic_terms.is_empty() {
                 queries_with_issues += 1;
-                println!("  ❌ PROBLEM: Terms {:?} skipped for compound processing", problematic_terms);
-                println!("  💥 IMPACT: Compound words like '{}Handler', '{}Client' may be missed", 
-                    problematic_terms[0], problematic_terms[0]);
+                println!(
+                    "  ❌ PROBLEM: Terms {:?} skipped for compound processing",
+                    problematic_terms
+                );
+                println!(
+                    "  💥 IMPACT: Compound words like '{}Handler', '{}Client' may be missed",
+                    problematic_terms[0], problematic_terms[0]
+                );
             } else {
                 println!("  ✅ OK: All terms will be processed for compound words");
             }
         }
-        
+
         let problem_rate = (queries_with_issues as f64 / total_queries as f64) * 100.0;
         println!("\n📊 QUERY IMPACT SUMMARY:");
         println!("  Total queries tested: {}", total_queries);
-        println!("  Queries with problematic terms: {} ({:.1}%)", queries_with_issues, problem_rate);
-        
+        println!(
+            "  Queries with problematic terms: {} ({:.1}%)",
+            queries_with_issues, problem_rate
+        );
+
         // Most queries will have issues due to the aggressive heuristics
         assert!(queries_with_issues > 0, 
             "Expected some queries to have issues with current heuristics (this demonstrates the problem)");
