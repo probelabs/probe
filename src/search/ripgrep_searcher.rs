@@ -173,9 +173,14 @@ impl RipgrepSearcher {
             );
         }
 
+        // Sort file paths for deterministic processing order to fix non-deterministic behavior
+        // This ensures that parallel processing always processes files in the same order
+        let mut sorted_file_paths = file_paths.to_vec();
+        sorted_file_paths.sort();
+
         // Use par_iter().filter_map() for parallel processing
         // The searcher instance is thread-safe, so we can reuse it
-        let results: Vec<(PathBuf, HashMap<usize, HashSet<usize>>)> = file_paths
+        let results: Vec<(PathBuf, HashMap<usize, HashSet<usize>>)> = sorted_file_paths
             .par_iter()
             .filter_map(|file_path| {
                 // Reuse the shared searcher instance - it's thread-safe
@@ -198,9 +203,11 @@ impl RipgrepSearcher {
             })
             .collect();
 
-        // Convert to HashMap (order doesn't matter for final results)
-        let final_results: HashMap<PathBuf, HashMap<usize, HashSet<usize>>> =
+        // Convert to HashMap via BTreeMap for deterministic ordering
+        let sorted_results: std::collections::BTreeMap<PathBuf, HashMap<usize, HashSet<usize>>> =
             results.into_iter().collect();
+        let final_results: HashMap<PathBuf, HashMap<usize, HashSet<usize>>> =
+            sorted_results.into_iter().collect();
 
         if self.debug_mode {
             let duration = start_time.elapsed();

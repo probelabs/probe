@@ -1,0 +1,682 @@
+//! Comprehensive tests demonstrating cache invalidation issues in probe
+//!
+//! These tests expose critical flaws in the current caching architecture:
+//! 1. Stale cache entries returning incorrect results
+//! 2. Lack of cache invalidation causing memory leaks
+//! 3. Inconsistent behavior across different cache layers
+//! 4. Race conditions and concurrent access issues
+
+use std::collections::HashMap;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tempfile::{NamedTempFile, TempDir};
+
+use probe_code::language::factory::get_language_impl_by_extension;
+use probe_code::language::tree_cache::{
+    self, clear_tree_cache, get_cache_size, get_or_parse_tree, invalidate_cache_entry, is_in_cache,
+};
+use probe_code::search::cache::{calculate_file_md5, hash_query, SessionCache};
+use probe_code::search::search_tokens::{count_block_tokens, count_tokens, get_tokenizer};
+use probe_code::search::tokenization::{is_filtering_vocabulary_term, tokenize_query};
+
+/// Test demonstrating stale tree cache returning incorrect parsing results
+/// ISSUE: Tree cache doesn't invalidate when file content changes
+#[test]
+#[ignore] // This test is expected to FAIL - it demonstrates the bug
+fn test_tree_cache_stale_entry_bug() {
+    clear_tree_cache();
+
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("test.rs");
+
+    // Create initial file content
+    let initial_content = r#"
+fn original_function() {
+    println!("This is the original function");
+    let x = 42;
+    return x;
+}
+"#;
+    fs::write(&file_path, initial_content).unwrap();
+
+    // Get language implementation and parser
+    let language_impl = get_language_impl_by_extension("rs").unwrap();
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(language_impl.get_tree_sitter_language())
+        .unwrap();
+
+    // Parse the initial content - this will cache the tree
+    let initial_tree =
+        get_or_parse_tree(file_path.to_str().unwrap(), initial_content, &mut parser).unwrap();
+    let initial_node_count = initial_tree.root_node().child_count();
+
+    // Verify the file is cached
+    assert!(is_in_cache(file_path.to_str().unwrap()));
+
+    // CRITICAL BUG: Modify file content without updating cache
+    let modified_content = r#"
+fn completely_different_function() {
+    println!("This is completely different");
+    let y = 100;
+    let z = 200;
+    return y + z;
+}
+
+fn another_function() {
+    println!("Additional function");
+}
+"#;
+    fs::write(&file_path, modified_content).unwrap();
+
+    // BUG: get_or_parse_tree should detect content change and reparse
+    // but it uses file path as key, not content hash!
+    let cached_tree =
+        get_or_parse_tree(file_path.to_str().unwrap(), modified_content, &mut parser).unwrap();
+    let cached_node_count = cached_tree.root_node().child_count();
+
+    // Parse directly for comparison
+    let fresh_tree = parser.parse(modified_content, None).unwrap();
+    let fresh_node_count = fresh_tree.root_node().child_count();
+
+    // FAILING ASSERTION: The cached tree should match the fresh parse
+    // This will FAIL because cache returns stale tree structure
+    assert_eq!(
+        cached_node_count, fresh_node_count,
+        "BUG: Tree cache returned stale AST! Cached: {}, Fresh: {}",
+        cached_node_count, fresh_node_count
+    );
+
+    // Additional verification: Function names should match
+    let cached_root = cached_tree.root_node();
+    let fresh_root = fresh_tree.root_node();
+
+    let cached_functions = extract_function_names(&cached_root, modified_content.as_bytes());
+    let fresh_functions = extract_function_names(&fresh_root, modified_content.as_bytes());
+
+    assert_eq!(
+        cached_functions, fresh_functions,
+        "BUG: Cached functions {:?} != Fresh functions {:?}",
+        cached_functions, fresh_functions
+    );
+}
+
+/// Test demonstrating token cache returning stale counts
+/// ISSUE: Token cache uses content hash but doesn't handle hash collisions properly
+#[test]
+#[ignore] // This test is expected to FAIL - it demonstrates the bug
+fn test_token_cache_stale_count_bug() {
+    // Create two different strings that may have same hash (artificial collision)
+    let content1 = "function calculateTotal(items) {\n    return items.reduce((sum, item) => sum + item.price, 0);\n}";
+    let content2 = "class PaymentProcessor {\n    processPayment(amount) {\n        return amount * 1.1;\n    }\n}";
+
+    // Count tokens for first content
+    let count1_first = count_tokens(content1);
+    let count2_first = count_tokens(content2);
+
+    // Verify different content has different token counts
+    assert_ne!(
+        count1_first, count2_first,
+        "Test setup: contents should have different token counts"
+    );
+
+    // Now test potential hash collision scenario
+    // In a real scenario, hash collisions could cause wrong token counts
+
+    // Force cache the first content by calling multiple times
+    for _ in 0..10 {
+        let _ = count_tokens(content1);
+    }
+
+    // Now if there's a hash collision, content2 might get content1's count
+    let count2_second = count_tokens(content2);
+
+    // This should always be equal, but hash collisions could break this
+    assert_eq!(
+        count2_first, count2_second,
+        "BUG: Token cache corruption! First count: {}, Second count: {}",
+        count2_first, count2_second
+    );
+}
+
+/// Test demonstrating unbounded cache growth
+/// ISSUE: Caches grow without bounds leading to memory exhaustion
+#[test]
+#[ignore] // This test will cause OOM if run to completion
+fn test_unbounded_cache_growth_bug() {
+    clear_tree_cache();
+
+    let temp_dir = TempDir::new().unwrap();
+    let initial_cache_size = get_cache_size();
+
+    // Generate thousands of unique files to fill cache
+    let num_files = 10000; // This will cause OOM in practice
+    let mut file_paths = Vec::new();
+
+    for i in 0..num_files {
+        let file_path = temp_dir.path().join(format!("file_{}.rs", i));
+        let content = format!(
+            r#"
+fn function_{}() {{
+    println!("Function number {}", {});
+    let result = {} * 2;
+    return result;
+}}
+"#,
+            i, i, i
+        );
+
+        fs::write(&file_path, &content).unwrap();
+        file_paths.push((file_path, content));
+
+        // Parse each file to fill the cache
+        let language_impl = get_language_impl_by_extension("rs").unwrap();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(language_impl.get_tree_sitter_language())
+            .unwrap();
+
+        let _ = get_or_parse_tree(file_path.to_str().unwrap(), &content, &mut parser);
+
+        // Print cache growth (will grow without bounds)
+        if i % 1000 == 0 {
+            println!("Cache size after {} files: {}", i, get_cache_size());
+        }
+    }
+
+    let final_cache_size = get_cache_size();
+
+    // BUG: Cache should have size limits, but it grows without bounds
+    assert!(
+        final_cache_size < 1000,
+        "BUG: Cache grew unbounded to {} entries! This will cause OOM.",
+        final_cache_size
+    );
+}
+
+/// Test demonstrating session cache invalidation failures
+/// ISSUE: Session cache doesn't properly detect file changes
+#[test]
+#[ignore] // This test is expected to FAIL - it demonstrates the bug
+fn test_session_cache_invalidation_bug() {
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("session_test.rs");
+
+    // Create initial file
+    let initial_content = r#"
+fn initial_function() {
+    let value = 42;
+    return value;
+}
+"#;
+    fs::write(&file_path, initial_content).unwrap();
+
+    // Create session cache
+    let query = "function value";
+    let query_hash = hash_query(query);
+    let mut cache = SessionCache::new("test_session".to_string(), query_hash.clone());
+
+    // Add block to cache with initial file hash
+    let initial_md5 = calculate_file_md5(&file_path).unwrap();
+    cache
+        .file_md5_hashes
+        .insert(file_path.to_string_lossy().to_string(), initial_md5.clone());
+    cache.add_to_cache(format!("{}:1-5", file_path.to_string_lossy()));
+
+    // Verify block is cached
+    assert!(cache.is_cached(&format!("{}:1-5", file_path.to_string_lossy())));
+
+    // Modify file content
+    let modified_content = r#"
+fn completely_different_function() {
+    let different_value = 999;
+    let another_value = 888;
+    return different_value + another_value;
+}
+
+fn second_function() {
+    println!("This is a second function");
+}
+"#;
+    fs::write(&file_path, modified_content).unwrap();
+
+    // BUG: Cache validation should detect file change and invalidate
+    cache.validate_and_invalidate_cache(true).unwrap();
+
+    // FAILING ASSERTION: Block should be invalidated after file change
+    assert!(
+        !cache.is_cached(&format!("{}:1-5", file_path.to_string_lossy())),
+        "BUG: Session cache failed to invalidate stale entry after file modification!"
+    );
+
+    // Additional check: File hash should be removed from cache
+    assert!(
+        !cache
+            .file_md5_hashes
+            .contains_key(&file_path.to_string_lossy().to_string()),
+        "BUG: Session cache still contains stale file hash!"
+    );
+}
+
+/// Test demonstrating concurrent cache corruption
+/// ISSUE: Multiple threads can corrupt cache state
+#[test]
+#[ignore] // This test is expected to FAIL - it demonstrates race conditions
+fn test_concurrent_cache_corruption_bug() {
+    clear_tree_cache();
+
+    let temp_dir = TempDir::new().unwrap();
+    let corruption_count = Arc::new(AtomicUsize::new(0));
+    let num_threads = 10;
+    let files_per_thread = 100;
+
+    // Create shared file for concurrent access
+    let shared_file = temp_dir.path().join("shared.rs");
+    let initial_content = r#"
+fn shared_function() {
+    let value = 42;
+    return value;
+}
+"#;
+    fs::write(&shared_file, initial_content).unwrap();
+
+    let handles: Vec<_> = (0..num_threads)
+        .map(|thread_id| {
+            let temp_dir = temp_dir.path().to_path_buf();
+            let corruption_count = Arc::clone(&corruption_count);
+            let shared_file = shared_file.clone();
+
+            thread::spawn(move || {
+                let language_impl = get_language_impl_by_extension("rs").unwrap();
+                let mut parser = tree_sitter::Parser::new();
+                parser
+                    .set_language(language_impl.get_tree_sitter_language())
+                    .unwrap();
+
+                for i in 0..files_per_thread {
+                    // Each thread modifies the shared file concurrently
+                    let content = format!(
+                        r#"
+fn shared_function_thread_{}_iteration_{}() {{
+    let value = {};
+    return value * {};
+}}
+"#,
+                        thread_id, i, thread_id, i
+                    );
+
+                    // Write and immediately try to parse (race condition)
+                    if let Err(_) = fs::write(&shared_file, &content) {
+                        corruption_count.fetch_add(1, Ordering::SeqCst);
+                        continue;
+                    }
+
+                    // Parse with potential race conditions in cache
+                    match get_or_parse_tree(shared_file.to_str().unwrap(), &content, &mut parser) {
+                        Ok(tree) => {
+                            // Verify the tree matches expected content
+                            let root = tree.root_node();
+                            let function_names = extract_function_names(&root, content.as_bytes());
+
+                            let expected_function =
+                                format!("shared_function_thread_{}_iteration_{}", thread_id, i);
+                            if !function_names.contains(&expected_function) {
+                                corruption_count.fetch_add(1, Ordering::SeqCst);
+                            }
+                        }
+                        Err(_) => {
+                            corruption_count.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+
+                    // Small delay to increase chance of race conditions
+                    thread::sleep(Duration::from_millis(1));
+                }
+            })
+        })
+        .collect();
+
+    // Wait for all threads
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let total_corruptions = corruption_count.load(Ordering::SeqCst);
+
+    // BUG: There should be no corruptions in a properly synchronized cache
+    assert_eq!(
+        total_corruptions,
+        0,
+        "BUG: Cache corruption detected! {} corruptions out of {} operations",
+        total_corruptions,
+        num_threads * files_per_thread
+    );
+}
+
+/// Test demonstrating tokenization cache memory leak
+/// ISSUE: Tokenization caches never clean up old entries
+#[test]
+#[ignore] // This test will consume excessive memory
+fn test_tokenization_cache_memory_leak_bug() {
+    let mut memory_usage = Vec::new();
+    let num_unique_strings = 50000; // Large number to trigger memory issues
+
+    for i in 0..num_unique_strings {
+        // Generate unique content to fill tokenization cache
+        let content = format!(
+            r#"
+function processData_{}(input) {{
+    const result = input.map(item => {{
+        return {{
+            id: item.id + {},
+            value: item.value * {},
+            processed: true,
+            timestamp: Date.now(),
+            metadata: {{
+                iteration: {},
+                batch: Math.floor({} / 1000)
+            }}
+        }};
+    }});
+    return result.filter(item => item.value > {});
+}}
+"#,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i % 100
+        );
+
+        // Count tokens to fill cache
+        let _token_count = count_tokens(&content);
+
+        // Track memory usage (approximate)
+        if i % 5000 == 0 {
+            memory_usage.push(i);
+            println!("Processed {} strings", i);
+        }
+    }
+
+    // Generate more content with different pattern to test cache behavior
+    for i in 0..10000 {
+        let content = format!("Very short string number {}", i);
+        let _token_count = count_tokens(&content);
+    }
+
+    // BUG: Memory should be bounded, but tokenization cache never cleans up
+    // This test will consume excessive memory if cache has no limits
+
+    println!("Tokenization cache memory test completed");
+    // In practice, this test would reveal unbounded memory growth
+}
+
+/// Test demonstrating compound word cache inconsistencies
+/// ISSUE: Compound word cache can return inconsistent results
+#[test]
+#[ignore] // This test is expected to FAIL - it demonstrates inconsistencies
+fn test_compound_word_cache_inconsistency_bug() {
+    // Test compound words that might be cached differently
+    let test_cases = vec![
+        "processPaymentData",
+        "calculateTotalAmount",
+        "getUserInformation",
+        "validateInputParameters",
+        "generateReportSummary",
+    ];
+
+    let mut inconsistencies = 0;
+
+    for word in &test_cases {
+        // Tokenize the word multiple times
+        let mut results = Vec::new();
+
+        for _ in 0..10 {
+            let tokens = tokenize_query(word);
+            results.push(tokens);
+        }
+
+        // Check if all results are identical
+        let first_result = &results[0];
+        for (i, result) in results.iter().enumerate().skip(1) {
+            if result != first_result {
+                inconsistencies += 1;
+                println!(
+                    "Inconsistency in '{}': attempt 0: {:?}, attempt {}: {:?}",
+                    word, first_result, i, result
+                );
+            }
+        }
+    }
+
+    // BUG: Compound word tokenization should be deterministic
+    assert_eq!(
+        inconsistencies, 0,
+        "BUG: Found {} inconsistencies in compound word tokenization!",
+        inconsistencies
+    );
+}
+
+/// Test demonstrating filtering vocabulary cache staleness
+/// ISSUE: Filtering vocabulary cache can become stale with vocabulary updates
+#[test]
+#[ignore] // This test is expected to FAIL - it demonstrates staleness
+fn test_filtering_vocabulary_cache_staleness_bug() {
+    // Test with terms that should be in vocabulary
+    let test_terms = vec![
+        "function",
+        "class",
+        "variable",
+        "method",
+        "property",
+        "interface",
+        "struct",
+        "enum",
+        "trait",
+        "module",
+    ];
+
+    let mut initial_results = HashMap::new();
+    let mut final_results = HashMap::new();
+
+    // Check initial vocabulary state
+    for term in &test_terms {
+        initial_results.insert(term.to_string(), is_filtering_vocabulary_term(term));
+    }
+
+    // Simulate vocabulary update (this doesn't actually exist in current code)
+    // In a proper implementation, vocabulary could be updated dynamically
+
+    // Force some cache operations that might affect vocabulary cache
+    for i in 0..1000 {
+        let fake_term = format!("fake_term_{}", i);
+        let _ = is_filtering_vocabulary_term(&fake_term);
+    }
+
+    // Check vocabulary state after operations
+    for term in &test_terms {
+        final_results.insert(term.to_string(), is_filtering_vocabulary_term(term));
+    }
+
+    // Compare results
+    let mut mismatches = 0;
+    for term in &test_terms {
+        let initial = initial_results.get(term).unwrap();
+        let final_result = final_results.get(term).unwrap();
+
+        if initial != final_result {
+            mismatches += 1;
+            println!(
+                "Vocabulary staleness in '{}': initial: {}, final: {}",
+                term, initial, final_result
+            );
+        }
+    }
+
+    // BUG: Vocabulary cache should be consistent
+    assert_eq!(
+        mismatches, 0,
+        "BUG: Found {} vocabulary cache inconsistencies!",
+        mismatches
+    );
+}
+
+/// Helper function to extract function names from AST
+fn extract_function_names(node: &tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut function_names = Vec::new();
+
+    if node.kind() == "function_item" {
+        // Look for the function name
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "identifier" {
+                if let Ok(name) = std::str::from_utf8(&source[child.start_byte()..child.end_byte()])
+                {
+                    function_names.push(name.to_string());
+                    break;
+                }
+            }
+        }
+    }
+
+    // Recursively check children
+    for child in node.children(&mut node.walk()) {
+        function_names.extend(extract_function_names(&child, source));
+    }
+
+    function_names
+}
+
+/// Performance test demonstrating cache effectiveness vs correctness trade-off
+#[test]
+fn test_cache_performance_vs_correctness_trade_off() {
+    clear_tree_cache();
+
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("perf_test.rs");
+
+    // Create test content
+    let content = r#"
+fn performance_test_function() {
+    let data = vec![1, 2, 3, 4, 5];
+    let result: Vec<i32> = data.iter().map(|x| x * 2).collect();
+    println!("Result: {:?}", result);
+    return result.len();
+}
+"#;
+    fs::write(&file_path, content).unwrap();
+
+    let language_impl = get_language_impl_by_extension("rs").unwrap();
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(language_impl.get_tree_sitter_language())
+        .unwrap();
+
+    // Measure performance with cache
+    let start_time = SystemTime::now();
+    for _ in 0..1000 {
+        let _ = get_or_parse_tree(file_path.to_str().unwrap(), content, &mut parser);
+    }
+    let cached_duration = start_time.elapsed().unwrap();
+
+    // Clear cache and measure without cache
+    clear_tree_cache();
+    let start_time = SystemTime::now();
+    for _ in 0..1000 {
+        let _ = parser.parse(content, None);
+    }
+    let uncached_duration = start_time.elapsed().unwrap();
+
+    println!("Cached parsing: {:?}", cached_duration);
+    println!("Uncached parsing: {:?}", uncached_duration);
+    println!(
+        "Speedup: {:.2}x",
+        uncached_duration.as_secs_f64() / cached_duration.as_secs_f64()
+    );
+
+    // The cache provides significant performance improvement
+    // But at the cost of potential correctness issues demonstrated in other tests
+    assert!(
+        cached_duration < uncached_duration,
+        "Cache should provide performance improvement"
+    );
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    /// Integration test showing cascade invalidation failure
+    /// ISSUE: Changes in one cache layer don't propagate to dependent layers
+    #[test]
+    #[ignore] // This test is expected to FAIL - demonstrates cascade issues
+    fn test_cascade_invalidation_failure() {
+        clear_tree_cache();
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("cascade_test.rs");
+
+        // Create initial content
+        let initial_content = "fn test() { let x = 1; }";
+        fs::write(&file_path, initial_content).unwrap();
+
+        // Fill multiple cache layers
+        let language_impl = get_language_impl_by_extension("rs").unwrap();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(language_impl.get_tree_sitter_language())
+            .unwrap();
+
+        // Tree cache
+        let _ = get_or_parse_tree(file_path.to_str().unwrap(), initial_content, &mut parser);
+
+        // Token cache
+        let initial_tokens = count_tokens(initial_content);
+
+        // Session cache
+        let query = "test function";
+        let query_hash = hash_query(query);
+        let mut session_cache = SessionCache::new("test".to_string(), query_hash);
+        let initial_md5 = calculate_file_md5(&file_path).unwrap();
+        session_cache
+            .file_md5_hashes
+            .insert(file_path.to_string_lossy().to_string(), initial_md5);
+        session_cache.add_to_cache(format!("{}:1-1", file_path.to_string_lossy()));
+
+        // Modify file
+        let modified_content = "fn completely_different_test() { let y = 999; let z = 888; }";
+        fs::write(&file_path, modified_content).unwrap();
+
+        // BUG: Tree cache invalidation should cascade to token cache
+        invalidate_cache_entry(file_path.to_str().unwrap());
+
+        // Get new tree (should be fresh)
+        let new_tree =
+            get_or_parse_tree(file_path.to_str().unwrap(), modified_content, &mut parser).unwrap();
+
+        // Get token count (might still be cached with old value)
+        let new_tokens = count_tokens(modified_content);
+
+        // Session cache validation
+        session_cache.validate_and_invalidate_cache(true).unwrap();
+
+        // FAILING ASSERTIONS: All caches should be consistent
+        let expected_tokens = count_tokens(modified_content);
+        assert_eq!(
+            new_tokens, expected_tokens,
+            "BUG: Token cache not invalidated when tree cache was cleared!"
+        );
+
+        assert!(
+            !session_cache.is_cached(&format!("{}:1-1", file_path.to_string_lossy())),
+            "BUG: Session cache not invalidated despite file change!"
+        );
+    }
+}

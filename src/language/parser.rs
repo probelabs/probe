@@ -9,6 +9,43 @@ use probe_code::language::language_trait::LanguageImpl;
 use probe_code::language::tree_cache;
 use probe_code::models::CodeBlock;
 
+/// Node type priority for deterministic selection when multiple important types match same content
+/// Higher index = higher priority (more specific types should win)
+const NODE_TYPE_PRIORITY: &[&str] = &[
+    "compilation_unit",      // Lowest priority - most general
+    "function_declaration",
+    "method_declaration", 
+    "function_item",
+    "impl_item",
+    "type_declaration",
+    "struct_item",
+    "global_attribute",      // Highest priority - most specific
+];
+
+/// Select the highest priority node type from a list of candidates
+/// This ensures deterministic behavior when multiple important node types match the same content
+fn select_priority_node_type<'a>(node_types: &'a [&'a str]) -> &'a str {
+    // Find the node type with the highest priority (rightmost in the array)
+    let mut best_priority = -1;
+    let mut best_type = *node_types.first().unwrap_or(&"unknown");
+    
+    for &node_type in node_types {
+        if let Some(priority) = NODE_TYPE_PRIORITY.iter().position(|&t| t == node_type) {
+            if priority as i32 > best_priority {
+                best_priority = priority as i32;
+                best_type = node_type;
+            }
+        }
+    }
+    
+    // If no priority found, use lexicographic ordering for complete determinism
+    if best_priority == -1 {
+        *node_types.iter().min().unwrap_or(&"unknown")
+    } else {
+        best_type
+    }
+}
+
 // Define a static cache for line maps
 static LINE_MAP_CACHE: Lazy<DashMap<String, Vec<Option<CachedNodeInfo>>>> = Lazy::new(DashMap::new);
 
@@ -590,7 +627,11 @@ fn process_cached_line_map(
     let mut seen_block_spans: HashSet<(usize, usize)> = HashSet::new();
 
     // Process each line number using the cached map
-    for &line in line_numbers {
+    // Sort line numbers for deterministic processing order to fix non-deterministic behavior
+    let mut sorted_lines: Vec<usize> = line_numbers.iter().cloned().collect();
+    sorted_lines.sort();
+    
+    for line in sorted_lines {
         let line_idx = line.saturating_sub(1); // Adjust for 0-based indexing
 
         if debug_mode {
@@ -915,13 +956,37 @@ fn process_cached_line_map(
                         should_add = false;
                         break;
                     } else {
-                        // Both important or both not - prefer contained (current)
-                        if debug_mode {
-                            println!(
-                                "DEBUG: Cache Dedupe: Replacing outer block with contained block"
-                            );
+                        // Both important or both not - use priority-based selection for determinism
+                        let current_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == block.node_type.as_str());
+                        let prev_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == prev_block.node_type.as_str());
+                        
+                        match (current_priority, prev_priority) {
+                            (Some(cur_pri), Some(prev_pri)) => {
+                                if cur_pri > prev_pri {
+                                    // Current block has higher priority - keep it, remove previous
+                                    if debug_mode {
+                                        println!("DEBUG: Cache Dedupe: Replacing block with higher priority type: {} > {}", 
+                                                block.node_type, prev_block.node_type);
+                                    }
+                                    blocks_to_remove.push(idx);
+                                } else {
+                                    // Previous block has higher or equal priority - keep previous, skip current
+                                    if debug_mode {
+                                        println!("DEBUG: Cache Dedupe: Skipping block in favor of higher priority type: {} >= {}", 
+                                                prev_block.node_type, block.node_type);
+                                    }
+                                    should_add = false;
+                                    break;
+                                }
+                            }
+                            _ => {
+                                // Fallback: prefer contained (current) block for consistency
+                                if debug_mode {
+                                    println!("DEBUG: Cache Dedupe: Replacing outer block with contained block (no priority)");
+                                }
+                                blocks_to_remove.push(idx);
+                            }
                         }
-                        blocks_to_remove.push(idx);
                     }
                 }
                 // Case 2: Previous block is contained within current block
@@ -947,12 +1012,38 @@ fn process_cached_line_map(
                         should_add = false;
                         break;
                     } else {
-                        // Both important or both not - prefer contained (previous)
-                        if debug_mode {
-                            println!("DEBUG: Cache Dedupe: Skipping outer block (already have contained)");
+                        // Both important or both not - use priority-based selection for determinism
+                        let current_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == block.node_type.as_str());
+                        let prev_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == prev_block.node_type.as_str());
+                        
+                        match (current_priority, prev_priority) {
+                            (Some(cur_pri), Some(prev_pri)) => {
+                                if cur_pri > prev_pri {
+                                    // Current block has higher priority - keep it, remove previous
+                                    if debug_mode {
+                                        println!("DEBUG: Cache Dedupe: Replacing contained block with higher priority type: {} > {}", 
+                                                block.node_type, prev_block.node_type);
+                                    }
+                                    blocks_to_remove.push(idx);
+                                } else {
+                                    // Previous block has higher or equal priority - keep previous, skip current
+                                    if debug_mode {
+                                        println!("DEBUG: Cache Dedupe: Skipping outer block in favor of higher priority contained type: {} >= {}", 
+                                                prev_block.node_type, block.node_type);
+                                    }
+                                    should_add = false;
+                                    break;
+                                }
+                            }
+                            _ => {
+                                // Fallback: prefer contained (previous) block for consistency
+                                if debug_mode {
+                                    println!("DEBUG: Cache Dedupe: Skipping outer block (already have contained, no priority)");
+                                }
+                                should_add = false;
+                                break;
+                            }
                         }
-                        should_add = false;
-                        break;
                     }
                 }
                 // Case 3: Blocks partially overlap
@@ -1162,7 +1253,11 @@ pub fn parse_file_for_code_blocks(
     let mut seen_nodes: HashSet<(usize, usize)> = HashSet::new(); // Use row-based key for this original logic
 
     // Process each line number using the *live* precomputed map (line_map) with adjusted indexing
-    for &line in line_numbers {
+    // Sort line numbers for deterministic processing order to fix non-deterministic behavior
+    let mut sorted_lines: Vec<usize> = line_numbers.iter().cloned().collect();
+    sorted_lines.sort();
+    
+    for line in sorted_lines {
         // Adjust for 0-based indexing and apply base offset
         let line_idx = line.saturating_sub(1);
         let adjusted_line_idx = line_idx.saturating_sub(line_map_base_offset);
@@ -1530,9 +1625,35 @@ pub fn parse_file_for_code_blocks(
                         should_add = false;
                         break;
                     }
-                    // Otherwise, prefer the more specific (contained) block
+                    // Otherwise, use priority-based selection for determinism
                     else {
-                        blocks_to_remove.push(idx);
+                        let current_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == block.node_type.as_str());
+                        let prev_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == prev_block.node_type.as_str());
+                        
+                        match (current_priority, prev_priority) {
+                            (Some(cur_pri), Some(prev_pri)) => {
+                                if cur_pri > prev_pri {
+                                    // Current block has higher priority - keep it, remove previous
+                                    if debug_mode {
+                                        println!("DEBUG: Replacing block with higher priority type: {} > {}", 
+                                                block.node_type, prev_block.node_type);
+                                    }
+                                    blocks_to_remove.push(idx);
+                                } else {
+                                    // Previous block has higher or equal priority - keep previous, skip current
+                                    if debug_mode {
+                                        println!("DEBUG: Skipping block in favor of higher priority type: {} >= {}", 
+                                                prev_block.node_type, block.node_type);
+                                    }
+                                    should_add = false;
+                                    break;
+                                }
+                            }
+                            _ => {
+                                // Fallback: prefer the more specific (contained) block
+                                blocks_to_remove.push(idx);
+                            }
+                        }
                     }
                 }
                 // Case 2: Previous block is contained within current block
@@ -1565,10 +1686,36 @@ pub fn parse_file_for_code_blocks(
                         should_add = false;
                         break;
                     }
-                    // Otherwise, skip current block as it's less specific
+                    // Otherwise, use priority-based selection for determinism
                     else {
-                        should_add = false;
-                        break;
+                        let current_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == block.node_type.as_str());
+                        let prev_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == prev_block.node_type.as_str());
+                        
+                        match (current_priority, prev_priority) {
+                            (Some(cur_pri), Some(prev_pri)) => {
+                                if cur_pri > prev_pri {
+                                    // Current block has higher priority - keep it, remove previous
+                                    if debug_mode {
+                                        println!("DEBUG: Replacing contained block with higher priority type: {} > {}", 
+                                                block.node_type, prev_block.node_type);
+                                    }
+                                    blocks_to_remove.push(idx);
+                                } else {
+                                    // Previous block has higher or equal priority - keep previous, skip current
+                                    if debug_mode {
+                                        println!("DEBUG: Skipping outer block in favor of higher priority contained type: {} >= {}", 
+                                                prev_block.node_type, block.node_type);
+                                    }
+                                    should_add = false;
+                                    break;
+                                }
+                            }
+                            _ => {
+                                // Fallback: skip current block as it's less specific
+                                should_add = false;
+                                break;
+                            }
+                        }
                     }
                 }
                 // Case 3: Blocks partially overlap
