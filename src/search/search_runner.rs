@@ -1563,7 +1563,7 @@ pub fn search_with_structured_patterns(
         for (path, term_map) in results_vec {
             file_term_maps.insert(path, term_map);
         }
-        
+
         // Convert BTreeMap back to HashMap for compatibility with existing code
         file_term_maps.into_iter().collect::<HashMap<_, _>>()
     } else {
