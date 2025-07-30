@@ -340,12 +340,12 @@ jobs:
     - name: Run chat flow integration tests
       run: |
         cd examples/chat
-        npm test -- test/integration/chatFlows.test.js
+        npm run test:chat
 
     - name: Run tool calling integration tests
       run: |
         cd examples/chat
-        npm test -- test/integration/toolCalling.test.js
+        npm run test:tools
 
     - name: Run all chat tests
       run: |
