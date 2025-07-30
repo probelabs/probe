@@ -41,6 +41,12 @@ jobs:
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
             ${{ runner.os }}-cargo-
 
+      - name: Show Rust version
+        run: |
+          rustc --version
+          cargo --version
+          cargo clippy --version
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
