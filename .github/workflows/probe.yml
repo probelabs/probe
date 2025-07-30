@@ -1100,14 +1100,42 @@ jobs:
         run: |
           echo "Setting up implementation backends..."
           
-          # Install Claude Code SDK if using Claude backend
-          if [[ "${{ inputs.implement_tool_backend }}" == "claude-code" || -z "${{ inputs.implement_tool_backend }}" ]]; then
-            echo "Installing Claude Code SDK..."
-            npm install -g @anthropic-ai/claude-code || echo "::warning::Failed to install Claude Code SDK globally, will rely on probe-chat bundled version"
+          # Determine which backend to install
+          BACKEND="${{ inputs.implement_tool_backend }}"
+          FALLBACKS="${{ inputs.implement_tool_fallbacks }}"
+          
+          # If no backend specified, default to aider
+          if [[ -z "$BACKEND" ]]; then
+            BACKEND="aider"
+            echo "No backend specified, defaulting to: $BACKEND"
+          else
+            echo "Primary backend: $BACKEND"
           fi
           
-          # Install aider if using aider backend (default)
-          if [[ "${{ inputs.implement_tool_backend }}" == "aider" || -z "${{ inputs.implement_tool_backend }}" ]]; then
+          if [[ -n "$FALLBACKS" ]]; then
+            echo "Fallback backends: $FALLBACKS"
+          fi
+          
+          # Install Claude Code SDK if needed
+          if [[ "$BACKEND" == "claude-code" ]] || [[ "$FALLBACKS" == *"claude-code"* ]]; then
+            echo "Installing Claude Code SDK..."
+            # Check Node.js version (Claude Code requires Node.js 18+)
+            NODE_VERSION=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
+            if [[ $NODE_VERSION -lt 18 ]]; then
+              echo "::warning::Claude Code requires Node.js 18 or newer. Current version: $(node --version)"
+              echo "::warning::Claude Code installation may fail or not work properly"
+            fi
+            npm install -g @anthropic-ai/claude-code || echo "::warning::Failed to install Claude Code SDK globally, will rely on probe-chat bundled version"
+            # Verify installation
+            if command -v claude-code &> /dev/null; then
+              echo "Claude Code successfully installed: $(claude-code --version 2>/dev/null || echo 'version check failed')"
+            else
+              echo "::warning::Claude Code command not found after installation"
+            fi
+          fi
+          
+          # Install aider if needed
+          if [[ "$BACKEND" == "aider" ]] || [[ "$FALLBACKS" == *"aider"* ]]; then
             echo "Installing aider for code editing capabilities..."
             python -m pip install aider-install || echo "::warning::Failed to install aider-install"
             aider-install || echo "::warning::Failed to run aider-install"
