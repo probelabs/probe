@@ -477,8 +477,8 @@ fn test_hyphenated_compound_terms_parsing() {
             assert!(keywords.contains(&"agent".to_string()));
             assert_eq!(keywords.len(), 2);
         },
-        _ => {
-            assert!(false, "Expected Term expression for hyphenated compound term");
+        other => {
+            panic!("Expected Term expression for hyphenated compound term, got: {:?}", other);
         }
     }
     
@@ -490,10 +490,10 @@ fn test_hyphenated_compound_terms_parsing() {
         Expr::Or(_, _) => {
             // This should now work correctly without negated terms
             // The exact structure is complex, but the key is no negated "agent" terms
-            assert!(true, "Parsing now creates correct OR expression without negated terms");
+            // Parsing now creates correct OR expression without negated terms - test passes
         },
         _ => {
-            assert!(false, "Expected Or expression for multi-term query");
+            panic!("Expected Or expression for multi-term query");
         }
     }
 }

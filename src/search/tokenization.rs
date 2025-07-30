@@ -11,7 +11,7 @@ use std::sync::Mutex;
 ///
 /// The filtering pipeline heavily uses vocabulary operations through multiple code paths:
 /// 1. filter_tokenized_block -> tokenization functions -> load_vocabulary()
-/// 2. Compound word processing in batch operations -> split_compound_word -> load_vocabulary()  
+/// 2. Compound word processing in batch operations -> split_compound_word -> load_vocabulary()
 /// 3. Uncovered lines processing -> compound matching -> load_vocabulary()
 ///
 /// This cache system provides:
@@ -822,7 +822,7 @@ pub fn get_filtering_vocabulary() -> &'static HashSet<String> {
     FILTERING_VOCABULARY_CACHE.get_vocabulary()
 }
 
-/// Public API: Cached compound word splitting optimized for filtering operations  
+/// Public API: Cached compound word splitting optimized for filtering operations
 /// This replaces direct calls to split_compound_word() in filtering contexts
 pub fn split_compound_word_for_filtering(word: &str) -> Vec<String> {
     FILTERING_VOCABULARY_CACHE.split_compound_word_cached(word)
@@ -1794,7 +1794,7 @@ static COMMON_NON_COMPOUND_WORDS: Lazy<HashSet<String>> = Lazy::new(|| {
 ///
 /// Heuristics used:
 /// - Length: Words shorter than 6 characters are unlikely to be compound
-/// - Patterns: Words with numbers or special characters are unlikely to be compound  
+/// - Patterns: Words with numbers or special characters are unlikely to be compound
 /// - Common words: Very common English/programming words are rarely compound
 /// - Frequency: High-frequency terms are often single words, not compounds
 fn should_skip_compound_processing(word: &str) -> bool {
@@ -2933,7 +2933,7 @@ mod tests {
         assert_eq!(parts, vec!["whitelist".to_string()]); // Special case handling
 
         // Long words that are not in common lists should still be processed
-        let parts = split_compound_word("customwordprocessing", vocab);
+        let _parts = split_compound_word("customwordprocessing", vocab);
     }
 
     /// COMPREHENSIVE HEURISTIC ANALYSIS TEST
@@ -3153,7 +3153,7 @@ mod tests {
         );
 
         // Most queries will have issues due to the aggressive heuristics
-        assert!(queries_with_issues > 0, 
+        assert!(queries_with_issues > 0,
             "Expected some queries to have issues with current heuristics (this demonstrates the problem)");
     }
 }
