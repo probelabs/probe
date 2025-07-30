@@ -5,7 +5,7 @@
 
 import BaseBackend from './BaseBackend.js';
 import { BackendError, ErrorTypes, ProgressTracker, FileChangeParser, TokenEstimator } from '../core/utils.js';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 
@@ -89,18 +89,12 @@ class ClaudeCodeBackend extends BaseBackend {
       // Check if claude-code CLI is available
       await execPromise('which claude-code', { timeout: 5000 });
       
-      // Quick test to ensure API key is valid
-      // We'll do a minimal test query
+      // Quick test to ensure API key is valid using secure spawn
       if (this.sdkType === 'cli') {
-        const testCommand = `echo "test" | ANTHROPIC_API_KEY="${this.config.apiKey}" claude-code --non-interactive --max-turns 1`;
-        const { stdout, stderr } = await execPromise(testCommand, { 
-          timeout: 30000,
-          shell: true
-        });
-        
-        // Check for authentication errors
-        if (stderr && stderr.includes('authentication') || stderr.includes('401')) {
-          this.log('warn', 'API key appears to be invalid');
+        try {
+          await this.testApiKeySecurely();
+        } catch (error) {
+          this.log('warn', 'API key validation failed', { error: error.message });
           return false;
         }
       }
@@ -246,6 +240,11 @@ class ClaudeCodeBackend extends BaseBackend {
       throw new Error('API key is required. Set ANTHROPIC_API_KEY environment variable or provide apiKey in config');
     }
     
+    // Validate API key format (basic validation)
+    if (!this.isValidApiKey(this.config.apiKey)) {
+      throw new Error('Invalid API key format');
+    }
+    
     // Validate model name
     const validModels = [
       'claude-3-5-sonnet-20241022',
@@ -256,6 +255,11 @@ class ClaudeCodeBackend extends BaseBackend {
     if (this.config.model && !validModels.includes(this.config.model)) {
       this.log('warn', `Unknown model: ${this.config.model}. Using default.`);
       this.config.model = 'claude-3-5-sonnet-20241022';
+    }
+    
+    // Validate tools list
+    if (this.config.tools && Array.isArray(this.config.tools)) {
+      this.config.tools = this.validateTools(this.config.tools);
     }
   }
 
@@ -414,42 +418,21 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
   async executeWithCLI(prompt, workingDir, request, sessionInfo, progressTracker) {
     const startTime = Date.now();
     
-    // Build Claude Code CLI command
-    const args = [
-      '--non-interactive',
-      `--max-turns ${request.options?.maxTurns || this.config.maxTurns}`,
-      `--model ${this.config.model}`
-    ];
-    
-    if (request.options?.temperature !== undefined || this.config.temperature !== undefined) {
-      args.push(`--temperature ${request.options?.temperature || this.config.temperature}`);
-    }
-    
-    if (this.config.tools && this.config.tools.length > 0) {
-      args.push(`--allowed-tools ${this.config.tools.join(',')}`);
-    }
-    
-    // Add system prompt if available
-    if (this.buildSystemPrompt(request)) {
-      const systemPrompt = this.buildSystemPrompt(request).replace(/'/g, "'\"'\"'");
-      args.push(`--system-prompt '${systemPrompt}'`);
-    }
-    
-    const command = `claude-code ${args.join(' ')}`;
+    // Build Claude Code CLI arguments securely
+    const args = this.buildSecureCommandArgs(request);
     
     this.log('info', 'Executing Claude Code CLI', {
-      command: command.substring(0, 100) + '...',
+      command: 'claude-code',
+      args: args.slice(0, 5), // Log first few args only for security
       workingDir
     });
     
     return new Promise((resolve, reject) => {
-      const child = exec(command, {
+      // Use spawn instead of exec for better security
+      const child = spawn('claude-code', args, {
         cwd: workingDir,
-        env: {
-          ...process.env,
-          ANTHROPIC_API_KEY: this.config.apiKey
-        },
-        maxBuffer: 10 * 1024 * 1024 // 10MB
+        env: this.buildSecureEnvironment(),
+        stdio: ['pipe', 'pipe', 'pipe']
       });
       
       sessionInfo.childProcess = child;
@@ -464,7 +447,9 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
       
       // Send the prompt to stdin
       if (child.stdin) {
-        child.stdin.write(prompt);
+        // Validate prompt before sending
+        const validatedPrompt = this.validatePrompt(prompt);
+        child.stdin.write(validatedPrompt);
         child.stdin.end();
       }
       
@@ -519,7 +504,8 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
               exitCode: code
             },
             metadata: {
-              command,
+              command: 'claude-code',
+              args: args.slice(0, 5), // Limited args for security
               model: this.config.model,
               sdkType: 'cli'
             }
@@ -562,6 +548,234 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
         }
       }, timeout);
     });
+  }
+
+  /**
+   * Test API key securely without shell injection
+   * @private
+   */
+  async testApiKeySecurely() {
+    return new Promise((resolve, reject) => {
+      const child = spawn('claude-code', ['--non-interactive', '--max-turns', '1'], {
+        env: { ...process.env, ANTHROPIC_API_KEY: this.config.apiKey },
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      let stderr = '';
+
+      child.stdin.write('test');
+      child.stdin.end();
+
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      child.on('close', (code) => {
+        if (stderr.includes('authentication') || stderr.includes('401') || stderr.includes('invalid')) {
+          reject(new Error('API key appears to be invalid'));
+        } else {
+          resolve();
+        }
+      });
+
+      child.on('error', (error) => {
+        reject(error);
+      });
+
+      // Timeout after 10 seconds
+      setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error('API key test timed out'));
+      }, 10000);
+    });
+  }
+
+  /**
+   * Build secure command arguments
+   * @param {import('../types/BackendTypes').ImplementRequest} request - Implementation request
+   * @returns {Array<string>} Secure command arguments
+   * @private
+   */
+  buildSecureCommandArgs(request) {
+    const args = ['--non-interactive'];
+
+    // Add max turns with validation
+    const maxTurns = this.validateMaxTurns(request.options?.maxTurns || this.config.maxTurns);
+    args.push('--max-turns', maxTurns.toString());
+
+    // Add model with validation
+    if (this.config.model && this.isValidModelName(this.config.model)) {
+      args.push('--model', this.config.model);
+    }
+
+    // Add temperature with validation
+    const temperature = request.options?.temperature || this.config.temperature;
+    if (temperature !== undefined && this.isValidTemperature(temperature)) {
+      args.push('--temperature', temperature.toString());
+    }
+
+    // Add tools with validation
+    if (this.config.tools && this.config.tools.length > 0) {
+      const validatedTools = this.validateTools(this.config.tools);
+      if (validatedTools.length > 0) {
+        args.push('--allowed-tools', validatedTools.join(','));
+      }
+    }
+
+    return args;
+  }
+
+  /**
+   * Build secure environment variables
+   * @returns {Object} Secure environment variables
+   * @private
+   */
+  buildSecureEnvironment() {
+    const env = { ...process.env };
+    
+    if (this.config.apiKey && this.isValidApiKey(this.config.apiKey)) {
+      env.ANTHROPIC_API_KEY = this.config.apiKey;
+    }
+
+    return env;
+  }
+
+  /**
+   * Validate API key format
+   * @param {string} apiKey - API key to validate
+   * @returns {boolean} True if valid format
+   * @private
+   */
+  isValidApiKey(apiKey) {
+    if (!apiKey || typeof apiKey !== 'string') {
+      return false;
+    }
+
+    // Basic validation: should start with sk- and contain only safe characters
+    const validKeyPattern = /^sk-[a-zA-Z0-9_-]+$/;
+    const maxLength = 200; // Reasonable limit for API keys
+
+    return validKeyPattern.test(apiKey) && 
+           apiKey.length >= 20 && 
+           apiKey.length <= maxLength &&
+           !this.containsControlCharacters(apiKey);
+  }
+
+  /**
+   * Validate model name
+   * @param {string} model - Model name to validate
+   * @returns {boolean} True if valid
+   * @private
+   */
+  isValidModelName(model) {
+    if (!model || typeof model !== 'string') {
+      return false;
+    }
+
+    // Allow alphanumeric, hyphens, and dots only
+    const validModelPattern = /^[a-zA-Z0-9.-]+$/;
+    const maxLength = 100;
+
+    return validModelPattern.test(model) && 
+           model.length <= maxLength &&
+           !this.containsControlCharacters(model);
+  }
+
+  /**
+   * Validate temperature value
+   * @param {number} temperature - Temperature to validate
+   * @returns {boolean} True if valid
+   * @private
+   */
+  isValidTemperature(temperature) {
+    return typeof temperature === 'number' && 
+           temperature >= 0 && 
+           temperature <= 2 &&
+           !isNaN(temperature);
+  }
+
+  /**
+   * Validate max turns value
+   * @param {number} maxTurns - Max turns to validate
+   * @returns {number} Validated max turns value
+   * @private
+   */
+  validateMaxTurns(maxTurns) {
+    if (typeof maxTurns !== 'number' || isNaN(maxTurns) || maxTurns < 1) {
+      return 10; // Default value
+    }
+    
+    return Math.min(Math.max(Math.floor(maxTurns), 1), 50); // Clamp between 1 and 50
+  }
+
+  /**
+   * Validate tools list
+   * @param {Array<string>} tools - Tools to validate
+   * @returns {Array<string>} Validated tools
+   * @private
+   */
+  validateTools(tools) {
+    if (!Array.isArray(tools)) {
+      return [];
+    }
+
+    const validTools = ['edit', 'search', 'bash', 'str_replace', 'create_file'];
+    const validatedTools = [];
+
+    for (const tool of tools) {
+      if (typeof tool === 'string' && validTools.includes(tool)) {
+        validatedTools.push(tool);
+      } else {
+        this.log('warn', `Invalid tool ignored: ${tool}`);
+      }
+    }
+
+    return validatedTools;
+  }
+
+  /**
+   * Validate prompt content
+   * @param {string} prompt - Prompt to validate
+   * @returns {string} Validated prompt
+   * @private
+   */
+  validatePrompt(prompt) {
+    if (!prompt || typeof prompt !== 'string') {
+      throw new BackendError(
+        'Invalid prompt content',
+        ErrorTypes.VALIDATION_ERROR,
+        'INVALID_PROMPT'
+      );
+    }
+
+    const maxPromptLength = 100000; // 100KB limit for prompts
+    
+    if (prompt.length > maxPromptLength) {
+      throw new BackendError(
+        `Prompt too long (${prompt.length} chars, max: ${maxPromptLength})`,
+        ErrorTypes.VALIDATION_ERROR,
+        'PROMPT_TOO_LONG'
+      );
+    }
+
+    // Check for control characters that could cause issues
+    if (this.containsControlCharacters(prompt)) {
+      this.log('warn', 'Prompt contains control characters, they will be filtered');
+      return prompt.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''); // Remove most control chars but keep newlines/tabs
+    }
+
+    return prompt;
+  }
+
+  /**
+   * Check if string contains problematic control characters
+   * @param {string} str - String to check
+   * @returns {boolean} True if contains control characters
+   * @private
+   */
+  containsControlCharacters(str) {
+    // Check for control characters excluding newlines and tabs
+    return /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(str);
   }
 }
 

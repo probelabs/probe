@@ -167,9 +167,8 @@ class AiderBackend extends BaseBackend {
       progressTracker.endStep();
       progressTracker.startStep('execute', 'Executing aider');
       
-      // Build and execute aider command
-      const command = this.buildCommand(request, tempFilePath);
-      const workingDir = request.context?.workingDirectory || process.cwd();
+      // Validate working directory
+      const workingDir = this.validateWorkingDirectory(request.context?.workingDirectory || process.cwd());
       
       this.updateSessionStatus(request.sessionId, {
         status: 'running',
@@ -178,7 +177,7 @@ class AiderBackend extends BaseBackend {
       });
       
       // Execute aider
-      const result = await this.executeCommand(command, workingDir, request, sessionInfo, progressTracker);
+      const result = await this.executeCommand(workingDir, request, sessionInfo, progressTracker);
       
       progressTracker.endStep();
       
@@ -228,18 +227,28 @@ class AiderBackend extends BaseBackend {
   }
 
   /**
-   * Build aider command with arguments
+   * Build aider command arguments
    * @param {import('../types/BackendTypes').ImplementRequest} request - Implementation request
    * @param {string} tempFilePath - Path to temporary file with task
-   * @returns {string} Complete aider command
+   * @returns {Array<string>} Command arguments array for secure execution
    * @private
    */
-  buildCommand(request, tempFilePath) {
+  buildCommandArgs(request, tempFilePath) {
+    // Validate tempFilePath to prevent injection
+    if (!tempFilePath || typeof tempFilePath !== 'string') {
+      throw new BackendError(
+        'Invalid temporary file path',
+        ErrorTypes.VALIDATION_ERROR,
+        'INVALID_TEMP_FILE_PATH'
+      );
+    }
+    
     const args = [
       '--yes',
       '--no-check-update',
       '--no-analytics',
-      `--message-file "${tempFilePath}"`
+      '--message-file',
+      tempFilePath // Separate argument to prevent injection
     ];
     
     // Handle auto-commit option
@@ -250,7 +259,13 @@ class AiderBackend extends BaseBackend {
     // Add model selection
     const model = this.selectModel(request);
     if (model) {
-      args.push('--model', model);
+      // Validate model name to prevent injection
+      if (this.isValidModelName(model)) {
+        args.push('--model');
+        args.push(model);
+      } else {
+        this.log('warn', `Invalid model name ignored: ${model}`);
+      }
     }
     
     // Add timeout if specified
@@ -259,17 +274,19 @@ class AiderBackend extends BaseBackend {
       // Note: aider doesn't have a built-in timeout, this would need to be handled at process level
     }
     
-    // Add additional arguments from config
+    // Add additional arguments from config with validation
     if (this.config.additionalArgs && this.config.additionalArgs.length > 0) {
-      args.push(...this.config.additionalArgs);
+      const validatedArgs = this.validateAdditionalArgs(this.config.additionalArgs);
+      args.push(...validatedArgs);
     }
     
-    // Add any custom arguments from request
+    // Add any custom arguments from request with validation
     if (request.options?.additionalArgs) {
-      args.push(...request.options.additionalArgs);
+      const validatedArgs = this.validateAdditionalArgs(request.options.additionalArgs);
+      args.push(...validatedArgs);
     }
     
-    return `${this.config.command} ${args.join(' ')}`;
+    return args;
   }
 
   /**
@@ -307,8 +324,214 @@ class AiderBackend extends BaseBackend {
   }
 
   /**
+   * Validate model name to prevent command injection
+   * @param {string} model - Model name to validate
+   * @returns {boolean} True if valid, false otherwise
+   * @private
+   */
+  isValidModelName(model) {
+    if (!model || typeof model !== 'string') {
+      return false;
+    }
+    
+    // Allow alphanumeric, hyphens, underscores, dots, and forward slashes
+    // Block shell metacharacters and control characters
+    const validModelPattern = /^[a-zA-Z0-9._/-]+$/;
+    const maxLength = 100; // Reasonable limit for model names
+    
+    return validModelPattern.test(model) && model.length <= maxLength && !this.containsShellMetacharacters(model);
+  }
+
+  /**
+   * Validate additional arguments to prevent command injection
+   * @param {Array<string>} args - Arguments to validate
+   * @returns {Array<string>} Validated arguments
+   * @private
+   */
+  validateAdditionalArgs(args) {
+    if (!Array.isArray(args)) {
+      this.log('warn', 'additionalArgs must be an array, ignoring');
+      return [];
+    }
+    
+    const validatedArgs = [];
+    const maxArgLength = 500; // Reasonable limit for individual arguments
+    
+    for (const arg of args) {
+      if (typeof arg !== 'string') {
+        this.log('warn', `Skipping non-string argument: ${typeof arg}`);
+        continue;
+      }
+      
+      if (arg.length > maxArgLength) {
+        this.log('warn', `Skipping overly long argument (${arg.length} chars)`);
+        continue;
+      }
+      
+      // Check for dangerous patterns
+      if (this.containsShellMetacharacters(arg)) {
+        this.log('warn', `Skipping argument with shell metacharacters: ${arg.substring(0, 50)}`);
+        continue;
+      }
+      
+      // Validate common aider flags
+      if (this.isValidAiderArgument(arg)) {
+        validatedArgs.push(arg);
+      } else {
+        this.log('warn', `Skipping potentially unsafe argument: ${arg.substring(0, 50)}`);
+      }
+    }
+    
+    return validatedArgs;
+  }
+
+  /**
+   * Check if string contains shell metacharacters
+   * @param {string} str - String to check
+   * @returns {boolean} True if contains metacharacters
+   * @private
+   */
+  containsShellMetacharacters(str) {
+    // Common shell metacharacters that could be used for injection
+    const shellMetacharacters = /[;&|`$(){}[\]<>*?'"\\]/;
+    const controlChars = /[\x00-\x1f\x7f]/; // Control characters
+    
+    return shellMetacharacters.test(str) || controlChars.test(str);
+  }
+
+  /**
+   * Validate if argument is a known safe aider argument
+   * @param {string} arg - Argument to validate
+   * @returns {boolean} True if valid aider argument
+   * @private
+   */
+  isValidAiderArgument(arg) {
+    // Whitelist of known safe aider arguments
+    const safeAiderFlags = [
+      '--yes', '--no-check-update', '--no-analytics', '--no-auto-commits',
+      '--model', '--message-file', '--dry-run', '--map-tokens', '--show-model-warnings',
+      '--no-show-model-warnings', '--edit-format', '--architect', '--weak-model',
+      '--cache-prompts', '--no-cache-prompts', '--map-refresh', '--restore-chat-history',
+      '--encoding', '--config'
+    ];
+    
+    // Check if it's a known flag
+    if (safeAiderFlags.includes(arg)) {
+      return true;
+    }
+    
+    // Check if it's a flag with equals sign (like --model=value)
+    for (const flag of safeAiderFlags) {
+      if (arg.startsWith(flag + '=')) {
+        const value = arg.substring(flag.length + 1);
+        return !this.containsShellMetacharacters(value) && value.length <= 100;
+      }
+    }
+    
+    // Allow simple values that don't look like flags if they're safe
+    if (!arg.startsWith('-') && !this.containsShellMetacharacters(arg) && arg.length <= 100) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * Validate command path to prevent command injection
+   * @param {string} command - Command to validate
+   * @returns {boolean} True if valid
+   * @private
+   */
+  isValidCommand(command) {
+    if (!command || typeof command !== 'string') {
+      return false;
+    }
+    
+    // Only allow alphanumeric, hyphens, underscores, and forward slashes for paths
+    const validCommandPattern = /^[a-zA-Z0-9._/-]+$/;
+    const maxLength = 200; // Reasonable limit for command paths
+    
+    return validCommandPattern.test(command) && 
+           command.length <= maxLength && 
+           !this.containsShellMetacharacters(command);
+  }
+
+  /**
+   * Validate working directory path
+   * @param {string} dir - Directory path to validate
+   * @returns {string} Validated directory path
+   * @private
+   */
+  validateWorkingDirectory(dir) {
+    if (!dir || typeof dir !== 'string') {
+      throw new BackendError(
+        'Invalid working directory',
+        ErrorTypes.VALIDATION_ERROR,
+        'INVALID_WORKING_DIRECTORY'
+      );
+    }
+    
+    // Resolve path to prevent directory traversal
+    const resolvedPath = path.resolve(dir);
+    
+    // Basic validation - ensure it doesn't contain obvious injection attempts
+    if (this.containsShellMetacharacters(resolvedPath)) {
+      throw new BackendError(
+        'Working directory contains unsafe characters',
+        ErrorTypes.VALIDATION_ERROR,
+        'UNSAFE_WORKING_DIRECTORY'
+      );
+    }
+    
+    return resolvedPath;
+  }
+
+  /**
+   * Validate environment variables
+   * @param {Object} env - Environment variables to validate
+   * @returns {Object} Validated environment variables
+   * @private
+   */
+  validateEnvironment(env) {
+    if (!env || typeof env !== 'object') {
+      return {};
+    }
+    
+    const validatedEnv = {};
+    const maxValueLength = 1000; // Reasonable limit for env values
+    
+    for (const [key, value] of Object.entries(env)) {
+      // Validate key
+      if (typeof key !== 'string' || !/^[A-Z_][A-Z0-9_]*$/i.test(key)) {
+        this.log('warn', `Skipping invalid environment variable key: ${key}`);
+        continue;
+      }
+      
+      // Validate value
+      if (typeof value !== 'string') {
+        this.log('warn', `Skipping non-string environment variable value for: ${key}`);
+        continue;
+      }
+      
+      if (value.length > maxValueLength) {
+        this.log('warn', `Skipping overly long environment variable value for: ${key}`);
+        continue;
+      }
+      
+      // Don't allow control characters in environment variables
+      if (/[\x00-\x1f\x7f]/.test(value)) {
+        this.log('warn', `Skipping environment variable with control characters: ${key}`);
+        continue;
+      }
+      
+      validatedEnv[key] = value;
+    }
+    
+    return validatedEnv;
+  }
+
+  /**
    * Execute aider command
-   * @param {string} command - Command to execute
    * @param {string} workingDir - Working directory
    * @param {import('../types/BackendTypes').ImplementRequest} request - Implementation request
    * @param {Object} sessionInfo - Session information
@@ -316,19 +539,33 @@ class AiderBackend extends BaseBackend {
    * @returns {Promise<import('../types/BackendTypes').ImplementResult>}
    * @private
    */
-  async executeCommand(command, workingDir, request, sessionInfo, progressTracker) {
+  async executeCommand(workingDir, request, sessionInfo, progressTracker) {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
       
+      // Build command arguments securely
+      const commandArgs = this.buildCommandArgs(request, sessionInfo.tempFile);
+      const commandPath = this.config.command || 'aider';
+      
       this.log('info', 'Executing aider command', {
-        command: command.substring(0, 100) + '...',
+        command: commandPath,
+        args: commandArgs.slice(0, 5), // Log first few args only for security
         workingDir
       });
       
-      // Spawn the process
-      const childProcess = spawn('sh', ['-c', command], {
+      // Validate command exists and is safe
+      if (!this.isValidCommand(commandPath)) {
+        throw new BackendError(
+          'Invalid or unsafe command path',
+          ErrorTypes.VALIDATION_ERROR,
+          'INVALID_COMMAND_PATH'
+        );
+      }
+      
+      // Spawn the process directly (no shell interpretation)
+      const childProcess = spawn(commandPath, commandArgs, {
         cwd: workingDir,
-        env: { ...process.env, ...this.config.environment }
+        env: { ...process.env, ...this.validateEnvironment(this.config.environment) }
       });
       
       sessionInfo.childProcess = childProcess;
@@ -428,7 +665,8 @@ class AiderBackend extends BaseBackend {
               exitCode: code
             },
             metadata: {
-              command,
+              command: commandPath,
+              args: commandArgs.slice(0, 5), // Limited args for security
               workingDirectory: workingDir,
               aiderVersion: this.aiderVersion
             }
