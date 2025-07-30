@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 use tree_sitter::Tree;
 
@@ -20,11 +18,22 @@ lazy_static::lazy_static! {
     static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
 }
 
-/// Compute a hash of the content for cache validation
+/// Compute a deterministic hash of the content for cache validation
+///
+/// This uses the same FNV-1a algorithm as the line map cache to ensure
+/// consistent tree cache behavior across program runs.
 fn compute_content_hash(content: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    hasher.finish()
+    // FNV-1a hash algorithm - fast and deterministic
+    // Constants for 64-bit FNV-1a (same as parser.rs)
+    const FNV_OFFSET_BASIS: u64 = 14695981039346656037;
+    const FNV_PRIME: u64 = 1099511628211;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in content.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 /// Get a cached tree if available, otherwise parse and cache the result

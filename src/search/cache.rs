@@ -1,21 +1,24 @@
 use anyhow::Result;
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fs::{create_dir_all, File};
-use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use probe_code::models::SearchResult;
 
-/// Generate a hash for a query string
+/// Generate a deterministic hash for a query string
 /// This is used to create a unique identifier for each query
+/// Uses SHA-256 to ensure consistent cache keys across program runs
 pub fn hash_query(query: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    query.hash(&mut hasher);
-    format!("{:x}", hasher.finish())
+    use sha2::{Digest, Sha256};
+
+    // Use SHA-256 for deterministic, secure hashing
+    // This fixes non-deterministic behavior in cache key generation
+    let mut hasher = Sha256::new();
+    hasher.update(query.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// Structure to hold cache data for a session

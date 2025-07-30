@@ -191,18 +191,18 @@ impl BlockTokenCache {
         }
     }
 
-    /// Get content hash using SHA-256 (more secure and reliable than MD5 for block-level caching)
-    /// For block-level caching, we use a stronger hash function to ensure content integrity
-    /// and reduce hash collisions for large code blocks
+    /// Get content hash using SHA-256 for deterministic and secure caching
+    /// This ensures consistent cache keys across program runs, fixing non-deterministic behavior
+    /// caused by DefaultHasher's random seed
     fn hash_block_content(content: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use sha2::{Digest, Sha256};
 
-        // Use a simple but fast hash for caching purposes
-        // SHA-256 would be more secure but is overkill for cache keys and slower
-        let mut hasher = DefaultHasher::new();
-        content.hash(&mut hasher);
-        format!("{:x}", hasher.finish())
+        // Use SHA-256 for deterministic, secure hashing
+        // This fixes the non-deterministic behavior where DefaultHasher
+        // produces different hash values for the same content across runs
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        format!("{:x}", hasher.finalize())
     }
 
     /// Get current timestamp in seconds since epoch

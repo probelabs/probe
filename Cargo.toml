@@ -44,6 +44,7 @@ rust-stemmers = "1.2"
 tokio = { version = "1", features = ["full"] }
 tiktoken-rs = "0.6.0"
 regex = "1.9"
+sha2 = "0.10"
 futures = "0.3"
 itertools = "0.14.0"
 rayon = "1.8"
@@ -77,6 +78,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "probe"
 path = "src/main.rs"
+
+[[bin]]
+name = "test_token_approximation"
+path = "test_token_approximation.rs"
+
+[[bin]]
+name = "test_token_overrun_scenarios"
+path = "test_token_overrun_scenarios.rs"
 
 [[bench]]
 name = "search_benchmarks"

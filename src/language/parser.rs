@@ -13,7 +13,7 @@ use probe_code::models::CodeBlock;
 static LINE_MAP_CACHE: Lazy<DashMap<String, Vec<Option<CachedNodeInfo>>>> = Lazy::new(DashMap::new);
 
 /// Calculate a deterministic hash of the content for cache validation
-/// 
+///
 /// This uses a fast, deterministic hash function to ensure consistent cache keys
 /// across program runs, fixing the inconsistent search results issue caused by
 /// DefaultHasher's non-deterministic behavior.
@@ -25,7 +25,7 @@ fn calculate_content_hash(content: &str) -> u64 {
     // Constants for 64-bit FNV-1a
     const FNV_OFFSET_BASIS: u64 = 14695981039346656037;
     const FNV_PRIME: u64 = 1099511628211;
-    
+
     let mut hash = FNV_OFFSET_BASIS;
     for byte in content.bytes() {
         hash ^= byte as u64;
@@ -556,10 +556,10 @@ fn process_node<'a>(
     // node traversal order across program runs.
     let mut cursor = node.walk();
     let mut children: Vec<Node> = node.children(&mut cursor).collect();
-    
+
     // Sort children by their byte positions to ensure consistent processing order
     children.sort_by_key(|child| (child.start_byte(), child.end_byte()));
-    
+
     for child in children {
         process_node(
             child,
@@ -876,6 +876,8 @@ fn process_cached_line_map(
             "type_declaration",
             "struct_item",
             "block_comment", // Keep this? Seems odd for non-comment filter but matches original
+            "compilation_unit", // Root-level AST node - critical for content extraction
+            "global_attribute", // Assembly-level attributes - critical for C# code
         ];
         let is_important = important_block_types.contains(&block.node_type.as_str());
 
@@ -1482,6 +1484,8 @@ pub fn parse_file_for_code_blocks(
             "type_declaration",
             "struct_item",
             "block_comment",
+            "compilation_unit", // Root-level AST node - critical for content extraction
+            "global_attribute", // Assembly-level attributes - critical for C# code
         ];
         let is_important = important_block_types.contains(&block.node_type.as_str());
 
