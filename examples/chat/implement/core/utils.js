@@ -471,7 +471,7 @@ class TokenEstimator {
   }
 }
 
-module.exports = {
+export {
   ErrorTypes,
   BackendError,
   ErrorHandler,

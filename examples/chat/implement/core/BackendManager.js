@@ -3,7 +3,7 @@
  * @module BackendManager
  */
 
-const { BackendError, ErrorTypes, ErrorHandler, RetryHandler } = require('./utils.js');
+import { BackendError, ErrorTypes, ErrorHandler, RetryHandler } from './utils.js';
 
 /**
  * Manages registration, selection, and execution of implementation backends
@@ -564,4 +564,4 @@ class BackendManager {
   }
 }
 
-module.exports = BackendManager;
+export default BackendManager;

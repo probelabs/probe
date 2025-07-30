@@ -3,8 +3,8 @@
  * @module registry
  */
 
-const AiderBackend = require('./AiderBackend.js');
-const ClaudeCodeBackend = require('./ClaudeCodeBackend.js');
+import AiderBackend from './AiderBackend.js';
+import ClaudeCodeBackend from './ClaudeCodeBackend.js';
 
 /**
  * Available backend classes
@@ -73,7 +73,7 @@ function listBackendNames() {
   return Object.keys(AVAILABLE_BACKENDS);
 }
 
-module.exports = {
+export {
   getAvailableBackends,
   createBackend,
   registerBackend,

@@ -3,9 +3,9 @@
  * @module config
  */
 
-const fs = require('fs');
-const path = require('path');
-const { promisify } = require('util');
+import fs from 'fs';
+import path from 'path';
+import { promisify } from 'util';
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
@@ -408,7 +408,7 @@ class ConfigManager {
 // Create singleton instance
 const configManager = new ConfigManager();
 
-module.exports = {
+export {
   ConfigManager,
   configManager
 };

@@ -3,7 +3,7 @@
  * @module BaseBackend
  */
 
-const { BackendError, ErrorTypes } = require('../core/utils.js');
+import { BackendError, ErrorTypes } from '../core/utils.js';
 
 /**
  * Base class that all implementation backends must extend
@@ -269,4 +269,4 @@ class BaseBackend {
   }
 }
 
-module.exports = BaseBackend;
+export default BaseBackend;

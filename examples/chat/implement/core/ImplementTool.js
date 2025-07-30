@@ -3,10 +3,10 @@
  * @module ImplementTool
  */
 
-const BackendManager = require('./BackendManager.js');
-const { createBackend, listBackendNames } = require('../backends/registry.js');
-const { BackendError, ErrorTypes } = require('./utils.js');
-const { configManager } = require('./config.js');
+import BackendManager from './BackendManager.js';
+import { createBackend, listBackendNames } from '../backends/registry.js';
+import { BackendError, ErrorTypes } from './utils.js';
+import { configManager } from './config.js';
 
 /**
  * Implementation tool that uses pluggable backends
@@ -351,7 +351,4 @@ function createImplementTool(config = {}) {
   };
 }
 
-module.exports = {
-  ImplementTool,
-  createImplementTool
-};
+export { ImplementTool, createImplementTool };

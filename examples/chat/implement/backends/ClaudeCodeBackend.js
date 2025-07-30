@@ -3,11 +3,11 @@
  * @module ClaudeCodeBackend
  */
 
-const BaseBackend = require('./BaseBackend.js');
-const { BackendError, ErrorTypes, ProgressTracker, FileChangeParser, TokenEstimator } = require('../core/utils.js');
-const { exec } = require('child_process');
-const { promisify } = require('util');
-const path = require('path');
+import BaseBackend from './BaseBackend.js';
+import { BackendError, ErrorTypes, ProgressTracker, FileChangeParser, TokenEstimator } from '../core/utils.js';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import path from 'path';
 
 const execPromise = promisify(exec);
 
@@ -565,4 +565,4 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
   }
 }
 
-module.exports = ClaudeCodeBackend;
+export default ClaudeCodeBackend;

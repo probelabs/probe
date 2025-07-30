@@ -3,13 +3,13 @@
  * @module AiderBackend
  */
 
-const BaseBackend = require('./BaseBackend.js');
-const { BackendError, ErrorTypes, ProgressTracker, FileChangeParser, TokenEstimator } = require('../core/utils.js');
-const { spawn, exec } = require('child_process');
-const { promisify } = require('util');
-const { promises as fsPromises } = require('fs');
-const path = require('path');
-const os = require('os');
+import BaseBackend from './BaseBackend.js';
+import { BackendError, ErrorTypes, ProgressTracker, FileChangeParser, TokenEstimator } from '../core/utils.js';
+import { spawn, exec } from 'child_process';
+import { promisify } from 'util';
+import { promises as fsPromises } from 'fs';
+import path from 'path';
+import os from 'os';
 
 const execPromise = promisify(exec);
 
@@ -476,4 +476,4 @@ class AiderBackend extends BaseBackend {
   }
 }
 
-module.exports = AiderBackend;
+export default AiderBackend;

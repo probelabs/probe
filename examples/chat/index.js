@@ -151,47 +151,51 @@ export function main() {
 
   // Handle --implement-tool-list-backends option
   if (options.implementToolListBackends) {
-    const { listBackendNames, getBackendMetadata } = await import('./implement/backends/registry.js');
-    const backends = listBackendNames();
-    
-    console.log('\nAvailable implementation tool backends:');
-    for (const backend of backends) {
-      const metadata = getBackendMetadata(backend);
-      console.log(`\n  ${chalk.bold(backend)} - ${metadata.description}`);
-      console.log(`    Version: ${metadata.version}`);
-      console.log(`    Languages: ${metadata.capabilities.supportsLanguages.join(', ')}`);
-    }
-    process.exit(0);
+    (async () => {
+      const { listBackendNames, getBackendMetadata } = await import('./implement/backends/registry.js');
+      const backends = listBackendNames();
+      
+      console.log('\nAvailable implementation tool backends:');
+      for (const backend of backends) {
+        const metadata = getBackendMetadata(backend);
+        console.log(`\n  ${chalk.bold(backend)} - ${metadata.description}`);
+        console.log(`    Version: ${metadata.version}`);
+        console.log(`    Languages: ${metadata.capabilities.supportsLanguages.join(', ')}`);
+      }
+      process.exit(0);
+    })();
   }
 
   // Handle --implement-tool-backend-info option
   if (options.implementToolBackendInfo) {
-    const { getBackendMetadata } = await import('./implement/backends/registry.js');
-    const metadata = getBackendMetadata(options.implementToolBackendInfo);
-    
-    if (!metadata) {
-      console.error(`Backend '${options.implementToolBackendInfo}' not found`);
-      process.exit(1);
-    }
-    
-    console.log(`\n${chalk.bold('Backend Information: ' + options.implementToolBackendInfo)}`);
-    console.log(`\nDescription: ${metadata.description}`);
-    console.log(`Version: ${metadata.version}`);
-    console.log(`\nCapabilities:`);
-    console.log(`  Languages: ${metadata.capabilities.supportsLanguages.join(', ')}`);
-    console.log(`  Streaming: ${metadata.capabilities.supportsStreaming ? '✓' : '✗'}`);
-    console.log(`  Direct File Edit: ${metadata.capabilities.supportsDirectFileEdit ? '✓' : '✗'}`);
-    console.log(`  Test Generation: ${metadata.capabilities.supportsTestGeneration ? '✓' : '✗'}`);
-    console.log(`  Plan Generation: ${metadata.capabilities.supportsPlanGeneration ? '✓' : '✗'}`);
-    console.log(`  Max Sessions: ${metadata.capabilities.maxConcurrentSessions}`);
-    console.log(`\nRequired Dependencies:`);
-    for (const dep of metadata.dependencies) {
-      console.log(`  - ${dep.name} (${dep.type}): ${dep.description}`);
-      if (dep.installCommand) {
-        console.log(`    Install: ${dep.installCommand}`);
+    (async () => {
+      const { getBackendMetadata } = await import('./implement/backends/registry.js');
+      const metadata = getBackendMetadata(options.implementToolBackendInfo);
+      
+      if (!metadata) {
+        console.error(`Backend '${options.implementToolBackendInfo}' not found`);
+        process.exit(1);
       }
-    }
-    process.exit(0);
+      
+      console.log(`\n${chalk.bold('Backend Information: ' + options.implementToolBackendInfo)}`);
+      console.log(`\nDescription: ${metadata.description}`);
+      console.log(`Version: ${metadata.version}`);
+      console.log(`\nCapabilities:`);
+      console.log(`  Languages: ${metadata.capabilities.supportsLanguages.join(', ')}`);
+      console.log(`  Streaming: ${metadata.capabilities.supportsStreaming ? '✓' : '✗'}`);
+      console.log(`  Direct File Edit: ${metadata.capabilities.supportsDirectFileEdit ? '✓' : '✗'}`);
+      console.log(`  Test Generation: ${metadata.capabilities.supportsTestGeneration ? '✓' : '✗'}`);
+      console.log(`  Plan Generation: ${metadata.capabilities.supportsPlanGeneration ? '✓' : '✗'}`);
+      console.log(`  Max Sessions: ${metadata.capabilities.maxConcurrentSessions}`);
+      console.log(`\nRequired Dependencies:`);
+      for (const dep of metadata.dependencies) {
+        console.log(`  - ${dep.name} (${dep.type}): ${dep.description}`);
+        if (dep.installCommand) {
+          console.log(`    Install: ${dep.installCommand}`);
+        }
+      }
+      process.exit(0);
+    })();
   }
 
   // Set ALLOW_EDIT from command line if provided
