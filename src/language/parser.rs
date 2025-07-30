@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use tree_sitter::{Node, Parser as TSParser};
 
 use probe_code::language::factory::get_language_impl;
@@ -14,11 +12,26 @@ use probe_code::models::CodeBlock;
 // Define a static cache for line maps
 static LINE_MAP_CACHE: Lazy<DashMap<String, Vec<Option<CachedNodeInfo>>>> = Lazy::new(DashMap::new);
 
-/// Calculate a hash of the content for cache validation
+/// Calculate a deterministic hash of the content for cache validation
+/// 
+/// This uses a fast, deterministic hash function to ensure consistent cache keys
+/// across program runs, fixing the inconsistent search results issue caused by
+/// DefaultHasher's non-deterministic behavior.
+///
+/// The hash function is based on FNV-1a algorithm which is fast and provides
+/// good distribution while being deterministic.
 fn calculate_content_hash(content: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    hasher.finish()
+    // FNV-1a hash algorithm - fast and deterministic
+    // Constants for 64-bit FNV-1a
+    const FNV_OFFSET_BASIS: u64 = 14695981039346656037;
+    const FNV_PRIME: u64 = 1099511628211;
+    
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in content.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 /// A version of NodeInfo without lifetimes for caching
@@ -538,8 +551,16 @@ fn process_node<'a>(
     };
 
     // Process children recursively (depth-first traversal)
+    // IMPORTANT: Collect and sort children to ensure deterministic processing order
+    // This fixes the non-deterministic search results issue caused by inconsistent
+    // node traversal order across program runs.
     let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
+    let mut children: Vec<Node> = node.children(&mut cursor).collect();
+    
+    // Sort children by their byte positions to ensure consistent processing order
+    children.sort_by_key(|child| (child.start_byte(), child.end_byte()));
+    
+    for child in children {
         process_node(
             child,
             line_map,
