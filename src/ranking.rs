@@ -45,6 +45,12 @@ pub fn tokenize(text: &str) -> Vec<String> {
     tokenization::tokenize(text)
 }
 
+/// Preprocesses text for search by tokenizing and removing duplicates
+/// This is a lighter version that doesn't include filename tokens
+pub fn preprocess_text(text: &str) -> Vec<String> {
+    tokenize(text)
+}
+
 /// Preprocesses text with filename for search by tokenizing and removing duplicates
 /// This is used for filename matching - it adds the filename and its directory structure to the tokens
 pub fn preprocess_text_with_filename(text: &str, filename: &str) -> Vec<String> {

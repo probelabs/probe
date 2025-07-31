@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use probe_code::language::{is_test_file, parse_file_for_code_blocks};
+use probe_code::language::{is_test_file, parse_file_for_code_blocks_with_tree};
 use probe_code::models::SearchResult;
 use probe_code::ranking;
 use probe_code::search::tokenization;
@@ -409,12 +409,18 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
     let default_context_size = 5;
     let mut context_windows = Vec::new();
 
-    // Pre-create a basic text representation for pre-filtering (optimization)
-    let file_text_lower = ctx.lines.join("\n").to_lowercase();
-    let has_potential_matches = ctx
+    // PHASE 3A OPTIMIZATION: Pre-compile query terms into lowercase for faster matching
+    let query_terms_lower: HashSet<String> = ctx
         .unique_query_terms
         .iter()
-        .any(|term| file_text_lower.contains(&term.to_lowercase()));
+        .map(|s| s.to_lowercase())
+        .collect();
+
+    // Pre-create a basic text representation for pre-filtering (optimization)
+    let file_text_lower = ctx.lines.join("\n").to_lowercase();
+    let has_potential_matches = query_terms_lower
+        .iter()
+        .any(|term| file_text_lower.contains(term));
 
     if !has_potential_matches && ctx.debug_mode {
         println!("DEBUG: SMART MERGING: No query terms found in file content, processing minimal contexts");
@@ -490,9 +496,13 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
     let mut current_window: Option<(Vec<usize>, usize, usize, usize, usize)> = None;
 
     // SMART MERGING OPTIMIZATION: Use dynamic threshold based on context density
+    // PHASE 3A OPTIMIZATION: More aggressive merging reduces number of contexts to process
     let dynamic_merge_threshold = if context_windows.len() > 10 {
         // More aggressive merging for many context windows
-        default_context_size + 2
+        default_context_size + 3 // Increased from +2 to +3 for better batching
+    } else if context_windows.len() > 5 {
+        // Medium merging for moderate windows
+        default_context_size + 1
     } else {
         // Standard merging for fewer windows
         1
@@ -589,6 +599,11 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
     let mut tokenization_cache: std::collections::HashMap<(usize, usize), Vec<String>> =
         std::collections::HashMap::new();
 
+    // PHASE 3A OPTIMIZATION: Pre-allocate results vector with estimated capacity
+    // This avoids vector reallocation during result creation
+    let estimated_results = merged_windows.len();
+    ctx.results.reserve(estimated_results);
+
     // Step 3: Process merged context windows in batch with tokenization caching
     for (original_lines, context_start, context_end, context_start_idx, context_end_idx) in
         merged_windows
@@ -630,11 +645,11 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             .term_matches
             .values()
             .any(|lines| lines.len() >= file_line_count);
+        // PHASE 3A OPTIMIZATION: Reuse pre-computed lowercase query terms
         let context_text_lower = context_code.to_lowercase();
-        let has_potential_query_matches = ctx
-            .unique_query_terms
+        let has_potential_query_matches = query_terms_lower
             .iter()
-            .any(|term| context_text_lower.contains(&term.to_lowercase()));
+            .any(|term| context_text_lower.contains(term));
 
         // Skip aggressive pre-filtering for filename matches to preserve all context
         if !has_potential_query_matches && !is_likely_filename_match {
@@ -642,6 +657,11 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                 println!(
                     "DEBUG: AGGRESSIVE PRE-FILTERING: Context {context_start}-{context_end} contains no query terms, skipping expensive processing"
                 );
+            }
+            // PHASE 3A OPTIMIZATION: Mark lines as covered even when skipping
+            // This prevents redundant processing in subsequent operations
+            for line in context_start..=context_end {
+                ctx.covered_lines.insert(line);
             }
             // Skip this context entirely - no point in tokenizing or processing it further
             continue;
@@ -668,10 +688,19 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             cached_terms.clone()
         } else {
             // BATCH OPTIMIZATION: Single tokenization per merged context window (major performance gain)
-            let terms = ranking::preprocess_text_with_filename(
-                &context_code,
-                &ctx.params.path.to_string_lossy(),
-            );
+            // PHASE 3A OPTIMIZATION: Use more efficient tokenization for uncovered lines
+            // Since these are fallback contexts, we can use a lighter tokenization approach
+            let terms = if ctx.params.query_plan.exact {
+                // In exact mode, use the full tokenization
+                ranking::preprocess_text_with_filename(
+                    &context_code,
+                    &ctx.params.path.to_string_lossy(),
+                )
+            } else {
+                // For non-exact mode, use optimized tokenization without filename processing
+                // This is faster for fallback contexts where filename isn't as relevant
+                ranking::preprocess_text(&context_code)
+            };
             tokenization_cache.insert(cache_key, terms.clone());
             if ctx.debug_mode {
                 println!("DEBUG: TOKENIZATION CACHE: Cached tokenization for context {context_start}-{context_end}");
@@ -720,10 +749,9 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         }
 
         // BATCH OPTIMIZATION: Mark all lines in merged context as covered at once
-        if should_include {
-            for line in context_start..=context_end {
-                ctx.covered_lines.insert(line);
-            }
+        // PHASE 3A OPTIMIZATION: Always mark lines as covered to prevent redundant processing
+        for line in context_start..=context_end {
+            ctx.covered_lines.insert(line);
         }
 
         // Add to results only if it passes the filter
@@ -732,21 +760,34 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             let compound_start = Instant::now();
 
             // BATCH OPTIMIZATION: Calculate metrics once for the entire merged context window
-            let direct_matches: HashSet<&String> = context_terms
+            // PHASE 3A OPTIMIZATION: Use HashSet for O(1) lookups instead of Vec iterations
+            let context_terms_set: HashSet<&String> = context_terms.iter().collect();
+
+            let direct_matches: HashSet<&String> = ctx
+                .unique_query_terms
                 .iter()
-                .filter(|t| ctx.unique_query_terms.contains(*t))
+                .filter(|t| context_terms_set.contains(t))
                 .collect();
 
             let mut compound_matches = HashSet::new();
             // VOCABULARY CACHE OPTIMIZATION: Use cached vocabulary for filtering compound word processing
-            for qterm in ctx.unique_query_terms {
-                if context_terms.iter().any(|bt| bt == qterm) {
-                    continue;
-                }
-                // Use cached compound word splitting optimized for filtering operations
-                let parts = tokenization::split_compound_word_for_filtering(qterm);
-                if parts.len() > 1 && parts.iter().all(|part| context_terms.contains(part)) {
-                    compound_matches.insert(qterm);
+            // PHASE 3A OPTIMIZATION: Skip compound processing if no query terms have multiple parts
+            let needs_compound_processing = ctx
+                .unique_query_terms
+                .iter()
+                .any(|t| t.contains('_') || t.contains('-'));
+
+            if needs_compound_processing {
+                for qterm in ctx.unique_query_terms {
+                    if direct_matches.contains(&qterm) {
+                        continue;
+                    }
+                    // Use cached compound word splitting optimized for filtering operations
+                    let parts = tokenization::split_compound_word_for_filtering(qterm);
+                    if parts.len() > 1 && parts.iter().all(|part| context_terms_set.contains(&part))
+                    {
+                        compound_matches.insert(qterm);
+                    }
                 }
             }
 
@@ -1002,7 +1043,8 @@ pub fn process_file_with_results(
     cache_key.push('_');
     cache_key.push_str(extension);
 
-    let _ = if language_supported {
+    // Capture the parsed tree instead of discarding it
+    let parsed_tree = if language_supported {
         // Use the new pooled parser approach - this eliminates the expensive
         // parser creation and language setup that was happening for each file
         crate::language::get_or_parse_tree_pooled(&cache_key, &content, extension).ok()
@@ -1015,13 +1057,14 @@ pub fn process_file_with_results(
     // Measure line map building time (this is an approximation since we can't directly measure it)
     let line_map_building_start = Instant::now();
 
-    // Call the original parse_file_for_code_blocks function
-    let code_blocks_result = parse_file_for_code_blocks(
+    // Call parse_file_for_code_blocks with the pre-parsed tree to avoid double parsing
+    let code_blocks_result = parse_file_for_code_blocks_with_tree(
         &content,
         extension,
         params.line_numbers,
         params.allow_tests,
         Some(params.term_matches),
+        parsed_tree,
     );
 
     let line_map_building_duration = line_map_building_start.elapsed();
