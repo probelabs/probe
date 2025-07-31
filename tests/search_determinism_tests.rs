@@ -182,7 +182,7 @@ fn test_user_keyword_filename_vs_content_matching() {
         "Search result: {} lines, {} bytes, {} tokens",
         result.line_count, result.byte_count, result.token_count
     );
-    println!("Raw output:\n{}", stdout);
+    println!("Raw output:\n{stdout}");
 
     // This test documents the behavior - it may return results due to filename matching
     // even though the content doesn't contain the search terms
@@ -226,7 +226,7 @@ fn test_search_determinism_with_multiple_conditions() {
     ];
 
     for (name, config_flags) in search_configs {
-        println!("\n--- Testing with {} configuration ---", name);
+        println!("\n--- Testing with {name} configuration ---");
         let mut results = Vec::new();
 
         // Run multiple times with this configuration
@@ -247,10 +247,7 @@ fn test_search_determinism_with_multiple_conditions() {
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                panic!(
-                    "Command failed on iteration {} with {}: {}",
-                    i, name, stderr
-                );
+                panic!("Command failed on iteration {i} with {name}: {stderr}");
             }
 
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -264,7 +261,7 @@ fn test_search_determinism_with_multiple_conditions() {
 
         for (i, result) in results.iter().enumerate().skip(1) {
             if !results_equal(first_result, result) {
-                println!("❌ INCONSISTENCY DETECTED with {} configuration!", name);
+                println!("❌ INCONSISTENCY DETECTED with {name} configuration!");
                 println!(
                     "  Iteration 1: {} lines, {} bytes, {} tokens",
                     first_result.line_count, first_result.byte_count, first_result.token_count
@@ -288,7 +285,7 @@ fn test_search_determinism_with_multiple_conditions() {
             );
         } else {
             // Fail the test if we detect non-deterministic behavior
-            panic!("Non-deterministic behavior detected with {} configuration! This needs to be fixed.", name);
+            panic!("Non-deterministic behavior detected with {name} configuration! This needs to be fixed.");
         }
     }
 }
@@ -338,7 +335,7 @@ fn test_search_determinism_concurrent_execution() {
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                panic!("Command failed in thread {}: {}", thread_id, stderr);
+                panic!("Command failed in thread {thread_id}: {stderr}");
             }
 
             let stdout = String::from_utf8_lossy(&output.stdout);

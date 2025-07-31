@@ -3050,10 +3050,7 @@ mod tests {
 
         println!("\n📊 SUMMARY STATISTICS:");
         println!("  Total important programming terms tested: {total_terms}");
-        println!(
-            "  Terms skipped by heuristics: {} ({:.1}%)",
-            skipped_terms, skip_rate
-        );
+        println!("  Terms skipped by heuristics: {skipped_terms} ({skip_rate:.1}%)");
         println!(
             "  Terms that would be processed: {} ({:.1}%)",
             total_terms - skipped_terms,
@@ -3061,17 +3058,11 @@ mod tests {
         );
 
         println!("\n🚨 CRITICAL ANALYSIS:");
-        println!(
-            "  The current heuristics are skipping {} critical programming terms!",
-            skipped_terms
-        );
+        println!("  The current heuristics are skipping {skipped_terms} critical programming terms!");
         println!("  This means compound words containing these terms may not be found:");
 
         for term in &critical_misses[..critical_misses.len().min(10)] {
-            println!(
-                "    - Searches for '{}' might miss '{}Handler', '{}Client', '{}Parser'",
-                term, term, term, term
-            );
+            println!("    - Searches for '{term}' might miss '{term}Handler', '{term}Client', '{term}Parser'");
         }
 
         if critical_misses.len() > 10 {
@@ -3091,10 +3082,9 @@ mod tests {
         // This assertion will fail, demonstrating the problem
         if skip_rate > 50.0 {
             panic!(
-                "CRITICAL ISSUE: {:.1}% of important programming terms are being skipped! \
+                "CRITICAL ISSUE: {skip_rate:.1}% of important programming terms are being skipped! \
                    This creates significant false negatives in search results. \
-                   Terms affected: {:?}",
-                skip_rate, critical_misses
+                   Terms affected: {critical_misses:?}"
             );
         }
     }
@@ -3123,7 +3113,7 @@ mod tests {
 
         for query in &search_queries {
             total_queries += 1;
-            println!("\nQuery: \"{}\"", query);
+            println!("\nQuery: \"{query}\"");
 
             let words: Vec<&str> = query.split_whitespace().collect();
             let mut problematic_terms = Vec::new();
@@ -3156,9 +3146,7 @@ mod tests {
         let problem_rate = (queries_with_issues as f64 / total_queries as f64) * 100.0;
         println!("\n📊 QUERY IMPACT SUMMARY:");
         println!("  Total queries tested: {total_queries}");
-        println!(
-            "  Queries with problematic terms: {queries_with_issues} ({problem_rate:.1}%)"
-        );
+        println!("  Queries with problematic terms: {queries_with_issues} ({problem_rate:.1}%)");
 
         // Most queries will have issues due to the aggressive heuristics
         assert!(queries_with_issues > 0,
