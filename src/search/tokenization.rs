@@ -3058,7 +3058,9 @@ mod tests {
         );
 
         println!("\n🚨 CRITICAL ANALYSIS:");
-        println!("  The current heuristics are skipping {skipped_terms} critical programming terms!");
+        println!(
+            "  The current heuristics are skipping {skipped_terms} critical programming terms!"
+        );
         println!("  This means compound words containing these terms may not be found:");
 
         for term in &critical_misses[..critical_misses.len().min(10)] {
