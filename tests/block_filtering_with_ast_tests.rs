@@ -433,6 +433,8 @@ fn test_required_terms_query() {
         term_indices: indices.clone(),
         excluded_terms: HashSet::new(),
         exact: false,
+        is_simple_query: false,
+        required_terms: HashSet::new(),
     };
 
     // Use the term indices directly

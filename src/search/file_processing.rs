@@ -165,13 +165,36 @@ pub fn filter_tokenized_block(
     plan: &crate::search::query::QueryPlan,
     debug_mode: bool,
 ) -> bool {
+    // Early termination: if query has only excluded terms and content is empty, return true
+    if tokenized_content.is_empty() {
+        return plan.ast.is_only_excluded_terms();
+    }
+
     // Create a set of matched term indices based on tokenized content
     let mut matched_terms = HashSet::new();
+
+    // Quick check for required terms - if any required term is definitely missing, we can fail fast
+    if !plan.required_terms.is_empty() {
+        let tokenized_set: HashSet<&str> = tokenized_content.iter().map(|s| s.as_str()).collect();
+        for required_term in &plan.required_terms {
+            if !tokenized_set.contains(required_term.as_str()) {
+                // Check if it might be a compound word case
+                if !crate::search::tokenization::is_special_case(required_term) {
+                    return false;
+                }
+            }
+        }
+    }
 
     // For each token in the tokenized content, check if it's in the term_indices
     for token in tokenized_content {
         if let Some(&idx) = term_indices.get(token) {
             matched_terms.insert(idx);
+
+            // Early termination for simple queries
+            if plan.is_simple_query {
+                return true;
+            }
         }
     }
 
@@ -222,6 +245,10 @@ pub fn filter_tokenized_block(
 
     // Check if we have any matches at all
     if matched_terms.is_empty() {
+        // Check if the query only contains excluded terms
+        if plan.ast.is_only_excluded_terms() {
+            return true;
+        }
         if debug_mode {
             println!("DEBUG: No matched terms in tokenized block, returning false");
         }

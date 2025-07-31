@@ -32,6 +32,10 @@ pub struct QueryPlan {
     pub term_indices: HashMap<String, usize>,
     pub excluded_terms: HashSet<String>,
     pub exact: bool,
+    /// Optimization hint: true if this is a simple single-term query
+    pub is_simple_query: bool,
+    /// Optimization hint: set of required terms that must all be present
+    pub required_terms: HashSet<String>,
 }
 
 /// Helper function to format duration in a human-readable way
@@ -130,12 +134,50 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
         );
     }
 
+    // Collect required terms for optimization
+    let mut required_terms = HashSet::new();
+    collect_required_terms(&ast, &mut required_terms);
+
+    // Determine if this is a simple query for optimization
+    let is_simple_query = match &ast {
+        elastic_query::Expr::Term { excluded, .. } => !excluded && all_terms.len() == 1,
+        _ => false,
+    };
+
     Ok(QueryPlan {
         ast,
         term_indices,
         excluded_terms,
         exact,
+        is_simple_query,
+        required_terms,
     })
+}
+
+/// Collect required terms from the AST for optimization
+fn collect_required_terms(expr: &elastic_query::Expr, required_terms: &mut HashSet<String>) {
+    match expr {
+        elastic_query::Expr::Term {
+            keywords,
+            required,
+            excluded,
+            ..
+        } => {
+            if *required && !*excluded {
+                for keyword in keywords {
+                    required_terms.insert(keyword.clone());
+                }
+            }
+        }
+        elastic_query::Expr::And(left, right) => {
+            collect_required_terms(left, required_terms);
+            collect_required_terms(right, required_terms);
+        }
+        elastic_query::Expr::Or(_, _) => {
+            // For OR expressions, we can't guarantee any term is required
+            // so we don't collect anything
+        }
+    }
 }
 
 /// Recursively update the AST to mark all terms as exact

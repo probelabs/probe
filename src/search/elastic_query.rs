@@ -77,6 +77,20 @@ impl Expr {
         }
     }
 
+    /// Returns `true` if this expression contains only excluded terms.
+    /// This is used for early termination optimization.
+    pub fn is_only_excluded_terms(&self) -> bool {
+        match self {
+            Expr::Term { excluded, .. } => *excluded,
+            Expr::And(left, right) => {
+                left.is_only_excluded_terms() && right.is_only_excluded_terms()
+            }
+            Expr::Or(left, right) => {
+                left.is_only_excluded_terms() && right.is_only_excluded_terms()
+            }
+        }
+    }
+
     /// A helper to evaluate the expression when the caller already knows if
     /// there are any required terms in the *entire* query (not just in this subtree).
     fn evaluate_with_has_required(
@@ -86,6 +100,12 @@ impl Expr {
         ignore_negatives: bool,
         has_required_anywhere: bool,
     ) -> bool {
+        // Early termination optimization: if no terms matched, result is always false
+        // (unless we have only excluded terms, but that's handled below)
+        if matched_terms.is_empty() && !self.is_only_excluded_terms() {
+            return false;
+        }
+
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
         match self {
@@ -223,6 +243,11 @@ impl Expr {
         term_indices: &HashMap<String, usize>,
         ignore_negatives: bool,
     ) -> bool {
+        // Early termination optimization
+        if matched_terms.is_empty() && !self.is_only_excluded_terms() {
+            return false;
+        }
+
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
         // If ignoring negatives, let's ensure that all required terms are present up front.

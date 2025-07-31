@@ -695,6 +695,8 @@ fn test_filter_code_block_with_ast() {
             set
         },
         exact: false,
+        is_simple_query: false,
+        required_terms: HashSet::new(),
     };
 
     // Create term matches for a block
@@ -771,6 +773,8 @@ fn test_filter_tokenized_block() {
             set
         },
         exact: false,
+        is_simple_query: false,
+        required_terms: HashSet::new(),
     };
 
     // Import the function from probe crate
@@ -843,6 +847,8 @@ fn test_filter_tokenized_block() {
         term_indices: term_indices_or.clone(),
         excluded_terms: HashSet::new(),
         exact: false,
+        is_simple_query: false,
+        required_terms: HashSet::new(),
     };
 
     // Test with only keywordGamma
