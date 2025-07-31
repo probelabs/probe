@@ -95,6 +95,11 @@ fn test_excluded_term_pattern_generation() {
     let mut excluded_terms = HashSet::new();
     excluded_terms.insert("excluded".to_string());
 
+    let has_required_anywhere = ast.has_required_term();
+    let has_only_excluded_terms = ast.is_only_excluded_terms();
+    let required_terms_indices = HashSet::new();
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     let plan = QueryPlan {
         ast,
         term_indices,
@@ -102,6 +107,10 @@ fn test_excluded_term_pattern_generation() {
         exact: false,
         is_simple_query: false,
         required_terms: HashSet::new(),
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     };
 
     // Generate patterns

@@ -114,7 +114,8 @@ pub fn filter_code_block_with_ast(
 
         // Add detailed information about which exact keywords matched
         println!("DEBUG: ===== MATCHED KEYWORDS DETAILS =====");
-        let mut matched_keywords = Vec::new();
+        // PHASE 4 OPTIMIZATION: Pre-allocate with estimated size
+        let mut matched_keywords = Vec::with_capacity(plan.term_indices.len());
         for (term, &idx) in &plan.term_indices {
             if matched_terms.contains(&idx) {
                 matched_keywords.push(term);
@@ -286,7 +287,8 @@ pub fn filter_tokenized_block(
 
         // Add detailed information about which exact keywords matched
         println!("DEBUG: ===== MATCHED KEYWORDS DETAILS =====");
-        let mut matched_keywords = Vec::new();
+        // PHASE 4 OPTIMIZATION: Pre-allocate with estimated size
+        let mut matched_keywords = Vec::with_capacity(plan.term_indices.len());
         for (term, &idx) in &plan.term_indices {
             if matched_terms.contains(&idx) {
                 matched_keywords.push(term);
@@ -473,7 +475,8 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
 
     // SMART CONTEXT WINDOW MERGING: Pre-compute context windows with enhanced merging
     let default_context_size = 5;
-    let mut context_windows = Vec::new();
+    // PHASE 4 OPTIMIZATION: Pre-allocate with line numbers size
+    let mut context_windows = Vec::with_capacity(ctx.params.line_numbers.len());
 
     // PHASE 3A OPTIMIZATION: Pre-compile query terms into lowercase for faster matching
     let query_terms_lower: HashSet<String> = ctx
@@ -558,7 +561,8 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
     // Step 2: Enhanced merging with smart gap detection and aggressive combining
     context_windows.sort_by_key(|&(_, start, _, _, _)| start);
 
-    let mut merged_windows = Vec::new();
+    // PHASE 4 OPTIMIZATION: Pre-allocate with context windows size
+    let mut merged_windows = Vec::with_capacity(context_windows.len());
     let mut current_window: Option<(Vec<usize>, usize, usize, usize, usize)> = None;
 
     // SMART MERGING OPTIMIZATION: Use dynamic threshold based on context density
@@ -870,7 +874,8 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             let context_total_matches = direct_matches.len() + compound_matches.len();
 
             // Collect matched keywords for merged fallback context
-            let mut matched_keywords = Vec::new();
+            // PHASE 4 OPTIMIZATION: Pre-allocate with estimated size
+            let mut matched_keywords = Vec::with_capacity(ctx.params.query_plan.term_indices.len());
 
             // Add direct matches
             matched_keywords.extend(direct_matches.iter().map(|s| (*s).clone()));
@@ -1170,6 +1175,9 @@ pub fn process_file_with_results(
     }
 
     if let Ok(code_blocks) = code_blocks_result {
+        // PHASE 4 OPTIMIZATION: Pre-allocate results with code blocks size
+        results.reserve(code_blocks.len());
+
         if debug_mode {
             println!("DEBUG: AST parsing successful");
             println!("DEBUG:   Found {} code blocks", code_blocks.len());
@@ -1204,7 +1212,8 @@ pub fn process_file_with_results(
         let synchronization_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
 
         // Prepare shared resources for parallel processing
-        let shared_results = Arc::new(Mutex::new(Vec::new()));
+        // PHASE 4 OPTIMIZATION: Pre-allocate shared results with estimated capacity
+        let shared_results = Arc::new(Mutex::new(Vec::with_capacity(code_blocks.len())));
         let shared_covered_lines = Arc::new(Mutex::new(HashSet::new()));
 
         // Process blocks in parallel
@@ -1406,7 +1415,8 @@ pub fn process_file_with_results(
                     let block_total_matches = direct_matches.len() + compound_matches.len();
 
                     // Collect matched keywords
-                    let mut matched_keywords = Vec::new();
+                    // PHASE 4 OPTIMIZATION: Pre-allocate with estimated size
+                    let mut matched_keywords = Vec::with_capacity(params.query_plan.term_indices.len());
 
                     // Add direct matches
                     matched_keywords.extend(direct_matches.iter().map(|s| (*s).clone()));
@@ -1593,7 +1603,8 @@ pub fn process_file_with_results(
     }
 
     // Collect all uncovered lines first without processing them
-    let mut uncovered_lines = Vec::new();
+    // PHASE 4 OPTIMIZATION: Pre-allocate uncovered lines vector
+    let mut uncovered_lines = Vec::with_capacity(params.line_numbers.len());
     for &line_num in params.line_numbers {
         if !covered_lines.contains(&line_num) {
             if debug_mode {
