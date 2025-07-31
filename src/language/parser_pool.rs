@@ -179,13 +179,17 @@ mod tests {
 
         // Check pool stats
         let stats = get_pool_stats();
-        
+
         // On Windows, empty Vec entries might be removed from HashMap entirely
         // Both behaviors (Some(&0) and None) indicate the parser is checked out
         #[cfg(windows)]
         {
             let checked_out = stats.get("rs").map_or(true, |&count| count == 0);
-            assert!(checked_out, "Parser should be checked out (expected pool size 0 or entry removed, got {:?})", stats.get("rs"));
+            assert!(
+                checked_out,
+                "Parser should be checked out (expected pool size 0 or entry removed, got {:?})",
+                stats.get("rs")
+            );
         }
         #[cfg(not(windows))]
         {
