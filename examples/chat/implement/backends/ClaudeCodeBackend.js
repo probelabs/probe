@@ -86,8 +86,88 @@ class ClaudeCodeBackend extends BaseBackend {
     }
     
     try {
-      // Check if claude CLI is available
-      await execPromise('which claude', { timeout: 5000 });
+      let claudeCommand = null;
+      
+      // Method 1: Try direct execution with claude --version
+      try {
+        await execPromise('claude --version', { timeout: 5000 });
+        claudeCommand = 'claude';
+        this.log('debug', 'Claude found in PATH via direct execution');
+      } catch (directError) {
+        this.log('debug', 'Claude not directly executable from PATH', { error: directError.message });
+      }
+      
+      // Method 2: Check npm global installation and find the binary
+      if (!claudeCommand) {
+        try {
+          const { stdout } = await execPromise('npm list -g @anthropic-ai/claude-code --depth=0', { timeout: 5000 });
+          if (stdout.includes('@anthropic-ai/claude-code')) {
+            // Get npm global bin directory
+            const { stdout: binPath } = await execPromise('npm bin -g', { timeout: 5000 });
+            const npmBinDir = binPath.trim();
+            
+            // Build the claude command path
+            const isWindows = process.platform === 'win32';
+            const claudeBinary = isWindows ? 'claude.cmd' : 'claude';
+            const claudePath = path.join(npmBinDir, claudeBinary);
+            
+            // Test if we can execute it
+            try {
+              await execPromise(`"${claudePath}" --version`, { timeout: 5000 });
+              claudeCommand = claudePath;
+              
+              // Update PATH for this process to include npm global bin
+              const pathSeparator = isWindows ? ';' : ':';
+              process.env.PATH = `${npmBinDir}${pathSeparator}${process.env.PATH}`;
+              
+              this.log('info', `Claude found at ${claudePath}, added ${npmBinDir} to PATH`);
+            } catch (execError) {
+              this.log('debug', `Failed to execute claude at ${claudePath}`, { error: execError.message });
+            }
+          }
+        } catch (npmError) {
+          this.log('debug', 'Failed to check npm global packages', { error: npmError.message });
+        }
+      }
+      
+      // Method 3: Try to find claude in common locations
+      if (!claudeCommand) {
+        const isWindows = process.platform === 'win32';
+        const homeDir = process.env[isWindows ? 'USERPROFILE' : 'HOME'];
+        const claudeBinary = isWindows ? 'claude.cmd' : 'claude';
+        
+        // Common npm global locations
+        const commonPaths = [
+          // Windows paths
+          isWindows && path.join(process.env.APPDATA || '', 'npm', claudeBinary),
+          isWindows && path.join('C:', 'Program Files', 'nodejs', claudeBinary),
+          // Unix-like paths
+          !isWindows && path.join('/usr/local/bin', claudeBinary),
+          !isWindows && path.join(homeDir, '.npm-global', 'bin', claudeBinary),
+          !isWindows && path.join(homeDir, '.local', 'bin', claudeBinary),
+          // Cross-platform home directory paths
+          path.join(homeDir, 'node_modules', '.bin', claudeBinary),
+        ].filter(Boolean);
+        
+        for (const claudePath of commonPaths) {
+          try {
+            await execPromise(`"${claudePath}" --version`, { timeout: 2000 });
+            claudeCommand = claudePath;
+            this.log('info', `Claude found at ${claudePath}`);
+            break;
+          } catch (e) {
+            // Continue searching
+          }
+        }
+      }
+      
+      if (!claudeCommand) {
+        this.log('warn', 'Claude Code CLI not found. Please install with: npm install -g @anthropic-ai/claude-code');
+        return false;
+      }
+      
+      // Store the command for later use
+      this.claudeCommand = claudeCommand;
       
       // Just verify the API key exists (non-empty)
       // Don't validate format as it can vary
@@ -414,12 +494,41 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
       workingDir
     });
     
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       // Use spawn instead of exec for better security
-      const child = spawn('claude', args, {
+      // Use the command we found during isAvailable() check
+      let claudeCommand = this.claudeCommand || 'claude';
+      
+      // If we don't have a stored command, try to find it again
+      if (!this.claudeCommand) {
+        try {
+          // Try direct execution first
+          await execPromise('claude --version', { timeout: 1000 });
+          claudeCommand = 'claude';
+        } catch (e) {
+          // Try to find it in npm global bin
+          try {
+            const { stdout: binPath } = await execPromise('npm bin -g', { timeout: 1000 });
+            const isWindows = process.platform === 'win32';
+            const claudeBinary = isWindows ? 'claude.cmd' : 'claude';
+            const potentialClaudePath = path.join(binPath.trim(), claudeBinary);
+            
+            // Test if we can execute it
+            await execPromise(`"${potentialClaudePath}" --version`, { timeout: 1000 });
+            claudeCommand = potentialClaudePath;
+            this.log('info', `Using claude from npm global: ${claudeCommand}`);
+          } catch (npmError) {
+            // Fall back to 'claude' and let it fail with a clear error
+            this.log('warn', 'Could not find claude in npm global bin, attempting direct execution');
+          }
+        }
+      }
+      
+      const child = spawn(claudeCommand, args, {
         cwd: workingDir,
         env: this.buildSecureEnvironment(),
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: process.platform === 'win32' // Use shell on Windows for .cmd files
       });
       
       sessionInfo.childProcess = child;
