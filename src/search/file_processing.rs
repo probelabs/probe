@@ -914,6 +914,10 @@ pub fn process_file_with_results(
         println!("DEBUG: Processing file: {:?}", params.path);
         println!("DEBUG:   matched lines: {:?}", params.line_numbers);
         println!("DEBUG:   file I/O time: {file_io_duration:?}");
+        println!(
+            "DEBUG: Processing {} unique query terms",
+            unique_query_terms.len()
+        );
     }
 
     // Measure AST parsing time with sub-steps
@@ -1145,10 +1149,12 @@ pub fn process_file_with_results(
                     // Start measuring term matching time
                     let direct_matches_start = Instant::now();
 
-                    // Calculate metrics using the already tokenized content
-                    let direct_matches: HashSet<&String> = block_terms
+                    // OPTIMIZED: Instead of checking every block term against query terms (O(n*m)),
+                    // iterate through query terms and check if they exist in block terms (O(m*1))
+                    // This is much more efficient when there are many block terms but fewer query terms
+                    let direct_matches: HashSet<&String> = unique_query_terms
                         .iter()
-                        .filter(|t| unique_query_terms.contains(*t))
+                        .filter(|query_term| block_terms.contains(*query_term))
                         .collect();
 
                     let direct_matches_duration = direct_matches_start.elapsed();
