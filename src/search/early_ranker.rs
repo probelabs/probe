@@ -176,9 +176,10 @@ pub fn rank_files_early(
 ///
 /// The estimation strategy:
 /// 1. For token limits: Apply 1.5x buffer to account for estimation variance
-/// 2. Add minimum file count (20) to ensure reasonable coverage
-/// 3. Use conservative assumptions about results per file (2.5 instead of 3)
-/// 4. Better to slightly exceed limits than to fall short
+/// 2. For result limits: Apply 1.5x buffer to ensure we get the best results after final ranking
+/// 3. Add minimum file count (20) to ensure reasonable coverage
+/// 4. Use conservative assumptions about results per file (2.5 instead of 3)
+/// 5. Better to slightly exceed limits than to fall short
 pub fn estimate_files_needed(
     max_results: Option<usize>,
     max_tokens: Option<usize>,
@@ -191,7 +192,9 @@ pub fn estimate_files_needed(
     // (slightly lower than previous 3.0 to be more conservative)
     const AVG_RESULTS_PER_FILE: f64 = 2.5;
 
+    // Apply 1.5x buffer to result limits as well to ensure we get the best results after final ranking
     let result_limit = max_results.unwrap_or(1000);
+    let buffered_result_limit = (result_limit as f64 * 1.5).ceil() as usize;
 
     if let Some(token_limit) = max_tokens {
         // Estimate files needed based on token limit with buffer
@@ -199,20 +202,22 @@ pub fn estimate_files_needed(
 
         // Apply 1.5x buffer for token-based estimation
         // This accounts for variance in actual tokens per result and ensures we don't fall short
-        let buffered_results = (results_needed_for_tokens as f64 * 1.5).ceil() as usize;
+        let buffered_token_results = (results_needed_for_tokens as f64 * 1.5).ceil() as usize;
 
         // Convert results to files needed (using conservative avg results per file)
-        let files_for_tokens = (buffered_results as f64 / AVG_RESULTS_PER_FILE).ceil() as usize;
+        let files_for_tokens =
+            (buffered_token_results as f64 / AVG_RESULTS_PER_FILE).ceil() as usize;
 
-        // For result-based limits, estimate conservatively
-        let files_for_results = (result_limit as f64 / AVG_RESULTS_PER_FILE).ceil() as usize;
+        // For result-based limits, apply buffer and estimate conservatively
+        let files_for_results =
+            (buffered_result_limit as f64 / AVG_RESULTS_PER_FILE).ceil() as usize;
 
         // Take the smaller of the two file estimates, ensuring we meet the minimum
         let final_estimate = files_for_tokens.min(files_for_results);
         final_estimate.max(MIN_FILES_TO_PROCESS)
     } else {
-        // If no token limit, estimate based on result limit only
-        let files_needed = (result_limit as f64 / AVG_RESULTS_PER_FILE).ceil() as usize;
+        // If no token limit, estimate based on buffered result limit only
+        let files_needed = (buffered_result_limit as f64 / AVG_RESULTS_PER_FILE).ceil() as usize;
 
         // Apply minimum file count for reasonable coverage
         files_needed.max(MIN_FILES_TO_PROCESS)
@@ -292,21 +297,21 @@ mod tests {
 
     #[test]
     fn test_estimate_files_needed_result_limits() {
-        // Test with only result limit - no token buffer needed
+        // Test with only result limit - now applies 1.5x buffer
         let result = estimate_files_needed(Some(50), None, 250);
-        // Expected: 50 results / 2.5 results per file = 20 files
-        // Should return 20 (equals minimum)
-        assert_eq!(result, 20);
+        // Expected: 50 results * 1.5 buffer = 75 results / 2.5 results per file = 30 files
+        // Should return 30 (above minimum)
+        assert_eq!(result, 30);
 
         // Test with larger result limit
         let result = estimate_files_needed(Some(100), None, 250);
-        // Expected: 100 results / 2.5 results per file = 40 files
-        // Should return 40 (above minimum)
-        assert_eq!(result, 40);
+        // Expected: 100 results * 1.5 buffer = 150 results / 2.5 results per file = 60 files
+        // Should return 60 (above minimum)
+        assert_eq!(result, 60);
 
         // Test with small result limit - should enforce minimum
         let result = estimate_files_needed(Some(10), None, 250);
-        // Expected: 10 results / 2.5 results per file = 4 files
+        // Expected: 10 results * 1.5 buffer = 15 results / 2.5 results per file = 6 files
         // But minimum is 20, so should return 20
         assert_eq!(result, 20);
     }
@@ -315,21 +320,21 @@ mod tests {
     fn test_estimate_files_needed_both_limits() {
         // Test with both limits - should take the more restrictive
         let result = estimate_files_needed(Some(30), Some(7500), 250);
-        // Result limit: 30 / 2.5 = 12 files (but min 20) = 20 files
+        // Result limit: 30 * 1.5 buffer = 45 results / 2.5 = 18 files (but min 20) = 20 files
         // Token limit: 7500 / 250 = 30 results * 1.5 buffer = 45 results / 2.5 = 18 files (but min 20) = 20 files
         // Should take minimum of both = 20
         assert_eq!(result, 20);
 
         // Test where result limit is more restrictive
         let result = estimate_files_needed(Some(25), Some(50000), 250);
-        // Result limit: 25 / 2.5 = 10 files (but min 20) = 20 files
+        // Result limit: 25 * 1.5 buffer = 37.5 results / 2.5 = 15 files (but min 20) = 20 files
         // Token limit: 50000 / 250 = 200 results * 1.5 buffer = 300 results / 2.5 = 120 files
         // Should take minimum = 20
         assert_eq!(result, 20);
 
         // Test where token limit is more restrictive
         let result = estimate_files_needed(Some(500), Some(5000), 250);
-        // Result limit: 500 / 2.5 = 200 files
+        // Result limit: 500 * 1.5 buffer = 750 results / 2.5 = 300 files
         // Token limit: 5000 / 250 = 20 results * 1.5 buffer = 30 results / 2.5 = 12 files (but min 20) = 20 files
         // Should take minimum = 20
         assert_eq!(result, 20);
@@ -337,10 +342,10 @@ mod tests {
 
     #[test]
     fn test_estimate_files_needed_edge_cases() {
-        // Test with no limits - should use default result limit
+        // Test with no limits - should use default result limit with buffer
         let result = estimate_files_needed(None, None, 250);
-        // Expected: 1000 default results / 2.5 results per file = 400 files
-        assert_eq!(result, 400);
+        // Expected: 1000 default results * 1.5 buffer = 1500 results / 2.5 results per file = 600 files
+        assert_eq!(result, 600);
 
         // Test with zero avg_tokens_per_result - should handle gracefully
         let result = estimate_files_needed(None, Some(5000), 0);

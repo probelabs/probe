@@ -1168,13 +1168,15 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
 
         // Also check if we already have way more results than needed
+        // Use a more conservative multiplier aligned with our 1.5x buffer strategy
         if let Some(max_res) = max_results {
-            if final_results.len() > max_res * 5 {
+            let buffered_max_results = (*max_res as f64 * 2.0).ceil() as usize; // 2x buffer for safety
+            if final_results.len() > buffered_max_results {
                 if debug_mode {
                     println!(
-                        "DEBUG: Stopping batch processing - have {} results (5x max_results: {})",
+                        "DEBUG: Stopping batch processing - have {} results (2x buffered max_results: {})",
                         final_results.len(),
-                        max_res
+                        buffered_max_results
                     );
                 }
                 should_continue = false;
