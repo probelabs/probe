@@ -1,15 +1,36 @@
 use anyhow::{Context, Result};
+use lazy_static::lazy_static;
+use lru::LruCache;
 use rayon::prelude::*;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use probe_code::language::{is_test_file, parse_file_for_code_blocks};
+use probe_code::language::{is_test_file, parse_file_for_code_blocks_with_tree};
 use probe_code::models::SearchResult;
 use probe_code::ranking;
 use probe_code::search::tokenization;
+
+// PHASE 3B OPTIMIZATION: Global tokenization cache for term matching
+// This cache stores tokenized results to avoid redundant tokenization of the same content
+lazy_static! {
+    static ref TOKENIZATION_CACHE: Mutex<LruCache<u64, Vec<String>>> = {
+        // Cache up to 10,000 tokenized results
+        Mutex::new(LruCache::new(std::num::NonZeroUsize::new(10_000).unwrap()))
+    };
+}
+
+/// Compute a fast hash for cache key generation
+fn compute_content_hash(content: &str, filename: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    filename.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// Structure to hold timing information for file processing stages
 pub struct FileProcessingTimings {
@@ -65,6 +86,11 @@ pub fn filter_code_block_with_ast(
     plan: &crate::search::query::QueryPlan,
     debug_mode: bool,
 ) -> bool {
+    // PHASE 3C OPTIMIZATION: Early termination for simple queries
+    if plan.is_simple_query && term_matches.is_empty() {
+        return false;
+    }
+
     // Gather matched term indices for this block
     let mut matched_terms = HashSet::new();
     for (&term_idx, lines) in term_matches {
@@ -88,7 +114,8 @@ pub fn filter_code_block_with_ast(
 
         // Add detailed information about which exact keywords matched
         println!("DEBUG: ===== MATCHED KEYWORDS DETAILS =====");
-        let mut matched_keywords = Vec::new();
+        // PHASE 4 OPTIMIZATION: Pre-allocate with estimated size
+        let mut matched_keywords = Vec::with_capacity(plan.term_indices.len());
         for (term, &idx) in &plan.term_indices {
             if matched_terms.contains(&idx) {
                 matched_keywords.push(term);
@@ -106,8 +133,19 @@ pub fn filter_code_block_with_ast(
         println!("DEBUG: ===================================");
     }
 
+    // PHASE 3C OPTIMIZATION: Use fast path evaluation
+    if let Some(result) = plan.ast.evaluate_fast_path(&matched_terms, plan) {
+        if debug_mode {
+            println!(
+                "DEBUG: Fast path evaluation for block {}-{}: {}",
+                block_lines.0, block_lines.1, result
+            );
+        }
+        return result;
+    }
+
     // Check if we have any matches at all
-    if matched_terms.is_empty() {
+    if matched_terms.is_empty() && !plan.has_only_excluded_terms {
         if debug_mode {
             println!(
                 "DEBUG: No matched terms in block {}-{}, returning false",
@@ -124,7 +162,9 @@ pub fn filter_code_block_with_ast(
         println!("DEBUG: Term indices: {:?}", plan.term_indices);
     }
 
-    // Use the evaluate function from the elastic query module
+    // PHASE 3C OPTIMIZATION: Use cached evaluation when possible
+    // Note: We can't use mutable reference in filter_code_block_with_ast,
+    // so we fall back to regular evaluation here
     let result = plan.ast.evaluate(&matched_terms, &plan.term_indices, false);
 
     if debug_mode {
@@ -161,18 +201,60 @@ pub fn filter_code_block_with_ast(
 /// using the 'evaluate' method in `elastic_query::Expr`.
 pub fn filter_tokenized_block(
     tokenized_content: &[String],
-    term_indices: &HashMap<String, usize>,
+    _term_indices: &HashMap<String, usize>,
     plan: &crate::search::query::QueryPlan,
     debug_mode: bool,
 ) -> bool {
-    // Create a set of matched term indices based on tokenized content
-    let mut matched_terms = HashSet::new();
+    // Early termination: if query has only excluded terms and content is empty, return true
+    if tokenized_content.is_empty() {
+        return plan.has_only_excluded_terms;
+    }
 
-    // For each token in the tokenized content, check if it's in the term_indices
-    for token in tokenized_content {
-        if let Some(&idx) = term_indices.get(token) {
-            matched_terms.insert(idx);
+    // PHASE 3C OPTIMIZATION: Batch term index resolution
+    let mut matched_terms = resolve_term_indices_batch(tokenized_content, &plan.term_indices);
+
+    // PHASE 3C OPTIMIZATION: Early termination for required terms with indices
+    if !plan.required_terms_indices.is_empty() {
+        let has_all_required = plan
+            .required_terms_indices
+            .iter()
+            .all(|idx| matched_terms.contains(idx));
+
+        if !has_all_required {
+            // Check for special cases in compound words
+            let missing_required: Vec<_> = plan
+                .required_terms_indices
+                .iter()
+                .filter(|idx| !matched_terms.contains(idx))
+                .collect();
+
+            let mut check_special_cases = false;
+            for &idx in &missing_required {
+                // Find the term for this index
+                if let Some(term) = plan
+                    .term_indices
+                    .iter()
+                    .find(|(_, &i)| i == *idx)
+                    .map(|(t, _)| t)
+                {
+                    if crate::search::tokenization::is_special_case(term)
+                        && tokenized_content.contains(&term.to_lowercase())
+                    {
+                        matched_terms.insert(*idx);
+                        check_special_cases = true;
+                    }
+                }
+            }
+
+            if !check_special_cases {
+                return false;
+            }
         }
+    }
+
+    // PHASE 3C OPTIMIZATION: Early termination for simple queries
+    if plan.is_simple_query && !matched_terms.is_empty() {
+        return true;
     }
 
     // Special handling for compound words like "whitelist"
@@ -205,7 +287,8 @@ pub fn filter_tokenized_block(
 
         // Add detailed information about which exact keywords matched
         println!("DEBUG: ===== MATCHED KEYWORDS DETAILS =====");
-        let mut matched_keywords = Vec::new();
+        // PHASE 4 OPTIMIZATION: Pre-allocate with estimated size
+        let mut matched_keywords = Vec::with_capacity(plan.term_indices.len());
         for (term, &idx) in &plan.term_indices {
             if matched_terms.contains(&idx) {
                 matched_keywords.push(term);
@@ -222,6 +305,10 @@ pub fn filter_tokenized_block(
 
     // Check if we have any matches at all
     if matched_terms.is_empty() {
+        // Check if the query only contains excluded terms
+        if plan.has_only_excluded_terms {
+            return true;
+        }
         if debug_mode {
             println!("DEBUG: No matched terms in tokenized block, returning false");
         }
@@ -233,6 +320,14 @@ pub fn filter_tokenized_block(
         println!("DEBUG: ===== AST EVALUATION =====");
         println!("DEBUG: Matched terms: {matched_terms:?}");
         println!("DEBUG: Term indices: {:?}", plan.term_indices);
+    }
+
+    // PHASE 3C OPTIMIZATION: Use fast-path evaluation when possible
+    if let Some(result) = plan.ast.evaluate_fast_path(&matched_terms, plan) {
+        if debug_mode {
+            println!("DEBUG: Fast path evaluation result: {result}");
+        }
+        return result;
     }
 
     // Use the evaluate function from the elastic query module
@@ -380,14 +475,21 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
 
     // SMART CONTEXT WINDOW MERGING: Pre-compute context windows with enhanced merging
     let default_context_size = 5;
-    let mut context_windows = Vec::new();
+    // PHASE 4 OPTIMIZATION: Pre-allocate with line numbers size
+    let mut context_windows = Vec::with_capacity(ctx.params.line_numbers.len());
+
+    // PHASE 3A OPTIMIZATION: Pre-compile query terms into lowercase for faster matching
+    let query_terms_lower: HashSet<String> = ctx
+        .unique_query_terms
+        .iter()
+        .map(|s| s.to_lowercase())
+        .collect();
 
     // Pre-create a basic text representation for pre-filtering (optimization)
     let file_text_lower = ctx.lines.join("\n").to_lowercase();
-    let has_potential_matches = ctx
-        .unique_query_terms
+    let has_potential_matches = query_terms_lower
         .iter()
-        .any(|term| file_text_lower.contains(&term.to_lowercase()));
+        .any(|term| file_text_lower.contains(term));
 
     if !has_potential_matches && ctx.debug_mode {
         println!("DEBUG: SMART MERGING: No query terms found in file content, processing minimal contexts");
@@ -459,13 +561,18 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
     // Step 2: Enhanced merging with smart gap detection and aggressive combining
     context_windows.sort_by_key(|&(_, start, _, _, _)| start);
 
-    let mut merged_windows = Vec::new();
+    // PHASE 4 OPTIMIZATION: Pre-allocate with context windows size
+    let mut merged_windows = Vec::with_capacity(context_windows.len());
     let mut current_window: Option<(Vec<usize>, usize, usize, usize, usize)> = None;
 
     // SMART MERGING OPTIMIZATION: Use dynamic threshold based on context density
+    // PHASE 3A OPTIMIZATION: More aggressive merging reduces number of contexts to process
     let dynamic_merge_threshold = if context_windows.len() > 10 {
         // More aggressive merging for many context windows
-        default_context_size + 2
+        default_context_size + 3 // Increased from +2 to +3 for better batching
+    } else if context_windows.len() > 5 {
+        // Medium merging for moderate windows
+        default_context_size + 1
     } else {
         // Standard merging for fewer windows
         1
@@ -562,6 +669,11 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
     let mut tokenization_cache: std::collections::HashMap<(usize, usize), Vec<String>> =
         std::collections::HashMap::new();
 
+    // PHASE 3A OPTIMIZATION: Pre-allocate results vector with estimated capacity
+    // This avoids vector reallocation during result creation
+    let estimated_results = merged_windows.len();
+    ctx.results.reserve(estimated_results);
+
     // Step 3: Process merged context windows in batch with tokenization caching
     for (original_lines, context_start, context_end, context_start_idx, context_end_idx) in
         merged_windows
@@ -603,11 +715,11 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             .term_matches
             .values()
             .any(|lines| lines.len() >= file_line_count);
+        // PHASE 3A OPTIMIZATION: Reuse pre-computed lowercase query terms
         let context_text_lower = context_code.to_lowercase();
-        let has_potential_query_matches = ctx
-            .unique_query_terms
+        let has_potential_query_matches = query_terms_lower
             .iter()
-            .any(|term| context_text_lower.contains(&term.to_lowercase()));
+            .any(|term| context_text_lower.contains(term));
 
         // Skip aggressive pre-filtering for filename matches to preserve all context
         if !has_potential_query_matches && !is_likely_filename_match {
@@ -615,6 +727,11 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                 println!(
                     "DEBUG: AGGRESSIVE PRE-FILTERING: Context {context_start}-{context_end} contains no query terms, skipping expensive processing"
                 );
+            }
+            // PHASE 3A OPTIMIZATION: Mark lines as covered even when skipping
+            // This prevents redundant processing in subsequent operations
+            for line in context_start..=context_end {
+                ctx.covered_lines.insert(line);
             }
             // Skip this context entirely - no point in tokenizing or processing it further
             continue;
@@ -641,10 +758,19 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             cached_terms.clone()
         } else {
             // BATCH OPTIMIZATION: Single tokenization per merged context window (major performance gain)
-            let terms = ranking::preprocess_text_with_filename(
-                &context_code,
-                &ctx.params.path.to_string_lossy(),
-            );
+            // PHASE 3A OPTIMIZATION: Use more efficient tokenization for uncovered lines
+            // Since these are fallback contexts, we can use a lighter tokenization approach
+            let terms = if ctx.params.query_plan.exact {
+                // In exact mode, use the full tokenization
+                ranking::preprocess_text_with_filename(
+                    &context_code,
+                    &ctx.params.path.to_string_lossy(),
+                )
+            } else {
+                // For non-exact mode, use optimized tokenization without filename processing
+                // This is faster for fallback contexts where filename isn't as relevant
+                ranking::preprocess_text(&context_code)
+            };
             tokenization_cache.insert(cache_key, terms.clone());
             if ctx.debug_mode {
                 println!("DEBUG: TOKENIZATION CACHE: Cached tokenization for context {context_start}-{context_end}");
@@ -693,10 +819,9 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         }
 
         // BATCH OPTIMIZATION: Mark all lines in merged context as covered at once
-        if should_include {
-            for line in context_start..=context_end {
-                ctx.covered_lines.insert(line);
-            }
+        // PHASE 3A OPTIMIZATION: Always mark lines as covered to prevent redundant processing
+        for line in context_start..=context_end {
+            ctx.covered_lines.insert(line);
         }
 
         // Add to results only if it passes the filter
@@ -705,21 +830,34 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             let compound_start = Instant::now();
 
             // BATCH OPTIMIZATION: Calculate metrics once for the entire merged context window
-            let direct_matches: HashSet<&String> = context_terms
+            // PHASE 3A OPTIMIZATION: Use HashSet for O(1) lookups instead of Vec iterations
+            let context_terms_set: HashSet<&String> = context_terms.iter().collect();
+
+            let direct_matches: HashSet<&String> = ctx
+                .unique_query_terms
                 .iter()
-                .filter(|t| ctx.unique_query_terms.contains(*t))
+                .filter(|t| context_terms_set.contains(t))
                 .collect();
 
             let mut compound_matches = HashSet::new();
             // VOCABULARY CACHE OPTIMIZATION: Use cached vocabulary for filtering compound word processing
-            for qterm in ctx.unique_query_terms {
-                if context_terms.iter().any(|bt| bt == qterm) {
-                    continue;
-                }
-                // Use cached compound word splitting optimized for filtering operations
-                let parts = tokenization::split_compound_word_for_filtering(qterm);
-                if parts.len() > 1 && parts.iter().all(|part| context_terms.contains(part)) {
-                    compound_matches.insert(qterm);
+            // PHASE 3A OPTIMIZATION: Skip compound processing if no query terms have multiple parts
+            let needs_compound_processing = ctx
+                .unique_query_terms
+                .iter()
+                .any(|t| t.contains('_') || t.contains('-'));
+
+            if needs_compound_processing {
+                for qterm in ctx.unique_query_terms {
+                    if direct_matches.contains(&qterm) {
+                        continue;
+                    }
+                    // Use cached compound word splitting optimized for filtering operations
+                    let parts = tokenization::split_compound_word_for_filtering(qterm);
+                    if parts.len() > 1 && parts.iter().all(|part| context_terms_set.contains(&part))
+                    {
+                        compound_matches.insert(qterm);
+                    }
                 }
             }
 
@@ -736,7 +874,8 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             let context_total_matches = direct_matches.len() + compound_matches.len();
 
             // Collect matched keywords for merged fallback context
-            let mut matched_keywords = Vec::new();
+            // PHASE 4 OPTIMIZATION: Pre-allocate with estimated size
+            let mut matched_keywords = Vec::with_capacity(ctx.params.query_plan.term_indices.len());
 
             // Add direct matches
             matched_keywords.extend(direct_matches.iter().map(|s| (*s).clone()));
@@ -849,6 +988,27 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             tokenization_cache.len()
         );
     }
+}
+
+// PHASE 3B OPTIMIZATION: Cache for pre-tokenized query terms across file processing
+thread_local! {
+    static QUERY_TERMS_CACHE: RefCell<HashMap<String, Vec<String>>> = RefCell::new(HashMap::new());
+}
+
+// PHASE 3C OPTIMIZATION: Batch term index resolution
+fn resolve_term_indices_batch(
+    tokens: &[String],
+    term_indices: &HashMap<String, usize>,
+) -> HashSet<usize> {
+    let mut matched_terms = HashSet::with_capacity(tokens.len().min(term_indices.len()));
+
+    for token in tokens {
+        if let Some(&idx) = term_indices.get(token) {
+            matched_terms.insert(idx);
+        }
+    }
+
+    matched_terms
 }
 
 /// Main function for processing a file with matched lines
@@ -975,7 +1135,8 @@ pub fn process_file_with_results(
     cache_key.push('_');
     cache_key.push_str(extension);
 
-    let _ = if language_supported {
+    // Capture the parsed tree instead of discarding it
+    let parsed_tree = if language_supported {
         // Use the new pooled parser approach - this eliminates the expensive
         // parser creation and language setup that was happening for each file
         crate::language::get_or_parse_tree_pooled(&cache_key, &content, extension).ok()
@@ -988,13 +1149,14 @@ pub fn process_file_with_results(
     // Measure line map building time (this is an approximation since we can't directly measure it)
     let line_map_building_start = Instant::now();
 
-    // Call the original parse_file_for_code_blocks function
-    let code_blocks_result = parse_file_for_code_blocks(
+    // Call parse_file_for_code_blocks with the pre-parsed tree to avoid double parsing
+    let code_blocks_result = parse_file_for_code_blocks_with_tree(
         &content,
         extension,
         params.line_numbers,
         params.allow_tests,
         Some(params.term_matches),
+        parsed_tree,
     );
 
     let line_map_building_duration = line_map_building_start.elapsed();
@@ -1013,6 +1175,9 @@ pub fn process_file_with_results(
     }
 
     if let Ok(code_blocks) = code_blocks_result {
+        // PHASE 4 OPTIMIZATION: Pre-allocate results with code blocks size
+        results.reserve(code_blocks.len());
+
         if debug_mode {
             println!("DEBUG: AST parsing successful");
             println!("DEBUG:   Found {} code blocks", code_blocks.len());
@@ -1047,7 +1212,8 @@ pub fn process_file_with_results(
         let synchronization_duration = Arc::new(Mutex::new(Duration::new(0, 0)));
 
         // Prepare shared resources for parallel processing
-        let shared_results = Arc::new(Mutex::new(Vec::new()));
+        // PHASE 4 OPTIMIZATION: Pre-allocate shared results with estimated capacity
+        let shared_results = Arc::new(Mutex::new(Vec::with_capacity(code_blocks.len())));
         let shared_covered_lines = Arc::new(Mutex::new(HashSet::new()));
 
         // Process blocks in parallel
@@ -1100,11 +1266,29 @@ pub fn process_file_with_results(
                 // Start measuring term matching time
                 let term_matching_start = Instant::now();
 
-                // Early tokenization with full path prepended
-                let block_terms = ranking::preprocess_text_with_filename(
-                    &full_code,
-                    &params.path.to_string_lossy(),
-                );
+                // PHASE 3B OPTIMIZATION: Use global tokenization cache
+                let cache_key = compute_content_hash(&full_code, &params.path.to_string_lossy());
+                let block_terms = {
+                    let mut cache = TOKENIZATION_CACHE.lock().unwrap();
+                    if let Some(cached_terms) = cache.get(&cache_key) {
+                        if debug_mode {
+                            println!("DEBUG: PHASE 3B - Using cached tokenization for block");
+                        }
+                        cached_terms.clone()
+                    } else {
+                        drop(cache); // Release lock before tokenization
+                        let terms = ranking::preprocess_text_with_filename(
+                            &full_code,
+                            &params.path.to_string_lossy(),
+                        );
+                        let mut cache = TOKENIZATION_CACHE.lock().unwrap();
+                        cache.put(cache_key, terms.clone());
+                        if debug_mode {
+                            println!("DEBUG: PHASE 3B - Cached new tokenization for block");
+                        }
+                        terms
+                    }
+                };
 
                 // End term matching time measurement
                 let term_matching_block_duration = term_matching_start.elapsed();
@@ -1180,12 +1364,14 @@ pub fn process_file_with_results(
                     // Start measuring term matching time
                     let direct_matches_start = Instant::now();
 
+                    // PHASE 3B OPTIMIZATION: Convert block_terms to HashSet for O(1) lookups
+                    let block_terms_set: HashSet<&String> = block_terms.iter().collect();
                     // OPTIMIZED: Instead of checking every block term against query terms (O(n*m)),
                     // iterate through query terms and check if they exist in block terms (O(m*1))
                     // This is much more efficient when there are many block terms but fewer query terms
                     let direct_matches: HashSet<&String> = unique_query_terms
                         .iter()
-                        .filter(|query_term| block_terms.contains(*query_term))
+                        .filter(|query_term| block_terms_set.contains(query_term))
                         .collect();
 
                     let direct_matches_duration = direct_matches_start.elapsed();
@@ -1198,17 +1384,26 @@ pub fn process_file_with_results(
                     let compound_start = Instant::now();
 
                     let mut compound_matches = HashSet::new();
-                    // Load vocabulary once before the loop
-                    let vocabulary = tokenization::load_vocabulary();
-                    for qterm in &unique_query_terms {
-                        if block_terms.iter().any(|bt| bt == qterm) {
-                            continue;
+                    // PHASE 3B OPTIMIZATION: Use cached vocabulary and pre-computed splits
+                    QUERY_TERMS_CACHE.with(|cache| {
+                        let mut cache_ref = cache.borrow_mut();
+                        for qterm in &unique_query_terms {
+                            if block_terms.iter().any(|bt| bt == qterm) {
+                                continue;
+                            }
+                            // Check cache first
+                            let parts = if let Some(cached_parts) = cache_ref.get(qterm) {
+                                cached_parts.clone()
+                            } else {
+                                let parts = tokenization::split_compound_word_for_filtering(qterm);
+                                cache_ref.insert(qterm.clone(), parts.clone());
+                                parts
+                            };
+                            if parts.len() > 1 && parts.iter().all(|part| block_terms_set.contains(&part)) {
+                                compound_matches.insert(qterm);
+                            }
                         }
-                        let parts = tokenization::split_compound_word(qterm, vocabulary);
-                        if parts.len() > 1 && parts.iter().all(|part| block_terms.contains(part)) {
-                            compound_matches.insert(qterm);
-                        }
-                    }
+                    });
 
                     let compound_duration = compound_start.elapsed();
                     {
@@ -1220,7 +1415,8 @@ pub fn process_file_with_results(
                     let block_total_matches = direct_matches.len() + compound_matches.len();
 
                     // Collect matched keywords
-                    let mut matched_keywords = Vec::new();
+                    // PHASE 4 OPTIMIZATION: Pre-allocate with estimated size
+                    let mut matched_keywords = Vec::with_capacity(params.query_plan.term_indices.len());
 
                     // Add direct matches
                     matched_keywords.extend(direct_matches.iter().map(|s| (*s).clone()));
@@ -1407,7 +1603,8 @@ pub fn process_file_with_results(
     }
 
     // Collect all uncovered lines first without processing them
-    let mut uncovered_lines = Vec::new();
+    // PHASE 4 OPTIMIZATION: Pre-allocate uncovered lines vector
+    let mut uncovered_lines = Vec::with_capacity(params.line_numbers.len());
     for &line_num in params.line_numbers {
         if !covered_lines.contains(&line_num) {
             if debug_mode {

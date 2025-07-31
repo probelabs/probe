@@ -1,6 +1,9 @@
 use probe_code::search::elastic_query;
 // No term_exceptions import needed
+use lru::LruCache;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// Escapes special regex characters in a string
@@ -26,12 +29,42 @@ pub fn regex_escape(s: &str) -> String {
 
 /// A unified plan holding the parsed AST and a mapping of each AST term to an index.
 /// We store a map for quick lookups of term indices.
-#[derive(Debug)]
 pub struct QueryPlan {
     pub ast: elastic_query::Expr,
     pub term_indices: HashMap<String, usize>,
     pub excluded_terms: HashSet<String>,
     pub exact: bool,
+    /// Optimization hint: true if this is a simple single-term query
+    pub is_simple_query: bool,
+    /// Optimization hint: set of required terms that must all be present
+    pub required_terms: HashSet<String>,
+
+    // PHASE 3C OPTIMIZATION: Pre-computed AST metadata
+    /// Pre-computed: whether the AST has any required term anywhere
+    pub has_required_anywhere: bool,
+    /// Pre-computed: indices of required terms for fast lookup
+    pub required_terms_indices: HashSet<usize>,
+    /// Pre-computed: whether AST has only excluded terms
+    pub has_only_excluded_terms: bool,
+    /// Evaluation result cache for matched term patterns
+    pub evaluation_cache: Arc<Mutex<LruCache<u64, bool>>>,
+}
+
+impl std::fmt::Debug for QueryPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueryPlan")
+            .field("ast", &self.ast)
+            .field("term_indices", &self.term_indices)
+            .field("excluded_terms", &self.excluded_terms)
+            .field("exact", &self.exact)
+            .field("is_simple_query", &self.is_simple_query)
+            .field("required_terms", &self.required_terms)
+            .field("has_required_anywhere", &self.has_required_anywhere)
+            .field("required_terms_indices", &self.required_terms_indices)
+            .field("has_only_excluded_terms", &self.has_only_excluded_terms)
+            .field("evaluation_cache", &"<LruCache>")
+            .finish()
+    }
 }
 
 /// Helper function to format duration in a human-readable way
@@ -130,12 +163,67 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
         );
     }
 
+    // Collect required terms for optimization
+    let mut required_terms = HashSet::new();
+    collect_required_terms(&ast, &mut required_terms);
+
+    // Determine if this is a simple query for optimization
+    let is_simple_query = match &ast {
+        elastic_query::Expr::Term { excluded, .. } => !excluded && all_terms.len() == 1,
+        _ => false,
+    };
+
+    // PHASE 3C OPTIMIZATION: Pre-compute AST metadata
+    let has_required_anywhere = ast.has_required_term();
+    let has_only_excluded_terms = ast.is_only_excluded_terms();
+
+    // Pre-compute required term indices
+    let required_terms_indices: HashSet<usize> = required_terms
+        .iter()
+        .filter_map(|term| term_indices.get(term).cloned())
+        .collect();
+
+    // Create evaluation cache with reasonable capacity
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     Ok(QueryPlan {
         ast,
         term_indices,
         excluded_terms,
         exact,
+        is_simple_query,
+        required_terms,
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     })
+}
+
+/// Collect required terms from the AST for optimization
+fn collect_required_terms(expr: &elastic_query::Expr, required_terms: &mut HashSet<String>) {
+    match expr {
+        elastic_query::Expr::Term {
+            keywords,
+            required,
+            excluded,
+            ..
+        } => {
+            if *required && !*excluded {
+                for keyword in keywords {
+                    required_terms.insert(keyword.clone());
+                }
+            }
+        }
+        elastic_query::Expr::And(left, right) => {
+            collect_required_terms(left, required_terms);
+            collect_required_terms(right, required_terms);
+        }
+        elastic_query::Expr::Or(_, _) => {
+            // For OR expressions, we can't guarantee any term is required
+            // so we don't collect anything
+        }
+    }
 }
 
 /// Recursively update the AST to mark all terms as exact

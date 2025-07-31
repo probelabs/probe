@@ -26,7 +26,7 @@ pub mod swift;
 pub mod typescript;
 
 // Re-export items for backward compatibility
-pub use parser::parse_file_for_code_blocks;
+pub use parser::{parse_file_for_code_blocks, parse_file_for_code_blocks_with_tree};
 pub use parser_pool::{clear_parser_pool, get_pool_stats, get_pooled_parser, return_pooled_parser};
 pub use test_detection::is_test_file;
 #[allow(unused_imports)]

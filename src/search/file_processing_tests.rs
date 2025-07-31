@@ -1,6 +1,9 @@
+use lru::LruCache;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use probe_code::search::elastic_query;
@@ -32,11 +35,23 @@ pub fn create_test_query_plan(terms: &[&str]) -> QueryPlan {
         exact: false,
     };
 
+    // Pre-compute metadata
+    let has_required_anywhere = ast.has_required_term();
+    let has_only_excluded_terms = ast.is_only_excluded_terms();
+    let required_terms_indices = HashSet::new();
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     QueryPlan {
         ast,
         term_indices,
         excluded_terms: HashSet::new(),
         exact: false,
+        is_simple_query: true,
+        required_terms: HashSet::new(),
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     }
 }
 

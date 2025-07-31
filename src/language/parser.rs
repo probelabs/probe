@@ -1786,6 +1786,25 @@ pub fn parse_file_for_code_blocks(
     allow_tests: bool,
     _term_matches: Option<&HashMap<usize, HashSet<usize>>>, // Query index to line numbers
 ) -> Result<Vec<CodeBlock>> {
+    parse_file_for_code_blocks_with_tree(
+        content,
+        extension,
+        line_numbers,
+        allow_tests,
+        _term_matches,
+        None,
+    )
+}
+
+/// Function to parse a file and extract code blocks with an optional pre-parsed tree
+pub fn parse_file_for_code_blocks_with_tree(
+    content: &str,
+    extension: &str,
+    line_numbers: &HashSet<usize>,
+    allow_tests: bool,
+    _term_matches: Option<&HashMap<usize, HashSet<usize>>>, // Query index to line numbers
+    pre_parsed_tree: Option<tree_sitter::Tree>,
+) -> Result<Vec<CodeBlock>> {
     // Get the appropriate language implementation
     let language_impl = match get_language_impl(extension) {
         Some(lang) => lang,
@@ -1827,17 +1846,25 @@ pub fn parse_file_for_code_blocks(
         );
     }
 
-    // Get the tree-sitter language
-    let language = language_impl.get_tree_sitter_language();
+    // Get the tree - either use pre-parsed or parse it
+    let tree = if let Some(pre_parsed) = pre_parsed_tree {
+        if debug_mode {
+            println!("DEBUG: Using pre-parsed tree, skipping redundant parsing");
+        }
+        pre_parsed
+    } else {
+        // Get the tree-sitter language
+        let language = language_impl.get_tree_sitter_language();
 
-    // Parse the file
-    let mut parser = TSParser::new();
-    parser.set_language(&language)?;
+        // Parse the file
+        let mut parser = TSParser::new();
+        parser.set_language(&language)?;
 
-    // Use the tree cache to get or parse the tree
-    let tree_cache_key = format!("file_{extension}");
-    let tree = tree_cache::get_or_parse_tree(&tree_cache_key, content, &mut parser)
-        .context("Failed to parse the file")?;
+        // Use the tree cache to get or parse the tree
+        let tree_cache_key = format!("file_{extension}");
+        tree_cache::get_or_parse_tree(&tree_cache_key, content, &mut parser)
+            .context("Failed to parse the file")?
+    };
 
     let root_node = tree.root_node();
 

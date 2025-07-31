@@ -5,6 +5,21 @@ use tree_sitter::Parser;
 
 use crate::language::factory;
 
+// PHASE 4 OPTIMIZATION: Dynamic pool sizing based on CPU cores
+const DEFAULT_MAX_PARSERS_PER_LANGUAGE: usize = 4;
+
+fn get_max_parsers_per_language() -> usize {
+    std::env::var("PROBE_PARSER_POOL_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| {
+            std::cmp::max(
+                rayon::current_num_threads(),
+                DEFAULT_MAX_PARSERS_PER_LANGUAGE,
+            )
+        })
+}
+
 lazy_static::lazy_static! {
     /// A thread-safe pool of tree-sitter parsers organized by language extension
     ///
@@ -15,6 +30,24 @@ lazy_static::lazy_static! {
     /// of ready-to-use parsers that have already been configured with the appropriate
     /// tree-sitter language grammar.
     static ref PARSER_POOL: Mutex<HashMap<String, Vec<Parser>>> = Mutex::new(HashMap::new());
+
+    // PHASE 4 OPTIMIZATION: Pre-warm parsers for common languages
+    static ref PARSER_WARMER: () = {
+        if std::env::var("PROBE_NO_PARSER_WARMUP").is_err() {
+            let common_languages = ["rs", "js", "ts", "py", "go", "java", "cpp", "c"];
+            for lang in &common_languages {
+                // Try to create and return a parser to warm up the pool
+                if let Ok(parser) = get_pooled_parser(lang) {
+                    return_pooled_parser(lang, parser);
+                }
+            }
+        }
+    };
+}
+
+/// Initialize parser pool warming
+pub fn warm_parser_pool() {
+    let _ = &*PARSER_WARMER;
 }
 
 /// Gets a parser from the pool for the specified language extension.
@@ -100,11 +133,10 @@ pub fn return_pooled_parser(extension: &str, parser: Parser) {
 
     let parsers = pool.entry(extension.to_string()).or_default();
 
-    // Limit pool size to prevent unbounded memory growth
-    // Keep a reasonable number of parsers per language (e.g., 4-8 per language)
-    const MAX_PARSERS_PER_LANGUAGE: usize = 6;
+    // PHASE 4 OPTIMIZATION: Use dynamic pool sizing
+    let max_parsers = get_max_parsers_per_language();
 
-    if parsers.len() < MAX_PARSERS_PER_LANGUAGE {
+    if parsers.len() < max_parsers {
         parsers.push(parser);
         if debug_mode {
             println!(
@@ -248,9 +280,10 @@ mod tests {
             return_pooled_parser("rs", parser);
         }
 
-        // Pool should be limited to MAX_PARSERS_PER_LANGUAGE
+        // Pool should be limited to the dynamic max parsers per language
+        let max_parsers = get_max_parsers_per_language();
         let stats = get_pool_stats();
-        assert!(stats.get("rs").unwrap() <= &6); // Should be at most 6
+        assert!(stats.get("rs").unwrap() <= &max_parsers); // Should be at most the dynamic limit
     }
 
     #[test]
