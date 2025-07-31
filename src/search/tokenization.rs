@@ -3142,8 +3142,7 @@ mod tests {
             if !problematic_terms.is_empty() {
                 queries_with_issues += 1;
                 println!(
-                    "  ❌ PROBLEM: Terms {:?} skipped for compound processing",
-                    problematic_terms
+                    "  ❌ PROBLEM: Terms {problematic_terms:?} skipped for compound processing"
                 );
                 println!(
                     "  💥 IMPACT: Compound words like '{}Handler', '{}Client' may be missed",
@@ -3156,10 +3155,9 @@ mod tests {
 
         let problem_rate = (queries_with_issues as f64 / total_queries as f64) * 100.0;
         println!("\n📊 QUERY IMPACT SUMMARY:");
-        println!("  Total queries tested: {}", total_queries);
+        println!("  Total queries tested: {total_queries}");
         println!(
-            "  Queries with problematic terms: {} ({:.1}%)",
-            queries_with_issues, problem_rate
+            "  Queries with problematic terms: {queries_with_issues} ({problem_rate:.1}%)"
         );
 
         // Most queries will have issues due to the aggressive heuristics

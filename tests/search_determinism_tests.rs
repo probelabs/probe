@@ -92,16 +92,13 @@ fn test_search_determinism_with_user_path() {
     println!("\n=== DETERMINISM ANALYSIS ===");
     println!("Unique result patterns found:");
     for (pattern, count) in &unique_results {
-        println!("  {}: {} occurrences", pattern, count);
+        println!("  {pattern}: {count} occurrences");
     }
 
     // Test assertion: All results should be identical
     if unique_results.len() > 1 {
         println!("\n❌ NON-DETERMINISTIC BEHAVIOR DETECTED!");
-        println!(
-            "Expected: All {} iterations to return identical results",
-            iterations
-        );
+        println!("Expected: All {iterations} iterations to return identical results");
         println!(
             "Actual: Found {} different result patterns",
             unique_results.len()
@@ -130,7 +127,7 @@ fn test_search_determinism_with_user_path() {
         panic!("Search results are non-deterministic! Found {} different result patterns. This indicates a bug in the search engine that needs to be fixed.", unique_results.len());
     } else {
         println!("\n✅ DETERMINISTIC BEHAVIOR CONFIRMED");
-        println!("All {} iterations returned identical results", iterations);
+        println!("All {iterations} iterations returned identical results");
         let first_result = &results[0];
         println!(
             "Consistent result: {} lines, {} bytes, {} tokens",
@@ -159,7 +156,7 @@ fn test_user_keyword_filename_vs_content_matching() {
         .join("user");
 
     println!("Testing filename vs content matching hypothesis");
-    println!("Path contains 'user' keyword: {:?}", fixture_path);
+    println!("Path contains 'user' keyword: {fixture_path:?}");
     println!("Query contains 'user' keyword: \"yaml workflow agent multi-agent user input\"");
     println!("File content does NOT contain these keywords (AssemblyInfo.cs has only copyright and assembly info)\n");
 
@@ -175,7 +172,7 @@ fn test_user_keyword_filename_vs_content_matching() {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!("Command failed: {}", stderr);
+        panic!("Command failed: {stderr}");
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

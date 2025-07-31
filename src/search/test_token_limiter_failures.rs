@@ -63,8 +63,7 @@ mod token_limiter_failure_tests {
             let overrun_percent =
                 ((actual_total_tokens - token_limit) as f64 / token_limit as f64) * 100.0;
             panic!(
-                "Token limit severely exceeded: {} actual tokens vs {} limit ({:.1}% overrun)",
-                actual_total_tokens, token_limit, overrun_percent
+                "Token limit severely exceeded: {actual_total_tokens} actual tokens vs {token_limit} limit ({overrun_percent:.1}% overrun)"
             );
         }
     }
