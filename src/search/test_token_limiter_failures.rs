@@ -73,10 +73,12 @@ mod token_limiter_failure_tests {
     #[should_panic(expected = "90% threshold bypassed")]
     fn test_90_percent_threshold_bypass() {
         // Create blocks that stay under 90% estimation but exceed 100% actual
+        // The key is to use content that tokenizes inefficiently (many tokens per character)
         let deceptive_blocks = [
-            "function normal() { return 42; }",  // Normal code
-            "const value = getData();",          // Normal code  
-            "let[a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z]=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26];", // Killer block
+            "function normal() { return 42; }",  // Normal code (~8 tokens, 33 chars)
+            "const value = getData();",          // Normal code (~6 tokens, 25 chars)  
+            // Killer block: lots of individual tokens that don't compress well
+            "const a1=1,a2=2,a3=3,a4=4,a5=5,a6=6,a7=7,a8=8,a9=9,a10=10,a11=11,a12=12,a13=13,a14=14,a15=15,a16=16,a17=17,a18=18,a19=19,a20=20,a21=21,a22=22,a23=23,a24=24,a25=25,a26=26,a27=27,a28=28,a29=29,a30=30,a31=31,a32=32,a33=33,a34=34,a35=35,a36=36,a37=37,a38=38,a39=39,a40=40,a41=41,a42=42,a43=43,a44=44,a45=45,a46=46,a47=47,a48=48,a49=49,a50=50;",
         ];
 
         let results: Vec<SearchResult> = deceptive_blocks

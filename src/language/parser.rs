@@ -19,7 +19,9 @@ const NODE_TYPE_PRIORITY: &[&str] = &[
     "impl_item",
     "type_declaration",
     "struct_item",
-    "global_attribute", // Highest priority - most specific
+    "class",             // Class keyword node should have high priority
+    "class_declaration", // Class declarations should have high priority
+    "global_attribute",  // Highest priority - most specific
 ];
 
 /// Select the highest priority node type from a list of candidates

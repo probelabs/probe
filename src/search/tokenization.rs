@@ -1800,6 +1800,20 @@ static COMMON_NON_COMPOUND_WORDS: Lazy<HashSet<String>> = Lazy::new(|| {
 fn should_skip_compound_processing(word: &str) -> bool {
     let lowercase_word = word.to_lowercase();
 
+    // EXCEPTION: Critical programming terms should always be processed for compound words
+    // even if they're short or in common word lists, because they're often used in compounds
+    // like "ioHandler", "apiClient", "jsonParser", etc.
+    let critical_programming_terms = [
+        "io", "os", "ui", "db", "api", "css", "js", "py", "go", "rs", "xml", "sql", "jwt", "dom",
+        "rpc", "tcp", "udp", "http", "ftp", "ssh", "ssl", "tls", "dns", "git", "npm", "pip",
+        "json", "html", "yaml", "toml", "http2", "http3", "ipv4", "ipv6", "sha1", "sha256",
+        "oauth2", "md5", "base64", "utf8",
+    ];
+
+    if critical_programming_terms.contains(&lowercase_word.as_str()) {
+        return false; // Don't skip these critical terms
+    }
+
     // Skip very short words (less than 6 characters) - unlikely to be compound
     if word.len() < 6 {
         return true;
@@ -2884,7 +2898,8 @@ mod tests {
         // Test numeric heuristic - words with numbers should be skipped
         assert!(should_skip_compound_processing("test123"));
         assert!(should_skip_compound_processing("v1_api"));
-        assert!(should_skip_compound_processing("http2"));
+        // Exception: http2 is a critical programming term, so it should NOT be skipped
+        assert!(!should_skip_compound_processing("http2"));
 
         // Test special character heuristic - words with special chars should be skipped
         assert!(should_skip_compound_processing("hello@world"));
@@ -2896,8 +2911,9 @@ mod tests {
         // Test common word heuristic - common words should be skipped
         assert!(should_skip_compound_processing("and"));
         assert!(should_skip_compound_processing("for"));
-        assert!(should_skip_compound_processing("json"));
-        assert!(should_skip_compound_processing("html"));
+        // Exception: json and html are critical programming terms, so they should NOT be skipped
+        assert!(!should_skip_compound_processing("json"));
+        assert!(!should_skip_compound_processing("html"));
         assert!(should_skip_compound_processing("the"));
 
         // Test repeated character heuristic
