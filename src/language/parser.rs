@@ -877,12 +877,19 @@ fn process_cached_line_map(
             if let (Some(block), Some(key)) = (potential_block, block_key) {
                 if seen_block_spans.contains(&key) {
                     // Span already seen - check if current block has higher priority
-                    if let Some(existing_idx) = code_blocks.iter().position(|b| (b.start_row, b.end_row) == key) {
+                    if let Some(existing_idx) = code_blocks
+                        .iter()
+                        .position(|b| (b.start_row, b.end_row) == key)
+                    {
                         let existing_node_type = code_blocks[existing_idx].node_type.clone();
-                        
-                        let current_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == block.node_type.as_str());
-                        let existing_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == existing_node_type.as_str());
-                        
+
+                        let current_priority = NODE_TYPE_PRIORITY
+                            .iter()
+                            .position(|&t| t == block.node_type.as_str());
+                        let existing_priority = NODE_TYPE_PRIORITY
+                            .iter()
+                            .position(|&t| t == existing_node_type.as_str());
+
                         match (current_priority, existing_priority) {
                             (Some(cur_pri), Some(exist_pri)) if cur_pri > exist_pri => {
                                 // Replace with higher priority node
@@ -899,7 +906,7 @@ fn process_cached_line_map(
                                 if debug_mode {
                                     println!(
                                         "DEBUG: Cache: Keeping existing block at lines {}-{} with priority: {} >= {}",
-                                        key.0 + 1, key.1 + 1, 
+                                        key.0 + 1, key.1 + 1,
                                         existing_node_type, block.node_type
                                     );
                                 }
@@ -912,7 +919,9 @@ fn process_cached_line_map(
                     if debug_mode {
                         println!(
                             "DEBUG: Cache: Added new block at lines {}-{}, type: {}",
-                            key.0 + 1, key.1 + 1, block.node_type
+                            key.0 + 1,
+                            key.1 + 1,
+                            block.node_type
                         );
                     }
                     code_blocks.push(block);
@@ -1298,18 +1307,28 @@ pub fn parse_file_for_code_blocks(
 
     let mut code_blocks: Vec<CodeBlock> = Vec::new();
     let mut seen_nodes: HashSet<(usize, usize)> = HashSet::new(); // Use row-based key for this original logic
-    
+
     // Helper function to add blocks with priority-based selection for overlapping spans
-    let add_block_with_priority = |code_blocks: &mut Vec<CodeBlock>, seen_nodes: &mut HashSet<(usize, usize)>, block: CodeBlock, debug_mode: bool| {
+    let add_block_with_priority = |code_blocks: &mut Vec<CodeBlock>,
+                                   seen_nodes: &mut HashSet<(usize, usize)>,
+                                   block: CodeBlock,
+                                   debug_mode: bool| {
         let key = (block.start_row, block.end_row);
         if seen_nodes.contains(&key) {
             // Span already seen - check if current block has higher priority
-            if let Some(existing_idx) = code_blocks.iter().position(|b| (b.start_row, b.end_row) == key) {
+            if let Some(existing_idx) = code_blocks
+                .iter()
+                .position(|b| (b.start_row, b.end_row) == key)
+            {
                 let existing_node_type = code_blocks[existing_idx].node_type.clone();
-                
-                let current_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == block.node_type.as_str());
-                let existing_priority = NODE_TYPE_PRIORITY.iter().position(|&t| t == existing_node_type.as_str());
-                
+
+                let current_priority = NODE_TYPE_PRIORITY
+                    .iter()
+                    .position(|&t| t == block.node_type.as_str());
+                let existing_priority = NODE_TYPE_PRIORITY
+                    .iter()
+                    .position(|&t| t == existing_node_type.as_str());
+
                 match (current_priority, existing_priority) {
                     (Some(cur_pri), Some(exist_pri)) if cur_pri > exist_pri => {
                         // Replace with higher priority node
@@ -1326,7 +1345,7 @@ pub fn parse_file_for_code_blocks(
                         if debug_mode {
                             println!(
                                 "DEBUG: Keeping existing block at lines {}-{} with priority: {} >= {}",
-                                key.0 + 1, key.1 + 1, 
+                                key.0 + 1, key.1 + 1,
                                 existing_node_type, block.node_type
                             );
                         }
@@ -1339,7 +1358,9 @@ pub fn parse_file_for_code_blocks(
             if debug_mode {
                 println!(
                     "DEBUG: Added new block at lines {}-{}, type: {}",
-                    key.0 + 1, key.1 + 1, block.node_type
+                    key.0 + 1,
+                    key.1 + 1,
+                    block.node_type
                 );
             }
             code_blocks.push(block);
@@ -1441,16 +1462,21 @@ pub fn parse_file_for_code_blocks(
 
                         seen_nodes.insert(rel_key); // Mark context as seen too
 
-                        add_block_with_priority(&mut code_blocks, &mut seen_nodes, CodeBlock {
-                            start_row: merged_start_row,
-                            end_row: merged_end_row,
-                            start_byte: merged_start_byte,
-                            end_byte: merged_end_byte,
-                            node_type: merged_node_type.clone(),
-                            parent_node_type: None, // Keep consistent with original logic here
-                            parent_start_row: None,
-                            parent_end_row: None,
-                        }, debug_mode);
+                        add_block_with_priority(
+                            &mut code_blocks,
+                            &mut seen_nodes,
+                            CodeBlock {
+                                start_row: merged_start_row,
+                                end_row: merged_end_row,
+                                start_byte: merged_start_byte,
+                                end_byte: merged_end_byte,
+                                node_type: merged_node_type.clone(),
+                                parent_node_type: None, // Keep consistent with original logic here
+                                parent_start_row: None,
+                                parent_end_row: None,
+                            },
+                            debug_mode,
+                        );
 
                         if debug_mode {
                             println!(
@@ -1465,16 +1491,21 @@ pub fn parse_file_for_code_blocks(
                 }
 
                 // Add individual comment if not merged
-                add_block_with_priority(&mut code_blocks, &mut seen_nodes, CodeBlock {
-                    start_row: start_pos.row,
-                    end_row: end_pos.row,
-                    start_byte: target_node.start_byte(),
-                    end_byte: target_node.end_byte(),
-                    node_type: target_node.kind().to_string(),
-                    parent_node_type: None,
-                    parent_start_row: None,
-                    parent_end_row: None,
-                }, debug_mode);
+                add_block_with_priority(
+                    &mut code_blocks,
+                    &mut seen_nodes,
+                    CodeBlock {
+                        start_row: start_pos.row,
+                        end_row: end_pos.row,
+                        start_byte: target_node.start_byte(),
+                        end_byte: target_node.end_byte(),
+                        node_type: target_node.kind().to_string(),
+                        parent_node_type: None,
+                        parent_start_row: None,
+                        parent_end_row: None,
+                    },
+                    debug_mode,
+                );
                 if debug_mode {
                     println!(
                         "DEBUG: Added individual comment block at lines {}-{}",
@@ -1554,16 +1585,21 @@ pub fn parse_file_for_code_blocks(
                     None
                 };
 
-                add_block_with_priority(&mut code_blocks, &mut seen_nodes, CodeBlock {
-                    start_row: rel_start_pos.row,
-                    end_row: rel_end_pos.row,
-                    start_byte: context_node.start_byte(),
-                    end_byte: context_node.end_byte(),
-                    node_type: context_node.kind().to_string(),
-                    parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
-                    parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
-                    parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
-                }, debug_mode);
+                add_block_with_priority(
+                    &mut code_blocks,
+                    &mut seen_nodes,
+                    CodeBlock {
+                        start_row: rel_start_pos.row,
+                        end_row: rel_end_pos.row,
+                        start_byte: context_node.start_byte(),
+                        end_byte: context_node.end_byte(),
+                        node_type: context_node.kind().to_string(),
+                        parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
+                        parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
+                        parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
+                    },
+                    debug_mode,
+                );
                 continue; // Skip adding target_node if context was added
             }
 
@@ -1591,16 +1627,21 @@ pub fn parse_file_for_code_blocks(
                     None
                 };
 
-                add_block_with_priority(&mut code_blocks, &mut seen_nodes, CodeBlock {
-                    start_row: start_pos.row,
-                    end_row: end_pos.row,
-                    start_byte: target_node.start_byte(),
-                    end_byte: target_node.end_byte(),
-                    node_type: target_node.kind().to_string(),
-                    parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
-                    parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
-                    parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
-                }, debug_mode);
+                add_block_with_priority(
+                    &mut code_blocks,
+                    &mut seen_nodes,
+                    CodeBlock {
+                        start_row: start_pos.row,
+                        end_row: end_pos.row,
+                        start_byte: target_node.start_byte(),
+                        end_byte: target_node.end_byte(),
+                        node_type: target_node.kind().to_string(),
+                        parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
+                        parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
+                        parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
+                    },
+                    debug_mode,
+                );
                 continue; // Skip fallback if acceptable parent added
             }
 
@@ -1627,16 +1668,21 @@ pub fn parse_file_for_code_blocks(
                 None
             };
 
-            add_block_with_priority(&mut code_blocks, &mut seen_nodes, CodeBlock {
-                start_row: start_pos.row,
-                end_row: end_pos.row,
-                start_byte: target_node.start_byte(),
-                end_byte: target_node.end_byte(),
-                node_type: target_node.kind().to_string(),
-                parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
-                parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
-                parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
-            }, debug_mode);
+            add_block_with_priority(
+                &mut code_blocks,
+                &mut seen_nodes,
+                CodeBlock {
+                    start_row: start_pos.row,
+                    end_row: end_pos.row,
+                    start_byte: target_node.start_byte(),
+                    end_byte: target_node.end_byte(),
+                    node_type: target_node.kind().to_string(),
+                    parent_node_type: parent_info.as_ref().map(|(t, _, _)| t.clone()),
+                    parent_start_row: parent_info.as_ref().map(|(_, s, _)| *s),
+                    parent_end_row: parent_info.as_ref().map(|(_, _, e)| *e),
+                },
+                debug_mode,
+            );
         } else if debug_mode {
             println!("DEBUG: No node info found for line {line} (Live NodeInfo)");
         }
