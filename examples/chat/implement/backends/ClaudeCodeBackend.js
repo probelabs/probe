@@ -86,8 +86,8 @@ class ClaudeCodeBackend extends BaseBackend {
     }
     
     try {
-      // Check if claude-code CLI is available
-      await execPromise('which claude-code', { timeout: 5000 });
+      // Check if claude CLI is available
+      await execPromise('which claude', { timeout: 5000 });
       
       // Just verify the API key exists (non-empty)
       // Don't validate format as it can vary
@@ -404,15 +404,19 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
     // Build Claude Code CLI arguments securely
     const args = this.buildSecureCommandArgs(request);
     
+    // Add the prompt using -p flag
+    const validatedPrompt = this.validatePrompt(prompt);
+    args.unshift('-p', validatedPrompt);
+    
     this.log('info', 'Executing Claude Code CLI', {
-      command: 'claude-code',
+      command: 'claude',
       args: args.slice(0, 5), // Log first few args only for security
       workingDir
     });
     
     return new Promise((resolve, reject) => {
       // Use spawn instead of exec for better security
-      const child = spawn('claude-code', args, {
+      const child = spawn('claude', args, {
         cwd: workingDir,
         env: this.buildSecureEnvironment(),
         stdio: ['pipe', 'pipe', 'pipe']
@@ -428,11 +432,8 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
       let output = '';
       let errorOutput = '';
       
-      // Send the prompt to stdin
+      // No need to send prompt to stdin - it's passed via -p argument
       if (child.stdin) {
-        // Validate prompt before sending
-        const validatedPrompt = this.validatePrompt(prompt);
-        child.stdin.write(validatedPrompt);
         child.stdin.end();
       }
       
@@ -487,7 +488,7 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
               exitCode: code
             },
             metadata: {
-              command: 'claude-code',
+              command: 'claude',
               args: args.slice(0, 5), // Limited args for security
               model: this.config.model,
               sdkType: 'cli'
@@ -541,29 +542,34 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
    * @private
    */
   buildSecureCommandArgs(request) {
-    const args = ['--non-interactive'];
+    const args = [];
 
     // Add max turns with validation
     const maxTurns = this.validateMaxTurns(request.options?.maxTurns || this.config.maxTurns);
     args.push('--max-turns', maxTurns.toString());
 
-    // Add model with validation
-    if (this.config.model && this.isValidModelName(this.config.model)) {
-      args.push('--model', this.config.model);
+    // Only add model if explicitly set
+    const model = request.options?.model || this.config.model;
+    if (model && this.isValidModelName(model)) {
+      args.push('--model', model);
     }
 
-    // Add temperature with validation
-    const temperature = request.options?.temperature || this.config.temperature;
+    // Only add temperature if explicitly set
+    const temperature = request.options?.temperature !== undefined ? request.options.temperature : this.config.temperature;
     if (temperature !== undefined && this.isValidTemperature(temperature)) {
       args.push('--temperature', temperature.toString());
     }
 
-    // Add tools with validation
-    if (this.config.tools && this.config.tools.length > 0) {
-      const validatedTools = this.validateTools(this.config.tools);
+    // Add tools with validation or skip permissions if no tools
+    const tools = request.options?.tools || this.config.tools;
+    if (tools && tools.length > 0) {
+      const validatedTools = this.validateTools(tools);
       if (validatedTools.length > 0) {
-        args.push('--allowed-tools', validatedTools.join(','));
+        args.push('--allowedTools', validatedTools.join(','));
       }
+    } else {
+      // If no tools are specified, add dangerously-skip-permissions flag
+      args.push('--dangerously-skip-permissions');
     }
 
     return args;
