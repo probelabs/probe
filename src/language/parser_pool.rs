@@ -216,7 +216,7 @@ mod tests {
         // Both behaviors (Some(&0) and None) indicate the parser is checked out
         #[cfg(windows)]
         {
-            let checked_out = stats.get("rs").map_or(true, |&count| count == 0);
+            let checked_out = stats.get("rs").is_none_or(|&count| count == 0);
             assert!(
                 checked_out,
                 "Parser should be checked out (expected pool size 0 or entry removed, got {:?})",
