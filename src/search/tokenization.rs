@@ -3040,22 +3040,16 @@ mod tests {
                     "in common word list"
                 };
 
-                println!(
-                    "❌ SKIPPED: '{}' ({}) - reason: {}",
-                    term, description, reason
-                );
+                println!("❌ SKIPPED: '{term}' ({description}) - reason: {reason}");
             } else {
-                println!("✅ PROCESSED: '{}' ({})", term, description);
+                println!("✅ PROCESSED: '{term}' ({description})");
             }
         }
 
         let skip_rate = (skipped_terms as f64 / total_terms as f64) * 100.0;
 
         println!("\n📊 SUMMARY STATISTICS:");
-        println!(
-            "  Total important programming terms tested: {}",
-            total_terms
-        );
+        println!("  Total important programming terms tested: {total_terms}");
         println!(
             "  Terms skipped by heuristics: {} ({:.1}%)",
             skipped_terms, skip_rate

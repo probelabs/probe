@@ -478,7 +478,7 @@ fn test_hyphenated_compound_terms_parsing() {
             assert_eq!(keywords.len(), 2);
         },
         other => {
-            panic!("Expected Term expression for hyphenated compound term, got: {:?}", other);
+            panic!("Expected Term expression for hyphenated compound term, got: {other:?}");
         }
     }
     

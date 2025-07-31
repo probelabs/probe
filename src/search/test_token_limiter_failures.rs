@@ -196,7 +196,7 @@ mod token_limiter_failure_tests {
         let actual_ratio = total_bytes as f64 / total_tokens as f64;
 
         // Unicode content often has lower bytes/token ratios than expected
-        println!("Unicode bytes/token ratio: {:.2}", actual_ratio);
+        println!("Unicode bytes/token ratio: {actual_ratio:.2}");
 
         // This test documents the behavior rather than asserting failure
         // but shows that Unicode can cause unexpected tokenization
@@ -225,17 +225,14 @@ mod token_limiter_failure_tests {
         let total_tokens: usize = results.iter().map(|r| count_block_tokens(&r.code)).sum();
         let actual_ratio = total_bytes as f64 / total_tokens as f64;
 
-        println!("Mixed content bytes/token ratio: {:.2}", actual_ratio);
+        println!("Mixed content bytes/token ratio: {actual_ratio:.2}");
 
         // The 4.0 assumption could be wrong in either direction
         let error_from_assumption = ((4.0 - actual_ratio) / actual_ratio * 100.0).abs();
 
         // Document that mixed content makes estimation unreliable
         if error_from_assumption > 15.0 {
-            println!(
-                "WARNING: Mixed content shows {:.1}% deviation from 4.0 assumption",
-                error_from_assumption
-            );
+            println!("WARNING: Mixed content shows {error_from_assumption:.1}% deviation from 4.0 assumption");
         }
 
         assert!(actual_ratio > 0.0, "Sanity check: ratio should be positive");
@@ -265,8 +262,7 @@ mod token_limiter_failure_tests {
 
         // Verify our setup creates the problematic scenario
         if estimated_tokens < threshold_90_percent && actual_tokens > token_limit {
-            println!("SUCCESS: Created scenario where estimation ({}) < 90% threshold ({}) but actual ({}) > limit ({})",
-                     estimated_tokens, threshold_90_percent, actual_tokens, token_limit);
+            println!("SUCCESS: Created scenario where estimation ({estimated_tokens}) < 90% threshold ({threshold_90_percent}) but actual ({actual_tokens}) > limit ({token_limit})");
         }
     }
 }
