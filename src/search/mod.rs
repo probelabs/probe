@@ -23,6 +23,9 @@ pub mod tokenization; // New elastic search query parser
 #[cfg(test)]
 mod file_processing_tests;
 
+#[cfg(test)]
+mod test_token_limiter_failures;
+
 // Public exports
 pub use search_options::SearchOptions;
 pub use search_output::format_and_print_search_results;

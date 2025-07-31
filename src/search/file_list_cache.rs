@@ -294,11 +294,15 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
         files.push(entry.path().to_path_buf());
     }
 
+    // Sort files for deterministic ordering to fix non-deterministic behavior
+    // This ensures that file discovery is consistent across runs
+    files.sort();
+
     let walk_duration = walk_start.elapsed();
 
     if debug_mode {
         println!(
-            "DEBUG: Directory walk completed in {} - Found {} files out of {} entries",
+            "DEBUG: Directory walk completed in {} - Found {} files out of {} entries (sorted for determinism)",
             format_duration(walk_duration),
             files.len(),
             total_files

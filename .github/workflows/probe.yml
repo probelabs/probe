@@ -1292,7 +1292,7 @@ jobs:
           fi
 
           echo "::group::Debug: Git Status After Probe Chat"
-          git status
+          cd "$GITHUB_WORKSPACE" && git status
           echo "::endgroup::"
 
       # --- Upload Debug Files (No token needed) ---

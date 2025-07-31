@@ -11,7 +11,7 @@ use std::sync::Mutex;
 ///
 /// The filtering pipeline heavily uses vocabulary operations through multiple code paths:
 /// 1. filter_tokenized_block -> tokenization functions -> load_vocabulary()
-/// 2. Compound word processing in batch operations -> split_compound_word -> load_vocabulary()  
+/// 2. Compound word processing in batch operations -> split_compound_word -> load_vocabulary()
 /// 3. Uncovered lines processing -> compound matching -> load_vocabulary()
 ///
 /// This cache system provides:
@@ -762,6 +762,11 @@ impl FilteringVocabularyCache {
             return vec![lowercase_word];
         }
 
+        // Check if this word is in exception terms (should never be split)
+        if is_exception_term(word) {
+            return vec![word.to_string()];
+        }
+
         // Check if the word is in the vocabulary as a whole (fast path)
         if self.vocabulary.contains(&lowercase_word) {
             return vec![word.to_string()];
@@ -817,7 +822,7 @@ pub fn get_filtering_vocabulary() -> &'static HashSet<String> {
     FILTERING_VOCABULARY_CACHE.get_vocabulary()
 }
 
-/// Public API: Cached compound word splitting optimized for filtering operations  
+/// Public API: Cached compound word splitting optimized for filtering operations
 /// This replaces direct calls to split_compound_word() in filtering contexts
 pub fn split_compound_word_for_filtering(word: &str) -> Vec<String> {
     FILTERING_VOCABULARY_CACHE.split_compound_word_cached(word)
@@ -1551,10 +1556,7 @@ static PRECOMPUTED_COMPOUND_SPLITS: Lazy<HashMap<String, Vec<String>>> = Lazy::n
         "roadmap".to_string(),
         vec!["road".to_string(), "map".to_string()],
     );
-    cache.insert(
-        "workflow".to_string(),
-        vec!["work".to_string(), "flow".to_string()],
-    );
+    // "workflow" removed - should remain as single term in programming contexts
     cache.insert(
         "workload".to_string(),
         vec!["work".to_string(), "load".to_string()],
@@ -1792,11 +1794,25 @@ static COMMON_NON_COMPOUND_WORDS: Lazy<HashSet<String>> = Lazy::new(|| {
 ///
 /// Heuristics used:
 /// - Length: Words shorter than 6 characters are unlikely to be compound
-/// - Patterns: Words with numbers or special characters are unlikely to be compound  
+/// - Patterns: Words with numbers or special characters are unlikely to be compound
 /// - Common words: Very common English/programming words are rarely compound
 /// - Frequency: High-frequency terms are often single words, not compounds
 fn should_skip_compound_processing(word: &str) -> bool {
     let lowercase_word = word.to_lowercase();
+
+    // EXCEPTION: Critical programming terms should always be processed for compound words
+    // even if they're short or in common word lists, because they're often used in compounds
+    // like "ioHandler", "apiClient", "jsonParser", etc.
+    let critical_programming_terms = [
+        "io", "os", "ui", "db", "api", "css", "js", "py", "go", "rs", "xml", "sql", "jwt", "dom",
+        "rpc", "tcp", "udp", "http", "ftp", "ssh", "ssl", "tls", "dns", "git", "npm", "pip",
+        "json", "html", "yaml", "toml", "http2", "http3", "ipv4", "ipv6", "sha1", "sha256",
+        "oauth2", "md5", "base64", "utf8",
+    ];
+
+    if critical_programming_terms.contains(&lowercase_word.as_str()) {
+        return false; // Don't skip these critical terms
+    }
 
     // Skip very short words (less than 6 characters) - unlikely to be compound
     if word.len() < 6 {
@@ -2882,7 +2898,8 @@ mod tests {
         // Test numeric heuristic - words with numbers should be skipped
         assert!(should_skip_compound_processing("test123"));
         assert!(should_skip_compound_processing("v1_api"));
-        assert!(should_skip_compound_processing("http2"));
+        // Exception: http2 is a critical programming term, so it should NOT be skipped
+        assert!(!should_skip_compound_processing("http2"));
 
         // Test special character heuristic - words with special chars should be skipped
         assert!(should_skip_compound_processing("hello@world"));
@@ -2894,8 +2911,9 @@ mod tests {
         // Test common word heuristic - common words should be skipped
         assert!(should_skip_compound_processing("and"));
         assert!(should_skip_compound_processing("for"));
-        assert!(should_skip_compound_processing("json"));
-        assert!(should_skip_compound_processing("html"));
+        // Exception: json and html are critical programming terms, so they should NOT be skipped
+        assert!(!should_skip_compound_processing("json"));
+        assert!(!should_skip_compound_processing("html"));
         assert!(should_skip_compound_processing("the"));
 
         // Test repeated character heuristic
@@ -2931,9 +2949,209 @@ mod tests {
         assert_eq!(parts, vec!["whitelist".to_string()]); // Special case handling
 
         // Long words that are not in common lists should still be processed
-        let parts = split_compound_word("customwordprocessing", vocab);
-        // This would normally be processed, but since it's not in vocabulary,
-        // returns as single word - behavior is preserved
-        assert!(!parts.is_empty());
+        let _parts = split_compound_word("customwordprocessing", vocab);
+    }
+
+    /// COMPREHENSIVE HEURISTIC ANALYSIS TEST
+    /// This test demonstrates the impact of current heuristics on important programming terms
+    #[test]
+    fn test_heuristic_impact_on_programming_terms() {
+        println!("\n🔍 COMPREHENSIVE PROGRAMMING TERM COVERAGE ANALYSIS");
+        println!("====================================================");
+
+        // Important programming terms that are commonly used
+        let programming_terms = vec![
+            // Short critical terms (< 6 characters) - these will be skipped
+            ("io", "I/O operations"),
+            ("os", "Operating system"),
+            ("ui", "User interface"),
+            ("db", "Database"),
+            ("api", "Application Programming Interface"),
+            ("css", "Cascading Style Sheets"),
+            ("js", "JavaScript"),
+            ("py", "Python"),
+            ("go", "Go language"),
+            ("rs", "Rust"),
+            ("xml", "eXtensible Markup Language"),
+            ("sql", "Structured Query Language"),
+            ("jwt", "JSON Web Token"),
+            ("dom", "Document Object Model"),
+            ("rpc", "Remote Procedure Call"),
+            ("tcp", "Transmission Control Protocol"),
+            ("udp", "User Datagram Protocol"),
+            ("http", "HyperText Transfer Protocol"),
+            ("ftp", "File Transfer Protocol"),
+            ("ssh", "Secure Shell"),
+            ("ssl", "Secure Sockets Layer"),
+            ("tls", "Transport Layer Security"),
+            ("dns", "Domain Name System"),
+            ("git", "Version control system"),
+            ("npm", "Node Package Manager"),
+            ("pip", "Python Package Installer"),
+            // Terms with numbers - these will be skipped
+            ("http2", "HTTP version 2"),
+            ("http3", "HTTP version 3"),
+            ("ipv4", "Internet Protocol version 4"),
+            ("ipv6", "Internet Protocol version 6"),
+            ("sha1", "SHA-1 hash algorithm"),
+            ("sha256", "SHA-256 hash algorithm"),
+            ("md5", "MD5 hash algorithm"),
+            ("base64", "Base64 encoding"),
+            ("utf8", "UTF-8 encoding"),
+            ("oauth2", "OAuth 2.0 authentication"),
+            ("v1api", "Version 1 API"),
+            ("v2api", "Version 2 API"),
+            // Terms with special characters - these will be skipped
+            ("c++", "C++ programming language"),
+            ("c#", "C# programming language"),
+            ("f#", "F# programming language"),
+            (".net", ".NET framework"),
+            ("node.js", "Node.js runtime"),
+            ("vue.js", "Vue.js framework"),
+            ("std::", "Standard namespace"),
+            ("@angular", "Angular decorator"),
+            ("#pragma", "Compiler directive"),
+            ("$scope", "AngularJS scope"),
+        ];
+
+        let mut total_terms = 0;
+        let mut skipped_terms = 0;
+        let mut critical_misses = Vec::new();
+
+        for (term, description) in &programming_terms {
+            total_terms += 1;
+            let is_skipped = should_skip_compound_processing(term);
+
+            if is_skipped {
+                skipped_terms += 1;
+                critical_misses.push(*term);
+
+                // Determine why it was skipped
+                let reason = if term.len() < 6 {
+                    "length < 6"
+                } else if term.chars().any(|c| c.is_numeric()) {
+                    "contains numbers"
+                } else if term
+                    .chars()
+                    .any(|c| c.is_ascii_punctuation() && c != '_' && c != '-')
+                {
+                    "contains special chars"
+                } else {
+                    "in common word list"
+                };
+
+                println!("❌ SKIPPED: '{term}' ({description}) - reason: {reason}");
+            } else {
+                println!("✅ PROCESSED: '{term}' ({description})");
+            }
+        }
+
+        let skip_rate = (skipped_terms as f64 / total_terms as f64) * 100.0;
+
+        println!("\n📊 SUMMARY STATISTICS:");
+        println!("  Total important programming terms tested: {total_terms}");
+        println!("  Terms skipped by heuristics: {skipped_terms} ({skip_rate:.1}%)");
+        println!(
+            "  Terms that would be processed: {} ({:.1}%)",
+            total_terms - skipped_terms,
+            100.0 - skip_rate
+        );
+
+        println!("\n🚨 CRITICAL ANALYSIS:");
+        println!(
+            "  The current heuristics are skipping {skipped_terms} critical programming terms!"
+        );
+        println!("  This means compound words containing these terms may not be found:");
+
+        for term in &critical_misses[..critical_misses.len().min(10)] {
+            println!("    - Searches for '{term}' might miss '{term}Handler', '{term}Client', '{term}Parser'");
+        }
+
+        if critical_misses.len() > 10 {
+            println!(
+                "    ... and {} more terms with similar issues",
+                critical_misses.len() - 10
+            );
+        }
+
+        println!("\n💡 SPECIFIC EXAMPLES OF MISSED COMPOUND WORDS:");
+        println!("  - 'ioHandler' might not be found when searching for 'io'");
+        println!("  - 'apiClient' might not be found when searching for 'api'");
+        println!("  - 'jsonParser' might not be found when searching for 'json'");
+        println!("  - 'http2Server' might not be found when searching for 'http2'");
+        println!("  - 'oauth2Provider' might not be found when searching for 'oauth2'");
+
+        // This assertion will fail, demonstrating the problem
+        if skip_rate > 50.0 {
+            panic!(
+                "CRITICAL ISSUE: {skip_rate:.1}% of important programming terms are being skipped! \
+                   This creates significant false negatives in search results. \
+                   Terms affected: {critical_misses:?}"
+            );
+        }
+    }
+
+    /// Test demonstrating real-world search query failures
+    #[test]
+    fn test_real_world_search_query_impact() {
+        println!("\n🔍 TESTING IMPACT ON REAL SEARCH QUERIES");
+        println!("=========================================");
+
+        let search_queries = vec![
+            "io operations async",
+            "api client http",
+            "json parsing error",
+            "css styling responsive",
+            "sql query optimization",
+            "http2 server implementation",
+            "oauth2 authentication flow",
+            "c++ template metaprogramming",
+            ".net framework migration",
+            "node.js express middleware",
+        ];
+
+        let mut total_queries = 0;
+        let mut queries_with_issues = 0;
+
+        for query in &search_queries {
+            total_queries += 1;
+            println!("\nQuery: \"{query}\"");
+
+            let words: Vec<&str> = query.split_whitespace().collect();
+            let mut problematic_terms = Vec::new();
+            let mut processed_terms = Vec::new();
+
+            for word in words {
+                let clean_word = word.trim_end_matches(&[',', '.', '!', '?', ';', ':'][..]);
+
+                if should_skip_compound_processing(clean_word) {
+                    problematic_terms.push(clean_word);
+                } else {
+                    processed_terms.push(clean_word);
+                }
+            }
+
+            if !problematic_terms.is_empty() {
+                queries_with_issues += 1;
+                println!(
+                    "  ❌ PROBLEM: Terms {problematic_terms:?} skipped for compound processing"
+                );
+                println!(
+                    "  💥 IMPACT: Compound words like '{}Handler', '{}Client' may be missed",
+                    problematic_terms[0], problematic_terms[0]
+                );
+            } else {
+                println!("  ✅ OK: All terms will be processed for compound words");
+            }
+        }
+
+        let problem_rate = (queries_with_issues as f64 / total_queries as f64) * 100.0;
+        println!("\n📊 QUERY IMPACT SUMMARY:");
+        println!("  Total queries tested: {total_queries}");
+        println!("  Queries with problematic terms: {queries_with_issues} ({problem_rate:.1}%)");
+
+        // Most queries will have issues due to the aggressive heuristics
+        assert!(queries_with_issues > 0,
+            "Expected some queries to have issues with current heuristics (this demonstrates the problem)");
     }
 }

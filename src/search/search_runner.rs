@@ -1517,45 +1517,55 @@ pub fn search_with_structured_patterns(
 
     // Step 3: Process files in parallel using either SIMD or ripgrep
     let result = if use_simd {
-        // Use SIMD-based search
+        // Use SIMD-based search with deterministic collection
         let simd_matcher = Arc::new(simd_matcher);
         let pattern_to_terms = Arc::new(pattern_to_terms);
-        let file_term_maps = Arc::new(std::sync::Mutex::new(HashMap::new()));
 
-        file_list.files.par_iter().for_each(|file_path| {
-            let simd_matcher = Arc::clone(&simd_matcher);
-            let pattern_to_terms = Arc::clone(&pattern_to_terms);
+        // Sort files for deterministic processing order to fix non-deterministic behavior
+        let mut sorted_files = file_list.files.clone();
+        sorted_files.sort();
 
-            // Search file with SIMD pattern matching
-            match search_file_with_simd(file_path, &simd_matcher, &pattern_to_terms) {
-                Ok(term_map) => {
-                    if !term_map.is_empty() {
-                        if debug_mode {
-                            println!(
-                                "DEBUG: File {:?} matched patterns with {} term indices",
-                                file_path,
-                                term_map.len()
-                            );
+        // Collect results in parallel first, then sort for deterministic order
+        let results_vec: Vec<_> = sorted_files
+            .par_iter()
+            .filter_map(|file_path| {
+                let simd_matcher = Arc::clone(&simd_matcher);
+                let pattern_to_terms = Arc::clone(&pattern_to_terms);
+
+                // Search file with SIMD pattern matching
+                match search_file_with_simd(file_path, &simd_matcher, &pattern_to_terms) {
+                    Ok(term_map) => {
+                        if !term_map.is_empty() {
+                            if debug_mode {
+                                println!(
+                                    "DEBUG: File {:?} matched patterns with {} term indices",
+                                    file_path,
+                                    term_map.len()
+                                );
+                            }
+                            Some((file_path.clone(), term_map))
+                        } else {
+                            None
                         }
-
-                        // Add to results with proper locking
-                        let mut maps = file_term_maps.lock().unwrap();
-                        maps.insert(file_path.clone(), term_map);
+                    }
+                    Err(e) => {
+                        if debug_mode {
+                            println!("DEBUG: Error searching file {file_path:?}: {e:?}");
+                        }
+                        None
                     }
                 }
-                Err(e) => {
-                    if debug_mode {
-                        println!("DEBUG: Error searching file {file_path:?}: {e:?}");
-                    }
-                }
-            }
-        });
+            })
+            .collect();
 
-        // Extract results from the shared map
-        Arc::try_unwrap(file_term_maps)
-            .unwrap()
-            .into_inner()
-            .unwrap()
+        // Convert to BTreeMap for deterministic ordering by file path
+        let mut file_term_maps = std::collections::BTreeMap::new();
+        for (path, term_map) in results_vec {
+            file_term_maps.insert(path, term_map);
+        }
+
+        // Convert BTreeMap back to HashMap for compatibility with existing code
+        file_term_maps.into_iter().collect::<HashMap<_, _>>()
     } else {
         // Use ripgrep-based search
         searcher
