@@ -5,6 +5,7 @@ pub struct LimitedSearchResults {
     pub skipped_files: Vec<SearchResult>,
     pub limits_applied: Option<SearchLimits>,
     pub cached_blocks_skipped: Option<usize>,
+    pub files_skipped_early_termination: Option<usize>,
 }
 
 // Structure to track which limits were applied

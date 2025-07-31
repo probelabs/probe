@@ -188,11 +188,36 @@ fn handle_search(params: SearchParams) -> Result<()> {
                 }
 
                 println!();
+
+                // Calculate total skipped files (results skipped + files not processed)
+                let results_skipped = limited_results.skipped_files.len();
+                let files_not_processed =
+                    limited_results.files_skipped_early_termination.unwrap_or(0);
+                let total_skipped = results_skipped + files_not_processed;
+
                 println!(
                     "{} {}",
                     "Skipped files due to limits:".yellow().bold(),
-                    limited_results.skipped_files.len()
+                    total_skipped
                 );
+
+                // Show breakdown in debug mode
+                if std::env::var("DEBUG").is_ok() && total_skipped > 0 {
+                    if results_skipped > 0 {
+                        println!(
+                            "  {} {}",
+                            "Results skipped after processing:".yellow(),
+                            results_skipped
+                        );
+                    }
+                    if files_not_processed > 0 {
+                        println!(
+                            "  {} {}",
+                            "Files not processed (early termination):".yellow(),
+                            files_not_processed
+                        );
+                    }
+                }
             }
         }
 

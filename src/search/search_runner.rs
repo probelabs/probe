@@ -379,6 +379,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             skipped_files: Vec::new(),
             limits_applied: None,
             cached_blocks_skipped: None,
+            files_skipped_early_termination: None,
         });
     }
 
@@ -891,6 +892,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let mut batch_number = 0;
     let mut should_continue = true;
 
+    // Track total files available for accurate skipped file count
+    let total_ranked_files = ranked_files.len();
+
     // Process files in batches
     for batch in ranked_files.chunks(BATCH_SIZE) {
         if !should_continue {
@@ -1365,6 +1369,16 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // First apply limits to the results
     let mut limited = apply_limits(filtered_results, *max_results, *max_bytes, *max_tokens);
 
+    // Calculate files skipped due to early termination
+    let files_skipped_early_termination = total_ranked_files.saturating_sub(files_processed);
+
+    // Set the files skipped due to early termination
+    limited.files_skipped_early_termination = if files_skipped_early_termination > 0 {
+        Some(files_skipped_early_termination)
+    } else {
+        None
+    };
+
     // Measure limit application timing immediately after limits are applied
     let la_duration = la_start.elapsed();
     timings.limit_application = Some(la_duration);
@@ -1374,6 +1388,11 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             "DEBUG: Limit application completed in {}",
             format_duration(la_duration)
         );
+        if files_skipped_early_termination > 0 {
+            println!(
+                "DEBUG: Files skipped due to early termination: {files_skipped_early_termination}"
+            );
+        }
     }
 
     // Then apply caching AFTER limiting results
@@ -1475,6 +1494,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             skipped_files: limited.skipped_files,
             limits_applied: limited.limits_applied,
             cached_blocks_skipped: limited.cached_blocks_skipped,
+            files_skipped_early_termination: limited.files_skipped_early_termination,
         };
 
         // Update the cache with the merged results (after merging)

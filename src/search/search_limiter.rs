@@ -32,6 +32,7 @@ pub fn apply_limits(
             skipped_files: Vec::new(),
             limits_applied: None,
             cached_blocks_skipped: None,
+            files_skipped_early_termination: None,
         };
     }
 
@@ -220,5 +221,6 @@ pub fn apply_limits(
             total_tokens: final_total_tokens,
         }),
         cached_blocks_skipped: None,
+        files_skipped_early_termination: None,
     }
 }
