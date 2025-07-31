@@ -79,15 +79,16 @@ pub fn find_symbol_in_file(
         println!("[DEBUG] Using tree-sitter to parse file");
     }
 
-    // Parse the file with tree-sitter
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&language_impl.get_tree_sitter_language())
-        .map_err(|e| anyhow::anyhow!("Failed to set language: {}", e))?;
+    // Parse the file with tree-sitter using pooled parser for better performance
+    let mut parser = crate::language::get_pooled_parser(extension)
+        .map_err(|e| anyhow::anyhow!("Failed to get pooled parser: {}", e))?;
 
     let tree = parser
         .parse(content.as_bytes(), None)
         .ok_or_else(|| anyhow::anyhow!("Failed to parse file"))?;
+
+    // Return parser to pool for reuse
+    crate::language::return_pooled_parser(extension, parser);
 
     let root_node = tree.root_node();
 

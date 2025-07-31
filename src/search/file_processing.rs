@@ -5,7 +5,6 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tree_sitter;
 
 use probe_code::language::{is_test_file, parse_file_for_code_blocks};
 use probe_code::models::SearchResult;
@@ -365,15 +364,12 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         );
     }
 
-    // Create a single parser for all test detection (optimization: reuse parser)
+    // Test detection optimization: Use pooled parser for better performance
     let mut parser_opt = None;
     if !ctx.params.allow_tests {
         if let Some(language_impl) = crate::language::factory::get_language_impl(ctx.extension) {
-            let mut parser = tree_sitter::Parser::new();
-            if parser
-                .set_language(&language_impl.get_tree_sitter_language())
-                .is_ok()
-            {
+            // Use pooled parser for test detection as well
+            if let Ok(parser) = crate::language::get_pooled_parser(ctx.extension) {
                 parser_opt = Some((parser, language_impl));
             }
         }
@@ -591,6 +587,51 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             );
         }
 
+        // AGGRESSIVE PRE-FILTERING: Fast string contains() check before expensive tokenization
+        // This optimization skips contexts that obviously don't contain any query terms
+        // String contains() is ~100x faster than full tokenization + compound word processing
+        //
+        // FILENAME MATCH FIX: For filename-based matches, be more lenient with pre-filtering
+        // When a file matches by filename, we should include context even if individual lines
+        // don't contain query terms, because the user's intent is to see the file content
+        //
+        // HEURISTIC: Detect filename matches by checking if any term matches ALL lines in the file
+        // This is characteristic of filename-based matching where the entire file is considered relevant
+        let file_line_count = ctx.lines.len();
+        let is_likely_filename_match = ctx
+            .params
+            .term_matches
+            .values()
+            .any(|lines| lines.len() >= file_line_count);
+        let context_text_lower = context_code.to_lowercase();
+        let has_potential_query_matches = ctx
+            .unique_query_terms
+            .iter()
+            .any(|term| context_text_lower.contains(&term.to_lowercase()));
+
+        // Skip aggressive pre-filtering for filename matches to preserve all context
+        if !has_potential_query_matches && !is_likely_filename_match {
+            if ctx.debug_mode {
+                println!(
+                    "DEBUG: AGGRESSIVE PRE-FILTERING: Context {context_start}-{context_end} contains no query terms, skipping expensive processing"
+                );
+            }
+            // Skip this context entirely - no point in tokenizing or processing it further
+            continue;
+        }
+
+        if ctx.debug_mode {
+            if has_potential_query_matches {
+                println!(
+                    "DEBUG: AGGRESSIVE PRE-FILTERING: Context {context_start}-{context_end} passed pre-filter, proceeding with tokenization"
+                );
+            } else if is_likely_filename_match {
+                println!(
+                    "DEBUG: AGGRESSIVE PRE-FILTERING: Context {context_start}-{context_end} bypassed pre-filter due to filename match, proceeding with tokenization"
+                );
+            }
+        }
+
         // TOKENIZATION CACHE: Check cache first to avoid redundant tokenization
         let cache_key = (context_start_idx, context_end_idx);
         let context_terms = if let Some(cached_terms) = tokenization_cache.get(&cache_key) {
@@ -796,6 +837,11 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         }
     }
 
+    // Return parser to pool if it was used
+    if let Some((parser, _)) = parser_opt {
+        crate::language::return_pooled_parser(ctx.extension, parser);
+    }
+
     if ctx.debug_mode {
         println!(
             "DEBUG: SMART CONTEXT WINDOW MERGING: Completed processing {} uncovered lines with {} cache hits",
@@ -889,27 +935,39 @@ pub fn process_file_with_results(
         println!("DEBUG: Processing file: {:?}", params.path);
         println!("DEBUG:   matched lines: {:?}", params.line_numbers);
         println!("DEBUG:   file I/O time: {file_io_duration:?}");
+        println!(
+            "DEBUG: Processing {} unique query terms",
+            unique_query_terms.len()
+        );
     }
 
     // Measure AST parsing time with sub-steps
     let ast_parsing_start = Instant::now();
 
-    // Measure language initialization time
+    // PARSER POOLING OPTIMIZATION: Use pooled parsers to avoid expensive initialization
+    //
+    // Previous implementation created a new parser for each file:
+    // - Parser::new() + set_language() for every file (expensive)
+    // - Language implementation lookup for every file (redundant)
+    //
+    // New implementation uses parser pooling:
+    // - Reuses pre-configured parsers from a thread-safe pool
+    // - Eliminates parser creation and language setup overhead
+    // - Automatically manages parser lifecycle (get/return)
+
+    // Measure language initialization time (now minimal due to pooling)
     let language_init_start = Instant::now();
-    let language_impl = crate::language::factory::get_language_impl(extension);
+    let language_supported = crate::language::factory::get_language_impl(extension).is_some();
     let language_init_duration = language_init_start.elapsed();
     timings.ast_parsing_language_init = Some(language_init_duration);
 
-    // Measure parser initialization time
+    // Measure parser initialization time (now minimal due to pooling)
     let parser_init_start = Instant::now();
-    let mut parser = tree_sitter::Parser::new();
-    if let Some(lang_impl) = &language_impl {
-        let _ = parser.set_language(&lang_impl.get_tree_sitter_language());
-    }
+    // Parser initialization is now handled internally by the pooling system
     let parser_init_duration = parser_init_start.elapsed();
     timings.ast_parsing_parser_init = Some(parser_init_duration);
 
-    // Measure tree parsing time
+    // Measure tree parsing time (this is where the real optimization happens)
     let tree_parsing_start = Instant::now();
     let file_path = params.path.to_string_lossy();
     let mut cache_key = String::with_capacity(file_path.len() + extension.len() + 1);
@@ -917,8 +975,10 @@ pub fn process_file_with_results(
     cache_key.push('_');
     cache_key.push_str(extension);
 
-    let _ = if language_impl.is_some() {
-        crate::language::tree_cache::get_or_parse_tree(&cache_key, &content, &mut parser).ok()
+    let _ = if language_supported {
+        // Use the new pooled parser approach - this eliminates the expensive
+        // parser creation and language setup that was happening for each file
+        crate::language::get_or_parse_tree_pooled(&cache_key, &content, extension).ok()
     } else {
         None
     };
@@ -1120,10 +1180,12 @@ pub fn process_file_with_results(
                     // Start measuring term matching time
                     let direct_matches_start = Instant::now();
 
-                    // Calculate metrics using the already tokenized content
-                    let direct_matches: HashSet<&String> = block_terms
+                    // OPTIMIZED: Instead of checking every block term against query terms (O(n*m)),
+                    // iterate through query terms and check if they exist in block terms (O(m*1))
+                    // This is much more efficient when there are many block terms but fewer query terms
+                    let direct_matches: HashSet<&String> = unique_query_terms
                         .iter()
-                        .filter(|t| unique_query_terms.contains(*t))
+                        .filter(|query_term| block_terms.contains(*query_term))
                         .collect();
 
                     let direct_matches_duration = direct_matches_start.elapsed();

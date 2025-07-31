@@ -1218,6 +1218,17 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // First apply limits to the results
     let mut limited = apply_limits(filtered_results, *max_results, *max_bytes, *max_tokens);
 
+    // Measure limit application timing immediately after limits are applied
+    let la_duration = la_start.elapsed();
+    timings.limit_application = Some(la_duration);
+
+    if debug_mode {
+        println!(
+            "DEBUG: Limit application completed in {}",
+            format_duration(la_duration)
+        );
+    }
+
     // Then apply caching AFTER limiting results
     let fc_start = Instant::now();
 
@@ -1287,17 +1298,6 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         println!(
             "DEBUG: Final caching completed in {}",
             format_duration(fc_duration)
-        );
-    }
-
-    let la_duration = la_start.elapsed();
-    timings.limit_application = Some(la_duration);
-
-    if debug_mode {
-        println!(
-            "DEBUG: Limit application completed in {} - Final result count: {}",
-            format_duration(la_duration),
-            limited.results.len()
         );
     }
 
