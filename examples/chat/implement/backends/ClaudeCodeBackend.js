@@ -86,8 +86,8 @@ class ClaudeCodeBackend extends BaseBackend {
     }
     
     try {
-      // Check if claude-code CLI is available
-      await execPromise('which claude-code', { timeout: 5000 });
+      // Check if claude CLI is available
+      await execPromise('which claude', { timeout: 5000 });
       
       // Just verify the API key exists (non-empty)
       // Don't validate format as it can vary
@@ -412,7 +412,7 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
     
     return new Promise((resolve, reject) => {
       // Use spawn instead of exec for better security
-      const child = spawn('claude-code', args, {
+      const child = spawn('claude', args, {
         cwd: workingDir,
         env: this.buildSecureEnvironment(),
         stdio: ['pipe', 'pipe', 'pipe']

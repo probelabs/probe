@@ -1122,7 +1122,7 @@ jobs:
             npm install -g @anthropic-ai/claude-code || echo "::warning::Failed to install Claude Code SDK globally, will rely on probe-chat bundled version"
             # Verify installation
             if command -v claude &> /dev/null; then
-              echo "Claude Code successfully installed: $(claude-code --version 2>/dev/null || echo 'version check failed')"
+              echo "Claude Code successfully installed: $(claude --version 2>/dev/null || echo 'version check failed')"
             else
               echo "::warning::Claude Code command not found after installation"
             fi
