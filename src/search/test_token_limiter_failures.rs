@@ -97,8 +97,7 @@ mod token_limiter_failure_tests {
 
         if estimated_total < ninety_percent_threshold && actual_total > token_limit {
             panic!(
-                "90% threshold bypassed: {} estimated < {} threshold, but {} actual > {} limit",
-                estimated_total, ninety_percent_threshold, actual_total, token_limit
+                "90% threshold bypassed: {estimated_total} estimated < {ninety_percent_threshold} threshold, but {actual_total} actual > {token_limit} limit"
             );
         }
     }
@@ -128,8 +127,7 @@ mod token_limiter_failure_tests {
         // Symbol-heavy code should show severe underestimation (>50% error)
         assert!(
             error_percent < -50.0,
-            "Expected severe underestimation for symbol-heavy code, got {:.1}% error",
-            error_percent
+            "Expected severe underestimation for symbol-heavy code, got {error_percent:.1}% error"
         );
     }
 
@@ -138,7 +136,7 @@ mod token_limiter_failure_tests {
         // Create many small blocks with low bytes/token ratios
         let mut small_blocks = Vec::new();
         for i in 0..25 {
-            small_blocks.push(format!("a{}=1;b{}=2;c{}=3;", i, i, i));
+            small_blocks.push(format!("a{i}=1;b{i}=2;c{i}=3;"));
         }
 
         let results: Vec<SearchResult> = small_blocks
@@ -168,10 +166,7 @@ mod token_limiter_failure_tests {
                 ((actual_tokens - reported_tokens) as f64 / reported_tokens as f64) * 100.0;
             assert!(
                 undercount_percent < 20.0,
-                "Accumulation of errors caused {}% undercount ({} actual vs {} reported)",
-                undercount_percent,
-                actual_tokens,
-                reported_tokens
+                "Accumulation of errors caused {undercount_percent}% undercount ({actual_tokens} actual vs {reported_tokens} reported)"
             );
         }
     }

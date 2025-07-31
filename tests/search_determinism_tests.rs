@@ -38,9 +38,9 @@ fn test_search_determinism_with_user_path() {
         .join("fixtures")
         .join("user");
 
-    println!("Testing search determinism with {} iterations", iterations);
-    println!("Binary path: {:?}", binary_path);
-    println!("Fixture path: {:?}", fixture_path);
+    println!("Testing search determinism with {iterations} iterations");
+    println!("Binary path: {binary_path:?}");
+    println!("Fixture path: {fixture_path:?}");
     println!("Query: \"yaml workflow agent multi-agent user input\"");
     println!("Expected consistent results across all runs\n");
 
@@ -64,7 +64,7 @@ fn test_search_determinism_with_user_path() {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            panic!("Command failed on iteration {}: {}", i, stderr);
+            panic!("Command failed on iteration {i}: {stderr}");
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
