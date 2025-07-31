@@ -266,7 +266,19 @@ Probe can help you modify your code in two ways:
 When you use the `--allow-edit` flag, Probe can make changes directly to your code files.
 
 *   **What it does**: Ask Probe to "fix this bug" or "add error handling" and it will modify your files.
-*   **What you need**: Install the `aider-chat` package and make sure Probe can write to your project files.
+*   **What you need**: Install a code editing backend tool:
+     - **Claude Code** (default if available): `npm install -g @anthropic-ai/claude-code`
+     - **Aider** (fallback): `pip install aider-chat`
+*   **Backend selection**: Probe automatically detects which tool is available. You can override this with the `implement_tool_backend` environment variable:
+     ```bash
+     # Force Claude Code
+     export implement_tool_backend=claude
+     probe-chat --allow-edit
+     
+     # Force Aider
+     export implement_tool_backend=aider
+     probe-chat --allow-edit
+     ```
 
 #### GitHub Integration
 
