@@ -290,10 +290,10 @@ jobs:
           token: ${{ env.WORKFLOW_TOKEN }}
           fetch-depth: 0 # Fetch all history
 
-      - name: Install jq, perl and Verify gh
+      - name: Install jq and Verify gh
         if: steps.set_context.outputs.skip != 'true'
         run: |
-          sudo apt-get update && sudo apt-get install -y jq perl --no-install-recommends
+          sudo apt-get update && sudo apt-get install -y jq --no-install-recommends
           gh --version
 
       # --- Detect Languages ---
@@ -806,45 +806,69 @@ jobs:
           if [[ "$RAW_DIFF_CONTENT" != "FETCH_FAILED" && -n "$RAW_DIFF_CONTENT" ]]; then
               echo "Filtering suspected minified files..."
               set +e
-              FILTERED_PR_DIFF_CONTENT=$(echo "$RAW_DIFF_CONTENT" | perl -ne '
-                BEGIN { $chunk = ""; $print_chunk = 1; $max_len = 500; }
-                if (/^diff --git a\/(.+)\s+b\/(.+)$/) {
-                    print $chunk if $chunk ne "" && $print_chunk;
-                    $chunk = $_; $print_chunk = 1; my $b_path = $2;
-                    if ($b_path eq "/dev/null") { $print_chunk = 1; }
-                    elsif ($b_path =~ m/\.(lock|sum|mod|toml|cfg|ini|properties|yaml|yml|json|md|rst|adoc|txt|conf)$/i ||
-                           $b_path =~ m/(Makefile|Dockerfile|LICENSE|README|CONTRIBUTING|CHANGELOG)/i ||
-                           $b_path =~ m/\.(gitignore|dockerignore|.*rc)$/ ) { $print_chunk = 1; }
-                    elsif (! -e $b_path) { warn "Warning: File $b_path from diff not found at ./$b_path, including chunk."; $print_chunk = 1; }
-                    else {
-                         if (open my $fh, "<", $b_path) {
-                             my $lines_read = 0;
-                             while (my $line = <$fh>) {
-                                 $lines_read++; chomp $line;
-                                 if (length($line) > $max_len && $line !~ m{(https?://\S+|/\S+|[a-zA-Z0-9+/=]{20,}|d="M[\d\.,\sA-Za-z-]+"})}) {
-                                     warn "Info: Filtering chunk for $b_path (line $lines_read length > $max_len)"; $print_chunk = 0; last;
-                                 }
-                                 last if $lines_read >= 3;
-                             }
-                             close $fh;
-                         } else { warn "Warning: Could not open $b_path to check, including chunk."; $print_chunk = 1; }
+              # Filter diff content using bash/awk to remove suspected minified files
+              FILTERED_PR_DIFF_CONTENT=$(echo "$RAW_DIFF_CONTENT" | awk '
+                BEGIN { 
+                  chunk = ""; print_chunk = 1; max_len = 500;
+                  # Build whitelist patterns
+                  whitelist = "\\.(lock|sum|mod|toml|cfg|ini|properties|yaml|yml|json|md|rst|adoc|txt|conf)$|"
+                  whitelist = whitelist "(Makefile|Dockerfile|LICENSE|README|CONTRIBUTING|CHANGELOG)|"
+                  whitelist = whitelist "\\.(gitignore|dockerignore|.*rc)$"
+                }
+                /^diff --git a\/.*[[:space:]]+b\/.*$/ {
+                  if (chunk != "" && print_chunk) print chunk
+                  chunk = $0 "\n"; print_chunk = 1
+                  # Extract b_path from "diff --git a/path b/path" format
+                  match($0, /b\/(.*)$/, arr)
+                  b_path = arr[1]
+                  
+                  if (b_path == "/dev/null") {
+                    print_chunk = 1
+                  } else if (match(tolower(b_path), whitelist)) {
+                    print_chunk = 1
+                  } else {
+                    # Check if file exists and inspect first few lines for minification
+                    cmd = "test -f \"" b_path "\""
+                    if (system(cmd) != 0) {
+                      print "Warning: File " b_path " from diff not found at ./" b_path ", including chunk." > "/dev/stderr"
+                      print_chunk = 1
+                    } else {
+                      # Read first 3 lines to check for minification
+                      lines_read = 0
+                      while ((getline line < b_path) > 0 && lines_read < 3) {
+                        lines_read++
+                        line_len = length(line)
+                        if (line_len > max_len) {
+                          # Check if line contains patterns that suggest it is not minified
+                          if (!match(line, /(https?:\/\/[^[:space:]]+|\/[^[:space:]]+|[a-zA-Z0-9+\/=]{20,}|d="M[0-9.,[:space:]A-Za-z-]+")/)) {
+                            print "Info: Filtering chunk for " b_path " (line " lines_read " length > " max_len ")" > "/dev/stderr"
+                            print_chunk = 0
+                            close(b_path)
+                            break
+                          }
+                        }
+                      }
+                      close(b_path)
                     }
-                } else { $chunk .= $_; }
-                END { print $chunk if $chunk ne "" && $print_chunk; }
+                  }
+                  next
+                }
+                { chunk = chunk $0 "\n" }
+                END { if (chunk != "" && print_chunk) printf "%s", chunk }
               ' 2> filter_stderr.log)
-              PERL_PIPE_STATUS=${PIPESTATUS[1]}
+              FILTER_PIPE_STATUS=${PIPESTATUS[1]}
               set -e
 
-              if [[ $PERL_PIPE_STATUS -ne 0 ]]; then echo "::warning::Perl filter script exited with status $PERL_PIPE_STATUS."; fi
-              if [[ -s filter_stderr.log ]]; then echo "Perl filter script warnings/info:"; cat filter_stderr.log; fi
+              if [[ $FILTER_PIPE_STATUS -ne 0 ]]; then echo "::warning::Filter script exited with status $FILTER_PIPE_STATUS."; fi
+              if [[ -s filter_stderr.log ]]; then echo "Filter script warnings/info:"; cat filter_stderr.log; fi
 
               if [[ -z "$FILTERED_PR_DIFF_CONTENT" ]] && [[ -n "$RAW_DIFF_CONTENT" ]]; then
-                  echo "All diff chunks were filtered out by Perl script."
+                  echo "All diff chunks were filtered out by filter script."
                   FILTERED_PR_DIFF="<!-- Diff contained only files filtered out by heuristic -->"
               elif [[ -z "$FILTERED_PR_DIFF_CONTENT" ]]; then
-                  echo "Filtered diff is empty (remained empty after Perl filter)."
+                  echo "Filtered diff is empty (remained empty after filter)."
               else
-                   echo "Perl filtering complete. Final diff size: ${#FILTERED_PR_DIFF_CONTENT} bytes."
+                   echo "Filter processing complete. Final diff size: ${#FILTERED_PR_DIFF_CONTENT} bytes."
                    FILTERED_PR_DIFF="$FILTERED_PR_DIFF_CONTENT"
               fi
           elif [[ "$RAW_DIFF_CONTENT" == "FETCH_FAILED" ]]; then
