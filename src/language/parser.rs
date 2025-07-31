@@ -55,6 +55,7 @@ static LINE_MAP_CACHE: Lazy<DashMap<String, SparseLineMap>> = Lazy::new(DashMap:
 /// Sparse line map that only stores mappings for lines that are actually needed
 /// This dramatically reduces memory usage and construction time compared to dense Vec approach
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 struct SparseLineMap {
     /// Only stores mappings for lines that have been processed
     mappings: HashMap<usize, CachedNodeInfo>,
@@ -89,6 +90,7 @@ impl SparseLineMap {
     }
 
     /// Check if a line is within any populated range
+    #[allow(dead_code)]
     fn is_populated(&self, line: usize) -> bool {
         self.populated_ranges
             .iter()
@@ -239,6 +241,7 @@ impl CachedNodeInfo {
 
 /// Structure to hold node information for a specific line
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct NodeInfo<'a> {
     node: Node<'a>,
     is_comment: bool,
@@ -248,6 +251,7 @@ struct NodeInfo<'a> {
 }
 
 /// Helper function to determine if we should update the line map for a given line
+#[allow(dead_code)]
 fn should_update_line_map<'a>(
     line_map: &[Option<NodeInfo<'a>>],
     line: usize,
@@ -525,24 +529,27 @@ fn build_sparse_line_map<'a>(
     // Create buffer zones around requested lines for context
     const BUFFER_SIZE: usize = 10;
     let mut target_ranges: Vec<(usize, usize)> = Vec::new();
-    
+
     // Convert line numbers to ranges with buffer
     let mut sorted_lines: Vec<usize> = line_numbers.iter().cloned().collect();
     sorted_lines.sort();
-    
+
     if debug_mode {
-        println!("DEBUG: SPARSE OPTIMIZATION - Building sparse line map for {} lines", sorted_lines.len());
+        println!(
+            "DEBUG: SPARSE OPTIMIZATION - Building sparse line map for {} lines",
+            sorted_lines.len()
+        );
     }
-    
+
     // Build contiguous ranges with buffer
     if !sorted_lines.is_empty() {
         let mut range_start = sorted_lines[0].saturating_sub(BUFFER_SIZE);
         let mut range_end = sorted_lines[0] + BUFFER_SIZE;
-        
+
         for &line in &sorted_lines[1..] {
             let buffered_start = line.saturating_sub(BUFFER_SIZE);
             let buffered_end = line + BUFFER_SIZE;
-            
+
             if buffered_start <= range_end + BUFFER_SIZE {
                 range_end = buffered_end;
             } else {
@@ -553,14 +560,16 @@ fn build_sparse_line_map<'a>(
         }
         target_ranges.push((range_start, range_end));
     }
-    
+
     let base_offset = target_ranges.first().map(|(start, _)| *start).unwrap_or(0);
     let mut sparse_map = SparseLineMap::new(base_offset);
-    
+
     if debug_mode {
-        println!("DEBUG: SPARSE OPTIMIZATION - Target ranges: {:?}, base_offset: {}", target_ranges, base_offset);
+        println!(
+            "DEBUG: SPARSE OPTIMIZATION - Target ranges: {target_ranges:?}, base_offset: {base_offset}"
+        );
     }
-    
+
     // Process only nodes that intersect with target ranges
     process_node_sparse(
         root_node,
@@ -572,16 +581,16 @@ fn build_sparse_line_map<'a>(
         None, // Initial ancestor context is None
         &target_ranges,
     );
-    
+
     // Mark all target ranges as populated
     for &(start, end) in &target_ranges {
         sparse_map.mark_populated(start, end);
     }
-    
+
     if debug_mode {
         println!("DEBUG: SPARSE OPTIMIZATION - Built sparse line map with {} mappings (vs full file approach)", sparse_map.len());
     }
-    
+
     sparse_map
 }
 
@@ -599,7 +608,7 @@ fn process_node_sparse<'a>(
 ) {
     let start_row = node.start_position().row;
     let end_row = node.end_position().row;
-    
+
     // OPTIMIZATION: Early filtering - skip nodes that don't intersect with any target ranges
     let mut intersects_target = false;
     for &(range_start, range_end) in target_ranges {
@@ -608,7 +617,7 @@ fn process_node_sparse<'a>(
             break;
         }
     }
-    
+
     if !intersects_target {
         if debug_mode {
             println!(
@@ -620,30 +629,28 @@ fn process_node_sparse<'a>(
         }
         return; // Skip this entire subtree
     }
-    
+
     // Process this node since it intersects with target ranges
     let is_comment = node.kind() == "comment"
         || node.kind() == "line_comment"
         || node.kind() == "block_comment"
         || node.kind() == "doc_comment"
         || node.kind() == "//";
-    
+
     let is_test = !allow_tests && language_impl.is_test_node(&node, content);
     let line_coverage = end_row.saturating_sub(start_row) + 1;
     let byte_coverage = node.end_byte().saturating_sub(node.start_byte());
     let specificity = line_coverage * 1000 + (byte_coverage / 100);
-    
+
     // Determine context node
     let context_node = if is_comment {
         find_comment_context_node(node, language_impl, debug_mode)
+    } else if !language_impl.is_acceptable_parent(&node) {
+        current_ancestor
     } else {
-        if !language_impl.is_acceptable_parent(&node) {
-            current_ancestor
-        } else {
-            None
-        }
+        None
     };
-    
+
     // Store mappings for lines within target ranges
     for line in start_row..=end_row {
         // Check if this line is within any target range
@@ -654,7 +661,7 @@ fn process_node_sparse<'a>(
                 break;
             }
         }
-        
+
         if line_in_target {
             // Check if we should update using the original logic
             let should_update = if let Some(existing) = sparse_map.get(line) {
@@ -662,19 +669,21 @@ fn process_node_sparse<'a>(
                 // Special case: If current mapping is a comment with context, and new node is the context, don't replace
                 if existing.is_comment && existing.context_node_kind.is_some() {
                     // This gets complex to check without the actual nodes, so we'll use specificity
-                    specificity < (existing.end_row.saturating_sub(existing.start_row) + 1) * 1000 + 
-                                  (existing.end_byte.saturating_sub(existing.start_byte) / 100)
+                    specificity
+                        < (existing.end_row.saturating_sub(existing.start_row) + 1) * 1000
+                            + (existing.end_byte.saturating_sub(existing.start_byte) / 100)
                 } else if is_comment && context_node.is_some() {
                     // If new node is a comment with context, it's more specific
                     true
                 } else {
-                    specificity < (existing.end_row.saturating_sub(existing.start_row) + 1) * 1000 + 
-                                  (existing.end_byte.saturating_sub(existing.start_byte) / 100)
+                    specificity
+                        < (existing.end_row.saturating_sub(existing.start_row) + 1) * 1000
+                            + (existing.end_byte.saturating_sub(existing.start_byte) / 100)
                 }
             } else {
                 true // No existing mapping
             };
-            
+
             if should_update {
                 let cached_info = CachedNodeInfo::from_node_info(
                     &NodeInfo {
@@ -689,7 +698,7 @@ fn process_node_sparse<'a>(
                     allow_tests,
                 );
                 sparse_map.insert(line, cached_info);
-                
+
                 if debug_mode {
                     println!(
                         "DEBUG: SPARSE - Stored mapping for line {}: type='{}', is_comment={}, context={:?}",
@@ -702,19 +711,19 @@ fn process_node_sparse<'a>(
             }
         }
     }
-    
+
     // Determine ancestor for children
     let next_ancestor = if language_impl.is_acceptable_parent(&node) {
         Some(node)
     } else {
         current_ancestor
     };
-    
+
     // Process children recursively
     let mut cursor = node.walk();
     let mut children: Vec<Node> = node.children(&mut cursor).collect();
     children.sort_by_key(|child| (child.start_byte(), child.end_byte()));
-    
+
     for child in children {
         process_node_sparse(
             child,
@@ -733,6 +742,7 @@ fn process_node_sparse<'a>(
 /// This version passes the nearest acceptable ancestor context down the tree.
 /// OPTIMIZATION: Added line range filtering to skip AST nodes that don't intersect with requested lines.
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn process_node<'a>(
     node: Node<'a>,
     line_map: &mut Vec<Option<NodeInfo<'a>>>,
@@ -924,7 +934,7 @@ fn process_sparse_line_map(
 
             // Use the same logic as the dense cached line map processing
             // ... (this will be the same block processing logic)
-            
+
             // Determine which block to potentially create based on cached info
             let mut potential_block: Option<CodeBlock> = None;
             let mut block_key: Option<(usize, usize)> = None;
@@ -1141,7 +1151,7 @@ fn process_sparse_line_map(
 
         let important_block_types = [
             "function_declaration",
-            "method_declaration", 
+            "method_declaration",
             "function_item",
             "impl_item",
             "type_declaration",
@@ -1247,6 +1257,7 @@ fn process_sparse_line_map(
 }
 
 /// Process a cached line map to extract code blocks (LEGACY - for compatibility)
+#[allow(dead_code)]
 fn process_cached_line_map(
     cached_line_map: &[Option<CachedNodeInfo>],
     line_numbers: &HashSet<usize>,
@@ -1811,7 +1822,9 @@ pub fn parse_file_for_code_blocks(
     }
 
     if debug_mode {
-        println!("DEBUG: Sparse cache miss for line_map key: {cache_key}. Building sparse line map...");
+        println!(
+            "DEBUG: Sparse cache miss for line_map key: {cache_key}. Building sparse line map..."
+        );
     }
 
     // Get the tree-sitter language
@@ -1830,7 +1843,10 @@ pub fn parse_file_for_code_blocks(
 
     if debug_mode {
         println!("DEBUG: SPARSE OPTIMIZATION - Parsing file with extension: {extension}");
-        println!("DEBUG: SPARSE OPTIMIZATION - Root node type: {}", root_node.kind());
+        println!(
+            "DEBUG: SPARSE OPTIMIZATION - Root node type: {}",
+            root_node.kind()
+        );
     }
 
     // OPTIMIZATION: Build sparse line map that only processes intersecting nodes
@@ -1844,7 +1860,10 @@ pub fn parse_file_for_code_blocks(
     );
 
     if debug_mode {
-        println!("DEBUG: SPARSE OPTIMIZATION - Sparse line map built with {} entries", sparse_line_map.len());
+        println!(
+            "DEBUG: SPARSE OPTIMIZATION - Sparse line map built with {} entries",
+            sparse_line_map.len()
+        );
     }
 
     // Generate code blocks from the sparse line map

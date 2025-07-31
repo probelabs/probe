@@ -5,7 +5,6 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tree_sitter;
 
 use probe_code::language::{is_test_file, parse_file_for_code_blocks};
 use probe_code::models::SearchResult;
@@ -365,15 +364,12 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         );
     }
 
-    // Create a single parser for all test detection (optimization: reuse parser)
+    // Test detection optimization: Use pooled parser for better performance
     let mut parser_opt = None;
     if !ctx.params.allow_tests {
         if let Some(language_impl) = crate::language::factory::get_language_impl(ctx.extension) {
-            let mut parser = tree_sitter::Parser::new();
-            if parser
-                .set_language(&language_impl.get_tree_sitter_language())
-                .is_ok()
-            {
+            // Use pooled parser for test detection as well
+            if let Ok(parser) = crate::language::get_pooled_parser(ctx.extension) {
                 parser_opt = Some((parser, language_impl));
             }
         }
@@ -821,6 +817,11 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         }
     }
 
+    // Return parser to pool if it was used
+    if let Some((parser, _)) = parser_opt {
+        crate::language::return_pooled_parser(ctx.extension, parser);
+    }
+
     if ctx.debug_mode {
         println!(
             "DEBUG: SMART CONTEXT WINDOW MERGING: Completed processing {} uncovered lines with {} cache hits",
@@ -923,22 +924,30 @@ pub fn process_file_with_results(
     // Measure AST parsing time with sub-steps
     let ast_parsing_start = Instant::now();
 
-    // Measure language initialization time
+    // PARSER POOLING OPTIMIZATION: Use pooled parsers to avoid expensive initialization
+    //
+    // Previous implementation created a new parser for each file:
+    // - Parser::new() + set_language() for every file (expensive)
+    // - Language implementation lookup for every file (redundant)
+    //
+    // New implementation uses parser pooling:
+    // - Reuses pre-configured parsers from a thread-safe pool
+    // - Eliminates parser creation and language setup overhead
+    // - Automatically manages parser lifecycle (get/return)
+
+    // Measure language initialization time (now minimal due to pooling)
     let language_init_start = Instant::now();
-    let language_impl = crate::language::factory::get_language_impl(extension);
+    let language_supported = crate::language::factory::get_language_impl(extension).is_some();
     let language_init_duration = language_init_start.elapsed();
     timings.ast_parsing_language_init = Some(language_init_duration);
 
-    // Measure parser initialization time
+    // Measure parser initialization time (now minimal due to pooling)
     let parser_init_start = Instant::now();
-    let mut parser = tree_sitter::Parser::new();
-    if let Some(lang_impl) = &language_impl {
-        let _ = parser.set_language(&lang_impl.get_tree_sitter_language());
-    }
+    // Parser initialization is now handled internally by the pooling system
     let parser_init_duration = parser_init_start.elapsed();
     timings.ast_parsing_parser_init = Some(parser_init_duration);
 
-    // Measure tree parsing time
+    // Measure tree parsing time (this is where the real optimization happens)
     let tree_parsing_start = Instant::now();
     let file_path = params.path.to_string_lossy();
     let mut cache_key = String::with_capacity(file_path.len() + extension.len() + 1);
@@ -946,8 +955,10 @@ pub fn process_file_with_results(
     cache_key.push('_');
     cache_key.push_str(extension);
 
-    let _ = if language_impl.is_some() {
-        crate::language::tree_cache::get_or_parse_tree(&cache_key, &content, &mut parser).ok()
+    let _ = if language_supported {
+        // Use the new pooled parser approach - this eliminates the expensive
+        // parser creation and language setup that was happening for each file
+        crate::language::get_or_parse_tree_pooled(&cache_key, &content, extension).ok()
     } else {
         None
     };

@@ -113,6 +113,91 @@ pub fn get_or_parse_tree(
     Ok(tree)
 }
 
+/// Get a cached tree if available, otherwise parse using a pooled parser and cache the result
+///
+/// This is an optimized version of `get_or_parse_tree` that uses the parser pool to avoid
+/// the expensive overhead of creating and configuring parsers for each file. This function
+/// automatically manages parser acquisition and return, providing significant performance
+/// improvements for batch processing operations.
+///
+/// # Arguments
+///
+/// * `file_path` - The path of the file being parsed (used for cache key)
+/// * `content` - The content to parse
+/// * `extension` - The file extension to determine the language and parser type
+///
+/// # Returns
+///
+/// A Result containing the parsed tree, either from cache or freshly parsed using a pooled parser
+pub fn get_or_parse_tree_pooled(file_path: &str, content: &str, extension: &str) -> Result<Tree> {
+    use crate::language::parser_pool::{get_pooled_parser, return_pooled_parser};
+
+    let content_hash = compute_content_hash(content);
+
+    // Check if debug mode is enabled
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Try to get from cache first
+    {
+        let mut cache = TREE_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((cached_tree, cached_hash)) = cache.get(file_path) {
+            if cached_hash == &content_hash {
+                // Increment cache hit counter
+                {
+                    let mut hits = CACHE_HITS
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *hits += 1;
+                }
+
+                if debug_mode {
+                    println!("[DEBUG] Tree cache hit for file: {file_path}");
+                }
+                return Ok(cached_tree.clone());
+            } else {
+                // Content changed, explicitly remove the old entry
+                cache.remove(file_path);
+                if debug_mode {
+                    println!(
+                        "[DEBUG] Tree cache invalidated for file: {file_path} (content changed)"
+                    );
+                }
+            }
+        } else if debug_mode {
+            println!("[DEBUG] Tree cache miss for file: {file_path}");
+        }
+    }
+
+    // Not in cache or content changed, get a pooled parser and parse
+    let mut parser = get_pooled_parser(extension).context(format!(
+        "Failed to get pooled parser for extension: {extension}"
+    ))?;
+
+    let tree = parser
+        .parse(content, None)
+        .context(format!("Failed to parse file: {file_path}"))?;
+
+    // Return parser to pool
+    return_pooled_parser(extension, parser);
+
+    // Store in cache
+    {
+        let mut cache = TREE_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.insert(file_path.to_string(), (tree.clone(), content_hash));
+
+        if debug_mode {
+            println!("[DEBUG] Cached parsed tree for file: {file_path}");
+            println!("[DEBUG] Current tree cache size: {} entries", cache.len());
+        }
+    }
+
+    Ok(tree)
+}
+
 /// Clear the entire tree cache
 ///
 /// This function can be used to free memory or force re-parsing of all files.
