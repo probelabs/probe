@@ -591,6 +591,31 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             );
         }
 
+        // AGGRESSIVE PRE-FILTERING: Fast string contains() check before expensive tokenization
+        // This optimization skips contexts that obviously don't contain any query terms
+        // String contains() is ~100x faster than full tokenization + compound word processing
+        let context_text_lower = context_code.to_lowercase();
+        let has_potential_query_matches = ctx
+            .unique_query_terms
+            .iter()
+            .any(|term| context_text_lower.contains(&term.to_lowercase()));
+
+        if !has_potential_query_matches {
+            if ctx.debug_mode {
+                println!(
+                    "DEBUG: AGGRESSIVE PRE-FILTERING: Context {context_start}-{context_end} contains no query terms, skipping expensive processing"
+                );
+            }
+            // Skip this context entirely - no point in tokenizing or processing it further
+            continue;
+        }
+
+        if ctx.debug_mode {
+            println!(
+                "DEBUG: AGGRESSIVE PRE-FILTERING: Context {context_start}-{context_end} passed pre-filter, proceeding with tokenization"
+            );
+        }
+
         // TOKENIZATION CACHE: Check cache first to avoid redundant tokenization
         let cache_key = (context_start_idx, context_end_idx);
         let context_terms = if let Some(cached_terms) = tokenization_cache.get(&cache_key) {
