@@ -36,6 +36,7 @@ probe-chat --implement-tool-backend-info claude-code
 - **Strengths**: Latest Claude models, sophisticated code understanding, MCP tools
 - **Requirements**: Node.js 18+, `npm install -g @anthropic-ai/claude-code`
 - **API Keys**: Requires ANTHROPIC_API_KEY
+- **Cross-Platform**: Full support for Windows, macOS, Linux, and WSL
 
 ## ⚙️ Configuration
 
@@ -163,6 +164,7 @@ const result = await implementTool.execute({
    - Check if required dependencies are installed
    - Verify API keys are set correctly
    - Run `probe-chat --implement-tool-backend-info <name>` for diagnostics
+   - On Windows: Claude Code may be installed in WSL, which is automatically detected
 
 2. **Timeout errors**
    - Increase timeout: `--implement-tool-timeout 600000` (10 minutes)

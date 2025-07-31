@@ -86,18 +86,26 @@ You can create a `.env` file in the root directory with these variables.
 
 ```bash
 # If installed globally
-probe-mcp-agent
+probe-mcp-agent [options]
 
 # If installed locally
-npx probe-mcp-agent
+npx probe-mcp-agent [options]
 
 # Or start with npm
 npm start
 
-# Force a specific provider
+# Command line options:
+#   --provider <name>        Force a specific AI provider (anthropic, openai, google)
+#   --anthropic             Shorthand for --provider anthropic
+#   --openai                Shorthand for --provider openai
+#   --google                Shorthand for --provider google
+#   --timeout, -t <seconds> Set timeout for search operations (default: 120)
+#   --help, -h              Show help message
+
+# Examples:
 probe-mcp-agent --provider anthropic
-probe-mcp-agent --provider openai
-probe-mcp-agent --provider google
+probe-mcp-agent --provider openai --timeout 180
+probe-mcp-agent --google -t 60
 ```
 
 ### Using with MCP Clients
@@ -108,6 +116,7 @@ The server exposes a single tool called `search_code` with the following paramet
 - `path` (optional): Path to the directory to search in. If ALLOWED_FOLDERS is set, this path must be within one of the allowed folders for security reasons
 - `context` (optional): Additional context to help the AI understand the request
 - `max_tokens` (optional): Maximum number of tokens to return
+- `timeout` (optional): Timeout for the search operation in seconds (overrides server default)
 
 Example usage with an MCP client:
 
