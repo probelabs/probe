@@ -62,6 +62,12 @@ export function main() {
     .option('--max-iterations <number>', 'Maximum number of tool iterations allowed (default: 30)')
     .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, support, path to a file, or arbitrary string)')
     .option('--allow-edit', 'Enable the implement tool for editing files')
+    .option('--implement-tool-backend <backend>', 'Choose implementation tool backend (aider, claude-code)')
+    .option('--implement-tool-fallbacks <backends>', 'Comma-separated fallback backends for implementation tool')
+    .option('--implement-tool-timeout <ms>', 'Implementation tool timeout in milliseconds')
+    .option('--implement-tool-config <path>', 'Path to implementation tool configuration file')
+    .option('--implement-tool-list-backends', 'List available implementation tool backends')
+    .option('--implement-tool-backend-info <backend>', 'Show information about a specific implementation tool backend')
     .option('--trace-file [path]', 'Enable tracing to file (default: ./traces.jsonl)')
     .option('--trace-remote [endpoint]', 'Enable tracing to remote endpoint (default: http://localhost:4318/v1/traces)')
     .option('--trace-console', 'Enable tracing to console (for debugging)')
@@ -143,10 +149,80 @@ export function main() {
     logInfo(chalk.blue(`Setting maximum tool iterations to: ${maxIterations}`));
   }
 
+  // Handle --implement-tool-list-backends option
+  if (options.implementToolListBackends) {
+    (async () => {
+      const { listBackendNames, getBackendMetadata } = await import('./implement/backends/registry.js');
+      const backends = listBackendNames();
+      
+      console.log('\nAvailable implementation tool backends:');
+      for (const backend of backends) {
+        const metadata = getBackendMetadata(backend);
+        console.log(`\n  ${chalk.bold(backend)} - ${metadata.description}`);
+        console.log(`    Version: ${metadata.version}`);
+        console.log(`    Languages: ${metadata.capabilities.supportsLanguages.join(', ')}`);
+      }
+      process.exit(0);
+    })();
+  }
+
+  // Handle --implement-tool-backend-info option
+  if (options.implementToolBackendInfo) {
+    (async () => {
+      const { getBackendMetadata } = await import('./implement/backends/registry.js');
+      const metadata = getBackendMetadata(options.implementToolBackendInfo);
+      
+      if (!metadata) {
+        console.error(`Backend '${options.implementToolBackendInfo}' not found`);
+        process.exit(1);
+      }
+      
+      console.log(`\n${chalk.bold('Backend Information: ' + options.implementToolBackendInfo)}`);
+      console.log(`\nDescription: ${metadata.description}`);
+      console.log(`Version: ${metadata.version}`);
+      console.log(`\nCapabilities:`);
+      console.log(`  Languages: ${metadata.capabilities.supportsLanguages.join(', ')}`);
+      console.log(`  Streaming: ${metadata.capabilities.supportsStreaming ? '✓' : '✗'}`);
+      console.log(`  Direct File Edit: ${metadata.capabilities.supportsDirectFileEdit ? '✓' : '✗'}`);
+      console.log(`  Test Generation: ${metadata.capabilities.supportsTestGeneration ? '✓' : '✗'}`);
+      console.log(`  Plan Generation: ${metadata.capabilities.supportsPlanGeneration ? '✓' : '✗'}`);
+      console.log(`  Max Sessions: ${metadata.capabilities.maxConcurrentSessions}`);
+      console.log(`\nRequired Dependencies:`);
+      for (const dep of metadata.dependencies) {
+        console.log(`  - ${dep.name} (${dep.type}): ${dep.description}`);
+        if (dep.installCommand) {
+          console.log(`    Install: ${dep.installCommand}`);
+        }
+      }
+      process.exit(0);
+    })();
+  }
+
   // Set ALLOW_EDIT from command line if provided
   if (options.allowEdit) {
     process.env.ALLOW_EDIT = '1';
     logInfo(chalk.blue(`Enabling implement tool with --allow-edit flag`));
+  }
+
+  // Set implementation tool backend options
+  if (options.implementToolBackend) {
+    process.env.IMPLEMENT_TOOL_BACKEND = options.implementToolBackend;
+    logInfo(chalk.blue(`Using implementation tool backend: ${options.implementToolBackend}`));
+  }
+  
+  if (options.implementToolFallbacks) {
+    process.env.IMPLEMENT_TOOL_FALLBACKS = options.implementToolFallbacks;
+    logInfo(chalk.blue(`Implementation tool fallback backends: ${options.implementToolFallbacks}`));
+  }
+  
+  if (options.implementToolTimeout) {
+    process.env.IMPLEMENT_TOOL_TIMEOUT = options.implementToolTimeout;
+    logInfo(chalk.blue(`Implementation tool timeout: ${options.implementToolTimeout}ms`));
+  }
+  
+  if (options.implementToolConfig) {
+    process.env.IMPLEMENT_TOOL_CONFIG_PATH = options.implementToolConfig;
+    logInfo(chalk.blue(`Using implementation tool config: ${options.implementToolConfig}`));
   }
 
   // Set telemetry options from command line if provided

@@ -688,8 +688,7 @@ mod tests {
 
             assert_eq!(
                 cached_count, direct_count,
-                "Cached count should match direct tiktoken count for content: {:?}",
-                content
+                "Cached count should match direct tiktoken count for content: {content:?}"
             );
         }
     }

@@ -11,7 +11,9 @@
   "scripts": {
     "start": "node index.js",
     "web": "node index.js --web",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test test/integration/chatFlows.test.js test/integration/toolCalling.test.js",
+    "test:chat": "node --test test/integration/chatFlows.test.js",
+    "test:tools": "node --test test/integration/toolCalling.test.js",
     "prepublishOnly": "chmod +x ./bin/probe-chat.js"
   },
   "keywords": [
@@ -44,6 +46,17 @@
     "tiktoken": "^1.0.20",
     "zod": "^3.24.2"
   },
+  "optionalDependencies": {
+    "@anthropic-ai/claude-code": "^1.0.0"
+  },
+  "peerDependencies": {
+    "aider-chat": ">=0.20.0"
+  },
+  "peerDependenciesMeta": {
+    "aider-chat": {
+      "optional": true
+    }
+  },
   "engines": {
     "node": ">=18.0.0"
   },
@@ -61,6 +74,8 @@
   "files": [
     "bin/",
     "storage/",
+    "implement/",
+    "test/",
     "index.js",
     "probeChat.js",
     "tokenCounter.js",

@@ -75,6 +75,36 @@ on:
         description: "Remote OpenTelemetry collector endpoint for tracing (e.g., http://localhost:4318/v1/traces)"
         required: false
         type: string
+      implement_tool_backend:
+        description: "Implementation backend to use (aider, claude-code). Default: aider"
+        required: false
+        type: string
+        default: "aider"
+      implement_tool_fallbacks:
+        description: "Comma-separated list of fallback backends to try if primary fails"
+        required: false
+        type: string
+        default: ""
+      implement_tool_timeout:
+        description: "Timeout in seconds for implementation tool operations"
+        required: false
+        type: string
+        default: "300"
+      aider_model:
+        description: "Model to use with aider backend"
+        required: false
+        type: string
+        default: ""
+      claude_code_model:
+        description: "Model to use with Claude Code backend"
+        required: false
+        type: string
+        default: ""
+      claude_code_temperature:
+        description: "Temperature for Claude Code model (0.0-1.0)"
+        required: false
+        type: string
+        default: ""
     secrets:
       # ---- Existing Secrets ----
       PROBE_CHAT_COMMAND:
@@ -1057,21 +1087,54 @@ jobs:
           echo "Determined command base: $COMMAND_VAR"
           echo "command=$COMMAND_VAR" >> "$GITHUB_OUTPUT"
 
-      # --- Setup Python and Install Aider (No token needed) ---
-      - name: Set up Python and Install Aider
-        if: inputs.allow_edit || inputs.allow_suggestions
+      # --- Setup Implementation Backends ---
+      # --- Setup Python (if needed for aider) ---
+      - name: Set up Python
+        if: (inputs.allow_edit || inputs.allow_suggestions) && (inputs.implement_tool_backend == 'aider' || contains(inputs.implement_tool_fallbacks, 'aider'))
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - name: Install Aider
+      - name: Setup Implementation Backends
         if: inputs.allow_edit || inputs.allow_suggestions
         run: |
-          # (Script remains the same)
-          echo "Installing aider for code editing capabilities..."
-          python -m pip install aider-install
-          aider-install
-          echo "Aider installation completed."
+          echo "Setting up implementation backends..."
+          
+          # Get backend configuration
+          BACKEND="${{ inputs.implement_tool_backend }}"
+          FALLBACKS="${{ inputs.implement_tool_fallbacks }}"
+          
+          echo "Primary backend: $BACKEND"
+          
+          if [[ -n "$FALLBACKS" ]]; then
+            echo "Fallback backends: $FALLBACKS"
+          fi
+          
+          # Install Claude Code SDK if needed
+          if [[ "$BACKEND" == "claude-code" ]] || [[ "$FALLBACKS" == *"claude-code"* ]]; then
+            echo "Installing Claude Code SDK..."
+            # Check Node.js version (Claude Code requires Node.js 18+)
+            NODE_VERSION=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
+            if [[ $NODE_VERSION -lt 18 ]]; then
+              echo "::warning::Claude Code requires Node.js 18 or newer. Current version: $(node --version)"
+              echo "::warning::Claude Code installation may fail or not work properly"
+            fi
+            npm install -g @anthropic-ai/claude-code || echo "::warning::Failed to install Claude Code SDK globally, will rely on probe-chat bundled version"
+            # Verify installation
+            if command -v claude-code &> /dev/null; then
+              echo "Claude Code successfully installed: $(claude-code --version 2>/dev/null || echo 'version check failed')"
+            else
+              echo "::warning::Claude Code command not found after installation"
+            fi
+          fi
+          
+          # Install aider if needed
+          if [[ "$BACKEND" == "aider" ]] || [[ "$FALLBACKS" == *"aider"* ]]; then
+            echo "Installing aider for code editing capabilities..."
+            python -m pip install aider-install || echo "::warning::Failed to install aider-install"
+            aider-install || echo "::warning::Failed to run aider-install"
+            echo "Aider installation attempted."
+          fi
 
       - name: Switch to PR Branch (if applicable)
         # Only run if context is PR and we have the branch name
@@ -1123,6 +1186,13 @@ jobs:
           MAX_TOOL_ITERATIONS: ${{ secrets.MAX_TOOL_ITERATIONS }}
           # Debug configuration
           DEBUG_CHAT: ${{ secrets.DEBUG_CHAT }}
+          # Implementation backend configuration
+          IMPLEMENT_TOOL_BACKEND: ${{ inputs.implement_tool_backend }}
+          IMPLEMENT_TOOL_FALLBACKS: ${{ inputs.implement_tool_fallbacks }}
+          IMPLEMENT_TOOL_TIMEOUT: ${{ inputs.implement_tool_timeout }}
+          AIDER_MODEL: ${{ inputs.aider_model }}
+          CLAUDE_CODE_MODEL: ${{ inputs.claude_code_model }}
+          CLAUDE_CODE_TEMPERATURE: ${{ inputs.claude_code_temperature }}
         run: |
           # (Script remains the same)
           # Check and modify ANTHROPIC_API_URL to set ANTHROPIC_BASE_URL
