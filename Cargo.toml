@@ -58,6 +58,7 @@ rand = "0.8.5"
 glob = "0.3.1"
 arboard = "3.4.1"
 md5 = "0.7.0"
+lru = "0.12.5"
 simsimd = "6.1.0"  # SIMD-accelerated similarity metrics for vector operations
 memchr = "2.7"  # SIMD-accelerated string searching and processing
 wide = "0.7"  # Portable SIMD operations for text processing

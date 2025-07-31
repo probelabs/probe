@@ -1,6 +1,9 @@
+use lru::LruCache;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use probe_code::search::elastic_query::Expr;
@@ -686,6 +689,11 @@ fn test_filter_code_block_with_ast() {
     term_indices.insert("keywordBeta".to_string(), 1);
 
     // Create a QueryPlan
+    let has_required_anywhere = ast.has_required_term();
+    let has_only_excluded_terms = ast.is_only_excluded_terms();
+    let required_terms_indices = HashSet::new();
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     let plan = QueryPlan {
         ast,
         term_indices,
@@ -697,6 +705,10 @@ fn test_filter_code_block_with_ast() {
         exact: false,
         is_simple_query: false,
         required_terms: HashSet::new(),
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     };
 
     // Create term matches for a block
@@ -764,6 +776,11 @@ fn test_filter_tokenized_block() {
     term_indices.insert("keywordBeta".to_string(), 1);
 
     // Create a QueryPlan
+    let has_required_anywhere = ast.has_required_term();
+    let has_only_excluded_terms = ast.is_only_excluded_terms();
+    let required_terms_indices = HashSet::new();
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     let plan = QueryPlan {
         ast,
         term_indices: term_indices.clone(),
@@ -775,6 +792,10 @@ fn test_filter_tokenized_block() {
         exact: false,
         is_simple_query: false,
         required_terms: HashSet::new(),
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     };
 
     // Import the function from probe crate
@@ -842,6 +863,11 @@ fn test_filter_tokenized_block() {
     term_indices_or.insert("keywordGamma".to_string(), 2);
 
     // Create a QueryPlan
+    let has_required_anywhere = ast_or.has_required_term();
+    let has_only_excluded_terms = ast_or.is_only_excluded_terms();
+    let required_terms_indices = HashSet::new();
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     let plan_or = QueryPlan {
         ast: ast_or,
         term_indices: term_indices_or.clone(),
@@ -849,6 +875,10 @@ fn test_filter_tokenized_block() {
         exact: false,
         is_simple_query: false,
         required_terms: HashSet::new(),
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     };
 
     // Test with only keywordGamma

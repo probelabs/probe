@@ -1,7 +1,18 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::iter::Peekable;
 use std::str::Chars;
+
+// PHASE 3C OPTIMIZATION: Compute hash key for evaluation cache
+fn compute_evaluation_key(matched_terms: &HashSet<usize>) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+    let mut sorted_terms: Vec<_> = matched_terms.iter().cloned().collect();
+    sorted_terms.sort_unstable();
+    sorted_terms.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// The AST representing a parsed query.
 #[derive(Debug, Clone, PartialEq)]
@@ -68,7 +79,7 @@ impl Expr {
     }
 
     /// Returns `true` if this expression contains at least one `required=true` term.
-    fn has_required_term(&self) -> bool {
+    pub fn has_required_term(&self) -> bool {
         match self {
             Expr::Term { required, .. } => *required,
             Expr::And(left, right) | Expr::Or(left, right) => {
@@ -229,13 +240,76 @@ impl Expr {
         }
     }
 
+    // PHASE 3C OPTIMIZATION: Fast-path evaluation for simple queries
+    pub fn evaluate_fast_path(
+        &self,
+        matched_terms: &HashSet<usize>,
+        plan: &crate::search::query::QueryPlan,
+    ) -> Option<bool> {
+        // Fast path for simple single-term queries
+        if plan.is_simple_query {
+            return Some(!matched_terms.is_empty());
+        }
+
+        // Fast path: if no terms matched and query requires some terms
+        if matched_terms.is_empty() && !plan.has_only_excluded_terms {
+            return Some(false);
+        }
+
+        // Fast path: if all required terms are missing
+        if !plan.required_terms_indices.is_empty() {
+            let has_all_required = plan
+                .required_terms_indices
+                .iter()
+                .all(|idx| matched_terms.contains(idx));
+            if !has_all_required {
+                return Some(false);
+            }
+        }
+
+        None // Fall back to full evaluation
+    }
+
+    // PHASE 3C OPTIMIZATION: Cached evaluation
+    pub fn evaluate_with_cache(
+        &self,
+        matched_terms: &HashSet<usize>,
+        plan: &crate::search::query::QueryPlan,
+    ) -> bool {
+        // Try fast path first
+        if let Some(result) = self.evaluate_fast_path(matched_terms, plan) {
+            return result;
+        }
+
+        // Compute cache key from matched terms
+        let cache_key = compute_evaluation_key(matched_terms);
+
+        // Check cache
+        if let Ok(mut cache) = plan.evaluation_cache.lock() {
+            if let Some(&cached_result) = cache.peek(&cache_key) {
+                return cached_result;
+            }
+
+            // Perform full evaluation
+            let result = self.evaluate(matched_terms, &plan.term_indices, false);
+
+            // Cache the result
+            cache.put(cache_key, result);
+
+            result
+        } else {
+            // If we can't lock the cache, just evaluate without caching
+            self.evaluate(matched_terms, &plan.term_indices, false)
+        }
+    }
+
     /// Evaluate whether a set of matched term indices satisfies this logical expression.
     ///
     /// - Term: check if **all** of its keywords are present (optional/required), or
     ///   if **none** are present (excluded).
     /// - AND => both sides must match.
     /// - OR => at least one side must match.
-    /// - `ignore_negatives` => if true, excluded terms are basically ignored (they don’t exclude).
+    /// - `ignore_negatives` => if true, excluded terms are basically ignored (they don't exclude).
     /// - Field is **ignored** in evaluation, per request.
     pub fn evaluate(
         &self,

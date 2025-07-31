@@ -1,6 +1,9 @@
+use lru::LruCache;
 use probe_code::search::elastic_query::Expr;
 use probe_code::search::query::{create_structured_patterns, QueryPlan};
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 
 /// Test the pattern generation for multi-keyword terms
 #[test]
@@ -20,6 +23,11 @@ fn test_multi_keyword_pattern_generation() {
     term_indices.insert("list".to_string(), 1);
 
     // Create a QueryPlan
+    let has_required_anywhere = ast.has_required_term();
+    let has_only_excluded_terms = ast.is_only_excluded_terms();
+    let required_terms_indices = HashSet::new();
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     let plan = QueryPlan {
         ast,
         term_indices,
@@ -27,6 +35,10 @@ fn test_multi_keyword_pattern_generation() {
         exact: false,
         is_simple_query: false,
         required_terms: HashSet::new(),
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     };
 
     // Generate patterns
@@ -129,6 +141,11 @@ fn test_and_expression_pattern_generation() {
     term_indices.insert("term2".to_string(), 1);
 
     // Create a QueryPlan
+    let has_required_anywhere = ast.has_required_term();
+    let has_only_excluded_terms = ast.is_only_excluded_terms();
+    let required_terms_indices = HashSet::new();
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     let plan = QueryPlan {
         ast,
         term_indices,
@@ -136,6 +153,10 @@ fn test_and_expression_pattern_generation() {
         exact: false,
         is_simple_query: false,
         required_terms: HashSet::new(),
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     };
 
     // Generate patterns
@@ -190,6 +211,11 @@ fn test_or_expression_pattern_generation() {
     term_indices.insert("term2".to_string(), 1);
 
     // Create a QueryPlan
+    let has_required_anywhere = ast.has_required_term();
+    let has_only_excluded_terms = ast.is_only_excluded_terms();
+    let required_terms_indices = HashSet::new();
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     let plan = QueryPlan {
         ast,
         term_indices,
@@ -197,6 +223,10 @@ fn test_or_expression_pattern_generation() {
         exact: false,
         is_simple_query: false,
         required_terms: HashSet::new(),
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     };
 
     // Generate patterns
@@ -273,6 +303,11 @@ fn test_complex_expression_pattern_generation() {
     term_indices.insert("network".to_string(), 4);
 
     // Create a QueryPlan
+    let has_required_anywhere = ast.has_required_term();
+    let has_only_excluded_terms = ast.is_only_excluded_terms();
+    let required_terms_indices = HashSet::new();
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     let plan = QueryPlan {
         ast,
         term_indices,
@@ -280,6 +315,10 @@ fn test_complex_expression_pattern_generation() {
         exact: false,
         is_simple_query: false,
         required_terms: HashSet::new(),
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     };
 
     // Generate patterns
@@ -353,6 +392,11 @@ fn test_pattern_deduplication() {
     term_indices.insert("term".to_string(), 0);
 
     // Create a QueryPlan
+    let has_required_anywhere = ast.has_required_term();
+    let has_only_excluded_terms = ast.is_only_excluded_terms();
+    let required_terms_indices = HashSet::new();
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     let plan = QueryPlan {
         ast,
         term_indices,
@@ -360,6 +404,10 @@ fn test_pattern_deduplication() {
         exact: false,
         is_simple_query: false,
         required_terms: HashSet::new(),
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     };
 
     // Generate patterns

@@ -1,7 +1,10 @@
+use lru::LruCache;
 use probe_code::search::elastic_query::{self, parse_query_test as parse_query};
 use probe_code::search::file_processing::filter_code_block_with_ast;
 use probe_code::search::query::create_query_plan;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 
 /// Test direct usage of filter_code_block_with_ast with various complex queries
 #[test]
@@ -428,6 +431,11 @@ fn test_required_terms_query() {
     indices.insert("secur".to_string(), 2);
     indices.insert("white".to_string(), 3);
 
+    let has_required_anywhere = ast.has_required_term();
+    let has_only_excluded_terms = ast.is_only_excluded_terms();
+    let required_terms_indices = HashSet::new();
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
     let plan = probe_code::search::query::QueryPlan {
         ast: ast.clone(),
         term_indices: indices.clone(),
@@ -435,6 +443,10 @@ fn test_required_terms_query() {
         exact: false,
         is_simple_query: false,
         required_terms: HashSet::new(),
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
     };
 
     // Use the term indices directly
