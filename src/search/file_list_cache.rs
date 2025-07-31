@@ -542,13 +542,11 @@ mod tests {
 
         assert!(
             file_list.files.iter().any(|f| f == &test_file),
-            "File in nested underscore directory should be found: {:?}",
-            test_file
+            "File in nested underscore directory should be found: {test_file:?}"
         );
         assert!(
             file_list.files.iter().any(|f| f == &parent_file),
-            "File in underscore directory should be found: {:?}",
-            parent_file
+            "File in underscore directory should be found: {parent_file:?}"
         );
     }
 
@@ -592,18 +590,15 @@ mod tests {
 
         assert!(
             file_list.files.iter().any(|f| f == &test_file),
-            "File in deeply nested underscore directory should be found: {:?}",
-            test_file
+            "File in deeply nested underscore directory should be found: {test_file:?}"
         );
         assert!(
             file_list.files.iter().any(|f| f == &ai_dir_file),
-            "File in _ai directory should be found: {:?}",
-            ai_dir_file
+            "File in _ai directory should be found: {ai_dir_file:?}"
         );
         assert!(
             file_list.files.iter().any(|f| f == &docs_packages_file),
-            "File in docs_packages directory should be found: {:?}",
-            docs_packages_file
+            "File in docs_packages directory should be found: {docs_packages_file:?}"
         );
     }
 
@@ -627,13 +622,11 @@ mod tests {
 
         assert!(
             file_list.files.iter().any(|f| f == &test_file),
-            "Rust file in underscore directory should be found: {:?}",
-            test_file
+            "Rust file in underscore directory should be found: {test_file:?}"
         );
         assert!(
             !file_list.files.iter().any(|f| f == &ignored_file),
-            "Ignored file should not be found: {:?}",
-            ignored_file
+            "Ignored file should not be found: {ignored_file:?}"
         );
     }
 
@@ -658,7 +651,7 @@ mod tests {
             fs::create_dir_all(&dir).unwrap();
 
             let file = dir.join("content.txt");
-            fs::write(&file, format!("content in {}", pattern)).unwrap();
+            fs::write(&file, format!("content in {pattern}")).unwrap();
             expected_files.push(file);
         }
 
@@ -667,8 +660,7 @@ mod tests {
         for expected_file in &expected_files {
             assert!(
                 file_list.files.iter().any(|f| f == expected_file),
-                "File in underscore directory should be found: {:?}",
-                expected_file
+                "File in underscore directory should be found: {expected_file:?}"
             );
         }
     }
@@ -698,19 +690,16 @@ mod tests {
 
         assert!(
             !file_list.files.iter().any(|f| f == &node_file),
-            "Files in node_modules should be ignored: {:?}",
-            node_file
+            "Files in node_modules should be ignored: {node_file:?}"
         );
         assert!(
             !file_list.files.iter().any(|f| f == &target_file),
-            "Files in target directory should be ignored: {:?}",
-            target_file
+            "Files in target directory should be ignored: {target_file:?}"
         );
 
         assert!(
             file_list.files.iter().any(|f| f == &valid_file),
-            "Files in valid underscore directories should be found: {:?}",
-            valid_file
+            "Files in valid underscore directories should be found: {valid_file:?}"
         );
     }
 }

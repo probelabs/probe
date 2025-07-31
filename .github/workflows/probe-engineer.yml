@@ -22,6 +22,10 @@ jobs:
       update_existing_comment: false
       update_comment_marker: "<!-- probe-bot -->"
       enable_tracing: true
+      # Use Claude Code as the primary implementation backend
+      # Claude Code provides advanced AI coding capabilities with better context understanding
+      # Note: aider is the default if not specified
+      implement_tool_backend: "claude-code"
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL }}

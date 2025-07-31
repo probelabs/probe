@@ -14,11 +14,11 @@ fn generate_synthetic_docs(num_docs: usize, vocab_size: usize) -> Vec<String> {
     // Create a vocabulary of common programming terms
     let vocab: Vec<String> = (0..vocab_size)
         .map(|i| match i % 20 {
-            0..=4 => format!("function_{}", i),
-            5..=9 => format!("class_{}", i),
-            10..=14 => format!("method_{}", i),
-            15..=19 => format!("variable_{}", i),
-            _ => format!("token_{}", i),
+            0..=4 => format!("function_{i}"),
+            5..=9 => format!("class_{i}"),
+            10..=14 => format!("method_{i}"),
+            15..=19 => format!("variable_{i}"),
+            _ => format!("token_{i}"),
         })
         .collect();
 
@@ -73,9 +73,9 @@ fn generate_code_documents(num_docs: usize) -> Vec<String> {
             let obj = objects[rng.gen_range(0..objects.len())];
             let op = operations[rng.gen_range(0..operations.len())];
 
-            doc.push_str(&format!("function {}{}() {{\n", func, obj));
-            doc.push_str(&format!("    let {} = {}();\n", obj, op));
-            doc.push_str(&format!("    return {}.{}();\n", obj, op));
+            doc.push_str(&format!("function {func}{obj}() {{\n"));
+            doc.push_str(&format!("    let {obj} = {op}();\n"));
+            doc.push_str(&format!("    return {obj}.{op}();\n"));
             doc.push_str("}\n\n");
         }
 
@@ -83,7 +83,7 @@ fn generate_code_documents(num_docs: usize) -> Vec<String> {
         for _ in 0..rng.gen_range(2..8) {
             let obj = objects[rng.gen_range(0..objects.len())];
             let val = rng.gen_range(0..1000);
-            doc.push_str(&format!("const {} = {};\n", obj, val));
+            doc.push_str(&format!("const {obj} = {val};\n"));
         }
 
         documents.push(doc);
@@ -158,20 +158,21 @@ fn bench_ranking_synthetic(c: &mut Criterion) {
 
             group.throughput(Throughput::Elements(num_docs as u64));
 
+            let query_id = query.replace(' ', "_");
             group.bench_with_input(
-                BenchmarkId::new(format!("traditional_{}", query.replace(' ', "_")), num_docs),
+                BenchmarkId::new(format!("traditional_{query_id}"), num_docs),
                 &params,
                 |b, params| b.iter(|| black_box(rank_documents(params))),
             );
 
             group.bench_with_input(
-                BenchmarkId::new(format!("simd_{}", query.replace(' ', "_")), num_docs),
+                BenchmarkId::new(format!("simd_{query_id}"), num_docs),
                 &params,
                 |b, params| b.iter(|| black_box(rank_documents_simd(params))),
             );
 
             group.bench_with_input(
-                BenchmarkId::new(format!("simd_simple_{}", query.replace(' ', "_")), num_docs),
+                BenchmarkId::new(format!("simd_simple_{query_id}"), num_docs),
                 &params,
                 |b, params| b.iter(|| black_box(rank_documents_simd_simple(params))),
             );
@@ -207,20 +208,21 @@ fn bench_ranking_realistic(c: &mut Criterion) {
 
             group.throughput(Throughput::Elements(num_docs as u64));
 
+            let query_id = query.replace(' ', "_");
             group.bench_with_input(
-                BenchmarkId::new(format!("traditional_{}", query.replace(' ', "_")), num_docs),
+                BenchmarkId::new(format!("traditional_{query_id}"), num_docs),
                 &params,
                 |b, params| b.iter(|| black_box(rank_documents(params))),
             );
 
             group.bench_with_input(
-                BenchmarkId::new(format!("simd_{}", query.replace(' ', "_")), num_docs),
+                BenchmarkId::new(format!("simd_{query_id}"), num_docs),
                 &params,
                 |b, params| b.iter(|| black_box(rank_documents_simd(params))),
             );
 
             group.bench_with_input(
-                BenchmarkId::new(format!("simd_simple_{}", query.replace(' ', "_")), num_docs),
+                BenchmarkId::new(format!("simd_simple_{query_id}"), num_docs),
                 &params,
                 |b, params| b.iter(|| black_box(rank_documents_simd_simple(params))),
             );

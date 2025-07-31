@@ -99,7 +99,7 @@ impl TokenCountCache {
     /// Get content hash using MD5 (fast, good distribution for caching)
     fn hash_content(content: &str) -> String {
         let digest = md5::compute(content.as_bytes());
-        format!("{:x}", digest)
+        format!("{digest:x}")
     }
 
     /// Get current timestamp in seconds since epoch
@@ -685,8 +685,7 @@ mod tests {
 
             assert_eq!(
                 cached_count, direct_count,
-                "Cached count should match direct tiktoken count for content: {:?}",
-                content
+                "Cached count should match direct tiktoken count for content: {content:?}"
             );
         }
     }

@@ -10,6 +10,9 @@ import path from 'path';
 import os from 'os';
 import { glob } from 'glob';
 
+// Import the new pluggable implementation tool
+import { createImplementTool } from './implement/core/ImplementTool.js';
+
 // Create an event emitter for tool calls
 export const toolCallEmitter = new EventEmitter();
 
@@ -225,184 +228,68 @@ const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
 	};
 };
 
-// Create the implement tool
+// Create the implement tool using the new pluggable system
+const implementToolConfig = {
+	enabled: process.env.ALLOW_EDIT === '1' || process.argv.includes('--allow-edit'),
+	backendConfig: {
+		// Configuration can be extended here
+	}
+};
+
+const pluggableImplementTool = createImplementTool(implementToolConfig);
+
+// Create a compatibility wrapper for the old interface
 const baseImplementTool = {
 	name: "implement",
-	description: 'Implement a feature or fix a bug using aider. Only available when --allow-edit is enabled.',
-	parameters: {
-		type: 'object',
-		properties: {
-			task: {
-				type: 'string',
-				description: 'The task description to pass to aider for implementation'
-			}
-		},
-		required: ['task']
-	},
+	description: pluggableImplementTool.description,
+	parameters: pluggableImplementTool.parameters,
 	execute: async ({ task, autoCommits = false, prompt, sessionId }) => {
-		const execPromise = promisify(exec); // Keep this for compatibility
 		const debug = process.env.DEBUG_CHAT === '1';
-		// Get the current working directory where probe-chat is running
-		const currentWorkingDir = process.cwd();
-
-		// Use the modules imported at the top of the file
-
+		
 		if (debug) {
-			console.log(`[DEBUG] Executing aider with task: ${task}`);
+			console.log(`[DEBUG] Executing implementation with task: ${task}`);
 			console.log(`[DEBUG] Auto-commits: ${autoCommits}`);
-			console.log(`[DEBUG] Working directory: ${currentWorkingDir}`);
+			console.log(`[DEBUG] Session ID: ${sessionId}`);
 			if (prompt) console.log(`[DEBUG] Custom prompt: ${prompt}`);
 		}
 
-		// Create a temporary file for the task message
-		const tempDir = os.tmpdir();
-		const tempFilePath = path.join(tempDir, `aider-task-${Date.now()}-${Math.random().toString(36).substring(2, 10)}.txt`);
-
-		try {
-			// Write the task to the temporary file
-			await fsPromises.writeFile(tempFilePath, task, 'utf8');
-
-			if (debug) {
-				console.log(`[DEBUG] Created temporary file for task: ${tempFilePath}`);
-			}
-
-			// Build the aider command with the message-file argument
-			const autoCommitsFlag = '';
-			
-			// Add --model gemini/gemini-2.5-pro flag if Google API key is available
-			const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-			const modelFlag = geminiApiKey ? '--model gemini/gemini-2.5-pro' : '';
-			
-			const aiderCommand = `aider --yes --no-check-update --no-auto-commits --no-analytics ${autoCommitsFlag} ${modelFlag} --message-file "${tempFilePath}"`.replace(/\s+/g, ' ').trim();
-
-			console.error("Task:", task.substring(0, 100) + (task.length > 100 ? "..." : ""));
-			console.error("Working directory:", currentWorkingDir);
-			console.error("Temp file:", tempFilePath);
-			if (geminiApiKey && debug) {
-				console.log(`[DEBUG] Using Gemini 2.5 Pro model for aider (API key available)`);
-			}
-
-			// Use a safer approach that won't interfere with other tools
-			// We'll use child_process.spawn but in a way that's compatible with the existing code
-			return new Promise((resolve, reject) => {
-				try {
-					// Create a child process with spawn
-					const childProcess = spawn('sh', ['-c', aiderCommand], {
-						cwd: currentWorkingDir
-					});
-
-					let stdoutData = '';
-					let stderrData = '';
-
-					// Stream stdout in real-time to stderr
-					childProcess.stdout.on('data', (data) => {
-						const output = data.toString();
-						stdoutData += output;
-						// Print to stderr in real-time
-						process.stderr.write(output);
-					});
-
-					// Stream stderr in real-time to stderr
-					childProcess.stderr.on('data', (data) => {
-						const output = data.toString();
-						stderrData += output;
-						// Print to stderr in real-time
-						process.stderr.write(output);
-					});
-
-					// Handle process completion
-					childProcess.on('close', (code) => {
-						if (debug) {
-							console.log(`[DEBUG] aider process exited with code ${code}`);
-							console.log(`[DEBUG] Total stdout: ${stdoutData.length} chars`);
-							console.log(`[DEBUG] Total stderr: ${stderrData.length} chars`);
-						}
-
-						// Clean up the temporary file
-						fsPromises.unlink(tempFilePath)
-							.then(() => {
-								if (debug) {
-									console.log(`[DEBUG] Removed temporary file: ${tempFilePath}`);
-								}
-							})
-							.catch(err => {
-								console.error(`Error removing temporary file ${tempFilePath}:`, err);
-							})
-							.finally(() => {
-								// Always resolve, never reject (to match exec behavior)
-								resolve({
-									success: code === 0,
-									output: stdoutData,
-									error: stderrData || (code !== 0 ? `Process exited with code ${code}` : null),
-									command: aiderCommand,
-									timestamp: new Date().toISOString(),
-									prompt: prompt || null
-								});
-							});
-					});
-
-					// Handle process errors (like command not found)
-					childProcess.on('error', (error) => {
-						console.error(`Error executing aider:`, error);
-
-						// Clean up the temporary file
-						fsPromises.unlink(tempFilePath)
-							.then(() => {
-								if (debug) {
-									console.log(`[DEBUG] Removed temporary file after error: ${tempFilePath}`);
-								}
-							})
-							.catch(err => {
-								console.error(`Error removing temporary file ${tempFilePath}:`, err);
-							})
-							.finally(() => {
-								// Still resolve with error information, don't reject
-								resolve({
-									success: false,
-									output: stdoutData,
-									error: error.message || 'Unknown error executing aider',
-									command: aiderCommand,
-									timestamp: new Date().toISOString(),
-									prompt: prompt || null
-								});
-							});
-					});
-				} catch (error) {
-					// Catch any synchronous errors from spawn
-					console.error(`Error spawning aider process:`, error);
-
-					// Clean up the temporary file
-					fsPromises.unlink(tempFilePath)
-						.then(() => {
-							if (debug) {
-								console.log(`[DEBUG] Removed temporary file after spawn error: ${tempFilePath}`);
-							}
-						})
-						.catch(err => {
-							console.error(`Error removing temporary file ${tempFilePath}:`, err);
-						})
-						.finally(() => {
-							resolve({
-								success: false,
-								output: null,
-								error: error.message || 'Unknown error spawning aider process',
-								command: aiderCommand,
-								timestamp: new Date().toISOString(),
-								prompt: prompt || null
-							});
-						});
-				}
-			});
-		} catch (error) {
-			// Handle errors with creating or writing to the temp file
-			console.error(`Error creating temporary file:`, error);
+		// Check if the tool is enabled
+		if (!implementToolConfig.enabled) {
 			return {
 				success: false,
 				output: null,
-				error: `Error creating temporary file: ${error.message}`,
+				error: 'Implementation tool is not enabled. Use --allow-edit flag to enable.',
 				command: null,
 				timestamp: new Date().toISOString(),
-				prompt: prompt || null
+				prompt: prompt || task
+			};
+		}
+
+		try {
+			// Use the new pluggable implementation tool
+			const result = await pluggableImplementTool.execute({
+				task: prompt || task, // Use prompt if provided, otherwise use task
+				autoCommit: autoCommits,
+				sessionId: sessionId,
+				// Pass through any additional options that might be useful
+				context: {
+					workingDirectory: process.cwd()
+				}
+			});
+
+			// The result is already in the expected format
+			return result;
+
+		} catch (error) {
+			// Handle any unexpected errors
+			console.error(`Error in implement tool:`, error);
+			return {
+				success: false,
+				output: null,
+				error: error.message || 'Unknown error in implementation tool',
+				command: null,
+				timestamp: new Date().toISOString(),
+				prompt: prompt || task
 			};
 		}
 	}
