@@ -590,13 +590,25 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         // AGGRESSIVE PRE-FILTERING: Fast string contains() check before expensive tokenization
         // This optimization skips contexts that obviously don't contain any query terms
         // String contains() is ~100x faster than full tokenization + compound word processing
+        //
+        // FILENAME MATCH FIX: For filename-based matches, be more lenient with pre-filtering
+        // When a file matches by filename, we should include context even if individual lines
+        // don't contain query terms, because the user's intent is to see the file content
+        //
+        // HEURISTIC: Detect filename matches by checking if any term matches ALL lines in the file
+        // This is characteristic of filename-based matching where the entire file is considered relevant
+        let file_line_count = ctx.lines.len();
+        let is_likely_filename_match = ctx.params.term_matches.values().any(|lines| {
+            lines.len() >= file_line_count
+        });
         let context_text_lower = context_code.to_lowercase();
         let has_potential_query_matches = ctx
             .unique_query_terms
             .iter()
             .any(|term| context_text_lower.contains(&term.to_lowercase()));
 
-        if !has_potential_query_matches {
+        // Skip aggressive pre-filtering for filename matches to preserve all context
+        if !has_potential_query_matches && !is_likely_filename_match {
             if ctx.debug_mode {
                 println!(
                     "DEBUG: AGGRESSIVE PRE-FILTERING: Context {context_start}-{context_end} contains no query terms, skipping expensive processing"
@@ -607,9 +619,15 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         }
 
         if ctx.debug_mode {
-            println!(
-                "DEBUG: AGGRESSIVE PRE-FILTERING: Context {context_start}-{context_end} passed pre-filter, proceeding with tokenization"
-            );
+            if has_potential_query_matches {
+                println!(
+                    "DEBUG: AGGRESSIVE PRE-FILTERING: Context {context_start}-{context_end} passed pre-filter, proceeding with tokenization"
+                );
+            } else if is_likely_filename_match {
+                println!(
+                    "DEBUG: AGGRESSIVE PRE-FILTERING: Context {context_start}-{context_end} bypassed pre-filter due to filename match, proceeding with tokenization"
+                );
+            }
         }
 
         // TOKENIZATION CACHE: Check cache first to avoid redundant tokenization
