@@ -598,9 +598,11 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         // HEURISTIC: Detect filename matches by checking if any term matches ALL lines in the file
         // This is characteristic of filename-based matching where the entire file is considered relevant
         let file_line_count = ctx.lines.len();
-        let is_likely_filename_match = ctx.params.term_matches.values().any(|lines| {
-            lines.len() >= file_line_count
-        });
+        let is_likely_filename_match = ctx
+            .params
+            .term_matches
+            .values()
+            .any(|lines| lines.len() >= file_line_count);
         let context_text_lower = context_code.to_lowercase();
         let has_potential_query_matches = ctx
             .unique_query_terms
