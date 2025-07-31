@@ -1125,7 +1125,7 @@ jobs:
             NPM_GLOBAL_BIN=$(npm bin -g)
             echo "NPM global bin directory: $NPM_GLOBAL_BIN"
             export PATH="$NPM_GLOBAL_BIN:$PATH"
-            echo "PATH=$NPM_GLOBAL_BIN:$PATH" >> $GITHUB_ENV
+            echo "PATH=$NPM_GLOBAL_BIN:$PATH" >> "$GITHUB_ENV"
             
             # Verify installation
             # Try running claude directly
