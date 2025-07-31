@@ -6,6 +6,9 @@
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
