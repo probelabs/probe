@@ -130,7 +130,47 @@ class ClaudeCodeBackend extends BaseBackend {
         }
       }
       
-      // Method 3: Try to find claude in common locations
+      // Method 3: Try WSL on Windows
+      if (!claudeCommand && process.platform === 'win32') {
+        try {
+          // Check if WSL is available and claude is installed there
+          const { stdout: wslCheck } = await execPromise('wsl --list', { timeout: 2000 });
+          if (wslCheck) {
+            this.log('debug', 'WSL detected, checking for claude in WSL');
+            try {
+              // Try to run claude through WSL
+              await execPromise('wsl claude --version', { timeout: 5000 });
+              claudeCommand = 'wsl claude';
+              this.log('info', 'Claude found in WSL');
+            } catch (wslClaudeError) {
+              this.log('debug', 'Claude not found in WSL', { error: wslClaudeError.message });
+              
+              // Try common WSL paths
+              const wslPaths = [
+                'wsl /usr/local/bin/claude',
+                'wsl ~/.npm-global/bin/claude',
+                'wsl ~/.local/bin/claude',
+                'wsl ~/node_modules/.bin/claude'
+              ];
+              
+              for (const wslPath of wslPaths) {
+                try {
+                  await execPromise(`${wslPath} --version`, { timeout: 2000 });
+                  claudeCommand = wslPath;
+                  this.log('info', `Claude found in WSL at: ${wslPath}`);
+                  break;
+                } catch (e) {
+                  // Continue searching
+                }
+              }
+            }
+          }
+        } catch (wslError) {
+          this.log('debug', 'WSL not available or accessible', { error: wslError.message });
+        }
+      }
+      
+      // Method 4: Try to find claude in common locations
       if (!claudeCommand) {
         const isWindows = process.platform === 'win32';
         const homeDir = process.env[isWindows ? 'USERPROFILE' : 'HOME'];
@@ -162,7 +202,7 @@ class ClaudeCodeBackend extends BaseBackend {
       }
       
       if (!claudeCommand) {
-        this.log('warn', 'Claude Code CLI not found. Please install with: npm install -g @anthropic-ai/claude-code');
+        this.log('warn', 'Claude Code CLI not found. Please install with: npm install -g @anthropic-ai/claude-code (or in WSL on Windows)');
         return false;
       }
       
@@ -506,25 +546,50 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
           await execPromise('claude --version', { timeout: 1000 });
           claudeCommand = 'claude';
         } catch (e) {
+          const isWindows = process.platform === 'win32';
+          
+          // Try WSL on Windows
+          if (isWindows) {
+            try {
+              await execPromise('wsl claude --version', { timeout: 2000 });
+              claudeCommand = 'wsl claude';
+              this.log('info', 'Using claude from WSL');
+            } catch (wslError) {
+              // Continue to npm global check
+            }
+          }
+          
           // Try to find it in npm global bin
-          try {
-            const { stdout: binPath } = await execPromise('npm bin -g', { timeout: 1000 });
-            const isWindows = process.platform === 'win32';
-            const claudeBinary = isWindows ? 'claude.cmd' : 'claude';
-            const potentialClaudePath = path.join(binPath.trim(), claudeBinary);
-            
-            // Test if we can execute it
-            await execPromise(`"${potentialClaudePath}" --version`, { timeout: 1000 });
-            claudeCommand = potentialClaudePath;
-            this.log('info', `Using claude from npm global: ${claudeCommand}`);
-          } catch (npmError) {
-            // Fall back to 'claude' and let it fail with a clear error
-            this.log('warn', 'Could not find claude in npm global bin, attempting direct execution');
+          if (claudeCommand === 'claude') {
+            try {
+              const { stdout: binPath } = await execPromise('npm bin -g', { timeout: 1000 });
+              const claudeBinary = isWindows ? 'claude.cmd' : 'claude';
+              const potentialClaudePath = path.join(binPath.trim(), claudeBinary);
+              
+              // Test if we can execute it
+              await execPromise(`"${potentialClaudePath}" --version`, { timeout: 1000 });
+              claudeCommand = potentialClaudePath;
+              this.log('info', `Using claude from npm global: ${claudeCommand}`);
+            } catch (npmError) {
+              // Fall back to 'claude' and let it fail with a clear error
+              this.log('warn', 'Could not find claude in npm global bin or WSL, attempting direct execution');
+            }
           }
         }
       }
       
-      const child = spawn(claudeCommand, args, {
+      // Special handling for WSL commands
+      let spawnCommand = claudeCommand;
+      let spawnArgs = args;
+      
+      if (claudeCommand.startsWith('wsl ')) {
+        // Split WSL command properly
+        const wslParts = claudeCommand.split(' ');
+        spawnCommand = wslParts[0]; // 'wsl'
+        spawnArgs = [...wslParts.slice(1), ...args]; // claude path + original args
+      }
+      
+      const child = spawn(spawnCommand, spawnArgs, {
         cwd: workingDir,
         env: this.buildSecureEnvironment(),
         stdio: ['pipe', 'pipe', 'pipe'],
