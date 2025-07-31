@@ -36,13 +36,39 @@ pub fn apply_limits(
     }
 
     let mut results = results;
-    // Sort results by rank if available (best results first)
-    results.sort_by(|a, b| match (a.rank, b.rank) {
-        (Some(a_r), Some(b_r)) => a_r.cmp(&b_r),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        _ => std::cmp::Ordering::Equal,
-    });
+
+    // EARLY TERMINATION OPTIMIZATION: Use partial sort instead of full sort
+    // Only sort the top results we might need, reducing complexity from O(n log n) to O(k log n)
+    // where k (estimated results needed) << n (total results)
+    let estimated_results_needed = max_results.unwrap_or(1000).min(results.len());
+
+    // Use select_nth_unstable_by for partial sorting - much faster for large result sets
+    // This ensures the first 'estimated_results_needed' results are the best ranked ones
+    if results.len() > estimated_results_needed {
+        results.select_nth_unstable_by(estimated_results_needed - 1, |a, b| {
+            match (a.rank, b.rank) {
+                (Some(a_r), Some(b_r)) => a_r.cmp(&b_r),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            }
+        });
+        // Only sort the selected portion for consistent ordering
+        results[..estimated_results_needed].sort_by(|a, b| match (a.rank, b.rank) {
+            (Some(a_r), Some(b_r)) => a_r.cmp(&b_r),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            _ => std::cmp::Ordering::Equal,
+        });
+    } else {
+        // For small result sets, full sort is still efficient
+        results.sort_by(|a, b| match (a.rank, b.rank) {
+            (Some(a_r), Some(b_r)) => a_r.cmp(&b_r),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            _ => std::cmp::Ordering::Equal,
+        });
+    }
 
     let mut limited = Vec::new();
     let mut skipped = Vec::new();
@@ -64,19 +90,37 @@ pub fn apply_limits(
     let max_token_limit = max_tokens.unwrap_or(usize::MAX);
     let mut token_counting_started = false;
 
+    // EARLY TERMINATION: Track if any limit has been reached to exit the loop completely
+    let mut limit_reached = false;
+
     // Ultra-lazy token counting approach:
     // - Skip token counting entirely if max_tokens is None (saves 31ms-11.72s)
     // - Use byte-based estimation until we approach the token limit (1 token ≈ 4 bytes)
     // - Only start precise token counting when within 90% of the limit
     // - This minimizes expensive tiktoken-rs calls while maintaining accuracy
 
-    for r in results {
+    // EARLY TERMINATION OPTIMIZATION: Process only the results we might need
+    // Limit the iteration to the estimated_results_needed to avoid processing beyond limits
+    let max_iterations = estimated_results_needed;
+
+    for (index, r) in results.into_iter().enumerate() {
+        // EARLY TERMINATION: Stop processing if any limit has been reached
+        if limit_reached || index >= max_iterations {
+            // Add remaining results to skipped if they have valid ranking
+            if r.rank.is_some()
+                && (r.tfidf_score.unwrap_or(0.0) > 0.0 || r.bm25_score.unwrap_or(0.0) > 0.0)
+            {
+                skipped.push(r);
+            }
+            continue;
+        }
         let r_bytes = r.code.len();
 
         // PRE-COMPUTED LIMITS: Check result count limit first (fastest check)
         if let Some(max_res) = max_results {
             if running_count >= max_res {
-                // Early termination: we've reached max results, skip all remaining
+                // Early termination: we've reached max results, collect remaining as skipped
+                limit_reached = true;
                 if r.rank.is_some()
                     && (r.tfidf_score.unwrap_or(0.0) > 0.0 || r.bm25_score.unwrap_or(0.0) > 0.0)
                 {
@@ -90,6 +134,7 @@ pub fn apply_limits(
         if let Some(max_bytes_limit) = max_bytes {
             if running_bytes + r_bytes > max_bytes_limit {
                 // Early termination: adding this result would exceed byte limit
+                limit_reached = true;
                 if r.rank.is_some()
                     && (r.tfidf_score.unwrap_or(0.0) > 0.0 || r.bm25_score.unwrap_or(0.0) > 0.0)
                 {
@@ -133,6 +178,7 @@ pub fn apply_limits(
         if let Some(max_tokens_limit) = max_tokens {
             if running_tokens + r_tokens > max_tokens_limit {
                 // Early termination: adding this result would exceed token limit
+                limit_reached = true;
                 if r.rank.is_some()
                     && (r.tfidf_score.unwrap_or(0.0) > 0.0 || r.bm25_score.unwrap_or(0.0) > 0.0)
                 {
