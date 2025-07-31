@@ -79,13 +79,6 @@ path = "src/lib.rs"
 name = "probe"
 path = "src/main.rs"
 
-[[bin]]
-name = "test_token_approximation"
-path = "test_token_approximation.rs"
-
-[[bin]]
-name = "test_token_overrun_scenarios"
-path = "test_token_overrun_scenarios.rs"
 
 [[bench]]
 name = "search_benchmarks"
