@@ -17,6 +17,41 @@ import { fileURLToPath } from 'url';
 // @ts-ignore - Ignore missing type declarations for @buger/probe
 import { search, query, extract, getBinaryPath, setBinaryPath } from '@buger/probe';
 
+// Parse command-line arguments
+function parseArgs(): { timeout?: number } {
+  const args = process.argv.slice(2);
+  const config: { timeout?: number } = {};
+  
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === '--timeout' || args[i] === '-t') && i + 1 < args.length) {
+      const timeout = parseInt(args[i + 1], 10);
+      if (!isNaN(timeout) && timeout > 0) {
+        config.timeout = timeout;
+        console.error(`Timeout set to ${timeout} seconds`);
+      } else {
+        console.error(`Invalid timeout value: ${args[i + 1]}. Using default.`);
+      }
+      i++; // Skip the next argument
+    } else if (args[i] === '--help' || args[i] === '-h') {
+      console.log(`
+Probe MCP Server
+
+Usage:
+  probe-mcp [options]
+
+Options:
+  --timeout, -t <seconds>  Set timeout for search operations (default: 30)
+  --help, -h              Show this help message
+`);
+      process.exit(0);
+    }
+  }
+  
+  return config;
+}
+
+const cliConfig = parseArgs();
+
 const execAsync = promisify(exec);
 
 // Get the package.json to determine the version
@@ -80,6 +115,7 @@ interface SearchCodeArgs {
   maxTokens?: number;
   allowTests?: boolean;
   session?: string;
+  timeout?: number;
 }
 
 interface QueryCodeArgs {
@@ -90,6 +126,7 @@ interface QueryCodeArgs {
   allowTests?: boolean;
   maxResults?: number;
   format?: 'markdown' | 'plain' | 'json' | 'color';
+  timeout?: number;
 }
 
 interface ExtractCodeArgs {
@@ -98,12 +135,15 @@ interface ExtractCodeArgs {
   allowTests?: boolean;
   contextLines?: number;
   format?: 'markdown' | 'plain' | 'json';
+  timeout?: number;
 }
 
 class ProbeServer {
   private server: Server;
+  private defaultTimeout: number;
 
-  constructor() {
+  constructor(timeout: number = 30) {
+    this.defaultTimeout = timeout;
     this.server = new Server(
       {
         name: '@buger/probe-mcp',
@@ -166,6 +206,10 @@ class ProbeServer {
                 type: 'string',
                 description: 'Session identifier for caching. Set to "new" if unknown, or want to reset cache. Re-use session ID returned from previous searches',
                 default: "new",
+              },
+              timeout: {
+                type: 'number',
+                description: 'Timeout for the search operation in seconds (default: 30)',
               }
             },
             required: ['path', 'query']
@@ -202,6 +246,10 @@ class ProbeServer {
                 type: 'string',
                 enum: ['markdown', 'plain', 'json', 'color'],
                 description: 'Output format for the query results'
+              },
+              timeout: {
+                type: 'number',
+                description: 'Timeout for the query operation in seconds (default: 30)',
               }
             },
             required: ['path', 'pattern']
@@ -237,6 +285,10 @@ class ProbeServer {
                 description: 'Output format for the extracted code',
                 default: 'markdown'
               },
+              timeout: {
+                type: 'number',
+                description: 'Timeout for the extract operation in seconds (default: 30)',
+              }
             },
             required: ['path', 'files'],
           },
@@ -342,6 +394,12 @@ class ProbeServer {
       } else {
         options.session = "new";
       }
+      // Use timeout from args, or fall back to instance default
+      if (args.timeout !== undefined) {
+        options.timeout = args.timeout;
+      } else if (this.defaultTimeout !== undefined) {
+        options.timeout = this.defaultTimeout;
+      }
       
       console.error("Executing search with options:", JSON.stringify(options, null, 2));
       
@@ -386,7 +444,8 @@ class ProbeServer {
         ignore: args.ignore,
         allowTests: args.allowTests,
         maxResults: args.maxResults,
-        format: args.format
+        format: args.format,
+        timeout: args.timeout || this.defaultTimeout
       };
       
       console.log("Executing query with options:", JSON.stringify({
@@ -421,7 +480,8 @@ class ProbeServer {
         path: args.path,
         allowTests: args.allowTests,
         contextLines: args.contextLines,
-        format: args.format
+        format: args.format,
+        timeout: args.timeout || this.defaultTimeout
       };
       
       // Call extract with the complete options object
@@ -489,5 +549,5 @@ class ProbeServer {
   }
 }
 
-const server = new ProbeServer();
+const server = new ProbeServer(cliConfig.timeout);
 server.run().catch(console.error);

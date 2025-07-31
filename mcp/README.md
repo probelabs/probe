@@ -18,6 +18,16 @@ This package now uses the `@buger/probe` package as a dependency, which will aut
 
 This package provides an MCP server that allows AI assistants to use the Probe code search tool.
 
+### Command Line Options
+
+```bash
+probe-mcp [options]
+
+Options:
+  --timeout, -t <seconds>  Set timeout for search operations (default: 30)
+  --help, -h              Show help message
+```
+
 ### In Claude Desktop or VSCode
 
 1. Add the MCP server to your configuration:
@@ -30,6 +40,24 @@ This package provides an MCP server that allows AI assistants to use the Probe c
       "args": [
         "-y",
         "@buger/probe-mcp"
+      ]
+    }
+  }
+}
+```
+
+To use a custom timeout (e.g., 60 seconds):
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@buger/probe-mcp",
+        "--timeout",
+        "60"
       ]
     }
   }
