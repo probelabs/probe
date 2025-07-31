@@ -16,6 +16,8 @@ import config from './config.js';
 // Parse command line arguments
 function parseArgs() {
 	const args = process.argv.slice(2);
+	const config = {};
+	
 	for (let i = 0; i < args.length; i++) {
 		// Handle --provider flag
 		if (args[i] === '--provider' && i + 1 < args.length) {
@@ -26,6 +28,23 @@ function parseArgs() {
 			} else {
 				process.exit(1);
 			}
+			i++; // Skip the next argument
+		}
+		// Handle --timeout flag
+		else if ((args[i] === '--timeout' || args[i] === '-t') && i + 1 < args.length) {
+			const timeout = parseInt(args[i + 1], 10);
+			if (!isNaN(timeout) && timeout > 0) {
+				config.timeout = timeout;
+				console.error(`Timeout set to ${timeout} seconds`);
+			} else {
+				console.error(`Invalid timeout value: ${args[i + 1]}. Using default.`);
+			}
+			i++; // Skip the next argument
+		}
+		// Handle --help flag
+		else if (args[i] === '--help' || args[i] === '-h') {
+			console.log(`\nProbe MCP Agent Server\n\nUsage:\n  probe-mcp-agent [options]\n\nOptions:\n  --provider <name>        Force a specific AI provider (anthropic, openai, google)\n  --anthropic             Shorthand for --provider anthropic\n  --openai                Shorthand for --provider openai\n  --google                Shorthand for --provider google\n  --timeout, -t <seconds> Set timeout for search operations (default: 120)\n  --help, -h              Show this help message\n`);
+			process.exit(0);
 		}
 		// Handle shorthand flags
 		else if (args[i] === '--google') {
@@ -41,10 +60,12 @@ function parseArgs() {
 			console.error('Forcing provider: anthropic');
 		}
 	}
+	
+	return config;
 }
 
 // Parse command line arguments before initializing
-parseArgs();
+const cliConfig = parseArgs();
 
 // Get the package.json to determine the version
 const __filename = fileURLToPath(import.meta.url);
@@ -68,7 +89,10 @@ try {
 }
 
 class ProbeAgentServer {
-	constructor() {
+	constructor(timeout = 120) {
+		// Store timeout configuration
+		this.defaultTimeout = timeout;
+		
 		// Initialize the AI agent
 		this.agent = new ProbeAgent();
 
@@ -119,6 +143,10 @@ class ProbeAgentServer {
 							max_tokens: {
 								type: 'number',
 								description: 'Maximum number of tokens to return in the response.',
+							},
+							timeout: {
+								type: 'number',
+								description: 'Timeout for the search operation in seconds (default: 120)',
 							}
 						},
 						required: ['query']
@@ -191,7 +219,9 @@ class ProbeAgentServer {
 				console.error(`Using search path: ${searchPath}`);
 				console.error(`Current working directory: ${process.cwd()}`);
 
-				const result = await this.agent.processQuery(args.query, searchPath);
+				// Pass timeout from args or use default
+				const timeout = args.timeout || this.defaultTimeout;
+				const result = await this.agent.processQuery(args.query, searchPath, { timeout });
 
 				// Get token usage
 				const tokenUsage = this.agent.getTokenUsage();
@@ -237,5 +267,5 @@ class ProbeAgentServer {
 	}
 }
 
-const server = new ProbeAgentServer();
+const server = new ProbeAgentServer(cliConfig.timeout);
 server.run().catch(console.error);

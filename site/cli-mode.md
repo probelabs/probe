@@ -274,12 +274,36 @@ When you enable editing, Probe can modify your code when you ask it to:
 
 #### What You Need
 
-1. **Install Aider**: Probe uses a tool called Aider to make code changes.
-   ```bash
-   pip install aider-chat
-   ```
+1. **Install a Backend Tool**: Probe can use different tools to make code changes:
+   
+   - **Claude Code** (default if available):
+     ```bash
+     npm install -g @anthropic-ai/claude-code
+     ```
+   
+   - **Aider** (fallback):
+     ```bash
+     pip install aider-chat
+     ```
 
 2. **File Permissions**: Make sure Probe can write to your project files.
+
+#### Backend Configuration
+
+Probe automatically detects which tool to use for code editing:
+1. **Claude Code**: Used by default if installed (cross-platform, including WSL on Windows)
+2. **Aider**: Used as fallback if Claude Code is not available
+
+You can override this behavior by setting the `implement_tool_backend` environment variable:
+```bash
+# Force using Claude Code
+export implement_tool_backend=claude
+probe-chat --allow-edit
+
+# Force using Aider
+export implement_tool_backend=aider
+probe-chat --allow-edit
+```
 
 #### Usage Examples
 

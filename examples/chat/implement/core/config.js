@@ -151,6 +151,7 @@ class ConfigManager {
     // Backend selection
     if (process.env.IMPLEMENT_TOOL_BACKEND) {
       this.config.implement.defaultBackend = process.env.IMPLEMENT_TOOL_BACKEND;
+      console.error(`[ImplementConfig] Setting default backend from env: ${process.env.IMPLEMENT_TOOL_BACKEND}`);
     }
     
     if (process.env.IMPLEMENT_TOOL_FALLBACKS) {

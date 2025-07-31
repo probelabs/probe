@@ -11,6 +11,43 @@ All notable changes to Probe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 🚀 Major Features
+
+#### Cross-Platform Claude Code Backend Detection
+- **Removed Unix-specific commands**: No more `which` command dependency, works on all platforms
+- **Windows support**: Full support for `.cmd` files and Windows-specific paths
+- **WSL integration**: Automatically detects Claude Code installed in WSL on Windows systems
+- **Enhanced npm detection**: Better handling of npm global installations across different configurations
+- **Improved error messages**: Clear guidance when Claude Code is not found
+
+#### MCP Server Timeout Configuration
+- **Configurable timeouts**: New `--timeout/-t` flag for both MCP servers
+  - Basic MCP server: Default 30 seconds
+  - Agent MCP server: Default 120 seconds
+- **Per-request overrides**: Timeout can be specified in individual tool calls
+- **Help command**: Added `--help/-h` flag to display usage information
+- **Large codebase support**: Extended timeouts enable searching in massive repositories
+
+### 🔧 Improvements
+
+#### Backend Detection Enhancements
+- **Comprehensive logging**: Debug mode now shows detailed backend selection process
+- **Multiple detection methods**: Tries direct execution, npm global, and common installation paths
+- **Command caching**: Once found, Claude Code path is cached for faster subsequent calls
+- **Graceful fallbacks**: Clear error messages when backends are unavailable
+
+#### Documentation Updates
+- **MCP timeout examples**: Updated READMEs with timeout configuration examples
+- **Cross-platform guides**: Enhanced documentation for Windows and WSL users
+- **Troubleshooting section**: Added common issues and solutions for backend detection
+
+### 🐛 Bug Fixes
+- Fixed Claude Code detection failing in GitHub Actions
+- Fixed backend selection not respecting `implement_tool_backend` configuration
+- Fixed Windows compatibility issues with spawn command
+
 ## [0.6.0] - 2025-07-17
 
 ### 🚀 Major Features

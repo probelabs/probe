@@ -53,6 +53,48 @@ If you prefer to install the MCP server manually:
    }
    ```
 
+### Configuring Timeout
+
+For large codebases, you may need to increase the timeout for search operations. You can configure the timeout using the `--timeout` or `-t` flag:
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@buger/probe-mcp@latest",
+        "--timeout",
+        "60"
+      ]
+    }
+  }
+}
+```
+
+Or with manual installation:
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "probe-mcp",
+      "args": [
+        "--timeout",
+        "60"
+      ]
+    }
+  }
+}
+```
+
+The timeout is specified in seconds (default: 30 seconds). You can also see all available options by running:
+
+```bash
+probe-mcp --help
+```
+
 ## Available Tools
 
 The Probe MCP server provides the following tools:

@@ -45,26 +45,33 @@ export class ProbeAgent {
 			console.error(`[DEBUG] Generated session ID for agent: ${this.sessionId}`);
 		}
 
-		// Configure tools with the session ID
-		const configOptions = {
+		// Store base configuration for tools
+		this.baseToolConfig = {
 			sessionId: this.sessionId,
 			debug: config.debug,
 			defaultPath: config.allowedFolders.length > 0 ? config.allowedFolders[0] : process.cwd(), // Use first allowed folder or current working directory
 			allowedFolders: config.allowedFolders // Pass allowed folders to tools
 		};
 
-		// Create configured tool instances
-		this.tools = [
-			searchTool(configOptions),
-			queryTool(configOptions),
-			extractTool(configOptions)
-		];
+		// Initialize tools with base config (will be updated with timeout in processQuery)
+		this.tools = this.createTools(this.baseToolConfig);
 
 		// Initialize the AI model
 		this.initializeModel();
 
 		// Initialize chat history
 		this.history = [];
+	}
+
+	/**
+	 * Create tool instances with given configuration
+	 */
+	createTools(configOptions) {
+		return [
+			searchTool(configOptions),
+			queryTool(configOptions),
+			extractTool(configOptions)
+		];
 	}
 
 	/**
@@ -238,7 +245,7 @@ Examples:
 	/**
 	 * Process a user query and get a response
 	 */
-	async processQuery(query, path) {
+	async processQuery(query, path, options = {}) {
 		try {
 			// If path is not provided, use the first allowed folder or current working directory
 			let searchPath = path || (config.allowedFolders.length > 0 ? config.allowedFolders[0] : process.cwd());
@@ -290,12 +297,20 @@ Examples:
 				console.error(`[DEBUG] Sending ${messages.length} messages to model`);
 			}
 
+			// Update tools with timeout if provided
+			const toolConfig = { ...this.baseToolConfig };
+			if (options.timeout) {
+				toolConfig.timeout = options.timeout;
+				console.error(`Using timeout: ${options.timeout} seconds`);
+			}
+			const tools = this.createTools(toolConfig);
+
 			// Configure generateText options
 			const generateOptions = {
 				model: this.provider(this.model),
 				messages: messages,
 				system: await this.getSystemMessage(),
-				tools: this.tools.map(tool => {
+				tools: tools.map(tool => {
 					// Clone the tool and add the search path to its configuration
 					// For search tools, the path is treated as an allowed folder, not just a default
 					const updatedAllowedFolders = [...config.allowedFolders];

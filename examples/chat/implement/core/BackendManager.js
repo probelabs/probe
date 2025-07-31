@@ -153,18 +153,30 @@ class BackendManager {
    * @private
    */
   async selectAuto(request) {
+    console.error('[BackendManager] Starting backend selection with strategy: auto');
+    console.error(`[BackendManager] Default backend: ${this.config.defaultBackend}`);
+    console.error(`[BackendManager] Fallback backends: ${JSON.stringify(this.config.fallbackBackends)}`);
+    console.error(`[BackendManager] Available backends: ${Array.from(this.backends.keys()).join(', ')}`);
+    
     // First try explicit backend if specified
     if (request.options?.backend && this.backends.has(request.options.backend)) {
+      console.error(`[BackendManager] Checking explicit backend: ${request.options.backend}`);
       const backend = this.backends.get(request.options.backend);
       if (await backend.isAvailable()) {
+        console.error(`[BackendManager] Selected explicit backend: ${request.options.backend}`);
         return request.options.backend;
       }
+      console.error(`[BackendManager] Explicit backend ${request.options.backend} is not available`);
     }
     
     // Try default backend
     if (this.backends.has(this.config.defaultBackend)) {
+      console.error(`[BackendManager] Checking default backend: ${this.config.defaultBackend}`);
       const backend = this.backends.get(this.config.defaultBackend);
-      if (await backend.isAvailable()) {
+      const isAvailable = await backend.isAvailable();
+      console.error(`[BackendManager] Default backend ${this.config.defaultBackend} available: ${isAvailable}`);
+      if (isAvailable) {
+        console.error(`[BackendManager] Selected default backend: ${this.config.defaultBackend}`);
         return this.config.defaultBackend;
       }
     }
@@ -172,20 +184,30 @@ class BackendManager {
     // Try fallback backends
     for (const backendName of this.config.fallbackBackends) {
       if (this.backends.has(backendName)) {
+        console.error(`[BackendManager] Checking fallback backend: ${backendName}`);
         const backend = this.backends.get(backendName);
-        if (await backend.isAvailable()) {
+        const isAvailable = await backend.isAvailable();
+        console.error(`[BackendManager] Fallback backend ${backendName} available: ${isAvailable}`);
+        if (isAvailable) {
+          console.error(`[BackendManager] Selected fallback backend: ${backendName}`);
           return backendName;
         }
       }
     }
     
     // Try any available backend
+    console.error('[BackendManager] Trying any available backend...');
     for (const [name, backend] of this.backends) {
-      if (await backend.isAvailable()) {
+      console.error(`[BackendManager] Checking backend: ${name}`);
+      const isAvailable = await backend.isAvailable();
+      console.error(`[BackendManager] Backend ${name} available: ${isAvailable}`);
+      if (isAvailable) {
+        console.error(`[BackendManager] Selected any available backend: ${name}`);
         return name;
       }
     }
     
+    console.error('[BackendManager] No available backends found!');
     throw new BackendError(
       'No available backends found',
       ErrorTypes.BACKEND_NOT_FOUND,
@@ -294,7 +316,9 @@ class BackendManager {
     }
     
     // Select backend
+    console.error(`[BackendManager] Selecting backend for request ${request.sessionId}`);
     const backendName = await this.selectBackend(request);
+    console.error(`[BackendManager] Selected backend: ${backendName}`);
     const backend = this.backends.get(backendName);
     
     if (!backend) {

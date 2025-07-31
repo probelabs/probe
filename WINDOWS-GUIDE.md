@@ -44,6 +44,29 @@ The script will:
 - Verify the build was successful
 - Place the executable in `.\target\release\probe.exe`
 
+### Using WSL (Windows Subsystem for Linux)
+
+If you prefer to use WSL for development on Windows:
+
+1. Install WSL by running in PowerShell as Administrator:
+   ```
+   wsl --install
+   ```
+
+2. Install Rust in your WSL environment:
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+3. Clone and build Probe in WSL:
+   ```bash
+   git clone https://github.com/buger/probe.git
+   cd probe
+   cargo build --release
+   ```
+
+4. The binary will be available at `./target/release/probe` within WSL
+
 ### Manual Compilation
 
 If you prefer to compile manually:
@@ -122,6 +145,33 @@ To start the MCP server:
    ```
    node build\index.js
    ```
+
+### Using Claude Code with WSL
+
+If you have Claude Code installed in WSL, the Probe chat examples will automatically detect and use it:
+
+1. Install Claude Code in WSL:
+   ```bash
+   # In WSL terminal
+   npm install -g @anthropic-ai/claude-code
+   ```
+
+2. The probe-chat tool will automatically detect Claude Code in WSL when running from Windows:
+   ```
+   npx @buger/probe-chat
+   ```
+
+3. To verify detection, run with debug mode:
+   ```
+   set DEBUG_CHAT=1
+   npx @buger/probe-chat
+   ```
+
+The tool will attempt to use Claude Code in the following order:
+1. Direct execution (if in PATH)
+2. npm global installation (Windows)
+3. WSL installation (if available)
+4. Common installation paths
 
 ## Troubleshooting Windows Issues
 

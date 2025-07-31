@@ -1120,11 +1120,25 @@ jobs:
               echo "::warning::Claude Code installation may fail or not work properly"
             fi
             npm install -g @anthropic-ai/claude-code || echo "::warning::Failed to install Claude Code SDK globally, will rely on probe-chat bundled version"
+            
+            # Add npm global bin to PATH
+            NPM_GLOBAL_BIN=$(npm bin -g)
+            echo "NPM global bin directory: $NPM_GLOBAL_BIN"
+            export PATH="$NPM_GLOBAL_BIN:$PATH"
+            echo "PATH=$NPM_GLOBAL_BIN:$PATH" >> "$GITHUB_ENV"
+            
             # Verify installation
-            if command -v claude &> /dev/null; then
-              echo "Claude Code successfully installed: $(claude --version 2>/dev/null || echo 'version check failed')"
+            # Try running claude directly
+            if claude --version 2>/dev/null; then
+              echo "Claude Code successfully installed and accessible"
             else
-              echo "::warning::Claude Code command not found after installation"
+              echo "::warning::Claude Code command not found in PATH after installation"
+              # Try with full path
+              if [ -f "$NPM_GLOBAL_BIN/claude" ] || [ -f "$NPM_GLOBAL_BIN/claude.cmd" ]; then
+                echo "Claude Code binary found in: $NPM_GLOBAL_BIN"
+                # Try to execute it
+                "$NPM_GLOBAL_BIN/claude" --version 2>/dev/null || "$NPM_GLOBAL_BIN/claude.cmd" --version 2>/dev/null || echo "::warning::Could not execute Claude Code binary"
+              fi
             fi
           fi
           
