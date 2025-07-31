@@ -4,6 +4,7 @@ mod result_ranking;
 // Replace the old search_execution with new modules
 pub mod block_merging;
 pub mod cache; // New module for caching search results
+pub mod early_ranker; // New module for early BM25 ranking
 pub mod elastic_query;
 pub mod file_list_cache; // New module for caching file lists
 pub mod ripgrep_searcher;
