@@ -627,10 +627,11 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
         requestModel: request.options?.model, 
         configModel: this.config.model, 
         finalModel: model,
-        isValid: model && this.isValidModelName(model)
+        modelType: typeof model,
+        isValid: this.isValidModelName(model)
       });
     }
-    if (model && this.isValidModelName(model)) {
+    if (this.isValidModelName(model)) {
       args.push('--model', model);
     }
 
@@ -700,9 +701,13 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
    * @private
    */
   isValidModelName(model) {
-    // Just check if it's a non-empty string
+    // Check if it's a valid non-empty string
     // Model names change frequently and formats vary
-    return model && typeof model === 'string' && model.trim().length > 0;
+    return model != null && 
+           typeof model === 'string' && 
+           model.trim().length > 0 &&
+           model !== 'undefined' &&
+           model !== 'null';
   }
 
   /**
