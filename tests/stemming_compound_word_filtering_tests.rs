@@ -99,6 +99,7 @@ fn test_stemming_with_and_query(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -179,6 +180,7 @@ fn test_stemming_with_or_query(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -381,6 +383,7 @@ fn test_compound_word_splitting(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -426,6 +429,7 @@ fn test_compound_word_splitting(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -483,6 +487,7 @@ fn test_negative_compound_word_in_existing_tests(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 

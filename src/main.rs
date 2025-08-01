@@ -32,6 +32,7 @@ struct SearchParams {
     format: String,
     session: Option<String>,
     timeout: u64,
+    question: Option<String>,
 }
 
 struct BenchmarkParams {
@@ -129,6 +130,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
         dry_run: params.dry_run,
         session: params.session.as_deref(),
         timeout: params.timeout,
+        question: params.question.as_deref(),
     };
 
     let limited_results = perform_probe(&search_options)?;
@@ -353,6 +355,7 @@ async fn main() -> Result<()> {
                 format: args.format,
                 session: args.session,
                 timeout: args.timeout,
+                question: args.question,
             })?
         }
         Some(Commands::Search {
@@ -375,6 +378,7 @@ async fn main() -> Result<()> {
             format,
             session,
             timeout,
+            question,
         }) => handle_search(SearchParams {
             pattern,
             paths,
@@ -395,6 +399,7 @@ async fn main() -> Result<()> {
             format,
             session,
             timeout,
+            question,
         })?,
         Some(Commands::Extract {
             files,

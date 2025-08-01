@@ -104,6 +104,7 @@ fn test_basic_negative_compound_word(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -170,6 +171,7 @@ fn test_complex_negative_compound_word(temp_path: &Path) {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 

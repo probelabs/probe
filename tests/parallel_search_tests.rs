@@ -83,6 +83,7 @@ fn test_parallel_file_search() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -211,6 +212,7 @@ fn function_{}() {{
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -314,6 +316,7 @@ fn function_with_blocks_{}() {{
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 

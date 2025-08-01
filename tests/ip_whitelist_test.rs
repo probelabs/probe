@@ -30,6 +30,7 @@ fn test_ip_whitelist_stemming() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
     };
 
     // Enable debug mode to see the actual terms
@@ -117,6 +118,7 @@ fn test_negative_terms_exclude_files() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
     };
 
     // Enable debug mode to see the actual terms

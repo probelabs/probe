@@ -86,6 +86,7 @@ fn test_quoted_term_with_negative_keyword() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -167,6 +168,7 @@ fn test_negative_quoted_term() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 

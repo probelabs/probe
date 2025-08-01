@@ -309,6 +309,7 @@ func (i *IPWhiteListMiddleware) Process() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -388,6 +389,7 @@ func Process() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 

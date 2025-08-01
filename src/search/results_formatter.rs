@@ -87,7 +87,13 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
                     println!("{} {tfidf_score:.6}", "TF-IDF Score:".dimmed());
                 }
                 if let Some(bm25_score) = result.bm25_score {
-                    println!("{} {bm25_score:.6}", "BM25 Score:".dimmed());
+                    // Check if this is actually a BERT score
+                    let is_bert_score = result.score == result.bm25_score && result.score.is_some();
+                    if is_bert_score {
+                        println!("{} {bm25_score:.6}", "BERT Score:".dimmed());
+                    } else {
+                        println!("{} {bm25_score:.6}", "BM25 Score:".dimmed());
+                    }
                 }
                 if let Some(content_matches) = &result.content_matches {
                     let content_matches_str = content_matches.join(", ");

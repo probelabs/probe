@@ -1,0 +1,12 @@
+[package]
+name = "rust-bert-reranker-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rust-bert = "0.21"
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+
+# For downloading model files
+tch = "0.13.0"

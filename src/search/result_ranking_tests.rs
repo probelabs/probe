@@ -74,7 +74,7 @@ mod tests {
         
         // Enable debug mode for this test to verify logging
         std::env::set_var("DEBUG", "1");
-        rank_search_results(&mut results, &queries, "hybrid");
+        rank_search_results(&mut results, &queries, "hybrid", None);
         std::env::remove_var("DEBUG");
         
         // Check that all results have been assigned ranks and scores
@@ -103,7 +103,7 @@ mod tests {
         let mut results = create_test_results();
         let queries = vec!["search".to_string()];
         
-        rank_search_results(&mut results, &queries, "tfidf");
+        rank_search_results(&mut results, &queries, "tfidf", None);
         
         // Check that all results have been assigned ranks and scores
         for result in &results {
@@ -127,7 +127,7 @@ mod tests {
         let mut results = create_test_results();
         let queries = vec!["search".to_string()];
         
-        rank_search_results(&mut results, &queries, "bm25");
+        rank_search_results(&mut results, &queries, "bm25", None);
         
         // Check that all results have been assigned ranks and scores
         for result in &results {
@@ -151,7 +151,7 @@ mod tests {
         let mut results = create_test_results();
         let queries = vec!["search".to_string(), "function".to_string()];
         
-        rank_search_results(&mut results, &queries, "hybrid");
+        rank_search_results(&mut results, &queries, "hybrid", None);
         
         // Check that all results have been assigned ranks and scores
         for result in &results {
@@ -175,7 +175,7 @@ mod tests {
         let queries = vec!["search".to_string()];
         
         // Should not panic with empty results
-        rank_search_results(&mut results, &queries, "hybrid");
+        rank_search_results(&mut results, &queries, "hybrid", None);
         
         assert_eq!(results.len(), 0);
     }

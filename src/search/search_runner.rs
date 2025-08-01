@@ -235,6 +235,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         dry_run: _, // We don't need this in perform_probe, but need to include it in the pattern
         session,
         timeout,
+        question,
     } = options;
     // Start the timeout thread
     let timeout_handle = timeout::start_timeout_thread(*timeout);
@@ -1309,7 +1310,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     if !*exact {
         // Only perform ranking if exact flag is not set
-        rank_search_results(&mut final_results, queries, reranker);
+        rank_search_results(&mut final_results, queries, reranker, *question);
 
         // Apply deterministic secondary sort to ensure consistent ordering for results with equal scores
         // This prevents non-deterministic behavior when results have the same ranking score

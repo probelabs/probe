@@ -21,4 +21,5 @@ pub struct SearchOptions<'a> {
     pub dry_run: bool,
     pub session: Option<&'a str>,
     pub timeout: u64,
+    pub question: Option<&'a str>,
 }
