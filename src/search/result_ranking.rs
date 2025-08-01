@@ -170,8 +170,98 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
         if let Some(result) = results.get(*original_index) {
             let mut result_clone = result.clone();
             result_clone.rank = Some(rank_index + 1); // 1-based rank
-            result_clone.score = Some(*bm25_score);
-            result_clone.bm25_score = Some(*bm25_score);
+
+            // EXPERIMENT: Apply node type boosting for better relevance
+            let node_type_boost = match result_clone.node_type.as_str() {
+                // Function/method implementations are most relevant (2.0x boost)
+                "function_item"
+                | "function_declaration"
+                | "method_declaration"
+                | "function_definition"
+                | "function_expression"
+                | "arrow_function"
+                | "method_definition"
+                | "method"
+                | "singleton_method"
+                | "constructor_declaration" => 2.0,
+
+                // Type definitions and implementations are highly relevant (1.8x boost)
+                "impl_item"
+                | "struct_item"
+                | "class_declaration"
+                | "type_definition"
+                | "interface_declaration"
+                | "class_specifier"
+                | "struct_specifier"
+                | "struct_declaration"
+                | "interface_type"
+                | "protocol_declaration"
+                | "type_alias_declaration"
+                | "typealias_declaration" => 1.8,
+
+                // Enums, traits, and type specifications (1.6x boost)
+                "enum_item"
+                | "trait_item"
+                | "enum_declaration"
+                | "enum_specifier"
+                | "type_declaration"
+                | "type_spec"
+                | "trait_declaration"
+                | "extension_declaration"
+                | "delegate_declaration" => 1.6,
+
+                // Module, namespace, and package definitions (1.4x boost)
+                "module"
+                | "mod_item"
+                | "namespace"
+                | "namespace_declaration"
+                | "namespace_definition"
+                | "module_declaration"
+                | "package_declaration" => 1.4,
+
+                // Properties, constants, and event declarations (1.3x boost)
+                "property_declaration"
+                | "event_declaration"
+                | "const_declaration"
+                | "var_declaration"
+                | "variable_declaration"
+                | "constant_declaration"
+                | "const_spec"
+                | "var_spec" => 1.3,
+
+                // Documentation blocks for functions (multi-line) (1.2x boost)
+                "doc_comment" | "block_comment"
+                    if result_clone.lines.1 - result_clone.lines.0 > 3 =>
+                {
+                    1.2
+                }
+
+                // Export statements and declarations (1.1x boost)
+                "export_statement" | "declare_statement" | "declaration" => 1.1,
+
+                // Test code is less relevant (0.7x penalty)
+                node_type if node_type.contains("test") || node_type.contains("Test") => 0.7,
+
+                // Single line comments are least relevant (0.5x penalty)
+                "line_comment" | "comment" | "//" | "/*" | "*/" => 0.5,
+
+                // Other acceptable but less specific node types (1.0x - no change)
+                "object"
+                | "array"
+                | "jsx_element"
+                | "jsx_self_closing_element"
+                | "property_identifier"
+                | "class_body"
+                | "class"
+                | "identifier" => 1.0,
+
+                // Default for any other node types
+                _ => 1.0,
+            };
+
+            let boosted_score = bm25_score * node_type_boost;
+            result_clone.score = Some(boosted_score);
+            result_clone.bm25_score = Some(*bm25_score); // Keep original BM25 score
             updated_results.push(result_clone);
         }
     }
@@ -191,11 +281,11 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
         println!("Using BM25 ranking (Okapi BM25 algorithm)");
     }
 
-    // Sort by BM25 score in descending order
+    // Sort by boosted score in descending order
     updated_results.sort_by(|a, b| {
-        let score_a = a.bm25_score.unwrap_or(0.0);
-        let score_b = b.bm25_score.unwrap_or(0.0);
-        // Sort in descending order (higher score is better)
+        let score_a = a.score.unwrap_or(0.0); // Use boosted score
+        let score_b = b.score.unwrap_or(0.0); // Use boosted score
+                                              // Sort in descending order (higher score is better)
         score_b
             .partial_cmp(&score_a)
             .unwrap_or(std::cmp::Ordering::Equal)

@@ -358,8 +358,8 @@ pub fn rank_documents(params: &RankingParams) -> Vec<(usize, f64)> {
     // k1=1.2 controls term frequency saturation (higher values give more weight to term frequency)
     // b=0.75 controls document length normalization (higher values give more penalty to longer documents)
     // See: Robertson, S. E., & Zaragoza, H. (2009). The Probabilistic Relevance Framework: BM25 and Beyond
-    let k1 = 1.2;
-    let b = 0.75;
+    let k1 = 1.5; // EXPERIMENT: Slightly increased from 1.2 for balanced term frequency weight
+    let b = 0.5; // EXPERIMENT: Moderately reduced from 0.75 for balanced length normalization
 
     if debug_mode {
         println!("DEBUG: Starting parallel document scoring for {n_docs} documents");
@@ -552,8 +552,8 @@ pub fn rank_documents_simd(params: &RankingParams) -> Vec<(usize, f64)> {
                 avgdl,
                 idfs: &precomputed_idfs,
                 query_token_map: &query_token_map,
-                k1: 1.2,
-                b: 0.75,
+                k1: 1.5, // EXPERIMENT: Slightly increased from 1.2
+                b: 0.5,  // EXPERIMENT: Moderately reduced from 0.75
             };
 
             // Apply boolean query logic - this filters out documents that don't match requirements
