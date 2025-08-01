@@ -151,6 +151,7 @@ fn test_search_single_term() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -215,6 +216,7 @@ fn test_search_multiple_terms() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -261,6 +263,7 @@ fn test_search_files_only() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -336,6 +339,7 @@ fn test_search_include_filenames() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -392,6 +396,7 @@ fn test_search_with_limits() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -442,6 +447,7 @@ fn test_frequency_search() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -500,6 +506,7 @@ func main() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -541,6 +548,7 @@ fn test_search_with_custom_ignores() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -658,6 +666,7 @@ fn calculate_product(a: i32, b: i32) -> i32 {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 

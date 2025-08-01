@@ -31,8 +31,8 @@ pub struct Args {
     #[arg(short = 'n', long = "exclude-filenames")]
     pub exclude_filenames: bool,
 
-    /// BM25 ranking for search results
-    #[arg(short = 'r', long = "reranker", default_value = "bm25", value_parser = ["bm25"])]
+    /// Ranking algorithm for search results
+    #[arg(short = 'r', long = "reranker", default_value = "bm25", value_parser = ["bm25", "hybrid", "hybrid2", "tfidf", "ms-marco-tinybert", "ms-marco-minilm-l6", "ms-marco-minilm-l12"])]
     pub reranker: String,
 
     /// Use frequency-based search with stemming and stopword removal (enabled by default)
@@ -84,6 +84,10 @@ pub struct Args {
     #[arg(long = "timeout", default_value = "30")]
     pub timeout: u64,
 
+    /// Natural language question for BERT reranking (uses search keywords if not specified)
+    #[arg(long = "question")]
+    pub question: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -117,8 +121,8 @@ pub enum Commands {
         #[arg(short = 'n', long = "exclude-filenames")]
         exclude_filenames: bool,
 
-        /// BM25 ranking for search results
-        #[arg(short = 'r', long = "reranker", default_value = "bm25", value_parser = ["bm25"])]
+        /// Ranking algorithm for search results
+        #[arg(short = 'r', long = "reranker", default_value = "bm25", value_parser = ["bm25", "hybrid", "hybrid2", "tfidf", "ms-marco-tinybert", "ms-marco-minilm-l6", "ms-marco-minilm-l12"])]
         reranker: String,
 
         /// Use frequency-based search with stemming and stopword removal (enabled by default)
@@ -186,6 +190,10 @@ pub enum Commands {
         /// Timeout in seconds for search operation (default: 30)
         #[arg(long = "timeout", default_value = "30")]
         timeout: u64,
+
+        /// Natural language question for BERT reranking (uses search keywords if not specified)
+        #[arg(long = "question")]
+        question: Option<String>,
     },
 
     /// Extract code blocks from files

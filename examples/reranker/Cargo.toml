@@ -1,0 +1,33 @@
+[package]
+name = "bert-reranker"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "reranker"
+path = "src/main.rs"
+
+[[bin]]
+name = "demo"
+path = "src/demo.rs"
+
+[[bin]]
+name = "benchmark"
+path = "src/bin/benchmark.rs"
+
+[dependencies]
+candle-core = "0.8"
+candle-nn = "0.8"
+candle-transformers = "0.8"
+tokenizers = "0.20"
+anyhow = "1.0"
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+hf-hub = { version = "0.3", features = ["tokio"] }
+safetensors = "0.4"
+tokio = { version = "1.0", features = ["full"] }
+walkdir = "2.4"
+rayon = "1.8"
+parking_lot = "0.12"
+tempfile = "3.8"

@@ -120,6 +120,7 @@ fn test_required_term_query() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -228,6 +229,7 @@ fn test_excluded_term_query() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -320,6 +322,7 @@ fn test_or_query() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -420,6 +423,7 @@ fn test_complex_query_or() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -518,6 +522,7 @@ fn test_complex_query_exclusion() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -616,6 +621,7 @@ fn test_function() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 

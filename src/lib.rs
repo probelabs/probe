@@ -94,6 +94,7 @@
 // Allow internal modules to reference the crate by its library name
 extern crate self as probe_code;
 
+pub mod bert_reranker;
 pub mod extract;
 pub mod language;
 pub mod models;

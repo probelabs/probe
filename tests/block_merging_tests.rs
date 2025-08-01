@@ -191,6 +191,7 @@ fn test_integration_with_search_flow() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -304,6 +305,7 @@ fn test_no_merge_flag() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
@@ -329,6 +331,7 @@ fn test_no_merge_flag() {
         dry_run: false,
         session: None,
         timeout: 30,
+        question: None,
         exact: false,
     };
 
