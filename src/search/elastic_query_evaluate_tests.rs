@@ -226,10 +226,12 @@ fn test_evaluate_elastic_style_queries() {
     let term_indices = create_term_indices(&["keyword1", "keyword2", "keyword3", "keyword4"]);
     
     // Test expression: +(keyword1 OR keyword2) -keyword3
+    // This means: (keyword1 OR keyword2) is required as a group, keyword3 is excluded
+    // So we create one OR group where at least one term must match, then AND with exclusion
     let expr = Expr::And(
         Box::new(Expr::Or(
-            Box::new(create_required_term("keyword1")),
-            Box::new(create_required_term("keyword2"))
+            Box::new(create_term("keyword1")),
+            Box::new(create_term("keyword2"))
         )),
         Box::new(create_excluded_term("keyword3"))
     );
@@ -354,10 +356,10 @@ fn test_evaluate_optional_terms() {
     let matched_terms = create_matched_terms(&[0, 1]);
     assert!(expr.evaluate(&matched_terms, &term_indices, false));
     
-    // Match when only optional is present and excluded is absent
-    // With OR behavior, this should match
+    // No match when only optional is present but required is missing
+    // In correct Lucene semantics, required terms must be present even in OR
     let matched_terms = create_matched_terms(&[1]);
-    assert!(expr.evaluate(&matched_terms, &term_indices, false));
+    assert!(!expr.evaluate(&matched_terms, &term_indices, false));
     
     // No match when excluded is present, even with the OR behavior
     let matched_terms = create_matched_terms(&[0, 2]);
@@ -426,4 +428,57 @@ fn test_evaluate_exact_terms() {
     // No match when the exact term is only present as stemmed parts
     let matched_terms = create_matched_terms(&[0, 3, 4]); // "running", "white", "list"
     assert!(!expr.evaluate(&matched_terms, &term_indices, false));
+}
+
+#[test]
+fn test_required_term_in_or_bug() {
+    // Create term indices for "github" and "actions"
+    let term_indices = create_term_indices(&["github", "actions"]);
+    
+    // Test query: "+github OR actions" - equivalent to "(+github OR actions)"
+    // This should be parsed as OR(required_term("github"), term("actions"))
+    let expr = Expr::Or(
+        Box::new(create_required_term("github")),  // +github (required)
+        Box::new(create_term("actions"))           // actions (optional)
+    );
+    
+    println!("Testing query: (+github OR actions)");
+    println!("AST: {expr:?}");
+    
+    // Test case 1: only "actions" is present (github is missing)
+    // This should FAIL because github is required in the OR expression
+    let matched_terms = create_matched_terms(&[1]); // Only "actions" (index 1)
+    let result = expr.evaluate(&matched_terms, &term_indices, false);
+    
+    println!("Test 1 - Only 'actions' present: matched_terms={matched_terms:?}, result={result}");
+    
+    // BUG: This currently returns true but should return false
+    // Because if a required term is in an OR, the entire OR should fail if that required term is missing
+    // EXPECT: false - required term 'github' is missing
+    // This is now FIXED to match correct Lucene semantics
+    assert!(!result, "Should return false when required term 'github' is missing, even in OR expression");
+    
+    // Test case 2: only "github" is present
+    // This should PASS because the required term is present
+    let matched_terms = create_matched_terms(&[0]); // Only "github" (index 0)
+    let result = expr.evaluate(&matched_terms, &term_indices, false);
+    
+    println!("Test 2 - Only 'github' present: matched_terms={matched_terms:?}, result={result}");
+    assert!(result, "Should return true when required term 'github' is present");
+    
+    // Test case 3: both "github" and "actions" are present
+    // This should PASS
+    let matched_terms = create_matched_terms(&[0, 1]); // Both terms
+    let result = expr.evaluate(&matched_terms, &term_indices, false);
+    
+    println!("Test 3 - Both terms present: matched_terms={matched_terms:?}, result={result}");
+    assert!(result, "Should return true when both terms are present");
+    
+    // Test case 4: neither term is present
+    // This should FAIL
+    let matched_terms = create_matched_terms(&[]); // No terms
+    let result = expr.evaluate(&matched_terms, &term_indices, false);
+    
+    println!("Test 4 - No terms present: matched_terms={matched_terms:?}, result={result}");
+    assert!(!result, "Should return false when no terms are present");
 }

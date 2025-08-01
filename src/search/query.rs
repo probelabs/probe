@@ -382,13 +382,9 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
         );
     }
 
-    // Extract all non-excluded terms from the query plan
-    let terms: Vec<String> = plan
-        .term_indices
-        .keys()
-        .filter(|term| !plan.excluded_terms.contains(*term))
-        .cloned()
-        .collect();
+    // Extract ALL terms from the query plan (including excluded ones)
+    // Excluded terms need to be found during search so they can be properly excluded during evaluation
+    let terms: Vec<String> = plan.term_indices.keys().cloned().collect();
 
     if !terms.is_empty() {
         let combined_pattern = build_combined_pattern(&terms);
@@ -424,26 +420,21 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                 exact,
                 ..
             } => {
-                // Skip pattern generation for excluded terms
-                if *excluded {
-                    if debug_mode {
-                        println!(
-                            "DEBUG: Skipping pattern generation for excluded term: '{keywords:?}'"
-                        );
-                    }
-                    return; // Skip pattern generation for excluded terms
+                // FIXED: Don't skip pattern generation for excluded terms
+                // Excluded terms need to be found during search so they can be properly excluded during evaluation
+                if debug_mode && *excluded {
+                    println!(
+                        "DEBUG: Generating patterns for excluded term (will be filtered during evaluation): '{keywords:?}'"
+                    );
                 }
 
                 // Process each keyword
                 for keyword in keywords {
-                    // ADDED: Check against the global exclusion list first
-                    if plan.excluded_terms.contains(keyword) {
-                        if debug_mode {
-                            println!(
-                                    "DEBUG: Skipping pattern generation for globally excluded keyword: '{keyword}'"
-                                );
-                        }
-                        continue;
+                    // Note: We still generate patterns for excluded terms so they can be found and then filtered out
+                    if debug_mode && plan.excluded_terms.contains(keyword) {
+                        println!(
+                            "DEBUG: Generating pattern for globally excluded keyword (will be filtered during evaluation): '{keyword}'"
+                        );
                     }
                     // The original check `if *excluded` (line 352) already handles terms explicitly marked with `-`
                     // No need for an additional check here for `*excluded` as the outer check handles it.

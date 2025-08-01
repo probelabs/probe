@@ -506,13 +506,13 @@ fn test_required_terms_query() {
 
         // Test filtering
         let result = filter_code_block_with_ast(block_lines, &term_matches, &plan, true);
-        // Note: With the simplified evaluation, required terms with + are connected with OR, not AND
-        // So the test should pass even if one required term is missing
+        // Note: In correct Lucene semantics, ALL required terms must be present
+        // This block is missing 'security', so it should NOT match
         assert!(
-            result,
-            "Block with some required terms should match with OR semantics"
+            !result,
+            "Block missing required term 'security' should NOT match"
         );
-        println!("✓ Block with some required terms matches (OR semantics)");
+        println!("✓ Block missing required terms correctly rejected");
     }
 }
 
