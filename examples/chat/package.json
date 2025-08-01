@@ -1,6 +1,6 @@
 {
   "name": "@buger/probe-chat",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "CLI and web interface for Probe code search (formerly @buger/probe-web and @buger/probe-chat)",
   "main": "index.js",
   "type": "module",
@@ -47,7 +47,7 @@
     "zod": "^3.24.2"
   },
   "optionalDependencies": {
-    "@anthropic-ai/claude-code": "^1.0.0"
+    "@anthropic-ai/claude-code": "^1.0.65"
   },
   "peerDependencies": {
     "aider-chat": ">=0.20.0"

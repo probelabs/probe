@@ -19,7 +19,6 @@ const execPromise = promisify(exec);
 class ClaudeCodeBackend extends BaseBackend {
   constructor() {
     super('claude-code', '1.0.0');
-    this.sdk = null;
     this.config = null;
   }
 
@@ -36,24 +35,13 @@ class ClaudeCodeBackend extends BaseBackend {
       temperature: config.temperature || 0.3,
       systemPrompt: config.systemPrompt,
       tools: config.tools || ['edit', 'search', 'bash'],
-      maxTurns: config.maxTurns || 10,
+      maxTurns: config.maxTurns || 100,
       ...config
     };
     
     try {
-      // Dynamically import Claude Code SDK
-      // Try TypeScript version first, fall back to Python if needed
-      try {
-        const claudeCodeModule = await import('@anthropic-ai/claude-code');
-        this.sdk = claudeCodeModule;
-        this.sdkType = 'typescript';
-        this.log('info', 'Initialized with TypeScript Claude Code SDK');
-      } catch (tsError) {
-        // TypeScript SDK not available, this is expected in JavaScript environment
-        // We'll use the CLI interface instead
-        this.sdkType = 'cli';
-        this.log('info', 'Will use Claude Code CLI interface');
-      }
+      // Claude Code backend only uses CLI interface
+      this.log('info', 'Using Claude Code CLI interface');
       
       // Validate configuration
       await this.validateConfiguration();
@@ -229,13 +217,6 @@ class ClaudeCodeBackend extends BaseBackend {
   getRequiredDependencies() {
     return [
       {
-        name: '@anthropic-ai/claude-code',
-        type: 'npm',
-        version: '^1.0.0',
-        installCommand: 'npm install @anthropic-ai/claude-code',
-        description: 'Claude Code TypeScript SDK (optional)'
-      },
-      {
         name: 'claude-code',
         type: 'cli',
         installCommand: 'npm install -g @anthropic-ai/claude-code',
@@ -244,7 +225,7 @@ class ClaudeCodeBackend extends BaseBackend {
       {
         name: 'ANTHROPIC_API_KEY',
         type: 'environment',
-        description: 'Anthropic API key for Claude Code SDK'
+        description: 'Anthropic API key for Claude Code'
       }
     ];
   }
@@ -268,7 +249,7 @@ class ClaudeCodeBackend extends BaseBackend {
    * @override
    */
   getDescription() {
-    return 'Claude Code SDK - Advanced AI coding assistant powered by Claude';
+    return 'Claude Code CLI - Advanced AI coding assistant powered by Claude';
   }
 
   /**
@@ -307,15 +288,8 @@ class ClaudeCodeBackend extends BaseBackend {
       progressTracker.endStep();
       progressTracker.startStep('execute', 'Executing with Claude Code');
       
-      let result;
-      
-      if (this.sdkType === 'typescript' && this.sdk) {
-        // Use TypeScript SDK
-        result = await this.executeWithSDK(prompt, request, sessionInfo, progressTracker);
-      } else {
-        // Use CLI interface
-        result = await this.executeWithCLI(prompt, workingDir, request, sessionInfo, progressTracker);
-      }
+      // Always use CLI interface
+      const result = await this.executeWithCLI(prompt, workingDir, request, sessionInfo, progressTracker);
       
       progressTracker.endStep();
       
@@ -431,88 +405,6 @@ ${request.context?.allowedFiles ? `Allowed files: ${request.context.allowedFiles
 ${request.context?.language ? `Primary language: ${request.context.language}` : ''}`;
   }
 
-  /**
-   * Execute using TypeScript SDK
-   * @private
-   */
-  async executeWithSDK(prompt, request, sessionInfo, progressTracker) {
-    const startTime = Date.now();
-    const { query, ClaudeCodeOptions } = this.sdk;
-    
-    const options = new ClaudeCodeOptions({
-      max_turns: request.options?.maxTurns || this.config.maxTurns,
-      system_prompt: this.buildSystemPrompt(request),
-      model: this.config.model,
-      temperature: request.options?.temperature || this.config.temperature,
-      allowed_tools: this.config.tools
-    });
-    
-    const messages = [];
-    let cancelled = false;
-    
-    // Set up cancellation
-    sessionInfo.cancel = () => {
-      cancelled = true;
-    };
-    
-    try {
-      for await (const message of query({ prompt, options })) {
-        if (cancelled) {
-          throw new BackendError(
-            'Implementation cancelled by user',
-            ErrorTypes.CANCELLATION,
-            'USER_CANCELLED'
-          );
-        }
-        
-        messages.push(message);
-        
-        // Report progress
-        progressTracker.reportMessage(message, 'info');
-        
-        // Update progress periodically
-        const elapsed = Date.now() - startTime;
-        const progress = Math.min(25 + (messages.length * 5), 90);
-        this.updateSessionStatus(request.sessionId, { progress });
-      }
-      
-      const output = messages.join('\n');
-      const executionTime = Date.now() - startTime;
-      
-      // Parse changes from output
-      const changes = FileChangeParser.parseChanges(output, request.context?.workingDirectory);
-      
-      return {
-        success: true,
-        sessionId: request.sessionId,
-        output,
-        changes,
-        metrics: {
-          executionTime,
-          tokensUsed: TokenEstimator.estimate(prompt + output),
-          filesModified: changes.length,
-          linesChanged: 0, // Would need more sophisticated parsing
-          turns: messages.length
-        },
-        metadata: {
-          model: this.config.model,
-          sdkType: 'typescript'
-        }
-      };
-      
-    } catch (error) {
-      if (error instanceof BackendError) {
-        throw error;
-      }
-      
-      throw new BackendError(
-        `SDK execution failed: ${error.message}`,
-        ErrorTypes.EXECUTION_FAILED,
-        'SDK_EXECUTION_FAILED',
-        { originalError: error }
-      );
-    }
-  }
 
   /**
    * Execute using CLI interface
@@ -524,7 +416,7 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
     // Build Claude Code CLI arguments securely
     const args = this.buildSecureCommandArgs(request);
     
-    // Add the prompt using -p flag
+    // Add the prompt using -p flag (multiline strings are handled safely by spawn)
     const validatedPrompt = this.validatePrompt(prompt);
     args.unshift('-p', validatedPrompt);
     
@@ -664,8 +556,7 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
             metadata: {
               command: 'claude',
               args: args.slice(0, 5), // Limited args for security
-              model: this.config.model,
-              sdkType: 'cli'
+              model: this.config.model
             }
           });
         } else {
@@ -809,10 +700,10 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
    */
   validateMaxTurns(maxTurns) {
     if (typeof maxTurns !== 'number' || isNaN(maxTurns) || maxTurns < 1) {
-      return 10; // Default value
+      return 100; // Default value
     }
     
-    return Math.min(Math.max(Math.floor(maxTurns), 1), 50); // Clamp between 1 and 50
+    return Math.min(Math.max(Math.floor(maxTurns), 1), 1000); // Clamp between 1 and 1000
   }
 
   /**
