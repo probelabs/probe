@@ -252,10 +252,14 @@ class BaseBackend {
     
     switch (level) {
       case 'debug':
-        console.debug(logMessage, logData);
+        // Only output debug logs if DEBUG environment variable is set
+        if (process.env.DEBUG) {
+          console.debug(logMessage, logData);
+        }
         break;
       case 'info':
-        console.log(logMessage, logData);
+        // Send info logs to stderr to avoid mixing with stdout output
+        console.error(logMessage, logData);
         break;
       case 'warn':
         console.warn(logMessage, logData);
@@ -264,7 +268,7 @@ class BaseBackend {
         console.error(logMessage, logData);
         break;
       default:
-        console.log(logMessage, logData);
+        console.error(logMessage, logData);
     }
   }
 }

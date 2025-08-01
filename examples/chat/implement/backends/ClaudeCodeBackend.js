@@ -41,7 +41,7 @@ class ClaudeCodeBackend extends BaseBackend {
     
     try {
       // Claude Code backend only uses CLI interface
-      this.log('info', 'Using Claude Code CLI interface');
+      this.log('debug', 'Using Claude Code CLI interface');
       
       // Validate configuration
       await this.validateConfiguration();
@@ -108,7 +108,7 @@ class ClaudeCodeBackend extends BaseBackend {
               const pathSeparator = isWindows ? ';' : ':';
               process.env.PATH = `${npmBinDir}${pathSeparator}${process.env.PATH}`;
               
-              this.log('info', `Claude found at ${claudePath}, added ${npmBinDir} to PATH`);
+              this.log('debug', `Claude found at ${claudePath}, added ${npmBinDir} to PATH`);
             } catch (execError) {
               this.log('debug', `Failed to execute claude at ${claudePath}`, { error: execError.message });
             }
@@ -129,7 +129,7 @@ class ClaudeCodeBackend extends BaseBackend {
               // Try to run claude through WSL
               await execPromise('wsl claude --version', { timeout: 5000 });
               claudeCommand = 'wsl claude';
-              this.log('info', 'Claude found in WSL');
+              this.log('debug', 'Claude found in WSL');
             } catch (wslClaudeError) {
               this.log('debug', 'Claude not found in WSL', { error: wslClaudeError.message });
               
@@ -145,7 +145,7 @@ class ClaudeCodeBackend extends BaseBackend {
                 try {
                   await execPromise(`${wslPath} --version`, { timeout: 2000 });
                   claudeCommand = wslPath;
-                  this.log('info', `Claude found in WSL at: ${wslPath}`);
+                  this.log('debug', `Claude found in WSL at: ${wslPath}`);
                   break;
                 } catch (e) {
                   // Continue searching
@@ -181,7 +181,7 @@ class ClaudeCodeBackend extends BaseBackend {
           try {
             await execPromise(`"${claudePath}" --version`, { timeout: 2000 });
             claudeCommand = claudePath;
-            this.log('info', `Claude found at ${claudePath}`);
+            this.log('debug', `Claude found at ${claudePath}`);
             break;
           } catch (e) {
             // Continue searching
@@ -420,7 +420,7 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
     const validatedPrompt = this.validatePrompt(prompt);
     args.unshift('-p', validatedPrompt);
     
-    this.log('info', 'Executing Claude Code CLI', {
+    this.log('debug', 'Executing Claude Code CLI', {
       command: 'claude',
       args: args.slice(0, 5), // Log first few args only for security
       workingDir
@@ -445,7 +445,7 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
             try {
               await execPromise('wsl claude --version', { timeout: 2000 });
               claudeCommand = 'wsl claude';
-              this.log('info', 'Using claude from WSL');
+              this.log('debug', 'Using claude from WSL');
             } catch (wslError) {
               // Continue to npm global check
             }
@@ -461,7 +461,7 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
               // Test if we can execute it
               await execPromise(`"${potentialClaudePath}" --version`, { timeout: 1000 });
               claudeCommand = potentialClaudePath;
-              this.log('info', `Using claude from npm global: ${claudeCommand}`);
+              this.log('debug', `Using claude from npm global: ${claudeCommand}`);
             } catch (npmError) {
               // Fall back to 'claude' and let it fail with a clear error
               this.log('warn', 'Could not find claude in npm global bin or WSL, attempting direct execution');

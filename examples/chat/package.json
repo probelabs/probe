@@ -1,6 +1,6 @@
 {
   "name": "@buger/probe-chat",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "CLI and web interface for Probe code search (formerly @buger/probe-web and @buger/probe-chat)",
   "main": "index.js",
   "type": "module",
