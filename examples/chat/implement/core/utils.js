@@ -208,7 +208,7 @@ class RetryHandler {
           throw error;
         }
         
-        console.log(`Attempt ${attempt} failed, retrying in ${delay}ms...`);
+        console.error(`Attempt ${attempt} failed, retrying in ${delay}ms...`);
         await this.sleep(delay);
         
         // Calculate next delay with exponential backoff

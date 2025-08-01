@@ -334,10 +334,7 @@ class ClaudeCodeBackend extends BaseBackend {
     // No format validation - API key formats can vary
     // Model validation removed - model names change frequently
     
-    // Validate tools list
-    if (this.config.tools && Array.isArray(this.config.tools)) {
-      this.config.tools = this.validateTools(this.config.tools);
-    }
+    // Tools validation not needed since we always use --dangerously-skip-permissions
   }
 
   /**
@@ -620,50 +617,15 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
     }
     args.push('--max-turns', maxTurns.toString());
 
-    // Only add model if explicitly set and valid
-    const model = request.options?.model || this.config.model;
+    // Model and temperature are not supported by Claude CLI
+    // Claude CLI uses default model and temperature settings
+
+    // Always use --dangerously-skip-permissions to avoid tool permission complexity
+    args.push('--dangerously-skip-permissions');
+
     if (process.env.DEBUG) {
-      this.log('debug', 'Model check', { 
-        requestModel: request.options?.model, 
-        configModel: this.config.model, 
-        finalModel: model,
-        modelType: typeof model,
-        isValid: this.isValidModelName(model)
-      });
+      this.log('debug', 'Final args constructed', { args });
     }
-    if (this.isValidModelName(model)) {
-      args.push('--model', model);
-    }
-
-    // Only add temperature if explicitly set
-    const temperature = request.options?.temperature !== undefined ? request.options.temperature : this.config.temperature;
-    if (temperature !== undefined && this.isValidTemperature(temperature)) {
-      args.push('--temperature', temperature.toString());
-    }
-
-    // Add tools with validation or skip permissions if no tools
-    const tools = request.options?.tools || this.config.tools;
-    if (process.env.DEBUG) {
-      this.log('debug', 'Tools check', { 
-        requestTools: request.options?.tools, 
-        configTools: this.config.tools, 
-        finalTools: tools,
-        hasTools: tools && tools.length > 0
-      });
-    }
-    if (tools && tools.length > 0) {
-      const validatedTools = this.validateTools(tools);
-      if (validatedTools.length > 0) {
-        args.push('--allowedTools', validatedTools.join(','));
-      } else {
-        // No valid tools, add dangerously-skip-permissions flag
-        args.push('--dangerously-skip-permissions');
-      }
-    } else {
-      // If no tools are specified, add dangerously-skip-permissions flag
-      args.push('--dangerously-skip-permissions');
-    }
-
     return args;
   }
 
@@ -694,34 +656,6 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
     return apiKey && typeof apiKey === 'string' && apiKey.trim().length > 0;
   }
 
-  /**
-   * Validate model name
-   * @param {string} model - Model name to validate
-   * @returns {boolean} True if valid
-   * @private
-   */
-  isValidModelName(model) {
-    // Check if it's a valid non-empty string
-    // Model names change frequently and formats vary
-    return model != null && 
-           typeof model === 'string' && 
-           model.trim().length > 0 &&
-           model !== 'undefined' &&
-           model !== 'null';
-  }
-
-  /**
-   * Validate temperature value
-   * @param {number} temperature - Temperature to validate
-   * @returns {boolean} True if valid
-   * @private
-   */
-  isValidTemperature(temperature) {
-    return typeof temperature === 'number' && 
-           temperature >= 0 && 
-           temperature <= 2 &&
-           !isNaN(temperature);
-  }
 
   /**
    * Validate max turns value
@@ -737,30 +671,6 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
     return Math.min(Math.max(Math.floor(maxTurns), 1), 1000); // Clamp between 1 and 1000
   }
 
-  /**
-   * Validate tools list
-   * @param {Array<string>} tools - Tools to validate
-   * @returns {Array<string>} Validated tools
-   * @private
-   */
-  validateTools(tools) {
-    if (!Array.isArray(tools)) {
-      return [];
-    }
-
-    const validTools = ['edit', 'search', 'bash', 'str_replace', 'create_file'];
-    const validatedTools = [];
-
-    for (const tool of tools) {
-      if (typeof tool === 'string' && validTools.includes(tool)) {
-        validatedTools.push(tool);
-      } else {
-        this.log('warn', `Invalid tool ignored: ${tool}`);
-      }
-    }
-
-    return validatedTools;
-  }
 
   /**
    * Validate prompt content
