@@ -102,6 +102,47 @@ impl Expr {
         }
     }
 
+    /// Check if all required terms in the expression are present in matched_terms
+    /// This is the critical fix for Lucene semantics
+    fn check_all_required_terms_present(
+        &self,
+        matched_terms: &HashSet<usize>,
+        term_indices: &HashMap<String, usize>,
+    ) -> bool {
+        match self {
+            Expr::Term {
+                keywords,
+                required,
+                excluded,
+                ..
+            } => {
+                if *required && !*excluded {
+                    // All keywords in this required term must be present
+                    keywords.iter().all(|kw| {
+                        term_indices
+                            .get(kw)
+                            .map(|idx| matched_terms.contains(idx))
+                            .unwrap_or(false)
+                    })
+                } else {
+                    // Not a required term, so it doesn't affect required term checking
+                    true
+                }
+            }
+            Expr::And(left, right) => {
+                // For AND: both sides must have their required terms satisfied
+                left.check_all_required_terms_present(matched_terms, term_indices)
+                    && right.check_all_required_terms_present(matched_terms, term_indices)
+            }
+            Expr::Or(left, right) => {
+                // For OR: both sides must have their required terms satisfied
+                // This is crucial - even in OR, required terms must be present
+                left.check_all_required_terms_present(matched_terms, term_indices)
+                    && right.check_all_required_terms_present(matched_terms, term_indices)
+            }
+        }
+    }
+
     /// A helper to evaluate the expression when the caller already knows if
     /// there are any required terms in the *entire* query (not just in this subtree).
     fn evaluate_with_has_required(
@@ -118,6 +159,19 @@ impl Expr {
         }
 
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+        // CRITICAL FIX: Check required terms FIRST before any other evaluation
+        // In Lucene semantics, if ANY required term is missing, the entire query fails
+        if has_required_anywhere && !ignore_negatives {
+            let all_required_terms_present =
+                self.check_all_required_terms_present(matched_terms, term_indices);
+            if !all_required_terms_present {
+                if debug_mode {
+                    println!("DEBUG: Query failed - required terms missing");
+                }
+                return false;
+            }
+        }
 
         match self {
             Expr::Term {
@@ -211,9 +265,6 @@ impl Expr {
                 lval && rval
             }
             Expr::Or(left, right) => {
-                // For OR expressions, we need to be careful about how we handle has_required_anywhere
-                // We want to maintain the behavior that at least one term must be present
-
                 let lval = left.evaluate_with_has_required(
                     matched_terms,
                     term_indices,
@@ -660,7 +711,8 @@ impl Parser {
                 // Otherwise (Ident, QuotedString, LParen) => implicit combos
                 Token::Ident(_) | Token::QuotedString(_) | Token::LParen => {
                     let right = self.parse_factor()?;
-                    // Use OR for implicit combinations (space-separated terms) - Elasticsearch standard behavior
+                    // True Lucene/Elasticsearch semantics: implicit combinations are always OR
+                    // The + and - operators only affect individual terms, not the combination logic
                     left = Expr::Or(Box::new(left), Box::new(right));
                     if debug_mode {
                         println!("DEBUG: implicit OR => {left:?}");
@@ -669,6 +721,7 @@ impl Parser {
                 _ => break,
             }
         }
+
         Ok(left)
     }
 

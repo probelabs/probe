@@ -144,7 +144,7 @@ fn test_term_extraction() {
     assert_terms_eq("+foo", vec!["foo"], vec![]);
     assert_terms_eq("-foo", vec![], vec![]);
     
-    // Multiple terms - now treated as AND
+    // Multiple terms - treated as OR (Lucene semantics)
     assert_terms_eq("foo bar", vec![], vec!["foo", "bar"]);
     assert_terms_eq("+foo +bar", vec!["foo", "bar"], vec![]);
     assert_terms_eq("+foo bar", vec!["foo"], vec!["bar"]);
@@ -185,19 +185,41 @@ fn test_single_terms() {
 }
 
 #[test]
-fn test_multiple_terms_implicit_or() {
-    // Simple two terms - using OR for implicit combinations
+fn test_multiple_terms_implicit_combinations() {
+    // Simple two terms without modifiers - using OR for implicit combinations
     assert_parse_eq(
         "foo bar",
         Expr::Or(Box::new(term("foo")), Box::new(term("bar")))
     );
 
-    // Required term with normal term - using OR for implicit combinations
+    // Required term with normal term - using OR (true Lucene semantics)
+    // The + only affects individual terms, not the combination logic
     assert_parse_eq(
         "+foo bar",
         Expr::Or(Box::new(required_term("foo")), Box::new(term("bar")))
     );
 
+    // Multiple terms with one required - all use OR combinations
+    assert_parse_eq(
+        "+foo bar baz",
+        Expr::Or(
+            Box::new(Expr::Or(Box::new(required_term("foo")), Box::new(term("bar")))),
+            Box::new(term("baz"))
+        )
+    );
+    
+    // Multiple required terms use AND when explicit + on each
+    assert_parse_eq(
+        "+foo +bar",
+        Expr::And(Box::new(required_term("foo")), Box::new(required_term("bar")))
+    );
+    
+    // Mixed required and excluded use AND for modifier combinations
+    assert_parse_eq(
+        "+foo -bar",
+        Expr::And(Box::new(required_term("foo")), Box::new(excluded_term("bar")))
+    );
+    
     // Three terms with excluded - using OR for implicit combinations
     assert_parse_eq(
         "-foo bar baz",
