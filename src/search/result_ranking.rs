@@ -1,8 +1,8 @@
+#[cfg(feature = "bert-reranker")]
+use probe_code::bert_reranker;
 use probe_code::models::SearchResult;
 use probe_code::ranking;
 use std::time::Instant;
-#[cfg(feature = "bert-reranker")]
-use probe_code::bert_reranker;
 
 /// Helper function to format duration in a human-readable way
 fn format_duration(duration: std::time::Duration) -> String {
@@ -16,7 +16,12 @@ fn format_duration(duration: std::time::Duration) -> String {
 }
 
 /// Function to rank search results based on query relevance using various algorithms
-pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], reranker: &str, question: Option<&str>) {
+pub fn rank_search_results(
+    results: &mut [SearchResult],
+    queries: &[String],
+    reranker: &str,
+    question: Option<&str>,
+) {
     let start_time = Instant::now();
 
     // Check if debug mode is enabled
@@ -32,7 +37,10 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
     }
 
     // Handle BERT-based reranking for MS-MARCO models
-    if reranker == "ms-marco-tinybert" || reranker == "ms-marco-minilm-l6" || reranker == "ms-marco-minilm-l12" {
+    if reranker == "ms-marco-tinybert"
+        || reranker == "ms-marco-minilm-l6"
+        || reranker == "ms-marco-minilm-l12"
+    {
         handle_bert_reranking(results, queries, reranker, question, debug_mode, start_time);
         return;
     }
@@ -358,25 +366,32 @@ pub fn rank_search_results(results: &mut [SearchResult], queries: &[String], rer
 }
 
 /// Handle BERT-based reranking using the ms-marco-tinybert model
-fn handle_bert_reranking(results: &mut [SearchResult], queries: &[String], reranker: &str, question: Option<&str>, debug_mode: bool, start_time: Instant) {
+fn handle_bert_reranking(
+    results: &mut [SearchResult],
+    queries: &[String],
+    reranker: &str,
+    question: Option<&str>,
+    debug_mode: bool,
+    start_time: Instant,
+) {
     if debug_mode {
-        println!("DEBUG: Using BERT reranking with {}", reranker);
+        println!("DEBUG: Using BERT reranking with {reranker}");
         if let Some(q) = question {
-            println!("DEBUG: Using custom question for reranking: '{}'", q);
+            println!("DEBUG: Using custom question for reranking: '{q}'");
         } else {
-            println!("DEBUG: Using search keywords for reranking: {:?}", queries);
+            println!("DEBUG: Using search keywords for reranking: {queries:?}");
         }
     } else {
-        println!("Using BERT reranking with {}", reranker);
+        println!("Using BERT reranking with {reranker}");
         if let Some(q) = question {
-            println!("Using custom question: '{}'", q);
+            println!("Using custom question: '{q}'");
         }
     }
 
     #[cfg(feature = "bert-reranker")]
     {
         use tokio::runtime::Runtime;
-        
+
         // Use thread-based approach to avoid nested runtime issues
         let bert_result = std::thread::spawn({
             let results_clone = results.to_vec();
@@ -388,7 +403,7 @@ fn handle_bert_reranking(results: &mut [SearchResult], queries: &[String], reran
                 rt.block_on(async {
                     // Create a mutable copy to work with
                     let mut results_copy = results_clone;
-                    
+
                     // Map reranker name to model name
                     let model_name = match reranker_clone.as_str() {
                         "ms-marco-tinybert" => "cross-encoder/ms-marco-TinyBERT-L-2-v2",
@@ -396,12 +411,19 @@ fn handle_bert_reranking(results: &mut [SearchResult], queries: &[String], reran
                         "ms-marco-minilm-l12" => "cross-encoder/ms-marco-MiniLM-L-12-v2",
                         _ => "cross-encoder/ms-marco-TinyBERT-L-2-v2", // default fallback
                     };
-                    
-                    bert_reranker::rerank_with_bert(&mut results_copy, &queries_clone, model_name, question_clone.as_deref()).await
-                        .map(|_| results_copy)
+
+                    bert_reranker::rerank_with_bert(
+                        &mut results_copy,
+                        &queries_clone,
+                        model_name,
+                        question_clone.as_deref(),
+                    )
+                    .await
+                    .map(|_| results_copy)
                 })
             }
-        }).join();
+        })
+        .join();
 
         let bert_result = match bert_result {
             Ok(inner_result) => inner_result,
@@ -421,7 +443,7 @@ fn handle_bert_reranking(results: &mut [SearchResult], queries: &[String], reran
                         results[i] = reranked_result;
                     }
                 }
-                
+
                 let total_duration = start_time.elapsed();
                 if debug_mode {
                     println!(
@@ -431,7 +453,7 @@ fn handle_bert_reranking(results: &mut [SearchResult], queries: &[String], reran
                 }
             }
             Err(e) => {
-                eprintln!("BERT reranking failed: {}", e);
+                eprintln!("BERT reranking failed: {e}");
                 println!("Falling back to BM25 ranking...");
                 fallback_to_bm25_ranking(results, queries, debug_mode, start_time);
             }
@@ -448,10 +470,15 @@ fn handle_bert_reranking(results: &mut [SearchResult], queries: &[String], reran
 }
 
 /// Fallback to BM25 ranking when BERT reranking fails or is unavailable
-fn fallback_to_bm25_ranking(results: &mut [SearchResult], queries: &[String], debug_mode: bool, start_time: Instant) {
+fn fallback_to_bm25_ranking(
+    results: &mut [SearchResult],
+    queries: &[String],
+    debug_mode: bool,
+    start_time: Instant,
+) {
     // Reimplement the BM25 ranking logic that was in the main function
     let combined_query = queries.join(" ");
-    
+
     // Extract document texts for ranking, including filename in each document
     let documents: Vec<String> = results
         .iter()
@@ -508,19 +535,57 @@ fn fallback_to_bm25_ranking(results: &mut [SearchResult], queries: &[String], de
 
             // Apply node type boosting (same logic as in the main function)
             let node_type_boost = match result_clone.node_type.as_str() {
-                "function_item" | "function_declaration" | "method_declaration" | "function_definition" 
-                | "function_expression" | "arrow_function" | "method_definition" | "method" 
-                | "singleton_method" | "constructor_declaration" => 2.0,
-                "impl_item" | "struct_item" | "class_declaration" | "type_definition" 
-                | "interface_declaration" | "class_specifier" | "struct_specifier" | "struct_declaration" 
-                | "interface_type" | "protocol_declaration" | "type_alias_declaration" | "typealias_declaration" => 1.8,
-                "enum_item" | "trait_item" | "enum_declaration" | "enum_specifier" | "type_declaration" 
-                | "type_spec" | "trait_declaration" | "extension_declaration" | "delegate_declaration" => 1.6,
-                "module" | "mod_item" | "namespace" | "namespace_declaration" | "namespace_definition" 
-                | "module_declaration" | "package_declaration" => 1.4,
-                "property_declaration" | "event_declaration" | "const_declaration" | "var_declaration" 
-                | "variable_declaration" | "constant_declaration" | "const_spec" | "var_spec" => 1.3,
-                "doc_comment" | "block_comment" if result_clone.lines.1 - result_clone.lines.0 > 3 => 1.2,
+                "function_item"
+                | "function_declaration"
+                | "method_declaration"
+                | "function_definition"
+                | "function_expression"
+                | "arrow_function"
+                | "method_definition"
+                | "method"
+                | "singleton_method"
+                | "constructor_declaration" => 2.0,
+                "impl_item"
+                | "struct_item"
+                | "class_declaration"
+                | "type_definition"
+                | "interface_declaration"
+                | "class_specifier"
+                | "struct_specifier"
+                | "struct_declaration"
+                | "interface_type"
+                | "protocol_declaration"
+                | "type_alias_declaration"
+                | "typealias_declaration" => 1.8,
+                "enum_item"
+                | "trait_item"
+                | "enum_declaration"
+                | "enum_specifier"
+                | "type_declaration"
+                | "type_spec"
+                | "trait_declaration"
+                | "extension_declaration"
+                | "delegate_declaration" => 1.6,
+                "module"
+                | "mod_item"
+                | "namespace"
+                | "namespace_declaration"
+                | "namespace_definition"
+                | "module_declaration"
+                | "package_declaration" => 1.4,
+                "property_declaration"
+                | "event_declaration"
+                | "const_declaration"
+                | "var_declaration"
+                | "variable_declaration"
+                | "constant_declaration"
+                | "const_spec"
+                | "var_spec" => 1.3,
+                "doc_comment" | "block_comment"
+                    if result_clone.lines.1 - result_clone.lines.0 > 3 =>
+                {
+                    1.2
+                }
                 "export_statement" | "declare_statement" | "declaration" => 1.1,
                 node_type if node_type.contains("test") || node_type.contains("Test") => 0.7,
                 "line_comment" | "comment" | "//" | "/*" | "*/" => 0.5,
@@ -538,7 +603,9 @@ fn fallback_to_bm25_ranking(results: &mut [SearchResult], queries: &[String], de
     updated_results.sort_by(|a, b| {
         let score_a = a.score.unwrap_or(0.0);
         let score_b = b.score.unwrap_or(0.0);
-        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        score_b
+            .partial_cmp(&score_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     // Reassign ranks based on the sorted order

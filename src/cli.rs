@@ -83,7 +83,7 @@ pub struct Args {
     /// Timeout in seconds for search operation (default: 30)
     #[arg(long = "timeout", default_value = "30")]
     pub timeout: u64,
-    
+
     /// Natural language question for BERT reranking (uses search keywords if not specified)
     #[arg(long = "question")]
     pub question: Option<String>,
@@ -190,7 +190,7 @@ pub enum Commands {
         /// Timeout in seconds for search operation (default: 30)
         #[arg(long = "timeout", default_value = "30")]
         timeout: u64,
-        
+
         /// Natural language question for BERT reranking (uses search keywords if not specified)
         #[arg(long = "question")]
         question: Option<String>,

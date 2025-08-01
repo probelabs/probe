@@ -25,7 +25,7 @@ mod tests {
             dry_run: false,
             session: None,
             timeout: 30,
-        question: None,
+            question: None,
         };
 
         let results = perform_probe(&options).unwrap();

@@ -116,7 +116,8 @@ pub fn format_and_print_search_results(
                         if let Some(bm25_score) = result.bm25_score {
                             // Check if this is actually a BERT score by looking at the rank field
                             // When BERT reranking is used, both score and bm25_score are set to BERT score
-                            let is_bert_score = result.score == result.bm25_score && result.score.is_some();
+                            let is_bert_score =
+                                result.score == result.bm25_score && result.score.is_some();
                             if is_bert_score {
                                 println!("BERT Score: {bm25_score:.4}");
                             } else {

@@ -114,4 +114,5 @@ examples/chat/probe-debug*.txt
 # BERT model files (too large for git)
 examples/reranker/models/*/pytorch_model.bin
 examples/reranker/models/*/model.safetensors
+examples/reranker/models/*/vocab.txt
 examples/reranker/cross_encoder_test_results.json
