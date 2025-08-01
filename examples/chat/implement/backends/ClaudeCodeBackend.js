@@ -611,10 +611,25 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
 
     // Add max turns with validation
     const maxTurns = this.validateMaxTurns(request.options?.maxTurns || this.config.maxTurns);
+    if (process.env.DEBUG) {
+      this.log('debug', 'Max turns check', { 
+        requestMaxTurns: request.options?.maxTurns, 
+        configMaxTurns: this.config.maxTurns, 
+        validatedMaxTurns: maxTurns
+      });
+    }
     args.push('--max-turns', maxTurns.toString());
 
-    // Only add model if explicitly set
+    // Only add model if explicitly set and valid
     const model = request.options?.model || this.config.model;
+    if (process.env.DEBUG) {
+      this.log('debug', 'Model check', { 
+        requestModel: request.options?.model, 
+        configModel: this.config.model, 
+        finalModel: model,
+        isValid: model && this.isValidModelName(model)
+      });
+    }
     if (model && this.isValidModelName(model)) {
       args.push('--model', model);
     }
@@ -627,10 +642,21 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
 
     // Add tools with validation or skip permissions if no tools
     const tools = request.options?.tools || this.config.tools;
+    if (process.env.DEBUG) {
+      this.log('debug', 'Tools check', { 
+        requestTools: request.options?.tools, 
+        configTools: this.config.tools, 
+        finalTools: tools,
+        hasTools: tools && tools.length > 0
+      });
+    }
     if (tools && tools.length > 0) {
       const validatedTools = this.validateTools(tools);
       if (validatedTools.length > 0) {
         args.push('--allowedTools', validatedTools.join(','));
+      } else {
+        // No valid tools, add dangerously-skip-permissions flag
+        args.push('--dangerously-skip-permissions');
       }
     } else {
       // If no tools are specified, add dangerously-skip-permissions flag

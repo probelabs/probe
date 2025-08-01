@@ -140,7 +140,7 @@ class ConfigManager {
           model: 'claude-3-5-sonnet-20241022',
           systemPrompt: null,
           tools: ['edit', 'search', 'bash'],
-          maxTurns: 10
+          maxTurns: 100
         }
       }
     };
