@@ -3,7 +3,7 @@
 
 # Prevent infinite loops
 if [ "$CLAUDE_STOP_HOOK_ACTIVE" = "true" ]; then
-    echo '{"decision": "allow"}'
+    echo '{"decision": "approve"}'
     exit 0
 fi
 
@@ -39,7 +39,7 @@ fi
 
 # Generate response
 if [ -z "$errors" ]; then
-    echo '{"decision": "allow", "reason": "✅ All validations passed: formatting, linting, and tests!"}'
+    echo '{"decision": "approve", "reason": "✅ All validations passed: formatting, linting, and tests!"}'
 else
     # Escape the errors for JSON (replace quotes and newlines)
     escaped_errors=$(echo -e "$errors" | sed 's/"/\\"/g' | sed 's/$/\\n/' | tr -d '\n' | sed 's/\\n$//')
