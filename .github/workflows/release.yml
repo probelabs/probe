@@ -161,6 +161,7 @@ jobs:
     name: Publish to crates.io
     needs: build-and-release
     runs-on: ubuntu-22.04
+    if: "!contains(github.ref_name, 'rc')"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
