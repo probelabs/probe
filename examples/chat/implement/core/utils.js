@@ -208,7 +208,15 @@ class RetryHandler {
           throw error;
         }
         
-        console.error(`Attempt ${attempt} failed, retrying in ${delay}ms...`);
+        console.error(`[ERROR] Attempt ${attempt} failed, retrying in ${delay}ms...`);
+        console.error(`[ERROR] Failed attempt ${attempt} details:`);
+        console.error(`[ERROR] Error message: ${error.message}`);
+        console.error(`[ERROR] Error type: ${error.type || 'unknown'}`);
+        console.error(`[ERROR] Error code: ${error.code || 'unknown'}`);
+        if (error.metadata) {
+          console.error(`[ERROR] Error metadata:`, error.metadata);
+        }
+        console.error(`[ERROR] Full error:`, error);
         await this.sleep(delay);
         
         // Calculate next delay with exponential backoff

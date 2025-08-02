@@ -423,6 +423,12 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
       workingDir
     });
     
+    // Always log full command to stderr for debugging
+    console.error(`[DEBUG] Full Claude Code command: ${claudeCommand} ${args.join(' ')}`);
+    console.error(`[DEBUG] Working directory: ${workingDir}`);
+    console.error(`[DEBUG] Environment: ANTHROPIC_API_KEY=${this.config.apiKey ? '***set***' : '***not set***'}`);
+    console.error(`[DEBUG] Prompt length: ${validatedPrompt.length} characters`);
+    
     return new Promise(async (resolve, reject) => {
       // Use spawn instead of exec for better security
       // Use the command we found during isAvailable() check
@@ -477,6 +483,10 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
         spawnCommand = wslParts[0]; // 'wsl'
         spawnArgs = [...wslParts.slice(1), ...args]; // claude path + original args
       }
+      
+      // Log the exact spawn command to stderr
+      console.error(`[DEBUG] Spawning process: ${spawnCommand} ${spawnArgs.join(' ')}`);
+      console.error(`[DEBUG] Shell mode: ${process.platform === 'win32'}`);
       
       const child = spawn(spawnCommand, spawnArgs, {
         cwd: workingDir,
@@ -557,6 +567,16 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
             }
           });
         } else {
+          // Log full error details to stderr
+          console.error(`[ERROR] Claude Code CLI failed with exit code: ${code}`);
+          console.error(`[ERROR] Full command: ${claudeCommand} ${args.join(' ')}`);
+          console.error(`[ERROR] Working directory: ${workingDir}`);
+          console.error(`[ERROR] Full stdout output:`);
+          console.error(output || '(no stdout)');
+          console.error(`[ERROR] Full stderr output:`);
+          console.error(errorOutput || '(no stderr)');
+          console.error(`[ERROR] Execution time: ${Date.now() - startTime}ms`);
+          
           reject(new BackendError(
             `Claude Code CLI exited with code ${code}`,
             ErrorTypes.EXECUTION_FAILED,
@@ -572,6 +592,16 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
       
       // Handle errors
       child.on('error', (error) => {
+        // Log full error details to stderr
+        console.error(`[ERROR] Failed to spawn Claude Code CLI process:`);
+        console.error(`[ERROR] Command: ${spawnCommand}`);
+        console.error(`[ERROR] Args: ${spawnArgs.join(' ')}`);
+        console.error(`[ERROR] Working directory: ${workingDir}`);
+        console.error(`[ERROR] Error message: ${error.message}`);
+        console.error(`[ERROR] Error code: ${error.code || 'unknown'}`);
+        console.error(`[ERROR] Error signal: ${error.signal || 'none'}`);
+        console.error(`[ERROR] Full error:`, error);
+        
         reject(new BackendError(
           `Failed to execute Claude Code CLI: ${error.message}`,
           ErrorTypes.EXECUTION_FAILED,
@@ -584,6 +614,15 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
       const timeout = request.options?.timeout || this.config.timeout;
       setTimeout(() => {
         if (!child.killed) {
+          // Log timeout details to stderr
+          console.error(`[ERROR] Claude Code CLI timed out after ${timeout}ms`);
+          console.error(`[ERROR] Command: ${spawnCommand} ${spawnArgs.join(' ')}`);
+          console.error(`[ERROR] Working directory: ${workingDir}`);
+          console.error(`[ERROR] Partial stdout output:`);
+          console.error(output || '(no stdout)');
+          console.error(`[ERROR] Partial stderr output:`);
+          console.error(errorOutput || '(no stderr)');
+          
           child.kill('SIGTERM');
           reject(new BackendError(
             `Claude Code execution timed out after ${timeout}ms`,
