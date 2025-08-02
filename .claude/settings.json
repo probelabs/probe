@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/scripts/claude-hook-wrapper.sh $CLAUDE_PROJECT_DIR/.githooks/pre-commit"
+          }
+        ]
+      }
+    ]
+  }
+}

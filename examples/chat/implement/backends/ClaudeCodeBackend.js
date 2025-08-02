@@ -8,6 +8,7 @@ import { BackendError, ErrorTypes, ProgressTracker, FileChangeParser, TokenEstim
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import { TIMEOUTS, getDefaultTimeoutMs } from '../core/timeouts.js';
 
 const execPromise = promisify(exec);
 
@@ -30,7 +31,7 @@ class ClaudeCodeBackend extends BaseBackend {
       apiKey: config.apiKey || process.env.ANTHROPIC_API_KEY,
       model: config.model || 'claude-3-5-sonnet-20241022',
       baseUrl: config.baseUrl,
-      timeout: config.timeout || 300000, // 5 minutes default
+      timeout: config.timeout || getDefaultTimeoutMs(), // Use centralized default (20 minutes)
       maxTokens: config.maxTokens || 8000,
       temperature: config.temperature || 0.3,
       systemPrompt: config.systemPrompt,
@@ -78,7 +79,7 @@ class ClaudeCodeBackend extends BaseBackend {
       
       // Method 1: Try direct execution with claude --version
       try {
-        await execPromise('claude --version', { timeout: 5000 });
+        await execPromise('claude --version', { timeout: TIMEOUTS.VERSION_CHECK });
         claudeCommand = 'claude';
         this.log('debug', 'Claude found in PATH via direct execution');
       } catch (directError) {
@@ -88,10 +89,10 @@ class ClaudeCodeBackend extends BaseBackend {
       // Method 2: Check npm global installation and find the binary
       if (!claudeCommand) {
         try {
-          const { stdout } = await execPromise('npm list -g @anthropic-ai/claude-code --depth=0', { timeout: 5000 });
+          const { stdout } = await execPromise('npm list -g @anthropic-ai/claude-code --depth=0', { timeout: TIMEOUTS.VERSION_CHECK });
           if (stdout.includes('@anthropic-ai/claude-code')) {
             // Get npm global bin directory
-            const { stdout: binPath } = await execPromise('npm bin -g', { timeout: 5000 });
+            const { stdout: binPath } = await execPromise('npm bin -g', { timeout: TIMEOUTS.VERSION_CHECK });
             const npmBinDir = binPath.trim();
             
             // Build the claude command path
@@ -101,7 +102,7 @@ class ClaudeCodeBackend extends BaseBackend {
             
             // Test if we can execute it
             try {
-              await execPromise(`"${claudePath}" --version`, { timeout: 5000 });
+              await execPromise(`"${claudePath}" --version`, { timeout: TIMEOUTS.VERSION_CHECK });
               claudeCommand = claudePath;
               
               // Update PATH for this process to include npm global bin
@@ -122,12 +123,12 @@ class ClaudeCodeBackend extends BaseBackend {
       if (!claudeCommand && process.platform === 'win32') {
         try {
           // Check if WSL is available and claude is installed there
-          const { stdout: wslCheck } = await execPromise('wsl --list', { timeout: 2000 });
+          const { stdout: wslCheck } = await execPromise('wsl --list', { timeout: TIMEOUTS.WSL_CHECK });
           if (wslCheck) {
             this.log('debug', 'WSL detected, checking for claude in WSL');
             try {
               // Try to run claude through WSL
-              await execPromise('wsl claude --version', { timeout: 5000 });
+              await execPromise('wsl claude --version', { timeout: TIMEOUTS.VERSION_CHECK });
               claudeCommand = 'wsl claude';
               this.log('debug', 'Claude found in WSL');
             } catch (wslClaudeError) {
@@ -143,7 +144,7 @@ class ClaudeCodeBackend extends BaseBackend {
               
               for (const wslPath of wslPaths) {
                 try {
-                  await execPromise(`${wslPath} --version`, { timeout: 2000 });
+                  await execPromise(`${wslPath} --version`, { timeout: TIMEOUTS.WSL_CHECK });
                   claudeCommand = wslPath;
                   this.log('debug', `Claude found in WSL at: ${wslPath}`);
                   break;
@@ -179,7 +180,7 @@ class ClaudeCodeBackend extends BaseBackend {
         
         for (const claudePath of commonPaths) {
           try {
-            await execPromise(`"${claudePath}" --version`, { timeout: 2000 });
+            await execPromise(`"${claudePath}" --version`, { timeout: TIMEOUTS.WSL_CHECK });
             claudeCommand = claudePath;
             this.log('debug', `Claude found at ${claudePath}`);
             break;
@@ -438,7 +439,7 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
       if (!this.claudeCommand) {
         try {
           // Try direct execution first
-          await execPromise('claude --version', { timeout: 1000 });
+          await execPromise('claude --version', { timeout: TIMEOUTS.PATH_CHECK });
           claudeCommand = 'claude';
         } catch (e) {
           const isWindows = process.platform === 'win32';
@@ -446,7 +447,7 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
           // Try WSL on Windows
           if (isWindows) {
             try {
-              await execPromise('wsl claude --version', { timeout: 2000 });
+              await execPromise('wsl claude --version', { timeout: TIMEOUTS.WSL_CHECK });
               claudeCommand = 'wsl claude';
               this.log('debug', 'Using claude from WSL');
             } catch (wslError) {
@@ -457,12 +458,12 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
           // Try to find it in npm global bin
           if (claudeCommand === 'claude') {
             try {
-              const { stdout: binPath } = await execPromise('npm bin -g', { timeout: 1000 });
+              const { stdout: binPath } = await execPromise('npm bin -g', { timeout: TIMEOUTS.PATH_CHECK });
               const claudeBinary = isWindows ? 'claude.cmd' : 'claude';
               const potentialClaudePath = path.join(binPath.trim(), claudeBinary);
               
               // Test if we can execute it
-              await execPromise(`"${potentialClaudePath}" --version`, { timeout: 1000 });
+              await execPromise(`"${potentialClaudePath}" --version`, { timeout: TIMEOUTS.PATH_CHECK });
               claudeCommand = potentialClaudePath;
               this.log('debug', `Using claude from npm global: ${claudeCommand}`);
             } catch (npmError) {

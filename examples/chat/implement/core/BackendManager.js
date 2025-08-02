@@ -4,6 +4,7 @@
  */
 
 import { BackendError, ErrorTypes, ErrorHandler, RetryHandler } from './utils.js';
+import { getDefaultTimeoutMs } from './timeouts.js';
 
 /**
  * Manages registration, selection, and execution of implementation backends
@@ -22,10 +23,9 @@ class BackendManager {
   constructor(config) {
     this.config = {
       defaultBackend: config.defaultBackend || 'aider',
-      fallbackBackends: config.fallbackBackends || [],
       selectionStrategy: config.selectionStrategy || 'auto',
       maxConcurrentSessions: config.maxConcurrentSessions || 3,
-      timeout: config.timeout || 300000,
+      timeout: config.timeout || getDefaultTimeoutMs(), // Use centralized default (20 minutes)
       retryAttempts: config.retryAttempts || 2,
       ...config
     };
@@ -155,7 +155,6 @@ class BackendManager {
   async selectAuto(request) {
     console.error('[BackendManager] Starting backend selection with strategy: auto');
     console.error(`[BackendManager] Default backend: ${this.config.defaultBackend}`);
-    console.error(`[BackendManager] Fallback backends: ${JSON.stringify(this.config.fallbackBackends)}`);
     console.error(`[BackendManager] Available backends: ${Array.from(this.backends.keys()).join(', ')}`);
     
     // First try explicit backend if specified
@@ -165,8 +164,15 @@ class BackendManager {
       if (await backend.isAvailable()) {
         console.error(`[BackendManager] Selected explicit backend: ${request.options.backend}`);
         return request.options.backend;
+      } else {
+        // If explicit backend is not available, fail immediately (no fallbacks)
+        console.error(`[BackendManager] Explicit backend ${request.options.backend} is not available`);
+        throw new BackendError(
+          `Requested backend '${request.options.backend}' is not available`,
+          ErrorTypes.BACKEND_NOT_FOUND,
+          'BACKEND_NOT_AVAILABLE'
+        );
       }
-      console.error(`[BackendManager] Explicit backend ${request.options.backend} is not available`);
     }
     
     // Try default backend
@@ -181,35 +187,10 @@ class BackendManager {
       }
     }
     
-    // Try fallback backends
-    for (const backendName of this.config.fallbackBackends) {
-      if (this.backends.has(backendName)) {
-        console.error(`[BackendManager] Checking fallback backend: ${backendName}`);
-        const backend = this.backends.get(backendName);
-        const isAvailable = await backend.isAvailable();
-        console.error(`[BackendManager] Fallback backend ${backendName} available: ${isAvailable}`);
-        if (isAvailable) {
-          console.error(`[BackendManager] Selected fallback backend: ${backendName}`);
-          return backendName;
-        }
-      }
-    }
-    
-    // Try any available backend
-    console.error('[BackendManager] Trying any available backend...');
-    for (const [name, backend] of this.backends) {
-      console.error(`[BackendManager] Checking backend: ${name}`);
-      const isAvailable = await backend.isAvailable();
-      console.error(`[BackendManager] Backend ${name} available: ${isAvailable}`);
-      if (isAvailable) {
-        console.error(`[BackendManager] Selected any available backend: ${name}`);
-        return name;
-      }
-    }
-    
+    // No fallbacks - if default backend is not available, fail
     console.error('[BackendManager] No available backends found!');
     throw new BackendError(
-      'No available backends found',
+      `Default backend '${this.config.defaultBackend}' is not available`,
       ErrorTypes.BACKEND_NOT_FOUND,
       'NO_AVAILABLE_BACKENDS'
     );
@@ -465,12 +446,7 @@ class BackendManager {
       errors.push(`Default backend '${this.config.defaultBackend}' not registered`);
     }
     
-    // Check fallback backends exist
-    for (const fallback of this.config.fallbackBackends) {
-      if (!this.backends.has(fallback)) {
-        warnings.push(`Fallback backend '${fallback}' not registered`);
-      }
-    }
+    // Fallback backends removed - no longer checking them
     
     // Check at least one backend is available
     let hasAvailable = false;
