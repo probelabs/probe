@@ -848,5 +848,14 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         println!("[DEBUG] ===== Extract Command Completed =====");
     }
 
+    // Return an error if there were any extraction errors
+    if !errors.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Extraction failed with {} {}",
+            errors.len(),
+            if errors.len() == 1 { "error" } else { "errors" }
+        ));
+    }
+
     Ok(())
 }
