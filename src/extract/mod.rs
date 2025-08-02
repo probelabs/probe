@@ -552,9 +552,19 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             match processor::process_file_for_symbols_extraction(&params.path, params.allow_tests) {
                 Ok(symbol_results) => {
                     if params.debug_mode {
-                        println!("[DEBUG] Successfully extracted {} symbols from {:?}", symbol_results.len(), params.path);
+                        println!(
+                            "[DEBUG] Successfully extracted {} symbols from {:?}",
+                            symbol_results.len(),
+                            params.path
+                        );
                         for (i, result) in symbol_results.iter().enumerate() {
-                            println!("[DEBUG] Symbol {}: {} (lines {}-{})", i + 1, result.node_type, result.lines.0, result.lines.1);
+                            println!(
+                                "[DEBUG] Symbol {}: {} (lines {}-{})",
+                                i + 1,
+                                result.node_type,
+                                result.lines.0,
+                                result.lines.1
+                            );
                         }
                     }
 

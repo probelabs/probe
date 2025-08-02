@@ -636,7 +636,7 @@ pub fn process_file_for_symbols_extraction(
     allow_tests: bool,
 ) -> Result<Vec<SearchResult>> {
     use probe_code::extract::symbol_finder::extract_symbols_from_file;
-    
+
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
@@ -679,7 +679,8 @@ pub fn process_file_for_symbols_extraction(
 
     for symbol in symbols {
         // Tokenize the symbol's code content
-        let tokenized_content = crate::ranking::preprocess_text_with_filename(&symbol.code, &filename);
+        let tokenized_content =
+            crate::ranking::preprocess_text_with_filename(&symbol.code, &filename);
 
         let result = SearchResult {
             file: path.to_string_lossy().to_string(),
@@ -718,7 +719,10 @@ pub fn process_file_for_symbols_extraction(
     }
 
     if debug_mode {
-        println!("[DEBUG] Converted {} symbols to SearchResult objects", results.len());
+        println!(
+            "[DEBUG] Converted {} symbols to SearchResult objects",
+            results.len()
+        );
     }
 
     Ok(results)

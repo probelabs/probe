@@ -729,7 +729,7 @@ pub fn extract_symbols_from_file(
             // Try to extract the name of this node
             let mut cursor = node.walk();
             let mut symbol_name = None;
-            
+
             for child in node.children(&mut cursor) {
                 if child.kind() == "identifier"
                     || child.kind() == "field_identifier"
@@ -740,12 +740,12 @@ pub fn extract_symbols_from_file(
                     if let Ok(name) = child.utf8_text(content) {
                         symbol_name = Some(name.to_string());
                         if debug_mode {
-                            println!("[DEBUG] Found symbol name: '{}'", name);
+                            println!("[DEBUG] Found symbol name: '{name}'");
                         }
                         break;
                     }
                 }
-                
+
                 // For function_declarator, we need to look deeper
                 if child.kind() == "function_declarator" {
                     let mut subcursor = child.walk();
@@ -754,7 +754,9 @@ pub fn extract_symbols_from_file(
                             if let Ok(name) = subchild.utf8_text(content) {
                                 symbol_name = Some(name.to_string());
                                 if debug_mode {
-                                    println!("[DEBUG] Found function name in declarator: '{}'", name);
+                                    println!(
+                                        "[DEBUG] Found function name in declarator: '{name}'"
+                                    );
                                 }
                                 break;
                             }
@@ -771,11 +773,14 @@ pub fn extract_symbols_from_file(
                 let start_line = node.start_position().row + 1;
                 let end_line = node.end_position().row + 1;
                 let node_text = &content[node.start_byte()..node.end_byte()];
-                
+
                 if debug_mode {
                     println!(
                         "[DEBUG] Adding symbol '{}' of type '{}' at lines {}-{}",
-                        name, node.kind(), start_line, end_line
+                        name,
+                        node.kind(),
+                        start_line,
+                        end_line
                     );
                 }
 
