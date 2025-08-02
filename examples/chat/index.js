@@ -63,7 +63,6 @@ export function main() {
     .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, support, path to a file, or arbitrary string)')
     .option('--allow-edit', 'Enable the implement tool for editing files')
     .option('--implement-tool-backend <backend>', 'Choose implementation tool backend (aider, claude-code)')
-    .option('--implement-tool-fallbacks <backends>', 'Comma-separated fallback backends for implementation tool')
     .option('--implement-tool-timeout <ms>', 'Implementation tool timeout in milliseconds')
     .option('--implement-tool-config <path>', 'Path to implementation tool configuration file')
     .option('--implement-tool-list-backends', 'List available implementation tool backends')
@@ -208,11 +207,6 @@ export function main() {
   if (options.implementToolBackend) {
     process.env.IMPLEMENT_TOOL_BACKEND = options.implementToolBackend;
     logInfo(chalk.blue(`Using implementation tool backend: ${options.implementToolBackend}`));
-  }
-  
-  if (options.implementToolFallbacks) {
-    process.env.IMPLEMENT_TOOL_FALLBACKS = options.implementToolFallbacks;
-    logInfo(chalk.blue(`Implementation tool fallback backends: ${options.implementToolFallbacks}`));
   }
   
   if (options.implementToolTimeout) {

@@ -185,7 +185,7 @@ async function validateImageUrls(imageUrls, debug = false) {
           headers: {
             'Range': 'bytes=0-1023' // Only fetch first 1KB to check content type and minimize data transfer
           },
-          timeout: 10000, // 10 second timeout for GitHub URLs which can be slower
+          timeout: 10000, // TIMEOUTS.HTTP_REQUEST - 10 second timeout for GitHub URLs which can be slower
           redirect: 'follow'
         });
         

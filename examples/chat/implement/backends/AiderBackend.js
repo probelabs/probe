@@ -10,6 +10,7 @@ import { promisify } from 'util';
 import { promises as fsPromises } from 'fs';
 import path from 'path';
 import os from 'os';
+import { TIMEOUTS, getDefaultTimeoutMs } from '../core/timeouts.js';
 
 const execPromise = promisify(exec);
 
@@ -31,7 +32,7 @@ class AiderBackend extends BaseBackend {
   async initialize(config) {
     this.config = {
       command: 'aider',
-      timeout: 300000, // 5 minutes default
+      timeout: getDefaultTimeoutMs(), // Use centralized default (20 minutes)
       maxOutputSize: 10 * 1024 * 1024, // 10MB
       additionalArgs: [],
       environment: {},
@@ -52,7 +53,7 @@ class AiderBackend extends BaseBackend {
     
     // Get aider version
     try {
-      const { stdout } = await execPromise('aider --version', { timeout: 5000 });
+      const { stdout } = await execPromise('aider --version', { timeout: TIMEOUTS.VERSION_CHECK });
       this.aiderVersion = stdout.trim();
       this.log('info', `Initialized with aider version: ${this.aiderVersion}`);
     } catch (error) {
@@ -68,7 +69,7 @@ class AiderBackend extends BaseBackend {
   async isAvailable() {
     try {
       // Test if aider command exists
-      await execPromise('which aider', { timeout: 5000 });
+      await execPromise('which aider', { timeout: TIMEOUTS.VERSION_CHECK });
       
       // Check if API key is available
       const hasApiKey = !!(
@@ -645,25 +646,58 @@ class AiderBackend extends BaseBackend {
         const diffStats = FileChangeParser.extractDiffStats(stdoutData + stderrData);
         
         if (code === 0) {
-          resolve({
-            success: true,
-            sessionId: request.sessionId,
-            output: stdoutData,
-            changes,
-            metrics: {
-              executionTime,
-              filesModified: changes.length,
-              linesChanged: diffStats.insertions + diffStats.deletions,
-              tokensUsed: TokenEstimator.estimate(request.task + stdoutData),
-              exitCode: code
-            },
-            metadata: {
-              command: commandPath,
-              args: commandArgs.slice(0, 5), // Limited args for security
-              workingDirectory: workingDir,
-              aiderVersion: this.aiderVersion
-            }
-          });
+          // Check for errors in output even if exit code is 0
+          const combinedOutput = stdoutData + stderrData;
+          const hasAuthError = /AuthenticationError|Invalid API key|insufficient permissions|not able to authenticate/i.test(combinedOutput);
+          const hasOtherErrors = /Error:|Exception:|Failed:|fatal:/i.test(combinedOutput);
+          const hasChanges = changes.length > 0;
+          
+          // Only consider it successful if:
+          // 1. No authentication/critical errors found in output
+          // 2. Either changes were made OR this was an informational command
+          const isActualSuccess = !hasAuthError && !hasOtherErrors && (hasChanges || !request.requiresChanges);
+          
+          if (isActualSuccess) {
+            resolve({
+              success: true,
+              sessionId: request.sessionId,
+              output: stdoutData,
+              changes,
+              metrics: {
+                executionTime,
+                filesModified: changes.length,
+                linesChanged: diffStats.insertions + diffStats.deletions,
+                tokensUsed: TokenEstimator.estimate(request.task + stdoutData),
+                exitCode: code
+              },
+              metadata: {
+                command: commandPath,
+                args: commandArgs.slice(0, 5), // Limited args for security
+                workingDirectory: workingDir,
+                aiderVersion: this.aiderVersion
+              }
+            });
+          } else {
+            // Exit code 0 but actual failure detected
+            const errorType = hasAuthError ? 'AUTHENTICATION_ERROR' : 'EXECUTION_FAILED';
+            const errorMessage = hasAuthError 
+              ? 'Authentication failed - check API key and permissions'
+              : `Aider completed but encountered errors: ${combinedOutput.substring(0, 200)}...`;
+            
+            reject(new BackendError(
+              errorMessage,
+              hasAuthError ? ErrorTypes.AUTHENTICATION : ErrorTypes.EXECUTION_FAILED,
+              errorType,
+              {
+                exitCode: code,
+                hasChanges,
+                hasAuthError,
+                hasOtherErrors,
+                stdout: stdoutData.substring(0, 1000),
+                stderr: stderrData.substring(0, 1000)
+              }
+            ));
+          }
         } else {
           reject(new BackendError(
             `Aider process exited with code ${code}`,

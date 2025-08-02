@@ -16,6 +16,7 @@ const ErrorTypes = {
   CANCELLATION: 'cancellation',
   NETWORK_ERROR: 'network_error',
   API_ERROR: 'api_error',
+  AUTHENTICATION: 'authentication',
   FILE_ACCESS_ERROR: 'file_access_error',
   VALIDATION_ERROR: 'validation_error',
   BACKEND_NOT_FOUND: 'backend_not_found',
@@ -122,6 +123,8 @@ class ErrorHandler {
         return 'fix_configuration';
       case ErrorTypes.TIMEOUT:
         return 'retry_with_longer_timeout';
+      case ErrorTypes.AUTHENTICATION:
+        return 'check_api_credentials';
       case ErrorTypes.NETWORK_ERROR:
         return 'retry_with_backoff';
       case ErrorTypes.QUOTA_EXCEEDED:
@@ -157,6 +160,9 @@ class ErrorHandler {
           break;
         case 'retry_with_longer_timeout':
           message += '\n💡 Consider increasing the timeout value';
+          break;
+        case 'check_api_credentials':
+          message += '\n💡 Check your API key and authentication settings';
           break;
         case 'check_api_key':
           message += '\n💡 Verify your API key is valid';

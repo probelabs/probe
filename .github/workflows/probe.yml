@@ -86,7 +86,7 @@ on:
         type: string
         default: ""
       implement_tool_timeout:
-        description: "Timeout in seconds for implementation tool operations"
+        description: "Timeout in seconds for implementation tool operations (min: 60, max: 3600)"
         required: false
         type: string
         default: "1200"

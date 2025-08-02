@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
+import { TIMEOUTS, getDefaultTimeoutMs, secondsToMs, isValidTimeout } from './timeouts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -116,17 +117,16 @@ class ConfigManager {
     return {
       implement: {
         defaultBackend: 'aider',
-        fallbackBackends: ['claude-code'],
-        selectionStrategy: 'auto',
+        selectionStrategy: 'auto', 
         maxConcurrentSessions: 3,
-        timeout: 300000,
+        timeout: getDefaultTimeoutMs(), // Use centralized default (20 minutes)
         retryAttempts: 2,
         retryDelay: 5000
       },
       backends: {
         aider: {
           command: 'aider',
-          timeout: 300000,
+          timeout: getDefaultTimeoutMs(), // Use centralized default (20 minutes)
           maxOutputSize: 10485760,
           additionalArgs: [],
           environment: {},
@@ -134,7 +134,7 @@ class ConfigManager {
           modelSelection: 'auto'
         },
         'claude-code': {
-          timeout: 300000,
+          timeout: getDefaultTimeoutMs(), // Use centralized default (20 minutes)
           maxTokens: 8000,
           temperature: 0.3,
           model: 'claude-3-5-sonnet-20241022',
@@ -170,7 +170,16 @@ class ConfigManager {
     
     if (process.env.IMPLEMENT_TOOL_TIMEOUT) {
       // Convert seconds to milliseconds for backend compatibility
-      this.config.implement.timeout = parseInt(process.env.IMPLEMENT_TOOL_TIMEOUT, 10) * 1000;
+      const timeoutSeconds = parseInt(process.env.IMPLEMENT_TOOL_TIMEOUT, 10);
+      
+      if (isNaN(timeoutSeconds)) {
+        console.warn(`[Config] Invalid IMPLEMENT_TOOL_TIMEOUT value: ${process.env.IMPLEMENT_TOOL_TIMEOUT}. Using default: ${TIMEOUTS.IMPLEMENT_DEFAULT}s`);
+      } else if (!isValidTimeout(timeoutSeconds)) {
+        console.warn(`[Config] IMPLEMENT_TOOL_TIMEOUT ${timeoutSeconds}s outside valid range ${TIMEOUTS.IMPLEMENT_MINIMUM}-${TIMEOUTS.IMPLEMENT_MAXIMUM}s. Using default: ${TIMEOUTS.IMPLEMENT_DEFAULT}s`);
+      } else {
+        this.config.implement.timeout = secondsToMs(timeoutSeconds);
+        console.log(`[Config] Implementation timeout set to ${timeoutSeconds}s (${this.config.implement.timeout}ms)`);
+      }
     }
     
     // Aider backend configuration
