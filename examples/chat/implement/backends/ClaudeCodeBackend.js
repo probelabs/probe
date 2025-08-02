@@ -423,11 +423,11 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
       workingDir
     });
     
-    // Always log full command to stderr for debugging
-    console.error(`[DEBUG] Full Claude Code command: ${claudeCommand} ${args.join(' ')}`);
-    console.error(`[DEBUG] Working directory: ${workingDir}`);
-    console.error(`[DEBUG] Environment: ANTHROPIC_API_KEY=${this.config.apiKey ? '***set***' : '***not set***'}`);
-    console.error(`[DEBUG] Prompt length: ${validatedPrompt.length} characters`);
+    // Always log command info to stderr for debugging (visible in all modes)
+    console.error(`[INFO] Claude Code execution details:`);
+    console.error(`[INFO] Working directory: ${workingDir}`);
+    console.error(`[INFO] Environment: ANTHROPIC_API_KEY=${this.config.apiKey ? '***set***' : '***not set***'}`);
+    console.error(`[INFO] Prompt length: ${validatedPrompt.length} characters`);
     
     return new Promise(async (resolve, reject) => {
       // Use spawn instead of exec for better security
@@ -484,9 +484,9 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
         spawnArgs = [...wslParts.slice(1), ...args]; // claude path + original args
       }
       
-      // Log the exact spawn command to stderr
-      console.error(`[DEBUG] Spawning process: ${spawnCommand} ${spawnArgs.join(' ')}`);
-      console.error(`[DEBUG] Shell mode: ${process.platform === 'win32'}`);
+      // Log the exact spawn command to stderr (always visible)
+      console.error(`[INFO] Executing command: ${spawnCommand} ${spawnArgs.join(' ')}`);
+      console.error(`[INFO] Shell mode: ${process.platform === 'win32'}`);
       
       const child = spawn(spawnCommand, spawnArgs, {
         cwd: workingDir,
