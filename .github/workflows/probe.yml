@@ -89,7 +89,7 @@ on:
         description: "Timeout in seconds for implementation tool operations"
         required: false
         type: string
-        default: "300"
+        default: "1200"
       aider_model:
         description: "Model to use with aider backend"
         required: false
@@ -1230,7 +1230,27 @@ jobs:
           CLAUDE_CODE_MODEL: ${{ inputs.claude_code_model }}
           CLAUDE_CODE_TEMPERATURE: ${{ inputs.claude_code_temperature }}
         run: |
-          # (Script remains the same)
+          # Ensure Claude Code is in PATH if it was installed in previous step
+          NPM_PREFIX=$(npm config get prefix 2>/dev/null || echo "")
+          if [[ -n "$NPM_PREFIX" ]]; then
+            if [[ "${{ runner.os }}" == "Windows" ]]; then
+              NPM_GLOBAL_BIN="$NPM_PREFIX"
+            else
+              NPM_GLOBAL_BIN="$NPM_PREFIX/bin"
+            fi
+            
+            echo "Adding npm global bin to PATH: $NPM_GLOBAL_BIN"
+            export PATH="$NPM_GLOBAL_BIN:$PATH"
+            
+            # Verify Claude Code is accessible
+            if command -v claude >/dev/null 2>&1; then
+              echo "Claude Code found in PATH: $(which claude)"
+              claude --version || echo "::warning::Claude Code found but version check failed"
+            else
+              echo "::warning::Claude Code not found in PATH after adding npm global bin"
+            fi
+          fi
+          
           # Check and modify ANTHROPIC_API_URL to set ANTHROPIC_BASE_URL
           if [[ -n "$ANTHROPIC_API_URL" ]]; then
             if [[ "$ANTHROPIC_API_URL" == */v1 ]]; then

@@ -46,7 +46,7 @@ probe-chat --implement-tool-backend-info claude-code
 # Backend Selection
 export IMPLEMENT_TOOL_BACKEND=claude-code              # Choose primary backend
 export IMPLEMENT_TOOL_FALLBACKS=aider,claude-code  # Comma-separated fallbacks
-export IMPLEMENT_TOOL_TIMEOUT=300000                    # Timeout in milliseconds
+export IMPLEMENT_TOOL_TIMEOUT=1200                      # Timeout in seconds
 
 # Aider Configuration
 export AIDER_MODEL=gpt-4                          # Model for aider

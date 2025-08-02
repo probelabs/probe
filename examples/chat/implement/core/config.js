@@ -169,7 +169,8 @@ class ConfigManager {
     }
     
     if (process.env.IMPLEMENT_TOOL_TIMEOUT) {
-      this.config.implement.timeout = parseInt(process.env.IMPLEMENT_TOOL_TIMEOUT, 10);
+      // Convert seconds to milliseconds for backend compatibility
+      this.config.implement.timeout = parseInt(process.env.IMPLEMENT_TOOL_TIMEOUT, 10) * 1000;
     }
     
     // Aider backend configuration
