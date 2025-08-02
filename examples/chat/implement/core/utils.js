@@ -208,6 +208,7 @@ class RetryHandler {
           throw error;
         }
         
+        console.error(`[ERROR] ========================================`);
         console.error(`[ERROR] Attempt ${attempt} failed, retrying in ${delay}ms...`);
         console.error(`[ERROR] Error message: ${error.message}`);
         console.error(`[ERROR] Error type: ${error.type || 'unknown'}`);
@@ -215,9 +216,7 @@ class RetryHandler {
         if (error.metadata) {
           console.error(`[ERROR] Error metadata:`, JSON.stringify(error.metadata, null, 2));
         }
-        if (error.stack) {
-          console.error(`[ERROR] Stack trace:`, error.stack);
-        }
+        console.error(`[ERROR] ========================================`);
         await this.sleep(delay);
         
         // Calculate next delay with exponential backoff
