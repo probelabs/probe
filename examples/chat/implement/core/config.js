@@ -178,7 +178,7 @@ class ConfigManager {
         console.warn(`[Config] IMPLEMENT_TOOL_TIMEOUT ${timeoutSeconds}s outside valid range ${TIMEOUTS.IMPLEMENT_MINIMUM}-${TIMEOUTS.IMPLEMENT_MAXIMUM}s. Using default: ${TIMEOUTS.IMPLEMENT_DEFAULT}s`);
       } else {
         this.config.implement.timeout = secondsToMs(timeoutSeconds);
-        console.log(`[Config] Implementation timeout set to ${timeoutSeconds}s (${this.config.implement.timeout}ms)`);
+        // Log message removed to prevent stdout pollution
       }
     }
     
