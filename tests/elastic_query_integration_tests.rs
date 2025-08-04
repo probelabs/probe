@@ -122,6 +122,7 @@ fn test_required_term_query() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Print the temp_path for debugging
@@ -231,6 +232,7 @@ fn test_excluded_term_query() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Print the query for debugging
@@ -324,6 +326,7 @@ fn test_or_query() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Print the test files for debugging
@@ -425,6 +428,7 @@ fn test_complex_query_or() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Print the test files for debugging
@@ -524,6 +528,7 @@ fn test_complex_query_exclusion() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Print the query for debugging
@@ -623,6 +628,7 @@ fn test_function() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Run the search

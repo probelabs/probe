@@ -225,7 +225,7 @@ Examples:
 			const files = await listFilesByLevel({
 				directory: searchDirectory,
 				maxFiles: 100,
-				respectGitignore: true,
+				respectGitignore: !process.env.PROBE_NO_GITIGNORE || process.env.PROBE_NO_GITIGNORE === '',
 				cwd: process.cwd() // Explicitly set the current working directory
 			});
 

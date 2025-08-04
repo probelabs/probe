@@ -26,6 +26,7 @@ mod tests {
             session: None,
             timeout: 30,
             question: None,
+            no_gitignore: false,
         };
 
         let results = perform_probe(&options).unwrap();
@@ -47,6 +48,7 @@ mod tests {
             allow_tests: true,
             max_results: Some(5),
             format: "text",
+            no_gitignore: false,
         };
 
         let matches = perform_query(&options).unwrap();

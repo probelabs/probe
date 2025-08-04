@@ -22,4 +22,5 @@ pub struct SearchOptions<'a> {
     pub session: Option<&'a str>,
     pub timeout: u64,
     pub question: Option<&'a str>,
+    pub no_gitignore: bool,
 }

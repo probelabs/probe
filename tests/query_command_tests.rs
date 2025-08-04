@@ -31,6 +31,7 @@ fn add(a: i32, b: i32) -> i32 {
         allow_tests: true,
         max_results: None,
         format: "plain",
+        no_gitignore: false,
     };
 
     // Perform the query
@@ -82,6 +83,7 @@ const multiply = (a, b) => a * b;
         allow_tests: true,
         max_results: None,
         format: "plain",
+        no_gitignore: false,
     };
 
     // Perform the query
@@ -101,6 +103,7 @@ const multiply = (a, b) => a * b;
         allow_tests: true,
         max_results: None,
         format: "plain",
+        no_gitignore: false,
     };
 
     // Perform the query
@@ -140,6 +143,7 @@ fn func5() {}
         allow_tests: true,
         max_results: Some(3),
         format: "plain",
+        no_gitignore: false,
     };
 
     // Perform the query
@@ -176,6 +180,7 @@ fn test_query_ignore_patterns() -> Result<()> {
         allow_tests: false,
         max_results: None,
         format: "plain",
+        no_gitignore: false,
     };
 
     // Perform the query
@@ -213,6 +218,7 @@ fn auto_detected_function() {
         allow_tests: true,
         max_results: None,
         format: "plain",
+        no_gitignore: false,
     };
 
     // Perform the query

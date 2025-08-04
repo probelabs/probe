@@ -153,6 +153,7 @@ fn test_search_single_term() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Search for a single term
@@ -218,6 +219,7 @@ fn test_search_multiple_terms() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Search for multiple terms
@@ -265,6 +267,7 @@ fn test_search_files_only() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Search for files only
@@ -341,6 +344,7 @@ fn test_search_include_filenames() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Search with filename matching enabled
@@ -398,6 +402,7 @@ fn test_search_with_limits() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Search with limits
@@ -449,6 +454,7 @@ fn test_frequency_search() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Search using frequency-based search
@@ -508,6 +514,7 @@ func main() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Search for both terms in "all terms" mode
@@ -550,6 +557,7 @@ fn test_search_with_custom_ignores() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Search with custom ignore patterns
@@ -668,6 +676,7 @@ fn calculate_product(a: i32, b: i32) -> i32 {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Perform search

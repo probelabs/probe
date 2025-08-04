@@ -85,6 +85,7 @@ fn test_parallel_file_search() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Measure search time
@@ -140,6 +141,7 @@ fn test_structured_patterns_search() {
         &custom_ignores,
         true,
         None,
+        false,
     );
     let duration = start_time.elapsed();
 
@@ -214,6 +216,7 @@ fn function_{}() {{
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Measure search time
@@ -318,6 +321,7 @@ fn function_with_blocks_{}() {{
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Measure search time

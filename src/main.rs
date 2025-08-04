@@ -33,6 +33,7 @@ struct SearchParams {
     session: Option<String>,
     timeout: u64,
     question: Option<String>,
+    no_gitignore: bool,
 }
 
 struct BenchmarkParams {
@@ -79,6 +80,9 @@ fn handle_search(params: SearchParams) -> Result<()> {
     }
     if params.allow_tests {
         advanced_options.push("Including tests".to_string());
+    }
+    if params.no_gitignore {
+        advanced_options.push("Ignoring .gitignore".to_string());
     }
     if params.no_merge {
         advanced_options.push("No block merging".to_string());
@@ -131,6 +135,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
         session: params.session.as_deref(),
         timeout: params.timeout,
         question: params.question.as_deref(),
+        no_gitignore: params.no_gitignore,
     };
 
     let limited_results = perform_probe(&search_options)?;
@@ -356,6 +361,7 @@ async fn main() -> Result<()> {
                 session: args.session,
                 timeout: args.timeout,
                 question: args.question,
+                no_gitignore: args.no_gitignore || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
             })?
         }
         Some(Commands::Search {
@@ -379,6 +385,7 @@ async fn main() -> Result<()> {
             session,
             timeout,
             question,
+            no_gitignore,
         }) => handle_search(SearchParams {
             pattern,
             paths,
@@ -400,6 +407,7 @@ async fn main() -> Result<()> {
             session,
             timeout,
             question,
+            no_gitignore: no_gitignore || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
         })?,
         Some(Commands::Extract {
             files,
@@ -415,6 +423,7 @@ async fn main() -> Result<()> {
             keep_input,
             prompt,
             instructions,
+            no_gitignore,
         }) => handle_extract(ExtractOptions {
             files,
             custom_ignores: ignore,
@@ -434,6 +443,7 @@ async fn main() -> Result<()> {
                 })
             }),
             instructions,
+            no_gitignore: no_gitignore || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
         })?,
         Some(Commands::Query {
             pattern,
@@ -443,6 +453,7 @@ async fn main() -> Result<()> {
             allow_tests,
             max_results,
             format,
+            no_gitignore,
         }) => probe_code::query::handle_query(
             &pattern,
             &path,
@@ -464,6 +475,7 @@ async fn main() -> Result<()> {
             allow_tests,
             max_results,
             &format,
+            no_gitignore || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
         )?,
         Some(Commands::Benchmark {
             bench,
