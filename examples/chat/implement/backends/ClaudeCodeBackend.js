@@ -545,6 +545,9 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
       child.on('close', (code) => {
         const executionTime = Date.now() - startTime;
         
+        // Clear timeout
+        clearTimeout(timeoutId);
+        
         if (code === 0) {
           // Parse changes from output
           const changes = FileChangeParser.parseChanges(output, workingDir);
@@ -593,6 +596,9 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
       
       // Handle errors
       child.on('error', (error) => {
+        // Clear timeout
+        clearTimeout(timeoutId);
+        
         // Log full error details to stderr
         console.error(`[ERROR] Failed to spawn Claude Code CLI process:`);
         console.error(`[ERROR] Command: ${spawnCommand}`);
@@ -613,7 +619,7 @@ ${request.context?.language ? `Primary language: ${request.context.language}` : 
       
       // Set timeout
       const timeout = request.options?.timeout || this.config.timeout;
-      setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         if (!child.killed) {
           // Log timeout details to stderr
           console.error(`[ERROR] Claude Code CLI timed out after ${timeout}ms`);

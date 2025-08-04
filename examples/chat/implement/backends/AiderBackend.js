@@ -635,6 +635,9 @@ class AiderBackend extends BaseBackend {
       childProcess.on('close', (code) => {
         const executionTime = Date.now() - startTime;
         
+        // Clear timeout
+        clearTimeout(timeoutId);
+        
         this.log('info', `Aider process exited`, {
           code,
           executionTime,
@@ -714,6 +717,9 @@ class AiderBackend extends BaseBackend {
       
       // Handle process errors
       childProcess.on('error', (error) => {
+        // Clear timeout
+        clearTimeout(timeoutId);
+        
         this.log('error', 'Failed to spawn aider process', { error: error.message });
         reject(new BackendError(
           `Failed to spawn aider process: ${error.message}`,
@@ -725,7 +731,7 @@ class AiderBackend extends BaseBackend {
       
       // Set timeout
       const timeout = request.options?.timeout || this.config.timeout;
-      setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         if (!childProcess.killed) {
           this.log('warn', 'Aider execution timed out', { timeout });
           childProcess.kill('SIGTERM');
