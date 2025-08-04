@@ -361,7 +361,8 @@ async fn main() -> Result<()> {
                 session: args.session,
                 timeout: args.timeout,
                 question: args.question,
-                no_gitignore: args.no_gitignore || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+                no_gitignore: args.no_gitignore
+                    || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
             })?
         }
         Some(Commands::Search {
@@ -407,7 +408,8 @@ async fn main() -> Result<()> {
             session,
             timeout,
             question,
-            no_gitignore: no_gitignore || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+            no_gitignore: no_gitignore
+                || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
         })?,
         Some(Commands::Extract {
             files,
@@ -443,7 +445,8 @@ async fn main() -> Result<()> {
                 })
             }),
             instructions,
-            no_gitignore: no_gitignore || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+            no_gitignore: no_gitignore
+                || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
         })?,
         Some(Commands::Query {
             pattern,

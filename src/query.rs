@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use colored::*;
-use ignore::{Walk, WalkBuilder};
+use ignore::WalkBuilder;
 use probe_code::path_resolver::resolve_path;
 use rayon::prelude::*; // Added import
 use std::fs;
@@ -258,7 +258,7 @@ pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
 
     // Collect file paths using WalkBuilder to conditionally respect gitignore
     let mut builder = WalkBuilder::new(&resolved_path);
-    
+
     // Configure gitignore handling based on the no_gitignore option
     if !options.no_gitignore {
         builder.git_ignore(true);
@@ -269,8 +269,9 @@ pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
         builder.git_global(false);
         builder.git_exclude(false);
     }
-    
-    let file_paths: Vec<PathBuf> = builder.build()
+
+    let file_paths: Vec<PathBuf> = builder
+        .build()
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
         .filter(|entry| !should_ignore_file(entry.path(), options))
@@ -452,6 +453,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
 }
 
 /// Handle the query command
+#[allow(clippy::too_many_arguments)]
 pub fn handle_query(
     pattern: &str,
     path: &Path,

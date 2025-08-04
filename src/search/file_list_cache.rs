@@ -35,7 +35,12 @@ fn format_duration(duration: std::time::Duration) -> String {
 }
 
 /// Generate a cache key for a specific directory and options
-fn generate_cache_key(path: &Path, allow_tests: bool, custom_ignores: &[String], no_gitignore: bool) -> String {
+fn generate_cache_key(
+    path: &Path,
+    allow_tests: bool,
+    custom_ignores: &[String],
+    no_gitignore: bool,
+) -> String {
     // Create a unique identifier for this cache based on the path and options
     let path_str = path.to_string_lossy();
     let allow_tests_str = if allow_tests {
@@ -132,7 +137,12 @@ pub fn get_file_list(
 }
 
 /// Build a list of files in a directory, respecting ignore patterns and test file exclusions.
-fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String], no_gitignore: bool) -> Result<FileList> {
+fn build_file_list(
+    path: &Path,
+    allow_tests: bool,
+    custom_ignores: &[String],
+    no_gitignore: bool,
+) -> Result<FileList> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 
@@ -343,6 +353,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String], no
 
 /// Find files whose names match query words
 /// Returns a map of file paths to the term indices that matched the filename
+#[allow(clippy::too_many_arguments)]
 pub fn find_matching_filenames(
     path: &Path,
     queries: &[String],
@@ -367,7 +378,8 @@ pub fn find_matching_filenames(
     }
 
     // Get the cached file list, with language filtering if specified
-    let file_list = get_file_list_by_language(path, allow_tests, custom_ignores, language, no_gitignore)?;
+    let file_list =
+        get_file_list_by_language(path, allow_tests, custom_ignores, language, no_gitignore)?;
 
     if debug_mode {
         println!(
@@ -758,11 +770,17 @@ mod tests {
         let file_list_with_gitignore = get_file_list(temp_dir.path(), true, &[], false).unwrap();
 
         assert!(
-            file_list_with_gitignore.files.iter().any(|f| f == &regular_file),
+            file_list_with_gitignore
+                .files
+                .iter()
+                .any(|f| f == &regular_file),
             "Regular file should be found with gitignore enabled: {regular_file:?}"
         );
         assert!(
-            !file_list_with_gitignore.files.iter().any(|f| f == &ignored_file),
+            !file_list_with_gitignore
+                .files
+                .iter()
+                .any(|f| f == &ignored_file),
             "Ignored file should not be found with gitignore enabled: {ignored_file:?}"
         );
         assert!(
@@ -774,11 +792,17 @@ mod tests {
         let file_list_no_gitignore = get_file_list(temp_dir.path(), true, &[], true).unwrap();
 
         assert!(
-            file_list_no_gitignore.files.iter().any(|f| f == &regular_file),
+            file_list_no_gitignore
+                .files
+                .iter()
+                .any(|f| f == &regular_file),
             "Regular file should be found with gitignore disabled: {regular_file:?}"
         );
         assert!(
-            file_list_no_gitignore.files.iter().any(|f| f == &ignored_file),
+            file_list_no_gitignore
+                .files
+                .iter()
+                .any(|f| f == &ignored_file),
             "Ignored file should be found with gitignore disabled: {ignored_file:?}"
         );
         assert!(

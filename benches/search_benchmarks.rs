@@ -362,6 +362,7 @@ fn benchmark_search_patterns(c: &mut Criterion) {
                     session: None,
                     timeout: 30,
                     question: None,
+                    no_gitignore: false,
                 };
 
                 black_box(perform_probe(&options).unwrap())
@@ -404,6 +405,7 @@ fn benchmark_result_limits(c: &mut Criterion) {
                     session: None,
                     timeout: 30,
                     question: None,
+                    no_gitignore: false,
                 };
 
                 black_box(perform_probe(&options).unwrap())
@@ -450,6 +452,7 @@ fn benchmark_search_options(c: &mut Criterion) {
                         session: None,
                         timeout: 30,
                         question: None,
+                        no_gitignore: false,
                     };
 
                     black_box(perform_probe(&options).unwrap())
@@ -485,6 +488,7 @@ fn benchmark_search_options(c: &mut Criterion) {
                     session: None,
                     timeout: 30,
                     question: None,
+                    no_gitignore: false,
                 };
 
                 black_box(perform_probe(&options).unwrap())
@@ -518,6 +522,7 @@ fn benchmark_search_options(c: &mut Criterion) {
                     session: None,
                     timeout: 30,
                     question: None,
+                    no_gitignore: false,
                 };
 
                 black_box(perform_probe(&options).unwrap())
@@ -572,6 +577,7 @@ fn benchmark_query_complexity(c: &mut Criterion) {
                         session: None,
                         timeout: 30,
                         question: None,
+                        no_gitignore: false,
                     };
 
                     black_box(perform_probe(&options).unwrap())
