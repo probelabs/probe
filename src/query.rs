@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use colored::*;
-use ignore::Walk;
+use ignore::WalkBuilder;
 use probe_code::path_resolver::resolve_path;
 use rayon::prelude::*; // Added import
 use std::fs;
@@ -29,6 +29,7 @@ pub struct QueryOptions<'a> {
     pub max_results: Option<usize>,
     #[allow(dead_code)]
     pub format: &'a str,
+    pub no_gitignore: bool,
 }
 
 /// Convert a language string to the corresponding SupportLang
@@ -255,8 +256,22 @@ pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
         options.path.to_path_buf()
     };
 
-    // Collect file paths
-    let file_paths: Vec<PathBuf> = Walk::new(&resolved_path)
+    // Collect file paths using WalkBuilder to conditionally respect gitignore
+    let mut builder = WalkBuilder::new(&resolved_path);
+
+    // Configure gitignore handling based on the no_gitignore option
+    if !options.no_gitignore {
+        builder.git_ignore(true);
+        builder.git_global(true);
+        builder.git_exclude(true);
+    } else {
+        builder.git_ignore(false);
+        builder.git_global(false);
+        builder.git_exclude(false);
+    }
+
+    let file_paths: Vec<PathBuf> = builder
+        .build()
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
         .filter(|entry| !should_ignore_file(entry.path(), options))
@@ -438,6 +453,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
 }
 
 /// Handle the query command
+#[allow(clippy::too_many_arguments)]
 pub fn handle_query(
     pattern: &str,
     path: &Path,
@@ -446,6 +462,7 @@ pub fn handle_query(
     allow_tests: bool,
     max_results: Option<usize>,
     format: &str,
+    no_gitignore: bool,
 ) -> Result<()> {
     // Only print information for non-JSON/XML formats
     if format != "json" && format != "xml" {
@@ -463,6 +480,9 @@ pub fn handle_query(
         let mut advanced_options = Vec::<String>::new();
         if allow_tests {
             advanced_options.push("Including tests".to_string());
+        }
+        if no_gitignore {
+            advanced_options.push("Ignoring .gitignore".to_string());
         }
         if let Some(max) = max_results {
             advanced_options.push(format!("Max results: {max}"));
@@ -487,6 +507,7 @@ pub fn handle_query(
         allow_tests,
         max_results,
         format,
+        no_gitignore,
     };
 
     let matches = perform_query(&options)?;

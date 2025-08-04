@@ -59,6 +59,10 @@ pub struct Args {
     #[arg(long = "allow-tests")]
     pub allow_tests: bool,
 
+    /// Do not respect .gitignore files and patterns (gitignore is respected by default)
+    #[arg(long = "no-gitignore")]
+    pub no_gitignore: bool,
+
     /// Disable merging of adjacent code blocks after ranking (merging enabled by default)
     #[arg(long = "no-merge", default_value = "false")]
     pub no_merge: bool,
@@ -166,6 +170,10 @@ pub enum Commands {
         #[arg(long = "allow-tests")]
         allow_tests: bool,
 
+        /// Do not respect .gitignore files and patterns (gitignore is respected by default)
+        #[arg(long = "no-gitignore")]
+        no_gitignore: bool,
+
         /// Disable merging of adjacent code blocks after ranking (merging enabled by default)
         #[arg(long = "no-merge", default_value = "false")]
         no_merge: bool,
@@ -211,6 +219,10 @@ pub enum Commands {
         /// Custom patterns to ignore (in addition to .gitignore and common patterns)
         #[arg(short, long)]
         ignore: Vec<String>,
+
+        /// Do not respect .gitignore files and patterns (gitignore is respected by default)
+        #[arg(long = "no-gitignore")]
+        no_gitignore: bool,
 
         /// Number of context lines to include before and after the extracted block
         #[arg(short = 'c', long = "context", default_value = "0")]
@@ -297,6 +309,10 @@ pub enum Commands {
         /// Allow test files in search results
         #[arg(long = "allow-tests")]
         allow_tests: bool,
+
+        /// Do not respect .gitignore files and patterns (gitignore is respected by default)
+        #[arg(long = "no-gitignore")]
+        no_gitignore: bool,
 
         /// Maximum number of results to return
         #[arg(long = "max-results")]

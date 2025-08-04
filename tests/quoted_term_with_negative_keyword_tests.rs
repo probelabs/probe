@@ -88,6 +88,7 @@ fn test_quoted_term_with_negative_keyword() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Print the query for debugging
@@ -170,6 +171,7 @@ fn test_negative_quoted_term() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Print the query for debugging

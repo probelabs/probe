@@ -236,6 +236,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         session,
         timeout,
         question,
+        no_gitignore,
     } = options;
     // Start the timeout thread
     let timeout_handle = timeout::start_timeout_thread(*timeout);
@@ -442,6 +443,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         custom_ignores,
         *allow_tests,
         lang_param,
+        *no_gitignore,
     )?;
 
     let fs_duration = fs_start.elapsed();
@@ -511,6 +513,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 *allow_tests,
                 &plan.term_indices,
                 lang_param,
+                *no_gitignore,
             )?;
 
         if debug_mode {
@@ -1574,6 +1577,7 @@ pub fn search_with_structured_patterns(
     custom_ignores: &[String],
     allow_tests: bool,
     language: Option<&str>,
+    no_gitignore: bool,
 ) -> Result<HashMap<PathBuf, HashMap<usize, HashSet<usize>>>> {
     // Resolve the path if it's a special format (e.g., "go:github.com/user/repo")
     let root_path = if let Some(path_str) = root_path_str.to_str() {
@@ -1672,6 +1676,7 @@ pub fn search_with_structured_patterns(
         allow_tests,
         custom_ignores,
         language,
+        no_gitignore,
     )?;
 
     if debug_mode {

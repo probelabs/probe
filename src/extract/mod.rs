@@ -61,6 +61,8 @@ pub struct ExtractOptions {
     pub prompt: Option<prompts::PromptTemplate>,
     /// Optional user instructions for LLM models
     pub instructions: Option<String>,
+    /// Whether to ignore .gitignore files
+    pub no_gitignore: bool,
 }
 
 /// Handle the extract command

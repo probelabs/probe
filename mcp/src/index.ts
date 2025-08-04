@@ -116,6 +116,7 @@ interface SearchCodeArgs {
   allowTests?: boolean;
   session?: string;
   timeout?: number;
+  noGitignore?: boolean;
 }
 
 interface QueryCodeArgs {
@@ -127,6 +128,7 @@ interface QueryCodeArgs {
   maxResults?: number;
   format?: 'markdown' | 'plain' | 'json' | 'color';
   timeout?: number;
+  noGitignore?: boolean;
 }
 
 interface ExtractCodeArgs {
@@ -136,6 +138,7 @@ interface ExtractCodeArgs {
   contextLines?: number;
   format?: 'markdown' | 'plain' | 'json';
   timeout?: number;
+  noGitignore?: boolean;
 }
 
 class ProbeServer {
@@ -210,6 +213,10 @@ class ProbeServer {
               timeout: {
                 type: 'number',
                 description: 'Timeout for the search operation in seconds (default: 30)',
+              },
+              noGitignore: {
+                type: 'boolean',
+                description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
               }
             },
             required: ['path', 'query']
@@ -250,6 +257,10 @@ class ProbeServer {
               timeout: {
                 type: 'number',
                 description: 'Timeout for the query operation in seconds (default: 30)',
+              },
+              noGitignore: {
+                type: 'boolean',
+                description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
               }
             },
             required: ['path', 'pattern']
@@ -288,6 +299,10 @@ class ProbeServer {
               timeout: {
                 type: 'number',
                 description: 'Timeout for the extract operation in seconds (default: 30)',
+              },
+              noGitignore: {
+                type: 'boolean',
+                description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
               }
             },
             required: ['path', 'files'],
@@ -389,6 +404,12 @@ class ProbeServer {
       if (args.maxResults !== undefined) options.maxResults = args.maxResults;
       if (args.maxTokens !== undefined) options.maxTokens = args.maxTokens;
       if (args.allowTests !== undefined) options.allowTests = args.allowTests;
+      // Use noGitignore from args, or fall back to PROBE_NO_GITIGNORE environment variable
+      if (args.noGitignore !== undefined) {
+        options.noGitignore = args.noGitignore;
+      } else if (process.env.PROBE_NO_GITIGNORE) {
+        options.noGitignore = process.env.PROBE_NO_GITIGNORE === 'true';
+      }
       if (args.session !== undefined && args.session.trim() !== '') {
         options.session = args.session;
       } else {
@@ -437,7 +458,7 @@ class ProbeServer {
       }
 
       // Create a single options object with both pattern and path
-      const options = {
+      const options: any = {
         path: args.path,
         pattern: args.pattern,
         language: args.language,
@@ -447,6 +468,13 @@ class ProbeServer {
         format: args.format,
         timeout: args.timeout || this.defaultTimeout
       };
+      
+      // Use noGitignore from args, or fall back to PROBE_NO_GITIGNORE environment variable
+      if (args.noGitignore !== undefined) {
+        options.noGitignore = args.noGitignore;
+      } else if (process.env.PROBE_NO_GITIGNORE) {
+        options.noGitignore = process.env.PROBE_NO_GITIGNORE === 'true';
+      }
       
       console.log("Executing query with options:", JSON.stringify({
         path: options.path,
@@ -475,7 +503,7 @@ class ProbeServer {
       }
 
       // Create a single options object with files and other parameters
-      const options = {
+      const options: any = {
         files: args.files,
         path: args.path,
         allowTests: args.allowTests,
@@ -483,6 +511,13 @@ class ProbeServer {
         format: args.format,
         timeout: args.timeout || this.defaultTimeout
       };
+      
+      // Use noGitignore from args, or fall back to PROBE_NO_GITIGNORE environment variable
+      if (args.noGitignore !== undefined) {
+        options.noGitignore = args.noGitignore;
+      } else if (process.env.PROBE_NO_GITIGNORE) {
+        options.noGitignore = process.env.PROBE_NO_GITIGNORE === 'true';
+      }
       
       // Call extract with the complete options object
       try {

@@ -426,6 +426,7 @@ fn third_function() {
             timeout: 30,
             question: None,
             exact: false,
+            no_gitignore: false,
         };
 
         // Run the search

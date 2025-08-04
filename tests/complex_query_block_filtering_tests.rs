@@ -311,6 +311,7 @@ func (i *IPWhiteListMiddleware) Process() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Run the search
@@ -391,6 +392,7 @@ func Process() {
         timeout: 30,
         question: None,
         exact: false,
+        no_gitignore: false,
     };
 
     // Run the search

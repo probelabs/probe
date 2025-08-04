@@ -35,13 +35,24 @@ fn format_duration(duration: std::time::Duration) -> String {
 }
 
 /// Generate a cache key for a specific directory and options
-fn generate_cache_key(path: &Path, allow_tests: bool, custom_ignores: &[String]) -> String {
+fn generate_cache_key(
+    path: &Path,
+    allow_tests: bool,
+    custom_ignores: &[String],
+    no_gitignore: bool,
+) -> String {
     // Create a unique identifier for this cache based on the path and options
     let path_str = path.to_string_lossy();
     let allow_tests_str = if allow_tests {
         "with_tests"
     } else {
         "no_tests"
+    };
+
+    let gitignore_str = if no_gitignore {
+        "no_gitignore"
+    } else {
+        "with_gitignore"
     };
 
     // Create a hash of the custom ignores to include in the cache key
@@ -58,7 +69,7 @@ fn generate_cache_key(path: &Path, allow_tests: bool, custom_ignores: &[String])
         format!("ignores_{hash:x}")
     };
 
-    format!("{path_str}_{allow_tests_str}_{ignores_hash}")
+    format!("{path_str}_{allow_tests_str}_{ignores_hash}_{gitignore_str}")
 }
 
 /// Get a list of files in a directory, respecting ignore patterns and test file exclusions.
@@ -67,6 +78,7 @@ pub fn get_file_list(
     path: &Path,
     allow_tests: bool,
     custom_ignores: &[String],
+    no_gitignore: bool,
 ) -> Result<Arc<FileList>> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
@@ -75,10 +87,11 @@ pub fn get_file_list(
         println!("DEBUG: Getting file list for path: {path:?}");
         println!("DEBUG: allow_tests: {allow_tests}");
         println!("DEBUG: custom_ignores: {custom_ignores:?}");
+        println!("DEBUG: no_gitignore: {no_gitignore}");
     }
 
     // Create a cache key for this request
-    let cache_key = generate_cache_key(path, allow_tests, custom_ignores);
+    let cache_key = generate_cache_key(path, allow_tests, custom_ignores, no_gitignore);
 
     // Check if we have this file list in the cache
     {
@@ -101,7 +114,7 @@ pub fn get_file_list(
         println!("DEBUG: File list not found in cache, building new list");
     }
 
-    let file_list = build_file_list(path, allow_tests, custom_ignores)?;
+    let file_list = build_file_list(path, allow_tests, custom_ignores, no_gitignore)?;
     let file_count = file_list.files.len();
 
     // Cache the file list
@@ -124,7 +137,12 @@ pub fn get_file_list(
 }
 
 /// Build a list of files in a directory, respecting ignore patterns and test file exclusions.
-fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) -> Result<FileList> {
+fn build_file_list(
+    path: &Path,
+    allow_tests: bool,
+    custom_ignores: &[String],
+    no_gitignore: bool,
+) -> Result<FileList> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 
@@ -136,10 +154,19 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
     let builder_start = Instant::now();
     let mut builder = WalkBuilder::new(path);
 
-    // Configure the builder
-    builder.git_ignore(true);
-    builder.git_global(true);
-    builder.git_exclude(true);
+    // Configure the builder to conditionally respect gitignore files
+    if !no_gitignore {
+        builder.git_ignore(true);
+        builder.git_global(true);
+        builder.git_exclude(true);
+    } else {
+        builder.git_ignore(false);
+        builder.git_global(false);
+        builder.git_exclude(false);
+        if debug_mode {
+            println!("DEBUG: Gitignore disabled - will not respect .gitignore files");
+        }
+    }
 
     // Enable parallel walking for large directories
     builder.threads(rayon::current_num_threads());
@@ -326,6 +353,7 @@ fn build_file_list(path: &Path, allow_tests: bool, custom_ignores: &[String]) ->
 
 /// Find files whose names match query words
 /// Returns a map of file paths to the term indices that matched the filename
+#[allow(clippy::too_many_arguments)]
 pub fn find_matching_filenames(
     path: &Path,
     queries: &[String],
@@ -334,6 +362,7 @@ pub fn find_matching_filenames(
     allow_tests: bool,
     term_indices: &HashMap<String, usize>,
     language: Option<&str>,
+    no_gitignore: bool,
 ) -> Result<HashMap<PathBuf, HashSet<usize>>> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
@@ -349,7 +378,8 @@ pub fn find_matching_filenames(
     }
 
     // Get the cached file list, with language filtering if specified
-    let file_list = get_file_list_by_language(path, allow_tests, custom_ignores, language)?;
+    let file_list =
+        get_file_list_by_language(path, allow_tests, custom_ignores, language, no_gitignore)?;
 
     if debug_mode {
         println!(
@@ -460,10 +490,11 @@ pub fn get_file_list_by_language(
     allow_tests: bool,
     custom_ignores: &[String],
     language: Option<&str>,
+    no_gitignore: bool,
 ) -> Result<Arc<FileList>> {
     // If no language is specified, use the regular get_file_list function
     if language.is_none() {
-        return get_file_list(path, allow_tests, custom_ignores);
+        return get_file_list(path, allow_tests, custom_ignores, no_gitignore);
     }
 
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -474,7 +505,7 @@ pub fn get_file_list_by_language(
     }
 
     // Get the full file list first
-    let full_file_list = get_file_list(path, allow_tests, custom_ignores)?;
+    let full_file_list = get_file_list(path, allow_tests, custom_ignores, no_gitignore)?;
 
     // Get the extensions for the specified language
     let extensions = get_language_extensions(language.unwrap());
@@ -542,7 +573,7 @@ mod tests {
         let parent_file = temp_dir.path().join("docs_packages").join("parent.txt");
         fs::write(&parent_file, "parent content").unwrap();
 
-        let file_list = get_file_list(temp_dir.path(), true, &[]).unwrap();
+        let file_list = get_file_list(temp_dir.path(), true, &[], false).unwrap();
 
         assert!(
             file_list.files.iter().any(|f| f == &test_file),
@@ -590,7 +621,7 @@ mod tests {
         fs::create_dir_all(docs_packages_file.parent().unwrap()).unwrap();
         fs::write(&docs_packages_file, "documentation packages").unwrap();
 
-        let file_list = get_file_list(temp_dir.path(), true, &[]).unwrap();
+        let file_list = get_file_list(temp_dir.path(), true, &[], false).unwrap();
 
         assert!(
             file_list.files.iter().any(|f| f == &test_file),
@@ -622,7 +653,7 @@ mod tests {
 
         // Test with custom ignore patterns
         let custom_ignores = vec!["*.tmp".to_string()];
-        let file_list = get_file_list(temp_dir.path(), true, &custom_ignores).unwrap();
+        let file_list = get_file_list(temp_dir.path(), true, &custom_ignores, false).unwrap();
 
         assert!(
             file_list.files.iter().any(|f| f == &test_file),
@@ -659,7 +690,7 @@ mod tests {
             expected_files.push(file);
         }
 
-        let file_list = get_file_list(temp_dir.path(), true, &[]).unwrap();
+        let file_list = get_file_list(temp_dir.path(), true, &[], false).unwrap();
 
         for expected_file in &expected_files {
             assert!(
@@ -690,7 +721,7 @@ mod tests {
         let valid_file = valid_dir.join("main.rs");
         fs::write(&valid_file, "fn main() {}").unwrap();
 
-        let file_list = get_file_list(temp_dir.path(), true, &[]).unwrap();
+        let file_list = get_file_list(temp_dir.path(), true, &[], false).unwrap();
 
         assert!(
             !file_list.files.iter().any(|f| f == &node_file),
@@ -704,6 +735,105 @@ mod tests {
         assert!(
             file_list.files.iter().any(|f| f == &valid_file),
             "Files in valid underscore directories should be found: {valid_file:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_gitignore_parameter() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Initialize git repo to make .gitignore work with the ignore crate
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("Failed to initialize git repo");
+
+        // Create a .gitignore file
+        let gitignore_content = "*.ignored\nignored_dir/\n";
+        fs::write(temp_dir.path().join(".gitignore"), gitignore_content).unwrap();
+
+        // Create files that would normally be ignored by .gitignore
+        let ignored_file = temp_dir.path().join("test.ignored");
+        fs::write(&ignored_file, "ignored content").unwrap();
+
+        let ignored_dir = temp_dir.path().join("ignored_dir");
+        fs::create_dir_all(&ignored_dir).unwrap();
+        let ignored_dir_file = ignored_dir.join("file.txt");
+        fs::write(&ignored_dir_file, "file in ignored directory").unwrap();
+
+        // Create a regular file that should always be found
+        let regular_file = temp_dir.path().join("regular.txt");
+        fs::write(&regular_file, "regular content").unwrap();
+
+        // Test with gitignore enabled (default behavior)
+        let file_list_with_gitignore = get_file_list(temp_dir.path(), true, &[], false).unwrap();
+
+        assert!(
+            file_list_with_gitignore
+                .files
+                .iter()
+                .any(|f| f == &regular_file),
+            "Regular file should be found with gitignore enabled: {regular_file:?}"
+        );
+        assert!(
+            !file_list_with_gitignore
+                .files
+                .iter()
+                .any(|f| f == &ignored_file),
+            "Ignored file should not be found with gitignore enabled: {ignored_file:?}"
+        );
+        assert!(
+            !file_list_with_gitignore.files.iter().any(|f| f == &ignored_dir_file),
+            "File in ignored directory should not be found with gitignore enabled: {ignored_dir_file:?}"
+        );
+
+        // Test with gitignore disabled (no_gitignore = true)
+        let file_list_no_gitignore = get_file_list(temp_dir.path(), true, &[], true).unwrap();
+
+        assert!(
+            file_list_no_gitignore
+                .files
+                .iter()
+                .any(|f| f == &regular_file),
+            "Regular file should be found with gitignore disabled: {regular_file:?}"
+        );
+        assert!(
+            file_list_no_gitignore
+                .files
+                .iter()
+                .any(|f| f == &ignored_file),
+            "Ignored file should be found with gitignore disabled: {ignored_file:?}"
+        );
+        assert!(
+            file_list_no_gitignore.files.iter().any(|f| f == &ignored_dir_file),
+            "File in ignored directory should be found with gitignore disabled: {ignored_dir_file:?}"
+        );
+    }
+
+    #[test]
+    fn test_cache_key_includes_no_gitignore() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_path = temp_dir.path();
+
+        // Generate cache keys with different no_gitignore values
+        let key_with_gitignore = generate_cache_key(test_path, true, &[], false);
+        let key_without_gitignore = generate_cache_key(test_path, true, &[], true);
+
+        // The keys should be different
+        assert_ne!(
+            key_with_gitignore, key_without_gitignore,
+            "Cache keys should differ when no_gitignore parameter differs"
+        );
+
+        // Both keys should contain the appropriate gitignore string
+        assert!(
+            key_with_gitignore.contains("with_gitignore"),
+            "Cache key should contain 'with_gitignore' when no_gitignore is false"
+        );
+        assert!(
+            key_without_gitignore.contains("no_gitignore"),
+            "Cache key should contain 'no_gitignore' when no_gitignore is true"
         );
     }
 }
