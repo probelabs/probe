@@ -452,10 +452,12 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 				const currentWorkingDir = process.cwd();
 				// Use static config or environment variables directly
 				const folders = staticAllowedFolders.length > 0 ? staticAllowedFolders : [currentWorkingDir];
+				// Use first allowed folder as currentDir, or fall back to process.cwd()
+				const currentDir = staticAllowedFolders.length > 0 ? staticAllowedFolders[0] : currentWorkingDir;
 
 				sendJson(res, 200, {
 					folders: folders,
-					currentDir: currentWorkingDir,
+					currentDir: currentDir,
 					noApiKeysMode: noApiKeysMode
 				});
 			},

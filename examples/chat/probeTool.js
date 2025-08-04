@@ -312,7 +312,47 @@ const baseListFilesTool = {
 	execute: async ({ directory = '.', sessionId }) => {
 		const debug = process.env.DEBUG_CHAT === '1';
 		const currentWorkingDir = process.cwd();
-		const targetDir = path.resolve(currentWorkingDir, directory);
+		
+		// Get allowed folders from environment variable
+		const allowedFoldersEnv = process.env.ALLOWED_FOLDERS;
+		let allowedFolders = [];
+		
+		if (allowedFoldersEnv) {
+			allowedFolders = allowedFoldersEnv.split(',').map(folder => folder.trim()).filter(folder => folder.length > 0);
+		}
+
+		// Handle default directory behavior when ALLOWED_FOLDERS is set
+		let targetDirectory = directory;
+		if (allowedFolders.length > 0 && (directory === '.' || directory === './')) {
+			// Use the first allowed folder if directory is current directory
+			targetDirectory = allowedFolders[0];
+			if (debug) {
+				console.log(`[DEBUG] Redirecting from '${directory}' to first allowed folder: ${targetDirectory}`);
+			}
+		}
+
+		const targetDir = path.resolve(currentWorkingDir, targetDirectory);
+
+		// Validate that the target directory is within allowed folders
+		if (allowedFolders.length > 0) {
+			const isAllowed = allowedFolders.some(allowedFolder => {
+				const resolvedAllowedFolder = path.resolve(currentWorkingDir, allowedFolder);
+				return targetDir === resolvedAllowedFolder || targetDir.startsWith(resolvedAllowedFolder + path.sep);
+			});
+
+			if (!isAllowed) {
+				const error = `Access denied: Directory '${targetDirectory}' is not within allowed folders: ${allowedFolders.join(', ')}`;
+				if (debug) {
+					console.log(`[DEBUG] ${error}`);
+				}
+				return {
+					success: false,
+					directory: targetDir,
+					error: error,
+					timestamp: new Date().toISOString()
+				};
+			}
+		}
 
 		if (debug) {
 			console.log(`[DEBUG] Listing files in directory: ${targetDir}`);
@@ -328,7 +368,7 @@ const baseListFilesTool = {
 				return {
 					name: file.name,
 					type: isDirectory ? 'directory' : 'file',
-					path: path.join(directory, file.name)
+					path: path.join(targetDirectory, file.name)
 				};
 			});
 
@@ -382,10 +422,51 @@ const baseSearchFilesTool = {
 
 		const debug = process.env.DEBUG_CHAT === '1';
 		const currentWorkingDir = process.cwd();
-		const targetDir = path.resolve(currentWorkingDir, directory);
+		
+		// Get allowed folders from environment variable
+		const allowedFoldersEnv = process.env.ALLOWED_FOLDERS;
+		let allowedFolders = [];
+		
+		if (allowedFoldersEnv) {
+			allowedFolders = allowedFoldersEnv.split(',').map(folder => folder.trim()).filter(folder => folder.length > 0);
+		}
+
+		// Handle default directory behavior when ALLOWED_FOLDERS is set
+		let targetDirectory = directory;
+		if (allowedFolders.length > 0 && (directory === '.' || directory === './')) {
+			// Use the first allowed folder if directory is current directory
+			targetDirectory = allowedFolders[0];
+			if (debug) {
+				console.log(`[DEBUG] Redirecting from '${directory}' to first allowed folder: ${targetDirectory}`);
+			}
+		}
+
+		const targetDir = path.resolve(currentWorkingDir, targetDirectory);
+
+		// Validate that the target directory is within allowed folders
+		if (allowedFolders.length > 0) {
+			const isAllowed = allowedFolders.some(allowedFolder => {
+				const resolvedAllowedFolder = path.resolve(currentWorkingDir, allowedFolder);
+				return targetDir === resolvedAllowedFolder || targetDir.startsWith(resolvedAllowedFolder + path.sep);
+			});
+
+			if (!isAllowed) {
+				const error = `Access denied: Directory '${targetDirectory}' is not within allowed folders: ${allowedFolders.join(', ')}`;
+				if (debug) {
+					console.log(`[DEBUG] ${error}`);
+				}
+				return {
+					success: false,
+					directory: targetDir,
+					pattern: pattern,
+					error: error,
+					timestamp: new Date().toISOString()
+				};
+			}
+		}
 
 		// Log execution parameters to stderr for visibility
-		console.error(`Executing searchFiles with params: pattern="${pattern}", directory="${directory}", recursive=${recursive}`);
+		console.error(`Executing searchFiles with params: pattern="${pattern}", directory="${targetDirectory}", recursive=${recursive}`);
 		console.error(`Resolved target directory: ${targetDir}`);
 		console.error(`Current working directory: ${currentWorkingDir}`);
 
@@ -535,7 +616,7 @@ const baseSearchFilesTool = {
 				directory: targetDir,
 				pattern: pattern,
 				recursive: recursive,
-				files: limitedFiles.map(file => path.join(directory, file)),
+				files: limitedFiles.map(file => path.join(targetDirectory, file)),
 				count: limitedFiles.length,
 				totalMatches: files.length,
 				limited: files.length > maxResults,
@@ -543,7 +624,7 @@ const baseSearchFilesTool = {
 			};
 		} catch (error) {
 			console.error(`Error searching files with pattern "${pattern}" in ${targetDir}:`, error);
-			console.error(`Search parameters: directory="${directory}", recursive=${recursive}, sessionId=${sessionId}`);
+			console.error(`Search parameters: directory="${targetDirectory}", recursive=${recursive}, sessionId=${sessionId}`);
 			return {
 				success: false,
 				directory: targetDir,
