@@ -392,6 +392,31 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "Extracted version: $VERSION"
 
+      - name: Download Linux binaries from release
+        run: |
+          # Create binaries directory
+          mkdir -p binaries/amd64 binaries/arm64
+          
+          # Download and extract x86_64 binary
+          wget -O binaries/probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz"
+          
+          # Download and extract aarch64 binary  
+          wget -O binaries/probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz"
+          
+          # Extract binaries to architecture-specific directories
+          cd binaries
+          tar -xzf probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz
+          tar -xzf probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz
+          
+          cp probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu/probe amd64/
+          cp probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu/probe arm64/
+          
+          # Verify binaries exist
+          ls -la amd64/ arm64/
+          file amd64/probe arm64/probe
+
       # Build and push Probe CLI image
       - name: Build and push Probe Docker image
         uses: docker/build-push-action@v5

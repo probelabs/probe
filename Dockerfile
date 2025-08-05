@@ -1,28 +1,3 @@
-# ---- Build Stage ----
-FROM rust:1.84 AS builder
-
-# Set build arguments for better caching
-ARG CARGO_HOME=/usr/local/cargo
-ARG RUSTUP_HOME=/usr/local/rustup
-ARG VERSION=dev
-ARG BUILD_DATE
-ARG VCS_REF
-
-# Set environment variables
-ENV CARGO_HOME=${CARGO_HOME}
-ENV RUSTUP_HOME=${RUSTUP_HOME}
-ENV PATH=${CARGO_HOME}/bin:${RUSTUP_HOME}/bin:$PATH
-
-WORKDIR /usr/src/probe
-
-# Copy the entire build context (filtered by .dockerignore)
-# This is simpler and more maintainable than selective copying
-COPY . .
-
-# Build the project in release mode (this will generate Cargo.lock if missing)
-RUN cargo build --release
-
-# ---- Runtime Stage ----
 # Use distroless for minimal attack surface and smaller image
 FROM gcr.io/distroless/cc-debian12
 
@@ -30,6 +5,7 @@ FROM gcr.io/distroless/cc-debian12
 ARG VERSION=dev
 ARG BUILD_DATE
 ARG VCS_REF
+ARG TARGETARCH
 
 # Add security and metadata labels
 LABEL maintainer="Probe Team" \
@@ -44,8 +20,9 @@ LABEL maintainer="Probe Team" \
 
 # Distroless images run as non-root by default and include CA certificates
 
-# Copy the compiled binary from the builder (distroless uses /usr/local/bin)
-COPY --from=builder /usr/src/probe/target/release/probe /usr/local/bin/probe
+# Copy the pre-built binary based on target architecture
+# TARGETARCH is automatically provided by Docker buildx (amd64, arm64)
+COPY binaries/${TARGETARCH}/probe /usr/local/bin/probe
 
 # Health check using the binary (distroless runs as non-root by default)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
