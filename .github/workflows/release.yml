@@ -387,8 +387,8 @@ jobs:
       - name: Extract version from tag
         id: extract_version
         run: |
-          # Remove 'v' prefix from tag (e.g., v1.0.0 -> 1.0.0)
-          VERSION="${GITHUB_REF#refs/tags/v}"
+          # Keep the full tag (e.g., v1.0.0) to match binary naming
+          VERSION="${GITHUB_REF#refs/tags/}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "Extracted version: $VERSION"
 
@@ -399,11 +399,11 @@ jobs:
           
           # Download and extract x86_64 binary
           wget -O probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz"
+            "https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION }}/probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz"
           
           # Download and extract aarch64 binary  
           wget -O probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz"
+            "https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION }}/probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz"
           
           # Extract binaries to architecture-specific directories
           tar -xzf probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz
