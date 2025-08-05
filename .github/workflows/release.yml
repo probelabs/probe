@@ -145,14 +145,6 @@ jobs:
           fi
           echo "CHECKSUM=${ARCHIVE_NAME}.${{ matrix.archive_ext }}.sha256" >> "$GITHUB_ENV"
 
-      # Upload binary as workflow artifact for Docker job
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.ASSET }}
-          path: ${{ env.ASSET }}
-          retention-days: 1
-
       # Upload the binary as a release asset
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -400,37 +392,30 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "Extracted version: $VERSION"
 
-      - name: Download Linux x86_64 binary artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz
-          path: ./artifacts/
-
-      - name: Download Linux ARM64 binary artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz
-          path: ./artifacts/
-
-      - name: Extract binaries for Docker build
+      - name: Download Linux binaries from published release
         run: |
-          # Create architecture-specific directories
+          # Create binaries directory
           mkdir -p binaries/amd64 binaries/arm64
           
-          # Extract binaries from artifacts
-          cd artifacts
+          # Download and extract x86_64 binary
+          wget -O probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz"
+          
+          # Download and extract aarch64 binary  
+          wget -O probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz"
+          
+          # Extract binaries to architecture-specific directories
           tar -xzf probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz
           tar -xzf probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz
           
-          # Copy binaries to architecture directories
-          cp probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu/probe ../binaries/amd64/
-          cp probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu/probe ../binaries/arm64/
+          cp probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu/probe binaries/amd64/
+          cp probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu/probe binaries/arm64/
           
           # Verify binaries exist and are executable
-          cd ../binaries
-          ls -la amd64/ arm64/
-          file amd64/probe arm64/probe
-          chmod +x amd64/probe arm64/probe
+          ls -la binaries/amd64/ binaries/arm64/
+          file binaries/amd64/probe binaries/arm64/probe
+          chmod +x binaries/amd64/probe binaries/arm64/probe
 
       # Build and push Probe CLI image
       - name: Build and push Probe Docker image
