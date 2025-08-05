@@ -10,8 +10,9 @@ Pre-built images are available on Docker Hub:
 
 ### Available Tags
 - `latest` - Latest stable release
-- `vX.Y.Z` - Specific version (e.g., `v1.0.0`)
-- `main` - Latest development build from main branch
+- `X.Y.Z` - Specific version (e.g., `1.0.0`)
+- `X.Y` - Minor version (e.g., `1.0`)
+- `X` - Major version (e.g., `1`)
 
 ---
 

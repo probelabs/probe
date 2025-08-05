@@ -2,22 +2,8 @@ name: Docker Build and Publish
 
 on:
   push:
-    branches:
-      - main
-      - docker  # Include the docker branch for testing
     tags:
-      - "v*"  # Trigger on version tags
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'Dockerfile'
-      - 'examples/chat/Dockerfile'
-      - '.github/workflows/docker.yml'
-      - 'src/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'examples/chat/**'
+      - "v*"  # Trigger only on version tags
 
 env:
   DOCKER_HUB_USERNAME: ${{ vars.DOCKER_HUB_USERNAME || 'buger' }}
@@ -39,7 +25,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKER_HUB_USERNAME }}
@@ -51,12 +36,10 @@ jobs:
         with:
           images: ${{ env.DOCKER_HUB_USERNAME }}/${{ env.PROBE_IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -64,7 +47,7 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -88,7 +71,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKER_HUB_USERNAME }}
@@ -100,12 +82,10 @@ jobs:
         with:
           images: ${{ env.DOCKER_HUB_USERNAME }}/${{ env.PROBE_CHAT_IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -113,7 +93,7 @@ jobs:
           context: ./examples/chat
           file: ./examples/chat/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -123,30 +103,9 @@ jobs:
             VCS_REF=${{ github.sha }}
             VERSION=${{ steps.meta.outputs.version }}
 
-  test-docker-images:
-    name: Test Docker Images
-    needs: [docker-build-probe, docker-build-probe-chat]
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Test Probe CLI Image
-        run: |
-          docker build -t test-probe .
-          docker run --rm test-probe --help
-          docker run --rm test-probe --version
-
-      - name: Test Probe Chat Image
-        run: |
-          docker build -t test-probe-chat -f examples/chat/Dockerfile examples/chat
-          docker run --rm test-probe-chat --help
-
   update-docker-hub-description:
     name: Update Docker Hub Description
     needs: [docker-build-probe, docker-build-probe-chat]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

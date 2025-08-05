@@ -20,11 +20,9 @@ The following variables can be configured in repository settings:
 
 ### docker.yml
 - Triggers on:
-  - Push to main branch
-  - Pull requests affecting Docker files
-  - Version tags (v*)
+  - Version tags (v*) ONLY
 - Builds multi-platform images (linux/amd64, linux/arm64)
-- Pushes to Docker Hub on main branch and tags
+- Pushes to Docker Hub with version tags
 - Updates Docker Hub descriptions
 
 ### release.yml
@@ -40,9 +38,10 @@ The following variables can be configured in repository settings:
 ## Testing Locally
 
 ```bash
-# Test the Docker build workflow
-act -j docker-build-probe --secret DOCKER_HUB_TOKEN=your_token
+# Test the Docker build workflow with a tag
+act -j docker-build-probe --secret DOCKER_HUB_TOKEN=your_token -e <(echo '{"ref": "refs/tags/v1.0.0"}')
 
-# Test with dry run (no push)
-act -j docker-build-probe --env GITHUB_EVENT_NAME=pull_request
+# Test locally without act
+docker build -t probe-test .
+docker build -t probe-chat-test -f examples/chat/Dockerfile examples/chat
 ```
