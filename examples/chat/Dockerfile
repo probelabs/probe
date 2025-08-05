@@ -15,19 +15,27 @@ WORKDIR /app
 # Copy package files first for better layer caching
 COPY package.json ./
 
-# Install dependencies and clean cache
-RUN npm install --only=production && \
+# Install ALL dependencies (including dev dependencies for build)
+RUN npm install --include=dev && \
+    npm cache clean --force
+
+# Copy source files for bundling
+COPY . ./
+
+# Build production bundle
+RUN npm run build:prod
+
+# Install only production dependencies for runtime
+RUN rm -rf node_modules && \
+    npm install --only=production && \
     npm cache clean --force && \
-    # Remove unnecessary files from packages
+    # Clean production node_modules
     find node_modules -name "*.md" -delete && \
     find node_modules -name "*.txt" -delete && \
     find node_modules -name "test" -type d -exec rm -rf {} + 2>/dev/null || true && \
     find node_modules -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true && \
     find node_modules -name "*.test.js" -delete && \
     find node_modules -name "*.spec.js" -delete
-
-# Copy only essential source files (filtered by .dockerignore)
-COPY . ./
 
 # Runtime stage - use alpine for smaller size
 FROM node:20-alpine
@@ -67,16 +75,14 @@ RUN mkdir -p /app && \
 
 WORKDIR /app
 
-# Copy only node_modules from builder
+# Copy production node_modules (only external dependencies)
 COPY --from=builder --chown=probe:probe /app/node_modules ./node_modules
 
-# Copy only essential application files (no need to copy from builder, use local files)
-COPY --chown=probe:probe package.json index.js probeChat.js webServer.js probeTool.js tools.js ./
-COPY --chown=probe:probe auth.js cancelRequest.js telemetry.js fileSpanExporter.js appTracer.js ./
-COPY --chown=probe:probe tokenCounter.js tokenUsageDisplay.js index.html logo.png ./
-COPY --chown=probe:probe bin/ ./bin/
-COPY --chown=probe:probe storage/ ./storage/
-COPY --chown=probe:probe implement/ ./implement/
+# Copy the bundled distribution instead of source files
+COPY --from=builder --chown=probe:probe /app/dist ./dist
+
+# Update the default command to use bundled app
+COPY --from=builder --chown=probe:probe /app/package.json ./package.json
 
 # Switch to non-root user
 USER probe
@@ -89,4 +95,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:3000/health || node --version || exit 1
 
 # Default: CLI mode. To run web mode, use: docker run ... probe-chat-app --web
-ENTRYPOINT ["node", "index.js"]
+ENTRYPOINT ["node", "dist/index.js"]
