@@ -15,8 +15,8 @@ ENV PATH=${CARGO_HOME}/bin:${RUSTUP_HOME}/bin:$PATH
 
 WORKDIR /usr/src/probe
 
-# Copy manifest file first for caching
-COPY Cargo.toml ./
+# Copy manifest files first for caching
+COPY Cargo.toml Cargo.lock* ./
 # Copy source code
 COPY src ./src
 # Copy benches for benchmarks referenced in Cargo.toml
@@ -44,8 +44,13 @@ LABEL maintainer="Probe Team" \
       org.opencontainers.image.title="Probe" \
       org.opencontainers.image.description="AI-friendly code search tool built in Rust"
 
-# Install CA certificates (for HTTPS support)
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+# Install CA certificates and curl for health checks
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Create non-root user
 RUN groupadd -r probe && \
@@ -62,6 +67,10 @@ COPY --from=builder --chown=probe:probe /usr/src/probe/target/release/probe /usr
 
 # Switch to non-root user
 USER probe
+
+# Add health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD /usr/local/bin/probe --version || exit 1
 
 # Set the default command
 ENTRYPOINT ["/usr/local/bin/probe"]
