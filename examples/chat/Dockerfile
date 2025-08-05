@@ -18,7 +18,9 @@ COPY package.json ./
 # Install dependencies and clean cache
 RUN npm install --only=production && \
     npm cache clean --force && \
-    # Remove unnecessary files
+    # Remove the massive @anthropic-ai/claude-code optional dependency (163MB of IDE plugins!)
+    rm -rf node_modules/@anthropic-ai/claude-code && \
+    # Remove unnecessary files from remaining packages
     find node_modules -name "*.md" -delete && \
     find node_modules -name "*.txt" -delete && \
     find node_modules -name "test" -type d -exec rm -rf {} + 2>/dev/null || true && \
