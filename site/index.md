@@ -37,6 +37,13 @@ hero:
               </div>
               <p class="option-description">Built-in AI agent. <small>OpenAI or Anthropic (API key required)</small></p>
             </div>
+            <div class="quick-start-option">
+              <h3>Docker</h3>
+              <div class="pre-wrapper">
+                <div class="language-bash"><pre><code>docker run --rm -v $(pwd):/workspace buger/probe search "function"</code></pre></div>
+              </div>
+              <p class="option-description">Containerized deployment with multi-platform support</p>
+            </div>
     </div>
   </div>
 </div>
