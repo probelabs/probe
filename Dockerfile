@@ -19,8 +19,8 @@ WORKDIR /usr/src/probe
 COPY Cargo.toml Cargo.lock* ./
 # Copy source code
 COPY src ./src
-# Copy benches for benchmarks referenced in Cargo.toml
-COPY benches ./benches
+# Note: benches/ directory not needed for production builds
+# Benchmarks are only used during development with `cargo bench`
 
 # Build the project in release mode (this will generate Cargo.lock if missing)
 RUN cargo build --release
