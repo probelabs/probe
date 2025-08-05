@@ -41,10 +41,9 @@ yarn-error.log*
 .npm/
 .yarn/
 
-# Examples and benchmarks
+# Examples (but keep benchmarks - needed for Cargo.toml validation)
 examples/
 !examples/chat/
-benches/
 
 # MCP directories
 mcp/
