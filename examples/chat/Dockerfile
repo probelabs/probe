@@ -18,9 +18,7 @@ COPY package.json ./
 # Install dependencies and clean cache
 RUN npm install --only=production && \
     npm cache clean --force && \
-    # Remove the massive @anthropic-ai/claude-code optional dependency (163MB of IDE plugins!)
-    rm -rf node_modules/@anthropic-ai/claude-code && \
-    # Remove unnecessary files from remaining packages
+    # Remove unnecessary files from packages
     find node_modules -name "*.md" -delete && \
     find node_modules -name "*.txt" -delete && \
     find node_modules -name "test" -type d -exec rm -rf {} + 2>/dev/null || true && \
@@ -54,6 +52,10 @@ LABEL maintainer="Probe Team" \
 RUN apk add --no-cache \
         curl \
         ca-certificates
+
+# Install claude-code globally as a system tool (separate from app dependencies)
+RUN npm install -g @anthropic-ai/claude-code && \
+    npm cache clean --force
 
 # Create non-root user (alpine way)
 RUN addgroup -g 1001 -S probe && \

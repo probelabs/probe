@@ -46,9 +46,6 @@
     "tiktoken": "^1.0.20",
     "zod": "^3.24.2"
   },
-  "optionalDependencies": {
-    "@anthropic-ai/claude-code": "^1.0.65"
-  },
   "peerDependencies": {
     "aider-chat": ">=0.20.0"
   },
