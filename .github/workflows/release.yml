@@ -427,3 +427,48 @@ jobs:
             VERSION=${{ env.VERSION }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
             VCS_REF=${{ github.sha }}
+
+      # Update Docker Hub descriptions
+      - name: Update Probe Docker Hub Description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ vars.DOCKER_HUB_USERNAME || 'buger' }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+          repository: ${{ vars.DOCKER_HUB_USERNAME || 'buger' }}/probe
+          readme-filepath: ./DOCKER-README.md
+          short-description: "Probe - AI-friendly code search tool built in Rust"
+
+      - name: Create Probe Chat README
+        run: |
+          cat > PROBE-CHAT-README.md << 'EOF'
+          # Probe Chat - AI-powered Chat Interface for Probe
+
+          Probe Chat provides an interactive AI-powered interface for the Probe code search tool.
+
+          ## Quick Start
+
+          ### CLI Mode
+          ```bash
+          docker run --rm -e ANTHROPIC_API_KEY=your_key buger/probe-chat
+          ```
+
+          ### Web Mode
+          ```bash
+          docker run --rm -e ANTHROPIC_API_KEY=your_key -p 3000:3000 buger/probe-chat --web
+          ```
+
+          ## Environment Variables
+          - `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`: Required for LLM features
+          - `ALLOWED_FOLDERS`: Optional, restricts searchable folders
+
+          For full documentation, visit: https://github.com/buger/probe
+          EOF
+
+      - name: Update Probe Chat Docker Hub Description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ vars.DOCKER_HUB_USERNAME || 'buger' }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+          repository: ${{ vars.DOCKER_HUB_USERNAME || 'buger' }}/probe-chat
+          readme-filepath: ./PROBE-CHAT-README.md
+          short-description: "Probe Chat - AI-powered interface for code search and analysis"

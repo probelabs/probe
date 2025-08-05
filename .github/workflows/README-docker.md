@@ -16,19 +16,17 @@ The following variables can be configured in repository settings:
 
 1. **`DOCKER_HUB_USERNAME`** - Docker Hub username (defaults to 'buger')
 
-## Workflows
-
-### docker.yml
-- Triggers on:
-  - Version tags (v*) ONLY
-- Builds multi-platform images (linux/amd64, linux/arm64)
-- Pushes to Docker Hub with version tags
-- Updates Docker Hub descriptions
+## Workflow Integration
 
 ### release.yml
-- Enhanced to include Docker publishing
-- Publishes versioned images on releases
-- Tags: `vX.Y.Z` and `latest`
+The Docker build and publish process is integrated into the main release workflow:
+- Triggers on version tags (v*)
+- Builds multi-platform images (linux/amd64, linux/arm64)
+- Publishes versioned images to Docker Hub
+- Updates Docker Hub descriptions
+- Tags: `X.Y.Z` and `latest`
+
+The `publish-docker-images` job runs after the binary releases are complete, ensuring all release artifacts are available.
 
 ## Image Naming
 
@@ -38,10 +36,13 @@ The following variables can be configured in repository settings:
 ## Testing Locally
 
 ```bash
-# Test the Docker build workflow with a tag
-act -j docker-build-probe --secret DOCKER_HUB_TOKEN=your_token -e <(echo '{"ref": "refs/tags/v1.0.0"}')
+# Test the full release workflow (including Docker builds)
+act -j publish-docker-images --secret DOCKER_HUB_TOKEN=your_token -e <(echo '{"ref": "refs/tags/v1.0.0"}')
 
-# Test locally without act
+# Test Docker builds locally
 docker build -t probe-test .
 docker build -t probe-chat-test -f examples/chat/Dockerfile examples/chat
+
+# Test multi-platform builds locally
+docker buildx build --platform linux/amd64,linux/arm64 -t probe-test .
 ```
