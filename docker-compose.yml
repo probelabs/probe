@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  probe:
+    image: buger/probe:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        BUILD_DATE: ${BUILD_DATE:-}
+        VCS_REF: ${VCS_REF:-}
+    volumes:
+      - ./:/workspace:ro
+    working_dir: /workspace
+    command: --help
+
+  probe-chat-cli:
+    image: buger/probe-chat:latest
+    build:
+      context: ./examples/chat
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        BUILD_DATE: ${BUILD_DATE:-}
+        VCS_REF: ${VCS_REF:-}
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ALLOWED_FOLDERS=${ALLOWED_FOLDERS:-}
+    volumes:
+      - ./:/workspace:ro
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+
+  probe-chat-web:
+    image: buger/probe-chat:latest
+    build:
+      context: ./examples/chat
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        BUILD_DATE: ${BUILD_DATE:-}
+        VCS_REF: ${VCS_REF:-}
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ALLOWED_FOLDERS=${ALLOWED_FOLDERS:-}
+    volumes:
+      - ./:/workspace:ro
+    working_dir: /workspace
+    ports:
+      - "3000:3000"
+    command: --web
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+# Development profile for local builds
+profiles:
+  dev:
+    probe-dev:
+      build:
+        context: .
+        dockerfile: Dockerfile
+        cache_from:
+          - buger/probe:latest
+      volumes:
+        - ./:/workspace:ro
+        - cargo-cache:/usr/local/cargo
+      working_dir: /workspace
+      command: --help
+
+volumes:
+  cargo-cache:

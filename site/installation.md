@@ -4,7 +4,29 @@ Probe can be installed in several ways, depending on your preferences and system
 
 ## Quick Installation
 
-You can install Probe with a single command using npm, curl, or PowerShell:
+You can install Probe in several ways - choose the method that best fits your environment:
+
+### Using Docker (Recommended for containerized environments)
+
+```bash
+# Pull the CLI image
+docker pull buger/probe:latest
+
+# Create an alias for easy usage
+alias probe='docker run --rm -v $(pwd):/workspace buger/probe'
+
+# For the AI chat interface
+docker pull buger/probe-chat:latest
+```
+
+**Benefits of Docker installation**:
+- No local dependencies required
+- Consistent environment across systems
+- Multi-platform support (AMD64, ARM64)
+- Easy CI/CD integration
+- Isolated execution environment
+
+[→ Full Docker documentation](./integrations/docker.md)
 
 ### Using npm (Recommended for Node.js users)
 

@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Help command**: Added `--help/-h` flag to display usage information
 - **Large codebase support**: Extended timeouts enable searching in massive repositories
 
+#### Docker Integration & CI/CD
+- **Official Docker images**: Pre-built images available on Docker Hub
+  - `buger/probe` - CLI tool for code search
+  - `buger/probe-chat` - AI-powered chat interface
+- **Multi-platform support**: Images built for linux/amd64 and linux/arm64
+- **Docker Compose configuration**: Easy local development setup
+- **Automated CI/CD**: Docker images automatically built and published on releases
+- **Security best practices**: Non-root execution, minimal base images, health checks
+- **Production ready**: OCI-compliant labels, versioning, and comprehensive documentation
+
 ### 🔧 Improvements
 
 #### Backend Detection Enhancements
