@@ -15,19 +15,16 @@ ENV PATH=${CARGO_HOME}/bin:${RUSTUP_HOME}/bin:$PATH
 
 WORKDIR /usr/src/probe
 
-# Copy manifest files first for caching
-COPY Cargo.toml Cargo.lock* ./
-# Copy source code
-COPY src ./src
-# Copy benches - required because Cargo.toml declares benchmark targets
-# Even for release builds, Cargo validates that benchmark files exist
-COPY benches ./benches
+# Copy the entire build context (filtered by .dockerignore)
+# This is simpler and more maintainable than selective copying
+COPY . .
 
 # Build the project in release mode (this will generate Cargo.lock if missing)
 RUN cargo build --release
 
 # ---- Runtime Stage ----
-FROM debian:bookworm-slim
+# Use distroless for minimal attack surface and smaller image
+FROM gcr.io/distroless/cc-debian12
 
 # Build arguments for metadata
 ARG VERSION=dev
@@ -45,33 +42,14 @@ LABEL maintainer="Probe Team" \
       org.opencontainers.image.title="Probe" \
       org.opencontainers.image.description="AI-friendly code search tool built in Rust"
 
-# Install CA certificates and curl for health checks
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+# Distroless images run as non-root by default and include CA certificates
 
-# Create non-root user
-RUN groupadd -r probe && \
-    useradd -r -g probe -s /bin/bash -m probe
+# Copy the compiled binary from the builder (distroless uses /usr/local/bin)
+COPY --from=builder /usr/src/probe/target/release/probe /usr/local/bin/probe
 
-# Create directory and set ownership
-RUN mkdir -p /app && \
-    chown -R probe:probe /app
-
-WORKDIR /app
-
-# Copy the compiled binary from the builder
-COPY --from=builder --chown=probe:probe /usr/src/probe/target/release/probe /usr/local/bin/probe
-
-# Switch to non-root user
-USER probe
-
-# Add health check
+# Health check using the binary (distroless runs as non-root by default)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD /usr/local/bin/probe --version || exit 1
+    CMD ["/usr/local/bin/probe", "--version"]
 
 # Set the default command
 ENTRYPOINT ["/usr/local/bin/probe"]
