@@ -13,10 +13,10 @@ ENV NODE_ENV=${NODE_ENV}
 WORKDIR /app
 
 # Copy package files first for better layer caching
-COPY package.json package-lock.json* ./
+COPY package.json ./
 
-# Install dependencies and clean cache
-RUN npm ci --omit=dev && \
+# Install dependencies and clean cache  
+RUN npm install --only=production && \
     npm cache clean --force
 
 # Copy source code
