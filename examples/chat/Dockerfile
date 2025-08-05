@@ -1,5 +1,5 @@
-# Build stage
-FROM node:20.12.2-slim AS builder
+# Build stage - use alpine for smaller size
+FROM node:20-alpine AS builder
 
 # Set build arguments for better caching
 ARG NODE_ENV=production
@@ -15,15 +15,22 @@ WORKDIR /app
 # Copy package files first for better layer caching
 COPY package.json ./
 
-# Install dependencies and clean cache  
+# Install dependencies and clean cache
 RUN npm install --only=production && \
-    npm cache clean --force
+    npm cache clean --force && \
+    # Remove unnecessary files
+    find node_modules -name "*.md" -delete && \
+    find node_modules -name "*.txt" -delete && \
+    find node_modules -name "test" -type d -exec rm -rf {} + 2>/dev/null || true && \
+    find node_modules -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true && \
+    find node_modules -name "*.test.js" -delete && \
+    find node_modules -name "*.spec.js" -delete
 
-# Copy source code
+# Copy only essential source files (filtered by .dockerignore)
 COPY . ./
 
-# Runtime stage
-FROM node:20.12.2-slim
+# Runtime stage - use alpine for smaller size
+FROM node:20-alpine
 
 # Build arguments for metadata
 ARG VERSION=dev
@@ -41,17 +48,14 @@ LABEL maintainer="Probe Team" \
       org.opencontainers.image.title="Probe Chat" \
       org.opencontainers.image.description="AI-powered chat interface for code search and analysis"
 
-# Install only essential runtime dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ca-certificates \
+# Install only essential runtime dependencies (alpine uses apk, not apt)
+RUN apk add --no-cache \
         curl \
-        && rm -rf /var/lib/apt/lists/* \
-        && apt-get clean
+        ca-certificates
 
-# Create non-root user
-RUN groupadd -r probe && \
-    useradd -r -g probe -s /bin/bash -m probe
+# Create non-root user (alpine way)
+RUN addgroup -g 1001 -S probe && \
+    adduser -S -u 1001 -G probe probe
 
 # Create app directory and set ownership
 RUN mkdir -p /app && \
@@ -59,9 +63,16 @@ RUN mkdir -p /app && \
 
 WORKDIR /app
 
-# Copy node_modules and source from builder
+# Copy only node_modules from builder
 COPY --from=builder --chown=probe:probe /app/node_modules ./node_modules
-COPY --from=builder --chown=probe:probe /app ./
+
+# Copy only essential application files (no need to copy from builder, use local files)
+COPY --chown=probe:probe package.json index.js probeChat.js webServer.js probeTool.js tools.js ./
+COPY --chown=probe:probe auth.js cancelRequest.js telemetry.js fileSpanExporter.js appTracer.js ./
+COPY --chown=probe:probe tokenCounter.js tokenUsageDisplay.js index.html logo.png ./
+COPY --chown=probe:probe bin/ ./bin/
+COPY --chown=probe:probe storage/ ./storage/
+COPY --chown=probe:probe implement/ ./implement/
 
 # Switch to non-root user
 USER probe
