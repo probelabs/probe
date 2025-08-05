@@ -1,9 +1,12 @@
 # ---- Build Stage ----
-FROM rust:latest AS builder
+FROM rust:1.84 AS builder
 
 # Set build arguments for better caching
 ARG CARGO_HOME=/usr/local/cargo
 ARG RUSTUP_HOME=/usr/local/rustup
+ARG VERSION=dev
+ARG BUILD_DATE
+ARG VCS_REF
 
 # Set environment variables
 ENV CARGO_HOME=${CARGO_HOME}
@@ -25,10 +28,21 @@ RUN cargo build --release
 # ---- Runtime Stage ----
 FROM debian:bookworm-slim
 
-# Add security labels
+# Build arguments for metadata
+ARG VERSION=dev
+ARG BUILD_DATE
+ARG VCS_REF
+
+# Add security and metadata labels
 LABEL maintainer="Probe Team" \
       description="Probe - Code search tool" \
-      version="latest"
+      version="${VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.source="https://github.com/buger/probe" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.title="Probe" \
+      org.opencontainers.image.description="AI-friendly code search tool built in Rust"
 
 # Install CA certificates (for HTTPS support)
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*

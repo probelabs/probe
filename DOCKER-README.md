@@ -1,35 +1,69 @@
 # Docker Usage Guide for Probe
 
 This guide explains how to build and use the Docker containers for both the Rust-based Probe CLI tool and the Node.js-based probe-chat interface (CLI and web modes).
+
+## Docker Hub Images
+
+Pre-built images are available on Docker Hub:
+- **Probe CLI**: `docker pull buger/probe:latest`
+- **Probe Chat**: `docker pull buger/probe-chat:latest`
+
+### Available Tags
+- `latest` - Latest stable release
+- `vX.Y.Z` - Specific version (e.g., `v1.0.0`)
+- `main` - Latest development build from main branch
+
 ---
 
 ## 1. Probe CLI (Rust)
 
-### Build the Image
+### Using Docker Hub Image
+```sh
+docker pull buger/probe:latest
+```
+
+### Build the Image Locally
 ```sh
 docker build -t probe-app .
 ```
 
 ### Run the CLI
 ```sh
+# Using Docker Hub image
+docker run --rm buger/probe --help
+
+# Using locally built image
 docker run --rm probe-app --help
 ```
 
 You can pass any Probe CLI arguments as needed:
 ```sh
-docker run --rm probe-app search "fn main" /app/src
+# Using Docker Hub image
+docker run --rm -v $(pwd):/workspace buger/probe search "fn main" /workspace
+
+# Using locally built image
+docker run --rm -v $(pwd):/workspace probe-app search "fn main" /workspace
 ```
 
 ### Optional
 You can alias the Docker command to make the interaction identical to a local installation:
-```
-alias probe='docker run --rm probe-app'
+```sh
+# Using Docker Hub image
+alias probe='docker run --rm -v $(pwd):/workspace buger/probe'
+
+# Using locally built image  
+alias probe='docker run --rm -v $(pwd):/workspace probe-app'
 ```
 ---
 
 ## 2. Probe Chat (Node.js CLI & Web)
 
-### Build the Image
+### Using Docker Hub Image
+```sh
+docker pull buger/probe-chat:latest
+```
+
+### Build the Image Locally
 ```sh
 docker build -t probe-chat-app -f examples/chat/Dockerfile examples/chat
 ```
@@ -40,11 +74,19 @@ docker build -t probe-chat-app -f examples/chat/Dockerfile examples/chat
 
 ### Run in CLI Mode
 ```sh
+# Using Docker Hub image
+docker run --rm -e ANTHROPIC_API_KEY=your_api_key buger/probe-chat
+
+# Using locally built image
 docker run --rm -e ANTHROPIC_API_KEY=your_api_key probe-chat-app
 ```
 
 ### Run in Web Mode
 ```sh
+# Using Docker Hub image
+docker run --rm -e ANTHROPIC_API_KEY=your_api_key -p 8080:3000 buger/probe-chat --web
+
+# Using locally built image
 docker run --rm -e ANTHROPIC_API_KEY=your_api_key -p 8080:3000 probe-chat-app --web
 ```
 
@@ -95,6 +137,49 @@ docker run --rm -v $(pwd):/app/src probe-app query "function_declaration"
 - **Size:** ~1GB
 - **User:** `probe` (non-root)
 - **Ports:** 3000 (web mode)
+
+---
+
+## Docker Compose
+
+For easier local development and testing, use Docker Compose:
+
+### Quick Start with Docker Compose
+
+1. **Create a `.env` file** with your API keys:
+```sh
+ANTHROPIC_API_KEY=your_api_key_here
+# Or use OpenAI:
+# OPENAI_API_KEY=your_api_key_here
+```
+
+2. **Run services**:
+```sh
+# Run Probe CLI
+docker compose run --rm probe search "function" .
+
+# Run Probe Chat CLI
+docker compose run --rm probe-chat-cli
+
+# Run Probe Chat Web (accessible at http://localhost:3000)
+docker compose up probe-chat-web
+```
+
+3. **Build locally** (for development):
+```sh
+# Build all services
+docker compose build
+
+# Build and run with dev profile
+docker compose --profile dev up
+```
+
+### Docker Compose Services
+
+- **probe**: Probe CLI tool for code search
+- **probe-chat-cli**: Interactive chat interface (CLI mode)
+- **probe-chat-web**: Web interface (port 3000)
+- **probe-dev**: Development build with cargo cache (dev profile)
 
 ---
 

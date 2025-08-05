@@ -1,0 +1,59 @@
+# Git files
+.git/
+.github/
+.gitignore
+.githooks/
+
+# Build artifacts
+target/
+Cargo.lock
+
+# Documentation
+*.md
+!README.md
+!LICENSE
+!ABOUT.MD
+docs/
+site/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test files
+tests/
+test_cases/
+*.test.*
+
+# Scripts and CI
+scripts/
+.claude/
+
+# Node.js artifacts (for examples/chat)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+.yarn/
+
+# Examples and benchmarks
+examples/
+!examples/chat/
+benches/
+
+# MCP directories
+mcp/
+mcp-agent/
+
+# NPM package directory
+npm/
+
+# Temporary files
+*.tmp
+*.log
+*.cache
