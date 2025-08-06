@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "lsp-daemon", "examples/lsp-client"]
+resolver = "2"
+
 [package]
 name = "probe-code"
 version = "0.6.0"
