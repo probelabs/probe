@@ -7,6 +7,7 @@ use crate::protocol::{
     DaemonStatus, LanguageInfo, MessageCodec, PoolStatus,
 };
 use crate::socket_path::{get_default_socket_path, remove_socket_file};
+use crate::workspace_resolver::WorkspaceResolver;
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use std::fs;
@@ -23,6 +24,7 @@ pub struct LspDaemon {
     registry: Arc<LspRegistry>,
     detector: Arc<LanguageDetector>,
     pool_manager: Arc<PoolManager>,
+    workspace_resolver: Arc<tokio::sync::Mutex<WorkspaceResolver>>,
     connections: Arc<DashMap<Uuid, Instant>>,
     start_time: Instant,
     request_count: Arc<RwLock<u64>>,
@@ -31,15 +33,21 @@ pub struct LspDaemon {
 
 impl LspDaemon {
     pub fn new(socket_path: String) -> Result<Self> {
+        Self::new_with_config(socket_path, None)
+    }
+
+    pub fn new_with_config(socket_path: String, allowed_roots: Option<Vec<PathBuf>>) -> Result<Self> {
         let registry = Arc::new(LspRegistry::new()?);
         let detector = Arc::new(LanguageDetector::new());
         let pool_manager = Arc::new(PoolManager::new());
+        let workspace_resolver = Arc::new(tokio::sync::Mutex::new(WorkspaceResolver::new(allowed_roots)));
 
         Ok(Self {
             socket_path,
             registry,
             detector,
             pool_manager,
+            workspace_resolver,
             connections: Arc::new(DashMap::new()),
             start_time: Instant::now(),
             request_count: Arc::new(RwLock::new(0)),
@@ -150,11 +158,32 @@ impl LspDaemon {
                 daemon_version: env!("CARGO_PKG_VERSION").to_string(),
             },
 
+            DaemonRequest::InitializeWorkspace { request_id, workspace_root, language } => {
+                match self.handle_initialize_workspace(workspace_root, language).await {
+                    Ok((root, lang, server)) => DaemonResponse::WorkspaceInitialized { 
+                        request_id, 
+                        workspace_root: root, 
+                        language: lang, 
+                        lsp_server: server 
+                    },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::ListWorkspaces { request_id } => {
+                let workspaces = self.pool_manager.get_all_workspaces().await;
+                DaemonResponse::WorkspaceList { request_id, workspaces }
+            }
+
             DaemonRequest::CallHierarchy {
                 request_id,
                 file_path,
                 pattern,
-            } => match self.handle_call_hierarchy(&file_path, &pattern).await {
+                workspace_hint,
+            } => match self.handle_call_hierarchy(&file_path, &pattern, workspace_hint).await {
                 Ok(result) => DaemonResponse::CallHierarchy { request_id, result },
                 Err(e) => DaemonResponse::Error {
                     request_id,
@@ -225,6 +254,7 @@ impl LspDaemon {
         &self,
         file_path: &Path,
         pattern: &str,
+        workspace_hint: Option<PathBuf>,
     ) -> Result<CallHierarchyResult> {
         // Detect language
         let language = self.detector.detect(file_path)?;
@@ -233,6 +263,12 @@ impl LspDaemon {
             return Err(anyhow!("Unknown language for file: {:?}", file_path));
         }
 
+        // Resolve workspace root
+        let workspace_root = {
+            let mut resolver = self.workspace_resolver.lock().await;
+            resolver.resolve_workspace(file_path, workspace_hint)?
+        };
+
         // Get LSP server config
         let config = self
             .registry
@@ -240,8 +276,8 @@ impl LspDaemon {
             .ok_or_else(|| anyhow!("No LSP server configured for {:?}", language))?
             .clone();
 
-        // Get server from pool
-        let pool = self.pool_manager.get_pool(language, config).await;
+        // Get server from pool (with workspace)
+        let pool = self.pool_manager.get_pool(language, workspace_root, config).await;
         let pooled_server = pool.get_server().await?;
 
         // Read file content
@@ -271,6 +307,66 @@ impl LspDaemon {
 
         // Parse result
         parse_call_hierarchy_from_lsp(&result)
+    }
+
+    async fn handle_initialize_workspace(
+        &self,
+        workspace_root: PathBuf,
+        language_hint: Option<Language>,
+    ) -> Result<(PathBuf, Language, String)> {
+        // Validate workspace root exists
+        if !workspace_root.exists() {
+            return Err(anyhow!("Workspace root does not exist: {:?}", workspace_root));
+        }
+
+        // Check if workspace is allowed
+        {
+            let resolver = self.workspace_resolver.lock().await;
+            if !resolver.is_path_allowed(&workspace_root) {
+                return Err(anyhow!("Workspace {:?} not in allowed roots", workspace_root));
+            }
+        }
+
+        // Determine language - use hint if provided, otherwise detect from workspace
+        let language = if let Some(lang) = language_hint {
+            lang
+        } else {
+            // Try to detect language from common files in workspace
+            self.detect_workspace_language(&workspace_root)?
+        };
+
+        // Get LSP server config
+        let config = self
+            .registry
+            .get(language)
+            .ok_or_else(|| anyhow!("No LSP server configured for {:?}", language))?
+            .clone();
+
+        // Initialize pool for this workspace
+        let _pool = self.pool_manager.get_pool(language, workspace_root.clone(), config.clone()).await;
+
+        Ok((workspace_root, language, config.command))
+    }
+
+    fn detect_workspace_language(&self, workspace_root: &Path) -> Result<Language> {
+        // Look for common language markers in the workspace
+        let markers = [
+            ("go.mod", Language::Go),
+            ("Cargo.toml", Language::Rust),
+            ("package.json", Language::JavaScript),
+            ("pyproject.toml", Language::Python),
+            ("setup.py", Language::Python),
+            ("pom.xml", Language::Java),
+            ("build.gradle", Language::Java),
+        ];
+
+        for (marker, language) in &markers {
+            if workspace_root.join(marker).exists() {
+                return Ok(*language);
+            }
+        }
+
+        Err(anyhow!("Could not detect language for workspace: {:?}", workspace_root))
     }
 
     async fn idle_checker(&self) {
@@ -317,6 +413,7 @@ impl LspDaemon {
             registry: self.registry.clone(),
             detector: self.detector.clone(),
             pool_manager: self.pool_manager.clone(),
+            workspace_resolver: self.workspace_resolver.clone(),
             connections: self.connections.clone(),
             start_time: self.start_time,
             request_count: self.request_count.clone(),
@@ -358,7 +455,21 @@ fn find_daemon_binary() -> Result<PathBuf> {
         }
     }
 
-    // 3. Check common installation directories
+    // 3. Check target/debug directory (for development/testing)
+    if let Ok(current_exe) = std::env::current_exe() {
+        // Go up directories to find the workspace root and check target/debug
+        let mut check_path = current_exe.parent();
+        while let Some(path) = check_path {
+            let target_debug = path.join("target").join("debug").join(&daemon_name);
+            if target_debug.exists() {
+                debug!("Found daemon in target/debug: {:?}", target_debug);
+                return Ok(target_debug);
+            }
+            check_path = path.parent();
+        }
+    }
+
+    // 4. Check common installation directories
     let common_paths = [
         "/usr/local/bin",
         "/usr/bin",

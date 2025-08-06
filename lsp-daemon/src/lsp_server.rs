@@ -30,11 +30,27 @@ impl std::fmt::Debug for LspServer {
 }
 
 impl LspServer {
+    pub fn spawn_with_workspace(config: &LspServerConfig, workspace_root: &PathBuf) -> Result<Self> {
+        Self::spawn_internal(config, Some(workspace_root))
+    }
+
     pub fn spawn(config: &LspServerConfig) -> Result<Self> {
+        Self::spawn_internal(config, None)
+    }
+
+    fn spawn_internal(config: &LspServerConfig, workspace_root: Option<&PathBuf>) -> Result<Self> {
         let command = normalize_executable(&config.command);
         info!("Spawning LSP server: {} {:?}", command, config.args);
 
-        let mut child = Command::new(&command)
+        // Set working directory - use workspace root if provided
+        let mut cmd = Command::new(&command);
+        if let Some(workspace) = workspace_root {
+            cmd.current_dir(workspace);
+        } else if config.language == crate::language_detector::Language::Go {
+            cmd.current_dir("/tmp");
+        }
+        
+        let mut child = cmd
             .args(&config.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -63,12 +79,27 @@ impl LspServer {
         })
     }
 
+    pub async fn initialize_with_workspace(&mut self, config: &LspServerConfig, workspace_root: &PathBuf) -> Result<()> {
+        self.initialize_internal(config, Some(workspace_root)).await
+    }
+
     pub async fn initialize(&mut self, config: &LspServerConfig) -> Result<()> {
+        self.initialize_internal(config, None).await
+    }
+
+    async fn initialize_internal(&mut self, config: &LspServerConfig, workspace_root: Option<&PathBuf>) -> Result<()> {
         if self.initialized {
             return Ok(());
         }
 
-        let project_root = std::env::current_dir()?;
+        // Use provided workspace root, or fallback to current directory or /tmp for Go
+        let project_root = if let Some(workspace) = workspace_root {
+            workspace.clone()
+        } else if config.language == crate::language_detector::Language::Go {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::current_dir()?
+        };
         self.project_root = Some(project_root.clone());
 
         let request_id = self.next_request_id().await;
