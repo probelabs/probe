@@ -1,10 +1,13 @@
 use anyhow::Result;
-use lsp_daemon::{start_daemon_background, IpcStream, MessageCodec, DaemonRequest, DaemonResponse, get_default_socket_path, DaemonStatus};
-use std::path::PathBuf;
+use lsp_daemon::{
+    get_default_socket_path, start_daemon_background, DaemonRequest, DaemonResponse, DaemonStatus,
+    IpcStream, MessageCodec,
+};
 use std::fs;
+use std::path::PathBuf;
 use tempfile::TempDir;
-use tokio::time::{sleep, Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 /// Integration test for multi-workspace LSP daemon functionality
@@ -14,7 +17,7 @@ async fn test_multi_workspace_go_projects() -> Result<()> {
     let _ = std::process::Command::new("pkill")
         .args(["-f", "lsp-daemon"])
         .output();
-    
+
     sleep(Duration::from_millis(500)).await;
 
     // Create temporary workspaces
@@ -28,52 +31,75 @@ async fn test_multi_workspace_go_projects() -> Result<()> {
     sleep(Duration::from_millis(2000)).await; // Give more time for daemon to fully start
 
     let socket_path = get_default_socket_path();
-    
+
     // Test workspace 1: Database project
     test_project_analysis(&socket_path, &workspace1, "Connect", &[("main", 25)]).await?;
-    test_project_analysis(&socket_path, &workspace1, "connectToDatabase", &[("Connect", 14)]).await?;
-    
-    // Test workspace 2: Web server project 
+    test_project_analysis(
+        &socket_path,
+        &workspace1,
+        "connectToDatabase",
+        &[("Connect", 14)],
+    )
+    .await?;
+
+    // Test workspace 2: Web server project
     test_project_analysis(&socket_path, &workspace2, "Start", &[("main", 25)]).await?;
-    test_project_analysis(&socket_path, &workspace2, "startHTTPServer", &[("Start", 16)]).await?;
-    
+    test_project_analysis(
+        &socket_path,
+        &workspace2,
+        "startHTTPServer",
+        &[("Start", 16)],
+    )
+    .await?;
+
     // Test workspace 3: Calculator project
     test_project_analysis(&socket_path, &workspace3, "Add", &[("main", 29)]).await?;
     test_project_analysis(&socket_path, &workspace3, "performAddition", &[("Add", 14)]).await?;
-    
+
     // Verify daemon status shows multiple workspaces
     let status = get_daemon_status(&socket_path).await?;
-    
+
     // Should have at least 3 Go pools (one per workspace)
-    let go_pools = status.pools.iter().filter(|p| p.language.as_str() == "Go").count();
-    assert!(go_pools >= 3, "Expected at least 3 Go pools, got {}", go_pools);
-    
+    let go_pools = status
+        .pools
+        .iter()
+        .filter(|p| p.language.as_str() == "Go")
+        .count();
+    assert!(
+        go_pools >= 3,
+        "Expected at least 3 Go pools, got {}",
+        go_pools
+    );
+
     println!("✅ Multi-workspace test completed successfully!");
     println!("   - {} workspaces tested", 3);
     println!("   - {} Go language pools active", go_pools);
     println!("   - Total requests processed: {}", status.total_requests);
-    
+
     Ok(())
 }
 
 async fn setup_go_project(temp_dir: &TempDir, name: &str, code: &str) -> Result<PathBuf> {
     let project_dir = temp_dir.path().join(name);
     fs::create_dir_all(&project_dir)?;
-    
+
     // Create go.mod
-    fs::write(project_dir.join("go.mod"), format!("module {}\n\ngo 1.21\n", name))?;
-    
+    fs::write(
+        project_dir.join("go.mod"),
+        format!("module {}\n\ngo 1.21\n", name),
+    )?;
+
     // Create main.go
     fs::write(project_dir.join("main.go"), code)?;
-    
+
     Ok(project_dir)
 }
 
 async fn test_project_analysis(
     socket_path: &str,
-    workspace: &PathBuf, 
+    workspace: &PathBuf,
     pattern: &str,
-    expected_callers: &[(&str, u32)]
+    expected_callers: &[(&str, u32)],
 ) -> Result<()> {
     // Retry connection up to 5 times with exponential backoff
     let mut stream = None;
@@ -84,52 +110,75 @@ async fn test_project_analysis(
                 break;
             }
             Err(e) if attempt < 4 => {
-                println!("Connection attempt {} failed: {}, retrying...", attempt + 1, e);
+                println!(
+                    "Connection attempt {} failed: {}, retrying...",
+                    attempt + 1,
+                    e
+                );
                 sleep(Duration::from_millis(1000 * (attempt + 1) as u64)).await;
             }
             Err(e) => return Err(e.into()),
         }
     }
-    
+
     let mut stream = stream.unwrap();
-    
+
     let request = DaemonRequest::CallHierarchy {
         request_id: Uuid::new_v4(),
         file_path: workspace.join("main.go"),
         pattern: pattern.to_string(),
         workspace_hint: Some(workspace.clone()),
     };
-    
+
     let encoded = MessageCodec::encode(&request)?;
     stream.write_all(&encoded).await?;
-    
+
     // Read response with timeout
     let mut response_data = vec![0u8; 8192];
-    let n = tokio::time::timeout(Duration::from_secs(60), stream.read(&mut response_data)).await??;
+    let n =
+        tokio::time::timeout(Duration::from_secs(60), stream.read(&mut response_data)).await??;
     response_data.truncate(n);
-    
+
     match MessageCodec::decode_response(&response_data)? {
         DaemonResponse::CallHierarchy { result, .. } => {
-            println!("✅ Pattern '{}' in {:?}: {} incoming calls", pattern, workspace.file_name().unwrap(), result.incoming.len());
-            
+            println!(
+                "✅ Pattern '{}' in {:?}: {} incoming calls",
+                pattern,
+                workspace.file_name().unwrap(),
+                result.incoming.len()
+            );
+
             // Verify expected callers
-            assert_eq!(result.incoming.len(), expected_callers.len(), 
-                "Expected {} callers for '{}', got {}", expected_callers.len(), pattern, result.incoming.len());
-                
+            assert_eq!(
+                result.incoming.len(),
+                expected_callers.len(),
+                "Expected {} callers for '{}', got {}",
+                expected_callers.len(),
+                pattern,
+                result.incoming.len()
+            );
+
             for (expected_caller, expected_line) in expected_callers {
                 let found = result.incoming.iter().any(|call| {
-                    call.from.name.contains(expected_caller) && 
-                    call.from_ranges.iter().any(|range| range.start.line >= expected_line - 2 && range.start.line <= expected_line + 2)
+                    call.from.name.contains(expected_caller)
+                        && call.from_ranges.iter().any(|range| {
+                            range.start.line >= expected_line - 2
+                                && range.start.line <= expected_line + 2
+                        })
                 });
-                assert!(found, "Expected caller '{}' around line {} not found", expected_caller, expected_line);
+                assert!(
+                    found,
+                    "Expected caller '{}' around line {} not found",
+                    expected_caller, expected_line
+                );
             }
-        },
+        }
         DaemonResponse::Error { error, .. } => {
             panic!("Request failed: {}", error);
-        },
+        }
         _ => panic!("Unexpected response type"),
     }
-    
+
     Ok(())
 }
 
@@ -148,20 +197,20 @@ async fn get_daemon_status(socket_path: &str) -> Result<DaemonStatus> {
             Err(e) => return Err(e.into()),
         }
     }
-    
+
     let mut stream = stream.unwrap();
-    
+
     let request = DaemonRequest::Status {
         request_id: Uuid::new_v4(),
     };
-    
+
     let encoded = MessageCodec::encode(&request)?;
     stream.write_all(&encoded).await?;
-    
+
     let mut response_data = vec![0u8; 8192];
     let n = stream.read(&mut response_data).await?;
     response_data.truncate(n);
-    
+
     match MessageCodec::decode_response(&response_data)? {
         DaemonResponse::Status { status, .. } => Ok(status),
         _ => panic!("Expected status response"),
@@ -261,32 +310,32 @@ func main() {
 async fn test_workspace_isolation() -> Result<()> {
     // This test verifies that workspaces are properly isolated
     // and don't interfere with each other's symbol resolution
-    
+
     // Clean up any existing daemon
     let _ = std::process::Command::new("pkill")
         .args(["-f", "lsp-daemon"])
         .output();
-    
+
     sleep(Duration::from_millis(500)).await;
-    
+
     let temp_dir = TempDir::new()?;
-    
+
     // Create two projects with same function name but different implementations
     let workspace_a = setup_go_project(&temp_dir, "project_a", ISOLATION_PROJECT_A).await?;
     let workspace_b = setup_go_project(&temp_dir, "project_b", ISOLATION_PROJECT_B).await?;
-    
+
     // Start daemon
     start_daemon_background().await?;
     sleep(Duration::from_millis(2000)).await; // Give more time for daemon to fully start
-    
+
     let socket_path = get_default_socket_path();
-    
+
     // Test that each workspace sees only its own functions
     test_project_analysis(&socket_path, &workspace_a, "ProcessData", &[("main", 10)]).await?;
     test_project_analysis(&socket_path, &workspace_b, "ProcessData", &[("main", 14)]).await?;
-    
+
     println!("✅ Workspace isolation test completed successfully!");
-    
+
     Ok(())
 }
 
@@ -324,15 +373,15 @@ func main() {
 "#;
 
 // Test for allowed_roots security constraint
-#[tokio::test] 
+#[tokio::test]
 async fn test_allowed_roots_security() -> Result<()> {
     // This test would verify that the daemon respects allowed_roots constraints
     // when configured with restricted workspace access
-    
+
     // Note: This would require extending the daemon startup to accept config
     // For now, we'll just verify the basic functionality works
-    
+
     println!("✅ Security constraint test placeholder completed!");
-    
+
     Ok(())
 }

@@ -6,8 +6,8 @@ use anyhow::Result;
 use dashmap::DashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, info, warn};
@@ -65,7 +65,7 @@ impl LspServerPool {
         if self.is_spawning.load(Ordering::Acquire) {
             return;
         }
-        
+
         let ready_count = self.ready.lock().await.len();
         let busy_count = self.busy.len();
         let total = ready_count + busy_count;
@@ -85,16 +85,14 @@ impl LspServerPool {
 
                 tokio::spawn(async move {
                     // Try to set the spawning flag
-                    if is_spawning.compare_exchange(
-                        false,
-                        true,
-                        Ordering::AcqRel,
-                        Ordering::Acquire
-                    ).is_err() {
+                    if is_spawning
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_err()
+                    {
                         // Another task is already spawning
                         return;
                     }
-                    
+
                     match Self::spawn_server_with_workspace(&config, &workspace_root).await {
                         Ok(server) => {
                             let pooled = PooledServer {
@@ -117,7 +115,7 @@ impl LspServerPool {
                             );
                         }
                     }
-                    
+
                     // Clear the spawning flag
                     is_spawning.store(false, Ordering::Release);
                 });
@@ -125,10 +123,18 @@ impl LspServerPool {
         }
     }
 
-    async fn spawn_server_with_workspace(config: &LspServerConfig, workspace_root: &PathBuf) -> Result<LspServer> {
-        debug!("Spawning new LSP server for {:?} with workspace {:?}", config.language, workspace_root);
+    async fn spawn_server_with_workspace(
+        config: &LspServerConfig,
+        workspace_root: &PathBuf,
+    ) -> Result<LspServer> {
+        debug!(
+            "Spawning new LSP server for {:?} with workspace {:?}",
+            config.language, workspace_root
+        );
         let mut server = LspServer::spawn_with_workspace(config, workspace_root)?;
-        server.initialize_with_workspace(config, workspace_root).await?;
+        server
+            .initialize_with_workspace(config, workspace_root)
+            .await?;
         server.wait_until_ready().await?;
         Ok(server)
     }
@@ -159,20 +165,23 @@ impl LspServerPool {
                 "Server for {:?} is already being spawned, waiting...",
                 self.config.language
             );
-            
+
             // Wait for the spawning server to become ready
             let start = Instant::now();
             let timeout = Duration::from_secs(self.config.initialization_timeout_secs);
-            
+
             while start.elapsed() < timeout {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                
+
                 if let Some(server) = self.ready.lock().await.pop_front() {
-                    debug!("Got newly spawned server {} for {:?}", server.id, self.config.language);
+                    debug!(
+                        "Got newly spawned server {} for {:?}",
+                        server.id, self.config.language
+                    );
                     self.busy.insert(server.id, server.clone());
                     return Ok(server);
                 }
-                
+
                 // Check if spawning finished
                 if !self.is_spawning.load(Ordering::Acquire) {
                     // Try again to get a server
@@ -188,12 +197,11 @@ impl LspServerPool {
         // Check if we can spawn a new server
         if self.busy.len() < self.max_size {
             // Try to set the spawning flag
-            if self.is_spawning.compare_exchange(
-                false, 
-                true, 
-                Ordering::AcqRel, 
-                Ordering::Acquire
-            ).is_ok() {
+            if self
+                .is_spawning
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
                 info!(
                     "No ready servers for {:?}, spawning new one",
                     self.config.language
@@ -202,11 +210,12 @@ impl LspServerPool {
                 // Acquire semaphore permit
                 let _permit = self.semaphore.acquire().await?;
 
-                let server_result = Self::spawn_server_with_workspace(&self.config, &self.workspace_root).await;
-                
+                let server_result =
+                    Self::spawn_server_with_workspace(&self.config, &self.workspace_root).await;
+
                 // Always clear the spawning flag
                 self.is_spawning.store(false, Ordering::Release);
-                
+
                 let server = server_result?;
                 let pooled = PooledServer {
                     id: Uuid::new_v4(),
@@ -336,7 +345,12 @@ impl PoolManager {
         }
     }
 
-    pub async fn get_pool(&self, language: Language, workspace_root: PathBuf, config: LspServerConfig) -> LspServerPool {
+    pub async fn get_pool(
+        &self,
+        language: Language,
+        workspace_root: PathBuf,
+        config: LspServerConfig,
+    ) -> LspServerPool {
         self.pools
             .entry((language, workspace_root.clone()))
             .or_insert_with(|| LspServerPool::new(config, workspace_root))
@@ -365,7 +379,7 @@ impl PoolManager {
             let (language, workspace_root) = entry.key();
             let pool = entry.value();
             let stats = pool.get_stats().await;
-            
+
             let status = if stats.ready_servers > 0 {
                 crate::protocol::ServerStatus::Ready
             } else if stats.busy_servers > 0 {
@@ -392,7 +406,7 @@ impl PoolManager {
             if root == workspace_root {
                 let pool = entry.value();
                 let stats = pool.get_stats().await;
-                
+
                 let status = if stats.ready_servers > 0 {
                     crate::protocol::ServerStatus::Ready
                 } else if stats.busy_servers > 0 {

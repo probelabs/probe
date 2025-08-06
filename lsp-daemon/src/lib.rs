@@ -19,7 +19,8 @@ mod workspace_resolver;
 // Re-export commonly used types
 pub use protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, DaemonRequest,
-    DaemonResponse, DaemonStatus, LanguageInfo, MessageCodec, PoolStatus, WorkspaceInfo, ServerStatus,
+    DaemonResponse, DaemonStatus, LanguageInfo, MessageCodec, PoolStatus, ServerStatus,
+    WorkspaceInfo,
 };
 
 pub use ipc::{IpcListener, IpcStream};

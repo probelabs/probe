@@ -276,6 +276,57 @@ Use this checklist to verify the daemon and client are working correctly:
 ✅ All cleanup should happen automatically
 ✅ Socket/pipe files should be managed correctly
 
+## Known Issues and Workarounds
+
+### gopls (Go Language Server) Performance
+
+The Go language server (gopls) can be extremely slow to initialize (30-60 seconds) when no `go.mod` file is present. This happens because gopls attempts to scan the entire filesystem looking for Go modules, including your home directory and system folders.
+
+**Symptoms:**
+- gopls uses 100%+ CPU during startup
+- Requests timeout after 30-60 seconds
+- Multiple gopls processes may spawn
+
+**Root Cause:**
+When gopls doesn't find a `go.mod` file, it runs `findModules` which recursively scans directories. On macOS, this includes the `~/Library` folder which can contain hundreds of thousands of files.
+
+**Implemented Fixes:**
+1. Increased gopls initialization timeout to 60 seconds
+2. Added initialization options to limit gopls scope:
+   - `directoryFilters`: Restricts scanning to current directory only
+   - `expandWorkspaceToModule`: Disabled to prevent full module scanning
+   - `symbolScope`: Limited to workspace only
+3. gopls starts in `/tmp` directory to avoid home directory scanning
+4. Added spawning lock to prevent multiple gopls instances
+
+**User Workarounds:**
+1. **Always use go.mod files**: Create a `go.mod` file in your Go projects:
+   ```bash
+   go mod init myproject
+   ```
+
+2. **Use go.work files**: For multiple modules, create a `go.work` file:
+   ```bash
+   go work init
+   go work use ./module1 ./module2
+   ```
+
+3. **Test in isolated directories**: When testing, use a directory with go.mod:
+   ```bash
+   mkdir /tmp/gotest && cd /tmp/gotest
+   go mod init test
+   # Now gopls will start quickly
+   ```
+
+### Other Language Servers
+
+Some language servers may also have slow initialization times:
+- **Scala (metals)**: 60 seconds timeout configured
+- **Java (jdtls)**: 45 seconds timeout configured
+- **Kotlin**: 45 seconds timeout configured
+
+These servers typically need to index dependencies and build artifacts on first run.
+
 ## License
 
 MIT - See LICENSE file in the repository root
