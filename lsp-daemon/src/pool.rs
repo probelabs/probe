@@ -1,10 +1,13 @@
 use crate::language_detector::Language;
 use crate::lsp_registry::LspServerConfig;
 use crate::lsp_server::LspServer;
+use crate::protocol::WorkspaceInfo;
 use anyhow::Result;
 use dashmap::DashMap;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, info, warn};
@@ -16,31 +19,36 @@ pub struct PooledServer {
     pub server: Arc<LspServer>,
     pub last_used: Instant,
     pub request_count: usize,
+    pub workspace_root: PathBuf,
 }
 
 #[derive(Clone)]
 pub struct LspServerPool {
     config: Arc<LspServerConfig>,
+    workspace_root: PathBuf,
     ready: Arc<Mutex<VecDeque<PooledServer>>>,
     busy: Arc<DashMap<Uuid, PooledServer>>,
     semaphore: Arc<Semaphore>,
     min_size: usize,
     max_size: usize,
     max_requests_per_server: usize,
+    is_spawning: Arc<AtomicBool>,
 }
 
 impl LspServerPool {
-    pub fn new(config: LspServerConfig) -> Self {
+    pub fn new(config: LspServerConfig, workspace_root: PathBuf) -> Self {
         let min_size = 1;
         let max_size = 4;
         let pool = Self {
             config: Arc::new(config),
+            workspace_root,
             ready: Arc::new(Mutex::new(VecDeque::new())),
             busy: Arc::new(DashMap::new()),
             semaphore: Arc::new(Semaphore::new(max_size)),
             min_size,
             max_size,
             max_requests_per_server: 100, // Recycle after 100 requests
+            is_spawning: Arc::new(AtomicBool::new(false)),
         };
 
         // Start warming minimum servers
@@ -53,6 +61,11 @@ impl LspServerPool {
     }
 
     pub async fn ensure_minimum_servers(&self) {
+        // Don't start new servers if one is already being spawned
+        if self.is_spawning.load(Ordering::Acquire) {
+            return;
+        }
+        
         let ready_count = self.ready.lock().await.len();
         let busy_count = self.busy.len();
         let total = ready_count + busy_count;
@@ -67,15 +80,29 @@ impl LspServerPool {
             for _ in 0..needed {
                 let config = self.config.clone();
                 let ready = self.ready.clone();
+                let is_spawning = self.is_spawning.clone();
+                let workspace_root = self.workspace_root.clone();
 
                 tokio::spawn(async move {
-                    match Self::spawn_server(&config).await {
+                    // Try to set the spawning flag
+                    if is_spawning.compare_exchange(
+                        false,
+                        true,
+                        Ordering::AcqRel,
+                        Ordering::Acquire
+                    ).is_err() {
+                        // Another task is already spawning
+                        return;
+                    }
+                    
+                    match Self::spawn_server_with_workspace(&config, &workspace_root).await {
                         Ok(server) => {
                             let pooled = PooledServer {
                                 id: Uuid::new_v4(),
                                 server: Arc::new(server),
                                 last_used: Instant::now(),
                                 request_count: 0,
+                                workspace_root: workspace_root.clone(),
                             };
                             ready.lock().await.push_back(pooled);
                             info!(
@@ -90,15 +117,18 @@ impl LspServerPool {
                             );
                         }
                     }
+                    
+                    // Clear the spawning flag
+                    is_spawning.store(false, Ordering::Release);
                 });
             }
         }
     }
 
-    async fn spawn_server(config: &LspServerConfig) -> Result<LspServer> {
-        debug!("Spawning new LSP server for {:?}", config.language);
-        let mut server = LspServer::spawn(config)?;
-        server.initialize(config).await?;
+    async fn spawn_server_with_workspace(config: &LspServerConfig, workspace_root: &PathBuf) -> Result<LspServer> {
+        debug!("Spawning new LSP server for {:?} with workspace {:?}", config.language, workspace_root);
+        let mut server = LspServer::spawn_with_workspace(config, workspace_root)?;
+        server.initialize_with_workspace(config, workspace_root).await?;
         server.wait_until_ready().await?;
         Ok(server)
     }
@@ -123,28 +153,77 @@ impl LspServerPool {
             return Ok(server);
         }
 
-        // Check if we can spawn a new server
-        if self.busy.len() < self.max_size {
+        // Check if a server is already being spawned
+        if self.is_spawning.load(Ordering::Acquire) {
             info!(
-                "No ready servers for {:?}, spawning new one",
+                "Server for {:?} is already being spawned, waiting...",
                 self.config.language
             );
+            
+            // Wait for the spawning server to become ready
+            let start = Instant::now();
+            let timeout = Duration::from_secs(self.config.initialization_timeout_secs);
+            
+            while start.elapsed() < timeout {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                
+                if let Some(server) = self.ready.lock().await.pop_front() {
+                    debug!("Got newly spawned server {} for {:?}", server.id, self.config.language);
+                    self.busy.insert(server.id, server.clone());
+                    return Ok(server);
+                }
+                
+                // Check if spawning finished
+                if !self.is_spawning.load(Ordering::Acquire) {
+                    // Try again to get a server
+                    if let Some(server) = self.ready.lock().await.pop_front() {
+                        self.busy.insert(server.id, server.clone());
+                        return Ok(server);
+                    }
+                    break;
+                }
+            }
+        }
 
-            // Acquire semaphore permit
-            let _permit = self.semaphore.acquire().await?;
+        // Check if we can spawn a new server
+        if self.busy.len() < self.max_size {
+            // Try to set the spawning flag
+            if self.is_spawning.compare_exchange(
+                false, 
+                true, 
+                Ordering::AcqRel, 
+                Ordering::Acquire
+            ).is_ok() {
+                info!(
+                    "No ready servers for {:?}, spawning new one",
+                    self.config.language
+                );
 
-            let server = Self::spawn_server(&self.config).await?;
-            let pooled = PooledServer {
-                id: Uuid::new_v4(),
-                server: Arc::new(server),
-                last_used: Instant::now(),
-                request_count: 0,
-            };
+                // Acquire semaphore permit
+                let _permit = self.semaphore.acquire().await?;
 
-            let pooled_copy = pooled.clone();
-            self.busy.insert(pooled.id, pooled_copy);
+                let server_result = Self::spawn_server_with_workspace(&self.config, &self.workspace_root).await;
+                
+                // Always clear the spawning flag
+                self.is_spawning.store(false, Ordering::Release);
+                
+                let server = server_result?;
+                let pooled = PooledServer {
+                    id: Uuid::new_v4(),
+                    server: Arc::new(server),
+                    last_used: Instant::now(),
+                    request_count: 0,
+                    workspace_root: self.workspace_root.clone(),
+                };
 
-            return Ok(pooled);
+                let pooled_copy = pooled.clone();
+                self.busy.insert(pooled.id, pooled_copy);
+
+                return Ok(pooled);
+            } else {
+                // Another thread is spawning, wait for it
+                return Box::pin(self.get_server()).await;
+            }
         }
 
         // Wait for a server to become available
@@ -184,15 +263,17 @@ impl LspServerPool {
             // Spawn replacement in background
             let config = self.config.clone();
             let ready = self.ready.clone();
+            let workspace_root = self.workspace_root.clone();
 
             tokio::spawn(async move {
-                match Self::spawn_server(&config).await {
+                match Self::spawn_server_with_workspace(&config, &workspace_root).await {
                     Ok(new_server) => {
                         let pooled = PooledServer {
                             id: Uuid::new_v4(),
                             server: Arc::new(new_server),
                             last_used: Instant::now(),
                             request_count: 0,
+                            workspace_root: workspace_root.clone(),
                         };
                         ready.lock().await.push_back(pooled);
                     }
@@ -245,7 +326,7 @@ pub struct PoolStats {
 }
 
 pub struct PoolManager {
-    pools: Arc<DashMap<Language, LspServerPool>>,
+    pools: Arc<DashMap<(Language, PathBuf), LspServerPool>>,
 }
 
 impl PoolManager {
@@ -255,10 +336,10 @@ impl PoolManager {
         }
     }
 
-    pub async fn get_pool(&self, language: Language, config: LspServerConfig) -> LspServerPool {
+    pub async fn get_pool(&self, language: Language, workspace_root: PathBuf, config: LspServerConfig) -> LspServerPool {
         self.pools
-            .entry(language)
-            .or_insert_with(|| LspServerPool::new(config))
+            .entry((language, workspace_root.clone()))
+            .or_insert_with(|| LspServerPool::new(config, workspace_root))
             .clone()
     }
 
@@ -276,5 +357,58 @@ impl PoolManager {
         }
         stats.sort_by_key(|s| s.language.as_str().to_string());
         stats
+    }
+
+    pub async fn get_all_workspaces(&self) -> Vec<WorkspaceInfo> {
+        let mut workspaces = Vec::new();
+        for entry in self.pools.iter() {
+            let (language, workspace_root) = entry.key();
+            let pool = entry.value();
+            let stats = pool.get_stats().await;
+            
+            let status = if stats.ready_servers > 0 {
+                crate::protocol::ServerStatus::Ready
+            } else if stats.busy_servers > 0 {
+                crate::protocol::ServerStatus::Busy
+            } else {
+                crate::protocol::ServerStatus::Initializing
+            };
+
+            workspaces.push(WorkspaceInfo {
+                root: workspace_root.clone(),
+                language: *language,
+                server_status: status,
+                file_count: None, // Could be enhanced to actually count files
+            });
+        }
+        workspaces.sort_by(|a, b| a.root.cmp(&b.root));
+        workspaces
+    }
+
+    pub async fn get_workspace_info(&self, workspace_root: &PathBuf) -> Vec<WorkspaceInfo> {
+        let mut workspaces = Vec::new();
+        for entry in self.pools.iter() {
+            let (language, root) = entry.key();
+            if root == workspace_root {
+                let pool = entry.value();
+                let stats = pool.get_stats().await;
+                
+                let status = if stats.ready_servers > 0 {
+                    crate::protocol::ServerStatus::Ready
+                } else if stats.busy_servers > 0 {
+                    crate::protocol::ServerStatus::Busy
+                } else {
+                    crate::protocol::ServerStatus::Initializing
+                };
+
+                workspaces.push(WorkspaceInfo {
+                    root: root.clone(),
+                    language: *language,
+                    server_status: status,
+                    file_count: None,
+                });
+            }
+        }
+        workspaces
     }
 }

@@ -14,11 +14,12 @@ pub mod lsp_server;
 // Internal modules (not exposed)
 mod daemon;
 mod pool;
+mod workspace_resolver;
 
 // Re-export commonly used types
 pub use protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, DaemonRequest,
-    DaemonResponse, DaemonStatus, LanguageInfo, MessageCodec, PoolStatus,
+    DaemonResponse, DaemonStatus, LanguageInfo, MessageCodec, PoolStatus, WorkspaceInfo, ServerStatus,
 };
 
 pub use ipc::{IpcListener, IpcStream};

@@ -106,10 +106,26 @@ impl LspRegistry {
         self.register(LspServerConfig {
             language: Language::Go,
             command: "gopls".to_string(),
-            args: vec![],
-            initialization_options: None,
-            root_markers: vec!["go.mod".to_string()],
-            initialization_timeout_secs: 30,
+            args: vec!["serve".to_string(), "-mode=stdio".to_string()],
+            initialization_options: Some(serde_json::json!({
+                // Limit gopls to only the current directory to prevent
+                // scanning entire filesystem when no go.mod is found
+                "directoryFilters": ["-", "+."],
+                // Don't expand workspace to the entire module
+                "expandWorkspaceToModule": false,
+                // Only search workspace packages, not all dependencies
+                "symbolScope": "workspace",
+                // Disable deep completion which can be slow
+                "deepCompletion": false,
+                // Reduce analysis scope
+                "staticcheck": false,
+                "analyses": {
+                    "fieldalignment": false,
+                    "unusedparams": false
+                }
+            })),
+            root_markers: vec!["go.mod".to_string(), "go.work".to_string()],
+            initialization_timeout_secs: 60,
         });
 
         // Java

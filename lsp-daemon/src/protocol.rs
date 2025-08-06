@@ -11,16 +11,30 @@ pub enum DaemonRequest {
     Connect {
         client_id: Uuid,
     },
+    // Workspace management
+    InitializeWorkspace {
+        request_id: Uuid,
+        workspace_root: PathBuf,
+        language: Option<Language>,
+    },
+    ListWorkspaces {
+        request_id: Uuid,
+    },
+    // Analysis requests with optional workspace hints
     CallHierarchy {
         request_id: Uuid,
         file_path: PathBuf,
         pattern: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
     },
     Definition {
         request_id: Uuid,
         file_path: PathBuf,
         line: u32,
         column: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
     },
     References {
         request_id: Uuid,
@@ -28,19 +42,26 @@ pub enum DaemonRequest {
         line: u32,
         column: u32,
         include_declaration: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
     },
     Hover {
         request_id: Uuid,
         file_path: PathBuf,
         line: u32,
         column: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
     },
     Completion {
         request_id: Uuid,
         file_path: PathBuf,
         line: u32,
         column: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
     },
+    // System requests
     Status {
         request_id: Uuid,
     },
@@ -62,6 +83,18 @@ pub enum DaemonResponse {
         request_id: Uuid,
         daemon_version: String,
     },
+    // Workspace responses
+    WorkspaceInitialized {
+        request_id: Uuid,
+        workspace_root: PathBuf,
+        language: Language,
+        lsp_server: String,
+    },
+    WorkspaceList {
+        request_id: Uuid,
+        workspaces: Vec<WorkspaceInfo>,
+    },
+    // Analysis responses
     CallHierarchy {
         request_id: Uuid,
         result: CallHierarchyResult,
@@ -82,6 +115,7 @@ pub enum DaemonResponse {
         request_id: Uuid,
         items: Vec<CompletionItem>,
     },
+    // System responses
     Status {
         request_id: Uuid,
         status: DaemonStatus,
@@ -200,6 +234,22 @@ pub struct LanguageInfo {
     pub language: Language,
     pub lsp_server: String,
     pub available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceInfo {
+    pub root: PathBuf,
+    pub language: Language,
+    pub server_status: ServerStatus,
+    pub file_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ServerStatus {
+    Initializing,
+    Ready,
+    Busy,
+    Error(String),
 }
 
 pub struct MessageCodec;
