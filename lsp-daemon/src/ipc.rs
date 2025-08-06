@@ -138,7 +138,6 @@ mod windows_impl {
 
     pub struct IpcListener {
         path: String,
-        server_options: ServerOptions,
         current_server: Arc<Mutex<Option<NamedPipeServer>>>,
     }
 
@@ -154,7 +153,6 @@ mod windows_impl {
 
             Ok(Self {
                 path: path.to_string(),
-                server_options,
                 current_server: Arc::new(Mutex::new(Some(server))),
             })
         }
@@ -167,7 +165,11 @@ mod windows_impl {
                 server.connect().await?;
 
                 // Create a new server instance for the next connection
-                let new_server = self.server_options.create(&self.path)?;
+                let server_options = ServerOptions::new()
+                    .first_pipe_instance(false)
+                    .in_buffer_size(65536)
+                    .out_buffer_size(65536);
+                let new_server = server_options.create(&self.path)?;
                 *server_guard = Some(new_server);
 
                 // Convert the connected server to a client-like stream
