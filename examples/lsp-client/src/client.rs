@@ -125,6 +125,7 @@ impl LspClient {
             request_id: Uuid::new_v4(),
             file_path: file_path.to_path_buf(),
             pattern: pattern.to_string(),
+            workspace_hint: None,
         };
 
         let response = self.send_request(request).await?;
