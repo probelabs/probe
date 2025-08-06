@@ -174,9 +174,19 @@ impl WorkspaceResolver {
             Language::Go => vec!["go.mod", "go.work", "vendor"],
             Language::Rust => vec!["Cargo.toml", "Cargo.lock"],
             Language::JavaScript | Language::TypeScript => {
-                vec!["package.json", "tsconfig.json", "jsconfig.json", "node_modules"]
+                vec![
+                    "package.json",
+                    "tsconfig.json",
+                    "jsconfig.json",
+                    "node_modules",
+                ]
             }
-            Language::Python => vec!["pyproject.toml", "setup.py", "requirements.txt", "setup.cfg"],
+            Language::Python => vec![
+                "pyproject.toml",
+                "setup.py",
+                "requirements.txt",
+                "setup.cfg",
+            ],
             Language::Java => vec!["pom.xml", "build.gradle", "build.gradle.kts"],
             Language::C | Language::Cpp => vec!["CMakeLists.txt", "Makefile", "configure.ac"],
             Language::CSharp => vec!["*.sln", "*.csproj"],

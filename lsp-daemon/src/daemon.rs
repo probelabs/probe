@@ -36,11 +36,16 @@ impl LspDaemon {
         Self::new_with_config(socket_path, None)
     }
 
-    pub fn new_with_config(socket_path: String, allowed_roots: Option<Vec<PathBuf>>) -> Result<Self> {
+    pub fn new_with_config(
+        socket_path: String,
+        allowed_roots: Option<Vec<PathBuf>>,
+    ) -> Result<Self> {
         let registry = Arc::new(LspRegistry::new()?);
         let detector = Arc::new(LanguageDetector::new());
         let pool_manager = Arc::new(PoolManager::new());
-        let workspace_resolver = Arc::new(tokio::sync::Mutex::new(WorkspaceResolver::new(allowed_roots)));
+        let workspace_resolver = Arc::new(tokio::sync::Mutex::new(WorkspaceResolver::new(
+            allowed_roots,
+        )));
 
         Ok(Self {
             socket_path,
@@ -158,13 +163,20 @@ impl LspDaemon {
                 daemon_version: env!("CARGO_PKG_VERSION").to_string(),
             },
 
-            DaemonRequest::InitializeWorkspace { request_id, workspace_root, language } => {
-                match self.handle_initialize_workspace(workspace_root, language).await {
-                    Ok((root, lang, server)) => DaemonResponse::WorkspaceInitialized { 
-                        request_id, 
-                        workspace_root: root, 
-                        language: lang, 
-                        lsp_server: server 
+            DaemonRequest::InitializeWorkspace {
+                request_id,
+                workspace_root,
+                language,
+            } => {
+                match self
+                    .handle_initialize_workspace(workspace_root, language)
+                    .await
+                {
+                    Ok((root, lang, server)) => DaemonResponse::WorkspaceInitialized {
+                        request_id,
+                        workspace_root: root,
+                        language: lang,
+                        lsp_server: server,
                     },
                     Err(e) => DaemonResponse::Error {
                         request_id,
@@ -175,7 +187,10 @@ impl LspDaemon {
 
             DaemonRequest::ListWorkspaces { request_id } => {
                 let workspaces = self.pool_manager.get_all_workspaces().await;
-                DaemonResponse::WorkspaceList { request_id, workspaces }
+                DaemonResponse::WorkspaceList {
+                    request_id,
+                    workspaces,
+                }
             }
 
             DaemonRequest::CallHierarchy {
@@ -183,7 +198,10 @@ impl LspDaemon {
                 file_path,
                 pattern,
                 workspace_hint,
-            } => match self.handle_call_hierarchy(&file_path, &pattern, workspace_hint).await {
+            } => match self
+                .handle_call_hierarchy(&file_path, &pattern, workspace_hint)
+                .await
+            {
                 Ok(result) => DaemonResponse::CallHierarchy { request_id, result },
                 Err(e) => DaemonResponse::Error {
                     request_id,
@@ -277,7 +295,10 @@ impl LspDaemon {
             .clone();
 
         // Get server from pool (with workspace)
-        let pool = self.pool_manager.get_pool(language, workspace_root, config).await;
+        let pool = self
+            .pool_manager
+            .get_pool(language, workspace_root, config)
+            .await;
         let pooled_server = pool.get_server().await?;
 
         // Read file content
@@ -316,14 +337,20 @@ impl LspDaemon {
     ) -> Result<(PathBuf, Language, String)> {
         // Validate workspace root exists
         if !workspace_root.exists() {
-            return Err(anyhow!("Workspace root does not exist: {:?}", workspace_root));
+            return Err(anyhow!(
+                "Workspace root does not exist: {:?}",
+                workspace_root
+            ));
         }
 
         // Check if workspace is allowed
         {
             let resolver = self.workspace_resolver.lock().await;
             if !resolver.is_path_allowed(&workspace_root) {
-                return Err(anyhow!("Workspace {:?} not in allowed roots", workspace_root));
+                return Err(anyhow!(
+                    "Workspace {:?} not in allowed roots",
+                    workspace_root
+                ));
             }
         }
 
@@ -343,7 +370,10 @@ impl LspDaemon {
             .clone();
 
         // Initialize pool for this workspace
-        let _pool = self.pool_manager.get_pool(language, workspace_root.clone(), config.clone()).await;
+        let _pool = self
+            .pool_manager
+            .get_pool(language, workspace_root.clone(), config.clone())
+            .await;
 
         Ok((workspace_root, language, config.command))
     }
@@ -366,7 +396,10 @@ impl LspDaemon {
             }
         }
 
-        Err(anyhow!("Could not detect language for workspace: {:?}", workspace_root))
+        Err(anyhow!(
+            "Could not detect language for workspace: {:?}",
+            workspace_root
+        ))
     }
 
     async fn idle_checker(&self) {

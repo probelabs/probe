@@ -30,7 +30,10 @@ impl std::fmt::Debug for LspServer {
 }
 
 impl LspServer {
-    pub fn spawn_with_workspace(config: &LspServerConfig, workspace_root: &PathBuf) -> Result<Self> {
+    pub fn spawn_with_workspace(
+        config: &LspServerConfig,
+        workspace_root: &PathBuf,
+    ) -> Result<Self> {
         Self::spawn_internal(config, Some(workspace_root))
     }
 
@@ -49,7 +52,7 @@ impl LspServer {
         } else if config.language == crate::language_detector::Language::Go {
             cmd.current_dir("/tmp");
         }
-        
+
         let mut child = cmd
             .args(&config.args)
             .stdin(Stdio::piped())
@@ -79,7 +82,11 @@ impl LspServer {
         })
     }
 
-    pub async fn initialize_with_workspace(&mut self, config: &LspServerConfig, workspace_root: &PathBuf) -> Result<()> {
+    pub async fn initialize_with_workspace(
+        &mut self,
+        config: &LspServerConfig,
+        workspace_root: &PathBuf,
+    ) -> Result<()> {
         self.initialize_internal(config, Some(workspace_root)).await
     }
 
@@ -87,7 +94,11 @@ impl LspServer {
         self.initialize_internal(config, None).await
     }
 
-    async fn initialize_internal(&mut self, config: &LspServerConfig, workspace_root: Option<&PathBuf>) -> Result<()> {
+    async fn initialize_internal(
+        &mut self,
+        config: &LspServerConfig,
+        workspace_root: Option<&PathBuf>,
+    ) -> Result<()> {
         if self.initialized {
             return Ok(());
         }
