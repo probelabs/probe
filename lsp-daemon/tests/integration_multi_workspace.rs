@@ -91,16 +91,19 @@ async fn setup_go_project(temp_dir: &TempDir, name: &str, code: &str) -> Result<
 
     // Create main.go
     fs::write(project_dir.join("main.go"), code)?;
-    
+
     // Initialize the Go module properly by running go mod tidy
     // This ensures gopls can find package metadata
     let output = std::process::Command::new("go")
         .args(["mod", "tidy"])
         .current_dir(&project_dir)
         .output();
-        
+
     if let Err(e) = output {
-        println!("Warning: Failed to run 'go mod tidy' in {:?}: {}", project_dir, e);
+        println!(
+            "Warning: Failed to run 'go mod tidy' in {:?}: {}",
+            project_dir, e
+        );
     }
 
     Ok(project_dir)
