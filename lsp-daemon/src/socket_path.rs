@@ -27,7 +27,7 @@ pub fn socket_exists(path: &str) -> bool {
     {
         // On Windows, we need to try to connect to see if the pipe exists
         // For now, return false as we'll handle this properly in the IPC module
-        let _ = path;  // Suppress unused variable warning
+        let _ = path; // Suppress unused variable warning
         false
     }
 }

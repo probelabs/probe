@@ -356,7 +356,7 @@ fn parse_call_hierarchy_item(value: &Value) -> Result<CallHierarchyItem> {
         kind: value
             .get("kind")
             .and_then(|v| v.as_u64())
-            .map(|k| format!("{}", k))
+            .map(|k| k.to_string())
             .unwrap_or_else(|| "unknown".to_string()),
         uri: value
             .get("uri")
