@@ -14,6 +14,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct PooledServer {
     pub id: Uuid,
     pub server: Arc<LspServer>,
@@ -330,7 +331,9 @@ pub struct PoolStats {
     pub ready_servers: usize,
     pub busy_servers: usize,
     pub total_servers: usize,
+    #[allow(dead_code)]
     pub min_size: usize,
+    #[allow(dead_code)]
     pub max_size: usize,
 }
 
@@ -373,6 +376,7 @@ impl PoolManager {
         stats
     }
 
+    #[allow(dead_code)]
     pub async fn get_all_workspaces(&self) -> Vec<WorkspaceInfo> {
         let mut workspaces = Vec::new();
         for entry in self.pools.iter() {
@@ -399,6 +403,7 @@ impl PoolManager {
         workspaces
     }
 
+    #[allow(dead_code)]
     pub async fn get_workspace_info(&self, workspace_root: &PathBuf) -> Vec<WorkspaceInfo> {
         let mut workspaces = Vec::new();
         for entry in self.pools.iter() {

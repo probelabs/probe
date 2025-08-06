@@ -61,6 +61,12 @@ pub struct LanguageDetector {
     shebang_patterns: Vec<(Regex, Language)>,
 }
 
+impl Default for LanguageDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LanguageDetector {
     pub fn new() -> Self {
         let mut extension_map = HashMap::new();

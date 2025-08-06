@@ -143,7 +143,7 @@ impl LspDaemon {
             stream.flush().await?;
 
             // Check if shutdown was requested
-            if matches!(response, DaemonResponse::Shutdown { .. }) {
+            if let DaemonResponse::Shutdown { .. } = response {
                 *self.shutdown.write().await = true;
                 break;
             }
@@ -536,7 +536,7 @@ pub async fn start_daemon_background() -> Result<()> {
     let socket_path = get_default_socket_path();
 
     // Check if daemon is already running by trying to connect
-    if let Ok(_) = crate::ipc::IpcStream::connect(&socket_path).await {
+    if (crate::ipc::IpcStream::connect(&socket_path).await).is_ok() {
         debug!("Daemon already running");
         return Ok(());
     }

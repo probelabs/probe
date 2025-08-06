@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use lsp_client::client::{DirectLspClient, LspClient};
 use lsp_daemon::CallHierarchyResult;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
     let pattern = args.pattern.expect("Pattern required");
 
     if !file.exists() {
-        eprintln!("File not found: {:?}", file);
+        eprintln!("File not found: {file:?}");
         std::process::exit(1);
     }
 
@@ -82,8 +82,8 @@ async fn main() -> Result<()> {
         std::env::current_dir()?.join(file)
     };
 
-    println!("🚀 Analyzing: {:?}", absolute_path);
-    println!("   Pattern: {}", pattern);
+    println!("🚀 Analyzing: {absolute_path:?}");
+    println!("   Pattern: {pattern}");
 
     // Determine whether to use daemon or direct mode
     let use_daemon = !args.no_daemon && args.daemon;
@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
         match execute_with_daemon(&absolute_path, &pattern).await {
             Ok(result) => result,
             Err(e) => {
-                eprintln!("⚠️  Daemon failed: {}", e);
+                eprintln!("⚠️  Daemon failed: {e}");
                 eprintln!("   Falling back to direct mode...\n");
                 DirectLspClient::call_hierarchy(&absolute_path, &pattern).await?
             }
@@ -171,7 +171,7 @@ async fn handle_command(command: Commands) -> Result<()> {
     Ok(())
 }
 
-async fn execute_with_daemon(file: &PathBuf, pattern: &str) -> Result<CallHierarchyResult> {
+async fn execute_with_daemon(file: &Path, pattern: &str) -> Result<CallHierarchyResult> {
     let mut client = LspClient::new(true).await?;
     client.call_hierarchy(file, pattern).await
 }

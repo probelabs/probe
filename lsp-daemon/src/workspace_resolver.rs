@@ -169,6 +169,7 @@ impl WorkspaceResolver {
     }
 
     /// Get language-specific project markers
+    #[allow(dead_code)]
     pub fn get_language_markers(&self, language: Language) -> Vec<&'static str> {
         match language {
             Language::Go => vec!["go.mod", "go.work", "vendor"],
@@ -205,11 +206,13 @@ impl WorkspaceResolver {
     }
 
     /// Clear the cache
+    #[allow(dead_code)]
     pub fn clear_cache(&mut self) {
         self.workspace_cache.clear();
     }
 
     /// Get cache statistics
+    #[allow(dead_code)]
     pub fn cache_stats(&self) -> (usize, usize) {
         (self.workspace_cache.len(), self.max_cache_size)
     }
