@@ -46,18 +46,18 @@ impl LspRegistry {
         let mut registry = Self {
             servers: HashMap::new(),
         };
-        
+
         // Register built-in language servers
         registry.register_builtin_servers()?;
-        
+
         // Load user configurations if they exist
         if let Ok(config) = Self::load_user_config() {
             registry.merge_user_config(config);
         }
-        
+
         Ok(registry)
     }
-    
+
     fn register_builtin_servers(&mut self) -> Result<()> {
         // Rust
         self.register(LspServerConfig {
@@ -68,32 +68,26 @@ impl LspRegistry {
             root_markers: vec!["Cargo.toml".to_string()],
             initialization_timeout_secs: 30,
         });
-        
+
         // TypeScript/JavaScript
         self.register(LspServerConfig {
             language: Language::TypeScript,
             command: "typescript-language-server".to_string(),
             args: vec!["--stdio".to_string()],
             initialization_options: None,
-            root_markers: vec![
-                "package.json".to_string(),
-                "tsconfig.json".to_string(),
-            ],
+            root_markers: vec!["package.json".to_string(), "tsconfig.json".to_string()],
             initialization_timeout_secs: 30,
         });
-        
+
         self.register(LspServerConfig {
             language: Language::JavaScript,
             command: "typescript-language-server".to_string(),
             args: vec!["--stdio".to_string()],
             initialization_options: None,
-            root_markers: vec![
-                "package.json".to_string(),
-                "jsconfig.json".to_string(),
-            ],
+            root_markers: vec!["package.json".to_string(), "jsconfig.json".to_string()],
             initialization_timeout_secs: 30,
         });
-        
+
         // Python
         self.register(LspServerConfig {
             language: Language::Python,
@@ -107,7 +101,7 @@ impl LspRegistry {
             ],
             initialization_timeout_secs: 30,
         });
-        
+
         // Go
         self.register(LspServerConfig {
             language: Language::Go,
@@ -117,7 +111,7 @@ impl LspRegistry {
             root_markers: vec!["go.mod".to_string()],
             initialization_timeout_secs: 30,
         });
-        
+
         // Java
         self.register(LspServerConfig {
             language: Language::Java,
@@ -131,7 +125,7 @@ impl LspRegistry {
             ],
             initialization_timeout_secs: 45,
         });
-        
+
         // C/C++
         self.register(LspServerConfig {
             language: Language::C,
@@ -145,7 +139,7 @@ impl LspRegistry {
             ],
             initialization_timeout_secs: 30,
         });
-        
+
         self.register(LspServerConfig {
             language: Language::Cpp,
             command: "clangd".to_string(),
@@ -159,59 +153,51 @@ impl LspRegistry {
             ],
             initialization_timeout_secs: 30,
         });
-        
+
         // C#
         self.register(LspServerConfig {
             language: Language::CSharp,
             command: "omnisharp".to_string(),
-            args: vec!["--languageserver".to_string(), "--hostPID".to_string(), "0".to_string()],
-            initialization_options: None,
-            root_markers: vec![
-                "*.sln".to_string(),
-                "*.csproj".to_string(),
+            args: vec![
+                "--languageserver".to_string(),
+                "--hostPID".to_string(),
+                "0".to_string(),
             ],
+            initialization_options: None,
+            root_markers: vec!["*.sln".to_string(), "*.csproj".to_string()],
             initialization_timeout_secs: 45,
         });
-        
+
         // Ruby
         self.register(LspServerConfig {
             language: Language::Ruby,
             command: "solargraph".to_string(),
             args: vec!["stdio".to_string()],
             initialization_options: None,
-            root_markers: vec![
-                "Gemfile".to_string(),
-                ".solargraph.yml".to_string(),
-            ],
+            root_markers: vec!["Gemfile".to_string(), ".solargraph.yml".to_string()],
             initialization_timeout_secs: 30,
         });
-        
+
         // PHP
         self.register(LspServerConfig {
             language: Language::Php,
             command: "intelephense".to_string(),
             args: vec!["--stdio".to_string()],
             initialization_options: None,
-            root_markers: vec![
-                "composer.json".to_string(),
-                ".git".to_string(),
-            ],
+            root_markers: vec!["composer.json".to_string(), ".git".to_string()],
             initialization_timeout_secs: 30,
         });
-        
+
         // Swift
         self.register(LspServerConfig {
             language: Language::Swift,
             command: "sourcekit-lsp".to_string(),
             args: vec![],
             initialization_options: None,
-            root_markers: vec![
-                "Package.swift".to_string(),
-                "*.xcodeproj".to_string(),
-            ],
+            root_markers: vec!["Package.swift".to_string(), "*.xcodeproj".to_string()],
             initialization_timeout_secs: 30,
         });
-        
+
         // Kotlin
         self.register(LspServerConfig {
             language: Language::Kotlin,
@@ -225,20 +211,17 @@ impl LspRegistry {
             ],
             initialization_timeout_secs: 45,
         });
-        
+
         // Scala
         self.register(LspServerConfig {
             language: Language::Scala,
             command: "metals".to_string(),
             args: vec![],
             initialization_options: None,
-            root_markers: vec![
-                "build.sbt".to_string(),
-                "build.sc".to_string(),
-            ],
+            root_markers: vec!["build.sbt".to_string(), "build.sc".to_string()],
             initialization_timeout_secs: 60,
         });
-        
+
         // Haskell
         self.register(LspServerConfig {
             language: Language::Haskell,
@@ -252,77 +235,67 @@ impl LspRegistry {
             ],
             initialization_timeout_secs: 45,
         });
-        
+
         // Elixir
         self.register(LspServerConfig {
             language: Language::Elixir,
             command: "elixir-ls".to_string(),
             args: vec![],
             initialization_options: None,
-            root_markers: vec![
-                "mix.exs".to_string(),
-            ],
+            root_markers: vec!["mix.exs".to_string()],
             initialization_timeout_secs: 30,
         });
-        
+
         // Clojure
         self.register(LspServerConfig {
             language: Language::Clojure,
             command: "clojure-lsp".to_string(),
             args: vec![],
             initialization_options: None,
-            root_markers: vec![
-                "project.clj".to_string(),
-                "deps.edn".to_string(),
-            ],
+            root_markers: vec!["project.clj".to_string(), "deps.edn".to_string()],
             initialization_timeout_secs: 45,
         });
-        
+
         // Lua
         self.register(LspServerConfig {
             language: Language::Lua,
             command: "lua-language-server".to_string(),
             args: vec![],
             initialization_options: None,
-            root_markers: vec![
-                ".luarc.json".to_string(),
-                ".git".to_string(),
-            ],
+            root_markers: vec![".luarc.json".to_string(), ".git".to_string()],
             initialization_timeout_secs: 30,
         });
-        
+
         // Zig
         self.register(LspServerConfig {
             language: Language::Zig,
             command: "zls".to_string(),
             args: vec![],
             initialization_options: None,
-            root_markers: vec![
-                "build.zig".to_string(),
-            ],
+            root_markers: vec!["build.zig".to_string()],
             initialization_timeout_secs: 30,
         });
-        
+
         Ok(())
     }
-    
+
     pub fn register(&mut self, config: LspServerConfig) {
         self.servers.insert(config.language, config);
     }
-    
+
     pub fn get(&self, language: Language) -> Option<&LspServerConfig> {
         self.servers.get(&language)
     }
-    
+
     pub fn get_mut(&mut self, language: Language) -> Option<&mut LspServerConfig> {
         self.servers.get_mut(&language)
     }
-    
+
     pub fn find_project_root(&self, file_path: &Path, language: Language) -> Option<PathBuf> {
         let config = self.get(language)?;
-        
+
         let mut current = file_path.parent()?;
-        
+
         // Walk up the directory tree looking for root markers
         while current != current.parent().unwrap_or(current) {
             for marker in &config.root_markers {
@@ -344,50 +317,50 @@ impl LspRegistry {
                     }
                 }
             }
-            
+
             current = current.parent()?;
         }
-        
+
         // If no root marker found, use the file's directory
         file_path.parent().map(|p| p.to_path_buf())
     }
-    
+
     fn matches_glob(name: &str, pattern: &str) -> bool {
         // Simple glob matching for * wildcard
         if pattern == "*" {
             return true;
         }
-        
+
         if let Some(prefix) = pattern.strip_suffix('*') {
             return name.starts_with(prefix);
         }
-        
+
         if let Some(suffix) = pattern.strip_prefix('*') {
             return name.ends_with(suffix);
         }
-        
+
         name == pattern
     }
-    
+
     fn load_user_config() -> Result<HashMap<Language, LspServerConfig>> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow!("Could not find config directory"))?;
+        let config_dir =
+            dirs::config_dir().ok_or_else(|| anyhow!("Could not find config directory"))?;
         let config_path = config_dir.join("lsp-daemon").join("config.toml");
-        
+
         if !config_path.exists() {
             return Ok(HashMap::new());
         }
-        
+
         let content = std::fs::read_to_string(&config_path)?;
         let config: toml::Value = toml::from_str(&content)?;
-        
+
         let mut servers = HashMap::new();
-        
+
         if let Some(languages) = config.get("languages").and_then(|v| v.as_table()) {
             for (lang_str, value) in languages {
-                if let Ok(config) = serde_json::from_value::<LspServerConfig>(
-                    serde_json::to_value(value)?
-                ) {
+                if let Ok(config) =
+                    serde_json::from_value::<LspServerConfig>(serde_json::to_value(value)?)
+                {
                     // Parse language from string
                     let language = match lang_str.as_str() {
                         "rust" => Language::Rust,
@@ -411,21 +384,21 @@ impl LspRegistry {
                         "zig" => Language::Zig,
                         _ => continue,
                     };
-                    
+
                     servers.insert(language, config);
                 }
             }
         }
-        
+
         Ok(servers)
     }
-    
+
     fn merge_user_config(&mut self, user_configs: HashMap<Language, LspServerConfig>) {
         for (language, config) in user_configs {
             self.servers.insert(language, config);
         }
     }
-    
+
     pub fn is_lsp_available(&self, language: Language) -> bool {
         if let Some(config) = self.get(language) {
             // Check if the command exists in PATH (with platform-specific executable extension)
@@ -435,7 +408,7 @@ impl LspRegistry {
             false
         }
     }
-    
+
     pub fn list_available_servers(&self) -> Vec<(Language, bool)> {
         let mut servers = Vec::new();
         for (language, config) in &self.servers {

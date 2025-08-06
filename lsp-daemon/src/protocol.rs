@@ -208,67 +208,69 @@ impl MessageCodec {
     pub fn encode(msg: &DaemonRequest) -> Result<Vec<u8>> {
         let json = serde_json::to_string(msg)?;
         let bytes = json.as_bytes();
-        
+
         // Simple length-prefixed encoding
         let mut encoded = Vec::new();
         encoded.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
         encoded.extend_from_slice(bytes);
-        
+
         Ok(encoded)
     }
-    
+
     pub fn encode_response(msg: &DaemonResponse) -> Result<Vec<u8>> {
         let json = serde_json::to_string(msg)?;
         let bytes = json.as_bytes();
-        
+
         let mut encoded = Vec::new();
         encoded.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
         encoded.extend_from_slice(bytes);
-        
+
         Ok(encoded)
     }
-    
+
     pub fn decode_request(bytes: &[u8]) -> Result<DaemonRequest> {
         if bytes.len() < 4 {
             return Err(anyhow::anyhow!("Message too short"));
         }
-        
+
         let len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-        
+
         if bytes.len() < 4 + len {
             return Err(anyhow::anyhow!("Incomplete message"));
         }
-        
+
         let json_bytes = &bytes[4..4 + len];
         let request = serde_json::from_slice(json_bytes)?;
-        
+
         Ok(request)
     }
-    
+
     pub fn decode_response(bytes: &[u8]) -> Result<DaemonResponse> {
         if bytes.len() < 4 {
             return Err(anyhow::anyhow!("Message too short"));
         }
-        
+
         let len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-        
+
         if bytes.len() < 4 + len {
             return Err(anyhow::anyhow!("Incomplete message"));
         }
-        
+
         let json_bytes = &bytes[4..4 + len];
         let response = serde_json::from_slice(json_bytes)?;
-        
+
         Ok(response)
     }
 }
 
 // Helper function to convert from serde_json::Value to our types
 pub fn parse_call_hierarchy_from_lsp(value: &Value) -> Result<CallHierarchyResult> {
-    let item = value.get("item")
+    let item = value
+        .get("item")
         .ok_or_else(|| anyhow::anyhow!("Missing item in call hierarchy"))?;
-    
-    let incoming = value.get("incoming")
+
+    let incoming = value
+        .get("incoming")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
@@ -276,8 +278,9 @@ pub fn parse_call_hierarchy_from_lsp(value: &Value) -> Result<CallHierarchyResul
                 .collect()
         })
         .unwrap_or_default();
-    
-    let outgoing = value.get("outgoing")
+
+    let outgoing = value
+        .get("outgoing")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
@@ -285,7 +288,7 @@ pub fn parse_call_hierarchy_from_lsp(value: &Value) -> Result<CallHierarchyResul
                 .collect()
         })
         .unwrap_or_default();
-    
+
     Ok(CallHierarchyResult {
         item: parse_call_hierarchy_item(item)?,
         incoming,
@@ -295,15 +298,18 @@ pub fn parse_call_hierarchy_from_lsp(value: &Value) -> Result<CallHierarchyResul
 
 fn parse_call_hierarchy_item(value: &Value) -> Result<CallHierarchyItem> {
     Ok(CallHierarchyItem {
-        name: value.get("name")
+        name: value
+            .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string(),
-        kind: value.get("kind")
+        kind: value
+            .get("kind")
             .and_then(|v| v.as_u64())
             .map(|k| format!("{}", k))
             .unwrap_or_else(|| "unknown".to_string()),
-        uri: value.get("uri")
+        uri: value
+            .get("uri")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
@@ -313,18 +319,16 @@ fn parse_call_hierarchy_item(value: &Value) -> Result<CallHierarchyItem> {
 }
 
 fn parse_call_hierarchy_call(value: &Value) -> Result<CallHierarchyCall> {
-    let from = value.get("from")
+    let from = value
+        .get("from")
         .ok_or_else(|| anyhow::anyhow!("Missing 'from' in call"))?;
-    
-    let from_ranges = value.get("fromRanges")
+
+    let from_ranges = value
+        .get("fromRanges")
         .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|r| parse_range(r).ok())
-                .collect()
-        })
+        .map(|arr| arr.iter().filter_map(|r| parse_range(r).ok()).collect())
         .unwrap_or_default();
-    
+
     Ok(CallHierarchyCall {
         from: parse_call_hierarchy_item(from)?,
         from_ranges,
@@ -335,7 +339,7 @@ fn parse_range(value: &Value) -> Result<Range> {
     let default_pos = json!({});
     let start = value.get("start").unwrap_or(&default_pos);
     let end = value.get("end").unwrap_or(&default_pos);
-    
+
     Ok(Range {
         start: Position {
             line: start.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
