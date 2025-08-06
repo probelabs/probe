@@ -6,25 +6,29 @@ use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
-#[clap(author, version, about = "LSP Test - Multi-language LSP client with daemon support")]
+#[clap(
+    author,
+    version,
+    about = "LSP Test - Multi-language LSP client with daemon support"
+)]
 struct Args {
     #[clap(subcommand)]
     command: Option<Commands>,
-    
+
     /// File to analyze
     file: Option<PathBuf>,
-    
+
     /// Pattern to search for
     pattern: Option<String>,
-    
+
     /// Use daemon mode (auto-starts daemon if not running)
     #[clap(long, default_value = "true")]
     daemon: bool,
-    
+
     /// Force direct mode (no daemon)
     #[clap(long)]
     no_daemon: bool,
-    
+
     /// Log level (trace, debug, info, warn, error)
     #[clap(short, long, default_value = "info")]
     log_level: String,
@@ -34,13 +38,13 @@ struct Args {
 enum Commands {
     /// Get daemon status
     Status,
-    
+
     /// List available language servers
     Languages,
-    
+
     /// Shutdown the daemon
     Shutdown,
-    
+
     /// Ping the daemon
     Ping,
 }
@@ -48,45 +52,45 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    
+
     // Initialize logging
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&args.log_level));
-    
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&args.log_level));
+
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
         .init();
-    
+
     // Handle subcommands
     if let Some(command) = args.command {
         return handle_command(command).await;
     }
-    
+
     // Regular call hierarchy operation
     let file = args.file.expect("File path required");
     let pattern = args.pattern.expect("Pattern required");
-    
+
     if !file.exists() {
         eprintln!("File not found: {:?}", file);
         std::process::exit(1);
     }
-    
+
     let absolute_path = if file.is_absolute() {
         file
     } else {
         std::env::current_dir()?.join(file)
     };
-    
+
     println!("🚀 Analyzing: {:?}", absolute_path);
     println!("   Pattern: {}", pattern);
-    
+
     // Determine whether to use daemon or direct mode
     let use_daemon = !args.no_daemon && args.daemon;
-    
+
     let result = if use_daemon {
         println!("   Mode: Daemon (auto-start enabled)\n");
-        
+
         // Try daemon mode with fallback to direct
         match execute_with_daemon(&absolute_path, &pattern).await {
             Ok(result) => result,
@@ -100,10 +104,10 @@ async fn main() -> Result<()> {
         println!("   Mode: Direct\n");
         DirectLspClient::call_hierarchy(&absolute_path, &pattern).await?
     };
-    
+
     // Display results
     display_call_hierarchy(&result);
-    
+
     Ok(())
 }
 
@@ -111,7 +115,7 @@ async fn handle_command(command: Commands) -> Result<()> {
     // For shutdown command, don't auto-start. For others, auto-start if needed.
     let auto_start = !matches!(command, Commands::Shutdown);
     let mut client = LspClient::new(auto_start).await?;
-    
+
     match command {
         Commands::Status => {
             let status = client.get_status().await?;
@@ -119,48 +123,51 @@ async fn handle_command(command: Commands) -> Result<()> {
             println!("   Uptime: {} seconds", status.uptime_secs);
             println!("   Total requests: {}", status.total_requests);
             println!("   Active connections: {}", status.active_connections);
-            
+
             if !status.pools.is_empty() {
                 println!("\n   Language Pools:");
                 for pool in status.pools {
-                    println!("   - {:?}: {} ready, {} busy, {} total",
-                        pool.language,
-                        pool.ready_servers,
-                        pool.busy_servers,
-                        pool.total_servers
+                    println!(
+                        "   - {:?}: {} ready, {} busy, {} total",
+                        pool.language, pool.ready_servers, pool.busy_servers, pool.total_servers
                     );
                 }
             } else {
                 println!("\n   No active language pools");
             }
         }
-        
+
         Commands::Languages => {
             let languages = client.list_languages().await?;
             println!("📚 Available Language Servers\n");
-            
+
             for lang in languages {
                 let status = if lang.available { "✅" } else { "❌" };
-                println!("   {} {:?} - {} {}",
+                println!(
+                    "   {} {:?} - {} {}",
                     status,
                     lang.language,
                     lang.lsp_server,
-                    if !lang.available { "(not installed)" } else { "" }
+                    if !lang.available {
+                        "(not installed)"
+                    } else {
+                        ""
+                    }
                 );
             }
         }
-        
+
         Commands::Shutdown => {
             client.shutdown_daemon().await?;
             println!("✅ Daemon shutdown complete");
         }
-        
+
         Commands::Ping => {
             client.ping().await?;
             println!("✅ Daemon is responsive");
         }
     }
-    
+
     Ok(())
 }
 
@@ -171,7 +178,7 @@ async fn execute_with_daemon(file: &PathBuf, pattern: &str) -> Result<CallHierar
 
 fn display_call_hierarchy(result: &CallHierarchyResult) {
     println!("📊 Call Hierarchy for '{}':\n", result.item.name);
-    
+
     if !result.incoming.is_empty() {
         println!("  📥 Incoming calls (functions that call this):");
         for call in &result.incoming {
@@ -185,9 +192,9 @@ fn display_call_hierarchy(result: &CallHierarchyResult) {
     } else {
         println!("  📥 Incoming calls: (none)");
     }
-    
+
     println!();
-    
+
     if !result.outgoing.is_empty() {
         println!("  📤 Outgoing calls (this function calls):");
         for call in &result.outgoing {
@@ -201,7 +208,7 @@ fn display_call_hierarchy(result: &CallHierarchyResult) {
     } else {
         println!("  📤 Outgoing calls: (none)");
     }
-    
+
     if result.incoming.is_empty() && result.outgoing.is_empty() {
         println!("\n  ℹ️  No calls found. This could mean:");
         println!("     - The function is not used/called anywhere");
