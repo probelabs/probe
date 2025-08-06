@@ -26,13 +26,8 @@ pub fn socket_exists(path: &str) -> bool {
     #[cfg(windows)]
     {
         // On Windows, we need to try to connect to see if the pipe exists
-        // This is a simplified check - actual implementation would try to open the pipe
-        use std::os::windows::io::AsRawHandle;
-        use std::ptr;
-        use winapi::um::fileapi::CreateFileW;
-        use winapi::um::winbase::PIPE_ACCESS_DUPLEX;
-
         // For now, return false as we'll handle this properly in the IPC module
+        let _ = path;  // Suppress unused variable warning
         false
     }
 }
