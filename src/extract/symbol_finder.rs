@@ -8,20 +8,211 @@ use anyhow::Result;
 use probe_code::models::SearchResult;
 use std::path::Path;
 
-/// Walk up the AST parent chain to find the enclosing class/struct/namespace name.
-/// Returns "ClassName.symbolName" for methods, or just "symbolName" for top-level symbols.
-fn get_qualified_name<'a>(
-    node: tree_sitter::Node<'a>,
-    symbol_name: &str,
-    language_impl: &dyn crate::language::language_trait::LanguageImpl,
+/// Find a symbol (function, struct, class, etc.) in a file by name
+///
+/// This function searches for a symbol by name in a file and returns the code block
+/// containing that symbol. It uses tree-sitter to parse the code and find the symbol.
+///
+/// # Arguments
+///
+/// * `path` - The path to the file to search in
+/// * `symbol` - The name of the symbol to find
+/// * `content` - The content of the file
+/// * `allow_tests` - Whether to include test files and test code blocks
+/// * `context_lines` - Number of context lines to include
+///
+/// # Returns
+///
+/// A SearchResult containing the extracted code block for the symbol, or an error
+/// if the symbol couldn't be found.
+pub fn find_symbol_in_file(
+    path: &Path,
+    symbol: &str,
+    content: &str,
+    _allow_tests: bool,
+    context_lines: usize,
+) -> Result<SearchResult> {
+    let (result, _) = find_symbol_in_file_with_position(path, symbol, content, _allow_tests, context_lines)?;
+    Ok(result)
+}
+
+/// Find the position of a specific identifier within a tree-sitter node
+/// 
+/// This function searches for an identifier with the given name within a node
+/// and returns its position. This is useful for LSP integration where we need
+/// the exact position of the symbol name, not just the start of the node.
+/// 
+/// Returns (line, column) in 0-indexed coordinates, or None if not found
+fn find_identifier_position_in_node(
+    node: tree_sitter::Node,
+    identifier_name: &str,
     content: &[u8],
-) -> String {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if language_impl.is_acceptable_parent(&parent) {
-            // Try to get the identifier name of this parent node
-            let mut cursor = parent.walk();
-            for child in parent.children(&mut cursor) {
+    debug_mode: bool,
+) -> Option<(u32, u32)> {
+    if debug_mode {
+        println!(
+            "[DEBUG] Searching for identifier '{}' in node type '{}'",
+            identifier_name,
+            node.kind()
+        );
+    }
+    
+    // Recursively search for identifier nodes within this node
+    fn find_identifier_recursive(
+        node: tree_sitter::Node,
+        target_name: &str,
+        content: &[u8],
+        debug_mode: bool,
+    ) -> Option<(u32, u32)> {
+        // Check if this node is an identifier and matches our target
+        if node.kind() == "identifier" || node.kind() == "field_identifier" || node.kind() == "type_identifier" {
+            if let Ok(name) = node.utf8_text(content) {
+                if debug_mode {
+                    println!(
+                        "[DEBUG] Found identifier '{}' at {}:{} (looking for '{}')",
+                        name,
+                        node.start_position().row,
+                        node.start_position().column,
+                        target_name
+                    );
+                }
+                if name == target_name {
+                    return Some((node.start_position().row as u32, node.start_position().column as u32));
+                }
+            }
+        }
+        
+        // Search in children
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(pos) = find_identifier_recursive(child, target_name, content, debug_mode) {
+                return Some(pos);
+            }
+        }
+        
+        None
+    }
+    
+    find_identifier_recursive(node, identifier_name, content, debug_mode)
+}
+
+/// Find a symbol in a file and return both the SearchResult and position information
+/// 
+/// Returns a tuple of (SearchResult, Option<(line, column)>) where the position
+/// is the exact location of the symbol in the file (0-indexed)
+pub fn find_symbol_in_file_with_position(
+    path: &Path,
+    symbol: &str,
+    content: &str,
+    _allow_tests: bool,
+    context_lines: usize,
+) -> Result<(SearchResult, Option<(u32, u32)>)> {
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Check if the symbol contains a dot, indicating a nested symbol path
+    let symbol_parts: Vec<&str> = symbol.split('.').collect();
+    let is_nested_symbol = symbol_parts.len() > 1;
+
+    // For nested symbols, we'll use the AST-based approach directly
+    // The find_symbol_node function already handles nested symbols
+
+    if debug_mode {
+        println!("\n[DEBUG] ===== Symbol Search =====");
+        if is_nested_symbol {
+            println!("[DEBUG] Searching for nested symbol '{symbol}' in file {path:?}");
+            println!(
+                "[DEBUG] Symbol parts: {:?} (parent: '{}', child: '{}')",
+                symbol_parts,
+                symbol_parts[0],
+                symbol_parts.last().unwrap_or(&"")
+            );
+        } else {
+            println!("[DEBUG] Searching for symbol '{symbol}' in file {path:?}");
+        }
+        println!(
+            "[DEBUG] Content size: {content_len} bytes",
+            content_len = content.len()
+        );
+        println!(
+            "[DEBUG] Line count: {line_count}",
+            line_count = content.lines().count()
+        );
+    }
+
+    // Get the file extension to determine the language
+    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+
+    if debug_mode {
+        println!("[DEBUG] File extension: {extension}");
+    }
+
+    // Get the language implementation for this extension
+    let language_impl = crate::language::factory::get_language_impl(extension)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported language extension: {}", extension))?;
+
+    if debug_mode {
+        println!("[DEBUG] Language detected: {extension}");
+        println!("[DEBUG] Using tree-sitter to parse file");
+    }
+
+    // Parse the file with tree-sitter using pooled parser for better performance
+    let mut parser = crate::language::get_pooled_parser(extension)
+        .map_err(|e| anyhow::anyhow!("Failed to get pooled parser: {}", e))?;
+
+    let tree = parser
+        .parse(content.as_bytes(), None)
+        .ok_or_else(|| anyhow::anyhow!("Failed to parse file"))?;
+
+    // Return parser to pool for reuse
+    crate::language::return_pooled_parser(extension, parser);
+
+    let root_node = tree.root_node();
+
+    if debug_mode {
+        println!("[DEBUG] File parsed successfully");
+        println!(
+            "[DEBUG] Root node type: {root_node_kind}",
+            root_node_kind = root_node.kind()
+        );
+        println!(
+            "[DEBUG] Root node range: {}:{} - {}:{}",
+            root_node.start_position().row + 1,
+            root_node.start_position().column + 1,
+            root_node.end_position().row + 1,
+            root_node.end_position().column + 1
+        );
+        println!("[DEBUG] Searching for symbol '{symbol}' in AST");
+    }
+
+    // Function to recursively search for a node with the given symbol name
+    fn find_symbol_node<'a>(
+        node: tree_sitter::Node<'a>,
+        symbol_parts: &[&str],
+        language_impl: &dyn crate::language::language_trait::LanguageImpl,
+        content: &'a [u8],
+        debug_mode: bool,
+    ) -> Option<tree_sitter::Node<'a>> {
+        // If we're looking for a nested symbol (e.g., "Class.method"), we need to:
+        // 1. First find the parent symbol (e.g., "Class")
+        // 2. Then search within that node for the child symbol (e.g., "method")
+        let current_symbol = symbol_parts[0];
+        let is_nested = symbol_parts.len() > 1;
+
+        // Check if this node is an acceptable parent (function, struct, class, etc.)
+        if language_impl.is_acceptable_parent(&node) {
+            if debug_mode {
+                println!(
+                    "[DEBUG] Checking node type '{}' at {}:{} for symbol '{}'",
+                    node.kind(),
+                    node.start_position().row + 1,
+                    node.start_position().column + 1,
+                    current_symbol
+                );
+            }
+
+            // Try to extract the name of this node
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
                 if child.kind() == "identifier"
                     || child.kind() == "type_identifier"
                     || child.kind() == "field_identifier"
@@ -182,6 +373,75 @@ fn find_all_symbol_nodes<'a>(
                 matches,
             );
         }
+
+        // Extract the code block
+        let node_text = &content[found_node.start_byte()..found_node.end_byte()];
+
+        if debug_mode {
+            println!(
+                "[DEBUG] Extracted code size: {code_size} bytes",
+                code_size = node_text.len()
+            );
+            println!(
+                "[DEBUG] Extracted code lines: {line_count}",
+                line_count = node_text.lines().count()
+            );
+        }
+
+        // Tokenize the content
+        let filename = path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let node_text_str = node_text.to_string();
+        let tokenized_content =
+            crate::ranking::preprocess_text_with_filename(&node_text_str, &filename);
+
+        // Extract position information from the found node
+        // Instead of using the node's start position (which might be the "fn" keyword),
+        // find the actual identifier position within the node
+        let (symbol_line, symbol_column) = find_identifier_position_in_node(
+            found_node, 
+            &symbol_parts[symbol_parts.len() - 1], // Use the last part for nested symbols
+            content.as_bytes(),
+            debug_mode
+        ).unwrap_or((found_node.start_position().row as u32, found_node.start_position().column as u32));
+        
+        if debug_mode {
+            println!(
+                "[DEBUG] Symbol position: line {}, column {}",
+                symbol_line, symbol_column
+            );
+        }
+        
+        let search_result = SearchResult {
+            file: path.to_string_lossy().to_string(),
+            lines: (node_start_line, node_end_line),
+            node_type: found_node.kind().to_string(),
+            code: node_text_str,
+            matched_by_filename: None,
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            bm25_score: None,
+            tfidf_rank: None,
+            bm25_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            parent_file_id: None,
+            block_id: None,
+            matched_keywords: None,
+            tokenized_content: Some(tokenized_content),
+            lsp_info: None,
+        };
+        
+        return Ok((search_result, Some((symbol_line, symbol_column))));
     }
 }
 
@@ -259,7 +519,7 @@ fn text_search_fallback(
             .unwrap_or_default();
         let tokenized_content = crate::ranking::preprocess_text_with_filename(&context, &filename);
 
-        return Ok(vec![SearchResult {
+        let search_result = SearchResult {
             file: path.to_string_lossy().to_string(),
             lines: (start_line, end_line),
             node_type: "text_search".to_string(),
@@ -285,8 +545,12 @@ fn text_search_fallback(
             matched_keywords: None,
             matched_lines: None,
             tokenized_content: Some(tokenized_content),
-            parent_context: None,
-        }]);
+            lsp_info: None,
+        };
+        
+        // For text search fallback, we don't have precise position information
+        // We could estimate it, but it's less reliable than tree-sitter positions
+        return Ok((search_result, None));
     }
 
     // Nothing found
