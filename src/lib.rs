@@ -104,6 +104,7 @@ pub mod ranking;
 pub mod search;
 pub mod simd_ranking;
 pub mod simd_test;
+pub mod version;
 
 // Re-export commonly used types for convenience
 pub use extract::{

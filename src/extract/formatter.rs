@@ -74,7 +74,8 @@ fn format_extraction_internal(
                     "results": json_results,
                     "summary": {
                         "count": results.len(),
-                    }
+                    },
+                    "version": probe_code::version::get_version()
                 });
 
                 // Add system prompt, user instructions, and original_input if provided
@@ -146,7 +147,8 @@ fn format_extraction_internal(
                         "count": results.len(),
                         "total_bytes": results.iter().map(|r| r.code.len()).sum::<usize>(),
                         "total_tokens": total_tokens,
-                    }
+                    },
+                    "version": probe_code::version::get_version()
                 });
 
                 // Add system prompt, user instructions, and original_input if provided
@@ -203,6 +205,7 @@ fn format_extraction_internal(
                 writeln!(output, "  <summary>")?;
                 writeln!(output, "    <count>{}</count>", results.len())?;
                 writeln!(output, "  </summary>")?;
+                writeln!(output, "  <version>{}</version>", probe_code::version::get_version())?;
             } else {
                 // NON-DRY-RUN: includes code
                 for result in results {
@@ -241,6 +244,7 @@ fn format_extraction_internal(
 
                 writeln!(output, "    <total_tokens>{total_tokens}</total_tokens>")?;
                 writeln!(output, "  </summary>")?;
+                writeln!(output, "  <version>{}</version>", probe_code::version::get_version())?;
             }
 
             // Add original_input, system_prompt, and user_instructions inside the root element
@@ -410,6 +414,7 @@ fn format_extraction_internal(
                     let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
                     writeln!(output, "Total bytes returned: {total_bytes}")?;
                     writeln!(output, "Total tokens returned: {total_tokens}")?;
+                    writeln!(output, "Probe version: {}", probe_code::version::get_version())?;
                 }
             }
         }
