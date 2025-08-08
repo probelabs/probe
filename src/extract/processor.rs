@@ -302,7 +302,7 @@ pub fn process_file_for_extraction(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&merged_content, &filename);
 
-                return Ok(SearchResult {
+                Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_line".to_string(),
@@ -326,7 +326,7 @@ pub fn process_file_for_extraction(
                     block_id: None,
                     matched_keywords: None,
                     tokenized_content: Some(tokenized_content),
-                });
+                })
             }
             _ => {
                 // If no AST block found, fallback to the line + context
@@ -358,7 +358,7 @@ pub fn process_file_for_extraction(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&context_code, &filename);
 
-                return Ok(SearchResult {
+                Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (start_ctx, end_ctx),
                     node_type: "context".to_string(),
@@ -382,7 +382,7 @@ pub fn process_file_for_extraction(
                     block_id: None,
                     matched_keywords: None,
                     tokenized_content: Some(tokenized_content),
-                });
+                })
             }
         }
     } else if let Some(lines_set) = specific_lines {
