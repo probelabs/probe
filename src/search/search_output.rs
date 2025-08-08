@@ -629,7 +629,10 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
     println!("    <total_tokens>{total_tokens}</total_tokens>");
     println!("  </summary>");
 
-    println!("  <version>{}</version>", probe_code::version::get_version());
+    println!(
+        "  <version>{}</version>",
+        probe_code::version::get_version()
+    );
 
     println!("</probe_results>");
     Ok(())

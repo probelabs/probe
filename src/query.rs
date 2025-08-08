@@ -442,7 +442,10 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             println!("    <total_tokens>{total_tokens}");
             println!("  </summary>");
 
-            println!("  <version>{}</version>", probe_code::version::get_version());
+            println!(
+                "  <version>{}</version>",
+                probe_code::version::get_version()
+            );
 
             println!("</probe_results>");
         }
