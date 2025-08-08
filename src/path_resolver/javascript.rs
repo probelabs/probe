@@ -266,8 +266,7 @@ mod tests {
 
         // Try to resolve a common package like 'lodash' if it exists
         let result = resolver.resolve("lodash");
-        if result.is_ok() {
-            let path = result.unwrap();
+        if let Ok(path) = result {
             assert!(path.exists(), "Path does not exist: {path:?}");
 
             // Check if it contains a package.json

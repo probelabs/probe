@@ -371,7 +371,7 @@ function processResults(results) {
             term_matches: &term_matches,
             num_queries: 2, // "process" and "data"
             filename_matched_queries: HashSet::new(),
-            queries_terms: &[term_pairs.clone()],
+            queries_terms: std::slice::from_ref(&term_pairs),
             preprocessed_queries: Some(&preprocessed_queries),
             query_plan: &query_plan,
             no_merge: false,
