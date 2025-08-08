@@ -400,7 +400,8 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
                     "count": matches.len(),
                     "total_bytes": matches.iter().map(|m| m.matched_text.len()).sum::<usize>(),
                     "total_tokens": total_tokens
-                }
+                },
+                "version": probe_code::version::get_version()
             });
 
             println!("{}", serde_json::to_string_pretty(&wrapper)?);
@@ -440,6 +441,11 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
 
             println!("    <total_tokens>{total_tokens}");
             println!("  </summary>");
+
+            println!(
+                "  <version>{}</version>",
+                probe_code::version::get_version()
+            );
 
             println!("</probe_results>");
         }
@@ -548,6 +554,7 @@ pub fn handle_query(
 
             println!("Total bytes returned: {total_bytes}");
             println!("Total tokens returned: {total_tokens}");
+            println!("Probe version: {}", probe_code::version::get_version());
         }
     }
 

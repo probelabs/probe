@@ -178,6 +178,7 @@ pub fn format_and_print_search_results(
     let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
     println!("Total bytes returned: {total_bytes}");
     println!("Total tokens returned: {total_tokens}");
+    println!("Probe version: {}", probe_code::version::get_version());
 }
 
 /// Format and print search results with color highlighting for matching words
@@ -544,7 +545,8 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
             "count": results.len(),
             "total_bytes": results.iter().map(|r| r.code.len()).sum::<usize>(),
             "total_tokens": total_tokens,
-        }
+        },
+        "version": probe_code::version::get_version()
     });
 
     println!("{json}", json = serde_json::to_string_pretty(&wrapper)?);
@@ -626,6 +628,11 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
 
     println!("    <total_tokens>{total_tokens}</total_tokens>");
     println!("  </summary>");
+
+    println!(
+        "  <version>{}</version>",
+        probe_code::version::get_version()
+    );
 
     println!("</probe_results>");
     Ok(())
