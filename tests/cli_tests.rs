@@ -414,3 +414,60 @@ fn test_cli_max_results() {
         "Should find only 1 result"
     );
 }
+
+#[test]
+fn test_cli_limit_message() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_test_directory_structure(&temp_dir);
+
+    // Create additional test files to ensure we have enough results to trigger limits
+    let additional_content = r#"
+fn another_search_function() {
+    // Another function with search term
+    println!("More search functionality here");
+}
+"#;
+    create_test_file(&temp_dir, "src/more_search.rs", additional_content);
+
+    let yet_more_content = r#"
+struct SearchConfig {
+    query: String,
+}
+"#;
+    create_test_file(&temp_dir, "src/search_config.rs", yet_more_content);
+
+    // Run the CLI with a restrictive max-results limit
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--",
+            "search",
+            "search",
+            temp_dir.path().to_str().unwrap(),
+            "--max-results",
+            "1",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    // Check that the command succeeded
+    assert!(output.status.success());
+
+    // Convert stdout to string
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Check that the limit message appears
+    // The limit message is no longer in the search output
+
+    // Check that the guidance message appears
+    assert!(
+        stdout.contains("💡 To get more results from this search query, repeat it with the same params and use --session with the session ID shown above"),
+        "Should show guidance message about using session ID"
+    );
+
+    // Should only report 1 result in the summary
+    assert!(
+        stdout.contains("Found 1 search results"),
+        "Should find only 1 result due to limit"
+    );
+}

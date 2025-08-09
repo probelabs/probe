@@ -207,6 +207,19 @@ fn handle_search(params: SearchParams) -> Result<()> {
                     "Skipped files due to limits:".yellow().bold(),
                     total_skipped
                 );
+                
+                // Show guidance message to get more results
+                if total_skipped > 0 {
+                    if let Some(session_id) = search_options.session {
+                        if !session_id.is_empty() && session_id != "new" {
+                            println!("💡 To get more results from this search query, repeat it with the same params and session ID: {session_id}");
+                        } else {
+                            println!("💡 To get more results from this search query, repeat it with the same params and session ID (see above)");
+                        }
+                    } else {
+                        println!("💡 To get more results from this search query, repeat it with the same params and use --session with the session ID shown above");
+                    }
+                }
 
                 // Show breakdown in debug mode
                 if std::env::var("DEBUG").is_ok() && total_skipped > 0 {
