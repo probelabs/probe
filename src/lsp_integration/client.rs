@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use lsp_daemon::{
     get_default_socket_path, remove_socket_file, IpcStream,
     CallHierarchyResult, DaemonRequest, DaemonResponse, DaemonStatus, LanguageInfo,
-    MessageCodec, Language, LanguageDetector,
+    LogEntry, MessageCodec, Language, LanguageDetector,
 };
 use std::path::Path;
 use std::time::Duration;
@@ -268,6 +268,21 @@ impl LspClient {
 
         match response {
             DaemonResponse::LanguageList { languages, .. } => Ok(languages),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Get log entries from the daemon
+    pub async fn get_logs(&mut self, lines: usize) -> Result<Vec<LogEntry>> {
+        let request = DaemonRequest::GetLogs {
+            request_id: Uuid::new_v4(),
+            lines,
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::Logs { entries, .. } => Ok(entries),
             _ => Err(anyhow!("Unexpected response type")),
         }
     }

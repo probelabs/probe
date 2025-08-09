@@ -75,6 +75,10 @@ pub enum DaemonRequest {
     Ping {
         request_id: Uuid,
     },
+    GetLogs {
+        request_id: Uuid,
+        lines: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +134,10 @@ pub enum DaemonResponse {
     },
     Pong {
         request_id: Uuid,
+    },
+    Logs {
+        request_id: Uuid,
+        entries: Vec<LogEntry>,
     },
     Error {
         request_id: Uuid,
@@ -263,6 +271,37 @@ pub enum ServerStatus {
     Ready,
     Busy,
     Error(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: LogLevel,
+    pub target: String,
+    pub message: String,
+    pub file: Option<String>,
+    pub line: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl std::fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogLevel::Trace => write!(f, "TRACE"),
+            LogLevel::Debug => write!(f, "DEBUG"),
+            LogLevel::Info => write!(f, "INFO"),
+            LogLevel::Warn => write!(f, "WARN"),
+            LogLevel::Error => write!(f, "ERROR"),
+        }
+    }
 }
 
 pub struct MessageCodec;

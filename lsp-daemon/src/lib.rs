@@ -4,6 +4,7 @@
 // Core modules
 pub mod ipc;
 pub mod language_detector;
+pub mod logging;
 pub mod protocol;
 pub mod socket_path;
 
@@ -20,12 +21,13 @@ mod workspace_resolver;
 // Re-export commonly used types
 pub use protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, DaemonRequest,
-    DaemonResponse, DaemonStatus, LanguageInfo, MessageCodec, PoolStatus, ServerStatus,
-    WorkspaceInfo,
+    DaemonResponse, DaemonStatus, LanguageInfo, LogEntry, LogLevel, MessageCodec, PoolStatus, 
+    ServerStatus, WorkspaceInfo,
 };
 
 pub use ipc::{IpcListener, IpcStream};
 pub use language_detector::{Language, LanguageDetector};
+pub use logging::{LogBuffer, MemoryLogLayer};
 pub use socket_path::{get_default_socket_path, normalize_executable, remove_socket_file};
 
 // Re-export daemon for binary and embedded use

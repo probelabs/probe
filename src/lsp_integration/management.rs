@@ -7,6 +7,7 @@ use std::path::Path;
 use crate::lsp_integration::client::LspClient;
 use crate::lsp_integration::types::*;
 use crate::lsp_integration::LspSubcommands;
+use lsp_daemon::{LspDaemon, LogEntry, LogLevel};
 
 pub struct LspManager;
 
@@ -322,133 +323,98 @@ impl LspManager {
 
     /// Handle LSP logs command
     async fn handle_logs(follow: bool, lines: usize, clear: bool) -> Result<()> {
-        use std::fs;
-        use std::io::{BufRead, BufReader};
-        use std::path::Path;
-        
-        let log_path = Path::new("/tmp/lsp-daemon.log");
-        
         // Handle clear flag
         if clear {
-            if log_path.exists() {
-                fs::remove_file(log_path)?;
-                println!("✓ Log file cleared");
-            } else {
-                println!("No log file found");
-            }
+            println!("{}", "In-memory logs cannot be cleared (they auto-rotate)".yellow());
+            println!("Restart the daemon to reset logs: {}", "probe lsp restart".cyan());
             return Ok(());
         }
         
-        // Check if log file exists
-        if !log_path.exists() {
-            println!("{}", "No LSP daemon log file found".yellow());
-            println!("To enable logging, set the LSP_LOG environment variable:");
-            println!("  {} cargo run -- lsp start", "LSP_LOG=1".cyan());
-            println!("or");
-            println!("  {} probe extract <file> --lsp", "LSP_LOG=1".cyan());
-            return Ok(());
-        }
+        // Connect to daemon to get logs (without auto-starting)
+        let config = LspConfig {
+            use_daemon: true,
+            workspace_hint: None,
+            timeout_ms: 10000, // Short timeout for logs
+        };
+        let mut client = match LspClient::new(config).await {
+            Ok(client) => client,
+            Err(_) => {
+                println!("{}", "LSP daemon is not running".red());
+                println!("Start the daemon with: {}", "probe lsp start".cyan());
+                return Ok(());
+            }
+        };
         
         if follow {
-            // Follow mode (like tail -f)
+            // Follow mode - poll for new logs
             println!("{}", "Following LSP daemon log (Ctrl+C to stop)...".green().bold());
             println!("{}", "─".repeat(60).dimmed());
             
             // First show the last N lines
-            let file = fs::File::open(log_path)?;
-            let reader = BufReader::new(file);
-            let all_lines: Vec<String> = reader.lines().collect::<Result<Vec<_>, _>>()?;
+            let entries = match client.get_logs(lines).await {
+                Ok(entries) => {
+                    for entry in &entries {
+                        Self::print_log_entry(entry);
+                    }
+                    entries
+                }
+                Err(e) => {
+                    println!("{} Failed to get logs: {}", "❌".red(), e);
+                    return Ok(());
+                }
+            };
             
-            let start_idx = all_lines.len().saturating_sub(lines);
-            for line in &all_lines[start_idx..] {
-                println!("{}", line);
-            }
+            // Keep track of the last timestamp to avoid duplicates
+            let mut last_timestamp = entries.last().map(|e| e.timestamp.clone());
             
-            // Then follow new lines using a more robust approach
-            use std::io::{Seek, SeekFrom};
-            
-            let mut last_size = fs::metadata(log_path)?.len();
-            
+            // Poll for new logs every 500ms
             loop {
-                let current_size = fs::metadata(log_path)?.len();
+                tokio::time::sleep(Duration::from_millis(500)).await;
                 
-                if current_size > last_size {
-                    let file = fs::File::open(log_path)?;
-                    let mut reader = BufReader::new(file);
-                    
-                    // Seek to where we left off
-                    reader.seek(SeekFrom::Start(last_size))?;
-                    
-                    // Read all new lines
-                    for line_result in reader.lines() {
-                        match line_result {
-                            Ok(line) => {
-                                // Apply the same coloring as the static view and pretty-print JSON
-                                if line.contains(">>> TO LSP:") || line.contains("<<< FROM LSP:") {
-                                    Self::print_formatted_lsp_line(&line);
-                                } else if line.contains("ERROR") || line.contains("error") {
-                                    println!("{}", line.red());
-                                } else if line.contains("WARN") || line.contains("warning") {
-                                    println!("{}", line.yellow());
-                                } else if line.contains("INFO") {
-                                    println!("{}", line.blue());
-                                } else if line.contains("DEBUG") {
-                                    println!("{}", line.dimmed());
-                                } else if line.contains("==========") {
-                                    println!("{}", line.bold());
-                                } else {
-                                    println!("{}", line);
-                                }
-                            },
-                            Err(_) => break,
+                match client.get_logs(100).await {
+                    Ok(new_entries) => {
+                        // Show only new entries after the last timestamp
+                        let mut found_last = last_timestamp.is_none();
+                        for entry in &new_entries {
+                            if found_last {
+                                Self::print_log_entry(entry);
+                                last_timestamp = Some(entry.timestamp.clone());
+                            } else if Some(&entry.timestamp) == last_timestamp.as_ref() {
+                                found_last = true;
+                            }
                         }
                     }
-                    
-                    last_size = current_size;
-                } else {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    Err(_) => {
+                        // Daemon might have been shutdown
+                        break;
+                    }
                 }
             }
         } else {
             // Show last N lines
-            let file = fs::File::open(log_path)?;
-            let reader = BufReader::new(file);
-            let all_lines: Vec<String> = reader.lines().collect::<Result<Vec<_>, _>>()?;
-            
-            if all_lines.is_empty() {
-                println!("{}", "Log file is empty".yellow());
-                return Ok(());
-            }
-            
-            let total_lines = all_lines.len();
-            let start_idx = total_lines.saturating_sub(lines);
-            
-            println!("{}", format!("LSP Daemon Log (last {} lines of {})", 
-                lines.min(total_lines), total_lines).bold().green());
-            println!("{}", "─".repeat(60).dimmed());
-            
-            for line in &all_lines[start_idx..] {
-                // Highlight different log levels and format LSP JSON
-                if line.contains(">>> TO LSP:") || line.contains("<<< FROM LSP:") {
-                    Self::print_formatted_lsp_line(line);
-                } else if line.contains("ERROR") || line.contains("error") {
-                    println!("{}", line.red());
-                } else if line.contains("WARN") || line.contains("warning") {
-                    println!("{}", line.yellow());
-                } else if line.contains("INFO") {
-                    println!("{}", line.blue());
-                } else if line.contains("DEBUG") {
-                    println!("{}", line.dimmed());
-                } else if line.contains("==========") {
-                    println!("{}", line.bold());
-                } else {
-                    println!("{}", line);
+            match client.get_logs(lines).await {
+                Ok(entries) => {
+                    if entries.is_empty() {
+                        println!("{}", "No logs available".yellow());
+                        return Ok(());
+                    }
+                    
+                    let total_entries = entries.len();
+                    println!("{}", format!("LSP Daemon Log (last {} entries)", total_entries).bold().green());
+                    println!("{}", "─".repeat(60).dimmed());
+                    
+                    for entry in &entries {
+                        Self::print_log_entry(entry);
+                    }
+                    
+                    println!("{}", "─".repeat(60).dimmed());
+                    println!("Use {} to follow log in real-time", "--follow".cyan());
+                    println!("Use {} to restart daemon (clears logs)", "probe lsp restart".cyan());
+                }
+                Err(e) => {
+                    println!("{} Failed to get logs: {}", "❌".red(), e);
                 }
             }
-            
-            println!("{}", "─".repeat(60).dimmed());
-            println!("Use {} to follow log in real-time", "--follow".cyan());
-            println!("Use {} to clear the log file", "--clear".cyan());
         }
         
         Ok(())
@@ -456,8 +422,6 @@ impl LspManager {
 
     /// Start embedded LSP daemon
     async fn start_embedded_daemon(socket: Option<String>, log_level: String, foreground: bool) -> Result<()> {
-        use lsp_daemon::LspDaemon;
-        use tracing_subscriber::EnvFilter;
 
         // Check if we're being run via cargo and warn about potential conflicts
         if std::env::current_exe()
@@ -469,35 +433,10 @@ impl LspManager {
             eprintln!("   Then use: ./target/debug/probe lsp start -f");
         }
 
-        // Initialize logging
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(&log_level));
-
-        // Check if LSP_LOG is set to enable file logging
+        // Don't initialize tracing here - let the daemon handle it with memory logging
+        // The daemon will set up both memory logging and stderr logging as needed
         if std::env::var("LSP_LOG").is_ok() {
-            // Set up file logging to /tmp/lsp-daemon.log
-            use std::fs::OpenOptions;
-            use std::io::Write;
-            use tracing_subscriber::fmt::writer::MakeWriterExt;
-            
-            let log_file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/lsp-daemon.log")
-                .expect("Failed to open log file");
-            
-            tracing_subscriber::fmt()
-                .with_env_filter(filter)
-                .with_target(false)
-                .with_writer(log_file.and(std::io::stderr))
-                .init();
-                
-            eprintln!("LSP logging enabled - writing to /tmp/lsp-daemon.log");
-        } else {
-            tracing_subscriber::fmt()
-                .with_env_filter(filter)
-                .with_target(false)
-                .init();
+            eprintln!("LSP logging enabled - logs stored in-memory (use 'probe lsp logs' to view)");
         }
 
         // Determine socket path
@@ -529,53 +468,57 @@ impl LspManager {
         Ok(())
     }
 
-    /// Format and print LSP log line with proper JSON formatting
-    fn print_formatted_lsp_line(line: &str) {
-        // Extract the JSON part from the log line
-        // Format: "[15:01:18.346] >>> TO LSP: {json content}"
-        if let Some(json_start) = line.find('{') {
-            let timestamp_and_prefix = &line[..json_start];
-            let json_part = &line[json_start..];
-            
-            // Try to parse and pretty-print the JSON
-            match serde_json::from_str::<serde_json::Value>(json_part) {
+    /// Print a log entry with proper formatting and colors
+    fn print_log_entry(entry: &LogEntry) {
+        let level_color = match entry.level {
+            LogLevel::Error => "ERROR".red().bold(),
+            LogLevel::Warn => "WARN".yellow().bold(),
+            LogLevel::Info => "INFO".blue().bold(),
+            LogLevel::Debug => "DEBUG".dimmed(),
+            LogLevel::Trace => "TRACE".dimmed(),
+        };
+        
+        let timestamp = entry.timestamp.dimmed();
+        let target = if entry.target.is_empty() {
+            "".to_string()
+        } else {
+            format!(" [{}]", entry.target.dimmed())
+        };
+        
+        // Check if message looks like JSON and try to format it
+        let formatted_message = if entry.message.trim_start().starts_with('{') {
+            match serde_json::from_str::<serde_json::Value>(&entry.message) {
                 Ok(parsed) => {
                     match serde_json::to_string_pretty(&parsed) {
-                        Ok(pretty_json) => {
-                            // Print the timestamp/prefix in color, then the pretty JSON
-                            if line.contains(">>> TO LSP:") {
-                                print!("{}", timestamp_and_prefix.cyan());
-                            } else {
-                                print!("{}", timestamp_and_prefix.green());
-                            }
-                            println!("{}", pretty_json);
-                        }
-                        Err(_) => {
-                            // Fallback to original line with coloring
-                            if line.contains(">>> TO LSP:") {
-                                println!("{}", line.cyan());
-                            } else {
-                                println!("{}", line.green());
-                            }
-                        }
+                        Ok(pretty) => pretty,
+                        Err(_) => entry.message.clone(),
                     }
                 }
-                Err(_) => {
-                    // Fallback to original line with coloring
-                    if line.contains(">>> TO LSP:") {
-                        println!("{}", line.cyan());
-                    } else {
-                        println!("{}", line.green());
-                    }
-                }
+                Err(_) => entry.message.clone(),
             }
         } else {
-            // No JSON found, just color the line
-            if line.contains(">>> TO LSP:") {
-                println!("{}", line.cyan());
-            } else {
-                println!("{}", line.green());
+            entry.message.clone()
+        };
+        
+        // Apply message-specific coloring
+        let colored_message = if entry.message.contains(">>> TO LSP:") {
+            formatted_message.cyan()
+        } else if entry.message.contains("<<< FROM LSP:") {
+            formatted_message.green()
+        } else {
+            match entry.level {
+                LogLevel::Error => formatted_message.red(),
+                LogLevel::Warn => formatted_message.yellow(),
+                LogLevel::Info => formatted_message.normal(),
+                LogLevel::Debug | LogLevel::Trace => formatted_message.dimmed(),
             }
+        };
+        
+        println!("{} {}{} {}", timestamp, level_color, target, colored_message);
+        
+        // Show file/line info if available
+        if let (Some(file), Some(line)) = (&entry.file, entry.line) {
+            println!("    {} {}:{}", "at".dimmed(), file.dimmed(), line.to_string().dimmed());
         }
     }
 }
