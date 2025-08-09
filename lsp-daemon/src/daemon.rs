@@ -55,23 +55,25 @@ impl LspDaemon {
         let memory_layer = MemoryLogLayer::new(log_buffer.clone());
         
         // Set up tracing subscriber with memory layer and optionally stderr
-        let subscriber = tracing_subscriber::registry().with(memory_layer);
+        use tracing_subscriber::EnvFilter;
+        
+        // Always use a filter to ensure INFO level is captured
+        let filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("info"));
+        
+        let subscriber = tracing_subscriber::registry()
+            .with(memory_layer)
+            .with(filter);
         
         // If LSP_LOG is set, also add stderr logging
         if std::env::var("LSP_LOG").is_ok() {
             use tracing_subscriber::fmt;
-            use tracing_subscriber::EnvFilter;
-            
-            let filter = EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"));
             
             let fmt_layer = fmt::layer()
                 .with_target(false)
                 .with_writer(std::io::stderr);
             
-            if tracing::subscriber::set_global_default(
-                subscriber.with(filter).with(fmt_layer)
-            ).is_ok() {
+            if tracing::subscriber::set_global_default(subscriber.with(fmt_layer)).is_ok() {
                 tracing::info!("Tracing initialized with memory and stderr logging");
             }
         } else {
@@ -398,12 +400,9 @@ impl LspDaemon {
             .open_document(&absolute_file_path, &content)
             .await?;
         
-        // Wait for rust-analyzer to complete its initialization processes
-        // Reduced to 10 seconds as a reasonable default for small projects
-        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-        
-        // Give rust-analyzer some time to process the document and get ready
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        // Give rust-analyzer a brief moment to process the document
+        // Reduced from 10+2 seconds to 2 seconds since we have retry logic
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
         // Try call hierarchy with retry logic - allow multiple attempts with shorter wait
         let max_attempts = 3; // Multiple attempts to handle cases where rust-analyzer needs more time
@@ -448,8 +447,8 @@ impl LspDaemon {
             
             attempt += 1;
             if attempt <= max_attempts {
-                // Wait between attempts to give rust-analyzer more time
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                // Shorter wait between attempts - 2 seconds instead of 5
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             }
         }
 
