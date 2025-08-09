@@ -207,7 +207,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
                     "Skipped files due to limits:".yellow().bold(),
                     total_skipped
                 );
-                
+
                 // Show guidance message to get more results
                 if total_skipped > 0 {
                     if let Some(session_id) = search_options.session {
