@@ -160,7 +160,7 @@ mod windows_impl {
         pub async fn accept(&self) -> Result<IpcStream> {
             let mut server_guard = self.current_server.lock().await;
 
-            if let Some(server) = server_guard.take() {
+            if let Some(mut server) = server_guard.take() {
                 // Wait for a client to connect
                 server.connect().await?;
 

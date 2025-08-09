@@ -26,7 +26,6 @@ pub fn socket_exists(path: &str) -> bool {
     #[cfg(windows)]
     {
         // On Windows, check if we can connect to the named pipe
-        use std::time::Duration;
         use tokio::net::windows::named_pipe::ClientOptions;
 
         // Try to connect with a short timeout to check if pipe exists
