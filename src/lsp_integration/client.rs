@@ -150,17 +150,30 @@ impl LspClient {
         stream.write_all(&encoded).await?;
         stream.flush().await?;
 
-        // Read response with timeout
-        let mut buffer = vec![0; 65536];
+        // Read response with timeout using proper message framing
         let timeout_duration = Duration::from_millis(self.config.timeout_ms);
-        let n = timeout(timeout_duration, stream.read(&mut buffer)).await??;
-
-        if n == 0 {
-            return Err(anyhow!("Connection closed by daemon"));
+        
+        // Read message length (4 bytes)
+        let mut length_buf = [0u8; 4];
+        timeout(timeout_duration, stream.read_exact(&mut length_buf)).await??;
+        let message_len = u32::from_be_bytes(length_buf) as usize;
+        
+        // Ensure we don't try to read unreasonably large messages (10MB limit)
+        if message_len > 10 * 1024 * 1024 {
+            return Err(anyhow!("Message too large: {} bytes", message_len));
         }
+        
+        // Read the complete message body
+        let mut message_buf = vec![0u8; message_len];
+        timeout(timeout_duration, stream.read_exact(&mut message_buf)).await??;
+        
+        // Reconstruct the complete message with length prefix for decoding
+        let mut complete_message = Vec::with_capacity(4 + message_len);
+        complete_message.extend_from_slice(&length_buf);
+        complete_message.extend_from_slice(&message_buf);
 
         // Decode response
-        let response = MessageCodec::decode_response(&buffer[..n])?;
+        let response = MessageCodec::decode_response(&complete_message)?;
 
         // Check for errors
         if let DaemonResponse::Error { error, .. } = &response {

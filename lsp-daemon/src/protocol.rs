@@ -479,3 +479,79 @@ fn parse_range(value: &Value) -> Result<Range> {
 }
 
 use serde_json::json;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_message_codec_large_response() {
+        // Create a large response with many log entries
+        let mut large_log_entries = Vec::new();
+        for i in 0..100 {
+            large_log_entries.push(LogEntry {
+                timestamp: format!("2024-01-01 12:00:{:02}.000 UTC", i % 60),
+                level: LogLevel::Info,
+                target: "test".to_string(),
+                message: format!("Large message {} with lots of content that makes the overall response quite big", i),
+                file: Some("test.rs".to_string()),
+                line: Some(i),
+            });
+        }
+        
+        let response = DaemonResponse::Logs {
+            request_id: Uuid::new_v4(),
+            entries: large_log_entries,
+        };
+        
+        // Encode the response
+        let encoded = MessageCodec::encode_response(&response).expect("Failed to encode large response");
+        
+        // Ensure it's properly encoded with length prefix
+        assert!(encoded.len() >= 4);
+        let expected_len = encoded.len() - 4;
+        let actual_len = u32::from_be_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]) as usize;
+        assert_eq!(actual_len, expected_len);
+        
+        // Decode it back
+        let decoded = MessageCodec::decode_response(&encoded).expect("Failed to decode large response");
+        
+        match decoded {
+            DaemonResponse::Logs { entries, .. } => {
+                assert_eq!(entries.len(), 100);
+                assert_eq!(entries[0].message, "Large message 0 with lots of content that makes the overall response quite big");
+            }
+            _ => panic!("Expected Logs response"),
+        }
+    }
+    
+    #[test]
+    fn test_incomplete_message_detection() {
+        // Create a normal response
+        let response = DaemonResponse::Pong {
+            request_id: Uuid::new_v4(),
+        };
+        
+        let encoded = MessageCodec::encode_response(&response).expect("Failed to encode");
+        
+        // Test with truncated message (missing some bytes)
+        let truncated = &encoded[..encoded.len() - 5];
+        let result = MessageCodec::decode_response(truncated);
+        
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Incomplete message"));
+    }
+    
+    #[test]
+    fn test_message_too_short() {
+        // Test with message shorter than 4 bytes
+        let short_message = vec![1, 2];
+        let result = MessageCodec::decode_response(&short_message);
+        
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Message too short"));
+    }
+}
