@@ -13,6 +13,7 @@ pub struct LspManager;
 
 impl LspManager {
     /// Ensure project is built to avoid cargo build lock conflicts
+    #[allow(dead_code)]
     fn ensure_project_built() -> Result<()> {
         let target_debug = Path::new("target/debug/probe");
 
