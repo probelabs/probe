@@ -107,9 +107,9 @@ impl LspDaemon {
         info!("LSP daemon listening on {}", self.socket_path);
 
         // Set up signal handling for graceful shutdown
-        let daemon_for_signals = self.clone_refs();
         #[cfg(unix)]
         {
+            let daemon_for_signals = self.clone_refs();
             use tokio::signal::unix::{signal, SignalKind};
             let mut sigterm = signal(SignalKind::terminate())?;
             let mut sigint = signal(SignalKind::interrupt())?;
