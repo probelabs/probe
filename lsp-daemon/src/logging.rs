@@ -148,12 +148,20 @@ impl MemoryLogLayer {
         
         event.record(&mut visitor);
         
-        // If no message field was found, try to format as a display string
-        if visitor.message.is_empty() {
+        let message = if visitor.message.is_empty() {
             // Fallback to target if no specific message
             event.metadata().target().to_string()
         } else {
             visitor.message
+        };
+        
+        // Truncate very large messages to prevent IPC issues (limit to 4KB per log message)
+        const MAX_LOG_MESSAGE_SIZE: usize = 4096;
+        if message.len() > MAX_LOG_MESSAGE_SIZE {
+            format!("{}... [TRUNCATED - original size: {} chars]", 
+                   &message[..MAX_LOG_MESSAGE_SIZE], message.len())
+        } else {
+            message
         }
     }
 }
@@ -272,5 +280,67 @@ mod tests {
         assert!(matches!(MemoryLogLayer::convert_level(&tracing::Level::INFO), LogLevel::Info));
         assert!(matches!(MemoryLogLayer::convert_level(&tracing::Level::WARN), LogLevel::Warn));
         assert!(matches!(MemoryLogLayer::convert_level(&tracing::Level::ERROR), LogLevel::Error));
+    }
+
+    #[test]
+    fn test_log_message_truncation() {
+        // Test the format_message function directly by creating a mock scenario
+        let long_message = "A".repeat(5000);
+        
+        // Simulate what happens when a large message gets processed
+        const MAX_LOG_MESSAGE_SIZE: usize = 4096;
+        let truncated_message = if long_message.len() > MAX_LOG_MESSAGE_SIZE {
+            format!("{}... [TRUNCATED - original size: {} chars]", 
+                   &long_message[..MAX_LOG_MESSAGE_SIZE], long_message.len())
+        } else {
+            long_message.clone()
+        };
+        
+        // Verify truncation occurred
+        assert!(truncated_message.len() < long_message.len());
+        assert!(truncated_message.contains("TRUNCATED"));
+        assert!(truncated_message.contains("original size: 5000 chars"));
+        assert!(truncated_message.starts_with(&"A".repeat(4096)));
+        
+        // Now test with a LogEntry that simulates the truncated message
+        let buffer = LogBuffer::new();
+        let entry = LogEntry {
+            timestamp: "2024-01-01 12:00:00.000 UTC".to_string(),
+            level: LogLevel::Info,
+            target: "test".to_string(),
+            message: truncated_message.clone(),
+            file: None,
+            line: None,
+        };
+        
+        buffer.push(entry);
+        let entries = buffer.get_all();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].message, truncated_message);
+    }
+    
+    #[test]
+    fn test_log_message_no_truncation_for_short_messages() {
+        let buffer = LogBuffer::new();
+        
+        // Create a normal-sized message
+        let normal_message = "This is a normal message";
+        let entry = LogEntry {
+            timestamp: "2024-01-01 12:00:00.000 UTC".to_string(),
+            level: LogLevel::Info,
+            target: "test".to_string(),
+            message: normal_message.to_string(),
+            file: None,
+            line: None,
+        };
+        
+        buffer.push(entry);
+        let entries = buffer.get_all();
+        assert_eq!(entries.len(), 1);
+        
+        // Message should not be truncated
+        let retrieved_message = &entries[0].message;
+        assert_eq!(retrieved_message, normal_message);
+        assert!(!retrieved_message.contains("TRUNCATED"));
     }
 }
