@@ -1,6 +1,6 @@
 use clap::{Parser as ClapParser, Subcommand};
-use std::path::PathBuf;
 use probe_code::lsp_integration::LspSubcommands;
+use std::path::PathBuf;
 
 #[derive(ClapParser, Debug)]
 #[command(
@@ -96,7 +96,6 @@ pub struct Args {
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
-
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {

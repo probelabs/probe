@@ -2,16 +2,16 @@ use std::collections::HashMap;
 
 fn main() {
     println!("LSP Test Project");
-    
+
     let data = setup_data();
     process_data(&data);
-    
+
     let result = calculate_result(10, 20);
     display_result(result);
-    
+
     let numbers = vec![1, 2, 3, 4, 5];
     let processed = process_numbers(numbers);
-    println!("Processed numbers: {:?}", processed);
+    println!("Processed numbers: {processed:?}");
 }
 
 fn setup_data() -> HashMap<String, i32> {
@@ -19,11 +19,11 @@ fn setup_data() -> HashMap<String, i32> {
     map.insert("first".to_string(), 1);
     map.insert("second".to_string(), 2);
     map.insert("third".to_string(), 3);
-    
+
     // This function calls helper functions
     let additional_data = create_additional_data();
     map.extend(additional_data);
-    
+
     map
 }
 
@@ -36,27 +36,27 @@ fn create_additional_data() -> HashMap<String, i32> {
 
 fn process_data(data: &HashMap<String, i32>) {
     println!("Processing data with {} entries", data.len());
-    
+
     for (key, value) in data {
         validate_entry(key, *value);
     }
-    
+
     let sum = calculate_sum(data);
-    println!("Total sum: {}", sum);
+    println!("Total sum: {sum}");
 }
 
 fn validate_entry(key: &str, value: i32) {
     if value < 0 {
-        println!("Warning: negative value for key '{}'", key);
+        println!("Warning: negative value for key '{key}'");
     }
-    
+
     // Call utility function
     let formatted = format_entry(key, value);
-    println!("Formatted: {}", formatted);
+    println!("Formatted: {formatted}");
 }
 
 fn format_entry(key: &str, value: i32) -> String {
-    format!("{}={}", key, value)
+    format!("{key}={value}")
 }
 
 fn calculate_sum(data: &HashMap<String, i32>) -> i32 {
@@ -81,8 +81,8 @@ fn apply_modifier(value: i32) -> i32 {
 }
 
 fn display_result(result: i32) {
-    println!("Final result: {}", result);
-    
+    println!("Final result: {result}");
+
     if result > 100 {
         print_large_result(result);
     } else {
@@ -91,16 +91,17 @@ fn display_result(result: i32) {
 }
 
 fn print_large_result(value: i32) {
-    println!("That's a large result: {}", value);
+    println!("That's a large result: {value}");
 }
 
 fn print_small_result(value: i32) {
-    println!("That's a small result: {}", value);
+    println!("That's a small result: {value}");
 }
 
 fn process_numbers(numbers: Vec<i32>) -> Vec<i32> {
-    numbers.into_iter()
-        .map(|n| transform_number(n))
+    numbers
+        .into_iter()
+        .map(transform_number)
         .filter(|&n| filter_number(n))
         .collect()
 }
@@ -126,24 +127,24 @@ fn internal_processor(input: &str) -> String {
 }
 
 fn preprocessing_step(input: &str) -> String {
-    format!("preprocessed_{}", input)
+    format!("preprocessed_{input}")
 }
 
 fn main_processing_step(input: &str) -> String {
     let helper_result = processing_helper(input);
-    format!("main_processed_{}", helper_result)
+    format!("main_processed_{helper_result}")
 }
 
 fn processing_helper(input: &str) -> String {
-    format!("helper_{}", input)
+    format!("helper_{input}")
 }
 
 fn postprocessing_step(input: String) -> String {
-    format!("postprocessed_{}", input)
+    format!("postprocessed_{input}")
 }
 
 fn finalize_output(input: String) -> String {
-    format!("final_{}", input)
+    format!("final_{input}")
 }
 
 #[cfg(test)]
@@ -159,7 +160,10 @@ mod tests {
     #[test]
     fn test_public_api_function() {
         let result = public_api_function("test");
-        assert_eq!(result, "final_postprocessed_main_processed_helper_preprocessed_test");
+        assert_eq!(
+            result,
+            "final_postprocessed_main_processed_helper_preprocessed_test"
+        );
     }
 
     #[test]

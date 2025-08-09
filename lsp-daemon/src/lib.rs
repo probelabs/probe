@@ -14,14 +14,14 @@ pub mod lsp_server;
 
 // Internal modules - exposed for embedded daemon use
 pub mod daemon;
-pub mod server_manager;
 mod pool; // Keep for now but mark as deprecated
+pub mod server_manager;
 mod workspace_resolver;
 
 // Re-export commonly used types
 pub use protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, DaemonRequest,
-    DaemonResponse, DaemonStatus, LanguageInfo, LogEntry, LogLevel, MessageCodec, PoolStatus, 
+    DaemonResponse, DaemonStatus, LanguageInfo, LogEntry, LogLevel, MessageCodec, PoolStatus,
     ServerStatus, WorkspaceInfo,
 };
 

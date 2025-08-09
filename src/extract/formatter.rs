@@ -334,8 +334,11 @@ fn format_extraction_internal(
                                 writeln!(output, "LSP Information:")?;
                             }
                         }
-                        
-                        if let Ok(enhanced_symbol) = serde_json::from_value::<probe_code::lsp_integration::EnhancedSymbolInfo>(lsp_info.clone()) {
+
+                        if let Ok(enhanced_symbol) = serde_json::from_value::<
+                            probe_code::lsp_integration::EnhancedSymbolInfo,
+                        >(lsp_info.clone())
+                        {
                             // Display call hierarchy if available
                             if let Some(call_hierarchy) = &enhanced_symbol.call_hierarchy {
                                 if !call_hierarchy.incoming_calls.is_empty() {
@@ -344,9 +347,12 @@ fn format_extraction_internal(
                                     } else {
                                         writeln!(output, "  Incoming Calls:")?;
                                     }
-                                    
+
                                     for call in &call_hierarchy.incoming_calls {
-                                        let call_desc = format!("{} ({}:{})", call.name, call.file_path, call.line);
+                                        let call_desc = format!(
+                                            "{} ({}:{})",
+                                            call.name, call.file_path, call.line
+                                        );
                                         if format == "markdown" {
                                             writeln!(output, "  - {}", call_desc)?;
                                         } else {
@@ -354,16 +360,19 @@ fn format_extraction_internal(
                                         }
                                     }
                                 }
-                                
+
                                 if !call_hierarchy.outgoing_calls.is_empty() {
                                     if format == "markdown" {
                                         writeln!(output, "#### Outgoing Calls:")?;
                                     } else {
                                         writeln!(output, "  Outgoing Calls:")?;
                                     }
-                                    
+
                                     for call in &call_hierarchy.outgoing_calls {
-                                        let call_desc = format!("{} ({}:{})", call.name, call.file_path, call.line);
+                                        let call_desc = format!(
+                                            "{} ({}:{})",
+                                            call.name, call.file_path, call.line
+                                        );
                                         if format == "markdown" {
                                             writeln!(output, "  - {}", call_desc)?;
                                         } else {
@@ -371,16 +380,25 @@ fn format_extraction_internal(
                                         }
                                     }
                                 }
-                                
-                                if call_hierarchy.incoming_calls.is_empty() && call_hierarchy.outgoing_calls.is_empty() {
+
+                                if call_hierarchy.incoming_calls.is_empty()
+                                    && call_hierarchy.outgoing_calls.is_empty()
+                                {
                                     if format == "markdown" {
-                                        writeln!(output, "  No call hierarchy information available")?;
+                                        writeln!(
+                                            output,
+                                            "  No call hierarchy information available"
+                                        )?;
                                     } else {
-                                        writeln!(output, "  {}", "No call hierarchy information available".dimmed())?
+                                        writeln!(
+                                            output,
+                                            "  {}",
+                                            "No call hierarchy information available".dimmed()
+                                        )?
                                     }
                                 }
                             }
-                            
+
                             // Display references if available
                             if !enhanced_symbol.references.is_empty() {
                                 if format == "markdown" {
@@ -388,9 +406,12 @@ fn format_extraction_internal(
                                 } else {
                                     writeln!(output, "  References:")?;
                                 }
-                                
+
                                 for reference in &enhanced_symbol.references {
-                                    let ref_desc = format!("{}:{} - {}", reference.file_path, reference.line, reference.context);
+                                    let ref_desc = format!(
+                                        "{}:{} - {}",
+                                        reference.file_path, reference.line, reference.context
+                                    );
                                     if format == "markdown" {
                                         writeln!(output, "  - {}", ref_desc)?;
                                     } else {
@@ -398,7 +419,7 @@ fn format_extraction_internal(
                                     }
                                 }
                             }
-                            
+
                             // Display documentation if available
                             if let Some(doc) = &enhanced_symbol.documentation {
                                 if format == "markdown" {
@@ -418,7 +439,11 @@ fn format_extraction_internal(
                                 writeln!(output, "{}", serde_json::to_string_pretty(lsp_info)?)?;
                                 writeln!(output, "```")?;
                             } else {
-                                writeln!(output, "  Raw LSP Data: {}", serde_json::to_string_pretty(lsp_info)?.dimmed())?;
+                                writeln!(
+                                    output,
+                                    "  Raw LSP Data: {}",
+                                    serde_json::to_string_pretty(lsp_info)?.dimmed()
+                                )?;
                             }
                         }
                         writeln!(output)?;

@@ -26,11 +26,11 @@ impl SimpleStruct {
     pub fn new(value: i32) -> Self {
         Self { value }
     }
-    
+
     pub fn get_value(&self) -> i32 {
         self.value
     }
-    
+
     pub fn set_value(&mut self, value: i32) {
         self.value = value;
     }

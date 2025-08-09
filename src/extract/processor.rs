@@ -97,28 +97,43 @@ pub fn process_file_for_extraction_with_lsp(
         if debug_mode {
             println!("[DEBUG] Looking for symbol: {symbol_name}");
         }
-        
+
         // Find the symbol in the file first and get position information
-        let (mut result, symbol_position) = find_symbol_in_file_with_position(path, symbol_name, &content, allow_tests, context_lines)?;
-        
+        let (mut result, symbol_position) = find_symbol_in_file_with_position(
+            path,
+            symbol_name,
+            &content,
+            allow_tests,
+            context_lines,
+        )?;
+
         // Add LSP information if enabled
         if enable_lsp {
             if debug_mode {
-                println!("[DEBUG] LSP enabled, attempting to get symbol info for: {}", symbol_name);
+                println!(
+                    "[DEBUG] LSP enabled, attempting to get symbol info for: {}",
+                    symbol_name
+                );
             }
             // Only attempt LSP if we have position information from tree-sitter
             if let Some((line, column)) = symbol_position {
                 if debug_mode {
-                    println!("[DEBUG] Using position from tree-sitter: line {}, column {}", line, column);
+                    println!(
+                        "[DEBUG] Using position from tree-sitter: line {}, column {}",
+                        line, column
+                    );
                 }
-                result.lsp_info = get_lsp_symbol_info_sync(path, symbol_name, line, column, debug_mode);
+                result.lsp_info =
+                    get_lsp_symbol_info_sync(path, symbol_name, line, column, debug_mode);
             } else {
                 if debug_mode {
-                    println!("[DEBUG] No position information available from tree-sitter, skipping LSP");
+                    println!(
+                        "[DEBUG] No position information available from tree-sitter, skipping LSP"
+                    );
                 }
             }
         }
-        
+
         return Ok(result);
     }
 
@@ -695,7 +710,10 @@ async fn get_lsp_symbol_info(
     debug_mode: bool,
 ) -> Option<serde_json::Value> {
     if debug_mode {
-        println!("[DEBUG] Attempting to get LSP info for symbol: {}", symbol_name);
+        println!(
+            "[DEBUG] Attempting to get LSP info for symbol: {}",
+            symbol_name
+        );
     }
 
     // Create LSP client with timeout to prevent hanging
@@ -706,11 +724,14 @@ async fn get_lsp_symbol_info(
         workspace_hint: workspace_hint.clone(),
         timeout_ms: 90000, // 90 seconds timeout for complex projects with rust-analyzer
     };
-    
+
     if debug_mode {
-        println!("[DEBUG] LSP config: timeout={}ms, workspace_hint={:?}", config.timeout_ms, config.workspace_hint);
+        println!(
+            "[DEBUG] LSP config: timeout={}ms, workspace_hint={:?}",
+            config.timeout_ms, config.workspace_hint
+        );
     }
-    
+
     let mut client = match LspClient::new(config).await {
         Ok(client) => client,
         Err(e) => {
@@ -732,24 +753,32 @@ async fn get_lsp_symbol_info(
     // Get symbol information with retries
     let mut attempts = 0;
     const MAX_ATTEMPTS: u32 = 2;
-    
+
     while attempts < MAX_ATTEMPTS {
         attempts += 1;
         if debug_mode && attempts > 1 {
             println!("[DEBUG] LSP attempt {} of {}", attempts, MAX_ATTEMPTS);
         }
-        
-        match client.get_symbol_info(file_path, symbol_name, line, column).await {
+
+        match client
+            .get_symbol_info(file_path, symbol_name, line, column)
+            .await
+        {
             Ok(Some(symbol_info)) => {
                 if debug_mode {
-                    println!("[DEBUG] Successfully retrieved LSP info for symbol: {}", symbol_name);
+                    println!(
+                        "[DEBUG] Successfully retrieved LSP info for symbol: {}",
+                        symbol_name
+                    );
                     if let Some(ref call_hierarchy) = symbol_info.call_hierarchy {
-                        println!("[DEBUG] Call hierarchy - incoming calls: {}, outgoing calls: {}", 
-                               call_hierarchy.incoming_calls.len(), 
-                               call_hierarchy.outgoing_calls.len());
+                        println!(
+                            "[DEBUG] Call hierarchy - incoming calls: {}, outgoing calls: {}",
+                            call_hierarchy.incoming_calls.len(),
+                            call_hierarchy.outgoing_calls.len()
+                        );
                     }
                 }
-                
+
                 // Convert to JSON for storage
                 match serde_json::to_value(&symbol_info) {
                     Ok(json) => return Some(json),
@@ -763,7 +792,10 @@ async fn get_lsp_symbol_info(
             }
             Ok(None) => {
                 if debug_mode {
-                    println!("[DEBUG] No LSP info available for symbol: {} (attempt {})", symbol_name, attempts);
+                    println!(
+                        "[DEBUG] No LSP info available for symbol: {} (attempt {})",
+                        symbol_name, attempts
+                    );
                 }
                 if attempts < MAX_ATTEMPTS {
                     // Wait a bit before retry
@@ -774,7 +806,10 @@ async fn get_lsp_symbol_info(
             }
             Err(e) => {
                 if debug_mode {
-                    println!("[DEBUG] LSP query failed for symbol {} (attempt {}): {}", symbol_name, attempts, e);
+                    println!(
+                        "[DEBUG] LSP query failed for symbol {} (attempt {}): {}",
+                        symbol_name, attempts, e
+                    );
                 }
                 if attempts < MAX_ATTEMPTS {
                     // Wait a bit before retry
@@ -785,7 +820,7 @@ async fn get_lsp_symbol_info(
             }
         }
     }
-    
+
     None
 }
 
@@ -801,7 +836,7 @@ fn get_lsp_symbol_info_sync(
     let file_path = file_path.to_path_buf();
     let symbol_name = symbol_name.to_string();
     let symbol_name_for_error = symbol_name.clone();
-    
+
     match std::thread::spawn(move || {
         // Create a new runtime in a separate thread
         let rt = match Runtime::new() {
@@ -817,7 +852,11 @@ fn get_lsp_symbol_info_sync(
         // Use a timeout to prevent blocking indefinitely
         let timeout_duration = std::time::Duration::from_secs(45); // Reasonable timeout to prevent hanging
         match rt.block_on(async {
-            tokio::time::timeout(timeout_duration, get_lsp_symbol_info(&file_path, &symbol_name, line, column, debug_mode)).await
+            tokio::time::timeout(
+                timeout_duration,
+                get_lsp_symbol_info(&file_path, &symbol_name, line, column, debug_mode),
+            )
+            .await
         }) {
             Ok(result) => result,
             Err(_) => {
@@ -827,11 +866,16 @@ fn get_lsp_symbol_info_sync(
                 None
             }
         }
-    }).join() {
+    })
+    .join()
+    {
         Ok(result) => result,
         Err(_) => {
             if debug_mode {
-                println!("[DEBUG] LSP thread panicked for symbol: {}", symbol_name_for_error);
+                println!(
+                    "[DEBUG] LSP thread panicked for symbol: {}",
+                    symbol_name_for_error
+                );
             }
             None
         }
@@ -846,40 +890,40 @@ fn file_extension(path: &Path) -> &str {
 /// Find the workspace root by walking up the directory tree looking for project markers
 fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
     let mut current = file_path.parent()?;
-    
+
     loop {
         // Check for Cargo.toml (Rust projects)
         if current.join("Cargo.toml").exists() {
             return Some(current.to_path_buf());
         }
-        
+
         // Check for package.json (Node.js projects)
         if current.join("package.json").exists() {
             return Some(current.to_path_buf());
         }
-        
+
         // Check for go.mod (Go projects)
         if current.join("go.mod").exists() {
             return Some(current.to_path_buf());
         }
-        
+
         // Check for pom.xml or build.gradle (Java projects)
         if current.join("pom.xml").exists() || current.join("build.gradle").exists() {
             return Some(current.to_path_buf());
         }
-        
+
         // Check for .git directory (Git repository root)
         if current.join(".git").exists() {
             return Some(current.to_path_buf());
         }
-        
+
         // Move up one directory
         match current.parent() {
             Some(parent) => current = parent,
             None => break, // Reached filesystem root
         }
     }
-    
+
     // Fallback to the file's parent directory
     file_path.parent().map(|p| p.to_path_buf())
 }
