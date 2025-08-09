@@ -34,28 +34,26 @@ async fn test_multi_workspace_go_projects() -> Result<()> {
     let socket_path = get_default_socket_path();
 
     // Test workspace 1: Database project
-    test_project_analysis(&socket_path, &workspace1, "Connect", &[("main", 25)]).await?;
+    test_project_analysis(&socket_path, &workspace1, &[("main", 25)]).await?;
     test_project_analysis(
         &socket_path,
         &workspace1,
-        "connectToDatabase",
         &[("Connect", 14)],
     )
     .await?;
 
     // Test workspace 2: Web server project
-    test_project_analysis(&socket_path, &workspace2, "Start", &[("main", 25)]).await?;
+    test_project_analysis(&socket_path, &workspace2, &[("main", 25)]).await?;
     test_project_analysis(
         &socket_path,
         &workspace2,
-        "startHTTPServer",
         &[("Start", 16)],
     )
     .await?;
 
     // Test workspace 3: Calculator project
-    test_project_analysis(&socket_path, &workspace3, "Add", &[("main", 29)]).await?;
-    test_project_analysis(&socket_path, &workspace3, "performAddition", &[("Add", 14)]).await?;
+    test_project_analysis(&socket_path, &workspace3, &[("main", 29)]).await?;
+    test_project_analysis(&socket_path, &workspace3, &[("Add", 14)]).await?;
 
     // Verify daemon status shows multiple workspaces
     let status = get_daemon_status(&socket_path).await?;
@@ -113,7 +111,6 @@ async fn setup_go_project(temp_dir: &TempDir, name: &str, code: &str) -> Result<
 async fn test_project_analysis(
     socket_path: &str,
     workspace: &PathBuf,
-    pattern: &str,
     expected_callers: &[(&str, u32)],
 ) -> Result<()> {
     // Retry connection up to 5 times with exponential backoff
@@ -141,7 +138,8 @@ async fn test_project_analysis(
     let request = DaemonRequest::CallHierarchy {
         request_id: Uuid::new_v4(),
         file_path: workspace.join("main.go"),
-        pattern: pattern.to_string(),
+        line: 5,  // Line number where the function might be
+        column: 0, // Column number
         workspace_hint: Some(workspace.clone()),
     };
 
@@ -157,8 +155,7 @@ async fn test_project_analysis(
     match MessageCodec::decode_response(&response_data)? {
         DaemonResponse::CallHierarchy { result, .. } => {
             println!(
-                "✅ Pattern '{}' in {:?}: {} incoming calls",
-                pattern,
+                "✅ Call hierarchy in {:?}: {} incoming calls",
                 workspace.file_name().unwrap(),
                 result.incoming.len()
             );
@@ -167,9 +164,8 @@ async fn test_project_analysis(
             assert_eq!(
                 result.incoming.len(),
                 expected_callers.len(),
-                "Expected {} callers for '{}', got {}",
+                "Expected {} callers, got {}",
                 expected_callers.len(),
-                pattern,
                 result.incoming.len()
             );
 
@@ -347,8 +343,8 @@ async fn test_workspace_isolation() -> Result<()> {
     let socket_path = get_default_socket_path();
 
     // Test that each workspace sees only its own functions
-    test_project_analysis(&socket_path, &workspace_a, "ProcessData", &[("main", 10)]).await?;
-    test_project_analysis(&socket_path, &workspace_b, "ProcessData", &[("main", 14)]).await?;
+    test_project_analysis(&socket_path, &workspace_a, &[("main", 10)]).await?;
+    test_project_analysis(&socket_path, &workspace_b, &[("main", 14)]).await?;
 
     println!("✅ Workspace isolation test completed successfully!");
 

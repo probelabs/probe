@@ -1,5 +1,6 @@
 use crate::ipc::{IpcListener, IpcStream};
 use crate::language_detector::{Language, LanguageDetector};
+use crate::logging::{LogBuffer, MemoryLogLayer};
 use crate::lsp_registry::LspRegistry;
 use crate::server_manager::SingleServerManager;
 use crate::protocol::{
@@ -17,6 +18,7 @@ use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
+use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
 pub struct LspDaemon {
@@ -29,6 +31,7 @@ pub struct LspDaemon {
     start_time: Instant,
     request_count: Arc<RwLock<u64>>,
     shutdown: Arc<RwLock<bool>>,
+    log_buffer: LogBuffer,
 }
 
 impl LspDaemon {
@@ -46,6 +49,37 @@ impl LspDaemon {
         let workspace_resolver = Arc::new(tokio::sync::Mutex::new(WorkspaceResolver::new(
             allowed_roots,
         )));
+        
+        // Create log buffer and set up tracing subscriber
+        let log_buffer = LogBuffer::new();
+        let memory_layer = MemoryLogLayer::new(log_buffer.clone());
+        
+        // Set up tracing subscriber with memory layer and optionally stderr
+        let subscriber = tracing_subscriber::registry().with(memory_layer);
+        
+        // If LSP_LOG is set, also add stderr logging
+        if std::env::var("LSP_LOG").is_ok() {
+            use tracing_subscriber::fmt;
+            use tracing_subscriber::EnvFilter;
+            
+            let filter = EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info"));
+            
+            let fmt_layer = fmt::layer()
+                .with_target(false)
+                .with_writer(std::io::stderr);
+            
+            if tracing::subscriber::set_global_default(
+                subscriber.with(filter).with(fmt_layer)
+            ).is_ok() {
+                tracing::info!("Tracing initialized with memory and stderr logging");
+            }
+        } else {
+            // Memory logging only
+            if tracing::subscriber::set_global_default(subscriber).is_ok() {
+                tracing::info!("Tracing initialized with memory logging layer");
+            }
+        }
 
         Ok(Self {
             socket_path,
@@ -57,6 +91,7 @@ impl LspDaemon {
             start_time: Instant::now(),
             request_count: Arc::new(RwLock::new(0)),
             shutdown: Arc::new(RwLock::new(false)),
+            log_buffer,
         })
     }
 
@@ -179,20 +214,7 @@ impl LspDaemon {
     }
 
     async fn handle_request(&self, request: DaemonRequest) -> DaemonResponse {
-        // Log to LSP log file if enabled
-        if std::env::var("LSP_LOG").is_ok() {
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/lsp-daemon.log")
-            {
-                use std::io::Write;
-                writeln!(file, "[{}] [DAEMON] Received request: {:?}", 
-                    chrono::Local::now().format("%H:%M:%S%.3f"),
-                    std::mem::discriminant(&request)
-                ).ok();
-            }
-        }
+        debug!("Received daemon request: {:?}", std::mem::discriminant(&request));
         
         match request {
             DaemonRequest::Connect { client_id } => DaemonResponse::Connected {
@@ -305,6 +327,11 @@ impl LspDaemon {
 
             DaemonRequest::Ping { request_id } => DaemonResponse::Pong { request_id },
 
+            DaemonRequest::GetLogs { request_id, lines } => {
+                let entries = self.log_buffer.get_last(lines);
+                DaemonResponse::Logs { request_id, entries }
+            }
+
             _ => DaemonResponse::Error {
                 request_id: Uuid::new_v4(),
                 error: "Unsupported request type".to_string(),
@@ -333,21 +360,7 @@ impl LspDaemon {
         column: u32,
         workspace_hint: Option<PathBuf>,
     ) -> Result<CallHierarchyResult> {
-        // Log to LSP log file if enabled
-        if std::env::var("LSP_LOG").is_ok() {
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/lsp-daemon.log")
-            {
-                use std::io::Write;
-                writeln!(file, "[{}] [DAEMON] handle_call_hierarchy_inner called for {:?} at {}:{}", 
-                    chrono::Local::now().format("%H:%M:%S%.3f"),
-                    file_path, line, column
-                ).ok();
-                file.flush().ok();
-            }
-        }
+        debug!("handle_call_hierarchy_inner called for {:?} at {}:{}", file_path, line, column);
         
         // Detect language
         let language = self.detector.detect(file_path)?;
@@ -398,21 +411,7 @@ impl LspDaemon {
         let mut result = None;
         
         while attempt <= max_attempts {
-            // Log attempt to file if enabled
-            if std::env::var("LSP_LOG").is_ok() {
-                if let Ok(mut file) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/lsp-daemon.log")
-                {
-                    use std::io::Write;
-                    writeln!(file, "[{}] [DAEMON] Call hierarchy attempt {} at {}:{}", 
-                        chrono::Local::now().format("%H:%M:%S%.3f"),
-                        attempt, line, column
-                    ).ok();
-                    file.flush().ok();
-                }
-            }
+            debug!("Call hierarchy attempt {} at {}:{}", attempt, line, column);
             let call_result = server
                 .server
                 .call_hierarchy(&absolute_file_path, line, column)
@@ -586,6 +585,7 @@ impl LspDaemon {
             start_time: self.start_time,
             request_count: self.request_count.clone(),
             shutdown: self.shutdown.clone(),
+            log_buffer: self.log_buffer.clone(),
         }
     }
 }

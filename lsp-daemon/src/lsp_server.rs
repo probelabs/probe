@@ -38,26 +38,8 @@ impl LspServer {
     }
 
     pub fn spawn(config: &LspServerConfig) -> Result<Self> {
-        // Log that we're starting if LSP_LOG is set
-        if std::env::var("LSP_LOG").is_ok() {
-            eprintln!("[LSP_LOG] Logging enabled - writing to /tmp/lsp-daemon.log");
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/lsp-daemon.log")
-            {
-                use std::io::Write;
-                writeln!(file, "\n[{}] ========== STARTING LSP SERVER FOR {:?} ==========", 
-                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
-                    config.language
-                ).ok();
-                writeln!(file, "[{}] Command: {} {}", 
-                    chrono::Local::now().format("%H:%M:%S%.3f"),
-                    config.command,
-                    config.args.join(" ")
-                ).ok();
-            }
-        }
+        info!("Starting LSP server for {:?}: {} {}", 
+            config.language, config.command, config.args.join(" "));
         Self::spawn_internal(config, None)
     }
 
@@ -97,20 +79,8 @@ impl LspServer {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines() {
                     if let Ok(line) = line {
-                        // Log stderr to file only if LSP_LOG is enabled
-                        if std::env::var("LSP_LOG").is_ok() {
-                            if let Ok(mut file) = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open("/tmp/lsp-daemon.log")
-                            {
-                                use std::io::Write;
-                                writeln!(file, "[{}] [LSP_STDERR] {}", 
-                                    chrono::Local::now().format("%H:%M:%S%.3f"),
-                                    line
-                                ).ok();
-                            }
-                        }
+                        // Log stderr output using tracing
+                        tracing::warn!(target: "lsp_stderr", "{}", line);
                     }
                 }
             });
@@ -534,20 +504,8 @@ impl LspServer {
         let message = format!("Content-Length: {}\r\n\r\n{}", bytes.len(), bytes);
 
         // Log outgoing message
-        if std::env::var("LSP_LOG").is_ok() {
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/lsp-daemon.log")
-            {
-                use std::io::Write;
-                writeln!(file, "[{}] >>> TO LSP: {}", 
-                    chrono::Local::now().format("%H:%M:%S%.3f"),
-                    serde_json::to_string(&msg).unwrap_or_else(|_| msg.to_string())
-                ).ok();
-                file.flush().ok();
-            }
-        }
+        debug!(target: "lsp_protocol", ">>> TO LSP: {}", 
+            serde_json::to_string(&msg).unwrap_or_else(|_| msg.to_string()));
         
         // Simplified approach - just acquire the lock and write directly
         let mut stdin = self.stdin.lock().await;
@@ -614,21 +572,8 @@ impl LspServer {
         let msg: Value = serde_json::from_slice(&body)?;
         
         // Log incoming message
-        if std::env::var("LSP_LOG").is_ok() {
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/lsp-daemon.log")
-            {
-                use std::io::Write;
-                // Log JSON on a single line for better log parsing
-                writeln!(file, "[{}] <<< FROM LSP: {}", 
-                    chrono::Local::now().format("%H:%M:%S%.3f"),
-                    serde_json::to_string(&msg).unwrap_or_else(|_| msg.to_string())
-                ).ok();
-                file.flush().ok();
-            }
-        }
+        debug!(target: "lsp_protocol", "<<< FROM LSP: {}", 
+            serde_json::to_string(&msg).unwrap_or_else(|_| msg.to_string()));
 
         Ok(msg)
     }
@@ -749,21 +694,8 @@ impl LspServer {
     }
 
     pub async fn call_hierarchy(&self, file_path: &Path, line: u32, column: u32) -> Result<Value> {
-        // Log to LSP log file if enabled
-        if std::env::var("LSP_LOG").is_ok() {
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/lsp-daemon.log")
-            {
-                use std::io::Write;
-                writeln!(file, "[{}] [LSP_CALL_HIERARCHY] Starting call hierarchy for {:?} at {}:{}", 
-                    chrono::Local::now().format("%H:%M:%S%.3f"),
-                    file_path, line, column
-                ).ok();
-                file.flush().ok();
-            }
-        }
+        debug!(target: "lsp_call_hierarchy", "Starting call hierarchy for {:?} at {}:{}", 
+            file_path, line, column);
         
         let uri =
             Url::from_file_path(file_path).map_err(|_| anyhow!("Failed to convert file path"))?;

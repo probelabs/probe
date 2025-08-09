@@ -326,41 +326,12 @@ impl SingleServerManager {
 
     pub async fn get_stats(&self) -> Vec<ServerStats> {
         let mut stats = Vec::new();
-        
-        // Log to LSP log file if enabled
-        if std::env::var("LSP_LOG").is_ok() {
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/lsp-daemon.log")
-            {
-                use std::io::Write;
-                writeln!(file, "[{}] [SERVER_MANAGER] get_stats called, {} servers in map", 
-                    chrono::Local::now().format("%H:%M:%S%.3f"),
-                    self.servers.len()
-                ).ok();
-            }
-        }
-        eprintln!("[SERVER_MANAGER] get_stats called, {} servers in map", self.servers.len());
+        debug!("get_stats called, {} servers in map", self.servers.len());
         
         for entry in self.servers.iter() {
             let language = *entry.key();
             let server_instance = entry.value();
-            // Log to LSP log file if enabled
-            if std::env::var("LSP_LOG").is_ok() {
-                if let Ok(mut file) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/lsp-daemon.log")
-                {
-                    use std::io::Write;
-                    writeln!(file, "[{}] [SERVER_MANAGER] Processing {:?} server", 
-                        chrono::Local::now().format("%H:%M:%S%.3f"),
-                        language
-                    ).ok();
-                }
-            }
-            eprintln!("[SERVER_MANAGER] Processing {:?} server", language);
+            debug!("Processing {:?} server", language);
             
             // Use timeout-based lock instead of try_lock to handle busy servers
             match tokio::time::timeout(Duration::from_millis(1000), server_instance.lock()).await {
