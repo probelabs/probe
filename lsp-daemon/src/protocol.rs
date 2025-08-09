@@ -20,6 +20,10 @@ pub enum DaemonRequest {
     ListWorkspaces {
         request_id: Uuid,
     },
+    // Health check endpoint for monitoring
+    HealthCheck {
+        request_id: Uuid,
+    },
     // Analysis requests with optional workspace hints
     CallHierarchy {
         request_id: Uuid,
@@ -134,6 +138,15 @@ pub enum DaemonResponse {
     },
     Pong {
         request_id: Uuid,
+    },
+    HealthCheck {
+        request_id: Uuid,
+        healthy: bool,
+        uptime_seconds: u64,
+        total_requests: usize,
+        active_connections: usize,
+        active_servers: usize,
+        memory_usage_mb: f64,
     },
     Logs {
         request_id: Uuid,
@@ -331,11 +344,23 @@ impl MessageCodec {
     }
 
     pub fn decode_request(bytes: &[u8]) -> Result<DaemonRequest> {
+        // Maximum message size: 10MB (must match daemon.rs)
+        const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+        
         if bytes.len() < 4 {
             return Err(anyhow::anyhow!("Message too short"));
         }
 
         let len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+
+        // Validate message size to prevent excessive memory allocation
+        if len > MAX_MESSAGE_SIZE {
+            return Err(anyhow::anyhow!(
+                "Message size {} exceeds maximum allowed size of {} bytes",
+                len,
+                MAX_MESSAGE_SIZE
+            ));
+        }
 
         if bytes.len() < 4 + len {
             return Err(anyhow::anyhow!("Incomplete message"));
@@ -348,11 +373,23 @@ impl MessageCodec {
     }
 
     pub fn decode_response(bytes: &[u8]) -> Result<DaemonResponse> {
+        // Maximum message size: 10MB (must match daemon.rs)
+        const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+        
         if bytes.len() < 4 {
             return Err(anyhow::anyhow!("Message too short"));
         }
 
         let len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+
+        // Validate message size to prevent excessive memory allocation
+        if len > MAX_MESSAGE_SIZE {
+            return Err(anyhow::anyhow!(
+                "Message size {} exceeds maximum allowed size of {} bytes",
+                len,
+                MAX_MESSAGE_SIZE
+            ));
+        }
 
         if bytes.len() < 4 + len {
             return Err(anyhow::anyhow!("Incomplete message"));

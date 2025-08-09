@@ -119,12 +119,14 @@ impl LspClient {
     pub async fn call_hierarchy(
         &mut self,
         file_path: &Path,
-        pattern: &str,
+        line: u32,
+        column: u32,
     ) -> Result<CallHierarchyResult> {
         let request = DaemonRequest::CallHierarchy {
             request_id: Uuid::new_v4(),
             file_path: file_path.to_path_buf(),
-            pattern: pattern.to_string(),
+            line,
+            column,
             workspace_hint: None,
         };
 
