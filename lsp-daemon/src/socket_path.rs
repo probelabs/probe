@@ -30,7 +30,7 @@ pub fn socket_exists(path: &str) -> bool {
         use tokio::net::windows::named_pipe::ClientOptions;
 
         // Try to connect with a short timeout to check if pipe exists
-        let client =
+        let _client =
             ClientOptions::new().pipe_mode(tokio::net::windows::named_pipe::PipeMode::Message);
 
         // Use blocking I/O for the existence check (quick operation)
