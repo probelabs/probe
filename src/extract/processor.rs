@@ -434,7 +434,7 @@ pub fn process_file_for_extraction_with_lsp(
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
                     lsp_info: None,
-                });
+                })
             }
             _ => {
                 // If no AST block found, fallback to the line + context
@@ -495,7 +495,7 @@ pub fn process_file_for_extraction_with_lsp(
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
                     lsp_info: None,
-                });
+                })
             }
         }
     } else if let Some(lines_set) = specific_lines {
@@ -550,7 +550,7 @@ pub fn process_file_for_extraction_with_lsp(
                 matched_lines: None,
                 tokenized_content: Some(tokenized_content),
                 lsp_info: None,
-            });
+            })
         }
 
         // Clamp specific lines to valid range instead of failing
@@ -656,7 +656,7 @@ pub fn process_file_for_extraction_with_lsp(
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
                     lsp_info: None,
-                });
+                })
             }
             _ => {
                 // Fallback to literal extraction of the specific lines
@@ -732,7 +732,7 @@ pub fn process_file_for_extraction_with_lsp(
                     matched_lines: matched_lines_vec,
                     tokenized_content: Some(tokenized_content),
                     lsp_info: None,
-                });
+                })
             }
         }
     } else {

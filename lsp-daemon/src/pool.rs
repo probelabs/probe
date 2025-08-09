@@ -27,6 +27,7 @@ pub struct PooledServer {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct LspServerPool {
     config: Arc<LspServerConfig>,
     workspace_root: PathBuf,
@@ -39,6 +40,7 @@ pub struct LspServerPool {
     is_spawning: Arc<AtomicBool>,
 }
 
+#[allow(dead_code)]
 impl LspServerPool {
     pub fn new(config: LspServerConfig, workspace_root: PathBuf) -> Self {
         let min_size = 1;
