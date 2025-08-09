@@ -582,9 +582,7 @@ impl LspManager {
             }
         };
 
-        println!(
-            "{timestamp} {level_color}{target} {colored_message}"
-        );
+        println!("{timestamp} {level_color}{target} {colored_message}");
 
         // Show file/line info if available
         if let (Some(file), Some(line)) = (&entry.file, entry.line) {

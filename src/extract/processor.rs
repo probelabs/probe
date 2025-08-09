@@ -111,9 +111,7 @@ pub fn process_file_for_extraction_with_lsp(
         // Add LSP information if enabled
         if enable_lsp {
             if debug_mode {
-                println!(
-                    "[DEBUG] LSP enabled, attempting to get symbol info for: {symbol_name}"
-                );
+                println!("[DEBUG] LSP enabled, attempting to get symbol info for: {symbol_name}");
             }
             // Only attempt LSP if we have position information from tree-sitter
             if let Some((line, column)) = symbol_position {
@@ -707,9 +705,7 @@ async fn get_lsp_symbol_info(
     debug_mode: bool,
 ) -> Option<serde_json::Value> {
     if debug_mode {
-        println!(
-            "[DEBUG] Attempting to get LSP info for symbol: {symbol_name}"
-        );
+        println!("[DEBUG] Attempting to get LSP info for symbol: {symbol_name}");
     }
 
     // Create LSP client with timeout to prevent hanging
@@ -762,9 +758,7 @@ async fn get_lsp_symbol_info(
         {
             Ok(Some(symbol_info)) => {
                 if debug_mode {
-                    println!(
-                        "[DEBUG] Successfully retrieved LSP info for symbol: {symbol_name}"
-                    );
+                    println!("[DEBUG] Successfully retrieved LSP info for symbol: {symbol_name}");
                     if let Some(ref call_hierarchy) = symbol_info.call_hierarchy {
                         println!(
                             "[DEBUG] Call hierarchy - incoming calls: {}, outgoing calls: {}",
@@ -865,9 +859,7 @@ fn get_lsp_symbol_info_sync(
         Ok(result) => result,
         Err(_) => {
             if debug_mode {
-                println!(
-                    "[DEBUG] LSP thread panicked for symbol: {symbol_name_for_error}"
-                );
+                println!("[DEBUG] LSP thread panicked for symbol: {symbol_name_for_error}");
             }
             None
         }

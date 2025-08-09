@@ -552,9 +552,7 @@ pub fn find_symbol_in_file_with_position(
         ));
 
         if debug_mode {
-            println!(
-                "[DEBUG] Symbol position: line {symbol_line}, column {symbol_column}"
-            );
+            println!("[DEBUG] Symbol position: line {symbol_line}, column {symbol_column}");
         }
 
         let search_result = SearchResult {
