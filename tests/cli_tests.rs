@@ -464,6 +464,12 @@ struct SearchConfig {
         stdout.contains("💡 To get more results from this search query, repeat it with the same params and use --session with the session ID shown above"),
         "Should show guidance message about using session ID"
     );
+    
+    // Check that the tip message appears at the bottom
+    assert!(
+        stdout.contains("💡 Tip: Use --exact flag when searching for specific function names or variables for more precise results"),
+        "Should show tip about using --exact flag"
+    );
 
     // Should only report 1 result in the summary
     assert!(
