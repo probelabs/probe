@@ -542,7 +542,7 @@ pub fn find_symbol_in_file_with_position(
         // find the actual identifier position within the node
         let (symbol_line, symbol_column) = find_identifier_position_in_node(
             found_node,
-            &symbol_parts[symbol_parts.len() - 1], // Use the last part for nested symbols
+            symbol_parts[symbol_parts.len() - 1], // Use the last part for nested symbols
             content.as_bytes(),
             debug_mode,
         )
@@ -553,8 +553,7 @@ pub fn find_symbol_in_file_with_position(
 
         if debug_mode {
             println!(
-                "[DEBUG] Symbol position: line {}, column {}",
-                symbol_line, symbol_column
+                "[DEBUG] Symbol position: line {symbol_line}, column {symbol_column}"
             );
         }
 

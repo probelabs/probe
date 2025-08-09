@@ -82,9 +82,16 @@ impl LspServer {
                 use std::io::{BufRead, BufReader};
                 let reader = BufReader::new(stderr);
                 for line in reader.lines() {
-                    if let Ok(line) = line {
-                        // Log stderr output using tracing
-                        tracing::warn!(target: "lsp_stderr", "{}", line);
+                    match line {
+                        Ok(line) => {
+                            // Log stderr output using tracing
+                            tracing::warn!(target: "lsp_stderr", "{}", line);
+                        }
+                        Err(e) => {
+                            // Log error and break to avoid infinite loop
+                            tracing::error!(target: "lsp_stderr", "Error reading stderr: {}", e);
+                            break;
+                        }
                     }
                 }
             });

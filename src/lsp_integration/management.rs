@@ -133,7 +133,7 @@ impl LspManager {
 
                         println!(
                             "  {} {} ({})",
-                            format!("{}:", language).bold(),
+                            format!("{language}:").bold(),
                             status_text,
                             pool.status.dimmed()
                         );
@@ -459,7 +459,7 @@ impl LspManager {
                     let total_entries = entries.len();
                     println!(
                         "{}",
-                        format!("LSP Daemon Log (last {} entries)", total_entries)
+                        format!("LSP Daemon Log (last {total_entries} entries)")
                             .bold()
                             .green()
                     );
@@ -510,11 +510,11 @@ impl LspManager {
         }
 
         // Determine socket path
-        let socket_path = socket.unwrap_or_else(|| lsp_daemon::get_default_socket_path());
+        let socket_path = socket.unwrap_or_else(lsp_daemon::get_default_socket_path);
 
         println!("🚀 Starting embedded LSP daemon...");
-        println!("   Socket: {}", socket_path);
-        println!("   Log Level: {}", log_level);
+        println!("   Socket: {socket_path}");
+        println!("   Log Level: {log_level}");
 
         if foreground {
             println!("   Mode: Foreground");
@@ -583,8 +583,7 @@ impl LspManager {
         };
 
         println!(
-            "{} {}{} {}",
-            timestamp, level_color, target, colored_message
+            "{timestamp} {level_color}{target} {colored_message}"
         );
 
         // Show file/line info if available
@@ -604,15 +603,15 @@ fn format_duration(duration: Duration) -> String {
     let total_seconds = duration.as_secs();
 
     if total_seconds < 60 {
-        format!("{}s", total_seconds)
+        format!("{total_seconds}s")
     } else if total_seconds < 3600 {
         let minutes = total_seconds / 60;
         let seconds = total_seconds % 60;
-        format!("{}m {}s", minutes, seconds)
+        format!("{minutes}m {seconds}s")
     } else {
         let hours = total_seconds / 3600;
         let minutes = (total_seconds % 3600) / 60;
-        format!("{}h {}m", hours, minutes)
+        format!("{hours}h {minutes}m")
     }
 }
 

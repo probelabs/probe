@@ -49,6 +49,7 @@ pub fn process_file_for_extraction(
 /// This is an enhanced version of the extraction function that optionally
 /// queries LSP servers for additional symbol information like call hierarchy
 /// and references when LSP is enabled.
+#[allow(clippy::too_many_arguments)]
 pub fn process_file_for_extraction_with_lsp(
     path: &Path,
     start_line: Option<usize>,
@@ -111,26 +112,22 @@ pub fn process_file_for_extraction_with_lsp(
         if enable_lsp {
             if debug_mode {
                 println!(
-                    "[DEBUG] LSP enabled, attempting to get symbol info for: {}",
-                    symbol_name
+                    "[DEBUG] LSP enabled, attempting to get symbol info for: {symbol_name}"
                 );
             }
             // Only attempt LSP if we have position information from tree-sitter
             if let Some((line, column)) = symbol_position {
                 if debug_mode {
                     println!(
-                        "[DEBUG] Using position from tree-sitter: line {}, column {}",
-                        line, column
+                        "[DEBUG] Using position from tree-sitter: line {line}, column {column}"
                     );
                 }
                 result.lsp_info =
                     get_lsp_symbol_info_sync(path, symbol_name, line, column, debug_mode);
-            } else {
-                if debug_mode {
-                    println!(
-                        "[DEBUG] No position information available from tree-sitter, skipping LSP"
-                    );
-                }
+            } else if debug_mode {
+                println!(
+                    "[DEBUG] No position information available from tree-sitter, skipping LSP"
+                );
             }
         }
 
@@ -711,8 +708,7 @@ async fn get_lsp_symbol_info(
 ) -> Option<serde_json::Value> {
     if debug_mode {
         println!(
-            "[DEBUG] Attempting to get LSP info for symbol: {}",
-            symbol_name
+            "[DEBUG] Attempting to get LSP info for symbol: {symbol_name}"
         );
     }
 
@@ -736,7 +732,7 @@ async fn get_lsp_symbol_info(
         Ok(client) => client,
         Err(e) => {
             if debug_mode {
-                println!("[DEBUG] Failed to create LSP client: {}", e);
+                println!("[DEBUG] Failed to create LSP client: {e}");
             }
             return None;
         }
@@ -745,7 +741,7 @@ async fn get_lsp_symbol_info(
     // Check if LSP is supported for this file
     if !client.is_supported(file_path) {
         if debug_mode {
-            println!("[DEBUG] LSP not supported for file: {:?}", file_path);
+            println!("[DEBUG] LSP not supported for file: {file_path:?}");
         }
         return None;
     }
@@ -757,7 +753,7 @@ async fn get_lsp_symbol_info(
     while attempts < MAX_ATTEMPTS {
         attempts += 1;
         if debug_mode && attempts > 1 {
-            println!("[DEBUG] LSP attempt {} of {}", attempts, MAX_ATTEMPTS);
+            println!("[DEBUG] LSP attempt {attempts} of {MAX_ATTEMPTS}");
         }
 
         match client
@@ -767,8 +763,7 @@ async fn get_lsp_symbol_info(
             Ok(Some(symbol_info)) => {
                 if debug_mode {
                     println!(
-                        "[DEBUG] Successfully retrieved LSP info for symbol: {}",
-                        symbol_name
+                        "[DEBUG] Successfully retrieved LSP info for symbol: {symbol_name}"
                     );
                     if let Some(ref call_hierarchy) = symbol_info.call_hierarchy {
                         println!(
@@ -784,7 +779,7 @@ async fn get_lsp_symbol_info(
                     Ok(json) => return Some(json),
                     Err(e) => {
                         if debug_mode {
-                            println!("[DEBUG] Failed to serialize LSP info to JSON: {}", e);
+                            println!("[DEBUG] Failed to serialize LSP info to JSON: {e}");
                         }
                         return None;
                     }
@@ -793,8 +788,7 @@ async fn get_lsp_symbol_info(
             Ok(None) => {
                 if debug_mode {
                     println!(
-                        "[DEBUG] No LSP info available for symbol: {} (attempt {})",
-                        symbol_name, attempts
+                        "[DEBUG] No LSP info available for symbol: {symbol_name} (attempt {attempts})"
                     );
                 }
                 if attempts < MAX_ATTEMPTS {
@@ -807,8 +801,7 @@ async fn get_lsp_symbol_info(
             Err(e) => {
                 if debug_mode {
                     println!(
-                        "[DEBUG] LSP query failed for symbol {} (attempt {}): {}",
-                        symbol_name, attempts, e
+                        "[DEBUG] LSP query failed for symbol {symbol_name} (attempt {attempts}): {e}"
                     );
                 }
                 if attempts < MAX_ATTEMPTS {
@@ -843,7 +836,7 @@ fn get_lsp_symbol_info_sync(
             Ok(rt) => rt,
             Err(e) => {
                 if debug_mode {
-                    println!("[DEBUG] Failed to create async runtime for LSP: {}", e);
+                    println!("[DEBUG] Failed to create async runtime for LSP: {e}");
                 }
                 return None;
             }
@@ -861,7 +854,7 @@ fn get_lsp_symbol_info_sync(
             Ok(result) => result,
             Err(_) => {
                 if debug_mode {
-                    println!("[DEBUG] LSP query timed out for symbol: {}", symbol_name);
+                    println!("[DEBUG] LSP query timed out for symbol: {symbol_name}");
                 }
                 None
             }
@@ -873,8 +866,7 @@ fn get_lsp_symbol_info_sync(
         Err(_) => {
             if debug_mode {
                 println!(
-                    "[DEBUG] LSP thread panicked for symbol: {}",
-                    symbol_name_for_error
+                    "[DEBUG] LSP thread panicked for symbol: {symbol_name_for_error}"
                 );
             }
             None
