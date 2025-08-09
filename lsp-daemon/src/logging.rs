@@ -25,7 +25,7 @@ impl LogBuffer {
     pub fn push(&self, entry: LogEntry) {
         if let Ok(mut entries) = self.entries.lock() {
             entries.push_back(entry);
-            
+
             // Maintain circular buffer behavior by removing old entries
             while entries.len() > MAX_LOG_ENTRIES {
                 entries.pop_front();
@@ -129,37 +129,40 @@ impl MemoryLogLayer {
         struct MessageVisitor {
             message: String,
         }
-        
+
         impl tracing::field::Visit for MessageVisitor {
             fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
                 if field.name() == "message" {
                     self.message = format!("{:?}", value);
                     // Remove surrounding quotes from debug format
                     if self.message.starts_with('"') && self.message.ends_with('"') {
-                        self.message = self.message[1..self.message.len()-1].to_string();
+                        self.message = self.message[1..self.message.len() - 1].to_string();
                     }
                 }
             }
         }
-        
+
         let mut visitor = MessageVisitor {
             message: String::new(),
         };
-        
+
         event.record(&mut visitor);
-        
+
         let message = if visitor.message.is_empty() {
             // Fallback to target if no specific message
             event.metadata().target().to_string()
         } else {
             visitor.message
         };
-        
+
         // Truncate very large messages to prevent IPC issues (limit to 4KB per log message)
         const MAX_LOG_MESSAGE_SIZE: usize = 4096;
         if message.len() > MAX_LOG_MESSAGE_SIZE {
-            format!("{}... [TRUNCATED - original size: {} chars]", 
-                   &message[..MAX_LOG_MESSAGE_SIZE], message.len())
+            format!(
+                "{}... [TRUNCATED - original size: {} chars]",
+                &message[..MAX_LOG_MESSAGE_SIZE],
+                message.len()
+            )
         } else {
             message
         }
@@ -175,14 +178,16 @@ where
         let level = Self::convert_level(metadata.level());
         let target = metadata.target().to_string();
         let (file, line) = Self::extract_location(metadata);
-        
+
         // Create timestamp
-        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string();
-        
+        let timestamp = chrono::Utc::now()
+            .format("%Y-%m-%d %H:%M:%S%.3f UTC")
+            .to_string();
+
         // Format message - this is a simplified version
         // A full implementation would extract the formatted message from the event
         let message = Self::format_message(event, &ctx);
-        
+
         let log_entry = LogEntry {
             timestamp,
             level,
@@ -227,7 +232,7 @@ mod tests {
     #[test]
     fn test_log_buffer_circular_behavior() {
         let buffer = LogBuffer::new();
-        
+
         // Fill buffer beyond capacity
         for i in 0..(MAX_LOG_ENTRIES + 100) {
             let entry = LogEntry {
@@ -243,16 +248,18 @@ mod tests {
 
         // Should not exceed max capacity
         assert_eq!(buffer.len(), MAX_LOG_ENTRIES);
-        
+
         // Should contain the most recent entries
         let entries = buffer.get_all();
-        assert!(entries[entries.len() - 1].message.contains(&format!("{}", MAX_LOG_ENTRIES + 99)));
+        assert!(entries[entries.len() - 1]
+            .message
+            .contains(&format!("{}", MAX_LOG_ENTRIES + 99)));
     }
 
     #[test]
     fn test_get_last_entries() {
         let buffer = LogBuffer::new();
-        
+
         // Add some entries
         for i in 0..10 {
             let entry = LogEntry {
@@ -275,33 +282,51 @@ mod tests {
 
     #[test]
     fn test_level_conversion() {
-        assert!(matches!(MemoryLogLayer::convert_level(&tracing::Level::TRACE), LogLevel::Trace));
-        assert!(matches!(MemoryLogLayer::convert_level(&tracing::Level::DEBUG), LogLevel::Debug));
-        assert!(matches!(MemoryLogLayer::convert_level(&tracing::Level::INFO), LogLevel::Info));
-        assert!(matches!(MemoryLogLayer::convert_level(&tracing::Level::WARN), LogLevel::Warn));
-        assert!(matches!(MemoryLogLayer::convert_level(&tracing::Level::ERROR), LogLevel::Error));
+        assert!(matches!(
+            MemoryLogLayer::convert_level(&tracing::Level::TRACE),
+            LogLevel::Trace
+        ));
+        assert!(matches!(
+            MemoryLogLayer::convert_level(&tracing::Level::DEBUG),
+            LogLevel::Debug
+        ));
+        assert!(matches!(
+            MemoryLogLayer::convert_level(&tracing::Level::INFO),
+            LogLevel::Info
+        ));
+        assert!(matches!(
+            MemoryLogLayer::convert_level(&tracing::Level::WARN),
+            LogLevel::Warn
+        ));
+        assert!(matches!(
+            MemoryLogLayer::convert_level(&tracing::Level::ERROR),
+            LogLevel::Error
+        ));
     }
 
     #[test]
     fn test_log_message_truncation() {
         // Test the format_message function directly by creating a mock scenario
         let long_message = "A".repeat(5000);
-        
+
         // Simulate what happens when a large message gets processed
         const MAX_LOG_MESSAGE_SIZE: usize = 4096;
         let truncated_message = if long_message.len() > MAX_LOG_MESSAGE_SIZE {
-            format!("{}... [TRUNCATED - original size: {} chars]", 
-                   &long_message[..MAX_LOG_MESSAGE_SIZE], long_message.len())
+            format!(
+                "{}... [TRUNCATED - original size: {} chars]",
+                &long_message[..MAX_LOG_MESSAGE_SIZE],
+                long_message.len()
+            )
         } else {
             long_message.clone()
         };
-        
+
         // Verify truncation occurred
         assert!(truncated_message.len() < long_message.len());
         assert!(truncated_message.contains("TRUNCATED"));
         assert!(truncated_message.contains("original size: 5000 chars"));
         assert!(truncated_message.starts_with(&"A".repeat(4096)));
-        
+
         // Now test with a LogEntry that simulates the truncated message
         let buffer = LogBuffer::new();
         let entry = LogEntry {
@@ -312,17 +337,17 @@ mod tests {
             file: None,
             line: None,
         };
-        
+
         buffer.push(entry);
         let entries = buffer.get_all();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].message, truncated_message);
     }
-    
+
     #[test]
     fn test_log_message_no_truncation_for_short_messages() {
         let buffer = LogBuffer::new();
-        
+
         // Create a normal-sized message
         let normal_message = "This is a normal message";
         let entry = LogEntry {
@@ -333,11 +358,11 @@ mod tests {
             file: None,
             line: None,
         };
-        
+
         buffer.push(entry);
         let entries = buffer.get_all();
         assert_eq!(entries.len(), 1);
-        
+
         // Message should not be truncated
         let retrieved_message = &entries[0].message;
         assert_eq!(retrieved_message, normal_message);

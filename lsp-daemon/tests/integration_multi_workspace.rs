@@ -35,21 +35,11 @@ async fn test_multi_workspace_go_projects() -> Result<()> {
 
     // Test workspace 1: Database project
     test_project_analysis(&socket_path, &workspace1, &[("main", 25)]).await?;
-    test_project_analysis(
-        &socket_path,
-        &workspace1,
-        &[("Connect", 14)],
-    )
-    .await?;
+    test_project_analysis(&socket_path, &workspace1, &[("Connect", 14)]).await?;
 
     // Test workspace 2: Web server project
     test_project_analysis(&socket_path, &workspace2, &[("main", 25)]).await?;
-    test_project_analysis(
-        &socket_path,
-        &workspace2,
-        &[("Start", 16)],
-    )
-    .await?;
+    test_project_analysis(&socket_path, &workspace2, &[("Start", 16)]).await?;
 
     // Test workspace 3: Calculator project
     test_project_analysis(&socket_path, &workspace3, &[("main", 29)]).await?;
@@ -138,7 +128,7 @@ async fn test_project_analysis(
     let request = DaemonRequest::CallHierarchy {
         request_id: Uuid::new_v4(),
         file_path: workspace.join("main.go"),
-        line: 5,  // Line number where the function might be
+        line: 5,   // Line number where the function might be
         column: 0, // Column number
         workspace_hint: Some(workspace.clone()),
     };

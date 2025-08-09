@@ -21,8 +21,8 @@ fn main() {
     // Get current UTC time
     let build_date = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
 
-    println!("cargo:rustc-env=GIT_HASH={}", git_hash);
-    println!("cargo:rustc-env=BUILD_DATE={}", build_date);
+    println!("cargo:rustc-env=GIT_HASH={git_hash}");
+    println!("cargo:rustc-env=BUILD_DATE={build_date}");
 
     // Rerun if git changes
     println!("cargo:rerun-if-changed=.git/HEAD");

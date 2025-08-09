@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Pool implementation is kept for future use
+
 use crate::language_detector::Language;
 use crate::lsp_registry::LspServerConfig;
 use crate::lsp_server::LspServer;
@@ -284,21 +286,27 @@ impl LspServerPool {
                             request_count: 0,
                             workspace_root: workspace_root.clone(),
                         };
-                        
+
                         // Add new server to pool FIRST (Blue-Green: new server is online)
                         ready.lock().await.push_back(pooled);
-                        
+
                         // THEN shutdown old server gracefully (Green server going offline)
                         if let Err(e) = old_server.server.shutdown().await {
                             warn!("Error shutting down old server {}: {}", old_server.id, e);
                         } else {
-                            info!("Successfully replaced server {} with new server", old_server.id);
+                            info!(
+                                "Successfully replaced server {} with new server",
+                                old_server.id
+                            );
                         }
                     }
                     Err(e) => {
                         warn!("Failed to spawn replacement server: {}", e);
                         // Fallback: Keep old server running if replacement fails
-                        warn!("Keeping old server {} running due to replacement failure", old_server.id);
+                        warn!(
+                            "Keeping old server {} running due to replacement failure",
+                            old_server.id
+                        );
                         ready.lock().await.push_back(old_server);
                     }
                 }

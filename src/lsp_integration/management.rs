@@ -1,13 +1,13 @@
 use anyhow::Result;
 use colored::*;
 use serde_json::json;
-use std::time::Duration;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::lsp_integration::client::LspClient;
 use crate::lsp_integration::types::*;
 use crate::lsp_integration::LspSubcommands;
-use lsp_daemon::{LspDaemon, LogEntry, LogLevel};
+use lsp_daemon::{LogEntry, LogLevel, LspDaemon};
 
 pub struct LspManager;
 
@@ -15,13 +15,11 @@ impl LspManager {
     /// Ensure project is built to avoid cargo build lock conflicts
     fn ensure_project_built() -> Result<()> {
         let target_debug = Path::new("target/debug/probe");
-        
+
         if !target_debug.exists() {
             eprintln!("⚠️  Project not built, building to avoid cargo lock conflicts...");
-            let output = std::process::Command::new("cargo")
-                .arg("build")
-                .output()?;
-                
+            let output = std::process::Command::new("cargo").arg("build").output()?;
+
             if !output.status.success() {
                 eprintln!("❌ Build failed:");
                 eprintln!("{}", String::from_utf8_lossy(&output.stderr));
@@ -35,41 +33,47 @@ impl LspManager {
     /// Handle LSP subcommands
     pub async fn handle_command(subcommand: &LspSubcommands, format: &str) -> Result<()> {
         match subcommand {
-            LspSubcommands::Status { daemon, workspace_hint } => {
-                Self::show_status(*daemon, workspace_hint.clone(), format).await
-            }
-            LspSubcommands::Languages => {
-                Self::list_languages(format).await
-            }
-            LspSubcommands::Ping { daemon, workspace_hint } => {
-                Self::ping(*daemon, workspace_hint.clone(), format).await
-            }
-            LspSubcommands::Shutdown => {
-                Self::shutdown_daemon(format).await
-            }
+            LspSubcommands::Status {
+                daemon,
+                workspace_hint,
+            } => Self::show_status(*daemon, workspace_hint.clone(), format).await,
+            LspSubcommands::Languages => Self::list_languages(format).await,
+            LspSubcommands::Ping {
+                daemon,
+                workspace_hint,
+            } => Self::ping(*daemon, workspace_hint.clone(), format).await,
+            LspSubcommands::Shutdown => Self::shutdown_daemon(format).await,
             LspSubcommands::Restart { workspace_hint } => {
                 Self::restart_daemon(workspace_hint.clone(), format).await
             }
-            LspSubcommands::Version => {
-                Self::show_version(format).await
-            }
-            LspSubcommands::Start { socket, log_level, foreground } => {
-                Self::start_embedded_daemon(socket.clone(), log_level.clone(), *foreground).await
-            }
-            LspSubcommands::Logs { follow, lines, clear } => {
-                Self::handle_logs(*follow, *lines, *clear).await
-            }
+            LspSubcommands::Version => Self::show_version(format).await,
+            LspSubcommands::Start {
+                socket,
+                log_level,
+                foreground,
+            } => Self::start_embedded_daemon(socket.clone(), log_level.clone(), *foreground).await,
+            LspSubcommands::Logs {
+                follow,
+                lines,
+                clear,
+            } => Self::handle_logs(*follow, *lines, *clear).await,
         }
     }
 
     /// Show daemon status
-    async fn show_status(use_daemon: bool, workspace_hint: Option<String>, format: &str) -> Result<()> {
+    async fn show_status(
+        use_daemon: bool,
+        workspace_hint: Option<String>,
+        format: &str,
+    ) -> Result<()> {
         // Check if we're being run via cargo and warn about potential conflicts
         if std::env::current_exe()
             .map(|path| path.to_string_lossy().contains("cargo"))
             .unwrap_or(false)
         {
-            eprintln!("⚠️  WARNING: Running via 'cargo run' may cause build lock conflicts with daemon.");
+            eprintln!(
+                "⚠️  WARNING: Running via 'cargo run' may cause build lock conflicts with daemon."
+            );
             eprintln!("   If this hangs, use: cargo build && ./target/debug/probe lsp status");
         }
 
@@ -106,9 +110,17 @@ impl LspManager {
                     println!("  {} {}", "Build Date:".bold(), status.build_date.dimmed());
                 }
                 println!("  {} {}", "Uptime:".bold(), format_duration(status.uptime));
-                println!("  {} {}", "Total Requests:".bold(), status.total_requests.to_string().cyan());
-                println!("  {} {}", "Active Connections:".bold(), status.active_connections.to_string().cyan());
-                
+                println!(
+                    "  {} {}",
+                    "Total Requests:".bold(),
+                    status.total_requests.to_string().cyan()
+                );
+                println!(
+                    "  {} {}",
+                    "Active Connections:".bold(),
+                    status.active_connections.to_string().cyan()
+                );
+
                 if !status.language_pools.is_empty() {
                     println!("\n{}", "Language Servers:".bold());
                     for (language, pool) in status.language_pools {
@@ -117,25 +129,34 @@ impl LspManager {
                         } else {
                             "Unavailable".red()
                         };
-                        
-                        println!("  {} {} ({})", 
-                            format!("{}:", language).bold(), 
+
+                        println!(
+                            "  {} {} ({})",
+                            format!("{}:", language).bold(),
                             status_text,
-                            pool.status.dimmed());
-                            
+                            pool.status.dimmed()
+                        );
+
                         if pool.uptime_secs > 0 {
-                            let uptime = format_duration(std::time::Duration::from_secs(pool.uptime_secs));
+                            let uptime =
+                                format_duration(std::time::Duration::from_secs(pool.uptime_secs));
                             println!("    {} {}", "Uptime:".bold(), uptime.cyan());
                         }
-                        
-                        println!("    {} Ready: {}, Busy: {}, Total: {}", 
+
+                        println!(
+                            "    {} Ready: {}, Busy: {}, Total: {}",
                             "Servers:".bold(),
                             pool.ready_servers.to_string().green(),
                             pool.busy_servers.to_string().yellow(),
-                            pool.total_servers.to_string().cyan());
-                            
+                            pool.total_servers.to_string().cyan()
+                        );
+
                         if !pool.workspaces.is_empty() {
-                            println!("    {} {}", "Workspaces:".bold(), pool.workspaces.len().to_string().cyan());
+                            println!(
+                                "    {} {}",
+                                "Workspaces:".bold(),
+                                pool.workspaces.len().to_string().cyan()
+                            );
                             for workspace in &pool.workspaces {
                                 if let Some(name) = std::path::Path::new(workspace).file_name() {
                                     println!("      • {}", name.to_string_lossy().dimmed());
@@ -164,24 +185,38 @@ impl LspManager {
             }
             _ => {
                 println!("{}", "Available Language Servers".bold().green());
-                
+
                 if languages.is_empty() {
                     println!("  {}", "No language servers configured".yellow());
                     return Ok(());
                 }
 
                 for lang in languages {
-                    let status_icon = if lang.available { "✓".green() } else { "✗".red() };
-                    let status_text = if lang.available { "Available" } else { "Not Available" };
-                    
-                    println!("  {} {} {} ({})", 
+                    let status_icon = if lang.available {
+                        "✓".green()
+                    } else {
+                        "✗".red()
+                    };
+                    let status_text = if lang.available {
+                        "Available"
+                    } else {
+                        "Not Available"
+                    };
+
+                    println!(
+                        "  {} {} {} ({})",
                         status_icon,
                         format!("{:?}", lang.language).bold(),
                         status_text.dimmed(),
-                        lang.lsp_server.dimmed());
-                    
+                        lang.lsp_server.dimmed()
+                    );
+
                     if !lang.available {
-                        println!("    {} {}", "LSP Server:".yellow(), lang.lsp_server.dimmed());
+                        println!(
+                            "    {} {}",
+                            "LSP Server:".yellow(),
+                            lang.lsp_server.dimmed()
+                        );
                     }
                 }
             }
@@ -200,7 +235,7 @@ impl LspManager {
 
         let start_time = std::time::Instant::now();
         let mut client = LspClient::new(config).await?;
-        
+
         client.ping().await?;
         let response_time = start_time.elapsed();
 
@@ -213,10 +248,12 @@ impl LspManager {
                 println!("{}", serde_json::to_string_pretty(&json_output)?);
             }
             _ => {
-                println!("{} {} ({}ms)", 
-                    "✓".green(), 
+                println!(
+                    "{} {} ({}ms)",
+                    "✓".green(),
                     "LSP daemon is responsive".bold().green(),
-                    response_time.as_millis().to_string().cyan());
+                    response_time.as_millis().to_string().cyan()
+                );
             }
         }
 
@@ -227,7 +264,7 @@ impl LspManager {
     async fn shutdown_daemon(format: &str) -> Result<()> {
         let config = LspConfig::default();
         let mut client = LspClient::new(config).await?;
-        
+
         client.shutdown_daemon().await?;
 
         match format {
@@ -239,7 +276,11 @@ impl LspManager {
                 println!("{}", serde_json::to_string_pretty(&json_output)?);
             }
             _ => {
-                println!("{} {}", "✓".green(), "LSP daemon shutdown successfully".bold().green());
+                println!(
+                    "{} {}",
+                    "✓".green(),
+                    "LSP daemon shutdown successfully".bold().green()
+                );
             }
         }
 
@@ -256,7 +297,7 @@ impl LspManager {
         };
 
         let mut client = LspClient::new(config).await;
-        
+
         // Try to shutdown if connected
         if let Ok(ref mut client) = client {
             let _ = client.shutdown_daemon().await;
@@ -273,7 +314,7 @@ impl LspManager {
         };
 
         let mut client = LspClient::new(config).await?;
-        
+
         // Verify it's working
         client.ping().await?;
 
@@ -286,7 +327,11 @@ impl LspManager {
                 println!("{}", serde_json::to_string_pretty(&json_output)?);
             }
             _ => {
-                println!("{} {}", "✓".green(), "LSP daemon restarted successfully".bold().green());
+                println!(
+                    "{} {}",
+                    "✓".green(),
+                    "LSP daemon restarted successfully".bold().green()
+                );
             }
         }
 
@@ -298,7 +343,7 @@ impl LspManager {
         let version = env!("CARGO_PKG_VERSION");
         let git_hash = env!("GIT_HASH");
         let build_date = env!("BUILD_DATE");
-        
+
         match format {
             "json" => {
                 let json_output = json!({
@@ -325,11 +370,17 @@ impl LspManager {
     async fn handle_logs(follow: bool, lines: usize, clear: bool) -> Result<()> {
         // Handle clear flag
         if clear {
-            println!("{}", "In-memory logs cannot be cleared (they auto-rotate)".yellow());
-            println!("Restart the daemon to reset logs: {}", "probe lsp restart".cyan());
+            println!(
+                "{}",
+                "In-memory logs cannot be cleared (they auto-rotate)".yellow()
+            );
+            println!(
+                "Restart the daemon to reset logs: {}",
+                "probe lsp restart".cyan()
+            );
             return Ok(());
         }
-        
+
         // Connect to daemon to get logs (without auto-starting)
         let config = LspConfig {
             use_daemon: true,
@@ -344,12 +395,17 @@ impl LspManager {
                 return Ok(());
             }
         };
-        
+
         if follow {
             // Follow mode - poll for new logs
-            println!("{}", "Following LSP daemon log (Ctrl+C to stop)...".green().bold());
+            println!(
+                "{}",
+                "Following LSP daemon log (Ctrl+C to stop)..."
+                    .green()
+                    .bold()
+            );
             println!("{}", "─".repeat(60).dimmed());
-            
+
             // First show the last N lines
             let entries = match client.get_logs(lines).await {
                 Ok(entries) => {
@@ -363,14 +419,14 @@ impl LspManager {
                     return Ok(());
                 }
             };
-            
+
             // Keep track of the last timestamp to avoid duplicates
             let mut last_timestamp = entries.last().map(|e| e.timestamp.clone());
-            
+
             // Poll for new logs every 500ms
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                
+
                 match client.get_logs(100).await {
                     Ok(new_entries) => {
                         // Show only new entries after the last timestamp
@@ -398,37 +454,50 @@ impl LspManager {
                         println!("{}", "No logs available".yellow());
                         return Ok(());
                     }
-                    
+
                     let total_entries = entries.len();
-                    println!("{}", format!("LSP Daemon Log (last {} entries)", total_entries).bold().green());
+                    println!(
+                        "{}",
+                        format!("LSP Daemon Log (last {} entries)", total_entries)
+                            .bold()
+                            .green()
+                    );
                     println!("{}", "─".repeat(60).dimmed());
-                    
+
                     for entry in &entries {
                         Self::print_log_entry(entry);
                     }
-                    
+
                     println!("{}", "─".repeat(60).dimmed());
                     println!("Use {} to follow log in real-time", "--follow".cyan());
-                    println!("Use {} to restart daemon (clears logs)", "probe lsp restart".cyan());
+                    println!(
+                        "Use {} to restart daemon (clears logs)",
+                        "probe lsp restart".cyan()
+                    );
                 }
                 Err(e) => {
                     println!("{} Failed to get logs: {}", "❌".red(), e);
                 }
             }
         }
-        
+
         Ok(())
     }
 
     /// Start embedded LSP daemon
-    async fn start_embedded_daemon(socket: Option<String>, log_level: String, foreground: bool) -> Result<()> {
-
+    async fn start_embedded_daemon(
+        socket: Option<String>,
+        log_level: String,
+        foreground: bool,
+    ) -> Result<()> {
         // Check if we're being run via cargo and warn about potential conflicts
         if std::env::current_exe()
             .map(|path| path.to_string_lossy().contains("cargo"))
             .unwrap_or(false)
         {
-            eprintln!("⚠️  WARNING: Running LSP daemon via 'cargo run' may cause build lock conflicts.");
+            eprintln!(
+                "⚠️  WARNING: Running LSP daemon via 'cargo run' may cause build lock conflicts."
+            );
             eprintln!("   For better performance, build first: cargo build");
             eprintln!("   Then use: ./target/debug/probe lsp start -f");
         }
@@ -445,7 +514,7 @@ impl LspManager {
         println!("🚀 Starting embedded LSP daemon...");
         println!("   Socket: {}", socket_path);
         println!("   Log Level: {}", log_level);
-        
+
         if foreground {
             println!("   Mode: Foreground");
         } else {
@@ -477,29 +546,27 @@ impl LspManager {
             LogLevel::Debug => "DEBUG".dimmed(),
             LogLevel::Trace => "TRACE".dimmed(),
         };
-        
+
         let timestamp = entry.timestamp.dimmed();
         let target = if entry.target.is_empty() {
             "".to_string()
         } else {
             format!(" [{}]", entry.target.dimmed())
         };
-        
+
         // Check if message looks like JSON and try to format it
         let formatted_message = if entry.message.trim_start().starts_with('{') {
             match serde_json::from_str::<serde_json::Value>(&entry.message) {
-                Ok(parsed) => {
-                    match serde_json::to_string_pretty(&parsed) {
-                        Ok(pretty) => pretty,
-                        Err(_) => entry.message.clone(),
-                    }
-                }
+                Ok(parsed) => match serde_json::to_string_pretty(&parsed) {
+                    Ok(pretty) => pretty,
+                    Err(_) => entry.message.clone(),
+                },
                 Err(_) => entry.message.clone(),
             }
         } else {
             entry.message.clone()
         };
-        
+
         // Apply message-specific coloring
         let colored_message = if entry.message.contains(">>> TO LSP:") {
             formatted_message.cyan()
@@ -513,12 +580,20 @@ impl LspManager {
                 LogLevel::Debug | LogLevel::Trace => formatted_message.dimmed(),
             }
         };
-        
-        println!("{} {}{} {}", timestamp, level_color, target, colored_message);
-        
+
+        println!(
+            "{} {}{} {}",
+            timestamp, level_color, target, colored_message
+        );
+
         // Show file/line info if available
         if let (Some(file), Some(line)) = (&entry.file, entry.line) {
-            println!("    {} {}:{}", "at".dimmed(), file.dimmed(), line.to_string().dimmed());
+            println!(
+                "    {} {}:{}",
+                "at".dimmed(),
+                file.dimmed(),
+                line.to_string().dimmed()
+            );
         }
     }
 }
@@ -526,7 +601,7 @@ impl LspManager {
 /// Format duration in a human-readable way
 fn format_duration(duration: Duration) -> String {
     let total_seconds = duration.as_secs();
-    
+
     if total_seconds < 60 {
         format!("{}s", total_seconds)
     } else if total_seconds < 3600 {

@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use lsp_daemon::{
-    get_default_socket_path, remove_socket_file, IpcStream,
-    CallHierarchyResult, DaemonRequest, DaemonResponse, DaemonStatus, LanguageInfo,
-    LogEntry, MessageCodec, Language, LanguageDetector,
+    get_default_socket_path, remove_socket_file, CallHierarchyResult, DaemonRequest,
+    DaemonResponse, DaemonStatus, IpcStream, Language, LanguageDetector, LanguageInfo, LogEntry,
+    MessageCodec,
 };
 use std::path::Path;
 use std::time::Duration;
@@ -51,7 +51,7 @@ impl LspClient {
                     let request = DaemonRequest::Connect {
                         client_id: Uuid::new_v4(),
                     };
-                    
+
                     match timeout(connection_timeout, self.send_request(request)).await {
                         Ok(Ok(response)) => {
                             if let DaemonResponse::Connected { daemon_version, .. } = response {
@@ -108,7 +108,7 @@ impl LspClient {
                     let request = DaemonRequest::Connect {
                         client_id: Uuid::new_v4(),
                     };
-                    
+
                     match timeout(connection_timeout, self.send_request(request)).await {
                         Ok(Ok(response)) => {
                             if let DaemonResponse::Connected { daemon_version, .. } = response {
@@ -135,7 +135,9 @@ impl LspClient {
             }
         }
 
-        Err(anyhow!("Failed to connect to daemon after starting (all attempts timed out)"))
+        Err(anyhow!(
+            "Failed to connect to daemon after starting (all attempts timed out)"
+        ))
     }
 
     /// Send a request to the daemon and wait for response
@@ -152,21 +154,21 @@ impl LspClient {
 
         // Read response with timeout using proper message framing
         let timeout_duration = Duration::from_millis(self.config.timeout_ms);
-        
+
         // Read message length (4 bytes)
         let mut length_buf = [0u8; 4];
         timeout(timeout_duration, stream.read_exact(&mut length_buf)).await??;
         let message_len = u32::from_be_bytes(length_buf) as usize;
-        
+
         // Ensure we don't try to read unreasonably large messages (10MB limit)
         if message_len > 10 * 1024 * 1024 {
             return Err(anyhow!("Message too large: {} bytes", message_len));
         }
-        
+
         // Read the complete message body
         let mut message_buf = vec![0u8; message_len];
         timeout(timeout_duration, stream.read_exact(&mut message_buf)).await??;
-        
+
         // Reconstruct the complete message with length prefix for decoding
         let mut complete_message = Vec::with_capacity(4 + message_len);
         complete_message.extend_from_slice(&length_buf);
@@ -213,8 +215,8 @@ impl LspClient {
             symbol_kind: "unknown".to_string(), // Will be determined by tree-sitter
             call_hierarchy,
             references: Vec::new(), // TODO: implement references
-            documentation: None, // TODO: implement hover info
-            type_info: None, // TODO: implement type info
+            documentation: None,    // TODO: implement hover info
+            type_info: None,        // TODO: implement type info
         }))
     }
 
@@ -225,33 +227,36 @@ impl LspClient {
         line: u32,
         column: u32,
     ) -> Result<CallHierarchyInfo> {
-        
         let request = DaemonRequest::CallHierarchy {
             request_id: Uuid::new_v4(),
             file_path: file_path.to_path_buf(),
             line,
             column,
-            workspace_hint: self.config.workspace_hint.as_ref().map(|s| std::path::PathBuf::from(s)),
+            workspace_hint: self
+                .config
+                .workspace_hint
+                .as_ref()
+                .map(|s| std::path::PathBuf::from(s)),
         };
 
-        
         // Add timeout for call hierarchy request - this can be slow due to rust-analyzer
         let call_timeout = Duration::from_millis(self.config.timeout_ms);
-        let response = timeout(call_timeout, self.send_request(request)).await
-            .map_err(|_| anyhow!("Call hierarchy request timed out after {}ms", self.config.timeout_ms))??;
-            
-        
+        let response = timeout(call_timeout, self.send_request(request))
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "Call hierarchy request timed out after {}ms",
+                    self.config.timeout_ms
+                )
+            })??;
+
         match response {
             DaemonResponse::CallHierarchy { result, .. } => {
                 let converted = convert_call_hierarchy_result(result);
                 Ok(converted)
             }
-            DaemonResponse::Error { error, .. } => {
-                Err(anyhow!("Call hierarchy failed: {}", error))
-            }
-            _ => {
-                Err(anyhow!("Unexpected response type"))
-            }
+            DaemonResponse::Error { error, .. } => Err(anyhow!("Call hierarchy failed: {}", error)),
+            _ => Err(anyhow!("Unexpected response type")),
         }
     }
 
@@ -264,9 +269,7 @@ impl LspClient {
         let response = self.send_request(request).await?;
 
         match response {
-            DaemonResponse::Status { status, .. } => {
-                Ok(convert_daemon_status(status))
-            }
+            DaemonResponse::Status { status, .. } => Ok(convert_daemon_status(status)),
             _ => Err(anyhow!("Unexpected response type")),
         }
     }
@@ -355,7 +358,7 @@ fn get_probe_version_info() -> (String, String, String) {
 /// Check if daemon version matches probe binary version
 async fn check_daemon_version_compatibility() -> Result<bool> {
     let socket_path = get_default_socket_path();
-    
+
     // Try to connect to existing daemon
     match IpcStream::connect(&socket_path).await {
         Ok(mut stream) => {
@@ -363,36 +366,45 @@ async fn check_daemon_version_compatibility() -> Result<bool> {
             let request = DaemonRequest::Status {
                 request_id: Uuid::new_v4(),
             };
-            
+
             let encoded = MessageCodec::encode(&request)?;
             stream.write_all(&encoded).await?;
-            
+
             // Read response
             let mut length_buf = [0u8; 4];
             stream.read_exact(&mut length_buf).await?;
             let length = u32::from_be_bytes(length_buf) as usize;
-            
+
             let mut response_buf = vec![0u8; length];
             stream.read_exact(&mut response_buf).await?;
-            
-            let response = MessageCodec::decode_response(&[&length_buf[..], &response_buf[..]].concat())?;
-            
+
+            let response =
+                MessageCodec::decode_response(&[&length_buf[..], &response_buf[..]].concat())?;
+
             if let DaemonResponse::Status { status, .. } = response {
                 let (probe_version, probe_git_hash, probe_build_date) = get_probe_version_info();
-                
-                debug!("Probe version: {}, git: {}, build: {}", probe_version, probe_git_hash, probe_build_date);
-                debug!("Daemon version: {}, git: {}, build: {}", status.version, status.git_hash, status.build_date);
-                
+
+                debug!(
+                    "Probe version: {}, git: {}, build: {}",
+                    probe_version, probe_git_hash, probe_build_date
+                );
+                debug!(
+                    "Daemon version: {}, git: {}, build: {}",
+                    status.version, status.git_hash, status.build_date
+                );
+
                 // Check if versions match
-                let version_matches = !status.version.is_empty() && 
-                    !status.git_hash.is_empty() &&
-                    status.git_hash == probe_git_hash;
-                
+                let version_matches = !status.version.is_empty()
+                    && !status.git_hash.is_empty()
+                    && status.git_hash == probe_git_hash;
+
                 if !version_matches {
-                    info!("Version mismatch detected - Probe: {} ({}), Daemon: {} ({})", 
-                          probe_version, probe_git_hash, status.version, status.git_hash);
+                    info!(
+                        "Version mismatch detected - Probe: {} ({}), Daemon: {} ({})",
+                        probe_version, probe_git_hash, status.version, status.git_hash
+                    );
                 }
-                
+
                 Ok(version_matches)
             } else {
                 // If we can't get status, assume incompatible
@@ -409,19 +421,19 @@ async fn check_daemon_version_compatibility() -> Result<bool> {
 /// Shutdown existing daemon gracefully
 async fn shutdown_existing_daemon() -> Result<()> {
     let socket_path = get_default_socket_path();
-    
+
     match IpcStream::connect(&socket_path).await {
         Ok(mut stream) => {
             // Send shutdown request
             let request = DaemonRequest::Shutdown {
                 request_id: Uuid::new_v4(),
             };
-            
+
             let encoded = MessageCodec::encode(&request)?;
             stream.write_all(&encoded).await?;
-            
+
             info!("Sent shutdown request to existing daemon");
-            
+
             // Give daemon time to shutdown
             sleep(Duration::from_millis(500)).await;
             Ok(())
@@ -455,7 +467,10 @@ async fn start_embedded_daemon_background() -> Result<()> {
     let probe_binary = std::env::current_exe()
         .map_err(|e| anyhow!("Failed to get current executable path: {}", e))?;
 
-    debug!("Starting embedded daemon using probe binary: {:?}", probe_binary);
+    debug!(
+        "Starting embedded daemon using probe binary: {:?}",
+        probe_binary
+    );
 
     // Start daemon using "probe lsp start" command
     // Environment variables are inherited by default
@@ -473,21 +488,29 @@ async fn start_embedded_daemon_background() -> Result<()> {
 
 /// Convert lsp-daemon CallHierarchyResult to our CallHierarchyInfo
 fn convert_call_hierarchy_result(result: CallHierarchyResult) -> CallHierarchyInfo {
-    let incoming_calls = result.incoming.into_iter().map(|call| CallInfo {
-        name: call.from.name,
-        file_path: call.from.uri,
-        line: call.from.range.start.line,
-        column: call.from.range.start.character,
-        symbol_kind: call.from.kind,
-    }).collect();
+    let incoming_calls = result
+        .incoming
+        .into_iter()
+        .map(|call| CallInfo {
+            name: call.from.name,
+            file_path: call.from.uri,
+            line: call.from.range.start.line,
+            column: call.from.range.start.character,
+            symbol_kind: call.from.kind,
+        })
+        .collect();
 
-    let outgoing_calls = result.outgoing.into_iter().map(|call| CallInfo {
-        name: call.from.name,
-        file_path: call.from.uri,
-        line: call.from.range.start.line,
-        column: call.from.range.start.character,
-        symbol_kind: call.from.kind,
-    }).collect();
+    let outgoing_calls = result
+        .outgoing
+        .into_iter()
+        .map(|call| CallInfo {
+            name: call.from.name,
+            file_path: call.from.uri,
+            line: call.from.range.start.line,
+            column: call.from.range.start.character,
+            symbol_kind: call.from.kind,
+        })
+        .collect();
 
     CallHierarchyInfo {
         incoming_calls,
@@ -499,19 +522,23 @@ fn convert_call_hierarchy_result(result: CallHierarchyResult) -> CallHierarchyIn
 fn convert_daemon_status(status: DaemonStatus) -> LspDaemonStatus {
     use std::collections::HashMap;
 
-    let language_pools = status.pools.into_iter().map(|pool| {
-        let pool_status = LanguagePoolStatus {
-            language: format!("{:?}", pool.language), // Convert Language enum to string
-            ready_servers: pool.ready_servers,
-            busy_servers: pool.busy_servers,
-            total_servers: pool.total_servers,
-            available: pool.ready_servers > 0,
-            workspaces: pool.workspaces,
-            uptime_secs: pool.uptime_secs,
-            status: pool.status,
-        };
-        (format!("{:?}", pool.language), pool_status)
-    }).collect::<HashMap<String, LanguagePoolStatus>>();
+    let language_pools = status
+        .pools
+        .into_iter()
+        .map(|pool| {
+            let pool_status = LanguagePoolStatus {
+                language: format!("{:?}", pool.language), // Convert Language enum to string
+                ready_servers: pool.ready_servers,
+                busy_servers: pool.busy_servers,
+                total_servers: pool.total_servers,
+                available: pool.ready_servers > 0,
+                workspaces: pool.workspaces,
+                uptime_secs: pool.uptime_secs,
+                status: pool.status,
+            };
+            (format!("{:?}", pool.language), pool_status)
+        })
+        .collect::<HashMap<String, LanguagePoolStatus>>();
 
     LspDaemonStatus {
         uptime: std::time::Duration::from_secs(status.uptime_secs),

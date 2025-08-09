@@ -38,8 +38,12 @@ impl LspServer {
     }
 
     pub fn spawn(config: &LspServerConfig) -> Result<Self> {
-        info!("Starting LSP server for {:?}: {} {}", 
-            config.language, config.command, config.args.join(" "));
+        info!(
+            "Starting LSP server for {:?}: {} {}",
+            config.language,
+            config.command,
+            config.args.join(" ")
+        );
         Self::spawn_internal(config, None)
     }
 
@@ -71,7 +75,7 @@ impl LspServer {
             .stdout
             .take()
             .ok_or_else(|| anyhow!("Failed to get stdout"))?;
-        
+
         // Spawn a thread to log stderr output (using std thread since ChildStderr isn't async)
         if let Some(stderr) = child.stderr.take() {
             std::thread::spawn(move || {
@@ -85,7 +89,7 @@ impl LspServer {
                 }
             });
         }
-        
+
         Ok(Self {
             child: Arc::new(Mutex::new(Some(child))),
             stdin: Arc::new(Mutex::new(Box::new(stdin) as Box<dyn Write + Send>)),
@@ -113,16 +117,20 @@ impl LspServer {
         }
 
         let request_id = self.next_request_id().await;
-        
+
         // Initialize with the actual workspace root
         let absolute_path = if workspace_root.is_absolute() {
             workspace_root.to_path_buf()
         } else {
             std::env::current_dir()?.join(workspace_root)
         };
-        
-        let root_uri = Url::from_file_path(&absolute_path)
-            .map_err(|_| anyhow!("Failed to convert workspace root to URI: {:?}", absolute_path))?;
+
+        let root_uri = Url::from_file_path(&absolute_path).map_err(|_| {
+            anyhow!(
+                "Failed to convert workspace root to URI: {:?}",
+                absolute_path
+            )
+        })?;
 
         let init_params = json!({
             "processId": std::process::id(),
@@ -164,7 +172,8 @@ impl LspServer {
             "initializationOptions": config.initialization_options
         });
 
-        self.send_request("initialize", init_params, request_id).await?;
+        self.send_request("initialize", init_params, request_id)
+            .await?;
 
         // Wait for initialize response with reduced timeout
         debug!("Waiting for initialize response with timeout 10s...");
@@ -184,8 +193,11 @@ impl LspServer {
 
         self.initialized = true;
         self.project_root = Some(workspace_root.to_path_buf());
-        info!("LSP server initialized for {:?} with workspace {:?}", config.language, workspace_root);
-        
+        info!(
+            "LSP server initialized for {:?} with workspace {:?}",
+            config.language, workspace_root
+        );
+
         Ok(())
     }
 
@@ -270,7 +282,10 @@ impl LspServer {
         debug!("Initialized notification sent!");
 
         self.initialized = true;
-        info!("LSP server initialized for {:?} with empty workspace folders", config.language);
+        info!(
+            "LSP server initialized for {:?} with empty workspace folders",
+            config.language
+        );
 
         Ok(())
     }
@@ -345,7 +360,10 @@ impl LspServer {
             .await?;
 
         // Wait for initialize response
-        debug!("Waiting for initialize response with timeout {}s...", config.initialization_timeout_secs);
+        debug!(
+            "Waiting for initialize response with timeout {}s...",
+            config.initialization_timeout_secs
+        );
         let response = self
             .wait_for_response(
                 request_id,
@@ -400,29 +418,41 @@ impl LspServer {
                                         if let Some(kind) =
                                             value.get("kind").and_then(|k| k.as_str())
                                         {
-                                            if kind == "end" && (token.contains("cachePriming") || token.contains("Roots Scanned")) {
+                                            if kind == "end"
+                                                && (token.contains("cachePriming")
+                                                    || token.contains("Roots Scanned"))
+                                            {
                                                 cache_priming_completed = true;
                                                 debug!("Indexing completed for token: {}", token);
                                             }
-                                            
+
                                             // Monitor progress to detect stalled indexing
                                             if kind == "report" {
-                                                let current_percentage = value.get("percentage").and_then(|p| p.as_u64()).map(|p| p as u32);
+                                                let current_percentage = value
+                                                    .get("percentage")
+                                                    .and_then(|p| p.as_u64())
+                                                    .map(|p| p as u32);
                                                 if let Some(percentage) = current_percentage {
-                                                    if let Some(last_pct) = last_progress_percentage {
+                                                    if let Some(last_pct) = last_progress_percentage
+                                                    {
                                                         if percentage > last_pct {
                                                             // Progress made, update timestamp
                                                             last_progress_time = Instant::now();
-                                                            debug!("Indexing progress: {}%", percentage);
+                                                            debug!(
+                                                                "Indexing progress: {}%",
+                                                                percentage
+                                                            );
                                                         }
                                                     } else {
                                                         // First progress report
                                                         last_progress_time = Instant::now();
                                                     }
                                                     last_progress_percentage = Some(percentage);
-                                                    
+
                                                     // Check for stalled progress
-                                                    if last_progress_time.elapsed() > progress_stall_timeout {
+                                                    if last_progress_time.elapsed()
+                                                        > progress_stall_timeout
+                                                    {
                                                         debug!("Indexing appears to be stalled at {}% for {:?}", percentage, last_progress_time.elapsed());
                                                         if percentage >= 80 {
                                                             // If we're at 80%+ and stalled, consider it "good enough"
@@ -467,10 +497,13 @@ impl LspServer {
                                         0
                                     })
                                 } else {
-                                    warn!("Unexpected ID type in LSP request: {:?}, using 0", id_value);
+                                    warn!(
+                                        "Unexpected ID type in LSP request: {:?}, using 0",
+                                        id_value
+                                    );
                                     0
                                 };
-                                
+
                                 self.send_response(response_id, json!(null)).await?;
                             }
                         }
@@ -488,7 +521,10 @@ impl LspServer {
                     if let Some(silence_time) = silence_start {
                         let elapsed = silence_time.elapsed();
                         if cache_priming_completed && elapsed >= required_silence {
-                            debug!("Server ready after cache priming and {}s silence period", elapsed.as_secs());
+                            debug!(
+                                "Server ready after cache priming and {}s silence period",
+                                elapsed.as_secs()
+                            );
                             return Ok(());
                         }
                     }
@@ -518,12 +554,12 @@ impl LspServer {
         // Log outgoing message
         info!(target: "lsp_protocol", ">>> TO LSP: {}", 
             serde_json::to_string(&msg).unwrap_or_else(|_| msg.to_string()));
-        
+
         // Simplified approach - just acquire the lock and write directly
         let mut stdin = self.stdin.lock().await;
         stdin.write_all(message.as_bytes())?;
         stdin.flush()?;
-        
+
         Ok(())
     }
 
@@ -563,7 +599,7 @@ impl LspServer {
 
         let mut header = String::new();
         let bytes_read = stdout.read_line(&mut header)?;
-        
+
         if bytes_read == 0 {
             return Err(anyhow!("LSP server closed connection"));
         }
@@ -582,7 +618,7 @@ impl LspServer {
         stdout.read_exact(&mut body)?;
 
         let msg: Value = serde_json::from_slice(&body)?;
-        
+
         // Log incoming message
         info!(target: "lsp_protocol", "<<< FROM LSP: {}", 
             serde_json::to_string(&msg).unwrap_or_else(|_| msg.to_string()));
@@ -606,40 +642,53 @@ impl LspServer {
         while start.elapsed() < timeout_duration {
             // Log progress every 10 seconds during long waits
             if last_progress_log.elapsed() > Duration::from_secs(10) {
-                debug!("Still waiting for response ID {} (elapsed: {:?}, messages seen: {})", 
-                    id, start.elapsed(), message_count);
+                debug!(
+                    "Still waiting for response ID {} (elapsed: {:?}, messages seen: {})",
+                    id,
+                    start.elapsed(),
+                    message_count
+                );
                 last_progress_log = Instant::now();
             }
-            
+
             match self.read_message_timeout(Duration::from_millis(500)).await {
                 Ok(Some(msg)) => {
                     message_count += 1;
                     let msg_id = msg.get("id").and_then(|i| i.as_i64());
-                    
+
                     // Log what kind of message we got
                     if let Some(_method) = msg.get("method").and_then(|m| m.as_str()) {
                         // Skip progress notifications in release mode
                     } else {
-                        debug!("Got message with ID: {:?}, looking for {} (message #{})", 
-                            msg_id, id, message_count);
+                        debug!(
+                            "Got message with ID: {:?}, looking for {} (message #{})",
+                            msg_id, id, message_count
+                        );
                     }
-                    
+
                     if msg_id == Some(id) {
                         // Check if this is actually a response (not a request from the LSP server)
                         if msg.get("method").is_some() {
-                            debug!("Ignoring request (not response) with ID {} - method: {:?}", 
-                                id, msg.get("method"));
+                            debug!(
+                                "Ignoring request (not response) with ID {} - method: {:?}",
+                                id,
+                                msg.get("method")
+                            );
                             // This is a request FROM the LSP server, not a response TO our request
                             continue;
                         }
-                        debug!("Found matching response for ID {}! (took {:?}, saw {} messages)", 
-                            id, start.elapsed(), message_count);
+                        debug!(
+                            "Found matching response for ID {}! (took {:?}, saw {} messages)",
+                            id,
+                            start.elapsed(),
+                            message_count
+                        );
                         return Ok(msg);
                     }
-                },
+                }
                 Ok(None) => {
                     // Timeout on single read - this is normal, just continue
-                },
+                }
                 Err(e) => {
                     debug!("Error reading message: {}", e);
                     return Err(e);
@@ -647,13 +696,18 @@ impl LspServer {
             }
         }
 
-        debug!("TIMEOUT: No response received for request ID {} after {:?} (saw {} total messages)", 
-            id, timeout_duration, message_count);
-        Err(anyhow!("Timeout waiting for response to request {} after {:?}", id, timeout_duration))
+        debug!(
+            "TIMEOUT: No response received for request ID {} after {:?} (saw {} total messages)",
+            id, timeout_duration, message_count
+        );
+        Err(anyhow!(
+            "Timeout waiting for response to request {} after {:?}",
+            id,
+            timeout_duration
+        ))
     }
 
     pub async fn open_document(&self, file_path: &Path, content: &str) -> Result<()> {
-        
         let uri =
             Url::from_file_path(file_path).map_err(|_| anyhow!("Failed to convert file path"))?;
 
@@ -684,11 +738,10 @@ impl LspServer {
         self.send_notification("textDocument/didClose", params)
             .await
     }
-    
+
     pub async fn test_readiness(&self, file_path: &Path, line: u32, column: u32) -> Result<bool> {
-        
-        let uri = Url::from_file_path(file_path)
-            .map_err(|_| anyhow!("Failed to convert file path"))?;
+        let uri =
+            Url::from_file_path(file_path).map_err(|_| anyhow!("Failed to convert file path"))?;
 
         let request_id = self.next_request_id().await;
         let params = json!({
@@ -696,19 +749,23 @@ impl LspServer {
             "position": { "line": line, "character": column }
         });
 
-        self.send_request("textDocument/hover", params, request_id).await?;
-        
+        self.send_request("textDocument/hover", params, request_id)
+            .await?;
+
         // Use a shorter timeout for readiness check
-        match self.wait_for_response(request_id, Duration::from_secs(10)).await {
+        match self
+            .wait_for_response(request_id, Duration::from_secs(10))
+            .await
+        {
             Ok(_) => Ok(true),
-            Err(_) => Ok(false)
+            Err(_) => Ok(false),
         }
     }
 
     pub async fn call_hierarchy(&self, file_path: &Path, line: u32, column: u32) -> Result<Value> {
         debug!(target: "lsp_call_hierarchy", "Starting call hierarchy for {:?} at {}:{}", 
             file_path, line, column);
-        
+
         let uri =
             Url::from_file_path(file_path).map_err(|_| anyhow!("Failed to convert file path"))?;
 
@@ -725,14 +782,17 @@ impl LspServer {
         let response = self
             .wait_for_response(request_id, Duration::from_secs(60))
             .await
-            .map_err(|e| anyhow!("Call hierarchy prepare timed out - rust-analyzer may still be indexing: {}", e))?;
-
+            .map_err(|e| {
+                anyhow!(
+                    "Call hierarchy prepare timed out - rust-analyzer may still be indexing: {}",
+                    e
+                )
+            })?;
 
         if let Some(error) = response.get("error") {
             return Err(anyhow!("Call hierarchy prepare failed: {:?}", error));
         }
 
-        
         // Handle null result (rust-analyzer returns null when no items found)
         let result = &response["result"];
         if result.is_null() {
@@ -741,7 +801,7 @@ impl LspServer {
                 "outgoing": []
             }));
         }
-        
+
         let items = match result.as_array() {
             Some(array) => array,
             None => {
@@ -761,34 +821,33 @@ impl LspServer {
 
         let item = &items[0];
 
-
         // Get incoming calls
         let incoming_request_id = self.next_request_id().await;
-        
+
         self.send_request(
             "callHierarchy/incomingCalls",
             json!({ "item": item }),
             incoming_request_id,
         )
         .await?;
-        
+
         let incoming_response = self
             .wait_for_response(incoming_request_id, Duration::from_secs(60))
             .await?;
 
         // Get outgoing calls
         let outgoing_request_id = self.next_request_id().await;
-        
+
         self.send_request(
             "callHierarchy/outgoingCalls",
             json!({ "item": item }),
             outgoing_request_id,
         )
         .await?;
-        
+
         let outgoing_response = match self
             .wait_for_response(outgoing_request_id, Duration::from_secs(60))
-            .await 
+            .await
         {
             Ok(response) => {
                 // Check if there's an error in the response
@@ -814,31 +873,34 @@ impl LspServer {
             "incoming": incoming_response["result"],
             "outgoing": outgoing_response["result"]
         });
-        
+
         Ok(result)
     }
 
     pub async fn shutdown(&self) -> Result<()> {
-        
         let mut child_opt = self.child.lock().await;
         if let Some(ref mut child) = *child_opt {
-            
             // Try graceful shutdown first
             let request_id = self.next_request_id().await;
-            if self.send_request("shutdown", json!(null), request_id).await.is_ok() {
+            if self
+                .send_request("shutdown", json!(null), request_id)
+                .await
+                .is_ok()
+            {
                 // Wait briefly for shutdown response
                 let _ = tokio::time::timeout(
-                    Duration::from_secs(1), 
-                    self.wait_for_response(request_id, Duration::from_secs(1))
-                ).await;
-                
+                    Duration::from_secs(1),
+                    self.wait_for_response(request_id, Duration::from_secs(1)),
+                )
+                .await;
+
                 // Send exit notification
                 let _ = self.send_notification("exit", json!(null)).await;
             }
-            
+
             // Give the process a moment to shut down gracefully
             tokio::time::sleep(Duration::from_millis(500)).await;
-            
+
             // Force kill if still running
             match child.try_wait() {
                 Ok(Some(_status)) => {
@@ -851,14 +913,15 @@ impl LspServer {
                         // Wait for process to actually die
                         let _ = tokio::time::timeout(Duration::from_secs(2), async {
                             let _ = child.wait();
-                        }).await;
+                        })
+                        .await;
                     }
                 }
                 Err(_e) => {
                     // Error checking process status
                 }
             }
-            
+
             // Ensure child is dropped
             *child_opt = None;
         }
