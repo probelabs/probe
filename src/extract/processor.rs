@@ -355,7 +355,7 @@ pub fn process_file_for_extraction_with_lsp(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&merged_content, &filename);
 
-                return Ok(SearchResult {
+                Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_line".to_string(),
@@ -412,7 +412,7 @@ pub fn process_file_for_extraction_with_lsp(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&context_code, &filename);
 
-                return Ok(SearchResult {
+                Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (start_ctx, end_ctx),
                     node_type: "context".to_string(),
@@ -557,7 +557,7 @@ pub fn process_file_for_extraction_with_lsp(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&merged_content, &filename);
 
-                return Ok(SearchResult {
+                Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_specific_lines".to_string(),
@@ -616,7 +616,7 @@ pub fn process_file_for_extraction_with_lsp(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&range_content, &filename);
 
-                return Ok(SearchResult {
+                Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (start, end),
                     node_type: "specific_lines".to_string(),
