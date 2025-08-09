@@ -33,14 +33,11 @@ pub fn socket_exists(path: &str) -> bool {
             ClientOptions::new().pipe_mode(tokio::net::windows::named_pipe::PipeMode::Message);
 
         // Use blocking I/O for the existence check (quick operation)
-        match std::fs::OpenOptions::new()
+        std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(path)
-        {
-            Ok(_) => true,   // Pipe exists and is accessible
-            Err(_) => false, // Pipe doesn't exist or isn't accessible
-        }
+            .is_ok()
     }
 }
 
