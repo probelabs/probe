@@ -216,8 +216,25 @@ make install-hooks
 - Use `RUST_BACKTRACE=1` for stack traces
 - Profile with `cargo flamegraph` for performance
 
-### LSP Debugging
-When LSP features aren't working, use these debugging steps:
+### LSP Architecture & Debugging
+
+#### Architecture Overview
+The LSP integration uses a daemon-based architecture:
+
+```
+CLI Client → IPC Socket → LSP Daemon → Server Manager → Language Servers
+                              ↓
+                        In-Memory Log Buffer (1000 entries)
+```
+
+**Key Components:**
+- **LSP Daemon**: Persistent background service at `lsp-daemon/src/daemon.rs`
+- **Server Manager**: Pool management at `lsp-daemon/src/server_manager.rs`
+- **LSP Client**: IPC communication at `src/lsp_integration/client.rs`
+- **Protocol Layer**: Request/response types at `lsp-daemon/src/protocol.rs`
+- **Logging System**: In-memory circular buffer at `lsp-daemon/src/logging.rs`
+
+#### Debugging LSP Issues
 
 **CRITICAL: Avoid Rust Build Lock Contention**
 ```bash
@@ -234,42 +251,73 @@ cargo build
 probe lsp status  # If probe is installed
 ```
 
-**1. Enable LSP logging:**
+**1. View LSP daemon logs (in-memory, no files):**
 ```bash
-LSP_LOG=1 probe extract file.rs#symbol --lsp
+probe lsp logs              # View last 50 log entries
+probe lsp logs -n 100       # View last 100 entries
+probe lsp logs --follow     # Follow logs in real-time (polls every 500ms)
 ```
 
-**2. View LSP daemon logs:**
+**2. Check daemon status and server pools:**
 ```bash
-probe lsp logs              # View last 50 lines
-probe lsp logs -n 100       # View specific number of lines
-probe lsp logs -f           # Follow logs in real-time
-probe lsp logs --clear      # Clear log file
-```
-
-**3. Check daemon status:**
-```bash
-probe lsp status            # Show daemon status and server pools
+probe lsp status            # Show daemon status, uptime, and server pools
 probe lsp shutdown          # Stop daemon cleanly
-probe lsp restart           # Restart daemon
+probe lsp restart           # Restart daemon (clears in-memory logs)
 ```
 
-**4. Common LSP issues:**
-- **No data returned**: Check `/tmp/lsp-daemon.log` for initialization errors
-- **Timeout errors**: Language servers (especially rust-analyzer) can be slow on first run
-- **Connection issues**: Ensure daemon is running with `probe lsp status`
-- **Language server crashes**: Check stderr output in logs for error messages
-
-**5. Debug in foreground mode:**
+**3. Debug in foreground mode:**
 ```bash
-LSP_LOG=1 probe lsp start -f  # Run daemon in foreground to see all output
+# Run daemon in foreground with debug logging
+./target/debug/probe lsp start -f --log-level debug
+
+# In another terminal, test LSP operations
+./target/debug/probe extract file.rs#symbol --lsp
 ```
 
-The LSP logs are written to `/tmp/lsp-daemon.log` and include:
-- All JSON-RPC messages (>>> TO LSP, <<< FROM LSP)
-- Server lifecycle events (spawn, initialize, shutdown)
-- Error messages from language servers (stderr)
-- Timing information for debugging timeouts
+**4. Common LSP issues and solutions:**
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| **No call hierarchy data** | Language server still indexing | Wait 10-15s for rust-analyzer to index |
+| **Timeout errors** | Large codebase or slow language server | Increase timeout in client config |
+| **Connection refused** | Daemon not running | Daemon auto-starts, check `probe lsp status` |
+| **Empty responses** | Symbol not at function definition | Use exact function name position |
+| **Incomplete message** | Concurrent request conflict | Retry the operation |
+
+**5. Language Server Timings:**
+- **rust-analyzer**: 10-15s initial indexing for large projects
+- **pylsp**: 2-3s for Python projects
+- **gopls**: 3-5s for Go modules
+- **typescript-language-server**: 5-10s for node_modules
+
+**6. Log Analysis Commands:**
+```bash
+# Check for errors
+probe lsp logs -n 200 | grep ERROR
+
+# Monitor specific language server
+probe lsp logs --follow | grep rust-analyzer
+
+# Check initialization timing
+probe lsp logs | grep "initialize.*response"
+
+# View call hierarchy requests
+probe lsp logs | grep "prepareCallHierarchy\|incomingCalls\|outgoingCalls"
+```
+
+**7. Performance Monitoring:**
+The in-memory log buffer stores:
+- Timestamp with microsecond precision
+- Log level (ERROR, WARN, INFO, DEBUG)
+- Source file and line number
+- Target component (e.g., "lsp_protocol", "lsp_stderr")
+- Full message content including JSON-RPC payloads
+
+**8. Daemon Communication:**
+- Uses Unix domain sockets on macOS/Linux: `/var/folders/.../lsp-daemon.sock`
+- Named pipes on Windows: `\\.\pipe\lsp-daemon`
+- Binary protocol with MessagePack serialization
+- UUID-based request tracking for concurrent operations
 
 ## Getting Help
 
