@@ -14,10 +14,10 @@ use dashmap::DashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
@@ -32,6 +32,9 @@ pub struct LspDaemon {
     request_count: Arc<RwLock<u64>>,
     shutdown: Arc<RwLock<bool>>,
     log_buffer: LogBuffer,
+    // Performance metrics
+    request_durations: Arc<RwLock<Vec<Duration>>>, // Keep last 100 request durations
+    error_count: Arc<RwLock<usize>>,
 }
 
 impl LspDaemon {
@@ -94,6 +97,8 @@ impl LspDaemon {
             request_count: Arc::new(RwLock::new(0)),
             shutdown: Arc::new(RwLock::new(false)),
             log_buffer,
+            request_durations: Arc::new(RwLock::new(Vec::with_capacity(100))),
+            error_count: Arc::new(RwLock::new(0)),
         })
     }
 
@@ -141,6 +146,20 @@ impl LspDaemon {
 
             match listener.accept().await {
                 Ok(stream) => {
+                    // Check if we've reached the connection limit
+                    const MAX_CONNECTIONS: usize = 100; // Reasonable limit for concurrent connections
+                    
+                    let current_connections = self.connections.len();
+                    if current_connections >= MAX_CONNECTIONS {
+                        warn!(
+                            "Maximum connection limit reached ({}/{}), rejecting new connection",
+                            current_connections, MAX_CONNECTIONS
+                        );
+                        // Drop the stream to close the connection
+                        drop(stream);
+                        continue;
+                    }
+                    
                     let daemon = self.clone_refs();
                     tokio::spawn(async move {
                         if let Err(e) = daemon.handle_client(stream).await {
@@ -160,32 +179,64 @@ impl LspDaemon {
     }
 
     async fn handle_client(&self, mut stream: IpcStream) -> Result<()> {
+        // Maximum message size: 10MB (reasonable for LSP messages)
+        const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+        
         let client_id = Uuid::new_v4();
         info!("New client connected: {}", client_id);
 
         // Store connection timestamp
         self.connections.insert(client_id, Instant::now());
 
-        let mut buffer = vec![0; 65536]; // 64KB buffer
+        let mut buffer = vec![0; 65536]; // 64KB initial buffer
 
         loop {
             // Read message length
             let n = stream.read(&mut buffer[..4]).await?;
             if n == 0 {
-                break; // Connection closed
+                // Connection closed - clean up
+                self.connections.remove(&client_id);
+                info!("Client disconnected: {}", client_id);
+                break;
             }
 
             let msg_len = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+
+            // Validate message size to prevent OOM attacks
+            if msg_len > MAX_MESSAGE_SIZE {
+                error!(
+                    "Client {} attempted to send oversized message: {} bytes (max: {} bytes)",
+                    client_id, msg_len, MAX_MESSAGE_SIZE
+                );
+                self.connections.remove(&client_id);
+                return Err(anyhow::anyhow!(
+                    "Message size {} exceeds maximum allowed size of {} bytes",
+                    msg_len,
+                    MAX_MESSAGE_SIZE
+                ));
+            }
 
             // Read message body
             if msg_len > buffer.len() - 4 {
                 buffer.resize(msg_len + 4, 0);
             }
 
-            stream.read_exact(&mut buffer[4..4 + msg_len]).await?;
+            // Read with error handling that cleans up connection
+            if let Err(e) = stream.read_exact(&mut buffer[4..4 + msg_len]).await {
+                self.connections.remove(&client_id);
+                error!("Failed to read message body from client {}: {}", client_id, e);
+                return Err(e.into());
+            }
 
             // Decode request
-            let request = MessageCodec::decode_request(&buffer[..4 + msg_len])?;
+            let request = match MessageCodec::decode_request(&buffer[..4 + msg_len]) {
+                Ok(req) => req,
+                Err(e) => {
+                    self.connections.remove(&client_id);
+                    error!("Failed to decode request from client {}: {}", client_id, e);
+                    return Err(e);
+                }
+            };
 
             // Update activity timestamp
             self.connections.insert(client_id, Instant::now());
@@ -193,8 +244,24 @@ impl LspDaemon {
             // Increment request count
             *self.request_count.write().await += 1;
 
-            // Handle request
+            // Handle request with timing
+            let request_start = Instant::now();
             let response = self.handle_request(request).await;
+            let request_duration = request_start.elapsed();
+            
+            // Track request duration (keep only last 100)
+            {
+                let mut durations = self.request_durations.write().await;
+                durations.push(request_duration);
+                if durations.len() > 100 {
+                    durations.remove(0);
+                }
+            }
+            
+            // Track errors
+            if let DaemonResponse::Error { .. } = &response {
+                *self.error_count.write().await += 1;
+            }
 
             // Send response
             let encoded = MessageCodec::encode_response(&response)?;
@@ -215,8 +282,30 @@ impl LspDaemon {
         Ok(())
     }
 
+    // Clean up connections that have been idle for too long
+    fn cleanup_stale_connections(&self) {
+        const MAX_IDLE_TIME: Duration = Duration::from_secs(300); // 5 minutes
+        let now = Instant::now();
+        
+        self.connections.retain(|client_id, last_activity| {
+            let idle_time = now.duration_since(*last_activity);
+            if idle_time > MAX_IDLE_TIME {
+                info!("Removing stale connection {}: idle for {:?}", client_id, idle_time);
+                false
+            } else {
+                true
+            }
+        });
+    }
+
     async fn handle_request(&self, request: DaemonRequest) -> DaemonResponse {
         debug!("Received daemon request: {:?}", std::mem::discriminant(&request));
+        
+        // Periodically clean up stale connections (every 100 requests)
+        let request_count = *self.request_count.read().await;
+        if request_count % 100 == 0 {
+            self.cleanup_stale_connections();
+        }
         
         match request {
             DaemonRequest::Connect { client_id } => DaemonResponse::Connected {
@@ -251,6 +340,65 @@ impl LspDaemon {
                 DaemonResponse::WorkspaceList {
                     request_id,
                     workspaces,
+                }
+            }
+            
+            DaemonRequest::HealthCheck { request_id } => {
+                // Calculate health metrics
+                let uptime_seconds = self.start_time.elapsed().as_secs();
+                let total_requests = *self.request_count.read().await as usize;
+                let active_connections = self.connections.len();
+                let active_servers = self.server_manager.get_active_server_count().await;
+                
+                // Calculate average request duration
+                let avg_request_duration_ms = {
+                    let durations = self.request_durations.read().await;
+                    if durations.is_empty() {
+                        0.0
+                    } else {
+                        let total: Duration = durations.iter().sum();
+                        total.as_millis() as f64 / durations.len() as f64
+                    }
+                };
+                
+                // Get error count
+                let errors = *self.error_count.read().await;
+                let error_rate = if total_requests > 0 {
+                    (errors as f64 / total_requests as f64) * 100.0
+                } else {
+                    0.0
+                };
+                
+                // Estimate memory usage (simplified - in production you'd use a proper memory profiler)
+                let memory_usage_mb = {
+                    // This is a rough estimate - consider using a proper memory profiler
+                    let rusage = std::mem::size_of_val(&*self) as f64 / 1_048_576.0;
+                    rusage + (active_servers as f64 * 50.0) // Estimate 50MB per LSP server
+                };
+                
+                // Health is considered good if:
+                // - Not at connection limit
+                // - Reasonable memory usage
+                // - Low error rate
+                // - Reasonable response times
+                let healthy = active_connections < 90 
+                    && memory_usage_mb < 1024.0 
+                    && error_rate < 5.0
+                    && avg_request_duration_ms < 5000.0;
+                
+                info!(
+                    "Health check: connections={}, memory={}MB, errors={}%, avg_duration={}ms",
+                    active_connections, memory_usage_mb, error_rate, avg_request_duration_ms
+                );
+                
+                DaemonResponse::HealthCheck {
+                    request_id,
+                    healthy,
+                    uptime_seconds,
+                    total_requests,
+                    active_connections,
+                    active_servers,
+                    memory_usage_mb,
                 }
             }
 
@@ -585,6 +733,8 @@ impl LspDaemon {
             request_count: self.request_count.clone(),
             shutdown: self.shutdown.clone(),
             log_buffer: self.log_buffer.clone(),
+            request_durations: self.request_durations.clone(),
+            error_count: self.error_count.clone(),
         }
     }
 }

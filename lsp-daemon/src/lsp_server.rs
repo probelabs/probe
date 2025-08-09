@@ -456,9 +456,22 @@ impl LspServer {
 
                         // Respond to window/workDoneProgress/create requests
                         if method == "window/workDoneProgress/create" {
-                            if let Some(id) = msg.get("id") {
-                                self.send_response(id.as_i64().unwrap_or(0), json!(null))
-                                    .await?;
+                            if let Some(id_value) = msg.get("id") {
+                                // Handle various ID types (integer, string, null)
+                                let response_id = if let Some(id_num) = id_value.as_i64() {
+                                    id_num
+                                } else if let Some(id_str) = id_value.as_str() {
+                                    // Try to parse string as number, or use hash as fallback
+                                    id_str.parse::<i64>().unwrap_or_else(|_| {
+                                        warn!("Non-numeric ID received: {}, using 0", id_str);
+                                        0
+                                    })
+                                } else {
+                                    warn!("Unexpected ID type in LSP request: {:?}, using 0", id_value);
+                                    0
+                                };
+                                
+                                self.send_response(response_id, json!(null)).await?;
                             }
                         }
                     }

@@ -354,6 +354,10 @@ impl SingleServerManager {
         stats
     }
 
+    pub async fn get_active_server_count(&self) -> usize {
+        self.servers.len()
+    }
+    
     pub async fn get_all_workspaces(&self) -> Vec<WorkspaceInfo> {
         let mut workspaces = Vec::new();
         

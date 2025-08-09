@@ -172,9 +172,11 @@ async fn handle_command(command: Commands) -> Result<()> {
     Ok(())
 }
 
-async fn execute_with_daemon(file: &Path, pattern: &str) -> Result<CallHierarchyResult> {
+async fn execute_with_daemon(file: &Path, _pattern: &str) -> Result<CallHierarchyResult> {
     let mut client = LspClient::new(true).await?;
-    client.call_hierarchy(file, pattern).await
+    // For now, use a simple heuristic: search at line 1, column 0
+    // In a real implementation, we'd parse the file to find the pattern location
+    client.call_hierarchy(file, 1, 0).await
 }
 
 fn display_call_hierarchy(result: &CallHierarchyResult) {

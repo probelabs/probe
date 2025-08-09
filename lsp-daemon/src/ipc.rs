@@ -172,8 +172,9 @@ mod windows_impl {
                 let new_server = server_options.create(&self.path)?;
                 *server_guard = Some(new_server);
 
-                // Convert the connected server to a client-like stream
-                // Note: This is a simplification. In practice, we'd need proper conversion
+                // Return the connected server as a stream
+                // Windows named pipes work bidirectionally, so the server pipe
+                // can be used for both reading and writing after connection
                 Ok(IpcStream {
                     stream: IpcStreamInner::Server(server),
                 })
