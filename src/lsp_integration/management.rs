@@ -473,10 +473,32 @@ impl LspManager {
         let filter = EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new(&log_level));
 
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_target(false)
-            .init();
+        // Check if LSP_LOG is set to enable file logging
+        if std::env::var("LSP_LOG").is_ok() {
+            // Set up file logging to /tmp/lsp-daemon.log
+            use std::fs::OpenOptions;
+            use std::io::Write;
+            use tracing_subscriber::fmt::writer::MakeWriterExt;
+            
+            let log_file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/lsp-daemon.log")
+                .expect("Failed to open log file");
+            
+            tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_target(false)
+                .with_writer(log_file.and(std::io::stderr))
+                .init();
+                
+            eprintln!("LSP logging enabled - writing to /tmp/lsp-daemon.log");
+        } else {
+            tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_target(false)
+                .init();
+        }
 
         // Determine socket path
         let socket_path = socket.unwrap_or_else(|| lsp_daemon::get_default_socket_path());
