@@ -504,7 +504,7 @@ impl LspServer {
         let message = format!("Content-Length: {}\r\n\r\n{}", bytes.len(), bytes);
 
         // Log outgoing message
-        debug!(target: "lsp_protocol", ">>> TO LSP: {}", 
+        info!(target: "lsp_protocol", ">>> TO LSP: {}", 
             serde_json::to_string(&msg).unwrap_or_else(|_| msg.to_string()));
         
         // Simplified approach - just acquire the lock and write directly
@@ -572,7 +572,7 @@ impl LspServer {
         let msg: Value = serde_json::from_slice(&body)?;
         
         // Log incoming message
-        debug!(target: "lsp_protocol", "<<< FROM LSP: {}", 
+        info!(target: "lsp_protocol", "<<< FROM LSP: {}", 
             serde_json::to_string(&msg).unwrap_or_else(|_| msg.to_string()));
 
         Ok(msg)
