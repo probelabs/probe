@@ -550,7 +550,7 @@ pub fn process_file_for_extraction_with_lsp(
                 matched_lines: None,
                 tokenized_content: Some(tokenized_content),
                 lsp_info: None,
-            })
+            });
         }
 
         // Clamp specific lines to valid range instead of failing
