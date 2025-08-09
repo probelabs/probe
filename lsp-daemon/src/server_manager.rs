@@ -101,14 +101,9 @@ impl SingleServerManager {
         language: Language,
         workspace_root: PathBuf,
     ) -> Result<Arc<Mutex<ServerInstance>>> {
-        eprintln!("[SERVER_MANAGER] ensure_workspace_registered called for {:?} with workspace {:?}", language, workspace_root);
-        
-        // Log current server count
-        eprintln!("[SERVER_MANAGER] Current servers in map: {}", self.servers.len());
         
         // Check if server already exists
         if let Some(server_instance) = self.servers.get(&language) {
-            eprintln!("[SERVER_MANAGER] Found existing server for {:?}", language);
             let mut server = server_instance.lock().await;
             
             // If server is not initialized yet, initialize it with this workspace
@@ -121,11 +116,9 @@ impl SingleServerManager {
                     .clone();
                 
                 // Initialize with the actual workspace
-                eprintln!("[SERVER_MANAGER] Initializing server with workspace: {:?}", workspace_root);
                 match server.server.initialize_with_workspace(&config, &workspace_root).await {
-                    Ok(_) => eprintln!("[SERVER_MANAGER] Initialization succeeded"),
+                    Ok(_) => {},
                     Err(e) => {
-                        eprintln!("[SERVER_MANAGER] Initialization failed: {}", e);
                         return Err(e);
                     }
                 }
@@ -159,11 +152,9 @@ impl SingleServerManager {
             .clone();
 
         info!("Creating and initializing new {:?} server with workspace: {:?}", language, workspace_root);
-        eprintln!("[SERVER_MANAGER] Creating new server for {:?}", language);
         
         // Spawn server
         let mut server = LspServer::spawn(&config)?;
-        eprintln!("[SERVER_MANAGER] Server spawned successfully for {:?}", language);
         
         // Initialize with the actual workspace from the start
         server.initialize_with_workspace(&config, &workspace_root).await?;
@@ -176,11 +167,9 @@ impl SingleServerManager {
         
         let server_instance = Arc::new(Mutex::new(instance));
         self.servers.insert(language, server_instance.clone());
-        eprintln!("[SERVER_MANAGER] Inserted server for {:?} into map. New size: {}", language, self.servers.len());
         
         // The server is already initialized and ready for basic operations
         // Background indexing will continue automatically without blocking the daemon
-        eprintln!("[SERVER_MANAGER] Server created and ready for operations. Indexing continues in background.");
         
         info!("Created and initialized new {:?} server with workspace {:?}", language, workspace_root);
         Ok(server_instance)
@@ -196,7 +185,6 @@ impl SingleServerManager {
         server.initialize_empty(config).await?;
         
         // Don't wait for indexing to complete - let it happen in background
-        eprintln!("[SERVER_MANAGER] Server initialized, allowing background indexing to continue");
         
         Ok(server)
     }
@@ -288,7 +276,6 @@ impl SingleServerManager {
 
     pub async fn shutdown_all(&self) {
         info!("Shutting down all LSP servers");
-        eprintln!("[SERVER_MANAGER] Starting shutdown of all servers");
 
         // Collect all servers first to avoid holding locks
         let mut servers_to_shutdown = Vec::new();
@@ -300,28 +287,23 @@ impl SingleServerManager {
 
         // Shutdown each server
         for (language, server_instance) in servers_to_shutdown {
-            eprintln!("[SERVER_MANAGER] Shutting down {:?} server", language);
             
             // Try to acquire lock with timeout
             match tokio::time::timeout(Duration::from_secs(2), server_instance.lock()).await {
                 Ok(server) => {
                     if let Err(e) = server.server.shutdown().await {
-                        eprintln!("[SERVER_MANAGER] Error shutting down {:?} server: {}", language, e);
                         warn!("Error shutting down {:?} server: {}", language, e);
                     } else {
-                        eprintln!("[SERVER_MANAGER] Successfully shut down {:?} server", language);
                         info!("Successfully shut down {:?} server", language);
                     }
                 }
                 Err(_) => {
-                    eprintln!("[SERVER_MANAGER] Timeout acquiring lock for {:?} server, may be stuck", language);
                     warn!("Timeout acquiring lock for {:?} server during shutdown", language);
                 }
             }
         }
 
         self.servers.clear();
-        eprintln!("[SERVER_MANAGER] All servers shutdown complete");
     }
 
     pub async fn get_stats(&self) -> Vec<ServerStats> {
@@ -336,7 +318,6 @@ impl SingleServerManager {
             // Use timeout-based lock instead of try_lock to handle busy servers
             match tokio::time::timeout(Duration::from_millis(1000), server_instance.lock()).await {
                 Ok(server) => {
-                    eprintln!("[SERVER_MANAGER] Got lock for {:?}, initialized: {}", language, server.initialized);
                 let status = if !server.initialized {
                     ServerStatus::Initializing
                 } else {
@@ -352,10 +333,8 @@ impl SingleServerManager {
                     uptime: server.start_time.elapsed(),
                     status,
                 });
-                eprintln!("[SERVER_MANAGER] Added stats for {:?}", language);
                 }
                 Err(_) => {
-                    eprintln!("[SERVER_MANAGER] Timeout getting lock for {:?} server - reporting as busy", language);
                     // Return stats even if we can't get the lock, mark as busy/indexing
                     stats.push(ServerStats {
                         language,
@@ -366,12 +345,10 @@ impl SingleServerManager {
                         uptime: Duration::from_secs(0), // Unknown
                         status: ServerStatus::Indexing, // Likely indexing if busy
                     });
-                    eprintln!("[SERVER_MANAGER] Added busy stats for {:?}", language);
                 }
             }
         }
         
-        eprintln!("[SERVER_MANAGER] Returning {} server stats", stats.len());
         
         stats.sort_by_key(|s| s.language.as_str().to_string());
         stats

@@ -365,7 +365,6 @@ impl LspServer {
 
         self.initialized = true;
         info!("LSP server initialized for {:?}", config.language);
-        eprintln!("[DEBUG] Initialize method completing!");
 
         Ok(())
     }
