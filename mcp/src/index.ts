@@ -111,6 +111,7 @@ interface SearchCodeArgs {
   filesOnly?: boolean;
   ignore?: string[];
   excludeFilenames?: boolean;
+  exact?: boolean;
   maxResults?: number;
   maxTokens?: number;
   allowTests?: boolean;
@@ -200,6 +201,10 @@ class ProbeServer {
               excludeFilenames: {
                 type: 'boolean',
                 description: 'Exclude filenames from being used for matching'
+              },
+              exact: {
+                type: 'boolean',
+                description: 'Perform exact search without tokenization (case-insensitive)'
               },
               allowTests: {
                 type: 'boolean',
@@ -401,6 +406,7 @@ class ProbeServer {
       if (args.filesOnly !== undefined) options.filesOnly = args.filesOnly;
       if (args.ignore !== undefined) options.ignore = args.ignore;
       if (args.excludeFilenames !== undefined) options.excludeFilenames = args.excludeFilenames;
+      if (args.exact !== undefined) options.exact = args.exact;
       if (args.maxResults !== undefined) options.maxResults = args.maxResults;
       if (args.maxTokens !== undefined) options.maxTokens = args.maxTokens;
       if (args.allowTests !== undefined) options.allowTests = args.allowTests;

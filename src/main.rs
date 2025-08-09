@@ -208,6 +208,19 @@ fn handle_search(params: SearchParams) -> Result<()> {
                     total_skipped
                 );
 
+                // Show guidance message to get more results
+                if total_skipped > 0 {
+                    if let Some(session_id) = search_options.session {
+                        if !session_id.is_empty() && session_id != "new" {
+                            println!("💡 To get more results from this search query, repeat it with the same params and session ID: {session_id}");
+                        } else {
+                            println!("💡 To get more results from this search query, repeat it with the same params and session ID (see above)");
+                        }
+                    } else {
+                        println!("💡 To get more results from this search query, repeat it with the same params and use --session with the session ID shown above");
+                    }
+                }
+
                 // Show breakdown in debug mode
                 if std::env::var("DEBUG").is_ok() && total_skipped > 0 {
                     if results_skipped > 0 {
@@ -240,6 +253,10 @@ fn handle_search(params: SearchParams) -> Result<()> {
             }
         }
     }
+
+    // Add helpful tip at the very bottom of output
+    println!();
+    println!("💡 Tip: Use --exact flag when searching for specific function names or variables for more precise results");
 
     Ok(())
 }
