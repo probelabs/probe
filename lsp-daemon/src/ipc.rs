@@ -143,13 +143,12 @@ mod windows_impl {
 
     impl IpcListener {
         pub async fn bind(path: &str) -> Result<Self> {
-            let server_options = ServerOptions::new()
+            // Create the first server instance
+            let server = ServerOptions::new()
                 .first_pipe_instance(true)
                 .in_buffer_size(65536)
-                .out_buffer_size(65536);
-
-            // Create the first server instance
-            let server = server_options.create(path)?;
+                .out_buffer_size(65536)
+                .create(path)?;
 
             Ok(Self {
                 path: path.to_string(),
@@ -165,11 +164,11 @@ mod windows_impl {
                 server.connect().await?;
 
                 // Create a new server instance for the next connection
-                let server_options = ServerOptions::new()
+                let new_server = ServerOptions::new()
                     .first_pipe_instance(false)
                     .in_buffer_size(65536)
-                    .out_buffer_size(65536);
-                let new_server = server_options.create(&self.path)?;
+                    .out_buffer_size(65536)
+                    .create(&self.path)?;
                 *server_guard = Some(new_server);
 
                 // Return the connected server as a stream
