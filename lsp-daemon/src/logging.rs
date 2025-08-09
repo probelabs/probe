@@ -133,7 +133,7 @@ impl MemoryLogLayer {
         impl tracing::field::Visit for MessageVisitor {
             fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
                 if field.name() == "message" {
-                    self.message = format!("{:?}", value);
+                    self.message = format!("{value:?}");
                     // Remove surrounding quotes from debug format
                     if self.message.starts_with('"') && self.message.ends_with('"') {
                         self.message = self.message[1..self.message.len() - 1].to_string();

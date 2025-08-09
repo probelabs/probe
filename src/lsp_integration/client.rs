@@ -236,7 +236,7 @@ impl LspClient {
                 .config
                 .workspace_hint
                 .as_ref()
-                .map(|s| std::path::PathBuf::from(s)),
+                .map(std::path::PathBuf::from),
         };
 
         // Add timeout for call hierarchy request - this can be slow due to rust-analyzer
@@ -450,7 +450,7 @@ async fn start_embedded_daemon_background() -> Result<()> {
     let socket_path = get_default_socket_path();
 
     // Check version compatibility if daemon is running
-    if let Ok(_) = IpcStream::connect(&socket_path).await {
+    if IpcStream::connect(&socket_path).await.is_ok() {
         if check_daemon_version_compatibility().await.unwrap_or(false) {
             debug!("Daemon already running with compatible version");
             return Ok(());
@@ -475,7 +475,7 @@ async fn start_embedded_daemon_background() -> Result<()> {
     // Start daemon using "probe lsp start" command
     // Environment variables are inherited by default
     std::process::Command::new(&probe_binary)
-        .args(&["lsp", "start"])
+        .args(["lsp", "start"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

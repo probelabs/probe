@@ -378,7 +378,7 @@ impl LspDaemon {
                 // Estimate memory usage (simplified - in production you'd use a proper memory profiler)
                 let memory_usage_mb = {
                     // This is a rough estimate - consider using a proper memory profiler
-                    let rusage = std::mem::size_of_val(&*self) as f64 / 1_048_576.0;
+                    let rusage = std::mem::size_of_val(self) as f64 / 1_048_576.0;
                     rusage + (active_servers as f64 * 50.0) // Estimate 50MB per LSP server
                 };
 
@@ -554,7 +554,7 @@ impl LspDaemon {
         // Convert relative path to absolute path for LSP server
         let absolute_file_path = file_path
             .canonicalize()
-            .with_context(|| format!("Failed to resolve absolute path for {:?}", file_path))?;
+            .with_context(|| format!("Failed to resolve absolute path for {file_path:?}"))?;
 
         // Read file content
         let content = fs::read_to_string(file_path)?;
@@ -601,11 +601,11 @@ impl LspDaemon {
                     if response
                         .get("incoming")
                         .and_then(|v| v.as_array())
-                        .map_or(false, |arr| !arr.is_empty())
+                        .is_some_and(|arr| !arr.is_empty())
                         || response
                             .get("outgoing")
                             .and_then(|v| v.as_array())
-                            .map_or(false, |arr| !arr.is_empty())
+                            .is_some_and(|arr| !arr.is_empty())
                     {
                         result = Some(response);
                         break;
@@ -638,9 +638,7 @@ impl LspDaemon {
         server.server.close_document(&absolute_file_path).await?;
 
         // Parse result
-        let parsed_result = parse_call_hierarchy_from_lsp(&result);
-
-        parsed_result
+        parse_call_hierarchy_from_lsp(&result)
     }
 
     async fn handle_initialize_workspace(

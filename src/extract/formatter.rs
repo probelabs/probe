@@ -453,7 +453,7 @@ fn format_extraction_internal(
                                             call.name, call.file_path, call.line
                                         );
                                         if format == "markdown" {
-                                            writeln!(output, "  - {}", call_desc)?;
+                                            writeln!(output, "  - {call_desc}")?;
                                         } else {
                                             writeln!(output, "    - {}", call_desc.green())?;
                                         }
@@ -473,7 +473,7 @@ fn format_extraction_internal(
                                             call.name, call.file_path, call.line
                                         );
                                         if format == "markdown" {
-                                            writeln!(output, "  - {}", call_desc)?;
+                                            writeln!(output, "  - {call_desc}")?;
                                         } else {
                                             writeln!(output, "    - {}", call_desc.green())?;
                                         }
@@ -512,7 +512,7 @@ fn format_extraction_internal(
                                         reference.file_path, reference.line, reference.context
                                     );
                                     if format == "markdown" {
-                                        writeln!(output, "  - {}", ref_desc)?;
+                                        writeln!(output, "  - {ref_desc}")?;
                                     } else {
                                         writeln!(output, "    - {}", ref_desc.blue())?;
                                     }
@@ -524,7 +524,7 @@ fn format_extraction_internal(
                                 if format == "markdown" {
                                     writeln!(output, "#### Documentation:")?;
                                     writeln!(output, "```")?;
-                                    writeln!(output, "{}", doc)?;
+                                    writeln!(output, "{doc}")?;
                                     writeln!(output, "```")?;
                                 } else {
                                     writeln!(output, "  Documentation:")?;
