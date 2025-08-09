@@ -81,8 +81,8 @@ pub struct SearchResult {
     /// Tokenized version of the code block with filename prepended
     #[allow(dead_code)]
     pub tokenized_content: Option<Vec<String>>,
-    // Parent context chain for enhanced outline display
-    pub parent_context: Option<Vec<ParentContext>>,
+    /// LSP-enhanced symbol information (call hierarchy, references, etc.)
+    pub lsp_info: Option<serde_json::Value>,
 }
 
 // Structure to hold node information for merging

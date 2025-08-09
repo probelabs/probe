@@ -733,7 +733,7 @@ mod tests {
             matched_keywords: None,
             matched_lines: None,
             tokenized_content: None,
-            parent_context: None,
+            lsp_info: None,
         };
 
         let result2 = SearchResult {
@@ -762,7 +762,7 @@ mod tests {
             matched_keywords: None,
             matched_lines: None,
             tokenized_content: None,
-            parent_context: None,
+            lsp_info: None,
         };
 
         // Generate cache keys for both results

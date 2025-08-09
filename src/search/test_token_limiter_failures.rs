@@ -32,7 +32,7 @@ mod token_limiter_failure_tests {
             matched_keywords: None,
             matched_lines: None,
             tokenized_content: None,
-            parent_context: None,
+            lsp_info: None,
         }
     }
 

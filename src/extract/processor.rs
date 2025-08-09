@@ -3,13 +3,14 @@
 //! This module provides functions for processing files and extracting code blocks
 //! based on file paths and optional line numbers.
 use anyhow::{Context, Result};
-use probe_code::extract::symbol_finder::find_all_symbols_in_file;
-use probe_code::language::factory::get_language_impl;
+use probe_code::extract::symbol_finder::find_symbol_in_file_with_position;
 use probe_code::language::parser::parse_file_for_code_blocks;
+use probe_code::lsp_integration::{LspClient, LspConfig};
 use probe_code::models::SearchResult;
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tokio::runtime::Runtime;
 
 /// Process a single file and extract code blocks
 ///
@@ -32,20 +33,47 @@ pub fn process_file_for_extraction(
     allow_tests: bool,
     context_lines: usize,
     specific_lines: Option<&HashSet<usize>>,
-    symbols: bool,
-) -> Result<Vec<SearchResult>> {
+) -> Result<SearchResult> {
+    process_file_for_extraction_with_lsp(
+        path,
+        start_line,
+        end_line,
+        symbol,
+        allow_tests,
+        context_lines,
+        specific_lines,
+        false,
+    )
+}
+
+/// Process a single file and extract code blocks with optional LSP integration
+///
+/// This is an enhanced version of the extraction function that optionally
+/// queries LSP servers for additional symbol information like call hierarchy
+/// and references when LSP is enabled.
+pub fn process_file_for_extraction_with_lsp(
+    path: &Path,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+    symbol: Option<&str>,
+    allow_tests: bool,
+    context_lines: usize,
+    specific_lines: Option<&HashSet<usize>>,
+    enable_lsp: bool,
+) -> Result<SearchResult> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        eprintln!("\n[DEBUG] ===== Processing File for Extraction =====");
-        eprintln!("[DEBUG] File path: {path:?}");
-        eprintln!("[DEBUG] Start line: {start_line:?}");
-        eprintln!("[DEBUG] End line: {end_line:?}");
-        eprintln!("[DEBUG] Symbol: {symbol:?}");
-        eprintln!("[DEBUG] Allow tests: {allow_tests}");
-        eprintln!("[DEBUG] Context lines: {context_lines}");
-        eprintln!("[DEBUG] Specific lines: {specific_lines:?}");
+        println!("\n[DEBUG] ===== Processing File for Extraction =====");
+        println!("[DEBUG] File path: {path:?}");
+        println!("[DEBUG] Start line: {start_line:?}");
+        println!("[DEBUG] End line: {end_line:?}");
+        println!("[DEBUG] Symbol: {symbol:?}");
+        println!("[DEBUG] Allow tests: {allow_tests}");
+        println!("[DEBUG] Context lines: {context_lines}");
+        println!("[DEBUG] Specific lines: {specific_lines:?}");
+        println!("[DEBUG] LSP enabled: {enable_lsp}");
     }
 
     // Check if the file exists
@@ -71,8 +99,29 @@ pub fn process_file_for_extraction(
         if debug_mode {
             eprintln!("[DEBUG] Looking for symbol: {symbol_name}");
         }
-        // Find all matching symbols (returns Vec for disambiguation)
-        return find_all_symbols_in_file(path, symbol_name, &content, allow_tests, context_lines);
+        
+        // Find the symbol in the file first and get position information
+        let (mut result, symbol_position) = find_symbol_in_file_with_position(path, symbol_name, &content, allow_tests, context_lines)?;
+        
+        // Add LSP information if enabled
+        if enable_lsp {
+            if debug_mode {
+                println!("[DEBUG] LSP enabled, attempting to get symbol info for: {}", symbol_name);
+            }
+            // Only attempt LSP if we have position information from tree-sitter
+            if let Some((line, column)) = symbol_position {
+                if debug_mode {
+                    println!("[DEBUG] Using position from tree-sitter: line {}, column {}", line, column);
+                }
+                result.lsp_info = get_lsp_symbol_info_sync(path, symbol_name, line, column, debug_mode);
+            } else {
+                if debug_mode {
+                    println!("[DEBUG] No position information available from tree-sitter, skipping LSP");
+                }
+            }
+        }
+        
+        return Ok(result);
     }
 
     // If we have a line range (start_line, end_line), gather AST blocks overlapping that range.
@@ -214,8 +263,8 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: matched_lines_vec,
                     tokenized_content: Some(tokenized_content),
-                    parent_context: None,
-                }])
+                    lsp_info: None,
+                })
             }
             _ => {
                 // Fallback to literal extraction of lines [start..end]
@@ -263,8 +312,8 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
-                    parent_context: None,
-                }])
+                    lsp_info: None,
+                })
             }
         }
     }
@@ -369,8 +418,8 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
-                    parent_context: None,
-                }])
+                    lsp_info: None,
+                });
             }
             _ => {
                 // If no AST block found, fallback to the line + context
@@ -430,8 +479,8 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
-                    parent_context: None,
-                }])
+                    lsp_info: None,
+                });
             }
         }
     } else if let Some(lines_set) = specific_lines {
@@ -485,8 +534,8 @@ pub fn process_file_for_extraction(
                 matched_keywords: None,
                 matched_lines: None,
                 tokenized_content: Some(tokenized_content),
-                parent_context: None,
-            }]);
+                lsp_info: None,
+            });
         }
 
         // Clamp specific lines to valid range instead of failing
@@ -591,8 +640,8 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
-                    parent_context: None,
-                }])
+                    lsp_info: None,
+                });
             }
             _ => {
                 // Fallback to literal extraction of the specific lines
@@ -667,8 +716,8 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: matched_lines_vec,
                     tokenized_content: Some(tokenized_content),
-                    parent_context: None,
-                }])
+                    lsp_info: None,
+                });
             }
         }
     } else {
@@ -716,326 +765,205 @@ pub fn process_file_for_extraction(
             matched_keywords: None,
             matched_lines: None,
             tokenized_content: Some(tokenized_content),
-            parent_context: None,
-        }])
+            lsp_info: None,
+        })
     }
 }
 
-/// Helper function to extract symbol signature for a specific line range
-/// Returns Some(String) if symbols is true and extraction succeeds, None otherwise
-fn extract_symbol_signature_for_extract(
-    path: &Path,
-    content: &str,
-    start_line: usize,
-    end_line: usize,
-    symbols: bool,
-) -> Option<String> {
-    if !symbols {
+/// Helper to get LSP information for a symbol at a specific position
+async fn get_lsp_symbol_info(
+    file_path: &Path,
+    symbol_name: &str,
+    line: u32,
+    column: u32,
+    debug_mode: bool,
+) -> Option<serde_json::Value> {
+    if debug_mode {
+        println!("[DEBUG] Attempting to get LSP info for symbol: {}", symbol_name);
+    }
+
+    // Create LSP client with timeout to prevent hanging
+    // Find the actual workspace root by looking for Cargo.toml or other project markers
+    let workspace_hint = find_workspace_root(file_path).map(|p| p.to_string_lossy().to_string());
+    let config = LspConfig {
+        use_daemon: true,
+        workspace_hint: workspace_hint.clone(),
+        timeout_ms: 90000, // 90 seconds timeout for complex projects with rust-analyzer
+    };
+    
+    if debug_mode {
+        println!("[DEBUG] LSP config: timeout={}ms, workspace_hint={:?}", config.timeout_ms, config.workspace_hint);
+    }
+    
+    let mut client = match LspClient::new(config).await {
+        Ok(client) => client,
+        Err(e) => {
+            if debug_mode {
+                println!("[DEBUG] Failed to create LSP client: {}", e);
+            }
+            return None;
+        }
+    };
+
+    // Check if LSP is supported for this file
+    if !client.is_supported(file_path) {
+        if debug_mode {
+            println!("[DEBUG] LSP not supported for file: {:?}", file_path);
+        }
         return None;
     }
 
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    // Get file extension
-    let extension = file_extension(path);
-
-    // Get language implementation
-    let language_impl = get_language_impl(extension)?;
-
-    if debug_mode {
-        eprintln!(
-            "[DEBUG] Extracting symbol signature for lines {}-{} in {}",
-            start_line,
-            end_line,
-            path.display()
-        );
-    }
-
-    // Try to parse the content
-    if let Ok(mut parser) = probe_code::language::get_pooled_parser(extension) {
-        if let Some(tree) = parser.parse(content, None) {
-            // Convert line numbers to byte ranges
-            let lines: Vec<&str> = content.lines().collect();
-
-            // Clamp line numbers to valid ranges
-            let start_line = start_line.clamp(1, lines.len());
-            let end_line = end_line.clamp(start_line, lines.len());
-
-            // Calculate byte offsets for the line range
-            let start_byte = if start_line <= 1 {
-                0
-            } else {
-                lines[..start_line - 1]
-                    .iter()
-                    .map(|l| l.len() + 1)
-                    .sum::<usize>()
-            };
-
-            let end_byte = if end_line >= lines.len() {
-                content.len()
-            } else {
-                lines[..end_line]
-                    .iter()
-                    .map(|l| l.len() + 1)
-                    .sum::<usize>()
-                    .saturating_sub(1)
-            };
-
-            if debug_mode {
-                eprintln!(
-                    "[DEBUG] Line range {}-{} maps to byte range {}-{}",
-                    start_line, end_line, start_byte, end_byte
-                );
-            }
-
-            // Find nodes within the byte range and extract symbol signature
-            let root_node = tree.root_node();
-            let signature = find_node_and_extract_signature(
-                &root_node,
-                start_byte,
-                end_byte,
-                content.as_bytes(),
-                &*language_impl,
-                debug_mode,
-            );
-
-            // Return parser to pool
-            probe_code::language::return_pooled_parser(extension, parser);
-
-            signature
-        } else {
-            if debug_mode {
-                eprintln!("[DEBUG] Failed to parse content for symbol signature");
-            }
-            probe_code::language::return_pooled_parser(extension, parser);
-            None
+    // Get symbol information with retries
+    let mut attempts = 0;
+    const MAX_ATTEMPTS: u32 = 2;
+    
+    while attempts < MAX_ATTEMPTS {
+        attempts += 1;
+        if debug_mode && attempts > 1 {
+            println!("[DEBUG] LSP attempt {} of {}", attempts, MAX_ATTEMPTS);
         }
-    } else {
-        if debug_mode {
-            eprintln!("[DEBUG] Failed to get parser for symbol signature extraction");
-        }
-        None
-    }
-}
-
-/// Find a node within the specified byte range and extract its symbol signature
-fn find_node_and_extract_signature(
-    node: &tree_sitter::Node,
-    start_byte: usize,
-    end_byte: usize,
-    source: &[u8],
-    language_impl: &dyn probe_code::language::language_trait::LanguageImpl,
-    debug_mode: bool,
-) -> Option<String> {
-    // Check if this node overlaps with the byte range
-    if node.start_byte() <= end_byte && node.end_byte() >= start_byte {
-        // First, search children to find more specific nodes
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if let Some(child_signature) = find_node_and_extract_signature(
-                &child,
-                start_byte,
-                end_byte,
-                source,
-                language_impl,
-                debug_mode,
-            ) {
-                return Some(child_signature);
-            }
-        }
-
-        // If no child provides a signature, try the current node
-        // Skip root-level nodes like 'source_file' unless they're the only option
-        if node.kind() != "source_file"
-            || (node.start_byte() == start_byte && node.end_byte() == end_byte)
-        {
-            if debug_mode {
-                eprintln!(
-                    "[DEBUG] Checking node of type '{}' for symbol signature (range {}-{})",
-                    node.kind(),
-                    node.start_byte(),
-                    node.end_byte()
-                );
-            }
-
-            let signature = language_impl.get_symbol_signature(node, source);
-            if let Some(ref sig) = signature {
+        
+        match client.get_symbol_info(file_path, symbol_name, line, column).await {
+            Ok(Some(symbol_info)) => {
                 if debug_mode {
-                    eprintln!(
-                        "[DEBUG] Found symbol signature for node type '{}': {}",
-                        node.kind(),
-                        sig
-                    );
+                    println!("[DEBUG] Successfully retrieved LSP info for symbol: {}", symbol_name);
+                    if let Some(ref call_hierarchy) = symbol_info.call_hierarchy {
+                        println!("[DEBUG] Call hierarchy - incoming calls: {}, outgoing calls: {}", 
+                               call_hierarchy.incoming_calls.len(), 
+                               call_hierarchy.outgoing_calls.len());
+                    }
                 }
-                return signature;
-            } else if debug_mode {
-                eprintln!(
-                    "[DEBUG] No symbol signature available for node type '{}'",
-                    node.kind()
-                );
+                
+                // Convert to JSON for storage
+                match serde_json::to_value(&symbol_info) {
+                    Ok(json) => return Some(json),
+                    Err(e) => {
+                        if debug_mode {
+                            println!("[DEBUG] Failed to serialize LSP info to JSON: {}", e);
+                        }
+                        return None;
+                    }
+                }
+            }
+            Ok(None) => {
+                if debug_mode {
+                    println!("[DEBUG] No LSP info available for symbol: {} (attempt {})", symbol_name, attempts);
+                }
+                if attempts < MAX_ATTEMPTS {
+                    // Wait a bit before retry
+                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                    continue;
+                }
+                return None;
+            }
+            Err(e) => {
+                if debug_mode {
+                    println!("[DEBUG] LSP query failed for symbol {} (attempt {}): {}", symbol_name, attempts, e);
+                }
+                if attempts < MAX_ATTEMPTS {
+                    // Wait a bit before retry
+                    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+                    continue;
+                }
+                return None;
             }
         }
     }
+    
     None
 }
 
-/// Extract all root-level symbols from a file
-/// Returns a vector of SearchResults, one for each root-level symbol
-#[allow(dead_code)]
-pub fn extract_all_symbols_from_file(path: &Path, allow_tests: bool) -> Result<Vec<SearchResult>> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    if debug_mode {
-        eprintln!("[DEBUG] Extracting all symbols from file: {:?}", path);
-    }
-
-    // Check if the file exists
-    if !path.exists() {
-        return Err(anyhow::anyhow!("File does not exist: {:?}", path));
-    }
-
-    // Read the file content
-    let content = fs::read_to_string(path).context(format!("Failed to read file: {path:?}"))?;
-
-    // Get file extension and language implementation
-    let extension = file_extension(path);
-    let language_impl = get_language_impl(extension)
-        .ok_or_else(|| anyhow::anyhow!("Unsupported file extension: {}", extension))?;
-
-    if debug_mode {
-        eprintln!("[DEBUG] File extension: {}, Language detected", extension);
-    }
-
-    // Parse the file with tree-sitter
-    let mut results = Vec::new();
-
-    if let Ok(mut parser) = probe_code::language::get_pooled_parser(extension) {
-        if let Some(tree) = parser.parse(&content, None) {
-            let root_node = tree.root_node();
-
-            if debug_mode {
-                eprintln!("[DEBUG] Successfully parsed file, traversing root-level nodes");
-            }
-
-            // Find all root-level acceptable parent nodes
-            let mut cursor = root_node.walk();
-            for child in root_node.children(&mut cursor) {
+/// Helper to get LSP information synchronously using spawn_blocking
+fn get_lsp_symbol_info_sync(
+    file_path: &Path,
+    symbol_name: &str,
+    line: u32,
+    column: u32,
+    debug_mode: bool,
+) -> Option<serde_json::Value> {
+    // Use spawn_blocking to run the async LSP code from within an async context
+    let file_path = file_path.to_path_buf();
+    let symbol_name = symbol_name.to_string();
+    let symbol_name_for_error = symbol_name.clone();
+    
+    match std::thread::spawn(move || {
+        // Create a new runtime in a separate thread
+        let rt = match Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
                 if debug_mode {
-                    eprintln!(
-                        "[DEBUG] Checking root-level node: {} at lines {}-{}",
-                        child.kind(),
-                        child.start_position().row + 1,
-                        child.end_position().row + 1
-                    );
+                    println!("[DEBUG] Failed to create async runtime for LSP: {}", e);
                 }
-
-                // Skip test nodes if not allowed
-                if !allow_tests && language_impl.is_test_node(&child, content.as_bytes()) {
-                    if debug_mode {
-                        eprintln!("[DEBUG] Skipping test node: {}", child.kind());
-                    }
-                    continue;
-                }
-
-                // Check if this is an acceptable parent (symbol we want to extract)
-                if language_impl.is_acceptable_parent(&child) {
-                    if debug_mode {
-                        eprintln!(
-                            "[DEBUG] Found acceptable symbol: {} at lines {}-{}",
-                            child.kind(),
-                            child.start_position().row + 1,
-                            child.end_position().row + 1
-                        );
-                    }
-
-                    // Get the symbol signature
-                    if let Some(signature) =
-                        language_impl.get_symbol_signature(&child, content.as_bytes())
-                    {
-                        let start_line = child.start_position().row + 1;
-                        let end_line = child.end_position().row + 1;
-
-                        // Create a SearchResult for this symbol
-                        let result = SearchResult {
-                            file: path.to_string_lossy().to_string(),
-                            lines: (start_line, end_line),
-                            node_type: child.kind().to_string(),
-                            code: String::new(), // Empty code since we only want the signature
-                            symbol_signature: Some(signature),
-                            matched_by_filename: None,
-                            rank: None,
-                            score: None,
-                            tfidf_score: None,
-                            bm25_score: None,
-                            tfidf_rank: None,
-                            bm25_rank: None,
-                            new_score: None,
-                            hybrid2_rank: None,
-                            combined_score_rank: None,
-                            file_unique_terms: None,
-                            file_total_matches: None,
-                            file_match_rank: None,
-                            block_unique_terms: None,
-                            block_total_matches: None,
-                            parent_file_id: None,
-                            block_id: None,
-                            matched_keywords: None,
-                            matched_lines: None,
-                            tokenized_content: None,
-                            parent_context: None,
-                        };
-
-                        results.push(result);
-
-                        if debug_mode {
-                            eprintln!(
-                                "[DEBUG] Added symbol result: {} (lines {}-{})",
-                                child.kind(),
-                                start_line,
-                                end_line
-                            );
-                        }
-                    } else if debug_mode {
-                        eprintln!("[DEBUG] No signature available for node: {}", child.kind());
-                    }
-                } else if debug_mode {
-                    eprintln!("[DEBUG] Node not acceptable as symbol: {}", child.kind());
-                }
+                return None;
             }
-        } else {
+        };
+
+        // Use a timeout to prevent blocking indefinitely
+        let timeout_duration = std::time::Duration::from_secs(45); // Reasonable timeout to prevent hanging
+        match rt.block_on(async {
+            tokio::time::timeout(timeout_duration, get_lsp_symbol_info(&file_path, &symbol_name, line, column, debug_mode)).await
+        }) {
+            Ok(result) => result,
+            Err(_) => {
+                if debug_mode {
+                    println!("[DEBUG] LSP query timed out for symbol: {}", symbol_name);
+                }
+                None
+            }
+        }
+    }).join() {
+        Ok(result) => result,
+        Err(_) => {
             if debug_mode {
-                eprintln!("[DEBUG] Failed to parse file with tree-sitter");
+                println!("[DEBUG] LSP thread panicked for symbol: {}", symbol_name_for_error);
             }
-            probe_code::language::return_pooled_parser(extension, parser);
-            return Err(anyhow::anyhow!("Failed to parse file: {:?}", path));
-        }
-
-        // Return parser to pool
-        probe_code::language::return_pooled_parser(extension, parser);
-    } else {
-        return Err(anyhow::anyhow!("Failed to get parser for file: {:?}", path));
-    }
-
-    // Sort results by line number for consistent ordering
-    results.sort_by(|a, b| a.lines.0.cmp(&b.lines.0));
-
-    if debug_mode {
-        eprintln!(
-            "[DEBUG] Found {} symbols in file (sorted by line number)",
-            results.len()
-        );
-        for result in &results {
-            eprintln!(
-                "[DEBUG]   {} at lines {}-{}",
-                result.node_type, result.lines.0, result.lines.1
-            );
+            None
         }
     }
-
-    Ok(results)
 }
 
 /// Helper to get file extension as a &str
 fn file_extension(path: &Path) -> &str {
     path.extension().and_then(|ext| ext.to_str()).unwrap_or("")
+}
+
+/// Find the workspace root by walking up the directory tree looking for project markers
+fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
+    let mut current = file_path.parent()?;
+    
+    loop {
+        // Check for Cargo.toml (Rust projects)
+        if current.join("Cargo.toml").exists() {
+            return Some(current.to_path_buf());
+        }
+        
+        // Check for package.json (Node.js projects)
+        if current.join("package.json").exists() {
+            return Some(current.to_path_buf());
+        }
+        
+        // Check for go.mod (Go projects)
+        if current.join("go.mod").exists() {
+            return Some(current.to_path_buf());
+        }
+        
+        // Check for pom.xml or build.gradle (Java projects)
+        if current.join("pom.xml").exists() || current.join("build.gradle").exists() {
+            return Some(current.to_path_buf());
+        }
+        
+        // Check for .git directory (Git repository root)
+        if current.join(".git").exists() {
+            return Some(current.to_path_buf());
+        }
+        
+        // Move up one directory
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => break, // Reached filesystem root
+        }
+    }
+    
+    // Fallback to the file's parent directory
+    file_path.parent().map(|p| p.to_path_buf())
 }

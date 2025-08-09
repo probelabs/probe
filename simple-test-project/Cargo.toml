@@ -1,0 +1,7 @@
+[package]
+name = "simple-test-project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# No dependencies - minimal project for testing LSP call hierarchy

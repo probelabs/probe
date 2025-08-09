@@ -102,6 +102,7 @@ async fn main() -> Result<()> {
         }
     } else {
         println!("   Mode: Direct\n");
+        eprintln!("About to call DirectLspClient::call_hierarchy...");
         DirectLspClient::call_hierarchy(&absolute_path, &pattern).await?
     };
 

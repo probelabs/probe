@@ -12,6 +12,7 @@ mod query_validator;
 use cli::{Args, Commands};
 use probe_code::{
     extract::{handle_extract, ExtractOptions},
+    lsp_integration::management::LspManager,
     search::{format_and_print_search_results, perform_probe, SearchOptions},
 };
 
@@ -589,6 +590,7 @@ async fn main() -> Result<()> {
             prompt,
             instructions,
             no_gitignore,
+            lsp,
         }) => handle_extract(ExtractOptions {
             files,
             custom_ignores: ignore,
@@ -610,6 +612,7 @@ async fn main() -> Result<()> {
             instructions,
             no_gitignore: no_gitignore
                 || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+            lsp,
         })?,
         Some(Commands::Query {
             pattern,
@@ -660,40 +663,9 @@ async fn main() -> Result<()> {
             baseline,
             fast,
         })?,
-        Some(Commands::Grep {
-            pattern,
-            paths,
-            ignore_case,
-            line_number,
-            count,
-            files_with_matches,
-            files_without_match,
-            invert_match,
-            before_context,
-            after_context,
-            context,
-            ignore,
-            no_gitignore,
-            color,
-            max_count,
-        }) => grep::handle_grep(grep::GrepParams {
-            pattern,
-            paths,
-            ignore_case,
-            line_number,
-            count,
-            files_with_matches,
-            files_without_match,
-            invert_match,
-            before_context,
-            after_context,
-            context,
-            ignore,
-            no_gitignore: no_gitignore
-                || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
-            color,
-            max_count,
-        })?,
+        Some(Commands::Lsp { subcommand }) => {
+            LspManager::handle_command(&subcommand, "color").await?;
+        }
     }
 
     Ok(())

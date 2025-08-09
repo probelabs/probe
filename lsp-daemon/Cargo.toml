@@ -34,6 +34,10 @@ async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 regex = "1"
 tempfile = "3"
+chrono = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winbase", "namedpipeapi", "fileapi", "handleapi", "winnt"] }
+
+[build-dependencies]
+chrono = "0.4"
