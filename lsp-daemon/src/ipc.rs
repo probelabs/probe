@@ -243,10 +243,7 @@ mod windows_impl {
             }
         }
 
-        fn poll_shutdown(
-            self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-        ) -> Poll<std::io::Result<()>> {
+        fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
             // Named pipes don't have a shutdown method, so we just flush
             self.poll_flush(cx)
         }
