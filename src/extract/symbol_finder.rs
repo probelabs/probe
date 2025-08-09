@@ -419,9 +419,7 @@ fn find_all_symbol_nodes<'a>(
         ));
 
         if debug_mode {
-            println!(
-                "[DEBUG] Symbol position: line {symbol_line}, column {symbol_column}"
-            );
+            println!("[DEBUG] Symbol position: line {symbol_line}, column {symbol_column}");
         }
 
         let search_result = SearchResult {
