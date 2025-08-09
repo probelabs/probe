@@ -160,7 +160,7 @@ mod windows_impl {
         pub async fn accept(&self) -> Result<IpcStream> {
             let mut server_guard = self.current_server.lock().await;
 
-            if let Some(mut server) = server_guard.take() {
+            if let Some(server) = server_guard.take() {
                 // Wait for a client to connect
                 server.connect().await?;
 
@@ -244,7 +244,7 @@ mod windows_impl {
         }
 
         fn poll_shutdown(
-            mut self: Pin<&mut Self>,
+            self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<std::io::Result<()>> {
             // Named pipes don't have a shutdown method, so we just flush
