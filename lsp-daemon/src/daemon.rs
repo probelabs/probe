@@ -1,14 +1,14 @@
 use crate::ipc::{IpcListener, IpcStream};
 use crate::language_detector::{Language, LanguageDetector};
 use crate::lsp_registry::LspRegistry;
-use crate::pool::PoolManager;
+use crate::server_manager::SingleServerManager;
 use crate::protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyResult, DaemonRequest, DaemonResponse,
     DaemonStatus, LanguageInfo, MessageCodec, PoolStatus,
 };
 use crate::socket_path::{get_default_socket_path, remove_socket_file};
 use crate::workspace_resolver::WorkspaceResolver;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ pub struct LspDaemon {
     socket_path: String,
     registry: Arc<LspRegistry>,
     detector: Arc<LanguageDetector>,
-    pool_manager: Arc<PoolManager>,
+    server_manager: Arc<SingleServerManager>,
     workspace_resolver: Arc<tokio::sync::Mutex<WorkspaceResolver>>,
     connections: Arc<DashMap<Uuid, Instant>>,
     start_time: Instant,
@@ -42,7 +42,7 @@ impl LspDaemon {
     ) -> Result<Self> {
         let registry = Arc::new(LspRegistry::new()?);
         let detector = Arc::new(LanguageDetector::new());
-        let pool_manager = Arc::new(PoolManager::new());
+        let server_manager = Arc::new(SingleServerManager::new(registry.clone()));
         let workspace_resolver = Arc::new(tokio::sync::Mutex::new(WorkspaceResolver::new(
             allowed_roots,
         )));
@@ -51,7 +51,7 @@ impl LspDaemon {
             socket_path,
             registry,
             detector,
-            pool_manager,
+            server_manager,
             workspace_resolver,
             connections: Arc::new(DashMap::new()),
             start_time: Instant::now(),
@@ -66,6 +66,28 @@ impl LspDaemon {
 
         let listener = IpcListener::bind(&self.socket_path).await?;
         info!("LSP daemon listening on {}", self.socket_path);
+
+        // Set up signal handling for graceful shutdown
+        let daemon_for_signals = self.clone_refs();
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate())?;
+            let mut sigint = signal(SignalKind::interrupt())?;
+            
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = sigterm.recv() => {
+                        info!("Received SIGTERM, shutting down gracefully");
+                        *daemon_for_signals.shutdown.write().await = true;
+                    }
+                    _ = sigint.recv() => {
+                        info!("Received SIGINT, shutting down gracefully");
+                        *daemon_for_signals.shutdown.write().await = true;
+                    }
+                }
+            });
+        }
 
         // Start idle checker
         let daemon = self.clone_refs();
@@ -157,6 +179,21 @@ impl LspDaemon {
     }
 
     async fn handle_request(&self, request: DaemonRequest) -> DaemonResponse {
+        // Log to LSP log file if enabled
+        if std::env::var("LSP_LOG").is_ok() {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/lsp-daemon.log")
+            {
+                use std::io::Write;
+                writeln!(file, "[{}] [DAEMON] Received request: {:?}", 
+                    chrono::Local::now().format("%H:%M:%S%.3f"),
+                    std::mem::discriminant(&request)
+                ).ok();
+            }
+        }
+        
         match request {
             DaemonRequest::Connect { client_id } => DaemonResponse::Connected {
                 request_id: client_id,
@@ -186,7 +223,7 @@ impl LspDaemon {
             }
 
             DaemonRequest::ListWorkspaces { request_id } => {
-                let workspaces = self.pool_manager.get_all_workspaces().await;
+                let workspaces = self.server_manager.get_all_workspaces().await;
                 DaemonResponse::WorkspaceList {
                     request_id,
                     workspaces,
@@ -196,10 +233,11 @@ impl LspDaemon {
             DaemonRequest::CallHierarchy {
                 request_id,
                 file_path,
-                pattern,
+                line,
+                column,
                 workspace_hint,
             } => match self
-                .handle_call_hierarchy(&file_path, &pattern, workspace_hint)
+                .handle_call_hierarchy(&file_path, line, column, workspace_hint)
                 .await
             {
                 Ok(result) => DaemonResponse::CallHierarchy { request_id, result },
@@ -210,14 +248,17 @@ impl LspDaemon {
             },
 
             DaemonRequest::Status { request_id } => {
-                let pools = self.pool_manager.get_all_stats().await;
-                let pool_status: Vec<PoolStatus> = pools
+                let server_stats = self.server_manager.get_stats().await;
+                let pool_status: Vec<PoolStatus> = server_stats
                     .into_iter()
-                    .map(|p| PoolStatus {
-                        language: p.language,
-                        ready_servers: p.ready_servers,
-                        busy_servers: p.busy_servers,
-                        total_servers: p.total_servers,
+                    .map(|s| PoolStatus {
+                        language: s.language,
+                        ready_servers: if s.initialized { 1 } else { 0 },
+                        busy_servers: 0, // No busy concept in single server model
+                        total_servers: 1,
+                        workspaces: s.workspaces.iter().map(|w| w.to_string_lossy().to_string()).collect(),
+                        uptime_secs: s.uptime.as_secs(),
+                        status: format!("{:?}", s.status),
                     })
                     .collect();
 
@@ -228,6 +269,9 @@ impl LspDaemon {
                         pools: pool_status,
                         total_requests: *self.request_count.read().await,
                         active_connections: self.connections.len(),
+                        version: env!("CARGO_PKG_VERSION").to_string(),
+                        git_hash: env!("GIT_HASH").to_string(),
+                        build_date: env!("BUILD_DATE").to_string(),
                     },
                 }
             }
@@ -271,9 +315,40 @@ impl LspDaemon {
     async fn handle_call_hierarchy(
         &self,
         file_path: &Path,
-        pattern: &str,
+        line: u32,
+        column: u32,
         workspace_hint: Option<PathBuf>,
     ) -> Result<CallHierarchyResult> {
+        // Use timeout to prevent hanging indefinitely
+        let operation_timeout = tokio::time::Duration::from_secs(120); // 120 second timeout to accommodate rust-analyzer initialization
+        
+        tokio::time::timeout(operation_timeout, self.handle_call_hierarchy_inner(file_path, line, column, workspace_hint)).await
+            .map_err(|_| anyhow!("Call hierarchy operation timed out after 120 seconds"))?
+    }
+
+    async fn handle_call_hierarchy_inner(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+        workspace_hint: Option<PathBuf>,
+    ) -> Result<CallHierarchyResult> {
+        // Log to LSP log file if enabled
+        if std::env::var("LSP_LOG").is_ok() {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/lsp-daemon.log")
+            {
+                use std::io::Write;
+                writeln!(file, "[{}] [DAEMON] handle_call_hierarchy_inner called for {:?} at {}:{}", 
+                    chrono::Local::now().format("%H:%M:%S%.3f"),
+                    file_path, line, column
+                ).ok();
+                file.flush().ok();
+            }
+        }
+        
         // Detect language
         let language = self.detector.detect(file_path)?;
 
@@ -287,47 +362,107 @@ impl LspDaemon {
             resolver.resolve_workspace(file_path, workspace_hint)?
         };
 
-        // Get LSP server config
-        let config = self
-            .registry
-            .get(language)
-            .ok_or_else(|| anyhow!("No LSP server configured for {:?}", language))?
-            .clone();
+        // Ensure workspace is registered with the server for this language
+        let server_instance = self
+            .server_manager
+            .ensure_workspace_registered(language, workspace_root)
+            .await?;
 
-        // Get server from pool (with workspace)
-        let pool = self
-            .pool_manager
-            .get_pool(language, workspace_root, config)
-            .await;
-        let pooled_server = pool.get_server().await?;
+        // Convert relative path to absolute path for LSP server
+        let absolute_file_path = file_path.canonicalize()
+            .with_context(|| format!("Failed to resolve absolute path for {:?}", file_path))?;
 
         // Read file content
         let content = fs::read_to_string(file_path)?;
+        
 
-        // Find pattern position
-        let (line, column) = find_pattern_position(&content, pattern)
-            .ok_or_else(|| anyhow!("Pattern '{}' not found in file", pattern))?;
+        // Lock the server instance to use it
+        let server = server_instance.lock().await;
 
         // Open document
-        pooled_server
+        server
             .server
-            .open_document(file_path, &content)
+            .open_document(&absolute_file_path, &content)
             .await?;
+        
+        // Wait for rust-analyzer to complete its initialization processes
+        // Reduced to 10 seconds as a reasonable default for small projects
+        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+        
+        // Give rust-analyzer some time to process the document and get ready
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-        // Get call hierarchy
-        let result = pooled_server
-            .server
-            .call_hierarchy(file_path, line, column)
-            .await?;
+        // Try call hierarchy with retry logic - allow multiple attempts with shorter wait
+        let max_attempts = 3; // Multiple attempts to handle cases where rust-analyzer needs more time
+        let mut attempt = 1;
+        let mut result = None;
+        
+        while attempt <= max_attempts {
+            // Log attempt to file if enabled
+            if std::env::var("LSP_LOG").is_ok() {
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/lsp-daemon.log")
+                {
+                    use std::io::Write;
+                    writeln!(file, "[{}] [DAEMON] Call hierarchy attempt {} at {}:{}", 
+                        chrono::Local::now().format("%H:%M:%S%.3f"),
+                        attempt, line, column
+                    ).ok();
+                    file.flush().ok();
+                }
+            }
+            let call_result = server
+                .server
+                .call_hierarchy(&absolute_file_path, line, column)
+                .await;
+            
+            match call_result {
+                Ok(response) => {
+                    // Check the response from call_hierarchy method (which has already processed the LSP response)
+                    // The response contains incoming/outgoing arrays or an item with name/uri info
+                    if let Some(item) = response.get("item") {
+                        if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
+                            if name != "unknown" && !name.is_empty() {
+                                result = Some(response);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Also check for any incoming/outgoing calls
+                    if response.get("incoming").and_then(|v| v.as_array()).map_or(false, |arr| !arr.is_empty()) ||
+                       response.get("outgoing").and_then(|v| v.as_array()).map_or(false, |arr| !arr.is_empty()) {
+                        result = Some(response);
+                        break;
+                    }
+                    
+                    result = Some(response); // Keep the last response even if empty
+                }
+                Err(e) => {
+                    if attempt == max_attempts {
+                        return Err(e);
+                    }
+                }
+            }
+            
+            attempt += 1;
+            if attempt <= max_attempts {
+                // Wait between attempts to give rust-analyzer more time
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
+        }
+
+        let result = result.ok_or_else(|| anyhow!("Failed to get call hierarchy response after {} attempts", max_attempts))?;
 
         // Close document
-        pooled_server.server.close_document(file_path).await?;
-
-        // Return server to pool
-        pool.return_server(pooled_server).await;
+        server.server.close_document(&absolute_file_path).await?;
 
         // Parse result
-        parse_call_hierarchy_from_lsp(&result)
+        let parsed_result = parse_call_hierarchy_from_lsp(&result);
+        
+        parsed_result
     }
 
     async fn handle_initialize_workspace(
@@ -369,11 +504,11 @@ impl LspDaemon {
             .ok_or_else(|| anyhow!("No LSP server configured for {:?}", language))?
             .clone();
 
-        // Initialize pool for this workspace
-        let _pool = self
-            .pool_manager
-            .get_pool(language, workspace_root.clone(), config.clone())
-            .await;
+        // Ensure workspace is registered with the server
+        let _server_instance = self
+            .server_manager
+            .ensure_workspace_registered(language, workspace_root.clone())
+            .await?;
 
         Ok((workspace_root, language, config.command))
     }
@@ -431,8 +566,8 @@ impl LspDaemon {
     async fn cleanup(&self) -> Result<()> {
         info!("Cleaning up daemon resources");
 
-        // Shutdown all pools
-        self.pool_manager.shutdown_all().await;
+        // Shutdown all servers
+        self.server_manager.shutdown_all().await;
 
         // Remove socket file (Unix only)
         remove_socket_file(&self.socket_path)?;
@@ -445,7 +580,7 @@ impl LspDaemon {
             socket_path: self.socket_path.clone(),
             registry: self.registry.clone(),
             detector: self.detector.clone(),
-            pool_manager: self.pool_manager.clone(),
+            server_manager: self.server_manager.clone(),
             workspace_resolver: self.workspace_resolver.clone(),
             connections: self.connections.clone(),
             start_time: self.start_time,
@@ -455,15 +590,6 @@ impl LspDaemon {
     }
 }
 
-fn find_pattern_position(content: &str, pattern: &str) -> Option<(u32, u32)> {
-    for (line_idx, line) in content.lines().enumerate() {
-        if let Some(col_idx) = line.find(pattern) {
-            let char_col = line[..col_idx].chars().count() as u32;
-            return Some((line_idx as u32, char_col));
-        }
-    }
-    None
-}
 
 fn find_daemon_binary() -> Result<PathBuf> {
     use crate::socket_path::normalize_executable;

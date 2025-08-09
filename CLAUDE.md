@@ -216,6 +216,61 @@ make install-hooks
 - Use `RUST_BACKTRACE=1` for stack traces
 - Profile with `cargo flamegraph` for performance
 
+### LSP Debugging
+When LSP features aren't working, use these debugging steps:
+
+**CRITICAL: Avoid Rust Build Lock Contention**
+```bash
+# WRONG - This will hang due to build lock conflicts:
+# cargo run -- lsp start -f &
+# cargo run -- lsp status  # <-- This hangs!
+
+# CORRECT - Build first, then use binary:
+cargo build
+./target/debug/probe lsp start -f &
+./target/debug/probe lsp status  # <-- This works!
+
+# OR use the installed binary:
+probe lsp status  # If probe is installed
+```
+
+**1. Enable LSP logging:**
+```bash
+LSP_LOG=1 probe extract file.rs#symbol --lsp
+```
+
+**2. View LSP daemon logs:**
+```bash
+probe lsp logs              # View last 50 lines
+probe lsp logs -n 100       # View specific number of lines
+probe lsp logs -f           # Follow logs in real-time
+probe lsp logs --clear      # Clear log file
+```
+
+**3. Check daemon status:**
+```bash
+probe lsp status            # Show daemon status and server pools
+probe lsp shutdown          # Stop daemon cleanly
+probe lsp restart           # Restart daemon
+```
+
+**4. Common LSP issues:**
+- **No data returned**: Check `/tmp/lsp-daemon.log` for initialization errors
+- **Timeout errors**: Language servers (especially rust-analyzer) can be slow on first run
+- **Connection issues**: Ensure daemon is running with `probe lsp status`
+- **Language server crashes**: Check stderr output in logs for error messages
+
+**5. Debug in foreground mode:**
+```bash
+LSP_LOG=1 probe lsp start -f  # Run daemon in foreground to see all output
+```
+
+The LSP logs are written to `/tmp/lsp-daemon.log` and include:
+- All JSON-RPC messages (>>> TO LSP, <<< FROM LSP)
+- Server lifecycle events (spawn, initialize, shutdown)
+- Error messages from language servers (stderr)
+- Timing information for debugging timeouts
+
 ## Getting Help
 
 1. Search codebase first: `probe search "topic" ./src`

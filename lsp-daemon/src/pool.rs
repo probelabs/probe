@@ -20,6 +20,7 @@ pub struct PooledServer {
     pub server: Arc<LspServer>,
     pub last_used: Instant,
     pub request_count: usize,
+    #[allow(dead_code)]
     pub workspace_root: PathBuf,
 }
 
@@ -263,17 +264,15 @@ impl LspServerPool {
         // Check if server should be recycled
         if server.request_count >= self.max_requests_per_server {
             info!(
-                "Recycling server {} for {:?} after {} requests",
+                "Recycling server {} for {:?} after {} requests (blue-green strategy)",
                 server.id, self.config.language, server.request_count
             );
 
-            // Shutdown old server
-            let _ = server.server.shutdown().await;
-
-            // Spawn replacement in background
+            // Blue-Green Deployment: Spawn replacement FIRST, then shutdown old server
             let config = self.config.clone();
             let ready = self.ready.clone();
             let workspace_root = self.workspace_root.clone();
+            let old_server = server; // Keep reference to old server
 
             tokio::spawn(async move {
                 match Self::spawn_server_with_workspace(&config, &workspace_root).await {
@@ -285,10 +284,22 @@ impl LspServerPool {
                             request_count: 0,
                             workspace_root: workspace_root.clone(),
                         };
+                        
+                        // Add new server to pool FIRST (Blue-Green: new server is online)
                         ready.lock().await.push_back(pooled);
+                        
+                        // THEN shutdown old server gracefully (Green server going offline)
+                        if let Err(e) = old_server.server.shutdown().await {
+                            warn!("Error shutting down old server {}: {}", old_server.id, e);
+                        } else {
+                            info!("Successfully replaced server {} with new server", old_server.id);
+                        }
                     }
                     Err(e) => {
                         warn!("Failed to spawn replacement server: {}", e);
+                        // Fallback: Keep old server running if replacement fails
+                        warn!("Keeping old server {} running due to replacement failure", old_server.id);
+                        ready.lock().await.push_back(old_server);
                     }
                 }
             });

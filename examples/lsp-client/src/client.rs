@@ -99,7 +99,7 @@ impl LspClient {
 
         // Read response with timeout
         let mut buffer = vec![0; 65536];
-        let n = timeout(Duration::from_secs(30), stream.read(&mut buffer)).await??;
+        let n = timeout(Duration::from_secs(90), stream.read(&mut buffer)).await??; // Increased for rust-analyzer
 
         if n == 0 {
             return Err(anyhow!("Connection closed by daemon"));
@@ -199,6 +199,7 @@ pub struct DirectLspClient;
 
 impl DirectLspClient {
     pub async fn call_hierarchy(file_path: &Path, pattern: &str) -> Result<CallHierarchyResult> {
+        eprintln!("DirectLspClient::call_hierarchy called with file: {:?}, pattern: {}", file_path, pattern);
         use lsp_daemon::lsp_registry::LspRegistry;
         use lsp_daemon::lsp_server::LspServer;
         use lsp_daemon::parse_call_hierarchy_from_lsp;
@@ -221,8 +222,9 @@ impl DirectLspClient {
 
         // Spawn and initialize server
         let mut server = LspServer::spawn(config)?;
+        eprintln!("About to call initialize...");
         server.initialize(config).await?;
-        server.wait_until_ready().await?;
+        eprintln!("Initialization complete, proceeding immediately with call hierarchy...");
 
         // Read file content
         let content = fs::read_to_string(file_path)?;
@@ -231,11 +233,15 @@ impl DirectLspClient {
         let (line, column) = find_pattern_position(&content, pattern)
             .ok_or_else(|| anyhow!("Pattern '{}' not found in file", pattern))?;
 
+        eprintln!("Found pattern '{}' at line {}, column {}", pattern, line, column);
+
         // Open document
         server.open_document(file_path, &content).await?;
+        eprintln!("Document opened, requesting call hierarchy...");
 
         // Get call hierarchy
         let result = server.call_hierarchy(file_path, line, column).await?;
+        eprintln!("Call hierarchy received!");
 
         // Close document and shutdown
         server.close_document(file_path).await?;

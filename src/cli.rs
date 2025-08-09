@@ -1,5 +1,6 @@
 use clap::{Parser as ClapParser, Subcommand};
 use std::path::PathBuf;
+use probe_code::lsp_integration::LspSubcommands;
 
 #[derive(ClapParser, Debug)]
 #[command(
@@ -95,6 +96,7 @@ pub struct Args {
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
+
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -267,6 +269,10 @@ pub enum Commands {
         /// User instructions for LLM models
         #[arg(long = "instructions")]
         instructions: Option<String>,
+
+        /// Enable LSP integration for call hierarchy and reference graphs
+        #[arg(long = "lsp")]
+        lsp: bool,
     },
 
     /// Search code using AST patterns for precise structural matching
@@ -358,5 +364,15 @@ pub enum Commands {
         /// Run only fast benchmarks (shorter duration)
         #[arg(long = "fast")]
         fast: bool,
+    },
+
+    /// Manage LSP daemon and language servers
+    ///
+    /// This command provides tools for managing the LSP daemon that powers
+    /// call hierarchy and reference graph features. Use it to check daemon status,
+    /// restart servers, or troubleshoot LSP integration issues.
+    Lsp {
+        #[command(subcommand)]
+        subcommand: LspSubcommands,
     },
 }

@@ -24,7 +24,8 @@ pub enum DaemonRequest {
     CallHierarchy {
         request_id: Uuid,
         file_path: PathBuf,
-        pattern: String,
+        line: u32,
+        column: u32,
         #[serde(skip_serializing_if = "Option::is_none")]
         workspace_hint: Option<PathBuf>,
     },
@@ -219,6 +220,12 @@ pub struct DaemonStatus {
     pub pools: Vec<PoolStatus>,
     pub total_requests: u64,
     pub active_connections: usize,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub git_hash: String,
+    #[serde(default)]
+    pub build_date: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,6 +234,12 @@ pub struct PoolStatus {
     pub ready_servers: usize,
     pub busy_servers: usize,
     pub total_servers: usize,
+    #[serde(default)]
+    pub workspaces: Vec<String>,
+    #[serde(default)]
+    pub uptime_secs: u64,
+    #[serde(default)]
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,9 +328,30 @@ impl MessageCodec {
 
 // Helper function to convert from serde_json::Value to our types
 pub fn parse_call_hierarchy_from_lsp(value: &Value) -> Result<CallHierarchyResult> {
-    let item = value
-        .get("item")
-        .ok_or_else(|| anyhow::anyhow!("Missing item in call hierarchy"))?;
+    // Handle case where rust-analyzer returns empty call hierarchy (no item)
+    let item = match value.get("item") {
+        Some(item) => item,
+        None => {
+            // Return empty call hierarchy result
+            return Ok(CallHierarchyResult {
+                item: CallHierarchyItem {
+                    name: "unknown".to_string(),
+                    kind: "unknown".to_string(),
+                    uri: "".to_string(),
+                    range: Range {
+                        start: Position { line: 0, character: 0 },
+                        end: Position { line: 0, character: 0 },
+                    },
+                    selection_range: Range {
+                        start: Position { line: 0, character: 0 },
+                        end: Position { line: 0, character: 0 },
+                    },
+                },
+                incoming: vec![],
+                outgoing: vec![],
+            });
+        }
+    };
 
     let incoming = value
         .get("incoming")
@@ -369,9 +403,12 @@ fn parse_call_hierarchy_item(value: &Value) -> Result<CallHierarchyItem> {
 }
 
 fn parse_call_hierarchy_call(value: &Value) -> Result<CallHierarchyCall> {
+    // For incoming calls, use "from" field
+    // For outgoing calls, use "to" field (rename it to "from" for consistency)
     let from = value
         .get("from")
-        .ok_or_else(|| anyhow::anyhow!("Missing 'from' in call"))?;
+        .or_else(|| value.get("to"))
+        .ok_or_else(|| anyhow::anyhow!("Missing 'from' or 'to' in call"))?;
 
     let from_ranges = value
         .get("fromRanges")

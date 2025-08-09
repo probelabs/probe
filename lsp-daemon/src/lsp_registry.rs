@@ -64,9 +64,29 @@ impl LspRegistry {
             language: Language::Rust,
             command: "rust-analyzer".to_string(),
             args: vec![],
-            initialization_options: None,
+            initialization_options: Some(serde_json::json!({
+                "cargo": {
+                    "buildScripts": { "enable": true }
+                },
+                "procMacro": { "enable": true },
+                // Optimizations to prevent indexing from getting stuck
+                "checkOnSave": {
+                    "enable": false  // Disable cargo check on save to reduce load
+                },
+                "completion": {
+                    "limit": 25  // Limit completion results
+                },
+                "workspace": {
+                    "symbol": {
+                        "search": {
+                            "limit": 128,  // Limit symbol search results
+                            "kind": "only_types"  // Focus on types for better performance
+                        }
+                    }
+                }
+            })),
             root_markers: vec!["Cargo.toml".to_string()],
-            initialization_timeout_secs: 30,
+            initialization_timeout_secs: 10, // Reduced from 300s to 10s
         });
 
         // TypeScript/JavaScript
