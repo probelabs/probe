@@ -1553,9 +1553,12 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // Add LSP enrichment if enabled
     if options.lsp && !final_results.results.is_empty() {
         if debug_mode {
-            println!("DEBUG: Starting LSP enrichment for {} results", final_results.results.len());
+            println!(
+                "DEBUG: Starting LSP enrichment for {} results",
+                final_results.results.len()
+            );
         }
-        
+
         // Enrich results with LSP information
         if let Err(e) = crate::search::lsp_enrichment::enrich_results_with_lsp(
             &mut final_results.results,
@@ -1567,11 +1570,16 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             // Continue even if LSP enrichment fails
         } else if debug_mode {
             // Debug: check how many results have LSP info after enrichment
-            let enriched_count = final_results.results.iter()
+            let enriched_count = final_results
+                .results
+                .iter()
                 .filter(|r| r.lsp_info.is_some())
                 .count();
-            println!("DEBUG: After enrichment, {}/{} results have LSP info", 
-                enriched_count, final_results.results.len());
+            println!(
+                "DEBUG: After enrichment, {}/{} results have LSP info",
+                enriched_count,
+                final_results.results.len()
+            );
         }
     }
 
@@ -1585,11 +1593,16 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     timeout_handle.store(true, std::sync::atomic::Ordering::SeqCst);
 
     if debug_mode && options.lsp {
-        let enriched_count = final_results.results.iter()
+        let enriched_count = final_results
+            .results
+            .iter()
             .filter(|r| r.lsp_info.is_some())
             .count();
-        println!("DEBUG: Returning {} results, {} with LSP info", 
-            final_results.results.len(), enriched_count);
+        println!(
+            "DEBUG: Returning {} results, {} with LSP info",
+            final_results.results.len(),
+            enriched_count
+        );
     }
 
     Ok(final_results)

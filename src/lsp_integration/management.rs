@@ -517,7 +517,10 @@ impl LspManager {
         if !foreground {
             match lsp_daemon::ipc::IpcStream::connect(&socket_path).await {
                 Ok(_stream) => {
-                    eprintln!("❌ LSP daemon is already running on socket: {}", socket_path);
+                    eprintln!(
+                        "❌ LSP daemon is already running on socket: {}",
+                        socket_path
+                    );
                     eprintln!("   Use 'probe lsp status' to check the current daemon");
                     eprintln!("   Use 'probe lsp shutdown' to stop the current daemon");
                     eprintln!("   Use 'probe lsp restart' to restart the daemon");
@@ -554,25 +557,36 @@ impl LspManager {
         } else {
             // For background mode, fork a new process
             use std::process::{Command, Stdio};
-            
+
             // Get the current executable path
             let exe_path = std::env::current_exe()?;
-            
+
             // Fork the daemon as a separate process
             let child = Command::new(&exe_path)
-                .args(&["lsp", "start", "-f", "--socket", &socket_path, "--log-level", &log_level])
+                .args(&[
+                    "lsp",
+                    "start",
+                    "-f",
+                    "--socket",
+                    &socket_path,
+                    "--log-level",
+                    &log_level,
+                ])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()?;
-            
-            println!("✓ LSP daemon started in background mode (PID: {})", child.id());
+
+            println!(
+                "✓ LSP daemon started in background mode (PID: {})",
+                child.id()
+            );
             println!("   Use 'probe lsp status' to check daemon status");
             println!("   Use 'probe lsp logs' to view daemon logs");
-            
+
             // Wait a moment to ensure daemon starts
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            
+
             // Verify daemon is running
             match lsp_daemon::ipc::IpcStream::connect(&socket_path).await {
                 Ok(_) => {

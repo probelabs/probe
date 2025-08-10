@@ -78,49 +78,81 @@ pub fn format_and_print_search_results(
                         println!("{code}", code = result.code);
                         println!("```");
                     }
-                    
+
                     // Display LSP information if available (for both full file and partial results)
                     if let Some(lsp_info) = &result.lsp_info {
                         if let Some(obj) = lsp_info.as_object() {
                             println!("LSP Information:");
-                            
+
                             // Display call hierarchy if available
-                            if let Some(call_hierarchy) = obj.get("call_hierarchy").and_then(|v| v.as_object()) {
+                            if let Some(call_hierarchy) =
+                                obj.get("call_hierarchy").and_then(|v| v.as_object())
+                            {
                                 // Incoming calls
-                                if let Some(incoming) = call_hierarchy.get("incoming_calls").and_then(|v| v.as_array()) {
+                                if let Some(incoming) = call_hierarchy
+                                    .get("incoming_calls")
+                                    .and_then(|v| v.as_array())
+                                {
                                     if !incoming.is_empty() {
                                         println!("  Incoming Calls:");
                                         for call in incoming {
                                             if let Some(call_obj) = call.as_object() {
-                                                let name = call_obj.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                                let file_path = call_obj.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
-                                                let line = call_obj.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
-                                                let file_path = file_path.strip_prefix("file://").unwrap_or(file_path);
+                                                let name = call_obj
+                                                    .get("name")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("unknown");
+                                                let file_path = call_obj
+                                                    .get("file_path")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("");
+                                                let line = call_obj
+                                                    .get("line")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0);
+                                                let file_path = file_path
+                                                    .strip_prefix("file://")
+                                                    .unwrap_or(file_path);
                                                 println!("    - {} ({}:{})", name, file_path, line);
                                             }
                                         }
                                     }
                                 }
-                                
+
                                 // Outgoing calls
-                                if let Some(outgoing) = call_hierarchy.get("outgoing_calls").and_then(|v| v.as_array()) {
+                                if let Some(outgoing) = call_hierarchy
+                                    .get("outgoing_calls")
+                                    .and_then(|v| v.as_array())
+                                {
                                     if !outgoing.is_empty() {
                                         println!("  Outgoing Calls:");
                                         for call in outgoing {
                                             if let Some(call_obj) = call.as_object() {
-                                                let name = call_obj.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                                let file_path = call_obj.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
-                                                let line = call_obj.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
-                                                let file_path = file_path.strip_prefix("file://").unwrap_or(file_path);
+                                                let name = call_obj
+                                                    .get("name")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("unknown");
+                                                let file_path = call_obj
+                                                    .get("file_path")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("");
+                                                let line = call_obj
+                                                    .get("line")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0);
+                                                let file_path = file_path
+                                                    .strip_prefix("file://")
+                                                    .unwrap_or(file_path);
                                                 println!("    - {} ({}:{})", name, file_path, line);
                                             }
                                         }
                                     }
                                 }
                             }
-                            
+
                             // Display references count if available
-                            if let Some(refs_count) = obj.get("references_count").and_then(|v| v.as_u64()) {
+                            if let Some(refs_count) =
+                                obj.get("references_count").and_then(|v| v.as_u64())
+                            {
                                 if refs_count > 0 {
                                     println!("  References: {}", refs_count);
                                 }
@@ -450,49 +482,72 @@ fn format_and_print_color_results(
             // Parse the JSON structure directly
             if let Some(obj) = lsp_info.as_object() {
                 println!("{}", "LSP Information:".bold().blue());
-                
+
                 // Display call hierarchy if available
-                if let Some(call_hierarchy) = obj.get("call_hierarchy").and_then(|v| v.as_object()) {
+                if let Some(call_hierarchy) = obj.get("call_hierarchy").and_then(|v| v.as_object())
+                {
                     // Incoming calls
-                    if let Some(incoming) = call_hierarchy.get("incoming_calls").and_then(|v| v.as_array()) {
+                    if let Some(incoming) = call_hierarchy
+                        .get("incoming_calls")
+                        .and_then(|v| v.as_array())
+                    {
                         if !incoming.is_empty() {
                             println!("  {}", "Incoming Calls:".bold());
                             for call in incoming {
                                 if let Some(call_obj) = call.as_object() {
-                                    let name = call_obj.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                    let file_path = call_obj.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
-                                    let line = call_obj.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let file_path = file_path.strip_prefix("file://").unwrap_or(file_path);
+                                    let name = call_obj
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown");
+                                    let file_path = call_obj
+                                        .get("file_path")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    let line =
+                                        call_obj.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    let file_path =
+                                        file_path.strip_prefix("file://").unwrap_or(file_path);
                                     println!("    - {} ({}:{})", name, file_path, line);
                                 }
                             }
                         }
                     }
-                    
+
                     // Outgoing calls
-                    if let Some(outgoing) = call_hierarchy.get("outgoing_calls").and_then(|v| v.as_array()) {
+                    if let Some(outgoing) = call_hierarchy
+                        .get("outgoing_calls")
+                        .and_then(|v| v.as_array())
+                    {
                         if !outgoing.is_empty() {
                             println!("  {}", "Outgoing Calls:".bold());
                             for call in outgoing {
                                 if let Some(call_obj) = call.as_object() {
-                                    let name = call_obj.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                    let file_path = call_obj.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
-                                    let line = call_obj.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let file_path = file_path.strip_prefix("file://").unwrap_or(file_path);
+                                    let name = call_obj
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown");
+                                    let file_path = call_obj
+                                        .get("file_path")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    let line =
+                                        call_obj.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    let file_path =
+                                        file_path.strip_prefix("file://").unwrap_or(file_path);
                                     println!("    - {} ({}:{})", name, file_path, line);
                                 }
                             }
                         }
                     }
                 }
-                
+
                 // Display references count if available
                 if let Some(refs_count) = obj.get("references_count").and_then(|v| v.as_u64()) {
                     if refs_count > 0 {
                         println!("  {}: {}", "References".bold(), refs_count);
                     }
                 }
-                
+
                 println!();
             }
         }
@@ -625,9 +680,15 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
         .map(|r| {
             if std::env::var("DEBUG").is_ok() {
                 if r.lsp_info.is_some() {
-                    eprintln!("DEBUG format_json: Result has LSP info for file {} at lines {:?}", r.file, r.lines);
+                    eprintln!(
+                        "DEBUG format_json: Result has LSP info for file {} at lines {:?}",
+                        r.file, r.lines
+                    );
                 } else {
-                    eprintln!("DEBUG format_json: Result has NO LSP info for file {} at lines {:?}", r.file, r.lines);
+                    eprintln!(
+                        "DEBUG format_json: Result has NO LSP info for file {} at lines {:?}",
+                        r.file, r.lines
+                    );
                 }
             }
             JsonResult {
