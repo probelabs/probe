@@ -5,7 +5,9 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration, Instant};
 use tracing::{debug, info, warn};
@@ -18,6 +20,8 @@ pub struct LspServer {
     request_id: Arc<Mutex<i64>>,
     project_root: Option<PathBuf>,
     initialized: bool,
+    stderr_thread: Arc<Mutex<Option<JoinHandle<()>>>>,
+    stderr_shutdown: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for LspServer {
@@ -76,12 +80,20 @@ impl LspServer {
             .take()
             .ok_or_else(|| anyhow!("Failed to get stdout"))?;
 
-        // Spawn a thread to log stderr output (using std thread since ChildStderr isn't async)
-        if let Some(stderr) = child.stderr.take() {
-            std::thread::spawn(move || {
+        // Track stderr thread and shutdown flag
+        let stderr_shutdown = Arc::new(AtomicBool::new(false));
+        let stderr_thread = if let Some(stderr) = child.stderr.take() {
+            let shutdown_flag = stderr_shutdown.clone();
+            Some(std::thread::spawn(move || {
                 use std::io::{BufRead, BufReader};
                 let reader = BufReader::new(stderr);
                 for line in reader.lines() {
+                    // Check if we should shutdown
+                    if shutdown_flag.load(Ordering::Relaxed) {
+                        tracing::debug!(target: "lsp_stderr", "Stderr thread shutting down gracefully");
+                        break;
+                    }
+
                     match line {
                         Ok(line) => {
                             // Log stderr output using tracing
@@ -94,8 +106,11 @@ impl LspServer {
                         }
                     }
                 }
-            });
-        }
+                tracing::debug!(target: "lsp_stderr", "Stderr reading thread terminated");
+            }))
+        } else {
+            None
+        };
 
         Ok(Self {
             child: Arc::new(Mutex::new(Some(child))),
@@ -106,6 +121,8 @@ impl LspServer {
             request_id: Arc::new(Mutex::new(1)),
             project_root: None,
             initialized: false,
+            stderr_thread: Arc::new(Mutex::new(stderr_thread)),
+            stderr_shutdown,
         })
     }
 
@@ -885,24 +902,42 @@ impl LspServer {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
+        tracing::debug!("Starting LSP server shutdown");
+
         let mut child_opt = self.child.lock().await;
         if let Some(ref mut child) = *child_opt {
             // Try graceful shutdown first
             let request_id = self.next_request_id().await;
-            if self
-                .send_request("shutdown", json!(null), request_id)
-                .await
-                .is_ok()
-            {
-                // Wait briefly for shutdown response
-                let _ = tokio::time::timeout(
-                    Duration::from_secs(1),
-                    self.wait_for_response(request_id, Duration::from_secs(1)),
-                )
-                .await;
+            match self.send_request("shutdown", json!(null), request_id).await {
+                Ok(_) => {
+                    // Wait briefly for shutdown response
+                    match tokio::time::timeout(
+                        Duration::from_secs(1),
+                        self.wait_for_response(request_id, Duration::from_secs(1)),
+                    )
+                    .await
+                    {
+                        Ok(response_result) => match response_result {
+                            Ok(_) => tracing::debug!("LSP shutdown response received"),
+                            Err(e) => {
+                                tracing::warn!("LSP shutdown response error (continuing): {}", e)
+                            }
+                        },
+                        Err(_) => {
+                            tracing::warn!("Timeout waiting for LSP shutdown response (continuing)")
+                        }
+                    }
 
-                // Send exit notification
-                let _ = self.send_notification("exit", json!(null)).await;
+                    // Send exit notification
+                    if let Err(e) = self.send_notification("exit", json!(null)).await {
+                        tracing::warn!("Failed to send exit notification to LSP server: {}", e);
+                    } else {
+                        tracing::debug!("Exit notification sent to LSP server");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to send shutdown request to LSP server: {}", e);
+                }
             }
 
             // Give the process a moment to shut down gracefully
@@ -911,27 +946,73 @@ impl LspServer {
             // Force kill if still running
             match child.try_wait() {
                 Ok(Some(_status)) => {
-                    // Process exited gracefully
+                    tracing::debug!("LSP process exited gracefully");
                 }
                 Ok(None) => {
-                    if let Err(_e) = child.kill() {
-                        // Failed to kill process
+                    tracing::warn!("LSP process did not exit gracefully, force killing");
+                    if let Err(e) = child.kill() {
+                        tracing::error!("Failed to kill LSP process: {}", e);
                     } else {
                         // Wait for process to actually die
-                        let _ = tokio::time::timeout(Duration::from_secs(2), async {
-                            let _ = child.wait();
+                        match tokio::time::timeout(Duration::from_secs(2), async {
+                            match child.wait() {
+                                Ok(status) => {
+                                    tracing::debug!("LSP process killed with status: {}", status);
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    tracing::error!("Error waiting for LSP process death: {}", e);
+                                    Err(e)
+                                }
+                            }
                         })
-                        .await;
+                        .await
+                        {
+                            Ok(wait_result) => {
+                                if wait_result.is_err() {
+                                    tracing::warn!(
+                                        "LSP process may still be running after kill attempt"
+                                    );
+                                }
+                            }
+                            Err(_timeout) => {
+                                tracing::warn!("Timeout waiting for LSP process to die after kill - process may still be running");
+                            }
+                        }
                     }
                 }
-                Err(_e) => {
-                    // Error checking process status
+                Err(e) => {
+                    tracing::error!("Error checking LSP process status: {}", e);
                 }
             }
 
             // Ensure child is dropped
             *child_opt = None;
         }
+
+        // Signal stderr thread to shutdown
+        self.stderr_shutdown.store(true, Ordering::Relaxed);
+
+        // Wait for stderr thread to finish (with timeout to avoid hanging)
+        let mut stderr_handle_guard = self.stderr_thread.lock().await;
+        if let Some(handle) = stderr_handle_guard.take() {
+            drop(stderr_handle_guard); // Release lock before blocking operation
+
+            tracing::debug!("Waiting for stderr thread to finish");
+            let handle_result = tokio::task::spawn_blocking(move || match handle.join() {
+                Ok(_) => tracing::debug!("Stderr thread joined successfully"),
+                Err(e) => tracing::error!("Error joining stderr thread: {:?}", e),
+            });
+
+            // Wait with timeout to prevent hanging
+            if (tokio::time::timeout(Duration::from_secs(3), handle_result).await).is_err() {
+                tracing::warn!("Timeout waiting for stderr thread to finish");
+            }
+        } else {
+            tracing::debug!("No stderr thread to cleanup (already cleaned up or never started)");
+        }
+
+        tracing::debug!("LSP server shutdown complete");
         Ok(())
     }
 
@@ -958,5 +1039,79 @@ impl LspServer {
             Some("zig") => "zig",
             _ => "plaintext",
         }
+    }
+}
+
+impl Drop for LspServer {
+    fn drop(&mut self) {
+        tracing::debug!("LspServer Drop implementation called");
+
+        // Signal stderr thread to shutdown immediately - this is atomic and safe
+        self.stderr_shutdown.store(true, Ordering::Relaxed);
+
+        // Try to get stderr thread handle without blocking
+        if let Ok(mut stderr_handle_guard) = self.stderr_thread.try_lock() {
+            if let Some(handle) = stderr_handle_guard.take() {
+                drop(stderr_handle_guard); // Release lock before potentially blocking operation
+
+                // Spawn cleanup thread to avoid blocking Drop
+                if let Err(e) = std::thread::Builder::new()
+                    .name("lsp-stderr-cleanup".to_string())
+                    .spawn(move || match handle.join() {
+                        Ok(_) => tracing::debug!("Stderr thread cleaned up in Drop"),
+                        Err(e) => tracing::error!("Error joining stderr thread in Drop: {:?}", e),
+                    })
+                {
+                    tracing::error!("Failed to spawn stderr cleanup thread: {}", e);
+                }
+            } else {
+                tracing::debug!("No stderr thread handle to cleanup (already cleaned up)");
+            }
+        } else {
+            tracing::warn!(
+                "Could not acquire stderr thread lock in Drop, thread may still be running"
+            );
+        }
+
+        // Try to cleanup child process without blocking
+        if let Ok(mut child_opt) = self.child.try_lock() {
+            if let Some(mut child) = child_opt.take() {
+                tracing::debug!("Forcefully killing child process in Drop");
+                match child.kill() {
+                    Ok(_) => {
+                        tracing::debug!("Child process killed successfully in Drop");
+
+                        // Best effort wait - don't block Drop indefinitely
+                        if let Err(e) = std::thread::Builder::new()
+                            .name("lsp-child-cleanup".to_string())
+                            .spawn(move || match child.wait() {
+                                Ok(status) => tracing::debug!(
+                                    "Child process wait completed with status: {}",
+                                    status
+                                ),
+                                Err(e) => tracing::error!("Error waiting for child process: {}", e),
+                            })
+                        {
+                            tracing::error!("Failed to spawn child cleanup thread: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        // Child might already be dead, or we don't have permission
+                        tracing::warn!(
+                            "Failed to kill child process in Drop (may already be dead): {}",
+                            e
+                        );
+                    }
+                }
+            } else {
+                tracing::debug!("No child process to cleanup (already cleaned up)");
+            }
+        } else {
+            tracing::warn!(
+                "Could not acquire child process lock in Drop, process may still be running"
+            );
+        }
+
+        tracing::debug!("LspServer Drop implementation complete - resources cleanup initiated");
     }
 }

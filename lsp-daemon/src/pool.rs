@@ -203,41 +203,49 @@ impl LspServerPool {
         // Check if we can spawn a new server
         if self.busy.len() < self.max_size {
             // Try to set the spawning flag
-            if self
-                .is_spawning
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                info!(
-                    "No ready servers for {:?}, spawning new one",
-                    self.config.language
-                );
+            match self.is_spawning.compare_exchange(
+                false,
+                true,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    info!(
+                        "No ready servers for {:?}, spawning new one",
+                        self.config.language
+                    );
 
-                // Acquire semaphore permit
-                let _permit = self.semaphore.acquire().await?;
+                    // Acquire semaphore permit
+                    let _permit = self.semaphore.acquire().await?;
 
-                let server_result =
-                    Self::spawn_server_with_workspace(&self.config, &self.workspace_root).await;
+                    let server_result =
+                        Self::spawn_server_with_workspace(&self.config, &self.workspace_root).await;
 
-                // Always clear the spawning flag
-                self.is_spawning.store(false, Ordering::Release);
+                    // Always clear the spawning flag
+                    self.is_spawning.store(false, Ordering::Release);
 
-                let server = server_result?;
-                let pooled = PooledServer {
-                    id: Uuid::new_v4(),
-                    server: Arc::new(server),
-                    last_used: Instant::now(),
-                    request_count: 0,
-                    workspace_root: self.workspace_root.clone(),
-                };
+                    let server = server_result?;
+                    let pooled = PooledServer {
+                        id: Uuid::new_v4(),
+                        server: Arc::new(server),
+                        last_used: Instant::now(),
+                        request_count: 0,
+                        workspace_root: self.workspace_root.clone(),
+                    };
 
-                let pooled_copy = pooled.clone();
-                self.busy.insert(pooled.id, pooled_copy);
+                    let pooled_copy = pooled.clone();
+                    self.busy.insert(pooled.id, pooled_copy);
 
-                return Ok(pooled);
-            } else {
-                // Another thread is spawning, wait for it
-                return Box::pin(self.get_server()).await;
+                    return Ok(pooled);
+                }
+                Err(_) => {
+                    // Another thread is already spawning, wait for it
+                    tracing::debug!(
+                        "Another thread is spawning server for {:?}, waiting for it",
+                        self.config.language
+                    );
+                    return Box::pin(self.get_server()).await;
+                }
             }
         }
 
@@ -325,7 +333,18 @@ impl LspServerPool {
         // Shutdown all ready servers
         let mut ready = self.ready.lock().await;
         while let Some(server) = ready.pop_front() {
-            let _ = server.server.shutdown().await;
+            if let Err(e) = server.server.shutdown().await {
+                tracing::warn!(
+                    "Error shutting down pooled server for {:?}: {}",
+                    self.config.language,
+                    e
+                );
+            } else {
+                tracing::debug!(
+                    "Successfully shut down pooled server for {:?}",
+                    self.config.language
+                );
+            }
         }
 
         // Note: Busy servers will be shut down when returned

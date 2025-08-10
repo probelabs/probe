@@ -13,6 +13,7 @@ use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -28,6 +29,7 @@ pub struct LspDaemon {
     server_manager: Arc<SingleServerManager>,
     workspace_resolver: Arc<tokio::sync::Mutex<WorkspaceResolver>>,
     connections: Arc<DashMap<Uuid, Instant>>,
+    connection_count: Arc<AtomicUsize>,
     start_time: Instant,
     request_count: Arc<RwLock<u64>>,
     shutdown: Arc<RwLock<bool>>,
@@ -61,25 +63,51 @@ impl LspDaemon {
         use tracing_subscriber::EnvFilter;
 
         // Always use a filter to ensure INFO level is captured
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|e| {
+            // Log the filter parsing error but continue with default
+            eprintln!("Warning: Failed to parse tracing filter from environment: {e}. Using default 'info' level.");
+            EnvFilter::new("info")
+        });
 
         let subscriber = tracing_subscriber::registry()
             .with(memory_layer)
             .with(filter);
 
         // If LSP_LOG is set, also add stderr logging
-        if std::env::var("LSP_LOG").is_ok() {
-            use tracing_subscriber::fmt;
+        match std::env::var("LSP_LOG") {
+            Ok(_) => {
+                use tracing_subscriber::fmt;
 
-            let fmt_layer = fmt::layer().with_target(false).with_writer(std::io::stderr);
+                let fmt_layer = fmt::layer().with_target(false).with_writer(std::io::stderr);
 
-            if tracing::subscriber::set_global_default(subscriber.with(fmt_layer)).is_ok() {
-                tracing::info!("Tracing initialized with memory and stderr logging");
+                match tracing::subscriber::set_global_default(subscriber.with(fmt_layer)) {
+                    Ok(()) => tracing::info!("Tracing initialized with memory and stderr logging"),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to set global tracing subscriber with stderr: {e}. Falling back to memory-only logging.");
+                        let fallback_memory_layer = MemoryLogLayer::new(log_buffer.clone());
+                        if let Err(fallback_err) = tracing::subscriber::set_global_default(
+                            tracing_subscriber::registry()
+                                .with(fallback_memory_layer)
+                                .with(EnvFilter::new("info")),
+                        ) {
+                            eprintln!("Error: Failed to set fallback tracing subscriber: {fallback_err}. Logging may not work properly.");
+                        } else {
+                            tracing::info!(
+                                "Tracing initialized with memory logging layer (fallback)"
+                            );
+                        }
+                    }
+                }
             }
-        } else {
-            // Memory logging only
-            if tracing::subscriber::set_global_default(subscriber).is_ok() {
-                tracing::info!("Tracing initialized with memory logging layer");
+            Err(_) => {
+                // Memory logging only
+                match tracing::subscriber::set_global_default(subscriber) {
+                    Ok(()) => tracing::info!("Tracing initialized with memory logging layer"),
+                    Err(e) => {
+                        eprintln!("Error: Failed to set global tracing subscriber: {e}. Logging may not work properly.");
+                        // Continue execution despite logging setup failure
+                    }
+                }
             }
         }
 
@@ -90,6 +118,7 @@ impl LspDaemon {
             server_manager,
             workspace_resolver,
             connections: Arc::new(DashMap::new()),
+            connection_count: Arc::new(AtomicUsize::new(0)),
             start_time: Instant::now(),
             request_count: Arc::new(RwLock::new(0)),
             shutdown: Arc::new(RwLock::new(false)),
@@ -143,20 +172,6 @@ impl LspDaemon {
 
             match listener.accept().await {
                 Ok(stream) => {
-                    // Check if we've reached the connection limit
-                    const MAX_CONNECTIONS: usize = 100; // Reasonable limit for concurrent connections
-
-                    let current_connections = self.connections.len();
-                    if current_connections >= MAX_CONNECTIONS {
-                        warn!(
-                            "Maximum connection limit reached ({}/{}), rejecting new connection",
-                            current_connections, MAX_CONNECTIONS
-                        );
-                        // Drop the stream to close the connection
-                        drop(stream);
-                        continue;
-                    }
-
                     let daemon = self.clone_refs();
                     tokio::spawn(async move {
                         if let Err(e) = daemon.handle_client(stream).await {
@@ -178,12 +193,36 @@ impl LspDaemon {
     async fn handle_client(&self, mut stream: IpcStream) -> Result<()> {
         // Maximum message size: 10MB (reasonable for LSP messages)
         const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+        const MAX_CONNECTIONS: usize = 100; // Reasonable limit for concurrent connections
 
         let client_id = Uuid::new_v4();
-        info!("New client connected: {}", client_id);
 
-        // Store connection timestamp
+        // Atomically check connection limit and increment counter
+        // This prevents race conditions where multiple connections could exceed the limit
+        let current_count = self.connection_count.fetch_add(1, Ordering::AcqRel);
+
+        if current_count >= MAX_CONNECTIONS {
+            // We've exceeded the limit, decrement counter and reject
+            self.connection_count.fetch_sub(1, Ordering::AcqRel);
+            warn!(
+                "Maximum connection limit reached ({}/{}), rejecting new connection {}",
+                current_count, MAX_CONNECTIONS, client_id
+            );
+            // Close the stream immediately to reject the connection
+            drop(stream);
+            return Err(anyhow::anyhow!(
+                "Connection rejected: maximum connection limit of {} reached",
+                MAX_CONNECTIONS
+            ));
+        }
+
+        // Connection accepted, store it in the connections map
         self.connections.insert(client_id, Instant::now());
+        info!(
+            "New client connected: {} (active connections: {})",
+            client_id,
+            current_count + 1
+        );
 
         let mut buffer = vec![0; 65536]; // 64KB initial buffer
 
@@ -193,6 +232,7 @@ impl LspDaemon {
             if n == 0 {
                 // Connection closed - clean up
                 self.connections.remove(&client_id);
+                self.connection_count.fetch_sub(1, Ordering::AcqRel);
                 info!("Client disconnected: {}", client_id);
                 break;
             }
@@ -206,6 +246,7 @@ impl LspDaemon {
                     client_id, msg_len, MAX_MESSAGE_SIZE
                 );
                 self.connections.remove(&client_id);
+                self.connection_count.fetch_sub(1, Ordering::AcqRel);
                 return Err(anyhow::anyhow!(
                     "Message size {} exceeds maximum allowed size of {} bytes",
                     msg_len,
@@ -221,6 +262,7 @@ impl LspDaemon {
             // Read with error handling that cleans up connection
             if let Err(e) = stream.read_exact(&mut buffer[4..4 + msg_len]).await {
                 self.connections.remove(&client_id);
+                self.connection_count.fetch_sub(1, Ordering::AcqRel);
                 error!(
                     "Failed to read message body from client {}: {}",
                     client_id, e
@@ -233,6 +275,7 @@ impl LspDaemon {
                 Ok(req) => req,
                 Err(e) => {
                     self.connections.remove(&client_id);
+                    self.connection_count.fetch_sub(1, Ordering::AcqRel);
                     error!("Failed to decode request from client {}: {}", client_id, e);
                     return Err(e);
                 }
@@ -277,6 +320,7 @@ impl LspDaemon {
 
         // Remove connection
         self.connections.remove(&client_id);
+        self.connection_count.fetch_sub(1, Ordering::AcqRel);
         info!("Client disconnected: {}", client_id);
 
         Ok(())
@@ -353,7 +397,7 @@ impl LspDaemon {
                 // Calculate health metrics
                 let uptime_seconds = self.start_time.elapsed().as_secs();
                 let total_requests = *self.request_count.read().await as usize;
-                let active_connections = self.connections.len();
+                let active_connections = self.connection_count.load(Ordering::Acquire);
                 let active_servers = self.server_manager.get_active_server_count().await;
 
                 // Calculate average request duration
@@ -450,7 +494,7 @@ impl LspDaemon {
                         uptime_secs: self.start_time.elapsed().as_secs(),
                         pools: pool_status,
                         total_requests: *self.request_count.read().await,
-                        active_connections: self.connections.len(),
+                        active_connections: self.connection_count.load(Ordering::Acquire),
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         git_hash: env!("GIT_HASH").to_string(),
                         build_date: env!("BUILD_DATE").to_string(),
@@ -759,6 +803,7 @@ impl LspDaemon {
             server_manager: self.server_manager.clone(),
             workspace_resolver: self.workspace_resolver.clone(),
             connections: self.connections.clone(),
+            connection_count: self.connection_count.clone(),
             start_time: self.start_time,
             request_count: self.request_count.clone(),
             shutdown: self.shutdown.clone(),
@@ -840,9 +885,17 @@ pub async fn start_daemon_background() -> Result<()> {
     let socket_path = get_default_socket_path();
 
     // Check if daemon is already running by trying to connect
-    if (crate::ipc::IpcStream::connect(&socket_path).await).is_ok() {
-        debug!("Daemon already running");
-        return Ok(());
+    match crate::ipc::IpcStream::connect(&socket_path).await {
+        Ok(_) => {
+            debug!("Daemon already running");
+            return Ok(());
+        }
+        Err(e) => {
+            debug!(
+                "No existing daemon found (connection failed: {}), starting new daemon",
+                e
+            );
+        }
     }
 
     // Clean up any stale socket
@@ -862,4 +915,191 @@ pub async fn start_daemon_background() -> Result<()> {
 
     info!("Started daemon in background");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::time::Instant;
+    use tokio::sync::mpsc;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn test_connection_counter_atomicity() {
+        // Create a daemon instance for testing
+        let socket_path = "/tmp/test_daemon.sock".to_string();
+        let daemon = LspDaemon::new(socket_path).unwrap();
+
+        // Test that connection_count starts at 0
+        assert_eq!(daemon.connection_count.load(Ordering::Acquire), 0);
+
+        // Test atomic increment behavior
+        let initial = daemon.connection_count.fetch_add(1, Ordering::AcqRel);
+        assert_eq!(initial, 0);
+        assert_eq!(daemon.connection_count.load(Ordering::Acquire), 1);
+
+        // Test atomic decrement behavior
+        let before_decrement = daemon.connection_count.fetch_sub(1, Ordering::AcqRel);
+        assert_eq!(before_decrement, 1);
+        assert_eq!(daemon.connection_count.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn test_connection_limit_enforcement() {
+        // This test simulates concurrent connection attempts
+        let socket_path = "/tmp/test_daemon_limit.sock".to_string();
+        let daemon = Arc::new(LspDaemon::new(socket_path).unwrap());
+
+        // Simulate MAX_CONNECTIONS (100) connections
+        const MAX_CONNECTIONS: usize = 100;
+
+        let mut handles = vec![];
+        let (tx, mut rx) = mpsc::unbounded_channel::<bool>();
+
+        // Spawn 105 tasks to simulate connection attempts (5 more than max)
+        for _ in 0..105 {
+            let daemon_clone = daemon.clone();
+            let tx_clone = tx.clone();
+
+            let handle = tokio::spawn(async move {
+                // Simulate the connection check and increment
+                let current_count = daemon_clone.connection_count.fetch_add(1, Ordering::AcqRel);
+
+                let accepted = current_count < MAX_CONNECTIONS;
+
+                if !accepted {
+                    // If rejected, decrement counter
+                    daemon_clone.connection_count.fetch_sub(1, Ordering::AcqRel);
+                }
+
+                // Send result
+                if let Err(_) = tx_clone.send(accepted) {
+                    // Test receiver dropped, which is expected in test cleanup scenarios
+                    tracing::trace!("Test receiver dropped while sending connection result");
+                }
+
+                // If accepted, simulate connection by adding to connections map
+                if accepted {
+                    let client_id = Uuid::new_v4();
+                    daemon_clone.connections.insert(client_id, Instant::now());
+
+                    // Simulate some work time
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+                    // Cleanup connection
+                    daemon_clone.connections.remove(&client_id);
+                    daemon_clone.connection_count.fetch_sub(1, Ordering::AcqRel);
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all tasks to complete
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Count accepted and rejected connections
+        let mut accepted_count = 0;
+        let mut rejected_count = 0;
+
+        // Close sender to end the loop
+        drop(tx);
+
+        while let Some(accepted) = rx.recv().await {
+            if accepted {
+                accepted_count += 1;
+            } else {
+                rejected_count += 1;
+            }
+        }
+
+        // Verify that exactly MAX_CONNECTIONS were accepted and 5 were rejected
+        assert_eq!(
+            accepted_count, MAX_CONNECTIONS,
+            "Expected exactly {} connections to be accepted",
+            MAX_CONNECTIONS
+        );
+        assert_eq!(
+            rejected_count, 5,
+            "Expected exactly 5 connections to be rejected"
+        );
+
+        // Verify final connection count is 0 (all cleaned up)
+        assert_eq!(daemon.connection_count.load(Ordering::Acquire), 0);
+        assert_eq!(daemon.connections.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_connection_cleanup_consistency() {
+        let socket_path = "/tmp/test_daemon_cleanup.sock".to_string();
+        let daemon = Arc::new(LspDaemon::new(socket_path).unwrap());
+
+        // Add some connections
+        for _ in 0..10 {
+            let client_id = Uuid::new_v4();
+            daemon.connection_count.fetch_add(1, Ordering::AcqRel);
+            daemon.connections.insert(client_id, Instant::now());
+        }
+
+        assert_eq!(daemon.connection_count.load(Ordering::Acquire), 10);
+        assert_eq!(daemon.connections.len(), 10);
+
+        // Clean up all connections
+        let client_ids: Vec<_> = daemon
+            .connections
+            .iter()
+            .map(|entry| *entry.key())
+            .collect();
+
+        for client_id in client_ids {
+            daemon.connections.remove(&client_id);
+            daemon.connection_count.fetch_sub(1, Ordering::AcqRel);
+        }
+
+        // Verify both counters are consistent
+        assert_eq!(daemon.connection_count.load(Ordering::Acquire), 0);
+        assert_eq!(daemon.connections.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_tracing_initialization_with_invalid_filter() {
+        // Test that daemon can be created even with invalid tracing environment
+        std::env::set_var("RUST_LOG", "invalid::filter::syntax[[[[");
+
+        let socket_path = "/tmp/test_daemon_invalid_filter.sock".to_string();
+
+        // This should not panic even with invalid filter
+        let result = LspDaemon::new(socket_path);
+
+        // Clean up environment variable
+        std::env::remove_var("RUST_LOG");
+
+        // Daemon creation should succeed despite invalid filter
+        assert!(
+            result.is_ok(),
+            "Daemon should be created even with invalid tracing filter"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_daemon_handles_existing_connection_gracefully() {
+        let socket_path = "/tmp/test_daemon_existing_connection.sock".to_string();
+
+        // Clean up any existing socket
+        let _ = std::fs::remove_file(&socket_path);
+
+        // Test that checking for existing daemon doesn't panic or fail
+        // This simulates the connection check in start_daemon_background
+        let connection_result = crate::ipc::IpcStream::connect(&socket_path).await;
+
+        // Connection should fail (no daemon running), but should not panic
+        assert!(
+            connection_result.is_err(),
+            "Connection should fail when no daemon is running"
+        );
+    }
 }
