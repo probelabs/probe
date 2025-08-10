@@ -227,6 +227,11 @@ impl LspClient {
         line: u32,
         column: u32,
     ) -> Result<CallHierarchyInfo> {
+        debug!(
+            "Getting call hierarchy for {:?} at {}:{}",
+            file_path, line, column
+        );
+
         let request = DaemonRequest::CallHierarchy {
             request_id: Uuid::new_v4(),
             file_path: file_path.to_path_buf(),
@@ -239,6 +244,8 @@ impl LspClient {
                 .map(std::path::PathBuf::from),
         };
 
+        debug!("Sending CallHierarchy request to daemon");
+
         // Add timeout for call hierarchy request - this can be slow due to rust-analyzer
         let call_timeout = Duration::from_millis(self.config.timeout_ms);
         let response = timeout(call_timeout, self.send_request(request))
@@ -250,12 +257,18 @@ impl LspClient {
                 )
             })??;
 
+        debug!("Received response from daemon");
+
         match response {
             DaemonResponse::CallHierarchy { result, .. } => {
+                debug!("Call hierarchy response received successfully");
                 let converted = convert_call_hierarchy_result(result);
                 Ok(converted)
             }
-            DaemonResponse::Error { error, .. } => Err(anyhow!("Call hierarchy failed: {}", error)),
+            DaemonResponse::Error { error, .. } => {
+                debug!("Call hierarchy failed: {}", error);
+                Err(anyhow!("Call hierarchy failed: {}", error))
+            }
             _ => Err(anyhow!("Unexpected response type")),
         }
     }
