@@ -39,7 +39,7 @@ struct SearchParams {
     timeout: u64,
     question: Option<String>,
     no_gitignore: bool,
-    verbose: bool,
+    lsp: bool,
 }
 
 struct BenchmarkParams {
@@ -159,6 +159,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
         timeout: params.timeout,
         question: params.question.as_deref(),
         no_gitignore: params.no_gitignore,
+        lsp: params.lsp,
     };
 
     let limited_results = perform_probe(&search_options)?;
@@ -522,7 +523,7 @@ async fn main() -> Result<()> {
                 question: args.question,
                 no_gitignore: args.no_gitignore
                     || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
-                verbose: args.verbose,
+                lsp: args.lsp,
             })?
         }
         Some(Commands::Search {
@@ -548,7 +549,7 @@ async fn main() -> Result<()> {
             timeout,
             question,
             no_gitignore,
-            verbose,
+            lsp,
         }) => handle_search(SearchParams {
             pattern,
             paths,
@@ -573,7 +574,7 @@ async fn main() -> Result<()> {
             question,
             no_gitignore: no_gitignore
                 || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
-            verbose,
+            lsp,
         })?,
         Some(Commands::Extract {
             files,

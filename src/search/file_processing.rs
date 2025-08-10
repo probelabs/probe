@@ -74,6 +74,7 @@ pub struct FileProcessingParams<'a> {
 
     #[allow(dead_code)]
     pub no_merge: bool,
+    pub lsp: bool,
 }
 
 /// Evaluate whether a block of lines satisfies a complex AST query
@@ -1528,28 +1529,8 @@ pub fn process_file_with_results(
                     // Start measuring result creation time
                     let result_creation_start = Instant::now();
 
-                    // Extract symbol signature if symbols mode is enabled
-                    let symbol_signature = if false { // symbols functionality removed
-                        // Re-parse the tree for symbol signature extraction when needed
-                        let tree = crate::language::get_or_parse_tree_pooled(
-                            &format!("{}_{}", params.path.to_string_lossy(), extension),
-                            &content,
-                            extension,
-                        ).ok();
-
-                        extract_symbol_signature(
-                            true,
-                            tree.as_ref(),
-                            extension,
-                            content.as_bytes(),
-                            block.start_byte,
-                            block.end_byte,
-                            debug_mode,
-                        )
-                    } else {
-                        None
-                    };
-
+                    // For now, we'll leave LSP info as None during initial processing
+                    // LSP info will be added in a post-processing step if enabled
                     let result = SearchResult {
                         file: params.path.to_string_lossy().to_string(),
                         lines: (final_start_line, final_end_line),

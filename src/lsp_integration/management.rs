@@ -512,6 +512,29 @@ impl LspManager {
         // Determine socket path
         let socket_path = socket.unwrap_or_else(lsp_daemon::get_default_socket_path);
 
+        // Check if daemon is already running by trying to connect
+        // Skip this check if we're in foreground mode (likely being spawned by background mode)
+        if !foreground {
+            match lsp_daemon::ipc::IpcStream::connect(&socket_path).await {
+                Ok(_stream) => {
+                    eprintln!("❌ LSP daemon is already running on socket: {}", socket_path);
+                    eprintln!("   Use 'probe lsp status' to check the current daemon");
+                    eprintln!("   Use 'probe lsp shutdown' to stop the current daemon");
+                    eprintln!("   Use 'probe lsp restart' to restart the daemon");
+                    return Err(anyhow::anyhow!("Daemon already running"));
+                }
+                Err(_) => {
+                    // Socket file might be stale, clean it up
+                    if std::path::Path::new(&socket_path).exists() {
+                        println!("🧹 Cleaning up stale socket file: {}", socket_path);
+                        if let Err(e) = std::fs::remove_file(&socket_path) {
+                            eprintln!("⚠️  Warning: Failed to remove stale socket: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+
         println!("🚀 Starting embedded LSP daemon...");
         println!("   Socket: {socket_path}");
         println!("   Log Level: {log_level}");
@@ -523,16 +546,42 @@ impl LspManager {
         }
 
         // Create and start daemon
-        let daemon = LspDaemon::new(socket_path)?;
+        let daemon = LspDaemon::new(socket_path.clone())?;
 
         if foreground {
             println!("✓ LSP daemon started in foreground mode");
             daemon.run().await?;
         } else {
-            println!("✓ LSP daemon started in background mode");
-            // For background mode, we would typically daemonize the process
-            // For now, just run in foreground since we're embedded
-            daemon.run().await?;
+            // For background mode, fork a new process
+            use std::process::{Command, Stdio};
+            
+            // Get the current executable path
+            let exe_path = std::env::current_exe()?;
+            
+            // Fork the daemon as a separate process
+            let child = Command::new(&exe_path)
+                .args(&["lsp", "start", "-f", "--socket", &socket_path, "--log-level", &log_level])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?;
+            
+            println!("✓ LSP daemon started in background mode (PID: {})", child.id());
+            println!("   Use 'probe lsp status' to check daemon status");
+            println!("   Use 'probe lsp logs' to view daemon logs");
+            
+            // Wait a moment to ensure daemon starts
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            
+            // Verify daemon is running
+            match lsp_daemon::ipc::IpcStream::connect(&socket_path).await {
+                Ok(_) => {
+                    // Daemon is running successfully
+                }
+                Err(e) => {
+                    eprintln!("⚠️  Warning: Could not verify daemon started: {}", e);
+                }
+            }
         }
 
         Ok(())

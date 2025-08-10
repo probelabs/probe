@@ -93,9 +93,9 @@ pub struct Args {
     #[arg(long = "question")]
     pub question: Option<String>,
 
-    /// Enable verbose output (show probe version, pattern, path, options, and timing)
-    #[arg(short = 'v', long = "verbose")]
-    pub verbose: bool,
+    /// Enable LSP integration for enhanced symbol information
+    #[arg(long = "lsp")]
+    pub lsp: bool,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -222,9 +222,9 @@ pub enum Commands {
         #[arg(long = "question")]
         question: Option<String>,
 
-        /// Enable verbose output (show probe version, pattern, path, options, and timing)
-        #[arg(short = 'v', long = "verbose")]
-        verbose: bool,
+        /// Enable LSP integration for enhanced symbol information
+        #[arg(long = "lsp")]
+        lsp: bool,
     },
 
     /// Extract code blocks from files
