@@ -906,7 +906,7 @@ impl LspServer {
 
         // Absolute timeout for the entire shutdown process
         const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
-        
+
         let shutdown_result = tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
             let mut child_opt = self.child.lock().await;
             if let Some(ref mut child) = *child_opt {
@@ -961,7 +961,7 @@ impl LspServer {
                             // We need to poll try_wait() since wait() is blocking
                             let start = tokio::time::Instant::now();
                             let timeout = Duration::from_secs(5);
-                            
+
                             loop {
                                 match child.try_wait() {
                                     Ok(Some(status)) => {
@@ -1098,9 +1098,12 @@ impl Drop for LspServer {
                             }
                         }
                     });
-                
+
                 if let Err(e) = cleanup_result {
-                    tracing::error!("Failed to spawn stderr cleanup thread: {}. Resources may leak.", e);
+                    tracing::error!(
+                        "Failed to spawn stderr cleanup thread: {}. Resources may leak.",
+                        e
+                    );
                     // If we can't spawn cleanup thread, we have to accept potential resource leak
                     // The OS will clean up when the process exits
                 }
@@ -1128,7 +1131,7 @@ impl Drop for LspServer {
                                 // Wait for process with timeout
                                 let timeout = Duration::from_secs(5);
                                 let start = std::time::Instant::now();
-                                
+
                                 loop {
                                     match child.try_wait() {
                                         Ok(Some(status)) => {
@@ -1155,7 +1158,7 @@ impl Drop for LspServer {
                                     }
                                 }
                             });
-                        
+
                         if let Err(e) = cleanup_result {
                             tracing::error!("Failed to spawn child cleanup thread: {}. Process may become zombie.", e);
                             // If we can't spawn cleanup thread, the process may become a zombie
