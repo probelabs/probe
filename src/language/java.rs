@@ -35,10 +35,6 @@ impl LanguageImpl for JavaLanguage {
                 | "constructor_declaration"
                 | "field_declaration"
                 | "variable_declaration"
-                | "if_statement"
-                | "for_statement"
-                | "while_statement"
-                | "try_statement"
                 | "block"
                 | "static_initializer"
         )
