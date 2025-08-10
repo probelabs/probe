@@ -191,9 +191,8 @@ impl LspDaemon {
             // Read message length
             let n = stream.read(&mut buffer[..4]).await?;
             if n == 0 {
-                // Connection closed - clean up
-                self.connections.remove(&client_id);
-                info!("Client disconnected: {}", client_id);
+                // Connection closed - clean up is done at the end of the function
+                debug!("Connection closed by client: {}", client_id);
                 break;
             }
 
