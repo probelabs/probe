@@ -12,7 +12,7 @@ use tokio::runtime::Runtime;
 
 // Global cache for LSP results to avoid redundant calls
 lazy_static::lazy_static! {
-    static ref LSP_CACHE: Arc<Mutex<HashMap<(String, String, u32, u32), Arc<serde_json::Value>>>> = 
+    static ref LSP_CACHE: Arc<Mutex<HashMap<(String, String, u32, u32), Arc<serde_json::Value>>>> =
         Arc::new(Mutex::new(HashMap::new()));
 }
 
@@ -21,7 +21,10 @@ lazy_static::lazy_static! {
 /// for functions, methods, and other symbols found in the code blocks.
 pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool) -> Result<()> {
     if debug_mode {
-        println!("[DEBUG] Starting LSP enrichment for {} results", results.len());
+        println!(
+            "[DEBUG] Starting LSP enrichment for {} results",
+            results.len()
+        );
     }
 
     // Process results in parallel
@@ -32,7 +35,8 @@ pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool
         }
 
         // Try to extract symbol information from the code block with precise position
-        if let Some(symbol_info) = extract_symbol_from_code_block_with_position(result, debug_mode) {
+        if let Some(symbol_info) = extract_symbol_from_code_block_with_position(result, debug_mode)
+        {
             // Check cache first
             let cache_key = (
                 result.file.clone(),
@@ -40,7 +44,7 @@ pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool
                 symbol_info.line,
                 symbol_info.column,
             );
-            
+
             let cached_value = {
                 if let Ok(cache) = LSP_CACHE.lock() {
                     cache.get(&cache_key).cloned()
@@ -48,11 +52,13 @@ pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool
                     None
                 }
             };
-            
+
             if let Some(cached) = cached_value {
                 if debug_mode {
-                    println!("[DEBUG] Using cached LSP info for {} at {}:{}:{}", 
-                        symbol_info.name, result.file, symbol_info.line, symbol_info.column);
+                    println!(
+                        "[DEBUG] Using cached LSP info for {} at {}:{}:{}",
+                        symbol_info.name, result.file, symbol_info.line, symbol_info.column
+                    );
                 }
                 result.lsp_info = Some((*cached).clone());
             } else {
@@ -64,14 +70,14 @@ pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool
                     symbol_info.column,
                     debug_mode,
                 );
-                
+
                 // Cache the result if successful
                 if let Some(ref info) = lsp_info {
                     if let Ok(mut cache) = LSP_CACHE.lock() {
                         cache.insert(cache_key, Arc::new(info.clone()));
                     }
                 }
-                
+
                 result.lsp_info = lsp_info;
             }
         }
@@ -79,8 +85,12 @@ pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool
 
     if debug_mode {
         let enriched_count = results.iter().filter(|r| r.lsp_info.is_some()).count();
-        println!("[DEBUG] LSP enrichment complete: {}/{} results enriched", enriched_count, results.len());
-        
+        println!(
+            "[DEBUG] LSP enrichment complete: {}/{} results enriched",
+            enriched_count,
+            results.len()
+        );
+
         // Print cache statistics
         if let Ok(cache) = LSP_CACHE.lock() {
             println!("[DEBUG] LSP cache size: {} entries", cache.len());
@@ -99,14 +109,27 @@ struct SymbolInfo {
 
 /// Extract symbol information from a code block with precise position using tree-sitter
 /// This function parses the code block to find the exact position of the symbol.
-fn extract_symbol_from_code_block_with_position(result: &SearchResult, debug_mode: bool) -> Option<SymbolInfo> {
+fn extract_symbol_from_code_block_with_position(
+    result: &SearchResult,
+    debug_mode: bool,
+) -> Option<SymbolInfo> {
     // For function and method node types, try to extract the name
     let is_function_like = matches!(
         result.node_type.as_str(),
-        "function_item" | "function_definition" | "method_definition" |
-        "function_declaration" | "method_declaration" | "function" | "method" |
-        "class_definition" | "struct_item" | "impl_item" | "trait_item" | 
-        "file" | "import" | "code" // Also check common fallback node types
+        "function_item"
+            | "function_definition"
+            | "method_definition"
+            | "function_declaration"
+            | "method_declaration"
+            | "function"
+            | "method"
+            | "class_definition"
+            | "struct_item"
+            | "impl_item"
+            | "trait_item"
+            | "file"
+            | "import"
+            | "code" // Also check common fallback node types
     );
 
     if debug_mode {
@@ -121,21 +144,31 @@ fn extract_symbol_from_code_block_with_position(result: &SearchResult, debug_mod
         // Check if the code block contains function-like patterns
         let code_contains_function = result.code.lines().any(|line| {
             let trimmed = line.trim();
-            trimmed.starts_with("pub fn ") || trimmed.starts_with("fn ") ||
-            trimmed.starts_with("def ") || trimmed.starts_with("function ") ||
-            trimmed.starts_with("func ") || trimmed.starts_with("class ") ||
-            trimmed.starts_with("struct ") || trimmed.starts_with("impl ")
+            trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("fn ")
+                || trimmed.starts_with("def ")
+                || trimmed.starts_with("function ")
+                || trimmed.starts_with("func ")
+                || trimmed.starts_with("class ")
+                || trimmed.starts_with("struct ")
+                || trimmed.starts_with("impl ")
         });
-        
+
         if !code_contains_function {
             if debug_mode {
-                println!("[DEBUG] Skipping non-function-like block with node_type: {}", result.node_type);
+                println!(
+                    "[DEBUG] Skipping non-function-like block with node_type: {}",
+                    result.node_type
+                );
             }
             return None;
         }
-        
+
         if debug_mode {
-            println!("[DEBUG] Found function-like code in block with node_type: {}", result.node_type);
+            println!(
+                "[DEBUG] Found function-like code in block with node_type: {}",
+                result.node_type
+            );
         }
     }
 
@@ -145,48 +178,69 @@ fn extract_symbol_from_code_block_with_position(result: &SearchResult, debug_mod
     for line in result.code.lines() {
         let trimmed = line.trim();
         // Skip comments and attributes
-        if trimmed.starts_with("///") || trimmed.starts_with("//") || 
-           trimmed.starts_with("#[") || trimmed.starts_with("#!") ||
-           trimmed.is_empty() {
+        if trimmed.starts_with("///")
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("#[")
+            || trimmed.starts_with("#!")
+            || trimmed.is_empty()
+        {
             continue;
         }
         // Check if this line looks like a function/method/class definition
-        if trimmed.starts_with("pub fn ") || trimmed.starts_with("fn ") ||
-           trimmed.starts_with("pub async fn ") || trimmed.starts_with("async fn ") ||
-           trimmed.starts_with("def ") || trimmed.starts_with("async def ") ||
-           trimmed.starts_with("function ") || trimmed.starts_with("func ") ||
-           trimmed.starts_with("class ") || trimmed.starts_with("struct ") ||
-           trimmed.starts_with("pub struct ") || trimmed.starts_with("impl ") ||
-           trimmed.starts_with("pub impl ") || trimmed.starts_with("trait ") ||
-           trimmed.starts_with("pub trait ") || trimmed.starts_with("interface ") ||
-           trimmed.starts_with("type ") || trimmed.starts_with("pub type ") ||
-           trimmed.starts_with("const ") || trimmed.starts_with("pub const ") ||
-           trimmed.starts_with("static ") || trimmed.starts_with("pub static ") ||
-           trimmed.starts_with("let ") || trimmed.starts_with("var ") ||
-           trimmed.starts_with("export ") || trimmed.starts_with("public ") ||
-           trimmed.starts_with("private ") || trimmed.starts_with("protected ") {
+        if trimmed.starts_with("pub fn ")
+            || trimmed.starts_with("fn ")
+            || trimmed.starts_with("pub async fn ")
+            || trimmed.starts_with("async fn ")
+            || trimmed.starts_with("def ")
+            || trimmed.starts_with("async def ")
+            || trimmed.starts_with("function ")
+            || trimmed.starts_with("func ")
+            || trimmed.starts_with("class ")
+            || trimmed.starts_with("struct ")
+            || trimmed.starts_with("pub struct ")
+            || trimmed.starts_with("impl ")
+            || trimmed.starts_with("pub impl ")
+            || trimmed.starts_with("trait ")
+            || trimmed.starts_with("pub trait ")
+            || trimmed.starts_with("interface ")
+            || trimmed.starts_with("type ")
+            || trimmed.starts_with("pub type ")
+            || trimmed.starts_with("const ")
+            || trimmed.starts_with("pub const ")
+            || trimmed.starts_with("static ")
+            || trimmed.starts_with("pub static ")
+            || trimmed.starts_with("let ")
+            || trimmed.starts_with("var ")
+            || trimmed.starts_with("export ")
+            || trimmed.starts_with("public ")
+            || trimmed.starts_with("private ")
+            || trimmed.starts_with("protected ")
+        {
             function_line = Some(line);
             break;
         }
     }
-    
+
     let first_line = function_line?;
-    
+
     if debug_mode {
-        println!("[DEBUG] First function line of code block: '{}'", first_line);
+        println!(
+            "[DEBUG] First function line of code block: '{}'",
+            first_line
+        );
     }
-    
+
     // Try to extract symbol name based on common patterns
     let symbol_name = extract_symbol_name_from_line(first_line, &result.node_type, debug_mode)?;
-    
+
     if debug_mode {
         println!("[DEBUG] Extracted symbol name: '{}'", symbol_name);
     }
-    
+
     // Now find the precise column position using tree-sitter
     let file_path = Path::new(&result.file);
     let extension = file_path.extension()?.to_str()?;
-    
+
     // Try to parse with tree-sitter for precise position
     if let Some((precise_line, precise_column)) = find_symbol_position_with_tree_sitter(
         &result.code,
@@ -207,17 +261,14 @@ fn extract_symbol_from_code_block_with_position(result: &SearchResult, debug_mod
             column: precise_column,
         });
     }
-    
+
     // Fallback to text-based column detection if tree-sitter fails
     let column = find_symbol_column_in_line(first_line, &symbol_name);
-    
+
     if debug_mode {
         println!(
             "[DEBUG] Extracted symbol '{}' from {} at {}:{} (text-based)",
-            symbol_name,
-            result.file,
-            result.lines.0,
-            column
+            symbol_name, result.file, result.lines.0, column
         );
     }
 
@@ -247,30 +298,26 @@ fn find_symbol_position_with_tree_sitter(
 ) -> Option<(u32, u32)> {
     // Get the language implementation based on file extension
     let language_impl = get_language_impl(file_extension)?;
-    
+
     // Get a parser from the pool
     let mut parser = get_pooled_parser(file_extension).ok()?;
-    parser.set_language(&language_impl.get_tree_sitter_language()).ok()?;
-    
+    parser
+        .set_language(&language_impl.get_tree_sitter_language())
+        .ok()?;
+
     // Parse the code block
     let tree = parser.parse(code, None)?;
     let root_node = tree.root_node();
-    
+
     // Find the identifier position within the parsed tree
-    let position = find_identifier_position_in_tree(
-        root_node,
-        symbol_name,
-        code.as_bytes(),
-        debug_mode,
-    );
-    
+    let position =
+        find_identifier_position_in_tree(root_node, symbol_name, code.as_bytes(), debug_mode);
+
     // Return the parser to the pool
     return_pooled_parser(file_extension, parser);
-    
+
     // Adjust the line number to be relative to the file, not the code block
-    position.map(|(line, column)| {
-        ((base_line - 1 + line as usize) as u32, column)
-    })
+    position.map(|(line, column)| ((base_line - 1 + line as usize) as u32, column))
 }
 
 /// Recursively search for an identifier in the tree-sitter AST
@@ -307,7 +354,8 @@ fn find_identifier_position_in_tree(
     // Search in children
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if let Some(pos) = find_identifier_position_in_tree(child, target_name, content, debug_mode) {
+        if let Some(pos) = find_identifier_position_in_tree(child, target_name, content, debug_mode)
+        {
             return Some(pos);
         }
     }
@@ -322,9 +370,17 @@ fn extract_symbol_from_code_block(result: &SearchResult, debug_mode: bool) -> Op
     // For function and method node types, try to extract the name
     let is_function_like = matches!(
         result.node_type.as_str(),
-        "function_item" | "function_definition" | "method_definition" |
-        "function_declaration" | "method_declaration" | "function" | "method" |
-        "class_definition" | "struct_item" | "impl_item" | "trait_item"
+        "function_item"
+            | "function_definition"
+            | "method_definition"
+            | "function_declaration"
+            | "method_declaration"
+            | "function"
+            | "method"
+            | "class_definition"
+            | "struct_item"
+            | "impl_item"
+            | "trait_item"
     );
 
     if !is_function_like {
@@ -337,50 +393,60 @@ fn extract_symbol_from_code_block(result: &SearchResult, debug_mode: bool) -> Op
     for line in result.code.lines() {
         let trimmed = line.trim();
         // Skip comments and attributes
-        if trimmed.starts_with("///") || trimmed.starts_with("//") || 
-           trimmed.starts_with("#[") || trimmed.starts_with("#!") ||
-           trimmed.is_empty() {
+        if trimmed.starts_with("///")
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("#[")
+            || trimmed.starts_with("#!")
+            || trimmed.is_empty()
+        {
             continue;
         }
         // Check if this line looks like a function/method/class definition
-        if trimmed.starts_with("pub fn ") || trimmed.starts_with("fn ") ||
-           trimmed.starts_with("pub async fn ") || trimmed.starts_with("async fn ") ||
-           trimmed.starts_with("def ") || trimmed.starts_with("async def ") ||
-           trimmed.starts_with("function ") || trimmed.starts_with("func ") ||
-           trimmed.starts_with("class ") || trimmed.starts_with("struct ") ||
-           trimmed.starts_with("pub struct ") || trimmed.starts_with("impl ") {
+        if trimmed.starts_with("pub fn ")
+            || trimmed.starts_with("fn ")
+            || trimmed.starts_with("pub async fn ")
+            || trimmed.starts_with("async fn ")
+            || trimmed.starts_with("def ")
+            || trimmed.starts_with("async def ")
+            || trimmed.starts_with("function ")
+            || trimmed.starts_with("func ")
+            || trimmed.starts_with("class ")
+            || trimmed.starts_with("struct ")
+            || trimmed.starts_with("pub struct ")
+            || trimmed.starts_with("impl ")
+        {
             function_line = Some(line);
             break;
         }
     }
-    
+
     let first_line = function_line?;
-    
+
     if debug_mode {
-        println!("[DEBUG] First function line of code block: '{}'", first_line);
+        println!(
+            "[DEBUG] First function line of code block: '{}'",
+            first_line
+        );
     }
-    
+
     // Try to extract symbol name based on common patterns
     let symbol_name = extract_symbol_name_from_line(first_line, &result.node_type, debug_mode)?;
-    
+
     if debug_mode {
         println!("[DEBUG] Extracted symbol name: '{}'", symbol_name);
     }
-    
+
     if debug_mode {
         println!(
             "[DEBUG] Extracted symbol '{}' from {} at {}:{}",
-            symbol_name,
-            result.file,
-            result.lines.0,
-            0
+            symbol_name, result.file, result.lines.0, 0
         );
     }
 
     Some(SymbolInfo {
         name: symbol_name,
         line: (result.lines.0 - 1) as u32, // Convert to 0-indexed
-        column: 0, // We don't have exact column info, use 0
+        column: 0,                         // We don't have exact column info, use 0
     })
 }
 
@@ -392,14 +458,20 @@ fn extract_symbol_name_from_line(line: &str, node_type: &str, debug_mode: bool) 
     } else {
         line
     };
-    
+
     let trimmed = line.trim();
-    
+
     // Common patterns for different languages
     match node_type {
-        "function_item" | "function_definition" | "function_declaration" | "function" | "file" | "import" | "code" => {
+        "function_item"
+        | "function_definition"
+        | "function_declaration"
+        | "function"
+        | "file"
+        | "import"
+        | "code" => {
             // Handle various function patterns
-            
+
             // Rust: pub fn function_name, async fn function_name, pub async fn function_name
             if let Some(pos) = trimmed.find("fn ") {
                 let after_fn = &trimmed[pos + 3..];
@@ -408,18 +480,18 @@ fn extract_symbol_name_from_line(line: &str, node_type: &str, debug_mode: bool) 
                 }
                 return extract_name_after_keyword(after_fn);
             }
-            
+
             // Python: def function_name, async def function_name
             if let Some(pos) = trimmed.find("def ") {
                 return extract_name_after_keyword(&trimmed[pos + 4..]);
             }
-            
+
             // JavaScript: function function_name, async function function_name
             // Also handle: export function, export async function
             if let Some(pos) = trimmed.find("function ") {
                 return extract_name_after_keyword(&trimmed[pos + 9..]);
             }
-            
+
             // Go: func function_name, func (r Receiver) function_name
             if let Some(pos) = trimmed.find("func ") {
                 let after_func = &trimmed[pos + 5..];
@@ -431,7 +503,7 @@ fn extract_symbol_name_from_line(line: &str, node_type: &str, debug_mode: bool) 
                 }
                 return extract_name_after_keyword(after_func);
             }
-            
+
             // C/C++: Handle various return types
             // e.g., int function_name, void function_name, static int function_name
             // Look for common patterns where identifier is followed by parenthesis
@@ -441,7 +513,8 @@ fn extract_symbol_name_from_line(line: &str, node_type: &str, debug_mode: bool) 
                 if let Some(name) = before_paren.split_whitespace().last() {
                     // Remove any pointer/reference symbols
                     let clean_name = name.trim_start_matches('*').trim_start_matches('&');
-                    if !clean_name.is_empty() && clean_name.chars().next().unwrap().is_alphabetic() {
+                    if !clean_name.is_empty() && clean_name.chars().next().unwrap().is_alphabetic()
+                    {
                         return Some(clean_name.to_string());
                     }
                 }
@@ -485,14 +558,14 @@ fn extract_symbol_name_from_line(line: &str, node_type: &str, debug_mode: bool) 
         }
         _ => {}
     }
-    
+
     None
 }
 
 /// Extract a name/identifier after a keyword
 fn extract_name_after_keyword(text: &str) -> Option<String> {
     let trimmed = text.trim_start();
-    
+
     // Find the position of the first non-identifier character
     // This should handle: function_name(params) -> "function_name"
     let end_pos = trimmed
@@ -500,15 +573,17 @@ fn extract_name_after_keyword(text: &str) -> Option<String> {
         .find(|(_, c)| !c.is_alphanumeric() && *c != '_')
         .map(|(i, _)| i)
         .unwrap_or(trimmed.len());
-    
+
     if end_pos > 0 {
         let name = trimmed[..end_pos].trim();
         // Validate that it's a valid identifier
-        if !name.is_empty() && (name.chars().next().unwrap().is_alphabetic() || name.starts_with('_')) {
+        if !name.is_empty()
+            && (name.chars().next().unwrap().is_alphabetic() || name.starts_with('_'))
+        {
             return Some(name.to_string());
         }
     }
-    
+
     None
 }
 
@@ -524,12 +599,12 @@ fn get_lsp_info_for_result(
     let file_path_owned = file_path.to_string();
     let symbol_name_owned = symbol_name.to_string();
     let symbol_name_for_error = symbol_name.to_string();
-    
+
     // Use a separate thread with its own runtime to avoid blocking
     match std::thread::spawn(move || {
         let rt = Runtime::new().ok()?;
         let path = Path::new(&file_path_owned);
-        
+
         rt.block_on(async {
             get_lsp_info_async(path, &symbol_name_owned, line, column, debug_mode).await
         })
@@ -539,7 +614,10 @@ fn get_lsp_info_for_result(
         Ok(result) => result,
         Err(_) => {
             if debug_mode {
-                println!("[DEBUG] LSP thread panicked for symbol: {}", symbol_name_for_error);
+                println!(
+                    "[DEBUG] LSP thread panicked for symbol: {}",
+                    symbol_name_for_error
+                );
             }
             None
         }
@@ -565,9 +643,8 @@ async fn get_lsp_info_async(
     }
 
     // Find workspace root
-    let workspace_hint = find_workspace_root(file_path)
-        .map(|p| p.to_string_lossy().to_string());
-    
+    let workspace_hint = find_workspace_root(file_path).map(|p| p.to_string_lossy().to_string());
+
     let config = LspConfig {
         use_daemon: true,
         workspace_hint: workspace_hint.clone(),
@@ -594,17 +671,17 @@ async fn get_lsp_info_async(
         Ok(Ok(Some(info))) => {
             // Create a simplified JSON structure for search results
             let references_count = info.references.len();
-            
+
             let lsp_data = json!({
                 "symbol": symbol_name,
                 "call_hierarchy": info.call_hierarchy,
                 "references_count": references_count,
             });
-            
+
             if debug_mode {
                 println!("[DEBUG] Got LSP info for {}: {:?}", symbol_name, lsp_data);
             }
-            
+
             Some(lsp_data)
         }
         Ok(Ok(None)) => {
@@ -631,7 +708,7 @@ async fn get_lsp_info_async(
 /// Find the workspace root by looking for project markers
 fn find_workspace_root(file_path: &Path) -> Option<&Path> {
     let mut current = file_path.parent()?;
-    
+
     // Look for common project root markers
     let markers = [
         "Cargo.toml",
@@ -643,7 +720,7 @@ fn find_workspace_root(file_path: &Path) -> Option<&Path> {
         "tsconfig.json",
         "composer.json",
     ];
-    
+
     while current.parent().is_some() {
         for marker in &markers {
             if current.join(marker).exists() {
@@ -652,6 +729,6 @@ fn find_workspace_root(file_path: &Path) -> Option<&Path> {
         }
         current = current.parent()?;
     }
-    
+
     None
 }
