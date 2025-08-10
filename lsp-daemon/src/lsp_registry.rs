@@ -439,8 +439,18 @@ impl LspRegistry {
         if let Some(config) = self.get(language) {
             // Check if the command exists in PATH (with platform-specific executable extension)
             let command = normalize_executable(&config.command);
-            which::which(&command).is_ok()
+            match which::which(&command) {
+                Ok(path) => {
+                    tracing::trace!("LSP server for {:?} found at: {:?}", language, path);
+                    true
+                }
+                Err(e) => {
+                    tracing::trace!("LSP server for {:?} not available: {}", language, e);
+                    false
+                }
+            }
         } else {
+            tracing::trace!("No LSP configuration found for {:?}", language);
             false
         }
     }
@@ -449,7 +459,16 @@ impl LspRegistry {
         let mut servers = Vec::new();
         for (language, config) in &self.servers {
             let command = normalize_executable(&config.command);
-            let available = which::which(&command).is_ok();
+            let available = match which::which(&command) {
+                Ok(_) => {
+                    tracing::trace!("LSP server for {:?} is available", language);
+                    true
+                }
+                Err(e) => {
+                    tracing::trace!("LSP server for {:?} is not available: {}", language, e);
+                    false
+                }
+            };
             servers.push((*language, available));
         }
         servers.sort_by_key(|(lang, _)| lang.as_str().to_string());

@@ -33,11 +33,24 @@ pub fn socket_exists(path: &str) -> bool {
             ClientOptions::new().pipe_mode(tokio::net::windows::named_pipe::PipeMode::Message);
 
         // Use blocking I/O for the existence check (quick operation)
-        std::fs::OpenOptions::new()
+        match std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(path)
-            .is_ok()
+        {
+            Ok(_) => {
+                tracing::trace!("Named pipe exists and is accessible: {}", path);
+                true
+            }
+            Err(e) => {
+                tracing::trace!(
+                    "Named pipe does not exist or is not accessible: {} (error: {})",
+                    path,
+                    e
+                );
+                false
+            }
+        }
     }
 }
 
@@ -53,7 +66,7 @@ pub fn remove_socket_file(path: &str) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         // Named pipes don't leave files on Windows, so this is a no-op
-        let _ = path;
+        tracing::trace!("Socket removal is no-op on Windows for path: {}", path);
     }
 
     Ok(())
@@ -69,7 +82,10 @@ pub fn get_socket_parent_dir(path: &str) -> Option<PathBuf> {
     #[cfg(windows)]
     {
         // Named pipes don't need parent directory creation on Windows
-        let _ = path;
+        tracing::trace!(
+            "Parent directory creation is not needed on Windows for path: {}",
+            path
+        );
         None
     }
 }

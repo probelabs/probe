@@ -69,7 +69,12 @@ mod unix_impl {
     impl Drop for IpcListener {
         fn drop(&mut self) {
             // Clean up socket file
-            let _ = std::fs::remove_file(&self.path);
+            if let Err(e) = std::fs::remove_file(&self.path) {
+                // Only log at trace level since this is cleanup code and the file might not exist
+                tracing::trace!("Failed to remove socket file during cleanup {}: {} (this is usually not a problem)", self.path, e);
+            } else {
+                tracing::trace!("Successfully cleaned up socket file: {}", self.path);
+            }
         }
     }
 
@@ -135,6 +140,7 @@ mod windows_impl {
         ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
     };
     use tokio::sync::Mutex;
+    use tracing;
 
     pub struct IpcListener {
         path: String,
@@ -154,6 +160,30 @@ mod windows_impl {
                 path: path.to_string(),
                 current_server: Arc::new(Mutex::new(Some(server))),
             })
+        }
+    }
+
+    impl Drop for IpcListener {
+        fn drop(&mut self) {
+            // Log cleanup action
+            tracing::debug!("Cleaning up Windows named pipe: {}", self.path);
+
+            // Named pipes on Windows are automatically cleaned up when the last handle is closed
+            // The Tokio NamedPipeServer will handle the cleanup when it's dropped
+            // We just need to ensure any remaining server instance is dropped
+            if let Ok(mut server_guard) = self.current_server.try_lock() {
+                if server_guard.take().is_some() {
+                    tracing::debug!(
+                        "Closed remaining named pipe server instance for: {}",
+                        self.path
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    "Could not acquire lock to clean up named pipe server: {}",
+                    self.path
+                );
+            }
         }
 
         pub async fn accept(&self) -> Result<IpcStream> {
