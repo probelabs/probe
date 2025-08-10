@@ -904,116 +904,145 @@ impl LspServer {
     pub async fn shutdown(&self) -> Result<()> {
         tracing::debug!("Starting LSP server shutdown");
 
-        let mut child_opt = self.child.lock().await;
-        if let Some(ref mut child) = *child_opt {
-            // Try graceful shutdown first
-            let request_id = self.next_request_id().await;
-            match self.send_request("shutdown", json!(null), request_id).await {
-                Ok(_) => {
-                    // Wait briefly for shutdown response
-                    match tokio::time::timeout(
-                        Duration::from_secs(1),
-                        self.wait_for_response(request_id, Duration::from_secs(1)),
-                    )
-                    .await
-                    {
-                        Ok(response_result) => match response_result {
-                            Ok(_) => tracing::debug!("LSP shutdown response received"),
-                            Err(e) => {
-                                tracing::warn!("LSP shutdown response error (continuing): {}", e)
-                            }
-                        },
-                        Err(_) => {
-                            tracing::warn!("Timeout waiting for LSP shutdown response (continuing)")
-                        }
-                    }
-
-                    // Send exit notification
-                    if let Err(e) = self.send_notification("exit", json!(null)).await {
-                        tracing::warn!("Failed to send exit notification to LSP server: {}", e);
-                    } else {
-                        tracing::debug!("Exit notification sent to LSP server");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to send shutdown request to LSP server: {}", e);
-                }
-            }
-
-            // Give the process a moment to shut down gracefully
-            tokio::time::sleep(Duration::from_millis(500)).await;
-
-            // Force kill if still running
-            match child.try_wait() {
-                Ok(Some(_status)) => {
-                    tracing::debug!("LSP process exited gracefully");
-                }
-                Ok(None) => {
-                    tracing::warn!("LSP process did not exit gracefully, force killing");
-                    if let Err(e) = child.kill() {
-                        tracing::error!("Failed to kill LSP process: {}", e);
-                    } else {
-                        // Wait for process to actually die
-                        match tokio::time::timeout(Duration::from_secs(2), async {
-                            match child.wait() {
-                                Ok(status) => {
-                                    tracing::debug!("LSP process killed with status: {}", status);
-                                    Ok(())
-                                }
-                                Err(e) => {
-                                    tracing::error!("Error waiting for LSP process death: {}", e);
-                                    Err(e)
-                                }
-                            }
-                        })
+        // Absolute timeout for the entire shutdown process
+        const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
+        
+        let shutdown_result = tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+            let mut child_opt = self.child.lock().await;
+            if let Some(ref mut child) = *child_opt {
+                // Try graceful shutdown first
+                let request_id = self.next_request_id().await;
+                match self.send_request("shutdown", json!(null), request_id).await {
+                    Ok(_) => {
+                        // Wait briefly for shutdown response
+                        match tokio::time::timeout(
+                            Duration::from_secs(1),
+                            self.wait_for_response(request_id, Duration::from_secs(1)),
+                        )
                         .await
                         {
-                            Ok(wait_result) => {
-                                if wait_result.is_err() {
-                                    tracing::warn!(
-                                        "LSP process may still be running after kill attempt"
-                                    );
+                            Ok(response_result) => match response_result {
+                                Ok(_) => tracing::debug!("LSP shutdown response received"),
+                                Err(e) => {
+                                    tracing::warn!("LSP shutdown response error (continuing): {}", e)
                                 }
+                            },
+                            Err(_) => {
+                                tracing::warn!("Timeout waiting for LSP shutdown response (continuing)")
                             }
-                            Err(_timeout) => {
-                                tracing::warn!("Timeout waiting for LSP process to die after kill - process may still be running");
+                        }
+
+                        // Send exit notification
+                        if let Err(e) = self.send_notification("exit", json!(null)).await {
+                            tracing::warn!("Failed to send exit notification to LSP server: {}", e);
+                        } else {
+                            tracing::debug!("Exit notification sent to LSP server");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to send shutdown request to LSP server: {}", e);
+                    }
+                }
+
+                // Give the process a moment to shut down gracefully
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
+                // Force kill if still running
+                match child.try_wait() {
+                    Ok(Some(_status)) => {
+                        tracing::debug!("LSP process exited gracefully");
+                    }
+                    Ok(None) => {
+                        tracing::warn!("LSP process did not exit gracefully, force killing");
+                        if let Err(e) = child.kill() {
+                            tracing::error!("Failed to kill LSP process: {}", e);
+                        } else {
+                            // Wait for process to actually die (with timeout)
+                            // We need to poll try_wait() since wait() is blocking
+                            let start = tokio::time::Instant::now();
+                            let timeout = Duration::from_secs(5);
+                            
+                            loop {
+                                match child.try_wait() {
+                                    Ok(Some(status)) => {
+                                        tracing::debug!("LSP process killed with status: {}", status);
+                                        break;
+                                    }
+                                    Ok(None) => {
+                                        // Process still running
+                                        if start.elapsed() >= timeout {
+                                            tracing::error!(
+                                                "Timeout waiting for LSP process to die after kill - process may still be running"
+                                            );
+                                            break;
+                                        }
+                                        // Sleep briefly before trying again
+                                        tokio::time::sleep(Duration::from_millis(100)).await;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Error waiting for LSP process death: {}", e);
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
+                    Err(e) => {
+                        tracing::error!("Error checking LSP process status: {}", e);
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Error checking LSP process status: {}", e);
-                }
+
+                // Ensure child is dropped
+                *child_opt = None;
             }
 
-            // Ensure child is dropped
-            *child_opt = None;
-        }
+            // Signal stderr thread to shutdown
+            self.stderr_shutdown.store(true, Ordering::Relaxed);
 
-        // Signal stderr thread to shutdown
-        self.stderr_shutdown.store(true, Ordering::Relaxed);
+            // Wait for stderr thread to finish (with timeout to avoid hanging)
+            let mut stderr_handle_guard = self.stderr_thread.lock().await;
+            if let Some(handle) = stderr_handle_guard.take() {
+                drop(stderr_handle_guard); // Release lock before blocking operation
 
-        // Wait for stderr thread to finish (with timeout to avoid hanging)
-        let mut stderr_handle_guard = self.stderr_thread.lock().await;
-        if let Some(handle) = stderr_handle_guard.take() {
-            drop(stderr_handle_guard); // Release lock before blocking operation
+                tracing::debug!("Waiting for stderr thread to finish");
+                let handle_result = tokio::task::spawn_blocking(move || match handle.join() {
+                    Ok(_) => tracing::debug!("Stderr thread joined successfully"),
+                    Err(e) => tracing::error!("Error joining stderr thread: {:?}", e),
+                });
 
-            tracing::debug!("Waiting for stderr thread to finish");
-            let handle_result = tokio::task::spawn_blocking(move || match handle.join() {
-                Ok(_) => tracing::debug!("Stderr thread joined successfully"),
-                Err(e) => tracing::error!("Error joining stderr thread: {:?}", e),
-            });
-
-            // Wait with timeout to prevent hanging
-            if (tokio::time::timeout(Duration::from_secs(3), handle_result).await).is_err() {
-                tracing::warn!("Timeout waiting for stderr thread to finish");
+                // Wait with timeout to prevent hanging
+                if (tokio::time::timeout(Duration::from_secs(3), handle_result).await).is_err() {
+                    tracing::warn!("Timeout waiting for stderr thread to finish");
+                }
+            } else {
+                tracing::debug!("No stderr thread to cleanup (already cleaned up or never started)");
             }
-        } else {
-            tracing::debug!("No stderr thread to cleanup (already cleaned up or never started)");
-        }
 
-        tracing::debug!("LSP server shutdown complete");
-        Ok(())
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
+
+        match shutdown_result {
+            Ok(Ok(())) => {
+                tracing::debug!("LSP server shutdown complete");
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Error during LSP server shutdown: {}", e);
+                Err(e)
+            }
+            Err(_) => {
+                tracing::error!(
+                    "LSP server shutdown timed out after {} seconds - forcefully terminating",
+                    SHUTDOWN_TIMEOUT.as_secs()
+                );
+                // At this point we've tried our best, return an error
+                Err(anyhow::anyhow!(
+                    "LSP server shutdown timed out after {} seconds",
+                    SHUTDOWN_TIMEOUT.as_secs()
+                ))
+            }
+        }
     }
 
     fn detect_language_id(&self, file_path: &Path) -> &str {
@@ -1055,14 +1084,25 @@ impl Drop for LspServer {
                 drop(stderr_handle_guard); // Release lock before potentially blocking operation
 
                 // Spawn cleanup thread to avoid blocking Drop
-                if let Err(e) = std::thread::Builder::new()
+                // We can't add a timeout to join() directly, so we just detach the cleanup thread
+                // The cleanup thread will try to join the stderr thread and log the result
+                let cleanup_result = std::thread::Builder::new()
                     .name("lsp-stderr-cleanup".to_string())
-                    .spawn(move || match handle.join() {
-                        Ok(_) => tracing::debug!("Stderr thread cleaned up in Drop"),
-                        Err(e) => tracing::error!("Error joining stderr thread in Drop: {:?}", e),
-                    })
-                {
-                    tracing::error!("Failed to spawn stderr cleanup thread: {}", e);
+                    .spawn(move || {
+                        // This will block until the stderr thread completes, but it's in a detached thread
+                        // so it won't block Drop
+                        match handle.join() {
+                            Ok(_) => tracing::debug!("Stderr thread cleaned up successfully"),
+                            Err(e) => {
+                                tracing::error!("Error joining stderr thread: {:?}", e);
+                            }
+                        }
+                    });
+                
+                if let Err(e) = cleanup_result {
+                    tracing::error!("Failed to spawn stderr cleanup thread: {}. Resources may leak.", e);
+                    // If we can't spawn cleanup thread, we have to accept potential resource leak
+                    // The OS will clean up when the process exits
                 }
             } else {
                 tracing::debug!("No stderr thread handle to cleanup (already cleaned up)");
@@ -1081,18 +1121,45 @@ impl Drop for LspServer {
                     Ok(_) => {
                         tracing::debug!("Child process killed successfully in Drop");
 
-                        // Best effort wait - don't block Drop indefinitely
-                        if let Err(e) = std::thread::Builder::new()
+                        // Best effort wait with timeout - don't block Drop indefinitely
+                        let cleanup_result = std::thread::Builder::new()
                             .name("lsp-child-cleanup".to_string())
-                            .spawn(move || match child.wait() {
-                                Ok(status) => tracing::debug!(
-                                    "Child process wait completed with status: {}",
-                                    status
-                                ),
-                                Err(e) => tracing::error!("Error waiting for child process: {}", e),
-                            })
-                        {
-                            tracing::error!("Failed to spawn child cleanup thread: {}", e);
+                            .spawn(move || {
+                                // Wait for process with timeout
+                                let timeout = Duration::from_secs(5);
+                                let start = std::time::Instant::now();
+                                
+                                loop {
+                                    match child.try_wait() {
+                                        Ok(Some(status)) => {
+                                            tracing::debug!(
+                                                "Child process wait completed with status: {}",
+                                                status
+                                            );
+                                            break;
+                                        }
+                                        Ok(None) => {
+                                            // Process still running
+                                            if start.elapsed() >= timeout {
+                                                tracing::warn!(
+                                                    "Timeout waiting for child process death - process may be zombied"
+                                                );
+                                                break;
+                                            }
+                                            std::thread::sleep(Duration::from_millis(100));
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Error waiting for child process: {}", e);
+                                            break;
+                                        }
+                                    }
+                                }
+                            });
+                        
+                        if let Err(e) = cleanup_result {
+                            tracing::error!("Failed to spawn child cleanup thread: {}. Process may become zombie.", e);
+                            // If we can't spawn cleanup thread, the process may become a zombie
+                            // but the OS will eventually clean it up
                         }
                     }
                     Err(e) => {
