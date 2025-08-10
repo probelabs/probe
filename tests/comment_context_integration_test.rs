@@ -6,7 +6,7 @@ use tempfile::NamedTempFile;
 
 /// Integration test to verify that comments in test functions are properly merged
 /// with their parent function context, even when allow_tests is false (the default).
-/// 
+///
 /// This test recreates the specific issue reported where single-line comments
 /// in test functions were not being extended to include their parent context.
 #[test]
@@ -47,35 +47,42 @@ pub fn regular_function() {
     )?;
 
     // Comments should still be merged with their parent functions even when allow_tests=false
-    let comment_blocks: Vec<_> = blocks_disallow_tests.iter()
+    let comment_blocks: Vec<_> = blocks_disallow_tests
+        .iter()
         .filter(|block| {
             // Find blocks that likely contain the "stemmed" comment
             block.start_row <= 7 && block.end_row >= 7 // Line with "stemmed" comment
         })
         .collect();
 
-    assert!(!comment_blocks.is_empty(), 
-        "Should find blocks containing the comment line with allow_tests=false");
+    assert!(
+        !comment_blocks.is_empty(),
+        "Should find blocks containing the comment line with allow_tests=false"
+    );
 
     // The comment should be part of a function block, not a standalone comment
-    let function_block = comment_blocks.iter()
+    let function_block = comment_blocks
+        .iter()
         .find(|block| block.node_type.contains("function") || block.node_type == "function_item");
-        
+
     assert!(function_block.is_some(),
         "Comment should be merged with function context even when allow_tests=false, found blocks: {:?}",
         comment_blocks.iter().map(|b| &b.node_type).collect::<Vec<_>>());
 
     if let Some(func_block) = function_block {
         // The function block should span multiple lines (the entire test function)
-        assert!(func_block.end_row > func_block.start_row + 1,
+        assert!(
+            func_block.end_row > func_block.start_row + 1,
             "Function block should span multiple lines, got {}-{}",
-            func_block.start_row + 1, func_block.end_row + 1);
+            func_block.start_row + 1,
+            func_block.end_row + 1
+        );
     }
 
     Ok(())
 }
 
-/// Test that regular function comments (non-test) work correctly 
+/// Test that regular function comments (non-test) work correctly
 #[test]
 fn test_regular_function_comment_context() -> Result<()> {
     let rust_code = r#"
@@ -100,31 +107,41 @@ pub fn tokenize_and_stem(keyword: &str) -> Vec<String> {
     let lines_to_search: HashSet<usize> = (0..15).collect();
     let blocks = parse_file_for_code_blocks(
         rust_code,
-        "rs", 
+        "rs",
         &lines_to_search,
         false, // allow_tests = false
         None,
     )?;
 
     // Find blocks containing the "stemmed" comments
-    let comment_blocks: Vec<_> = blocks.iter()
+    let comment_blocks: Vec<_> = blocks
+        .iter()
         .filter(|block| {
             // Should include the comment lines
             (block.start_row <= 8 && block.end_row >= 8) ||  // "stemmed parts"
-            (block.start_row <= 10 && block.end_row >= 10)   // "stemmed keyword"
+            (block.start_row <= 10 && block.end_row >= 10) // "stemmed keyword"
         })
         .collect();
 
-    assert!(!comment_blocks.is_empty(), "Should find blocks containing the comments");
+    assert!(
+        !comment_blocks.is_empty(),
+        "Should find blocks containing the comments"
+    );
 
     // Comments should be merged with the function
-    let function_blocks: Vec<_> = comment_blocks.iter()
+    let function_blocks: Vec<_> = comment_blocks
+        .iter()
         .filter(|block| block.node_type.contains("function") || block.node_type == "function_item")
         .collect();
-        
-    assert!(!function_blocks.is_empty(),
+
+    assert!(
+        !function_blocks.is_empty(),
         "Comments should be merged with function context, found: {:?}",
-        comment_blocks.iter().map(|b| &b.node_type).collect::<Vec<_>>());
+        comment_blocks
+            .iter()
+            .map(|b| &b.node_type)
+            .collect::<Vec<_>>()
+    );
 
     Ok(())
 }
@@ -149,7 +166,7 @@ fn test_example() {
     fs::write(&temp_file, rust_code).expect("Failed to write test content");
 
     let lines_to_search: HashSet<usize> = (0..10).collect();
-    
+
     // Test with allow_tests = false (default)
     let blocks_no_tests = parse_file_for_code_blocks(
         rust_code,
@@ -159,45 +176,64 @@ fn test_example() {
         None,
     )?;
 
-    // Test with allow_tests = true  
+    // Test with allow_tests = true
     let blocks_with_tests = parse_file_for_code_blocks(
         rust_code,
-        "rs", 
+        "rs",
         &lines_to_search,
         true, // allow_tests = true
         None,
     )?;
 
     // Both should have the regular function
-    let regular_func_no_tests = blocks_no_tests.iter()
+    let regular_func_no_tests = blocks_no_tests
+        .iter()
         .find(|b| b.node_type.contains("function") && b.start_row <= 2 && b.end_row >= 2);
-    let regular_func_with_tests = blocks_with_tests.iter()
+    let regular_func_with_tests = blocks_with_tests
+        .iter()
         .find(|b| b.node_type.contains("function") && b.start_row <= 2 && b.end_row >= 2);
-        
-    assert!(regular_func_no_tests.is_some(), "Regular function should be present without allow_tests");
-    assert!(regular_func_with_tests.is_some(), "Regular function should be present with allow_tests");
+
+    assert!(
+        regular_func_no_tests.is_some(),
+        "Regular function should be present without allow_tests"
+    );
+    assert!(
+        regular_func_with_tests.is_some(),
+        "Regular function should be present with allow_tests"
+    );
 
     // Comments in test functions should get their context regardless of allow_tests
     // (This was the bug we fixed - comments were losing context when allow_tests=false)
-    let test_comment_no_tests = blocks_no_tests.iter()
+    let test_comment_no_tests = blocks_no_tests
+        .iter()
         .find(|b| b.start_row <= 6 && b.end_row >= 6); // Line with test comment
-    let test_comment_with_tests = blocks_with_tests.iter()
+    let test_comment_with_tests = blocks_with_tests
+        .iter()
         .find(|b| b.start_row <= 6 && b.end_row >= 6); // Line with test comment
 
-    assert!(test_comment_no_tests.is_some(), 
-        "Test comment should have context block even when allow_tests=false");
-    assert!(test_comment_with_tests.is_some(),
-        "Test comment should have context block when allow_tests=true");
+    assert!(
+        test_comment_no_tests.is_some(),
+        "Test comment should have context block even when allow_tests=false"
+    );
+    assert!(
+        test_comment_with_tests.is_some(),
+        "Test comment should have context block when allow_tests=true"
+    );
 
     // The key fix: comments should get merged with parent context regardless of allow_tests
-    if let (Some(block_no_tests), Some(block_with_tests)) = (test_comment_no_tests, test_comment_with_tests) {
+    if let (Some(block_no_tests), Some(block_with_tests)) =
+        (test_comment_no_tests, test_comment_with_tests)
+    {
         // Both should span multiple lines (merged with function context), not just the comment line
         assert!(block_no_tests.end_row > block_no_tests.start_row,
             "Comment should be merged with function context when allow_tests=false, got lines {}-{}",
             block_no_tests.start_row + 1, block_no_tests.end_row + 1);
-        assert!(block_with_tests.end_row > block_with_tests.start_row,
+        assert!(
+            block_with_tests.end_row > block_with_tests.start_row,
             "Comment should be merged with function context when allow_tests=true, got lines {}-{}",
-            block_with_tests.start_row + 1, block_with_tests.end_row + 1);
+            block_with_tests.start_row + 1,
+            block_with_tests.end_row + 1
+        );
     }
 
     Ok(())

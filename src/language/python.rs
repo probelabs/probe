@@ -28,18 +28,18 @@ impl LanguageImpl for PythonLanguage {
     fn is_acceptable_parent(&self, node: &Node) -> bool {
         matches!(
             node.kind(),
-            "function_definition" 
-            | "class_definition"
-            | "module"
-            | "if_statement"
-            | "for_statement" 
-            | "while_statement"
-            | "with_statement"
-            | "try_statement"
-            | "assignment"
-            | "expression_statement"
-            | "block"
-            | "decorated_definition"
+            "function_definition"
+                | "class_definition"
+                | "module"
+                | "if_statement"
+                | "for_statement"
+                | "while_statement"
+                | "with_statement"
+                | "try_statement"
+                | "assignment"
+                | "expression_statement"
+                | "block"
+                | "decorated_definition"
         )
     }
 

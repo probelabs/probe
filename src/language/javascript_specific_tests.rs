@@ -67,11 +67,11 @@ setTimeout(() => {
     let has_function_expression = blocks
         .iter()
         .any(|block| block.node_type == "function_expression");
-        
+
     let has_arrow_function = blocks
         .iter()
         .any(|block| block.node_type == "arrow_function");
-        
+
     let has_function_bodies = blocks
         .iter()
         .any(|block| block.node_type == "statement_block");

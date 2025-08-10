@@ -955,7 +955,7 @@ fn process_sparse_line_map(
                     // For comments, always use parent context regardless of test status
                     // For non-comments, respect the allow_tests setting for the context node
                     let should_use_context = info.is_comment || allow_tests || !ctx_is_test;
-                    
+
                     if !should_use_context {
                         if debug_mode {
                             println!(
@@ -1000,12 +1000,13 @@ fn process_sparse_line_map(
                                 // Filter out complete test function blocks when allow_tests=false
                                 // Only filter if this is a complete test function block (merged from comment + full test context)
                                 // and NOT just a comment that happens to have test context
-                                let should_filter = !allow_tests && ctx_is_test && 
-                                    block.node_type == "function_item" &&
-                                    block.start_row == ctx_rows.0 && 
-                                    block.end_row == ctx_rows.1 &&
-                                    (block.end_row - block.start_row) > 10; // Only filter large function blocks, not small comments
-                                    
+                                let should_filter = !allow_tests
+                                    && ctx_is_test
+                                    && block.node_type == "function_item"
+                                    && block.start_row == ctx_rows.0
+                                    && block.end_row == ctx_rows.1
+                                    && (block.end_row - block.start_row) > 10; // Only filter large function blocks, not small comments
+
                                 if should_filter {
                                     if debug_mode {
                                         println!(
