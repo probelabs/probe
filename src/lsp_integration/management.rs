@@ -517,9 +517,7 @@ impl LspManager {
         if !foreground {
             match lsp_daemon::ipc::IpcStream::connect(&socket_path).await {
                 Ok(_stream) => {
-                    eprintln!(
-                        "❌ LSP daemon is already running on socket: {socket_path}"
-                    );
+                    eprintln!("❌ LSP daemon is already running on socket: {socket_path}");
                     eprintln!("   Use 'probe lsp status' to check the current daemon");
                     eprintln!("   Use 'probe lsp shutdown' to stop the current daemon");
                     eprintln!("   Use 'probe lsp restart' to restart the daemon");

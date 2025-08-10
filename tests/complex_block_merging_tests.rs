@@ -443,7 +443,7 @@ fn third_function() {
             question: None,
             exact: false,
             no_gitignore: false,
-        lsp: false,
+            lsp: false,
         };
 
         // Run the search

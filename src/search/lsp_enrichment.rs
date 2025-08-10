@@ -231,9 +231,7 @@ fn extract_symbol_from_code_block_with_position(
     let first_line = function_line?;
 
     if debug_mode {
-        println!(
-            "[DEBUG] First function line of code block: '{first_line}'"
-        );
+        println!("[DEBUG] First function line of code block: '{first_line}'");
     }
 
     // Try to extract symbol name based on common patterns
@@ -368,7 +366,6 @@ fn find_identifier_position_in_tree(
 
     None
 }
-
 
 /// Extract symbol name from a line of code based on node type
 fn extract_symbol_name_from_line(line: &str, node_type: &str, debug_mode: bool) -> Option<String> {
@@ -534,9 +531,7 @@ fn get_lsp_info_for_result(
         Ok(result) => result,
         Err(_) => {
             if debug_mode {
-                println!(
-                    "[DEBUG] LSP thread panicked for symbol: {symbol_name_for_error}"
-                );
+                println!("[DEBUG] LSP thread panicked for symbol: {symbol_name_for_error}");
             }
             None
         }
