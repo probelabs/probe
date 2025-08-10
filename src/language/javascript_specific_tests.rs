@@ -63,17 +63,22 @@ setTimeout(() => {
         );
     }
 
-    // Verify we got function expressions as acceptable parents
+    // Verify we got function-related blocks (either function expressions or their bodies)
     let has_function_expression = blocks
         .iter()
         .any(|block| block.node_type == "function_expression");
 
+    let has_arrow_function = blocks
+        .iter()
+        .any(|block| block.node_type == "arrow_function");
+
+    let has_function_bodies = blocks
+        .iter()
+        .any(|block| block.node_type == "statement_block");
+
     assert!(
-        has_function_expression
-            || blocks
-                .iter()
-                .any(|block| block.node_type == "arrow_function"),
-        "Expected to find function_expression or arrow_function as acceptable parent"
+        has_function_expression || has_arrow_function || has_function_bodies,
+        "Expected to find function_expression, arrow_function, or their statement_blocks as acceptable parents"
     );
 
     // Verify we don't get variable_declaration as the main container

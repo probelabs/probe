@@ -26,7 +26,16 @@ impl LanguageImpl for PythonLanguage {
     }
 
     fn is_acceptable_parent(&self, node: &Node) -> bool {
-        matches!(node.kind(), "function_definition" | "class_definition")
+        matches!(
+            node.kind(),
+            "function_definition"
+                | "class_definition"
+                | "module"
+                | "assignment"
+                | "expression_statement"
+                | "block"
+                | "decorated_definition"
+        )
     }
 
     fn is_test_node(&self, node: &Node, source: &[u8]) -> bool {

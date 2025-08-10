@@ -33,6 +33,10 @@ impl LanguageImpl for JavaLanguage {
                 | "interface_declaration"
                 | "enum_declaration"
                 | "constructor_declaration"
+                | "field_declaration"
+                | "variable_declaration"
+                | "block"
+                | "static_initializer"
         )
     }
 
