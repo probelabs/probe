@@ -185,7 +185,9 @@ mod windows_impl {
                 );
             }
         }
+    }
 
+    impl IpcListener {
         pub async fn accept(&self) -> Result<IpcStream> {
             let mut server_guard = self.current_server.lock().await;
 
