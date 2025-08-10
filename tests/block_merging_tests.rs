@@ -200,6 +200,7 @@ fn test_integration_with_search_flow() {
         question: None,
         exact: false,
         no_gitignore: false,
+        lsp: false,
     };
 
     // Run a search that should produce multiple overlapping blocks
@@ -315,6 +316,7 @@ fn test_no_merge_flag() {
         question: None,
         exact: false,
         no_gitignore: false,
+        lsp: false,
     };
 
     // Run a search that should produce merged blocks
@@ -342,6 +344,7 @@ fn test_no_merge_flag() {
         question: None,
         exact: false,
         no_gitignore: false,
+        lsp: false,
     };
 
     // Run a search that should not merge blocks

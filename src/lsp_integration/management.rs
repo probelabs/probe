@@ -518,8 +518,7 @@ impl LspManager {
             match lsp_daemon::ipc::IpcStream::connect(&socket_path).await {
                 Ok(_stream) => {
                     eprintln!(
-                        "❌ LSP daemon is already running on socket: {}",
-                        socket_path
+                        "❌ LSP daemon is already running on socket: {socket_path}"
                     );
                     eprintln!("   Use 'probe lsp status' to check the current daemon");
                     eprintln!("   Use 'probe lsp shutdown' to stop the current daemon");
@@ -529,9 +528,9 @@ impl LspManager {
                 Err(_) => {
                     // Socket file might be stale, clean it up
                     if std::path::Path::new(&socket_path).exists() {
-                        println!("🧹 Cleaning up stale socket file: {}", socket_path);
+                        println!("🧹 Cleaning up stale socket file: {socket_path}");
                         if let Err(e) = std::fs::remove_file(&socket_path) {
-                            eprintln!("⚠️  Warning: Failed to remove stale socket: {}", e);
+                            eprintln!("⚠️  Warning: Failed to remove stale socket: {e}");
                         }
                     }
                 }
@@ -563,7 +562,7 @@ impl LspManager {
 
             // Fork the daemon as a separate process
             let child = Command::new(&exe_path)
-                .args(&[
+                .args([
                     "lsp",
                     "start",
                     "-f",
@@ -593,7 +592,7 @@ impl LspManager {
                     // Daemon is running successfully
                 }
                 Err(e) => {
-                    eprintln!("⚠️  Warning: Could not verify daemon started: {}", e);
+                    eprintln!("⚠️  Warning: Could not verify daemon started: {e}");
                 }
             }
         }
