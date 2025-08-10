@@ -10,9 +10,16 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 
+// Type alias for the cache key
+type CacheKey = (String, String, u32, u32);
+// Type alias for the cache value
+type CacheValue = Arc<serde_json::Value>;
+// Type alias for the cache map
+type CacheMap = HashMap<CacheKey, CacheValue>;
+
 // Global cache for LSP results to avoid redundant calls
 lazy_static::lazy_static! {
-    static ref LSP_CACHE: Arc<Mutex<HashMap<(String, String, u32, u32), Arc<serde_json::Value>>>> =
+    static ref LSP_CACHE: Arc<Mutex<CacheMap>> =
         Arc::new(Mutex::new(HashMap::new()));
 }
 
@@ -225,8 +232,7 @@ fn extract_symbol_from_code_block_with_position(
 
     if debug_mode {
         println!(
-            "[DEBUG] First function line of code block: '{}'",
-            first_line
+            "[DEBUG] First function line of code block: '{first_line}'"
         );
     }
 
@@ -234,7 +240,7 @@ fn extract_symbol_from_code_block_with_position(
     let symbol_name = extract_symbol_name_from_line(first_line, &result.node_type, debug_mode)?;
 
     if debug_mode {
-        println!("[DEBUG] Extracted symbol name: '{}'", symbol_name);
+        println!("[DEBUG] Extracted symbol name: '{symbol_name}'");
     }
 
     // Now find the precise column position using tree-sitter
@@ -363,92 +369,6 @@ fn find_identifier_position_in_tree(
     None
 }
 
-/// Extract symbol information from a code block (legacy function for compatibility)
-/// This function attempts to identify the main symbol (function, class, etc.)
-/// in a code block and determine its position.
-fn extract_symbol_from_code_block(result: &SearchResult, debug_mode: bool) -> Option<SymbolInfo> {
-    // For function and method node types, try to extract the name
-    let is_function_like = matches!(
-        result.node_type.as_str(),
-        "function_item"
-            | "function_definition"
-            | "method_definition"
-            | "function_declaration"
-            | "method_declaration"
-            | "function"
-            | "method"
-            | "class_definition"
-            | "struct_item"
-            | "impl_item"
-            | "trait_item"
-    );
-
-    if !is_function_like {
-        return None;
-    }
-
-    // Find the first line that looks like a function/method/class definition
-    // Skip doc comments (///, //), attributes (#[...]), and regular comments
-    let mut function_line = None;
-    for line in result.code.lines() {
-        let trimmed = line.trim();
-        // Skip comments and attributes
-        if trimmed.starts_with("///")
-            || trimmed.starts_with("//")
-            || trimmed.starts_with("#[")
-            || trimmed.starts_with("#!")
-            || trimmed.is_empty()
-        {
-            continue;
-        }
-        // Check if this line looks like a function/method/class definition
-        if trimmed.starts_with("pub fn ")
-            || trimmed.starts_with("fn ")
-            || trimmed.starts_with("pub async fn ")
-            || trimmed.starts_with("async fn ")
-            || trimmed.starts_with("def ")
-            || trimmed.starts_with("async def ")
-            || trimmed.starts_with("function ")
-            || trimmed.starts_with("func ")
-            || trimmed.starts_with("class ")
-            || trimmed.starts_with("struct ")
-            || trimmed.starts_with("pub struct ")
-            || trimmed.starts_with("impl ")
-        {
-            function_line = Some(line);
-            break;
-        }
-    }
-
-    let first_line = function_line?;
-
-    if debug_mode {
-        println!(
-            "[DEBUG] First function line of code block: '{}'",
-            first_line
-        );
-    }
-
-    // Try to extract symbol name based on common patterns
-    let symbol_name = extract_symbol_name_from_line(first_line, &result.node_type, debug_mode)?;
-
-    if debug_mode {
-        println!("[DEBUG] Extracted symbol name: '{}'", symbol_name);
-    }
-
-    if debug_mode {
-        println!(
-            "[DEBUG] Extracted symbol '{}' from {} at {}:{}",
-            symbol_name, result.file, result.lines.0, 0
-        );
-    }
-
-    Some(SymbolInfo {
-        name: symbol_name,
-        line: (result.lines.0 - 1) as u32, // Convert to 0-indexed
-        column: 0,                         // We don't have exact column info, use 0
-    })
-}
 
 /// Extract symbol name from a line of code based on node type
 fn extract_symbol_name_from_line(line: &str, node_type: &str, debug_mode: bool) -> Option<String> {
@@ -476,7 +396,7 @@ fn extract_symbol_name_from_line(line: &str, node_type: &str, debug_mode: bool) 
             if let Some(pos) = trimmed.find("fn ") {
                 let after_fn = &trimmed[pos + 3..];
                 if debug_mode {
-                    println!("[DEBUG] Text after 'fn ': '{}'", after_fn);
+                    println!("[DEBUG] Text after 'fn ': '{after_fn}'");
                 }
                 return extract_name_after_keyword(after_fn);
             }
@@ -615,8 +535,7 @@ fn get_lsp_info_for_result(
         Err(_) => {
             if debug_mode {
                 println!(
-                    "[DEBUG] LSP thread panicked for symbol: {}",
-                    symbol_name_for_error
+                    "[DEBUG] LSP thread panicked for symbol: {symbol_name_for_error}"
                 );
             }
             None
@@ -655,7 +574,7 @@ async fn get_lsp_info_async(
         Ok(client) => client,
         Err(e) => {
             if debug_mode {
-                println!("[DEBUG] Failed to create LSP client: {}", e);
+                println!("[DEBUG] Failed to create LSP client: {e}");
             }
             return None;
         }
@@ -679,26 +598,26 @@ async fn get_lsp_info_async(
             });
 
             if debug_mode {
-                println!("[DEBUG] Got LSP info for {}: {:?}", symbol_name, lsp_data);
+                println!("[DEBUG] Got LSP info for {symbol_name}: {lsp_data:?}");
             }
 
             Some(lsp_data)
         }
         Ok(Ok(None)) => {
             if debug_mode {
-                println!("[DEBUG] No LSP info available for {}", symbol_name);
+                println!("[DEBUG] No LSP info available for {symbol_name}");
             }
             None
         }
         Ok(Err(e)) => {
             if debug_mode {
-                println!("[DEBUG] LSP query failed for {}: {}", symbol_name, e);
+                println!("[DEBUG] LSP query failed for {symbol_name}: {e}");
             }
             None
         }
         Err(_) => {
             if debug_mode {
-                println!("[DEBUG] LSP query timed out for {}", symbol_name);
+                println!("[DEBUG] LSP query timed out for {symbol_name}");
             }
             None
         }

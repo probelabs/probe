@@ -1565,7 +1565,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             debug_mode,
         ) {
             if debug_mode {
-                println!("DEBUG: LSP enrichment failed: {}", e);
+                println!("DEBUG: LSP enrichment failed: {e}");
             }
             // Continue even if LSP enrichment fails
         } else if debug_mode {

@@ -112,7 +112,7 @@ pub fn format_and_print_search_results(
                                                 let file_path = file_path
                                                     .strip_prefix("file://")
                                                     .unwrap_or(file_path);
-                                                println!("    - {} ({}:{})", name, file_path, line);
+                                                println!("    - {name} ({file_path}:{line})");
                                             }
                                         }
                                     }
@@ -142,7 +142,7 @@ pub fn format_and_print_search_results(
                                                 let file_path = file_path
                                                     .strip_prefix("file://")
                                                     .unwrap_or(file_path);
-                                                println!("    - {} ({}:{})", name, file_path, line);
+                                                println!("    - {name} ({file_path}:{line})");
                                             }
                                         }
                                     }
@@ -154,7 +154,7 @@ pub fn format_and_print_search_results(
                                 obj.get("references_count").and_then(|v| v.as_u64())
                             {
                                 if refs_count > 0 {
-                                    println!("  References: {}", refs_count);
+                                    println!("  References: {refs_count}");
                                 }
                             }
                         }
@@ -507,7 +507,7 @@ fn format_and_print_color_results(
                                         call_obj.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
                                     let file_path =
                                         file_path.strip_prefix("file://").unwrap_or(file_path);
-                                    println!("    - {} ({}:{})", name, file_path, line);
+                                    println!("    - {name} ({file_path}:{line})");
                                 }
                             }
                         }
@@ -534,7 +534,7 @@ fn format_and_print_color_results(
                                         call_obj.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
                                     let file_path =
                                         file_path.strip_prefix("file://").unwrap_or(file_path);
-                                    println!("    - {} ({}:{})", name, file_path, line);
+                                    println!("    - {name} ({file_path}:{line})");
                                 }
                             }
                         }
