@@ -29,10 +29,18 @@ impl LanguageImpl for JavaLanguage {
         matches!(
             node.kind(),
             "method_declaration"
-                | "class_declaration"
-                | "interface_declaration"
-                | "enum_declaration"
-                | "constructor_declaration"
+            | "class_declaration"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "constructor_declaration"
+            | "field_declaration"
+            | "variable_declaration"
+            | "if_statement"
+            | "for_statement"
+            | "while_statement"
+            | "try_statement"
+            | "block"
+            | "static_initializer"
         )
     }
 

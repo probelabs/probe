@@ -920,7 +920,7 @@ fn process_sparse_line_map(
         if let Some(info) = sparse_line_map.get(line_idx) {
             if debug_mode {
                 println!(
-                    "DEBUG: Found sparse cached node info for line {}: original_type='{}', original_lines={}-{}, is_comment={}, is_test={}, context_kind={:?}, context_lines={:?}",
+                    "DEBUG: Found sparse cached node info for line {}: original_type='{}', original_lines={}-{}, is_comment={}, is_test={}, context_kind={:?}, context_lines={:?}, context_is_test={:?}",
                     line,
                     info.node_kind,
                     info.start_row + 1,
@@ -928,7 +928,8 @@ fn process_sparse_line_map(
                     info.is_comment,
                     info.is_test,
                     info.context_node_kind,
-                    info.context_node_rows.map(|(s, e)| (s + 1, e + 1))
+                    info.context_node_rows.map(|(s, e)| (s + 1, e + 1)),
+                    info.context_node_is_test
                 );
             }
 
@@ -951,8 +952,11 @@ fn process_sparse_line_map(
                     &info.context_node_kind,
                     info.context_node_is_test,
                 ) {
-                    // Check test status of the context node
-                    if !allow_tests && ctx_is_test {
+                    // For comments, always use parent context regardless of test status
+                    // For non-comments, respect the allow_tests setting for the context node
+                    let should_use_context = info.is_comment || allow_tests || !ctx_is_test;
+                    
+                    if !should_use_context {
                         if debug_mode {
                             println!(
                                 "DEBUG: Sparse Cache: Skipping test context node at lines {}-{}, type: {}",
@@ -993,7 +997,26 @@ fn process_sparse_line_map(
                             seen_block_spans.insert(block_key.unwrap());
                             seen_block_spans.insert((info.start_row, info.end_row));
                             if let Some(block) = potential_block {
-                                code_blocks.push(block);
+                                // Filter out complete test function blocks when allow_tests=false
+                                // Only filter if this is a complete test function block (merged from comment + full test context)
+                                // and NOT just a comment that happens to have test context
+                                let should_filter = !allow_tests && ctx_is_test && 
+                                    block.node_type == "function_item" &&
+                                    block.start_row == ctx_rows.0 && 
+                                    block.end_row == ctx_rows.1 &&
+                                    (block.end_row - block.start_row) > 10; // Only filter large function blocks, not small comments
+                                    
+                                if should_filter {
+                                    if debug_mode {
+                                        println!(
+                                            "DEBUG: Sparse Cache: Filtering out complete test function block at lines {}-{}, type: {}",
+                                            block.start_row + 1, block.end_row + 1, block.node_type
+                                        );
+                                    }
+                                    // Skip adding this block
+                                } else {
+                                    code_blocks.push(block);
+                                }
                             }
                             continue;
                         }
@@ -1908,6 +1931,5 @@ pub fn parse_file_for_code_blocks_with_tree(
         println!("DEBUG: SPARSE OPTIMIZATION - Stored sparse line map in cache key: {cache_key}");
     }
 
-    // Return the code blocks generated from the sparse approach
     Ok(code_blocks)
 }
