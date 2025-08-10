@@ -703,25 +703,22 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
         if !ctx.params.allow_tests {
             // Use string-based test detection for merged context windows since AST parsing
             // of extracted context may not preserve full structure needed for is_test_node
-            let is_test_context = context_code.contains("#[test]") || 
-                                  context_code.lines().any(|line| {
-                                      let trimmed = line.trim();
-                                      trimmed.starts_with("fn test_") || 
-                                      trimmed.starts_with("pub fn test_")
-                                  });
-            
+            let is_test_context = context_code.contains("#[test]")
+                || context_code.lines().any(|line| {
+                    let trimmed = line.trim();
+                    trimmed.starts_with("fn test_") || trimmed.starts_with("pub fn test_")
+                });
+
             if ctx.debug_mode {
                 println!(
-                    "DEBUG: Test function check for merged context window at lines {}-{}: is_test={}",
-                    context_start, context_end, is_test_context
+                    "DEBUG: Test function check for merged context window at lines {context_start}-{context_end}: is_test={is_test_context}"
                 );
             }
-            
+
             if is_test_context {
                 if ctx.debug_mode {
                     println!(
-                        "DEBUG: Filtering out merged context window at lines {}-{} (contains test function)",
-                        context_start, context_end
+                        "DEBUG: Filtering out merged context window at lines {context_start}-{context_end} (contains test function)"
                     );
                 }
                 // Mark lines as covered to prevent further processing
