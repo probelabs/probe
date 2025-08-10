@@ -237,6 +237,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         timeout,
         question,
         no_gitignore,
+        lsp: _, // We access it via options.lsp directly
     } = options;
     // Start the timeout thread
     let timeout_handle = timeout::start_timeout_thread(*timeout);
@@ -971,6 +972,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                     preprocessed_queries: None,
                     no_merge: *no_merge,
                     query_plan: &plan,
+                    lsp: options.lsp,
                 };
 
                 if debug_mode {
@@ -1478,7 +1480,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         println!("DEBUG: Starting block merging...");
     }
 
-    let final_results = if !limited.results.is_empty() && !*no_merge {
+    let mut final_results = if !limited.results.is_empty() && !*no_merge {
         use probe_code::search::block_merging::merge_ranked_blocks;
         let merged = merge_ranked_blocks(limited.results.clone(), *merge_threshold);
 
@@ -1548,6 +1550,31 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
     }
 
+    // Add LSP enrichment if enabled
+    if options.lsp && !final_results.results.is_empty() {
+        if debug_mode {
+            println!("DEBUG: Starting LSP enrichment for {} results", final_results.results.len());
+        }
+        
+        // Enrich results with LSP information
+        if let Err(e) = crate::search::lsp_enrichment::enrich_results_with_lsp(
+            &mut final_results.results,
+            debug_mode,
+        ) {
+            if debug_mode {
+                println!("DEBUG: LSP enrichment failed: {}", e);
+            }
+            // Continue even if LSP enrichment fails
+        } else if debug_mode {
+            // Debug: check how many results have LSP info after enrichment
+            let enriched_count = final_results.results.iter()
+                .filter(|r| r.lsp_info.is_some())
+                .count();
+            println!("DEBUG: After enrichment, {}/{} results have LSP info", 
+                enriched_count, final_results.results.len());
+        }
+    }
+
     // Set total search time
     timings.total_search_time = Some(total_start.elapsed());
 
@@ -1556,6 +1583,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     // Stop the timeout thread
     timeout_handle.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    if debug_mode && options.lsp {
+        let enriched_count = final_results.results.iter()
+            .filter(|r| r.lsp_info.is_some())
+            .count();
+        println!("DEBUG: Returning {} results, {} with LSP info", 
+            final_results.results.len(), enriched_count);
+    }
 
     Ok(final_results)
 }

@@ -93,6 +93,10 @@ pub struct Args {
     #[arg(long = "question")]
     pub question: Option<String>,
 
+    /// Enable LSP integration for enhanced symbol information
+    #[arg(long = "lsp")]
+    pub lsp: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -203,6 +207,10 @@ pub enum Commands {
         /// Natural language question for BERT reranking (uses search keywords if not specified)
         #[arg(long = "question")]
         question: Option<String>,
+
+        /// Enable LSP integration for enhanced symbol information
+        #[arg(long = "lsp")]
+        lsp: bool,
     },
 
     /// Extract code blocks from files
