@@ -5,6 +5,8 @@
 pub mod ipc;
 pub mod language_detector;
 pub mod logging;
+pub mod pid_lock;
+pub mod process_group;
 pub mod protocol;
 pub mod socket_path;
 

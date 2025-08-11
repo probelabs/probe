@@ -39,9 +39,23 @@ mod unix_impl {
 
     impl IpcListener {
         pub async fn bind(path: &str) -> Result<Self> {
-            // Remove existing socket file if it exists
+            // Check if socket file exists and if a daemon is listening
             if Path::new(path).exists() {
-                std::fs::remove_file(path)?;
+                // Try to connect to see if a daemon is actually running
+                match TokioUnixStream::connect(path).await {
+                    Ok(_) => {
+                        // Another daemon is running on this socket
+                        return Err(anyhow::anyhow!(
+                            "Socket {} is already in use by another daemon",
+                            path
+                        ));
+                    }
+                    Err(_) => {
+                        // Socket file exists but no daemon is listening (stale socket)
+                        tracing::info!("Removing stale socket file: {}", path);
+                        std::fs::remove_file(path)?;
+                    }
+                }
             }
 
             // Create parent directory if needed

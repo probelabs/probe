@@ -13,6 +13,13 @@ use uuid::Uuid;
 
 use crate::lsp_integration::types::*;
 
+#[derive(Debug)]
+enum DaemonHealth {
+    Healthy,
+    VersionMismatch,
+    Unhealthy,
+}
+
 pub struct LspClient {
     stream: Option<IpcStream>,
     config: LspConfig,
@@ -368,6 +375,56 @@ fn get_probe_version_info() -> (String, String, String) {
     )
 }
 
+/// Check daemon health and version compatibility
+async fn check_daemon_health() -> Result<DaemonHealth> {
+    let socket_path = get_default_socket_path();
+
+    // Try to connect to existing daemon
+    let mut stream = match timeout(Duration::from_secs(2), IpcStream::connect(&socket_path)).await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(e)) => return Err(anyhow!("Failed to connect to daemon: {}", e)),
+        Err(_) => return Err(anyhow!("Connection timeout")),
+    };
+
+    // Send ping request to check health
+    let ping_request = DaemonRequest::Ping {
+        request_id: Uuid::new_v4(),
+    };
+
+    let encoded = MessageCodec::encode(&ping_request)?;
+    stream.write_all(&encoded).await?;
+    stream.flush().await?;
+
+    // Read ping response with timeout
+    let mut length_buf = [0u8; 4];
+    match timeout(Duration::from_secs(2), stream.read_exact(&mut length_buf)).await {
+        Ok(Ok(_)) => {}
+        _ => return Ok(DaemonHealth::Unhealthy),
+    }
+
+    let length = u32::from_be_bytes(length_buf) as usize;
+    let mut response_buf = vec![0u8; length];
+    match timeout(Duration::from_secs(2), stream.read_exact(&mut response_buf)).await {
+        Ok(Ok(_)) => {}
+        _ => return Ok(DaemonHealth::Unhealthy),
+    }
+
+    let response = MessageCodec::decode_response(&[&length_buf[..], &response_buf[..]].concat())?;
+
+    // Check if we got a pong response
+    match response {
+        DaemonResponse::Pong { .. } => {
+            // Daemon is responsive, now check version
+            if check_daemon_version_compatibility().await.unwrap_or(false) {
+                Ok(DaemonHealth::Healthy)
+            } else {
+                Ok(DaemonHealth::VersionMismatch)
+            }
+        }
+        _ => Ok(DaemonHealth::Unhealthy),
+    }
+}
+
 /// Check if daemon version matches probe binary version
 async fn check_daemon_version_compatibility() -> Result<bool> {
     let socket_path = get_default_socket_path();
@@ -462,14 +519,23 @@ async fn shutdown_existing_daemon() -> Result<()> {
 async fn start_embedded_daemon_background() -> Result<()> {
     let socket_path = get_default_socket_path();
 
-    // Check version compatibility if daemon is running
-    if IpcStream::connect(&socket_path).await.is_ok() {
-        if check_daemon_version_compatibility().await.unwrap_or(false) {
-            debug!("Daemon already running with compatible version");
+    // Check if daemon is healthy and compatible
+    match check_daemon_health().await {
+        Ok(DaemonHealth::Healthy) => {
+            debug!("Daemon already running and healthy");
             return Ok(());
-        } else {
+        }
+        Ok(DaemonHealth::VersionMismatch) => {
             info!("Daemon version mismatch detected, restarting daemon...");
             shutdown_existing_daemon().await?;
+        }
+        Ok(DaemonHealth::Unhealthy) => {
+            warn!("Daemon is unhealthy, restarting...");
+            shutdown_existing_daemon().await?;
+        }
+        Err(_) => {
+            // No daemon running or can't connect
+            debug!("No daemon running, will start new one");
         }
     }
 

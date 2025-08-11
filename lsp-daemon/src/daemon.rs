@@ -2,6 +2,8 @@ use crate::ipc::{IpcListener, IpcStream};
 use crate::language_detector::{Language, LanguageDetector};
 use crate::logging::{LogBuffer, MemoryLogLayer};
 use crate::lsp_registry::LspRegistry;
+use crate::pid_lock::PidLock;
+use crate::process_group::ProcessGroup;
 use crate::protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyResult, DaemonRequest, DaemonResponse,
     DaemonStatus, LanguageInfo, MessageCodec, PoolStatus,
@@ -32,6 +34,9 @@ pub struct LspDaemon {
     request_count: Arc<RwLock<u64>>,
     shutdown: Arc<RwLock<bool>>,
     log_buffer: LogBuffer,
+    pid_lock: Option<PidLock>,
+    process_group: ProcessGroup,
+    child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>, // Track all child PIDs
     // Performance metrics
     request_durations: Arc<RwLock<Vec<Duration>>>, // Keep last 100 request durations
     error_count: Arc<RwLock<usize>>,
@@ -48,7 +53,11 @@ impl LspDaemon {
     ) -> Result<Self> {
         let registry = Arc::new(LspRegistry::new()?);
         let detector = Arc::new(LanguageDetector::new());
-        let server_manager = Arc::new(SingleServerManager::new(registry.clone()));
+        let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let server_manager = Arc::new(SingleServerManager::new_with_tracker(
+            registry.clone(),
+            child_processes.clone(),
+        ));
         let workspace_resolver = Arc::new(tokio::sync::Mutex::new(WorkspaceResolver::new(
             allowed_roots,
         )));
@@ -94,12 +103,26 @@ impl LspDaemon {
             request_count: Arc::new(RwLock::new(0)),
             shutdown: Arc::new(RwLock::new(false)),
             log_buffer,
+            pid_lock: None,
+            process_group: ProcessGroup::new(),
+            child_processes,
             request_durations: Arc::new(RwLock::new(Vec::with_capacity(100))),
             error_count: Arc::new(RwLock::new(0)),
         })
     }
 
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(mut self) -> Result<()> {
+        // Acquire PID lock to ensure only one daemon runs
+        let mut pid_lock = PidLock::new(&self.socket_path);
+        pid_lock
+            .try_lock()
+            .map_err(|e| anyhow!("Failed to acquire daemon lock: {}", e))?;
+        self.pid_lock = Some(pid_lock);
+
+        // Set up process group for child management
+        #[cfg(unix)]
+        self.process_group.become_leader()?;
+
         // Clean up any existing socket
         remove_socket_file(&self.socket_path)?;
 
@@ -141,31 +164,43 @@ impl LspDaemon {
                 break;
             }
 
-            match listener.accept().await {
-                Ok(stream) => {
-                    // Check if we've reached the connection limit
-                    const MAX_CONNECTIONS: usize = 100; // Reasonable limit for concurrent connections
+            // Use select! to make accept interruptible by shutdown
+            tokio::select! {
+                    accept_result = listener.accept() => {
+                        match accept_result {
+                            Ok(stream) => {
+                        // Check if we've reached the connection limit
+                        const MAX_CONNECTIONS: usize = 100; // Reasonable limit for concurrent connections
 
-                    let current_connections = self.connections.len();
-                    if current_connections >= MAX_CONNECTIONS {
-                        warn!(
-                            "Maximum connection limit reached ({}/{}), rejecting new connection",
-                            current_connections, MAX_CONNECTIONS
-                        );
-                        // Drop the stream to close the connection
-                        drop(stream);
-                        continue;
-                    }
-
-                    let daemon = self.clone_refs();
-                    tokio::spawn(async move {
-                        if let Err(e) = daemon.handle_client(stream).await {
-                            error!("Error handling client: {}", e);
+                        let current_connections = self.connections.len();
+                        if current_connections >= MAX_CONNECTIONS {
+                            warn!(
+                                "Maximum connection limit reached ({}/{}), rejecting new connection",
+                                current_connections, MAX_CONNECTIONS
+                            );
+                            // Drop the stream to close the connection
+                            drop(stream);
+                            continue;
                         }
-                    });
+
+                        let daemon = self.clone_refs();
+                        tokio::spawn(async move {
+                            if let Err(e) = daemon.handle_client(stream).await {
+                                error!("Error handling client: {}", e);
+                            }
+                                });
+                        }
+                        Err(e) => {
+                            error!("Error accepting connection: {}", e);
+                        }
+                    }
                 }
-                Err(e) => {
-                    error!("Error accepting connection: {}", e);
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                    // Periodic check for shutdown flag
+                    if *self.shutdown.read().await {
+                        info!("Daemon shutting down (periodic check)...");
+                        break;
+                    }
                 }
             }
         }
@@ -738,11 +773,37 @@ impl LspDaemon {
         }
     }
 
-    async fn cleanup(&self) -> Result<()> {
+    async fn cleanup(&mut self) -> Result<()> {
         info!("Cleaning up daemon resources");
 
-        // Shutdown all servers
+        // Shutdown all servers gracefully first
         self.server_manager.shutdown_all().await;
+
+        // Give servers a moment to shutdown gracefully
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Kill any remaining child processes directly
+        let child_pids = self.child_processes.lock().await;
+        for &pid in child_pids.iter() {
+            #[cfg(unix)]
+            unsafe {
+                let _ = libc::kill(pid as i32, libc::SIGTERM);
+                debug!("Sent SIGTERM to child process {}", pid);
+            }
+        }
+        drop(child_pids);
+
+        // Give processes time to terminate
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Force kill any remaining processes in our process group
+        #[cfg(unix)]
+        self.process_group.kill_all();
+
+        // Release PID lock
+        if let Some(mut lock) = self.pid_lock.take() {
+            lock.unlock()?;
+        }
 
         // Remove socket file (Unix only)
         remove_socket_file(&self.socket_path)?;
@@ -762,6 +823,9 @@ impl LspDaemon {
             request_count: self.request_count.clone(),
             shutdown: self.shutdown.clone(),
             log_buffer: self.log_buffer.clone(),
+            pid_lock: None,                                // Don't clone the PID lock
+            process_group: ProcessGroup::new(),            // Create new for cloned instance
+            child_processes: self.child_processes.clone(), // Share child process tracking
             request_durations: self.request_durations.clone(),
             error_count: self.error_count.clone(),
         }
