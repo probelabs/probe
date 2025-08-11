@@ -57,13 +57,22 @@ impl ServerInstance {
 pub struct SingleServerManager {
     servers: Arc<DashMap<Language, Arc<Mutex<ServerInstance>>>>,
     registry: Arc<crate::lsp_registry::LspRegistry>,
+    child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
 }
 
 impl SingleServerManager {
     pub fn new(registry: Arc<crate::lsp_registry::LspRegistry>) -> Self {
+        Self::new_with_tracker(registry, Arc::new(tokio::sync::Mutex::new(Vec::new())))
+    }
+
+    pub fn new_with_tracker(
+        registry: Arc<crate::lsp_registry::LspRegistry>,
+        child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
+    ) -> Self {
         Self {
             servers: Arc::new(DashMap::new()),
             registry,
+            child_processes,
         }
     }
 
@@ -205,8 +214,15 @@ impl SingleServerManager {
     async fn create_server(&self, config: &LspServerConfig) -> Result<LspServer> {
         debug!("Creating new LSP server for {:?}", config.language);
 
-        // Create server
+        // Create server and track its PID
         let mut server = LspServer::spawn(config)?;
+
+        // Track the child process PID
+        if let Some(pid) = server.get_pid() {
+            let mut pids = self.child_processes.lock().await;
+            pids.push(pid);
+            info!("Tracking LSP server process with PID: {}", pid);
+        }
 
         // Initialize with a default workspace (will be replaced with actual workspace on first use)
         server.initialize_empty(config).await?;
@@ -325,7 +341,7 @@ impl SingleServerManager {
             servers_to_shutdown.push((language, server_instance));
         }
 
-        // Shutdown each server
+        // Shutdown each server gracefully
         for (language, server_instance) in servers_to_shutdown {
             // Try to acquire lock with timeout
             match tokio::time::timeout(Duration::from_secs(2), server_instance.lock()).await {
@@ -345,7 +361,36 @@ impl SingleServerManager {
             }
         }
 
+        // Clear servers from map
         self.servers.clear();
+
+        // Force kill all tracked child processes if any remain
+        let pids = self.child_processes.lock().await;
+        if !pids.is_empty() {
+            info!("Force killing {} tracked child processes", pids.len());
+            for &pid in pids.iter() {
+                #[cfg(unix)]
+                unsafe {
+                    // First try SIGTERM
+                    if libc::kill(pid as i32, libc::SIGTERM) == 0 {
+                        debug!("Sent SIGTERM to process {}", pid);
+                    }
+                }
+            }
+
+            // Give processes a moment to terminate
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            // Then force kill with SIGKILL
+            for &pid in pids.iter() {
+                #[cfg(unix)]
+                unsafe {
+                    if libc::kill(pid as i32, libc::SIGKILL) == 0 {
+                        debug!("Sent SIGKILL to process {}", pid);
+                    }
+                }
+            }
+        }
     }
 
     pub async fn get_stats(&self) -> Vec<ServerStats> {

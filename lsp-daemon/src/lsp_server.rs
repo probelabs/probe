@@ -34,6 +34,13 @@ impl std::fmt::Debug for LspServer {
 }
 
 impl LspServer {
+    /// Get the PID of the LSP server process
+    pub fn get_pid(&self) -> Option<u32> {
+        // This needs to be sync since we're calling from async context but Child is not Send
+        let child_opt = self.child.try_lock().ok()?;
+        child_opt.as_ref().map(|child| child.id())
+    }
+
     pub fn spawn_with_workspace(
         config: &LspServerConfig,
         workspace_root: &PathBuf,
