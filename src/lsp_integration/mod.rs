@@ -77,6 +77,25 @@ pub enum LspSubcommands {
         #[clap(short, long)]
         foreground: bool,
     },
+
+    /// Initialize language servers for workspaces
+    Init {
+        /// Workspace path to initialize (defaults to current directory)
+        #[clap(short = 'w', long = "workspace")]
+        workspace: Option<String>,
+
+        /// Specific languages to initialize (comma-separated, e.g., "rust,typescript")
+        #[clap(short = 'l', long = "languages")]
+        languages: Option<String>,
+
+        /// Recursively search for and initialize nested workspaces
+        #[clap(short = 'r', long = "recursive")]
+        recursive: bool,
+
+        /// Use daemon mode (auto-start if not running)
+        #[clap(long = "daemon", default_value = "true")]
+        daemon: bool,
+    },
 }
 
 use anyhow::Result;

@@ -17,6 +17,12 @@ pub enum DaemonRequest {
         workspace_root: PathBuf,
         language: Option<Language>,
     },
+    InitWorkspaces {
+        request_id: Uuid,
+        workspace_root: PathBuf,
+        languages: Option<Vec<Language>>,
+        recursive: bool,
+    },
     ListWorkspaces {
         request_id: Uuid,
     },
@@ -98,6 +104,11 @@ pub enum DaemonResponse {
         workspace_root: PathBuf,
         language: Language,
         lsp_server: String,
+    },
+    WorkspacesInitialized {
+        request_id: Uuid,
+        initialized: Vec<InitializedWorkspace>,
+        errors: Vec<String>,
     },
     WorkspaceList {
         request_id: Uuid,
@@ -276,6 +287,14 @@ pub struct WorkspaceInfo {
     pub language: Language,
     pub server_status: ServerStatus,
     pub file_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InitializedWorkspace {
+    pub workspace_root: PathBuf,
+    pub language: Language,
+    pub lsp_server: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

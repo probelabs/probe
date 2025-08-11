@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::*;
 use serde_json::json;
 use std::path::Path;
@@ -58,6 +58,21 @@ impl LspManager {
                 lines,
                 clear,
             } => Self::handle_logs(*follow, *lines, *clear).await,
+            LspSubcommands::Init {
+                workspace,
+                languages,
+                recursive,
+                daemon,
+            } => {
+                Self::init_workspaces(
+                    workspace.clone(),
+                    languages.clone(),
+                    *recursive,
+                    *daemon,
+                    format,
+                )
+                .await
+            }
         }
     }
 
@@ -154,14 +169,29 @@ impl LspManager {
 
                         if !pool.workspaces.is_empty() {
                             println!(
-                                "    {} {}",
+                                "    {} ({})",
                                 "Workspaces:".bold(),
                                 pool.workspaces.len().to_string().cyan()
                             );
                             for workspace in &pool.workspaces {
-                                if let Some(name) = std::path::Path::new(workspace).file_name() {
-                                    println!("      • {}", name.to_string_lossy().dimmed());
-                                }
+                                let path = std::path::Path::new(workspace);
+                                // Try to show a relative path from home or current directory
+                                let display_path = if let Ok(current_dir) = std::env::current_dir() {
+                                    if let Ok(relative) = path.strip_prefix(&current_dir) {
+                                        format!("./{}", relative.display())
+                                    } else if let Some(home) = dirs::home_dir() {
+                                        if let Ok(relative) = path.strip_prefix(&home) {
+                                            format!("~/{}", relative.display())
+                                        } else {
+                                            workspace.clone()
+                                        }
+                                    } else {
+                                        workspace.clone()
+                                    }
+                                } else {
+                                    workspace.clone()
+                                };
+                                println!("      • {}", display_path.dimmed());
                             }
                         }
                     }
@@ -654,6 +684,198 @@ impl LspManager {
             );
         }
     }
+
+    /// Initialize language servers for workspaces
+    async fn init_workspaces(
+        workspace: Option<String>,
+        languages: Option<String>,
+        recursive: bool,
+        use_daemon: bool,
+        format: &str,
+    ) -> Result<()> {
+        use std::path::PathBuf;
+
+        // Determine workspace root
+        let workspace_root = if let Some(ws) = workspace {
+            let path = PathBuf::from(ws);
+            // Convert relative paths to absolute paths for URI conversion
+            if path.is_absolute() {
+                path
+            } else {
+                // For relative paths, resolve them relative to current directory
+                std::env::current_dir()
+                    .context("Failed to get current directory")?
+                    .join(&path)
+                    .canonicalize()
+                    .context(format!(
+                        "Failed to resolve workspace path '{}'. Make sure the path exists and is accessible",
+                        path.display()
+                    ))?
+            }
+        } else {
+            std::env::current_dir()?
+        };
+
+        // Validate workspace exists (after canonicalization for relative paths)
+        if !workspace_root.exists() {
+            return Err(anyhow::anyhow!(
+                "Workspace does not exist: {}",
+                workspace_root.display()
+            ));
+        }
+
+        // Parse languages if provided
+        let languages = languages.map(|langs| {
+            langs
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        });
+
+        // Create client
+        let config = LspConfig {
+            use_daemon,
+            workspace_hint: Some(workspace_root.to_string_lossy().to_string()),
+            timeout_ms: 60000, // 60 seconds for initialization
+        };
+
+        let mut client = LspClient::new(config).await?;
+
+        match format {
+            "json" => {
+                // Initialize workspaces
+                let (initialized, errors) = client
+                    .init_workspaces(workspace_root.clone(), languages, recursive)
+                    .await?;
+
+                let json_output = json!({
+                    "workspace_root": workspace_root.to_string_lossy(),
+                    "recursive": recursive,
+                    "initialized": initialized,
+                    "errors": errors,
+                    "summary": {
+                        "total_initialized": initialized.len(),
+                        "total_errors": errors.len()
+                    }
+                });
+                println!("{}", serde_json::to_string_pretty(&json_output)?);
+            }
+            _ => {
+                println!(
+                    "{} {}",
+                    "Discovering workspaces in".bold().blue(),
+                    workspace_root.display().to_string().cyan()
+                );
+                if recursive {
+                    println!("  {} {}", "Mode:".bold(), "Recursive".yellow());
+                }
+                if let Some(ref langs) = languages {
+                    println!(
+                        "  {} {}",
+                        "Languages:".bold(),
+                        langs.join(", ").green()
+                    );
+                }
+                println!();
+
+                // Initialize workspaces
+                let (initialized, errors) = client
+                    .init_workspaces(workspace_root, languages, recursive)
+                    .await?;
+
+                if initialized.is_empty() && errors.is_empty() {
+                    println!("{}", "No workspaces found to initialize".yellow());
+                    return Ok(());
+                }
+
+                // Group initialized workspaces by language
+                use std::collections::HashMap;
+                let mut by_language: HashMap<String, Vec<String>> = HashMap::new();
+                for workspace in &initialized {
+                    let lang = format!("{:?}", workspace.language);
+                    by_language
+                        .entry(lang)
+                        .or_default()
+                        .push(workspace.workspace_root.to_string_lossy().to_string());
+                }
+
+                // Display results
+                if !initialized.is_empty() {
+                    println!("{}", "Initialized language servers:".bold().green());
+                    for (language, workspaces) in &by_language {
+                        println!(
+                            "  {} {} {}:",
+                            "✓".green(),
+                            language.bold(),
+                            format!("({})", workspaces.len()).dimmed()
+                        );
+                        for workspace in workspaces {
+                            // Try to show relative path
+                            let display_path = if let Ok(current_dir) = std::env::current_dir() {
+                                if let Ok(relative) =
+                                    std::path::Path::new(&workspace).strip_prefix(&current_dir)
+                                {
+                                    format!("./{}", relative.display())
+                                } else if let Some(home) = dirs::home_dir() {
+                                    if let Ok(relative) =
+                                        std::path::Path::new(&workspace).strip_prefix(&home)
+                                    {
+                                        format!("~/{}", relative.display())
+                                    } else {
+                                        workspace.clone()
+                                    }
+                                } else {
+                                    workspace.clone()
+                                }
+                            } else {
+                                workspace.clone()
+                            };
+                            println!("    • {}", display_path.dimmed());
+                        }
+                    }
+                }
+
+                if !errors.is_empty() {
+                    println!("\n{}", "Errors:".bold().red());
+                    for error in &errors {
+                        println!("  {} {}", "✗".red(), error);
+                    }
+                }
+
+                // Summary
+                println!();
+                if initialized.is_empty() {
+                    println!(
+                        "{}",
+                        "No language servers were initialized".yellow().bold()
+                    );
+                } else {
+                    let server_count = by_language.len();
+                    let workspace_count = initialized.len();
+                    println!(
+                        "{} {} {} {} {} {}",
+                        "Successfully initialized".green(),
+                        server_count.to_string().bold(),
+                        if server_count == 1 {
+                            "language server"
+                        } else {
+                            "language servers"
+                        },
+                        "for".green(),
+                        workspace_count.to_string().bold(),
+                        if workspace_count == 1 {
+                            "workspace"
+                        } else {
+                            "workspaces"
+                        }
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Format duration in a human-readable way
@@ -682,5 +904,142 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(30)), "30s");
         assert_eq!(format_duration(Duration::from_secs(90)), "1m 30s");
         assert_eq!(format_duration(Duration::from_secs(3661)), "1h 1m");
+    }
+
+    #[test]
+    fn test_workspace_path_resolution() {
+        use std::path::PathBuf;
+        use tempfile::TempDir;
+
+        // Create a temporary directory for testing
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_path = temp_dir.path();
+
+        // Create a test subdirectory
+        let test_subdir = temp_path.join("test-workspace");
+        std::fs::create_dir(&test_subdir).expect("Failed to create test subdirectory");
+
+        // Test relative path resolution
+        let original_dir = std::env::current_dir().expect("Failed to get current dir");
+        std::env::set_current_dir(temp_path).expect("Failed to change directory");
+
+        // Test the path resolution logic (extracted from init_workspaces)
+        let workspace_path = Some("test-workspace".to_string());
+        let workspace_root = if let Some(ws) = workspace_path {
+            let path = PathBuf::from(ws);
+            // Convert relative paths to absolute paths for URI conversion
+            if path.is_absolute() {
+                path
+            } else {
+                // For relative paths, resolve them relative to current directory
+                std::env::current_dir()
+                    .context("Failed to get current directory")
+                    .unwrap()
+                    .join(&path)
+                    .canonicalize()
+                    .context(format!(
+                        "Failed to resolve workspace path '{}'. Make sure the path exists and is accessible",
+                        path.display()
+                    ))
+                    .unwrap()
+            }
+        } else {
+            std::env::current_dir().unwrap()
+        };
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).expect("Failed to restore directory");
+
+        // Verify the path was resolved correctly
+        assert!(workspace_root.is_absolute());
+        assert!(workspace_root.exists());
+        assert_eq!(workspace_root, test_subdir.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_path_is_absolute_after_resolution() {
+        use std::path::PathBuf;
+        use tempfile::TempDir;
+
+        // Create a temporary directory for testing
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_path = temp_dir.path();
+
+        // Create a test subdirectory
+        let test_subdir = temp_path.join("test-workspace");
+        std::fs::create_dir(&test_subdir).expect("Failed to create test subdirectory");
+
+        // Change to the temp directory
+        let original_dir = std::env::current_dir().expect("Failed to get current dir");
+        std::env::set_current_dir(temp_path).expect("Failed to change directory");
+
+        // Test that relative path gets resolved to absolute
+        let workspace_path = Some("test-workspace".to_string());
+        let workspace_root = if let Some(ws) = workspace_path {
+            let path = PathBuf::from(ws);
+            if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir()
+                    .context("Failed to get current directory")
+                    .unwrap()
+                    .join(&path)
+                    .canonicalize()
+                    .context(format!(
+                        "Failed to resolve workspace path '{}'. Make sure the path exists and is accessible",
+                        path.display()
+                    ))
+                    .unwrap()
+            }
+        } else {
+            std::env::current_dir().unwrap()
+        };
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).expect("Failed to restore directory");
+
+        // Critical test: the path should be absolute (required for URI conversion)
+        assert!(workspace_root.is_absolute(), 
+            "Resolved path should be absolute for URI conversion: {:?}", workspace_root);
+        assert!(workspace_root.exists());
+    }
+
+    #[test]
+    fn test_absolute_path_passthrough() {
+        use std::path::PathBuf;
+        use tempfile::TempDir;
+
+        // Create a temporary directory for testing
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let absolute_path = temp_dir.path().canonicalize().expect("Failed to canonicalize");
+
+        // Test that absolute paths are passed through unchanged
+        let workspace_path = Some(absolute_path.to_string_lossy().to_string());
+        let workspace_root = if let Some(ws) = workspace_path {
+            let path = PathBuf::from(ws);
+            // Convert relative paths to absolute paths for URI conversion
+            if path.is_absolute() {
+                path
+            } else {
+                // For relative paths, resolve them relative to current directory
+                std::env::current_dir()
+                    .context("Failed to get current directory")
+                    .unwrap()
+                    .join(&path)
+                    .canonicalize()
+                    .context(format!(
+                        "Failed to resolve workspace path '{}'. Make sure the path exists and is accessible",
+                        path.display()
+                    ))
+                    .unwrap()
+            }
+        } else {
+            std::env::current_dir().unwrap()
+        };
+
+        // Verify the absolute path was preserved
+        assert!(workspace_root.is_absolute());
+        assert!(workspace_root.exists());
+        assert_eq!(workspace_root, absolute_path);
     }
 }
