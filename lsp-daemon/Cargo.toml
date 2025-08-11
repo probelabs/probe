@@ -44,3 +44,6 @@ winapi = { version = "0.3", features = ["winbase", "namedpipeapi", "fileapi", "h
 
 [build-dependencies]
 chrono = "0.4"
+
+[dev-dependencies]
+tempfile = "3.14.0"
