@@ -378,6 +378,28 @@ impl LspDaemon {
                 }
             }
 
+            DaemonRequest::InitWorkspaces {
+                request_id,
+                workspace_root,
+                languages,
+                recursive,
+            } => {
+                match self
+                    .handle_init_workspaces(workspace_root, languages, recursive)
+                    .await
+                {
+                    Ok((initialized, errors)) => DaemonResponse::WorkspacesInitialized {
+                        request_id,
+                        initialized,
+                        errors,
+                    },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
             DaemonRequest::ListWorkspaces { request_id } => {
                 let workspaces = self.server_manager.get_all_workspaces().await;
                 DaemonResponse::WorkspaceList {
@@ -724,6 +746,95 @@ impl LspDaemon {
             .await?;
 
         Ok((workspace_root, language, config.command))
+    }
+
+    async fn handle_init_workspaces(
+        &self,
+        workspace_root: PathBuf,
+        languages: Option<Vec<Language>>,
+        recursive: bool,
+    ) -> Result<(Vec<crate::protocol::InitializedWorkspace>, Vec<String>)> {
+        use crate::protocol::InitializedWorkspace;
+        
+        // Validate workspace root exists
+        if !workspace_root.exists() {
+            return Err(anyhow!(
+                "Workspace root does not exist: {:?}",
+                workspace_root
+            ));
+        }
+
+        // Discover workspaces
+        let detector = crate::language_detector::LanguageDetector::new();
+        let discovered_workspaces = detector.discover_workspaces(&workspace_root, recursive)?;
+
+        if discovered_workspaces.is_empty() {
+            return Ok((vec![], vec!["No workspaces found".to_string()]));
+        }
+
+        let mut initialized = Vec::new();
+        let mut errors = Vec::new();
+
+        // Filter by requested languages if specified
+        for (workspace_path, detected_languages) in discovered_workspaces {
+            let languages_to_init = if let Some(ref requested_languages) = languages {
+                // Only initialize requested languages that were detected
+                detected_languages
+                    .intersection(&requested_languages.iter().copied().collect())
+                    .copied()
+                    .collect::<Vec<_>>()
+            } else {
+                // Initialize all detected languages
+                detected_languages.into_iter().collect()
+            };
+
+            for language in languages_to_init {
+                // Skip unknown language
+                if language == Language::Unknown {
+                    continue;
+                }
+
+                // Get LSP server config
+                let config = match self.registry.get(language) {
+                    Some(cfg) => cfg,
+                    None => {
+                        errors.push(format!(
+                            "No LSP server configured for {:?} in {:?}",
+                            language, workspace_path
+                        ));
+                        continue;
+                    }
+                };
+
+                // Try to initialize the workspace
+                match self
+                    .server_manager
+                    .ensure_workspace_registered(language, workspace_path.clone())
+                    .await
+                {
+                    Ok(_) => {
+                        initialized.push(InitializedWorkspace {
+                            workspace_root: workspace_path.clone(),
+                            language,
+                            lsp_server: config.command.clone(),
+                            status: "Ready".to_string(),
+                        });
+                        info!(
+                            "Initialized {:?} for workspace {:?}",
+                            language, workspace_path
+                        );
+                    }
+                    Err(e) => {
+                        errors.push(format!(
+                            "Failed to initialize {:?} for {:?}: {}",
+                            language, workspace_path, e
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok((initialized, errors))
     }
 
     fn detect_workspace_language(&self, workspace_root: &Path) -> Result<Language> {

@@ -1,9 +1,9 @@
 use anyhow::Result;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Language {
@@ -185,6 +185,205 @@ impl LanguageDetector {
 
     pub fn detect_from_extension(&self, extension: &str) -> Option<Language> {
         self.extension_map.get(extension).copied()
+    }
+
+    /// Discover workspaces in a directory
+    pub fn discover_workspaces(
+        &self,
+        root: &Path,
+        recursive: bool,
+    ) -> Result<HashMap<PathBuf, HashSet<Language>>> {
+        let mut workspaces: HashMap<PathBuf, HashSet<Language>> = HashMap::new();
+
+        // Check for workspace marker in root directory
+        if let Some(languages) = self.detect_workspace_languages(root)? {
+            if !languages.is_empty() {
+                workspaces.insert(root.to_path_buf(), languages);
+            }
+        }
+
+        // If recursive, search for nested workspaces
+        if recursive {
+            self.discover_nested_workspaces(root, &mut workspaces)?;
+        }
+
+        // If no workspace markers found, detect languages from files in root
+        if workspaces.is_empty() {
+            if let Some(languages) = self.detect_languages_from_files(root)? {
+                if !languages.is_empty() {
+                    workspaces.insert(root.to_path_buf(), languages);
+                }
+            }
+        }
+
+        Ok(workspaces)
+    }
+
+    /// Recursively discover nested workspaces
+    fn discover_nested_workspaces(
+        &self,
+        dir: &Path,
+        workspaces: &mut HashMap<PathBuf, HashSet<Language>>,
+    ) -> Result<()> {
+        // Skip if we already identified this as a workspace
+        if workspaces.contains_key(dir) {
+            return Ok(());
+        }
+
+        // Read directory entries
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                
+                // Skip hidden directories and common build/dependency directories
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with('.')
+                        || name == "node_modules"
+                        || name == "target"
+                        || name == "dist"
+                        || name == "build"
+                        || name == "vendor"
+                        || name == "__pycache__"
+                    {
+                        continue;
+                    }
+                }
+
+                if path.is_dir() {
+                    // Check if this directory is a workspace
+                    if let Some(languages) = self.detect_workspace_languages(&path)? {
+                        if !languages.is_empty() {
+                            workspaces.insert(path.clone(), languages);
+                            // Don't recurse into identified workspaces
+                            continue;
+                        }
+                    }
+
+                    // Recurse into subdirectory
+                    self.discover_nested_workspaces(&path, workspaces)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Detect workspace languages based on marker files
+    fn detect_workspace_languages(&self, dir: &Path) -> Result<Option<HashSet<Language>>> {
+        let mut languages = HashSet::new();
+
+        // Check for language-specific workspace markers
+        let markers = [
+            ("Cargo.toml", Language::Rust),
+            ("package.json", Language::TypeScript), // Can be JS or TS
+            ("tsconfig.json", Language::TypeScript),
+            ("go.mod", Language::Go),
+            ("pom.xml", Language::Java),
+            ("build.gradle", Language::Java),
+            ("build.gradle.kts", Language::Kotlin),
+            ("requirements.txt", Language::Python),
+            ("pyproject.toml", Language::Python),
+            ("setup.py", Language::Python),
+            ("Pipfile", Language::Python),
+            ("composer.json", Language::Php),
+            ("Gemfile", Language::Ruby),
+            ("Package.swift", Language::Swift),
+            ("build.sbt", Language::Scala),
+            ("stack.yaml", Language::Haskell),
+            ("mix.exs", Language::Elixir),
+            ("project.clj", Language::Clojure),
+            ("deps.edn", Language::Clojure),
+            ("CMakeLists.txt", Language::Cpp),
+            (".csproj", Language::CSharp),
+            (".sln", Language::CSharp),
+        ];
+
+        for (marker, language) in markers {
+            if dir.join(marker).exists() {
+                languages.insert(language);
+            }
+        }
+
+        // Special case: Check for .csproj or .sln files
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.ends_with(".csproj") || name.ends_with(".sln") {
+                        languages.insert(Language::CSharp);
+                    }
+                }
+            }
+        }
+
+        // If package.json exists, check if it's TypeScript or JavaScript
+        if dir.join("package.json").exists() {
+            if dir.join("tsconfig.json").exists() {
+                languages.insert(Language::TypeScript);
+            } else {
+                // Check for TypeScript files
+                let has_ts = self.has_files_with_extension(dir, &["ts", "tsx"])?;
+                if has_ts {
+                    languages.insert(Language::TypeScript);
+                } else {
+                    languages.insert(Language::JavaScript);
+                }
+            }
+        }
+
+        if languages.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(languages))
+        }
+    }
+
+    /// Detect languages from files in a directory (fallback when no workspace markers)
+    fn detect_languages_from_files(&self, dir: &Path) -> Result<Option<HashSet<Language>>> {
+        let mut languages = HashSet::new();
+        let mut checked_extensions = HashSet::new();
+
+        // Scan files in the directory (non-recursive)
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                        // Only check each extension once
+                        if !checked_extensions.contains(ext) {
+                            checked_extensions.insert(ext.to_string());
+                            if let Some(lang) = self.detect_from_extension(ext) {
+                                if lang != Language::Unknown {
+                                    languages.insert(lang);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if languages.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(languages))
+        }
+    }
+
+    /// Check if directory contains files with given extensions
+    fn has_files_with_extension(&self, dir: &Path, extensions: &[&str]) -> Result<bool> {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                        if extensions.contains(&ext) {
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(false)
     }
 }
 

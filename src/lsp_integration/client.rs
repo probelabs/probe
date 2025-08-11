@@ -1,10 +1,10 @@
 use anyhow::{anyhow, Result};
 use lsp_daemon::{
-    get_default_socket_path, remove_socket_file, CallHierarchyResult, DaemonRequest,
-    DaemonResponse, DaemonStatus, IpcStream, Language, LanguageDetector, LanguageInfo, LogEntry,
-    MessageCodec,
+    get_default_socket_path, protocol::InitializedWorkspace, remove_socket_file,
+    CallHierarchyResult, DaemonRequest, DaemonResponse, DaemonStatus, IpcStream, Language,
+    LanguageDetector, LanguageInfo, LogEntry, MessageCodec,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::{sleep, timeout};
@@ -351,6 +351,64 @@ impl LspClient {
 
         match response {
             DaemonResponse::Pong { .. } => Ok(()),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Initialize workspaces
+    pub async fn init_workspaces(
+        &mut self,
+        workspace_root: PathBuf,
+        languages: Option<Vec<String>>,
+        recursive: bool,
+    ) -> Result<(Vec<InitializedWorkspace>, Vec<String>)> {
+        // Convert language strings to Language enum
+        let languages = languages.map(|langs| {
+            langs
+                .into_iter()
+                .filter_map(|lang| {
+                    let lang_lower = lang.to_lowercase();
+                    match lang_lower.as_str() {
+                        "rust" => Some(Language::Rust),
+                        "typescript" | "ts" => Some(Language::TypeScript),
+                        "javascript" | "js" => Some(Language::JavaScript),
+                        "python" | "py" => Some(Language::Python),
+                        "go" => Some(Language::Go),
+                        "java" => Some(Language::Java),
+                        "c" => Some(Language::C),
+                        "cpp" | "c++" => Some(Language::Cpp),
+                        "csharp" | "c#" => Some(Language::CSharp),
+                        "ruby" | "rb" => Some(Language::Ruby),
+                        "php" => Some(Language::Php),
+                        "swift" => Some(Language::Swift),
+                        "kotlin" | "kt" => Some(Language::Kotlin),
+                        "scala" => Some(Language::Scala),
+                        "haskell" | "hs" => Some(Language::Haskell),
+                        "elixir" | "ex" => Some(Language::Elixir),
+                        "clojure" | "clj" => Some(Language::Clojure),
+                        "lua" => Some(Language::Lua),
+                        "zig" => Some(Language::Zig),
+                        _ => None,
+                    }
+                })
+                .collect()
+        });
+
+        let request = DaemonRequest::InitWorkspaces {
+            request_id: Uuid::new_v4(),
+            workspace_root,
+            languages,
+            recursive,
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::WorkspacesInitialized {
+                initialized,
+                errors,
+                ..
+            } => Ok((initialized, errors)),
             _ => Err(anyhow!("Unexpected response type")),
         }
     }
