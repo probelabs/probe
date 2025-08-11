@@ -401,7 +401,7 @@ async fn test_daemon_basic_functionality() -> Result<()> {
 
     // Start daemon
     start_daemon_background().await?;
-    
+
     // Wait longer for daemon to be fully ready
     sleep(Duration::from_millis(3000)).await;
 
@@ -422,7 +422,7 @@ async fn test_daemon_basic_functionality() -> Result<()> {
             Err(e) => return Err(e),
         }
     }
-    
+
     let status = status.expect("Failed to get daemon status after retries");
 
     // Verify daemon is running (basic sanity checks)
@@ -432,7 +432,7 @@ async fn test_daemon_basic_functionality() -> Result<()> {
     println!("   - Uptime: {} seconds", status.uptime_secs);
     println!("   - Total pools: {}", status.pools.len());
     println!("   - Active connections: {}", status.active_connections);
-    
+
     // Clean up daemon after test
     let _ = std::process::Command::new("pkill")
         .args(["-f", "lsp-daemon"])
