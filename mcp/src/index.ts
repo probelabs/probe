@@ -45,6 +45,7 @@ Usage:
 Options:
   --timeout, -t <seconds>  Set timeout for search operations (default: 30)
   --lsp                    Enable LSP (Language Server Protocol) for enhanced features
+                           Automatically initializes language servers for the current workspace
   --help, -h              Show this help message
 `);
       process.exit(0);
@@ -610,6 +611,48 @@ class ProbeServer {
   async run() {
     // The @buger/probe package now handles binary path management internally
     // We don't need to verify or download the binary in the MCP server anymore
+    
+    // Initialize LSP servers for the current workspace if --lsp flag is enabled
+    if (this.lspEnabled) {
+      const workspaceRoot = process.cwd();
+      console.error(`Initializing LSP servers for workspace: ${workspaceRoot}`);
+      
+      try {
+        // Execute probe lsp init command to pre-warm language servers
+        // Use recursive flag to discover nested projects in monorepos
+        const initCmd = process.platform === 'win32' 
+          ? `probe lsp init -w "${workspaceRoot}" --recursive`
+          : `probe lsp init -w '${workspaceRoot}' --recursive`;
+        
+        const { stdout, stderr } = await execAsync(initCmd, {
+          timeout: 10000, // 10 second timeout for initialization - don't wait too long
+          env: { ...process.env }
+        });
+        
+        if (stderr && !stderr.includes('Successfully initialized')) {
+          console.error(`LSP initialization warnings: ${stderr}`);
+        }
+        
+        console.error(`LSP servers initialized successfully for workspace: ${workspaceRoot}`);
+        
+        // Parse initialization output to show what was initialized
+        if (stdout) {
+          const lines = stdout.split('\n');
+          const initializedServers = lines.filter(line => 
+            line.includes('✓') || line.includes('language server')
+          );
+          if (initializedServers.length > 0) {
+            console.error('Initialized language servers:');
+            initializedServers.forEach(line => console.error(`  ${line.trim()}`));
+          }
+        }
+      } catch (error: any) {
+        // Don't fail MCP server startup if LSP initialization fails
+        // LSP will still work with cold start on first use
+        console.error(`Warning: Failed to initialize LSP servers: ${error.message || error}`);
+        console.error('LSP features will still be available but may have slower first-use performance');
+      }
+    }
     
     // Just connect the server to the transport
     const transport = new StdioServerTransport();
