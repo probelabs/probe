@@ -766,7 +766,12 @@ impl LspDaemon {
                             workspaces: s
                                 .workspaces
                                 .iter()
-                                .map(|w| w.to_string_lossy().to_string())
+                                .map(|w| {
+                                    w.canonicalize()
+                                        .unwrap_or_else(|_| w.clone())
+                                        .to_string_lossy()
+                                        .to_string()
+                                })
                                 .collect(),
                             uptime_secs: s.uptime.as_secs(),
                             status: format!("{:?}", s.status),
