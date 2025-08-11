@@ -88,9 +88,7 @@ async fn setup_go_project(temp_dir: &TempDir, name: &str, code: &str) -> Result<
         .output();
 
     if let Err(e) = output {
-        println!(
-            "Warning: Failed to run 'go mod tidy' in {project_dir:?}: {e}"
-        );
+        println!("Warning: Failed to run 'go mod tidy' in {project_dir:?}: {e}");
     }
 
     Ok(project_dir)
