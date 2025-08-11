@@ -570,7 +570,9 @@ async fn test_circuit_breaker_prevents_cascading_failures() -> Result<()> {
                             {
                                 Ok(Ok(n)) => {
                                     response_data.truncate(n);
-                                    if let Ok(DaemonResponse::Error { .. }) = MessageCodec::decode_response(&response_data) {
+                                    if let Ok(DaemonResponse::Error { .. }) =
+                                        MessageCodec::decode_response(&response_data)
+                                    {
                                         let elapsed = start_time.elapsed();
                                         if elapsed < Duration::from_millis(100) {
                                             fast_failures.fetch_add(1, Ordering::Relaxed);
