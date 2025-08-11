@@ -176,7 +176,8 @@ impl LspManager {
                             for workspace in &pool.workspaces {
                                 let path = std::path::Path::new(workspace);
                                 // Try to show a relative path from home or current directory
-                                let display_path = if let Ok(current_dir) = std::env::current_dir() {
+                                let display_path = if let Ok(current_dir) = std::env::current_dir()
+                                {
                                     if let Ok(relative) = path.strip_prefix(&current_dir) {
                                         format!("./{}", relative.display())
                                     } else if let Some(home) = dirs::home_dir() {
@@ -771,11 +772,7 @@ impl LspManager {
                     println!("  {} {}", "Mode:".bold(), "Recursive".yellow());
                 }
                 if let Some(ref langs) = languages {
-                    println!(
-                        "  {} {}",
-                        "Languages:".bold(),
-                        langs.join(", ").green()
-                    );
+                    println!("  {} {}", "Languages:".bold(), langs.join(", ").green());
                 }
                 println!();
 
@@ -846,10 +843,7 @@ impl LspManager {
                 // Summary
                 println!();
                 if initialized.is_empty() {
-                    println!(
-                        "{}",
-                        "No language servers were initialized".yellow().bold()
-                    );
+                    println!("{}", "No language servers were initialized".yellow().bold());
                 } else {
                     let server_count = by_language.len();
                     let workspace_count = initialized.len();
@@ -999,8 +993,11 @@ mod tests {
         std::env::set_current_dir(original_dir).expect("Failed to restore directory");
 
         // Critical test: the path should be absolute (required for URI conversion)
-        assert!(workspace_root.is_absolute(), 
-            "Resolved path should be absolute for URI conversion: {:?}", workspace_root);
+        assert!(
+            workspace_root.is_absolute(),
+            "Resolved path should be absolute for URI conversion: {:?}",
+            workspace_root
+        );
         assert!(workspace_root.exists());
     }
 
@@ -1011,7 +1008,10 @@ mod tests {
 
         // Create a temporary directory for testing
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let absolute_path = temp_dir.path().canonicalize().expect("Failed to canonicalize");
+        let absolute_path = temp_dir
+            .path()
+            .canonicalize()
+            .expect("Failed to canonicalize");
 
         // Test that absolute paths are passed through unchanged
         let workspace_path = Some(absolute_path.to_string_lossy().to_string());

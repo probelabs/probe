@@ -755,7 +755,7 @@ impl LspDaemon {
         recursive: bool,
     ) -> Result<(Vec<crate::protocol::InitializedWorkspace>, Vec<String>)> {
         use crate::protocol::InitializedWorkspace;
-        
+
         // Validate workspace root exists
         if !workspace_root.exists() {
             return Err(anyhow!(

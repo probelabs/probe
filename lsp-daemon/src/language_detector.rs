@@ -234,7 +234,7 @@ impl LanguageDetector {
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                
+
                 // Skip hidden directories and common build/dependency directories
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if name.starts_with('.')
