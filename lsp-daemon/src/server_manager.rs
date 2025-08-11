@@ -368,8 +368,8 @@ impl SingleServerManager {
         let pids = self.child_processes.lock().await;
         if !pids.is_empty() {
             info!("Force killing {} tracked child processes", pids.len());
+            #[cfg(unix)]
             for &pid in pids.iter() {
-                #[cfg(unix)]
                 unsafe {
                     // First try SIGTERM
                     if libc::kill(pid as i32, libc::SIGTERM) == 0 {
@@ -377,18 +377,26 @@ impl SingleServerManager {
                     }
                 }
             }
+            #[cfg(not(unix))]
+            for &_pid in pids.iter() {
+                // Windows: process cleanup handled differently
+            }
 
             // Give processes a moment to terminate
             tokio::time::sleep(Duration::from_millis(500)).await;
 
             // Then force kill with SIGKILL
+            #[cfg(unix)]
             for &pid in pids.iter() {
-                #[cfg(unix)]
                 unsafe {
                     if libc::kill(pid as i32, libc::SIGKILL) == 0 {
                         debug!("Sent SIGKILL to process {}", pid);
                     }
                 }
+            }
+            #[cfg(not(unix))]
+            for &_pid in pids.iter() {
+                // Windows: process cleanup handled differently
             }
         }
     }
