@@ -1,5 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+#[cfg(unix)]
+use anyhow::Context;
 use std::process::Child;
+#[cfg(unix)]
 use tracing::debug;
 #[cfg(not(unix))]
 use tracing::warn;

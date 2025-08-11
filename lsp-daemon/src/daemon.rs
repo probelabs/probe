@@ -3,6 +3,7 @@ use crate::language_detector::{Language, LanguageDetector};
 use crate::logging::{LogBuffer, MemoryLogLayer};
 use crate::lsp_registry::LspRegistry;
 use crate::pid_lock::PidLock;
+#[cfg(unix)]
 use crate::process_group::ProcessGroup;
 use crate::protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyResult, DaemonRequest, DaemonResponse,
@@ -35,6 +36,7 @@ pub struct LspDaemon {
     shutdown: Arc<RwLock<bool>>,
     log_buffer: LogBuffer,
     pid_lock: Option<PidLock>,
+    #[cfg(unix)]
     process_group: ProcessGroup,
     child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>, // Track all child PIDs
     // Performance metrics
@@ -104,6 +106,7 @@ impl LspDaemon {
             shutdown: Arc::new(RwLock::new(false)),
             log_buffer,
             pid_lock: None,
+            #[cfg(unix)]
             process_group: ProcessGroup::new(),
             child_processes,
             request_durations: Arc::new(RwLock::new(Vec::with_capacity(100))),
@@ -784,12 +787,16 @@ impl LspDaemon {
 
         // Kill any remaining child processes directly
         let child_pids = self.child_processes.lock().await;
+        #[cfg(unix)]
         for &pid in child_pids.iter() {
-            #[cfg(unix)]
             unsafe {
                 let _ = libc::kill(pid as i32, libc::SIGTERM);
                 debug!("Sent SIGTERM to child process {}", pid);
             }
+        }
+        #[cfg(not(unix))]
+        for &_pid in child_pids.iter() {
+            // Windows: process cleanup handled differently
         }
         drop(child_pids);
 
@@ -823,8 +830,9 @@ impl LspDaemon {
             request_count: self.request_count.clone(),
             shutdown: self.shutdown.clone(),
             log_buffer: self.log_buffer.clone(),
-            pid_lock: None,                                // Don't clone the PID lock
-            process_group: ProcessGroup::new(),            // Create new for cloned instance
+            pid_lock: None, // Don't clone the PID lock
+            #[cfg(unix)]
+            process_group: ProcessGroup::new(), // Create new for cloned instance
             child_processes: self.child_processes.clone(), // Share child process tracking
             request_durations: self.request_durations.clone(),
             error_count: self.error_count.clone(),
