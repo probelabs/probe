@@ -18,9 +18,9 @@ import { fileURLToPath } from 'url';
 import { search, query, extract, getBinaryPath, setBinaryPath } from '@buger/probe';
 
 // Parse command-line arguments
-function parseArgs(): { timeout?: number } {
+function parseArgs(): { timeout?: number; lsp?: boolean } {
   const args = process.argv.slice(2);
-  const config: { timeout?: number } = {};
+  const config: { timeout?: number; lsp?: boolean } = {};
   
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '--timeout' || args[i] === '-t') && i + 1 < args.length) {
@@ -32,6 +32,9 @@ function parseArgs(): { timeout?: number } {
         console.error(`Invalid timeout value: ${args[i + 1]}. Using default.`);
       }
       i++; // Skip the next argument
+    } else if (args[i] === '--lsp') {
+      config.lsp = true;
+      console.error('LSP mode enabled');
     } else if (args[i] === '--help' || args[i] === '-h') {
       console.log(`
 Probe MCP Server
@@ -41,6 +44,7 @@ Usage:
 
 Options:
   --timeout, -t <seconds>  Set timeout for search operations (default: 30)
+  --lsp                    Enable LSP (Language Server Protocol) for enhanced features
   --help, -h              Show this help message
 `);
       process.exit(0);
@@ -118,6 +122,7 @@ interface SearchCodeArgs {
   session?: string;
   timeout?: number;
   noGitignore?: boolean;
+  lsp?: boolean;
 }
 
 interface QueryCodeArgs {
@@ -140,14 +145,17 @@ interface ExtractCodeArgs {
   format?: 'markdown' | 'plain' | 'json';
   timeout?: number;
   noGitignore?: boolean;
+  lsp?: boolean;
 }
 
 class ProbeServer {
   private server: Server;
   private defaultTimeout: number;
+  private lspEnabled: boolean;
 
-  constructor(timeout: number = 30) {
+  constructor(timeout: number = 30, lspEnabled: boolean = false) {
     this.defaultTimeout = timeout;
+    this.lspEnabled = lspEnabled;
     this.server = new Server(
       {
         name: '@buger/probe-mcp',
@@ -222,6 +230,10 @@ class ProbeServer {
               noGitignore: {
                 type: 'boolean',
                 description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
+              },
+              lsp: {
+                type: 'boolean',
+                description: 'Use LSP (Language Server Protocol) for call hierarchy, reference counts, and enhanced symbol information',
               }
             },
             required: ['path', 'query']
@@ -308,6 +320,10 @@ class ProbeServer {
               noGitignore: {
                 type: 'boolean',
                 description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
+              },
+              lsp: {
+                type: 'boolean',
+                description: 'Use LSP (Language Server Protocol) for call hierarchy, reference counts, and enhanced symbol information',
               }
             },
             required: ['path', 'files'],
@@ -427,6 +443,12 @@ class ProbeServer {
       } else if (this.defaultTimeout !== undefined) {
         options.timeout = this.defaultTimeout;
       }
+      // Pass LSP flag if enabled globally or per-request
+      if (args.lsp !== undefined) {
+        options.lsp = args.lsp;
+      } else if (this.lspEnabled) {
+        options.lsp = true;
+      }
       
       console.error("Executing search with options:", JSON.stringify(options, null, 2));
       
@@ -524,6 +546,12 @@ class ProbeServer {
       } else if (process.env.PROBE_NO_GITIGNORE) {
         options.noGitignore = process.env.PROBE_NO_GITIGNORE === 'true';
       }
+      // Pass LSP flag if enabled globally or per-request
+      if (args.lsp !== undefined) {
+        options.lsp = args.lsp;
+      } else if (this.lspEnabled) {
+        options.lsp = true;
+      }
       
       // Call extract with the complete options object
       try {
@@ -590,5 +618,5 @@ class ProbeServer {
   }
 }
 
-const server = new ProbeServer(cliConfig.timeout);
+const server = new ProbeServer(cliConfig.timeout, cliConfig.lsp);
 server.run().catch(console.error);
