@@ -4,7 +4,7 @@ use lsp_daemon::{
     IpcStream, MessageCodec,
 };
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::{sleep, Duration};
@@ -56,13 +56,12 @@ async fn test_multi_workspace_go_projects() -> Result<()> {
         .count();
     assert!(
         go_pools >= 3,
-        "Expected at least 3 Go pools, got {}",
-        go_pools
+        "Expected at least 3 Go pools, got {go_pools}"
     );
 
     println!("✅ Multi-workspace test completed successfully!");
     println!("   - {} workspaces tested", 3);
-    println!("   - {} Go language pools active", go_pools);
+    println!("   - {go_pools} Go language pools active");
     println!("   - Total requests processed: {}", status.total_requests);
 
     Ok(())
@@ -75,7 +74,7 @@ async fn setup_go_project(temp_dir: &TempDir, name: &str, code: &str) -> Result<
     // Create go.mod
     fs::write(
         project_dir.join("go.mod"),
-        format!("module {}\n\ngo 1.21\n", name),
+        format!("module {name}\n\ngo 1.21\n"),
     )?;
 
     // Create main.go
@@ -90,8 +89,7 @@ async fn setup_go_project(temp_dir: &TempDir, name: &str, code: &str) -> Result<
 
     if let Err(e) = output {
         println!(
-            "Warning: Failed to run 'go mod tidy' in {:?}: {}",
-            project_dir, e
+            "Warning: Failed to run 'go mod tidy' in {project_dir:?}: {e}"
         );
     }
 
@@ -100,7 +98,7 @@ async fn setup_go_project(temp_dir: &TempDir, name: &str, code: &str) -> Result<
 
 async fn test_project_analysis(
     socket_path: &str,
-    workspace: &PathBuf,
+    workspace: &Path,
     expected_callers: &[(&str, u32)],
 ) -> Result<()> {
     // Retry connection up to 5 times with exponential backoff
@@ -119,7 +117,7 @@ async fn test_project_analysis(
                 );
                 sleep(Duration::from_millis(1000 * (attempt + 1) as u64)).await;
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         }
     }
 
@@ -130,7 +128,7 @@ async fn test_project_analysis(
         file_path: workspace.join("main.go"),
         line: 5,   // Line number where the function might be
         column: 0, // Column number
-        workspace_hint: Some(workspace.clone()),
+        workspace_hint: Some(workspace.to_path_buf()),
     };
 
     let encoded = MessageCodec::encode(&request)?;
@@ -169,13 +167,12 @@ async fn test_project_analysis(
                 });
                 assert!(
                     found,
-                    "Expected caller '{}' around line {} not found",
-                    expected_caller, expected_line
+                    "Expected caller '{expected_caller}' around line {expected_line} not found"
                 );
             }
         }
         DaemonResponse::Error { error, .. } => {
-            panic!("Request failed: {}", error);
+            panic!("Request failed: {error}");
         }
         _ => panic!("Unexpected response type"),
     }
@@ -195,7 +192,7 @@ async fn get_daemon_status(socket_path: &str) -> Result<DaemonStatus> {
             Err(_e) if attempt < 2 => {
                 sleep(Duration::from_millis(500)).await;
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         }
     }
 

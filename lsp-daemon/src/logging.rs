@@ -239,7 +239,7 @@ mod tests {
                 timestamp: format!("2024-01-01 12:00:{:02}.000 UTC", i % 60),
                 level: LogLevel::Info,
                 target: "test".to_string(),
-                message: format!("Message {}", i),
+                message: format!("Message {i}"),
                 file: None,
                 line: None,
             };
@@ -263,10 +263,10 @@ mod tests {
         // Add some entries
         for i in 0..10 {
             let entry = LogEntry {
-                timestamp: format!("2024-01-01 12:00:{:02}.000 UTC", i),
+                timestamp: format!("2024-01-01 12:00:{i:02}.000 UTC"),
                 level: LogLevel::Info,
                 target: "test".to_string(),
-                message: format!("Message {}", i),
+                message: format!("Message {i}"),
                 file: None,
                 line: None,
             };

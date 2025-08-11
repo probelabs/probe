@@ -11,15 +11,21 @@ use crate::protocol::{
 };
 use crate::server_manager::SingleServerManager;
 use crate::socket_path::{get_default_socket_path, remove_socket_file};
+use crate::watchdog::{ProcessMonitor, Watchdog};
 use crate::workspace_resolver::WorkspaceResolver;
 use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
+use tokio::time::{timeout, Duration};
+
+// Timeout constants for client connection handling
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
@@ -42,6 +48,14 @@ pub struct LspDaemon {
     // Performance metrics
     request_durations: Arc<RwLock<Vec<Duration>>>, // Keep last 100 request durations
     error_count: Arc<RwLock<usize>>,
+    // Connection metrics
+    total_connections_accepted: Arc<RwLock<usize>>,
+    connections_cleaned_due_to_staleness: Arc<RwLock<usize>>,
+    connections_rejected_due_to_limit: Arc<RwLock<usize>>,
+    connection_durations: Arc<RwLock<Vec<Duration>>>, // Keep last 100 connection durations
+    // Watchdog
+    watchdog: Watchdog,
+    process_monitor: Arc<ProcessMonitor>,
 }
 
 impl LspDaemon {
@@ -94,6 +108,10 @@ impl LspDaemon {
             }
         }
 
+        // Initialize watchdog with 60-second timeout
+        let watchdog = Watchdog::new(60);
+        let process_monitor = Arc::new(ProcessMonitor::with_limits(80.0, 1024)); // 80% CPU, 1GB memory
+
         Ok(Self {
             socket_path,
             registry,
@@ -111,6 +129,12 @@ impl LspDaemon {
             child_processes,
             request_durations: Arc::new(RwLock::new(Vec::with_capacity(100))),
             error_count: Arc::new(RwLock::new(0)),
+            total_connections_accepted: Arc::new(RwLock::new(0)),
+            connections_cleaned_due_to_staleness: Arc::new(RwLock::new(0)),
+            connections_rejected_due_to_limit: Arc::new(RwLock::new(0)),
+            connection_durations: Arc::new(RwLock::new(Vec::with_capacity(100))),
+            watchdog,
+            process_monitor,
         })
     }
 
@@ -131,6 +155,21 @@ impl LspDaemon {
 
         let listener = IpcListener::bind(&self.socket_path).await?;
         info!("LSP daemon listening on {}", self.socket_path);
+
+        // Set up watchdog recovery callback
+        let shutdown_for_watchdog = self.shutdown.clone();
+        self.watchdog
+            .set_recovery_callback(move || {
+                // Set shutdown flag when watchdog detects unresponsive daemon
+                if let Ok(mut shutdown) = shutdown_for_watchdog.try_write() {
+                    *shutdown = true;
+                    error!("Watchdog triggered daemon shutdown due to unresponsiveness");
+                }
+            })
+            .await;
+
+        // Start watchdog monitoring
+        let _watchdog_task = self.watchdog.start();
 
         // Set up signal handling for graceful shutdown
         #[cfg(unix)]
@@ -160,7 +199,74 @@ impl LspDaemon {
             daemon.idle_checker().await;
         });
 
+        // Start periodic cleanup task
+        let daemon_for_cleanup = self.clone_refs();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+
+                // Check if daemon is shutting down
+                if *daemon_for_cleanup.shutdown.read().await {
+                    debug!("Periodic cleanup task stopping due to shutdown");
+                    break;
+                }
+
+                let cleaned = daemon_for_cleanup.cleanup_stale_connections();
+                if cleaned > 0 {
+                    debug!("Periodic cleanup removed {} stale connections", cleaned);
+                }
+            }
+        });
+
+        // Start health monitoring
+        let _health_monitor_task = self.server_manager.start_health_monitoring();
+        info!("Started health monitoring for LSP servers");
+
+        // Start process monitoring task
+        let process_monitor = self.process_monitor.clone();
+        let child_processes_for_monitoring = self.child_processes.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30)); // Check every 30 seconds
+            loop {
+                interval.tick().await;
+
+                let pids = {
+                    let pids_guard = child_processes_for_monitoring.lock().await;
+                    pids_guard.clone()
+                };
+
+                if !pids.is_empty() {
+                    debug!("Monitoring {} child processes", pids.len());
+                    let unhealthy_pids = process_monitor.monitor_children(pids).await;
+
+                    if !unhealthy_pids.is_empty() {
+                        warn!(
+                            "Found {} unhealthy child processes: {:?}",
+                            unhealthy_pids.len(),
+                            unhealthy_pids
+                        );
+
+                        // Kill unhealthy processes
+                        #[cfg(unix)]
+                        for pid in unhealthy_pids {
+                            unsafe {
+                                if libc::kill(pid as i32, libc::SIGTERM) == 0 {
+                                    warn!("Sent SIGTERM to unhealthy process {}", pid);
+                                } else {
+                                    warn!("Failed to send SIGTERM to process {}", pid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
         loop {
+            // Update watchdog heartbeat at the start of each loop iteration
+            self.watchdog.heartbeat();
+
             // Check shutdown flag
             if *self.shutdown.read().await {
                 info!("Daemon shutting down...");
@@ -177,14 +283,34 @@ impl LspDaemon {
 
                         let current_connections = self.connections.len();
                         if current_connections >= MAX_CONNECTIONS {
-                            warn!(
-                                "Maximum connection limit reached ({}/{}), rejecting new connection",
-                                current_connections, MAX_CONNECTIONS
-                            );
-                            // Drop the stream to close the connection
-                            drop(stream);
-                            continue;
+                            // Clean up stale connections first
+                            let cleaned = self.cleanup_stale_connections();
+
+                            // Check again after cleanup
+                            let connections_after_cleanup = self.connections.len();
+                            if connections_after_cleanup >= MAX_CONNECTIONS {
+                                // Update rejection metrics
+                                *self.connections_rejected_due_to_limit.write().await += 1;
+
+                                warn!(
+                                    "Maximum connection limit reached ({}/{}), cleaned {} stale connections, rejecting new connection",
+                                    connections_after_cleanup, MAX_CONNECTIONS, cleaned
+                                );
+                                // Drop the stream to close the connection
+                                drop(stream);
+                                // Wait a bit to prevent tight loop
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                continue;
+                            } else {
+                                info!(
+                                    "Cleaned {} stale connections, now have {}/{} connections, accepting new connection",
+                                    cleaned, connections_after_cleanup, MAX_CONNECTIONS
+                                );
+                            }
                         }
+
+                        // Track accepted connection
+                        *self.total_connections_accepted.write().await += 1;
 
                         let daemon = self.clone_refs();
                         tokio::spawn(async move {
@@ -225,9 +351,35 @@ impl LspDaemon {
 
         let mut buffer = vec![0; 65536]; // 64KB initial buffer
 
+        let connection_start = Instant::now();
+
         loop {
-            // Read message length
-            let n = stream.read(&mut buffer[..4]).await?;
+            // Check for overall connection timeout
+            if connection_start.elapsed() > CONNECTION_TIMEOUT {
+                warn!(
+                    "Connection timeout for client {} - closing after {}s",
+                    client_id,
+                    CONNECTION_TIMEOUT.as_secs()
+                );
+                break;
+            }
+
+            // Read message length with timeout
+            let n = match timeout(READ_TIMEOUT, stream.read(&mut buffer[..4])).await {
+                Ok(Ok(n)) => n,
+                Ok(Err(e)) => {
+                    debug!("Read error from client {}: {}", client_id, e);
+                    break;
+                }
+                Err(_) => {
+                    warn!(
+                        "Read timeout from client {} - closing connection",
+                        client_id
+                    );
+                    break;
+                }
+            };
+
             if n == 0 {
                 // Connection closed - clean up is done at the end of the function
                 debug!("Connection closed by client: {}", client_id);
@@ -239,7 +391,7 @@ impl LspDaemon {
             // Validate message size to prevent OOM attacks
             if msg_len > MAX_MESSAGE_SIZE {
                 error!(
-                    "Client {} attempted to send oversized message: {} bytes (max: {} bytes)",
+                    "[{}] Attempted to send oversized message: {} bytes (max: {} bytes)",
                     client_id, msg_len, MAX_MESSAGE_SIZE
                 );
                 self.connections.remove(&client_id);
@@ -255,14 +407,28 @@ impl LspDaemon {
                 buffer.resize(msg_len + 4, 0);
             }
 
-            // Read with error handling that cleans up connection
-            if let Err(e) = stream.read_exact(&mut buffer[4..4 + msg_len]).await {
-                self.connections.remove(&client_id);
-                error!(
-                    "Failed to read message body from client {}: {}",
-                    client_id, e
-                );
-                return Err(e.into());
+            // Read message body with timeout
+            match timeout(READ_TIMEOUT, stream.read_exact(&mut buffer[4..4 + msg_len])).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    self.connections.remove(&client_id);
+                    error!(
+                        "[{}] Failed to read message body from client: {}",
+                        client_id, e
+                    );
+                    return Err(e.into());
+                }
+                Err(_) => {
+                    self.connections.remove(&client_id);
+                    error!(
+                        "[{}] Timeout reading message body (size: {} bytes)",
+                        client_id, msg_len
+                    );
+                    return Err(anyhow!(
+                        "Read timeout after {} seconds",
+                        READ_TIMEOUT.as_secs()
+                    ));
+                }
             }
 
             // Decode request
@@ -270,7 +436,7 @@ impl LspDaemon {
                 Ok(req) => req,
                 Err(e) => {
                     self.connections.remove(&client_id);
-                    error!("Failed to decode request from client {}: {}", client_id, e);
+                    error!("[{}] Failed to decode request: {}", client_id, e);
                     return Err(e);
                 }
             };
@@ -312,30 +478,71 @@ impl LspDaemon {
             }
         }
 
+        // Calculate and log connection duration
+        let connection_duration = connection_start.elapsed();
+
+        // Track connection duration (keep only last 100)
+        {
+            let mut durations = self.connection_durations.write().await;
+            durations.push(connection_duration);
+            if durations.len() > 100 {
+                durations.remove(0);
+            }
+        }
+
         // Remove connection
         self.connections.remove(&client_id);
-        info!("Client disconnected: {}", client_id);
+        info!(
+            "Client disconnected: {} (connected for {:?})",
+            client_id, connection_duration
+        );
 
         Ok(())
     }
 
     // Clean up connections that have been idle for too long
-    fn cleanup_stale_connections(&self) {
-        const MAX_IDLE_TIME: Duration = Duration::from_secs(300); // 5 minutes
+    fn cleanup_stale_connections(&self) -> usize {
+        // Make MAX_IDLE_TIME configurable via environment variable
+        let max_idle_secs = std::env::var("LSP_MAX_IDLE_TIME_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300); // Default to 5 minutes
+        let max_idle_time = Duration::from_secs(max_idle_secs);
         let now = Instant::now();
+
+        let connections_before = self.connections.len();
+        let mut cleaned_connections = Vec::new();
 
         self.connections.retain(|client_id, last_activity| {
             let idle_time = now.duration_since(*last_activity);
-            if idle_time > MAX_IDLE_TIME {
-                info!(
-                    "Removing stale connection {}: idle for {:?}",
-                    client_id, idle_time
-                );
+            if idle_time > max_idle_time {
+                cleaned_connections.push((*client_id, idle_time));
                 false
             } else {
                 true
             }
         });
+
+        let cleaned_count = cleaned_connections.len();
+        if cleaned_count > 0 {
+            // Update metrics (use blocking_write since this is not an async function)
+            if let Ok(mut count) = self.connections_cleaned_due_to_staleness.try_write() {
+                *count += cleaned_count;
+            }
+
+            info!(
+                "Cleaned up {} stale connections (had {} total connections)",
+                cleaned_count, connections_before
+            );
+            for (client_id, idle_time) in cleaned_connections {
+                debug!(
+                    "Removed stale connection {}: idle for {:?}",
+                    client_id, idle_time
+                );
+            }
+        }
+
+        cleaned_count
     }
 
     async fn handle_request(&self, request: DaemonRequest) -> DaemonResponse {
@@ -344,11 +551,8 @@ impl LspDaemon {
             std::mem::discriminant(&request)
         );
 
-        // Periodically clean up stale connections (every 100 requests)
-        let request_count = *self.request_count.read().await;
-        if request_count % 100 == 0 {
-            self.cleanup_stale_connections();
-        }
+        // Clean up stale connections on every request to prevent accumulation
+        self.cleanup_stale_connections();
 
         match request {
             DaemonRequest::Connect { client_id } => DaemonResponse::Connected {
@@ -415,6 +619,37 @@ impl LspDaemon {
                 let active_connections = self.connections.len();
                 let active_servers = self.server_manager.get_active_server_count().await;
 
+                // Get LSP server health information
+                let health_status = self
+                    .server_manager
+                    .health_monitor()
+                    .get_health_status()
+                    .await;
+                let server_stats = self.server_manager.get_stats().await;
+
+                let lsp_server_health: Vec<crate::protocol::LspServerHealthInfo> = server_stats
+                    .into_iter()
+                    .map(|s| {
+                        let server_key = format!("{:?}", s.language);
+                        let health = health_status.get(&server_key);
+
+                        crate::protocol::LspServerHealthInfo {
+                            language: s.language,
+                            is_healthy: health.map(|h| h.is_healthy).unwrap_or(true),
+                            consecutive_failures: health
+                                .map(|h| h.consecutive_failures)
+                                .unwrap_or(0),
+                            circuit_breaker_open: health
+                                .map(|h| h.is_circuit_breaker_open())
+                                .unwrap_or(false),
+                            last_check_ms: health
+                                .map(|h| h.last_check.elapsed().as_millis() as u64)
+                                .unwrap_or(0),
+                            response_time_ms: health.map(|h| h.response_time_ms).unwrap_or(0),
+                        }
+                    })
+                    .collect();
+
                 // Calculate average request duration
                 let avg_request_duration_ms = {
                     let durations = self.request_durations.read().await;
@@ -434,6 +669,11 @@ impl LspDaemon {
                     0.0
                 };
 
+                // Get connection metrics
+                let total_accepted = *self.total_connections_accepted.read().await;
+                let total_cleaned = *self.connections_cleaned_due_to_staleness.read().await;
+                let total_rejected = *self.connections_rejected_due_to_limit.read().await;
+
                 // Estimate memory usage (simplified - in production you'd use a proper memory profiler)
                 let memory_usage_mb = {
                     // This is a rough estimate - consider using a proper memory profiler
@@ -442,18 +682,37 @@ impl LspDaemon {
                 };
 
                 // Health is considered good if:
-                // - Not at connection limit
+                // - Not at connection limit (with some buffer)
                 // - Reasonable memory usage
                 // - Low error rate
                 // - Reasonable response times
+                // - Not rejecting too many connections
+                let connection_rejection_rate = if total_accepted > 0 {
+                    (total_rejected as f64 / total_accepted as f64) * 100.0
+                } else {
+                    0.0
+                };
+
                 let healthy = active_connections < 90
                     && memory_usage_mb < 1024.0
                     && error_rate < 5.0
-                    && avg_request_duration_ms < 5000.0;
+                    && avg_request_duration_ms < 5000.0
+                    && connection_rejection_rate < 10.0; // Less than 10% rejection rate
+
+                // Calculate average connection duration
+                let avg_connection_duration_ms = {
+                    let durations = self.connection_durations.read().await;
+                    if durations.is_empty() {
+                        0.0
+                    } else {
+                        let total: Duration = durations.iter().sum();
+                        total.as_millis() as f64 / durations.len() as f64
+                    }
+                };
 
                 info!(
-                    "Health check: connections={}, memory={}MB, errors={}%, avg_duration={}ms",
-                    active_connections, memory_usage_mb, error_rate, avg_request_duration_ms
+                    "Health check: connections={} (accepted={}, cleaned={}, rejected={}), memory={}MB, errors={}%, avg_req_duration={}ms, avg_conn_duration={}ms",
+                    active_connections, total_accepted, total_cleaned, total_rejected, memory_usage_mb, error_rate, avg_request_duration_ms, avg_connection_duration_ms
                 );
 
                 DaemonResponse::HealthCheck {
@@ -464,6 +723,7 @@ impl LspDaemon {
                     active_connections,
                     active_servers,
                     memory_usage_mb,
+                    lsp_server_health,
                 }
             }
 
@@ -486,20 +746,46 @@ impl LspDaemon {
 
             DaemonRequest::Status { request_id } => {
                 let server_stats = self.server_manager.get_stats().await;
+                let health_status = self
+                    .server_manager
+                    .health_monitor()
+                    .get_health_status()
+                    .await;
+
                 let pool_status: Vec<PoolStatus> = server_stats
                     .into_iter()
-                    .map(|s| PoolStatus {
-                        language: s.language,
-                        ready_servers: if s.initialized { 1 } else { 0 },
-                        busy_servers: 0, // No busy concept in single server model
-                        total_servers: 1,
-                        workspaces: s
-                            .workspaces
-                            .iter()
-                            .map(|w| w.to_string_lossy().to_string())
-                            .collect(),
-                        uptime_secs: s.uptime.as_secs(),
-                        status: format!("{:?}", s.status),
+                    .map(|s| {
+                        let server_key = format!("{:?}", s.language);
+                        let health = health_status.get(&server_key);
+
+                        PoolStatus {
+                            language: s.language,
+                            ready_servers: if s.initialized { 1 } else { 0 },
+                            busy_servers: 0, // No busy concept in single server model
+                            total_servers: 1,
+                            workspaces: s
+                                .workspaces
+                                .iter()
+                                .map(|w| w.to_string_lossy().to_string())
+                                .collect(),
+                            uptime_secs: s.uptime.as_secs(),
+                            status: format!("{:?}", s.status),
+                            health_status: if let Some(h) = health {
+                                if h.is_healthy {
+                                    "healthy".to_string()
+                                } else {
+                                    "unhealthy".to_string()
+                                }
+                            } else {
+                                "unknown".to_string()
+                            },
+                            consecutive_failures: health
+                                .map(|h| h.consecutive_failures)
+                                .unwrap_or(0),
+                            circuit_breaker_open: health
+                                .map(|h| h.is_circuit_breaker_open())
+                                .unwrap_or(false),
+                        }
                     })
                     .collect();
 
@@ -799,8 +1085,7 @@ impl LspDaemon {
                     Some(cfg) => cfg,
                     None => {
                         errors.push(format!(
-                            "No LSP server configured for {:?} in {:?}",
-                            language, workspace_path
+                            "No LSP server configured for {language:?} in {workspace_path:?}"
                         ));
                         continue;
                     }
@@ -826,8 +1111,7 @@ impl LspDaemon {
                     }
                     Err(e) => {
                         errors.push(format!(
-                            "Failed to initialize {:?} for {:?}: {}",
-                            language, workspace_path, e
+                            "Failed to initialize {language:?} for {workspace_path:?}: {e}"
                         ));
                     }
                 }
@@ -890,6 +1174,9 @@ impl LspDaemon {
     async fn cleanup(&mut self) -> Result<()> {
         info!("Cleaning up daemon resources");
 
+        // Stop the watchdog first
+        self.watchdog.stop();
+
         // Shutdown all servers gracefully first
         self.server_manager.shutdown_all().await;
 
@@ -947,6 +1234,12 @@ impl LspDaemon {
             child_processes: self.child_processes.clone(), // Share child process tracking
             request_durations: self.request_durations.clone(),
             error_count: self.error_count.clone(),
+            total_connections_accepted: self.total_connections_accepted.clone(),
+            connections_cleaned_due_to_staleness: self.connections_cleaned_due_to_staleness.clone(),
+            connections_rejected_due_to_limit: self.connections_rejected_due_to_limit.clone(),
+            connection_durations: self.connection_durations.clone(),
+            watchdog: self.watchdog.clone(),
+            process_monitor: self.process_monitor.clone(),
         }
     }
 }

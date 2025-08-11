@@ -1,7 +1,9 @@
+use crate::health_monitor::HealthMonitor;
 use crate::language_detector::Language;
 use crate::lsp_registry::LspServerConfig;
 use crate::lsp_server::LspServer;
 use crate::protocol::WorkspaceInfo;
+use crate::watchdog::ProcessMonitor;
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use serde_json::json;
@@ -58,6 +60,8 @@ pub struct SingleServerManager {
     servers: Arc<DashMap<Language, Arc<Mutex<ServerInstance>>>>,
     registry: Arc<crate::lsp_registry::LspRegistry>,
     child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
+    health_monitor: Arc<HealthMonitor>,
+    process_monitor: Arc<ProcessMonitor>,
 }
 
 impl SingleServerManager {
@@ -69,15 +73,199 @@ impl SingleServerManager {
         registry: Arc<crate::lsp_registry::LspRegistry>,
         child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
     ) -> Self {
+        let health_monitor = Arc::new(HealthMonitor::new());
+        let process_monitor = Arc::new(ProcessMonitor::with_limits(80.0, 1024)); // 80% CPU, 1GB memory
         Self {
             servers: Arc::new(DashMap::new()),
             registry,
             child_processes,
+            health_monitor,
+            process_monitor,
         }
+    }
+
+    pub fn new_with_health_monitor(
+        registry: Arc<crate::lsp_registry::LspRegistry>,
+        child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
+        health_monitor: Arc<HealthMonitor>,
+    ) -> Self {
+        let process_monitor = Arc::new(ProcessMonitor::with_limits(80.0, 1024)); // 80% CPU, 1GB memory
+        Self {
+            servers: Arc::new(DashMap::new()),
+            registry,
+            child_processes,
+            health_monitor,
+            process_monitor,
+        }
+    }
+
+    /// Start health monitoring for this server manager
+    pub fn start_health_monitoring(&self) -> tokio::task::JoinHandle<()> {
+        info!("Starting health monitoring for LSP servers");
+        self.health_monitor.start_monitoring(Arc::new(self.clone()))
+    }
+
+    /// Get the health monitor instance
+    pub fn health_monitor(&self) -> Arc<HealthMonitor> {
+        self.health_monitor.clone()
+    }
+
+    /// Get the process monitor instance
+    pub fn process_monitor(&self) -> Arc<ProcessMonitor> {
+        self.process_monitor.clone()
+    }
+
+    /// Check and handle unhealthy processes
+    pub async fn check_process_health(&self) -> Result<()> {
+        let pids = {
+            let pids_guard = self.child_processes.lock().await;
+            pids_guard.clone()
+        };
+
+        if pids.is_empty() {
+            return Ok(());
+        }
+
+        debug!("Checking health of {} child processes", pids.len());
+        let unhealthy_pids = self.process_monitor.monitor_children(pids.clone()).await;
+
+        if !unhealthy_pids.is_empty() {
+            warn!(
+                "Found {} unhealthy processes out of {}: {:?}",
+                unhealthy_pids.len(),
+                pids.len(),
+                unhealthy_pids
+            );
+
+            // Find which languages correspond to the unhealthy PIDs and restart them
+            for &unhealthy_pid in &unhealthy_pids {
+                for entry in self.servers.iter() {
+                    let language = *entry.key();
+                    let server_instance = entry.value();
+
+                    // Try to get server lock without timeout (non-blocking)
+                    match server_instance.try_lock() {
+                        Ok(server) => {
+                            if let Some(server_pid) = server.server.get_pid() {
+                                if server_pid == unhealthy_pid {
+                                    warn!(
+                                        "Process {} belongs to {:?} server - marking for restart",
+                                        unhealthy_pid, language
+                                    );
+
+                                    // Mark server as unhealthy to trigger restart
+                                    self.health_monitor.mark_unhealthy(language).await;
+                                    break;
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // Server is busy or locked, skip for now
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // Kill unhealthy processes directly
+            #[cfg(unix)]
+            for &pid in &unhealthy_pids {
+                unsafe {
+                    if libc::kill(pid as i32, libc::SIGTERM) == 0 {
+                        warn!("Sent SIGTERM to unhealthy process {}", pid);
+                    } else {
+                        warn!("Failed to send SIGTERM to process {}", pid);
+                    }
+                }
+            }
+
+            // Remove killed PIDs from tracking
+            {
+                let mut pids_guard = self.child_processes.lock().await;
+                pids_guard.retain(|&pid| !unhealthy_pids.contains(&pid));
+                info!(
+                    "Removed {} unhealthy processes from tracking, {} remain",
+                    unhealthy_pids.len(),
+                    pids_guard.len()
+                );
+            }
+        } else {
+            debug!("All {} child processes are healthy", pids.len());
+        }
+
+        Ok(())
+    }
+
+    /// Execute an operation with health monitoring
+    /// Marks the server as healthy if the operation succeeds, unhealthy if it fails
+    pub async fn execute_with_health_monitoring<T, F, Fut>(
+        &self,
+        language: Language,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        match operation().await {
+            Ok(result) => {
+                self.health_monitor.mark_healthy(language).await;
+                Ok(result)
+            }
+            Err(e) => {
+                warn!("Operation failed for {:?}: {}", language, e);
+                self.health_monitor.mark_unhealthy(language).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Restart a server if it's unhealthy
+    pub async fn restart_server_if_unhealthy(&self, language: Language) -> Result<()> {
+        if self.health_monitor.should_restart(language).await {
+            warn!("Restarting unhealthy server for {:?}", language);
+
+            // Remove the server from our map
+            if let Some((_, server_instance)) = self.servers.remove(&language) {
+                // Try to shutdown gracefully
+                match tokio::time::timeout(Duration::from_secs(2), server_instance.lock()).await {
+                    Ok(server) => {
+                        if let Err(e) = server.server.shutdown().await {
+                            warn!(
+                                "Error shutting down {:?} server during restart: {}",
+                                language, e
+                            );
+                        } else {
+                            info!("Successfully shut down {:?} server for restart", language);
+                        }
+                    }
+                    Err(_) => {
+                        warn!(
+                            "Timeout acquiring lock for {:?} server during restart",
+                            language
+                        );
+                    }
+                }
+            }
+
+            // Reset health status
+            self.health_monitor.reset_health_status(language).await;
+
+            info!("Server restart completed for {:?}", language);
+        }
+        Ok(())
     }
 
     /// Get or create a server for the specified language
     pub async fn get_server(&self, language: Language) -> Result<Arc<Mutex<ServerInstance>>> {
+        // Check circuit breaker first
+        if self.health_monitor.should_reject_request(language).await {
+            return Err(anyhow!(
+                "Circuit breaker is open for {:?} - server is unhealthy",
+                language
+            ));
+        }
+
         // Check if server already exists
         if let Some(server_instance) = self.servers.get(&language) {
             return Ok(server_instance.clone());
@@ -97,6 +285,9 @@ impl SingleServerManager {
         // Store the server
         self.servers.insert(language, instance.clone());
 
+        // Mark as healthy after successful creation
+        self.health_monitor.mark_healthy(language).await;
+
         info!("Created new LSP server for {:?}", language);
         Ok(instance)
     }
@@ -107,6 +298,13 @@ impl SingleServerManager {
         language: Language,
         workspace_root: PathBuf,
     ) -> Result<Arc<Mutex<ServerInstance>>> {
+        // Check circuit breaker first
+        if self.health_monitor.should_reject_request(language).await {
+            return Err(anyhow!(
+                "Circuit breaker is open for {:?} - server is unhealthy",
+                language
+            ));
+        }
         // Check if server already exists
         if let Some(server_instance) = self.servers.get(&language) {
             let mut server = server_instance.lock().await;
@@ -131,8 +329,11 @@ impl SingleServerManager {
                     .initialize_with_workspace(&config, &workspace_root)
                     .await
                 {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        self.health_monitor.mark_healthy(language).await;
+                    }
                     Err(e) => {
+                        self.health_monitor.mark_unhealthy(language).await;
                         return Err(e);
                     }
                 }
@@ -161,13 +362,20 @@ impl SingleServerManager {
             }
 
             // Add workspace to the server
-            self.register_workspace(&mut server, &workspace_root)
-                .await?;
-            info!(
-                "Registered workspace {:?} with {:?} server",
-                workspace_root, language
-            );
-            return Ok(server_instance.clone());
+            match self.register_workspace(&mut server, &workspace_root).await {
+                Ok(_) => {
+                    self.health_monitor.mark_healthy(language).await;
+                    info!(
+                        "Registered workspace {:?} with {:?} server",
+                        workspace_root, language
+                    );
+                    return Ok(server_instance.clone());
+                }
+                Err(e) => {
+                    self.health_monitor.mark_unhealthy(language).await;
+                    return Err(e);
+                }
+            }
         }
 
         // Create new server and initialize with this workspace
@@ -186,9 +394,18 @@ impl SingleServerManager {
         let mut server = LspServer::spawn(&config)?;
 
         // Initialize with the actual workspace from the start
-        server
+        match server
             .initialize_with_workspace(&config, &workspace_root)
-            .await?;
+            .await
+        {
+            Ok(_) => {
+                self.health_monitor.mark_healthy(language).await;
+            }
+            Err(e) => {
+                self.health_monitor.mark_unhealthy(language).await;
+                return Err(e);
+            }
+        }
 
         // Create instance with this workspace already registered and mark as initialized
         // Note: We don't wait for full indexing to complete to avoid blocking

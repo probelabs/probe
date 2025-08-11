@@ -158,6 +158,8 @@ pub enum DaemonResponse {
         active_connections: usize,
         active_servers: usize,
         memory_usage_mb: f64,
+        #[serde(default)]
+        lsp_server_health: Vec<LspServerHealthInfo>,
     },
     Logs {
         request_id: Uuid,
@@ -261,6 +263,16 @@ pub struct DaemonStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspServerHealthInfo {
+    pub language: Language,
+    pub is_healthy: bool,
+    pub consecutive_failures: u32,
+    pub circuit_breaker_open: bool,
+    pub last_check_ms: u64,
+    pub response_time_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolStatus {
     pub language: Language,
     pub ready_servers: usize,
@@ -272,6 +284,12 @@ pub struct PoolStatus {
     pub uptime_secs: u64,
     #[serde(default)]
     pub status: String,
+    #[serde(default)]
+    pub health_status: String,
+    #[serde(default)]
+    pub consecutive_failures: u32,
+    #[serde(default)]
+    pub circuit_breaker_open: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -562,7 +580,7 @@ mod tests {
                 timestamp: format!("2024-01-01 12:00:{:02}.000 UTC", i % 60),
                 level: LogLevel::Info,
                 target: "test".to_string(),
-                message: format!("Large message {} with lots of content that makes the overall response quite big", i),
+                message: format!("Large message {i} with lots of content that makes the overall response quite big"),
                 file: Some("test.rs".to_string()),
                 line: Some(i),
             });
