@@ -1,8 +1,5 @@
 use anyhow::Result;
 use lsp_daemon::*;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::time::sleep;
 use uuid::Uuid;
 
 #[tokio::test]
@@ -11,7 +8,7 @@ async fn test_daemon_logging_basic() -> Result<()> {
     // This tests the LogBuffer and MemoryLogLayer functionality
 
     let log_buffer = LogBuffer::new();
-    let memory_layer = MemoryLogLayer::new(log_buffer.clone());
+    let _memory_layer = MemoryLogLayer::new(log_buffer.clone());
 
     // Test that we can create log entries
     let test_entry = LogEntry {
@@ -35,10 +32,10 @@ async fn test_daemon_logging_basic() -> Result<()> {
 
     // Test a simple daemon instance for GetLogs handler
     let socket_path = format!("/tmp/test_daemon_logging_{}.sock", Uuid::new_v4());
-    let daemon = LspDaemon::new(socket_path.clone())?;
+    let _daemon = LspDaemon::new(socket_path.clone())?;
 
     // Test the GetLogs request handler directly (without running full daemon)
-    let logs_request = DaemonRequest::GetLogs {
+    let _logs_request = DaemonRequest::GetLogs {
         request_id: Uuid::new_v4(),
         lines: 50,
     };

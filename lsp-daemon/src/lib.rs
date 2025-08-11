@@ -16,15 +16,17 @@ pub mod lsp_server;
 
 // Internal modules - exposed for embedded daemon use
 pub mod daemon;
+pub mod health_monitor;
 mod pool; // Keep for now but mark as deprecated
 pub mod server_manager;
+pub mod watchdog;
 mod workspace_resolver;
 
 // Re-export commonly used types
 pub use protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, DaemonRequest,
-    DaemonResponse, DaemonStatus, LanguageInfo, LogEntry, LogLevel, MessageCodec, PoolStatus,
-    ServerStatus, WorkspaceInfo,
+    DaemonResponse, DaemonStatus, LanguageInfo, LogEntry, LogLevel, LspServerHealthInfo,
+    MessageCodec, PoolStatus, ServerStatus, WorkspaceInfo,
 };
 
 pub use ipc::{IpcListener, IpcStream};
@@ -34,4 +36,6 @@ pub use socket_path::{get_default_socket_path, normalize_executable, remove_sock
 
 // Re-export daemon for binary and embedded use
 pub use daemon::{start_daemon_background, LspDaemon};
+pub use health_monitor::HealthMonitor;
 pub use lsp_registry::LspRegistry;
+pub use watchdog::{ProcessHealth, ProcessMonitor, ProcessStats, Watchdog};
