@@ -19,8 +19,10 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 // Test constants
+#[allow(dead_code)]
 const STRESS_TEST_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes max per test
 const CONNECTION_LIMIT: usize = 100;
+#[allow(dead_code)]
 const LARGE_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB
 const MEMORY_LEAK_THRESHOLD: usize = 50 * 1024 * 1024; // 50MB
 
@@ -33,6 +35,7 @@ struct MockLspServer {
     delay_ms: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 enum MockLspBehavior {
     Normal,              // Responds normally
@@ -56,6 +59,7 @@ impl MockLspServer {
         }
     }
 
+    #[allow(dead_code)]
     fn with_delay(mut self, delay_ms: u64) -> Self {
         self.delay_ms = delay_ms;
         self
