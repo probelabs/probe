@@ -265,7 +265,7 @@ edition = "2021"
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let cargo_toml_path = std::path::Path::new(manifest_dir).join("Cargo.toml");
         let cargo_toml = std::fs::read_to_string(&cargo_toml_path).unwrap_or_else(|e| {
-            panic!("Failed to read Cargo.toml at {:?}: {}", cargo_toml_path, e)
+            panic!("Failed to read Cargo.toml at {cargo_toml_path:?}: {e}")
         });
 
         // Extract the package name using a simple regex
