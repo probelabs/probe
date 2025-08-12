@@ -565,12 +565,20 @@ async fn get_lsp_info_async(
         timeout_ms: 30000, // 30 seconds timeout for search results
     };
 
-    let mut client = match LspClient::new(config).await {
-        Ok(client) => client,
-        Err(e) => {
+    // Use non-blocking client creation - returns None if LSP not ready
+    let mut client = match LspClient::new_non_blocking(config).await {
+        Some(client) => {
             if debug_mode {
-                println!("[DEBUG] Failed to create LSP client: {e}");
+                println!("[DEBUG] LSP client connected successfully");
             }
+            client
+        }
+        None => {
+            // LSP server not ready or still initializing - skip LSP enrichment
+            if debug_mode {
+                println!("[DEBUG] LSP server not ready or still initializing, skipping LSP enrichment");
+            }
+            eprintln!("LSP server not ready or still initializing, skipping LSP enrichment for search results");
             return None;
         }
     };
