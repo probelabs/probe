@@ -708,7 +708,7 @@ async fn get_lsp_symbol_info(
         println!("[DEBUG] Attempting to get LSP info for symbol: {symbol_name}");
     }
 
-    // Create LSP client with timeout to prevent hanging
+    // Create non-blocking LSP client that doesn't wait for server to be ready
     // Find the actual workspace root by looking for Cargo.toml or other project markers
     let workspace_hint = find_workspace_root(file_path).map(|p| p.to_string_lossy().to_string());
     let config = LspConfig {
@@ -724,11 +724,19 @@ async fn get_lsp_symbol_info(
         );
     }
 
-    let mut client = match LspClient::new(config).await {
-        Ok(client) => client,
-        Err(e) => {
+    // Use non-blocking client creation - returns None if LSP not ready
+    let mut client = match LspClient::new_non_blocking(config).await {
+        Some(client) => {
             if debug_mode {
-                println!("[DEBUG] Failed to create LSP client: {e}");
+                println!("[DEBUG] LSP client connected successfully");
+            }
+            client
+        }
+        None => {
+            // LSP server not ready or still initializing - skip LSP enrichment
+            eprintln!("LSP server not ready or still initializing, skipping LSP enrichment for symbol: {symbol_name}");
+            if debug_mode {
+                println!("[DEBUG] LSP server not available - might be starting up or not installed");
             }
             return None;
         }
@@ -836,8 +844,8 @@ fn get_lsp_symbol_info_sync(
             }
         };
 
-        // Use a timeout to prevent blocking indefinitely
-        let timeout_duration = std::time::Duration::from_secs(45); // Reasonable timeout to prevent hanging
+        // Use a shorter timeout since we're non-blocking now
+        let timeout_duration = std::time::Duration::from_secs(10); // Short timeout for non-blocking
         match rt.block_on(async {
             tokio::time::timeout(
                 timeout_duration,
@@ -847,8 +855,9 @@ fn get_lsp_symbol_info_sync(
         }) {
             Ok(result) => result,
             Err(_) => {
+                // Timeout is expected for non-blocking, just log at debug level
                 if debug_mode {
-                    println!("[DEBUG] LSP query timed out for symbol: {symbol_name}");
+                    println!("[DEBUG] LSP query timed out for symbol: {symbol_name} (non-blocking mode)");
                 }
                 None
             }

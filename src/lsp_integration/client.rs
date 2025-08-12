@@ -41,6 +41,75 @@ impl LspClient {
         Ok(client)
     }
 
+    /// Create a non-blocking client that doesn't wait for LSP server to be ready
+    /// Returns None if LSP is not available or still initializing
+    pub async fn new_non_blocking(config: LspConfig) -> Option<Self> {
+        let use_daemon = config.use_daemon;
+        let mut client = Self {
+            stream: None,
+            config,
+        };
+
+        if use_daemon {
+            // Try quick connection without auto-start or waiting
+            if client.try_connect_no_wait().await.is_err() {
+                return None;
+            }
+        }
+
+        Some(client)
+    }
+
+    /// Try to connect without waiting for server to be ready
+    /// This is used for non-blocking operations
+    async fn try_connect_no_wait(&mut self) -> Result<()> {
+        let socket_path = get_default_socket_path();
+        
+        // Very short timeout - just check if daemon is there
+        let quick_timeout = Duration::from_millis(100);
+        
+        match timeout(quick_timeout, IpcStream::connect(&socket_path)).await {
+            Ok(Ok(stream)) => {
+                self.stream = Some(stream);
+                
+                // Send connect message with short timeout
+                let request = DaemonRequest::Connect {
+                    client_id: Uuid::new_v4(),
+                };
+                
+                match timeout(quick_timeout, self.send_request(request)).await {
+                    Ok(Ok(response)) => {
+                        if let DaemonResponse::Connected { daemon_version, .. } = response {
+                            debug!("Quick connect to daemon version: {}", daemon_version);
+                        }
+                        Ok(())
+                    }
+                    Ok(Err(e)) => {
+                        debug!("LSP daemon not ready: {}", e);
+                        self.stream = None;
+                        Err(anyhow!("LSP daemon not ready"))
+                    }
+                    Err(_) => {
+                        debug!("LSP daemon connection timed out");
+                        self.stream = None;
+                        Err(anyhow!("LSP daemon not available"))
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                debug!("No LSP daemon running: {}", e);
+                // Try to start daemon in background but don't wait
+                let _ = start_embedded_daemon_background().await;
+                info!("LSP daemon starting in background, skipping LSP operations");
+                Err(anyhow!("LSP daemon not available (starting in background)"))
+            }
+            Err(_) => {
+                debug!("Quick connection check timed out");
+                Err(anyhow!("LSP daemon not available"))
+            }
+        }
+    }
+
     /// Connect to the LSP daemon, auto-starting if necessary
     async fn connect(&mut self) -> Result<()> {
         let socket_path = get_default_socket_path();
