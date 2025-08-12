@@ -25,6 +25,21 @@ pub struct LspClient {
     config: LspConfig,
 }
 
+impl Drop for LspClient {
+    fn drop(&mut self) {
+        // Ensure the stream is properly closed when the client is dropped
+        if let Some(mut stream) = self.stream.take() {
+            // Try to send a disconnect message before closing
+            // We use block_on here since Drop is not async
+            let _ = futures::executor::block_on(async {
+                // Best effort - ignore errors since we're dropping anyway
+                let _ = stream.flush().await;
+            });
+            debug!("LspClient dropped, connection closed");
+        }
+    }
+}
+
 impl LspClient {
     /// Create a new LSP client with the given configuration
     pub async fn new(config: LspConfig) -> Result<Self> {
