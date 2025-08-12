@@ -340,4 +340,4 @@ This guide includes:
 - Request/response types
 - Socket path discovery
 - Connection management best practices
-- Debugging tips and common issues
+- Debugging tips and common issues# Trigger CI re-run
