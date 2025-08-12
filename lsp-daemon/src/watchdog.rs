@@ -304,7 +304,7 @@ impl ProcessMonitor {
         // For CPU, we'd need to compare with previous readings
         // For simplicity, we'll use a basic approach with /proc/{pid}/status
         let status_path = format!("/proc/{}/status", pid);
-        let cpu_percent = if let Ok(status_content) = fs::read_to_string(&status_path) {
+        let cpu_percent = if let Ok(_status_content) = fs::read_to_string(&status_path) {
             // Look for VmSize or other indicators
             // This is simplified - in practice, you'd want to track CPU time over intervals
             0.0 // Placeholder - real CPU monitoring requires time sampling
