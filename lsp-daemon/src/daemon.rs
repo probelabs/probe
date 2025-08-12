@@ -17,8 +17,8 @@ use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
@@ -589,7 +589,7 @@ impl LspDaemon {
                 if enable_watchdog && !self.watchdog_enabled.load(Ordering::Relaxed) {
                     self.enable_watchdog().await;
                 }
-                
+
                 match self
                     .handle_init_workspaces(workspace_root, languages, recursive)
                     .await
@@ -1053,11 +1053,11 @@ impl LspDaemon {
         }
 
         info!("Enabling watchdog monitoring");
-        
+
         // Create and start the watchdog
         let watchdog = Watchdog::new(60);
         let shutdown_for_watchdog = self.shutdown.clone();
-        
+
         // Set recovery callback
         watchdog
             .set_recovery_callback(move || {
@@ -1071,18 +1071,18 @@ impl LspDaemon {
 
         // Start watchdog monitoring
         let watchdog_task = watchdog.start();
-        
+
         // Store the watchdog in the struct
         let mut watchdog_guard = self.watchdog.lock().await;
         *watchdog_guard = Some(watchdog);
-        
+
         // Mark as enabled
         self.watchdog_enabled.store(true, Ordering::Relaxed);
-        
+
         // Store the task handle
         let mut task_guard = self.watchdog_task.lock().await;
         *task_guard = Some(watchdog_task);
-        
+
         info!("Watchdog monitoring enabled");
     }
 

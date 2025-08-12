@@ -736,7 +736,9 @@ async fn get_lsp_symbol_info(
             // LSP server not ready or still initializing - skip LSP enrichment
             eprintln!("LSP server not ready or still initializing, skipping LSP enrichment for symbol: {symbol_name}");
             if debug_mode {
-                println!("[DEBUG] LSP server not available - might be starting up or not installed");
+                println!(
+                    "[DEBUG] LSP server not available - might be starting up or not installed"
+                );
             }
             return None;
         }
@@ -857,7 +859,9 @@ fn get_lsp_symbol_info_sync(
             Err(_) => {
                 // Timeout is expected for non-blocking, just log at debug level
                 if debug_mode {
-                    println!("[DEBUG] LSP query timed out for symbol: {symbol_name} (non-blocking mode)");
+                    println!(
+                        "[DEBUG] LSP query timed out for symbol: {symbol_name} (non-blocking mode)"
+                    );
                 }
                 None
             }

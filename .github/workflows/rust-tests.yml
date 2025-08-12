@@ -87,3 +87,6 @@ jobs:
         run: |
           cd lsp-daemon
           cargo test --test integration_multi_workspace
+
+      - name: Run LSP integration tests
+        run: cargo test --test lsp_integration_tests

@@ -737,7 +737,12 @@ impl LspManager {
             "json" => {
                 // Initialize workspaces
                 let (initialized, errors) = client
-                    .init_workspaces(workspace_root.clone(), languages, recursive, enable_watchdog)
+                    .init_workspaces(
+                        workspace_root.clone(),
+                        languages,
+                        recursive,
+                        enable_watchdog,
+                    )
                     .await?;
 
                 let json_output = json!({
