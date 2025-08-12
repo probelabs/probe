@@ -90,11 +90,11 @@ impl LspManager {
         if std::env::current_exe()
             .map(|path| {
                 let path_str = path.to_string_lossy();
-                // cargo run creates paths like: target/debug/deps/probe-<hash> or 
+                // cargo run creates paths like: target/debug/deps/probe-<hash> or
                 // target/debug/build/probe-<hash>/out/probe
-                path_str.contains("/target/debug/deps/") || 
-                path_str.contains("/target/release/deps/") ||
-                path_str.contains("cargo-run-build")
+                path_str.contains("/target/debug/deps/")
+                    || path_str.contains("/target/release/deps/")
+                    || path_str.contains("cargo-run-build")
             })
             .unwrap_or(false)
         {

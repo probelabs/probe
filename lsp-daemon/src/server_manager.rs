@@ -276,7 +276,10 @@ impl SingleServerManager {
                 }
                 Err(_) => {
                     // Server might be stuck, mark as unhealthy and recreate
-                    warn!("Server {:?} appears to be unresponsive, will recreate", language);
+                    warn!(
+                        "Server {:?} appears to be unresponsive, will recreate",
+                        language
+                    );
                     self.health_monitor.mark_unhealthy(language).await;
                     self.servers.remove(&language);
                     // Fall through to create new server
@@ -327,17 +330,18 @@ impl SingleServerManager {
         // Check if server already exists
         if let Some(server_instance) = self.servers.get(&language) {
             // Try to acquire lock with timeout to prevent hanging
-            let server_guard = tokio::time::timeout(
-                Duration::from_secs(10),
-                server_instance.lock()
-            )
-            .await
-            .map_err(|_| {
-                warn!("Failed to acquire lock for {:?} server within timeout", language);
-                let _ = self.health_monitor.mark_unhealthy(language);
-                anyhow!("Server lock acquisition timeout for {:?}", language)
-            })?;
-            
+            let server_guard =
+                tokio::time::timeout(Duration::from_secs(10), server_instance.lock())
+                    .await
+                    .map_err(|_| {
+                        warn!(
+                            "Failed to acquire lock for {:?} server within timeout",
+                            language
+                        );
+                        let _ = self.health_monitor.mark_unhealthy(language);
+                        anyhow!("Server lock acquisition timeout for {:?}", language)
+                    })?;
+
             let mut server = server_guard;
 
             // If server is not initialized yet, initialize it with this workspace
@@ -412,10 +416,10 @@ impl SingleServerManager {
                         workspace_root, language, e
                     );
                     self.health_monitor.mark_unhealthy(language).await;
-                    
+
                     // Remove the failed server so it gets recreated on next attempt
                     self.servers.remove(&language);
-                    
+
                     return Err(anyhow!(
                         "Failed to register workspace with existing server: {}. Server will be recreated on next attempt.",
                         e
