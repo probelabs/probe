@@ -63,12 +63,14 @@ impl LspManager {
                 languages,
                 recursive,
                 daemon,
+                watchdog,
             } => {
                 Self::init_workspaces(
                     workspace.clone(),
                     languages.clone(),
                     *recursive,
                     *daemon,
+                    *watchdog,
                     format,
                 )
                 .await
@@ -675,6 +677,7 @@ impl LspManager {
         languages: Option<String>,
         recursive: bool,
         use_daemon: bool,
+        enable_watchdog: bool,
         format: &str,
     ) -> Result<()> {
         use std::path::PathBuf;
@@ -734,7 +737,7 @@ impl LspManager {
             "json" => {
                 // Initialize workspaces
                 let (initialized, errors) = client
-                    .init_workspaces(workspace_root.clone(), languages, recursive)
+                    .init_workspaces(workspace_root.clone(), languages, recursive, enable_watchdog)
                     .await?;
 
                 let json_output = json!({
@@ -765,7 +768,7 @@ impl LspManager {
 
                 // Initialize workspaces
                 let (initialized, errors) = client
-                    .init_workspaces(workspace_root, languages, recursive)
+                    .init_workspaces(workspace_root, languages, recursive, enable_watchdog)
                     .await?;
 
                 if initialized.is_empty() && errors.is_empty() {

@@ -95,6 +95,10 @@ pub enum LspSubcommands {
         /// Use daemon mode (auto-start if not running)
         #[clap(long = "daemon", default_value = "true")]
         daemon: bool,
+
+        /// Enable watchdog monitoring for daemon health and resource usage
+        #[clap(long = "watchdog")]
+        watchdog: bool,
     },
 }
 

@@ -22,6 +22,7 @@ pub enum DaemonRequest {
         workspace_root: PathBuf,
         languages: Option<Vec<Language>>,
         recursive: bool,
+        enable_watchdog: bool,
     },
     ListWorkspaces {
         request_id: Uuid,
