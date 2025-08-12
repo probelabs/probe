@@ -137,7 +137,7 @@ fn test_extract_with_lsp() -> Result<()> {
     thread::sleep(Duration::from_secs(5));
 
     // Test extraction with LSP using an actual file in the repo
-    let (stdout, stderr, success) = run_probe_command(&["extract", "src/main.rs:10", "--lsp"])?;
+    let (stdout, _stderr, success) = run_probe_command(&["extract", "src/main.rs:10", "--lsp"])?;
 
     assert!(success, "Extract with LSP should succeed");
     assert!(
@@ -170,7 +170,7 @@ fn test_extract_non_blocking_without_daemon() -> Result<()> {
     // Test that extract doesn't block when daemon is not available
     let start = Instant::now();
 
-    let (stdout, stderr, success) = run_probe_command(&["extract", "src/main.rs:10", "--lsp"])?;
+    let (stdout, _stderr, success) = run_probe_command(&["extract", "src/main.rs:10", "--lsp"])?;
 
     let elapsed = start.elapsed();
 
@@ -253,9 +253,12 @@ fn test_lsp_with_multiple_languages() -> Result<()> {
 
     // Check if we got language server info in either init or status output
     assert!(
-        stdout.contains("Rust") || stdout.contains("rust") ||
-        status_out.contains("Rust") || status_out.contains("rust") ||
-        stdout.contains("language") || status_out.contains("language"),
+        stdout.contains("Rust")
+            || stdout.contains("rust")
+            || status_out.contains("Rust")
+            || status_out.contains("rust")
+            || stdout.contains("language")
+            || status_out.contains("language"),
         "Should show some language server info"
     );
 
