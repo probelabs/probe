@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use colored::*;
 use serde_json::json;
 use std::path::Path;
@@ -107,11 +107,26 @@ impl LspManager {
         let config = LspConfig {
             use_daemon,
             workspace_hint,
-            timeout_ms: 240000, // Increased to 4 minutes for full rust-analyzer indexing (90s) + call hierarchy (60s)
+            timeout_ms: 10000, // 10 seconds for status command
         };
 
-        let mut client = LspClient::new(config).await?;
-        let status = client.get_status().await?;
+        let mut client = match tokio::time::timeout(
+            Duration::from_secs(15),
+            LspClient::new(config)
+        ).await {
+            Ok(Ok(client)) => client,
+            Ok(Err(e)) => return Err(anyhow!("Failed to connect to daemon: {}", e)),
+            Err(_) => return Err(anyhow!("Timeout connecting to daemon after 15 seconds")),
+        };
+        
+        let status = match tokio::time::timeout(
+            Duration::from_secs(10),
+            client.get_status()
+        ).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(e)) => return Err(anyhow!("Failed to get status: {}", e)),
+            Err(_) => return Err(anyhow!("Timeout getting status after 10 seconds")),
+        };
 
         match format {
             "json" => {
@@ -256,13 +271,27 @@ impl LspManager {
         let config = LspConfig {
             use_daemon,
             workspace_hint,
-            timeout_ms: 30000, // Increased for rust-analyzer
+            timeout_ms: 5000, // 5 seconds for ping
         };
 
         let start_time = std::time::Instant::now();
-        let mut client = LspClient::new(config).await?;
+        let mut client = match tokio::time::timeout(
+            Duration::from_secs(10),
+            LspClient::new(config)
+        ).await {
+            Ok(Ok(client)) => client,
+            Ok(Err(e)) => return Err(anyhow!("Failed to connect to daemon: {}", e)),
+            Err(_) => return Err(anyhow!("Timeout connecting to daemon after 10 seconds")),
+        };
 
-        client.ping().await?;
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            client.ping()
+        ).await {
+            Ok(Ok(_)) => {},
+            Ok(Err(e)) => return Err(anyhow!("Ping failed: {}", e)),
+            Err(_) => return Err(anyhow!("Ping timeout after 5 seconds")),
+        }
         let response_time = start_time.elapsed();
 
         match format {

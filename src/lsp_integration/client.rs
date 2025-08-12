@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::{sleep, timeout};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::lsp_integration::types::*;
@@ -113,7 +113,10 @@ impl LspClient {
     /// Connect to the LSP daemon, auto-starting if necessary
     async fn connect(&mut self) -> Result<()> {
         let socket_path = get_default_socket_path();
-        let connection_timeout = Duration::from_millis(self.config.timeout_ms / 3); // Use 1/3 of total timeout for connection
+        // Use shorter timeout for initial connection attempt
+        let connection_timeout = Duration::from_secs(5);
+        
+        debug!("Attempting to connect to LSP daemon at: {}", socket_path);
 
         // Try to connect to existing daemon and check version compatibility
         match timeout(connection_timeout, IpcStream::connect(&socket_path)).await {
@@ -223,6 +226,8 @@ impl LspClient {
             .as_mut()
             .ok_or_else(|| anyhow!("Not connected to daemon"))?;
 
+        debug!("Sending request: {:?}", request);
+
         // Encode and send request
         let encoded = MessageCodec::encode(&request)?;
         stream.write_all(&encoded).await?;
@@ -230,11 +235,23 @@ impl LspClient {
 
         // Read response with timeout using proper message framing
         let timeout_duration = Duration::from_millis(self.config.timeout_ms);
+        debug!("Waiting for response with timeout: {}ms", self.config.timeout_ms);
 
         // Read message length (4 bytes)
         let mut length_buf = [0u8; 4];
-        timeout(timeout_duration, stream.read_exact(&mut length_buf)).await??;
+        match timeout(timeout_duration, stream.read_exact(&mut length_buf)).await {
+            Ok(Ok(_)) => {},
+            Ok(Err(e)) => {
+                error!("Failed to read message length: {}", e);
+                return Err(anyhow!("Failed to read message length: {}", e));
+            }
+            Err(_) => {
+                error!("Timeout reading message length after {}ms", self.config.timeout_ms);
+                return Err(anyhow!("Timeout reading response from daemon"));
+            }
+        }
         let message_len = u32::from_be_bytes(length_buf) as usize;
+        debug!("Message length: {} bytes", message_len);
 
         // Ensure we don't try to read unreasonably large messages (10MB limit)
         if message_len > 10 * 1024 * 1024 {
@@ -243,7 +260,17 @@ impl LspClient {
 
         // Read the complete message body
         let mut message_buf = vec![0u8; message_len];
-        timeout(timeout_duration, stream.read_exact(&mut message_buf)).await??;
+        match timeout(timeout_duration, stream.read_exact(&mut message_buf)).await {
+            Ok(Ok(_)) => {},
+            Ok(Err(e)) => {
+                error!("Failed to read message body of {} bytes: {}", message_len, e);
+                return Err(anyhow!("Failed to read message body: {}", e));
+            }
+            Err(_) => {
+                error!("Timeout reading message body of {} bytes after {}ms", message_len, self.config.timeout_ms);
+                return Err(anyhow!("Timeout reading message body from daemon"));
+            }
+        }
 
         // Reconstruct the complete message with length prefix for decoding
         let mut complete_message = Vec::with_capacity(4 + message_len);
@@ -252,6 +279,7 @@ impl LspClient {
 
         // Decode response
         let response = MessageCodec::decode_response(&complete_message)?;
+        debug!("Received response: {:?}", response);
 
         // Check for errors
         if let DaemonResponse::Error { error, .. } = &response {
