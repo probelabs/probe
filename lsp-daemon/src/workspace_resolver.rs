@@ -254,7 +254,9 @@ mod tests {
         let file_path = src_dir.join("main.go");
         let workspace = resolver.resolve_workspace(&file_path, None).unwrap();
 
-        assert_eq!(workspace, project_root);
+        // Canonicalize the expected path for comparison since resolve_workspace now returns canonical paths
+        let expected = project_root.canonicalize().unwrap();
+        assert_eq!(workspace, expected);
     }
 
     #[test]
@@ -268,7 +270,9 @@ mod tests {
             .resolve_workspace(&file_path, Some(hint_root.clone()))
             .unwrap();
 
-        assert_eq!(workspace, hint_root);
+        // Canonicalize the expected path for comparison
+        let expected = hint_root.canonicalize().unwrap();
+        assert_eq!(workspace, expected);
     }
 
     #[test]
@@ -280,7 +284,9 @@ mod tests {
         fs::create_dir_all(&allowed_root).unwrap();
         fs::create_dir_all(&forbidden_root).unwrap();
 
-        let mut resolver = WorkspaceResolver::new(Some(vec![allowed_root.clone()]));
+        // Canonicalize the allowed root for the resolver
+        let canonical_allowed = allowed_root.canonicalize().unwrap();
+        let mut resolver = WorkspaceResolver::new(Some(vec![canonical_allowed]));
 
         // File in allowed root should work
         let allowed_file = allowed_root.join("test.go");

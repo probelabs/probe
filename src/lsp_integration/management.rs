@@ -961,8 +961,7 @@ mod tests {
         // Critical test: the path should be absolute (required for URI conversion)
         assert!(
             workspace_root.is_absolute(),
-            "Resolved path should be absolute for URI conversion: {:?}",
-            workspace_root
+            "Resolved path should be absolute for URI conversion: {workspace_root:?}"
         );
         assert!(workspace_root.exists());
     }
