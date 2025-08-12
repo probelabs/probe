@@ -29,16 +29,42 @@ pub trait IpcStreamTrait: AsyncRead + AsyncWrite + Send + Sync + Unpin {
 #[cfg(unix)]
 mod unix_impl {
     use super::*;
+    use fs2::FileExt;
+    use std::fs::{File, OpenOptions};
     use std::path::Path;
+    use std::time::Duration;
     use tokio::net::{UnixListener as TokioUnixListener, UnixStream as TokioUnixStream};
 
     pub struct IpcListener {
         listener: TokioUnixListener,
         path: String,
+        _lock_file: Option<File>, // Keep lock file open to maintain the lock
     }
 
     impl IpcListener {
         pub async fn bind(path: &str) -> Result<Self> {
+            // Use a lock file to coordinate socket binding across multiple processes
+            let lock_path = format!("{path}.bind.lock");
+            let lock_file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&lock_path)
+                .map_err(|e| anyhow::anyhow!("Failed to open socket bind lock file: {}", e))?;
+
+            // Acquire exclusive lock for the socket binding operation
+            lock_file.try_lock_exclusive().map_err(|_| {
+                anyhow::anyhow!("Another process is currently binding to socket {}", path)
+            })?;
+
+            // Now we have exclusive access to check and bind the socket
+            let result = Self::bind_internal(path, lock_file).await;
+
+            // The lock will be released when the lock_file is dropped (either on success or error)
+            result
+        }
+
+        async fn bind_internal(path: &str, lock_file: File) -> Result<Self> {
             // Check if socket file exists and if a daemon is listening
             if Path::new(path).exists() {
                 // Try to connect to see if a daemon is actually running
@@ -63,10 +89,24 @@ mod unix_impl {
                 std::fs::create_dir_all(parent)?;
             }
 
-            let listener = TokioUnixListener::bind(path)?;
+            // Bind the socket - this is now protected by our exclusive lock
+            let listener = match TokioUnixListener::bind(path) {
+                Ok(l) => l,
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                    // This shouldn't happen with our locking, but handle it gracefully
+                    tracing::warn!(
+                        "Socket bind failed due to address in use, retrying after delay"
+                    );
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    TokioUnixListener::bind(path)?
+                }
+                Err(e) => return Err(e.into()),
+            };
+
             Ok(Self {
                 listener,
                 path: path.to_string(),
+                _lock_file: Some(lock_file), // Keep the lock file open
             })
         }
 
@@ -82,6 +122,15 @@ mod unix_impl {
 
     impl Drop for IpcListener {
         fn drop(&mut self) {
+            // Release the lock file first
+            if let Some(lock_file) = self._lock_file.take() {
+                let _ = FileExt::unlock(&lock_file);
+                drop(lock_file);
+                // Clean up the lock file
+                let lock_path = format!("{}.bind.lock", self.path);
+                let _ = std::fs::remove_file(&lock_path);
+            }
+
             // Clean up socket file
             if let Err(e) = std::fs::remove_file(&self.path) {
                 // Only log at trace level since this is cleanup code and the file might not exist
