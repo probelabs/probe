@@ -91,8 +91,8 @@ impl RustPathResolver {
             PathBuf::from(cargo_home)
         } else {
             // Use dirs crate for cross-platform home directory support
-            let home_dir = dirs::home_dir()
-                .ok_or_else(|| "Failed to determine home directory".to_string())?;
+            let home_dir =
+                dirs::home_dir().ok_or_else(|| "Failed to determine home directory".to_string())?;
             home_dir.join(".cargo")
         };
 
