@@ -87,16 +87,17 @@ impl RustPathResolver {
     /// Finds a crate in the Cargo registry cache.
     fn find_in_registry_cache(&self, crate_name: &str) -> Result<PathBuf, String> {
         // Get the cargo home directory
-        let cargo_home = std::env::var("CARGO_HOME")
-            .or_else(|_| {
-                let home = std::env::var("HOME")
-                    .map_err(|e| format!("Failed to get HOME environment variable: {e}"))?;
-                Ok::<String, String>(format!("{home}/.cargo"))
-            })
-            .map_err(|e| format!("Failed to determine CARGO_HOME: {e}"))?;
+        let cargo_home = if let Ok(cargo_home) = std::env::var("CARGO_HOME") {
+            PathBuf::from(cargo_home)
+        } else {
+            // Use dirs crate for cross-platform home directory support
+            let home_dir = dirs::home_dir()
+                .ok_or_else(|| "Failed to determine home directory".to_string())?;
+            home_dir.join(".cargo")
+        };
 
         // The registry cache is in $CARGO_HOME/registry/src
-        let registry_dir = PathBuf::from(cargo_home).join("registry").join("src");
+        let registry_dir = cargo_home.join("registry").join("src");
 
         if !registry_dir.exists() {
             return Err(format!(
