@@ -644,14 +644,45 @@ async fn shutdown_existing_daemon() -> Result<()> {
     }
 }
 
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::time::Instant;
+
+/// Wrapper for client startup lock file that cleans up on drop
+struct ClientStartupLock {
+    _file: File,
+    path: String,
+}
+
+impl Drop for ClientStartupLock {
+    fn drop(&mut self) {
+        // Clean up the lock file when dropped
+        let _ = std::fs::remove_file(&self.path);
+        debug!("Released client startup lock");
+    }
+}
+
+/// Global path for client startup coordination lock
+fn get_client_lock_path() -> String {
+    // Use platform-appropriate temp directory
+    let temp_dir = std::env::temp_dir();
+    temp_dir
+        .join("probe-lsp-client-start.lock")
+        .to_string_lossy()
+        .to_string()
+}
+
 /// Start embedded LSP daemon in the background using probe binary
 async fn start_embedded_daemon_background() -> Result<()> {
     let socket_path = get_default_socket_path();
 
-    // Check if daemon is healthy and compatible
+    // Use file-based locking for cross-process coordination
+    let _lock = acquire_client_startup_lock()?;
+
+    // Double-check after acquiring the lock - another process might have started the daemon
     match check_daemon_health().await {
         Ok(DaemonHealth::Healthy) => {
-            debug!("Daemon already running and healthy");
+            debug!("Daemon already running and healthy (after acquiring lock)");
             return Ok(());
         }
         Ok(DaemonHealth::VersionMismatch) => {
@@ -691,7 +722,48 @@ async fn start_embedded_daemon_background() -> Result<()> {
         .map_err(|e| anyhow!("Failed to spawn embedded daemon: {}", e))?;
 
     info!("Started embedded daemon in background");
+
+    // Lock will be automatically released when _lock goes out of scope
+
     Ok(())
+}
+
+/// Acquire a file-based lock for client startup coordination
+fn acquire_client_startup_lock() -> Result<ClientStartupLock> {
+    let lock_path = get_client_lock_path();
+    let start_time = Instant::now();
+    let max_wait = Duration::from_secs(10);
+
+    loop {
+        // Try to create the lock file exclusively
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true) // Atomic creation - fails if file exists
+            .open(&lock_path)
+        {
+            Ok(mut file) => {
+                // Write our PID to help with debugging
+                let _ = writeln!(file, "{}", std::process::id());
+                debug!("Acquired client startup lock");
+                return Ok(ClientStartupLock {
+                    _file: file,
+                    path: lock_path,
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Another client is starting the daemon
+                if start_time.elapsed() > max_wait {
+                    // Clean up potentially stale lock
+                    let _ = std::fs::remove_file(&lock_path);
+                    return Err(anyhow!("Timeout waiting for client startup lock"));
+                }
+
+                debug!("Another client is starting daemon, waiting...");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return Err(anyhow!("Failed to acquire client startup lock: {}", e)),
+        }
+    }
 }
 
 /// Convert lsp-daemon CallHierarchyResult to our CallHierarchyInfo
