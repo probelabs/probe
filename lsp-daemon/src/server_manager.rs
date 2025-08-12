@@ -554,13 +554,20 @@ impl SingleServerManager {
     ) -> Result<()> {
         if let Some(server_instance) = self.servers.get(&language) {
             // Use timeout to prevent hanging if server is busy
-            let mut server = match tokio::time::timeout(Duration::from_secs(5), server_instance.lock()).await {
-                Ok(guard) => guard,
-                Err(_) => {
-                    warn!("Timeout acquiring lock for {:?} server during unregister", language);
-                    return Err(anyhow!("Server lock acquisition timeout for {:?}", language));
-                }
-            };
+            let mut server =
+                match tokio::time::timeout(Duration::from_secs(5), server_instance.lock()).await {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        warn!(
+                            "Timeout acquiring lock for {:?} server during unregister",
+                            language
+                        );
+                        return Err(anyhow!(
+                            "Server lock acquisition timeout for {:?}",
+                            language
+                        ));
+                    }
+                };
 
             if !server.is_workspace_registered(workspace_root) {
                 return Ok(()); // Already unregistered
