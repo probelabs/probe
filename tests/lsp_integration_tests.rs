@@ -1,5 +1,5 @@
 //! Integration tests for LSP functionality
-//! 
+//!
 //! These tests verify that LSP daemon integration works correctly,
 //! including daemon lifecycle, extraction with LSP enrichment, and non-blocking behavior.
 
@@ -26,11 +26,11 @@ fn run_probe_command(args: &[&str]) -> Result<(String, String, bool)> {
 /// Helper to ensure daemon is stopped (cleanup)
 fn ensure_daemon_stopped() {
     let _ = Command::new("./target/debug/probe")
-        .args(&["lsp", "shutdown"])
+        .args(["lsp", "shutdown"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .output();
-    
+
     // Give it a moment to fully shutdown
     thread::sleep(Duration::from_millis(500));
 }
@@ -39,26 +39,26 @@ fn ensure_daemon_stopped() {
 fn start_daemon_and_wait() -> Result<()> {
     // Start daemon in background
     let _ = Command::new("./target/debug/probe")
-        .args(&["lsp", "start"])
+        .args(["lsp", "start"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    
+
     // Wait for daemon to be ready (try status command)
     for _ in 0..10 {
         thread::sleep(Duration::from_millis(500));
-        
+
         let output = Command::new("./target/debug/probe")
-            .args(&["lsp", "status"])
+            .args(["lsp", "status"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .output()?;
-        
+
         if output.status.success() {
             return Ok(());
         }
     }
-    
+
     Err(anyhow::anyhow!("Daemon failed to start within timeout"))
 }
 
@@ -66,21 +66,24 @@ fn start_daemon_and_wait() -> Result<()> {
 fn test_lsp_daemon_lifecycle() -> Result<()> {
     // Ensure clean state
     ensure_daemon_stopped();
-    
+
     // Test 1: Ping should auto-start daemon (since status auto-starts)
     // We'll use shutdown first to ensure it's not running
     let _ = run_probe_command(&["lsp", "shutdown"])?;
     thread::sleep(Duration::from_millis(500));
-    
+
     // Test 2: Start daemon
     start_daemon_and_wait()?;
-    
+
     // Test 3: Status should succeed when daemon is running
     let (stdout, _, success) = run_probe_command(&["lsp", "status"])?;
     assert!(success, "Status should succeed when daemon is running");
-    assert!(stdout.contains("LSP Daemon Status"), "Should show daemon status");
+    assert!(
+        stdout.contains("LSP Daemon Status"),
+        "Should show daemon status"
+    );
     assert!(stdout.contains("Connected"), "Should show connected status");
-    
+
     // Test 4: Shutdown daemon
     let (stdout, _, success) = run_probe_command(&["lsp", "shutdown"])?;
     assert!(success, "Shutdown should succeed");
@@ -88,18 +91,21 @@ fn test_lsp_daemon_lifecycle() -> Result<()> {
         stdout.contains("shutdown successfully"),
         "Should confirm shutdown"
     );
-    
+
     // Give it a moment to fully shutdown
     thread::sleep(Duration::from_millis(500));
-    
+
     // Test 5: Verify daemon is actually stopped by checking if it auto-starts again
     let (stdout, _, success) = run_probe_command(&["lsp", "status"])?;
     assert!(success, "Status should succeed (auto-starts daemon)");
-    assert!(stdout.contains("Connected"), "Should show connected after auto-start");
-    
+    assert!(
+        stdout.contains("Connected"),
+        "Should show connected after auto-start"
+    );
+
     // Final cleanup
     ensure_daemon_stopped();
-    
+
     Ok(())
 }
 
@@ -107,171 +113,168 @@ fn test_lsp_daemon_lifecycle() -> Result<()> {
 fn test_extract_with_lsp() -> Result<()> {
     // Ensure clean state
     ensure_daemon_stopped();
-    
+
     // Start daemon
     start_daemon_and_wait()?;
-    
+
     // Initialize workspace for rust-analyzer
     let (stdout, stderr, success) = run_probe_command(&[
-        "lsp", 
-        "init", 
-        "-w", 
+        "lsp",
+        "init",
+        "-w",
         "lsp-test-project",
         "--languages",
-        "rust"
+        "rust",
     ])?;
-    
+
     if !success {
-        eprintln!("Init failed. Stdout: {}", stdout);
-        eprintln!("Stderr: {}", stderr);
+        eprintln!("Init failed. Stdout: {stdout}");
+        eprintln!("Stderr: {stderr}");
     }
-    
+
     assert!(success, "LSP init should succeed");
     assert!(
-        stdout.contains("Successfully initialized") || 
-        stdout.contains("Initialized language servers"),
+        stdout.contains("Successfully initialized")
+            || stdout.contains("Initialized language servers"),
         "Should confirm initialization"
     );
-    
+
     // Give rust-analyzer time to index (it's a small project)
     thread::sleep(Duration::from_secs(5));
-    
+
     // Test extraction with LSP
     let (stdout, stderr, success) = run_probe_command(&[
         "extract",
         "lsp-test-project/src/main.rs#calculate_result",
-        "--lsp"
+        "--lsp",
     ])?;
-    
+
     assert!(success, "Extract with LSP should succeed");
     assert!(
         stdout.contains("fn calculate_result"),
         "Should extract the correct function"
     );
-    
+
     // Check if LSP info was attempted (it may or may not have call hierarchy)
     // The important thing is that it didn't block
     assert!(
-        stdout.contains("LSP Information") || 
-        stderr.contains("LSP server not ready") ||
-        stderr.contains("No call hierarchy"),
+        stdout.contains("LSP Information")
+            || stderr.contains("LSP server not ready")
+            || stderr.contains("No call hierarchy"),
         "Should either show LSP info or indicate it's not available"
     );
-    
+
     // Cleanup
     ensure_daemon_stopped();
-    
+
     Ok(())
 }
 
 #[test]
 fn test_extract_non_blocking_without_daemon() -> Result<()> {
     use std::time::Instant;
-    
+
     // Ensure daemon is NOT running
     ensure_daemon_stopped();
-    
+
     // Test that extract doesn't block when daemon is not available
     let start = Instant::now();
-    
+
     let (stdout, stderr, success) = run_probe_command(&[
         "extract",
         "lsp-test-project/src/main.rs#calculate_result",
-        "--lsp"
+        "--lsp",
     ])?;
-    
+
     let elapsed = start.elapsed();
-    
+
     assert!(success, "Extract should succeed even without daemon");
     assert!(
         stdout.contains("fn calculate_result"),
         "Should extract the correct function"
     );
     assert!(
-        stderr.contains("LSP server not ready") || 
-        stderr.contains("skipping LSP enrichment"),
+        stderr.contains("LSP server not ready") || stderr.contains("skipping LSP enrichment"),
         "Should indicate LSP is not available"
     );
-    
+
     // Should complete quickly (under 2 seconds)
     assert!(
         elapsed.as_secs() < 2,
-        "Extract should not block (took {:?})",
-        elapsed
+        "Extract should not block (took {elapsed:?})"
     );
-    
+
     Ok(())
 }
 
 #[test]
 fn test_search_non_blocking_without_daemon() -> Result<()> {
     use std::time::Instant;
-    
+
     // Ensure daemon is NOT running
     ensure_daemon_stopped();
-    
+
     // Test that search doesn't block when daemon is not available
     let start = Instant::now();
-    
+
     let (stdout, _stderr, success) = run_probe_command(&[
         "search",
         "calculate",
         "lsp-test-project",
         "--max-results",
-        "1"
+        "1",
     ])?;
-    
+
     let elapsed = start.elapsed();
-    
+
     assert!(success, "Search should succeed even without daemon");
     assert!(
         stdout.contains("calculate"),
         "Should find results with 'calculate'"
     );
-    
+
     // Should complete quickly (under 2 seconds)
     assert!(
         elapsed.as_secs() < 2,
-        "Search should not block (took {:?})",
-        elapsed
+        "Search should not block (took {elapsed:?})"
     );
-    
+
     Ok(())
 }
 
-#[test] 
+#[test]
 fn test_lsp_with_multiple_languages() -> Result<()> {
     // Ensure clean state
     ensure_daemon_stopped();
-    
+
     // Start daemon
     start_daemon_and_wait()?;
-    
+
     // Initialize multiple language servers
     let (stdout, _, success) = run_probe_command(&[
         "lsp",
-        "init", 
+        "init",
         "-w",
         ".",
         "--languages",
-        "rust,typescript,python"
+        "rust,typescript,python",
     ])?;
-    
+
     assert!(success, "Multi-language init should succeed");
-    
+
     // Check status shows multiple language pools
     let (_stdout, _, success) = run_probe_command(&["lsp", "status"])?;
     assert!(success, "Status should succeed");
-    
+
     // At least Rust should be initialized since we have Rust files
     assert!(
         stdout.contains("Rust") || stdout.contains("rust"),
         "Should show Rust language server"
     );
-    
+
     // Cleanup
     ensure_daemon_stopped();
-    
+
     Ok(())
 }
 
@@ -279,15 +282,15 @@ fn test_lsp_with_multiple_languages() -> Result<()> {
 fn test_lsp_logs() -> Result<()> {
     // Ensure clean state
     ensure_daemon_stopped();
-    
+
     // Start daemon with LSP_LOG enabled
     std::env::set_var("LSP_LOG", "1");
     start_daemon_and_wait()?;
-    
+
     // Do some operations to generate logs
     let _ = run_probe_command(&["lsp", "status"])?;
     let _ = run_probe_command(&["lsp", "ping"])?;
-    
+
     // Check logs
     let (stdout, _, success) = run_probe_command(&["lsp", "logs", "-n", "20"])?;
     assert!(success, "Getting logs should succeed");
@@ -295,11 +298,11 @@ fn test_lsp_logs() -> Result<()> {
         !stdout.is_empty() || stdout.contains("LSP Daemon Log"),
         "Should show some logs or log header"
     );
-    
+
     // Cleanup
     std::env::remove_var("LSP_LOG");
     ensure_daemon_stopped();
-    
+
     Ok(())
 }
 
@@ -308,26 +311,23 @@ fn test_lsp_logs() -> Result<()> {
 fn test_daemon_auto_start() -> Result<()> {
     // Ensure daemon is not running
     ensure_daemon_stopped();
-    
+
     // Run a command that uses daemon (should auto-start)
-    let (stdout, _, success) = run_probe_command(&[
-        "extract",
-        "lsp-test-project/src/main.rs#main",
-        "--lsp"
-    ])?;
-    
+    let (stdout, _, success) =
+        run_probe_command(&["extract", "lsp-test-project/src/main.rs#main", "--lsp"])?;
+
     assert!(success, "Extract should succeed with auto-start");
     assert!(stdout.contains("fn main"), "Should extract main function");
-    
+
     // Now status should work (daemon was auto-started)
     thread::sleep(Duration::from_secs(1));
     let (_, _, _success) = run_probe_command(&["lsp", "status"])?;
-    
+
     // Note: Status might fail if daemon was started in non-blocking mode
     // The important thing is that extract succeeded
-    
+
     // Cleanup
     ensure_daemon_stopped();
-    
+
     Ok(())
 }

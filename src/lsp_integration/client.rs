@@ -64,19 +64,19 @@ impl LspClient {
     /// This is used for non-blocking operations
     async fn try_connect_no_wait(&mut self) -> Result<()> {
         let socket_path = get_default_socket_path();
-        
+
         // Very short timeout - just check if daemon is there
         let quick_timeout = Duration::from_millis(100);
-        
+
         match timeout(quick_timeout, IpcStream::connect(&socket_path)).await {
             Ok(Ok(stream)) => {
                 self.stream = Some(stream);
-                
+
                 // Send connect message with short timeout
                 let request = DaemonRequest::Connect {
                     client_id: Uuid::new_v4(),
                 };
-                
+
                 match timeout(quick_timeout, self.send_request(request)).await {
                     Ok(Ok(response)) => {
                         if let DaemonResponse::Connected { daemon_version, .. } = response {

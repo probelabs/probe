@@ -576,7 +576,9 @@ async fn get_lsp_info_async(
         None => {
             // LSP server not ready or still initializing - skip LSP enrichment
             if debug_mode {
-                println!("[DEBUG] LSP server not ready or still initializing, skipping LSP enrichment");
+                println!(
+                    "[DEBUG] LSP server not ready or still initializing, skipping LSP enrichment"
+                );
             }
             eprintln!("LSP server not ready or still initializing, skipping LSP enrichment for search results");
             return None;
