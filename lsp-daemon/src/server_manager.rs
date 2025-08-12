@@ -553,7 +553,14 @@ impl SingleServerManager {
         workspace_root: &PathBuf,
     ) -> Result<()> {
         if let Some(server_instance) = self.servers.get(&language) {
-            let mut server = server_instance.lock().await;
+            // Use timeout to prevent hanging if server is busy
+            let mut server = match tokio::time::timeout(Duration::from_secs(5), server_instance.lock()).await {
+                Ok(guard) => guard,
+                Err(_) => {
+                    warn!("Timeout acquiring lock for {:?} server during unregister", language);
+                    return Err(anyhow!("Server lock acquisition timeout for {:?}", language));
+                }
+            };
 
             if !server.is_workspace_registered(workspace_root) {
                 return Ok(()); // Already unregistered
@@ -681,8 +688,8 @@ impl SingleServerManager {
             let server_instance = entry.value();
             debug!("Processing {:?} server", language);
 
-            // Use timeout-based lock instead of try_lock to handle busy servers
-            match tokio::time::timeout(Duration::from_millis(1000), server_instance.lock()).await {
+            // Use non-blocking try_lock for status queries to avoid hangs
+            match server_instance.try_lock() {
                 Ok(server) => {
                     let status = if !server.initialized {
                         ServerStatus::Initializing
@@ -701,15 +708,17 @@ impl SingleServerManager {
                     });
                 }
                 Err(_) => {
-                    // Return stats even if we can't get the lock, mark as busy/indexing
+                    // Server is busy (likely initializing), return partial stats immediately
+                    // This prevents the status command from hanging
+                    debug!("Server {:?} is busy, returning partial stats", language);
                     stats.push(ServerStats {
                         language,
                         workspace_count: 0,                     // Unknown
-                        initialized: true, // Assume initialized if we have it in the map
+                        initialized: false, // Likely still initializing if lock is held
                         last_used: tokio::time::Instant::now(), // Unknown, use current time
                         workspaces: Vec::new(), // Unknown
                         uptime: Duration::from_secs(0), // Unknown
-                        status: ServerStatus::Indexing, // Likely indexing if busy
+                        status: ServerStatus::Initializing, // Most likely initializing if busy
                     });
                 }
             }
