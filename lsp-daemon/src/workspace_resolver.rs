@@ -33,12 +33,10 @@ impl WorkspaceResolver {
         // 1. Use client hint if provided and valid
         if let Some(hint_root) = hint {
             // Canonicalize the hint path to ensure it's absolute
-            let canonical_hint = hint_root
-                .canonicalize()
-                .unwrap_or_else(|e| {
-                    warn!("Failed to canonicalize hint {:?}: {}", hint_root, e);
-                    hint_root.clone()
-                });
+            let canonical_hint = hint_root.canonicalize().unwrap_or_else(|e| {
+                warn!("Failed to canonicalize hint {:?}: {}", hint_root, e);
+                hint_root.clone()
+            });
             if self.is_valid_workspace(&canonical_hint, file_path)? {
                 info!("Using client workspace hint: {:?}", canonical_hint);
                 return Ok(canonical_hint);
@@ -61,12 +59,13 @@ impl WorkspaceResolver {
         info!("Auto-detected workspace: {:?}", detected_root);
 
         // Canonicalize the detected root to ensure it's an absolute path
-        let canonical_root = detected_root
-            .canonicalize()
-            .unwrap_or_else(|e| {
-                warn!("Failed to canonicalize detected root {:?}: {}", detected_root, e);
-                detected_root.clone()
-            });
+        let canonical_root = detected_root.canonicalize().unwrap_or_else(|e| {
+            warn!(
+                "Failed to canonicalize detected root {:?}: {}",
+                detected_root, e
+            );
+            detected_root.clone()
+        });
 
         // 4. Validate against allowed_roots if configured
         if let Some(ref allowed) = self.allowed_roots {

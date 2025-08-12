@@ -209,7 +209,10 @@ impl HealthMonitor {
             Err(_) => {
                 // If we can't acquire the lock immediately, the server might be busy
                 // This is not necessarily unhealthy, just busy
-                debug!("Server {:?} is busy, skipping detailed health check", language);
+                debug!(
+                    "Server {:?} is busy, skipping detailed health check",
+                    language
+                );
                 // Return a nominal response time to indicate the server exists but is busy
                 return Ok(1);
             }
