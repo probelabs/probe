@@ -85,8 +85,17 @@ impl LspManager {
         format: &str,
     ) -> Result<()> {
         // Check if we're being run via cargo and warn about potential conflicts
+        // Look for "cargo-run-build" in path which indicates cargo run is being used
+        // Don't trigger on installed binaries in .cargo/bin
         if std::env::current_exe()
-            .map(|path| path.to_string_lossy().contains("cargo"))
+            .map(|path| {
+                let path_str = path.to_string_lossy();
+                // cargo run creates paths like: target/debug/deps/probe-<hash> or 
+                // target/debug/build/probe-<hash>/out/probe
+                path_str.contains("/target/debug/deps/") || 
+                path_str.contains("/target/release/deps/") ||
+                path_str.contains("cargo-run-build")
+            })
             .unwrap_or(false)
         {
             eprintln!(
