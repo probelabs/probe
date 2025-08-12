@@ -1004,13 +1004,18 @@ impl LspDaemon {
             ));
         }
 
+        // Canonicalize the workspace root to ensure it's an absolute path
+        let canonical_root = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.clone());
+
         // Check if workspace is allowed
         {
             let resolver = self.workspace_resolver.lock().await;
-            if !resolver.is_path_allowed(&workspace_root) {
+            if !resolver.is_path_allowed(&canonical_root) {
                 return Err(anyhow!(
                     "Workspace {:?} not in allowed roots",
-                    workspace_root
+                    canonical_root
                 ));
             }
         }
@@ -1020,7 +1025,7 @@ impl LspDaemon {
             lang
         } else {
             // Try to detect language from common files in workspace
-            self.detect_workspace_language(&workspace_root)?
+            self.detect_workspace_language(&canonical_root)?
         };
 
         // Get LSP server config
@@ -1033,10 +1038,10 @@ impl LspDaemon {
         // Ensure workspace is registered with the server
         let _server_instance = self
             .server_manager
-            .ensure_workspace_registered(language, workspace_root.clone())
+            .ensure_workspace_registered(language, canonical_root.clone())
             .await?;
 
-        Ok((workspace_root, language, config.command))
+        Ok((canonical_root, language, config.command))
     }
 
     async fn handle_init_workspaces(
@@ -1055,9 +1060,14 @@ impl LspDaemon {
             ));
         }
 
+        // Canonicalize the workspace root to ensure it's an absolute path
+        let canonical_root = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.clone());
+
         // Discover workspaces
         let detector = crate::language_detector::LanguageDetector::new();
-        let discovered_workspaces = detector.discover_workspaces(&workspace_root, recursive)?;
+        let discovered_workspaces = detector.discover_workspaces(&canonical_root, recursive)?;
 
         if discovered_workspaces.is_empty() {
             return Ok((vec![], vec!["No workspaces found".to_string()]));
@@ -1068,6 +1078,11 @@ impl LspDaemon {
 
         // Filter by requested languages if specified
         for (workspace_path, detected_languages) in discovered_workspaces {
+            // Canonicalize each workspace path to ensure it's absolute
+            let canonical_workspace = workspace_path
+                .canonicalize()
+                .unwrap_or_else(|_| workspace_path.clone());
+
             let languages_to_init = if let Some(ref requested_languages) = languages {
                 // Only initialize requested languages that were detected
                 detected_languages
@@ -1090,7 +1105,7 @@ impl LspDaemon {
                     Some(cfg) => cfg,
                     None => {
                         errors.push(format!(
-                            "No LSP server configured for {language:?} in {workspace_path:?}"
+                            "No LSP server configured for {language:?} in {canonical_workspace:?}"
                         ));
                         continue;
                     }
@@ -1099,24 +1114,35 @@ impl LspDaemon {
                 // Try to initialize the workspace
                 match self
                     .server_manager
-                    .ensure_workspace_registered(language, workspace_path.clone())
+                    .ensure_workspace_registered(language, canonical_workspace.clone())
                     .await
                 {
                     Ok(_) => {
+                        // Ensure the workspace path is absolute before returning
+                        let absolute_workspace = if canonical_workspace.is_absolute() {
+                            canonical_workspace.clone()
+                        } else {
+                            std::env::current_dir()
+                                .unwrap_or_else(|_| PathBuf::from("/"))
+                                .join(&canonical_workspace)
+                                .canonicalize()
+                                .unwrap_or_else(|_| canonical_workspace.clone())
+                        };
+
                         initialized.push(InitializedWorkspace {
-                            workspace_root: workspace_path.clone(),
+                            workspace_root: absolute_workspace,
                             language,
                             lsp_server: config.command.clone(),
                             status: "Ready".to_string(),
                         });
                         info!(
                             "Initialized {:?} for workspace {:?}",
-                            language, workspace_path
+                            language, canonical_workspace
                         );
                     }
                     Err(e) => {
                         errors.push(format!(
-                            "Failed to initialize {language:?} for {workspace_path:?}: {e}"
+                            "Failed to initialize {language:?} for {canonical_workspace:?}: {e}"
                         ));
                     }
                 }

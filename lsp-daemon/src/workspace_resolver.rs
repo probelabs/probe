@@ -27,13 +27,17 @@ impl WorkspaceResolver {
     ) -> Result<PathBuf> {
         // 1. Use client hint if provided and valid
         if let Some(hint_root) = hint {
-            if self.is_valid_workspace(&hint_root, file_path)? {
-                debug!("Using client workspace hint: {:?}", hint_root);
-                return Ok(hint_root);
+            // Canonicalize the hint path to ensure it's absolute
+            let canonical_hint = hint_root
+                .canonicalize()
+                .unwrap_or_else(|_| hint_root.clone());
+            if self.is_valid_workspace(&canonical_hint, file_path)? {
+                debug!("Using client workspace hint: {:?}", canonical_hint);
+                return Ok(canonical_hint);
             }
             warn!(
                 "Client workspace hint {:?} is invalid for file {:?}",
-                hint_root, file_path
+                canonical_hint, file_path
             );
         }
 
@@ -47,21 +51,26 @@ impl WorkspaceResolver {
         // 3. Auto-detect workspace
         let detected_root = self.detect_workspace(file_path)?;
 
+        // Canonicalize the detected root to ensure it's an absolute path
+        let canonical_root = detected_root
+            .canonicalize()
+            .unwrap_or_else(|_| detected_root.clone());
+
         // 4. Validate against allowed_roots if configured
         if let Some(ref allowed) = self.allowed_roots {
-            if !allowed.iter().any(|root| detected_root.starts_with(root)) {
+            if !allowed.iter().any(|root| canonical_root.starts_with(root)) {
                 return Err(anyhow!(
                     "Workspace {:?} not in allowed roots: {:?}",
-                    detected_root,
+                    canonical_root,
                     allowed
                 ));
             }
         }
 
-        // 5. Cache and return
-        self.cache_workspace(file_dir, detected_root.clone());
-        info!("Detected workspace root: {:?}", detected_root);
-        Ok(detected_root)
+        // 5. Cache and return the canonical path
+        self.cache_workspace(file_dir, canonical_root.clone());
+        info!("Detected workspace root: {:?}", canonical_root);
+        Ok(canonical_root)
     }
 
     /// Detect the most appropriate workspace root for a file

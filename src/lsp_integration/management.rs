@@ -174,25 +174,8 @@ impl LspManager {
                                 pool.workspaces.len().to_string().cyan()
                             );
                             for workspace in &pool.workspaces {
-                                let path = std::path::Path::new(workspace);
-                                // Try to show a relative path from home or current directory
-                                let display_path = if let Ok(current_dir) = std::env::current_dir()
-                                {
-                                    if let Ok(relative) = path.strip_prefix(&current_dir) {
-                                        format!("./{}", relative.display())
-                                    } else if let Some(home) = dirs::home_dir() {
-                                        if let Ok(relative) = path.strip_prefix(&home) {
-                                            format!("~/{}", relative.display())
-                                        } else {
-                                            workspace.clone()
-                                        }
-                                    } else {
-                                        workspace.clone()
-                                    }
-                                } else {
-                                    workspace.clone()
-                                };
-                                println!("      • {}", display_path.dimmed());
+                                // Show the absolute path as is
+                                println!("      • {}", workspace.dimmed());
                             }
                         }
                     }
@@ -714,7 +697,11 @@ impl LspManager {
                     ))?
             }
         } else {
-            std::env::current_dir()?
+            // Default to current directory, canonicalized
+            std::env::current_dir()
+                .context("Failed to get current directory")?
+                .canonicalize()
+                .context("Failed to canonicalize current directory")?
         };
 
         // Validate workspace exists (after canonicalization for relative paths)
@@ -791,10 +778,8 @@ impl LspManager {
                 let mut by_language: HashMap<String, Vec<String>> = HashMap::new();
                 for workspace in &initialized {
                     let lang = format!("{:?}", workspace.language);
-                    by_language
-                        .entry(lang)
-                        .or_default()
-                        .push(workspace.workspace_root.to_string_lossy().to_string());
+                    let workspace_str = workspace.workspace_root.to_string_lossy().to_string();
+                    by_language.entry(lang).or_default().push(workspace_str);
                 }
 
                 // Display results
@@ -808,27 +793,8 @@ impl LspManager {
                             format!("({})", workspaces.len()).dimmed()
                         );
                         for workspace in workspaces {
-                            // Try to show relative path
-                            let display_path = if let Ok(current_dir) = std::env::current_dir() {
-                                if let Ok(relative) =
-                                    std::path::Path::new(&workspace).strip_prefix(&current_dir)
-                                {
-                                    format!("./{}", relative.display())
-                                } else if let Some(home) = dirs::home_dir() {
-                                    if let Ok(relative) =
-                                        std::path::Path::new(&workspace).strip_prefix(&home)
-                                    {
-                                        format!("~/{}", relative.display())
-                                    } else {
-                                        workspace.clone()
-                                    }
-                                } else {
-                                    workspace.clone()
-                                }
-                            } else {
-                                workspace.clone()
-                            };
-                            println!("    • {}", display_path.dimmed());
+                            // Show the absolute path as is
+                            println!("    • {}", workspace.dimmed());
                         }
                     }
                 }
