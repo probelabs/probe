@@ -1,7 +1,6 @@
 use crate::language_detector::Language;
 use crate::server_manager::SingleServerManager;
-use anyhow::{anyhow, Result};
-use serde_json::json;
+use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -204,33 +203,25 @@ impl HealthMonitor {
         // Try to get the server instance
         let server_instance = server_manager.get_server(language).await?;
 
-        // Try to acquire lock with short timeout
-        let server = tokio::time::timeout(Duration::from_millis(1000), server_instance.lock())
-            .await
-            .map_err(|_| anyhow!("Could not acquire server lock for health check"))?;
+        // Try to acquire lock with short timeout (use try_lock to avoid blocking)
+        let _server = match server_instance.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                // If we can't acquire the lock immediately, the server might be busy
+                // This is not necessarily unhealthy, just busy
+                debug!("Server {:?} is busy, skipping detailed health check", language);
+                // Return a nominal response time to indicate the server exists but is busy
+                return Ok(1);
+            }
+        };
 
         // For servers that support workspace/symbol requests, use that as health check
         // Otherwise, we just check that we can acquire the lock (server is responsive)
         match language {
             Language::Rust | Language::TypeScript | Language::Python | Language::Go => {
-                // Send a lightweight workspace/symbol request as health check
-                // Use timestamp as request ID since we won't wait for the response
-                let request_id = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos() as i64;
-
-                let params = json!({
-                    "query": ""
-                });
-
-                // Try to send the request - if this succeeds without hanging, server is healthy
-                server
-                    .server
-                    .send_request("workspace/symbol", params, request_id)
-                    .await?;
-
-                // We don't wait for response - just that we could send the request successfully
+                // For these languages, just check that we successfully acquired the lock
+                // Don't send additional requests during health check to avoid interfering
+                // with ongoing operations
                 let elapsed = start.elapsed();
                 Ok(elapsed.as_millis() as u64)
             }

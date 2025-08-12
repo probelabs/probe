@@ -25,14 +25,22 @@ impl WorkspaceResolver {
         file_path: &Path,
         hint: Option<PathBuf>,
     ) -> Result<PathBuf> {
+        info!(
+            "Resolving workspace for file: {:?}, hint: {:?}",
+            file_path, hint
+        );
+
         // 1. Use client hint if provided and valid
         if let Some(hint_root) = hint {
             // Canonicalize the hint path to ensure it's absolute
             let canonical_hint = hint_root
                 .canonicalize()
-                .unwrap_or_else(|_| hint_root.clone());
+                .unwrap_or_else(|e| {
+                    warn!("Failed to canonicalize hint {:?}: {}", hint_root, e);
+                    hint_root.clone()
+                });
             if self.is_valid_workspace(&canonical_hint, file_path)? {
-                debug!("Using client workspace hint: {:?}", canonical_hint);
+                info!("Using client workspace hint: {:?}", canonical_hint);
                 return Ok(canonical_hint);
             }
             warn!(
@@ -50,11 +58,15 @@ impl WorkspaceResolver {
 
         // 3. Auto-detect workspace
         let detected_root = self.detect_workspace(file_path)?;
+        info!("Auto-detected workspace: {:?}", detected_root);
 
         // Canonicalize the detected root to ensure it's an absolute path
         let canonical_root = detected_root
             .canonicalize()
-            .unwrap_or_else(|_| detected_root.clone());
+            .unwrap_or_else(|e| {
+                warn!("Failed to canonicalize detected root {:?}: {}", detected_root, e);
+                detected_root.clone()
+            });
 
         // 4. Validate against allowed_roots if configured
         if let Some(ref allowed) = self.allowed_roots {
@@ -69,7 +81,7 @@ impl WorkspaceResolver {
 
         // 5. Cache and return the canonical path
         self.cache_workspace(file_dir, canonical_root.clone());
-        info!("Detected workspace root: {:?}", canonical_root);
+        info!("Resolved workspace root: {:?}", canonical_root);
         Ok(canonical_root)
     }
 
