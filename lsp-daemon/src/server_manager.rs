@@ -268,7 +268,20 @@ impl SingleServerManager {
 
         // Check if server already exists
         if let Some(server_instance) = self.servers.get(&language) {
-            return Ok(server_instance.clone());
+            // Verify the server is still healthy by trying to acquire lock briefly
+            match server_instance.try_lock() {
+                Ok(_) => {
+                    // Server is responsive
+                    return Ok(server_instance.clone());
+                }
+                Err(_) => {
+                    // Server might be stuck, mark as unhealthy and recreate
+                    warn!("Server {:?} appears to be unresponsive, will recreate", language);
+                    self.health_monitor.mark_unhealthy(language).await;
+                    self.servers.remove(&language);
+                    // Fall through to create new server
+                }
+            }
         }
 
         // Get LSP server config
@@ -298,6 +311,12 @@ impl SingleServerManager {
         language: Language,
         workspace_root: PathBuf,
     ) -> Result<Arc<Mutex<ServerInstance>>> {
+        // Log the workspace registration attempt
+        info!(
+            "Ensuring workspace {:?} is registered for {:?}",
+            workspace_root, language
+        );
+
         // Check circuit breaker first
         if self.health_monitor.should_reject_request(language).await {
             return Err(anyhow!(
@@ -307,7 +326,19 @@ impl SingleServerManager {
         }
         // Check if server already exists
         if let Some(server_instance) = self.servers.get(&language) {
-            let mut server = server_instance.lock().await;
+            // Try to acquire lock with timeout to prevent hanging
+            let server_guard = tokio::time::timeout(
+                Duration::from_secs(10),
+                server_instance.lock()
+            )
+            .await
+            .map_err(|_| {
+                warn!("Failed to acquire lock for {:?} server within timeout", language);
+                let _ = self.health_monitor.mark_unhealthy(language);
+                anyhow!("Server lock acquisition timeout for {:?}", language)
+            })?;
+            
+            let mut server = server_guard;
 
             // If server is not initialized yet, initialize it with this workspace
             if !server.initialized {
@@ -353,7 +384,7 @@ impl SingleServerManager {
 
             // Check if workspace is already registered
             if server.is_workspace_registered(&workspace_root) {
-                debug!(
+                info!(
                     "Workspace {:?} already registered with {:?} server",
                     workspace_root, language
                 );
@@ -362,18 +393,33 @@ impl SingleServerManager {
             }
 
             // Add workspace to the server
+            info!(
+                "Adding new workspace {:?} to existing {:?} server",
+                workspace_root, language
+            );
             match self.register_workspace(&mut server, &workspace_root).await {
                 Ok(_) => {
                     self.health_monitor.mark_healthy(language).await;
                     info!(
-                        "Registered workspace {:?} with {:?} server",
+                        "Successfully registered workspace {:?} with {:?} server",
                         workspace_root, language
                     );
                     return Ok(server_instance.clone());
                 }
                 Err(e) => {
+                    warn!(
+                        "Failed to register workspace {:?} with {:?} server: {}",
+                        workspace_root, language, e
+                    );
                     self.health_monitor.mark_unhealthy(language).await;
-                    return Err(e);
+                    
+                    // Remove the failed server so it gets recreated on next attempt
+                    self.servers.remove(&language);
+                    
+                    return Err(anyhow!(
+                        "Failed to register workspace with existing server: {}. Server will be recreated on next attempt.",
+                        e
+                    ));
                 }
             }
         }

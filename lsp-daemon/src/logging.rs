@@ -35,26 +35,32 @@ impl LogBuffer {
 
     /// Get the last N log entries, up to the buffer size
     pub fn get_last(&self, count: usize) -> Vec<LogEntry> {
-        if let Ok(entries) = self.entries.lock() {
-            let take_count = count.min(entries.len());
-            entries
-                .iter()
-                .rev()
-                .take(take_count)
-                .rev()
-                .cloned()
-                .collect()
-        } else {
-            Vec::new()
+        // Use try_lock to avoid potential deadlock if logging happens during serialization
+        match self.entries.try_lock() {
+            Ok(entries) => {
+                let take_count = count.min(entries.len());
+                entries
+                    .iter()
+                    .rev()
+                    .take(take_count)
+                    .rev()
+                    .cloned()
+                    .collect()
+            }
+            Err(_) => {
+                // If we can't acquire the lock immediately, return empty to avoid deadlock
+                // This can happen if a log event is triggered during response serialization
+                Vec::new()
+            }
         }
     }
 
     /// Get all log entries currently in the buffer
     pub fn get_all(&self) -> Vec<LogEntry> {
-        if let Ok(entries) = self.entries.lock() {
-            entries.iter().cloned().collect()
-        } else {
-            Vec::new()
+        // Use try_lock to avoid potential deadlock
+        match self.entries.try_lock() {
+            Ok(entries) => entries.iter().cloned().collect(),
+            Err(_) => Vec::new(),
         }
     }
 
@@ -67,10 +73,9 @@ impl LogBuffer {
 
     /// Get the current number of entries in the buffer
     pub fn len(&self) -> usize {
-        if let Ok(entries) = self.entries.lock() {
-            entries.len()
-        } else {
-            0
+        match self.entries.try_lock() {
+            Ok(entries) => entries.len(),
+            Err(_) => 0,
         }
     }
 
