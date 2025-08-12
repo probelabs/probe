@@ -18,6 +18,7 @@ use dashmap::DashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
@@ -53,8 +54,10 @@ pub struct LspDaemon {
     connections_cleaned_due_to_staleness: Arc<RwLock<usize>>,
     connections_rejected_due_to_limit: Arc<RwLock<usize>>,
     connection_durations: Arc<RwLock<Vec<Duration>>>, // Keep last 100 connection durations
-    // Watchdog
-    watchdog: Watchdog,
+    // Watchdog (disabled by default, enabled via --watchdog flag)
+    watchdog: Arc<tokio::sync::Mutex<Option<Watchdog>>>,
+    watchdog_enabled: Arc<AtomicBool>,
+    watchdog_task: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     process_monitor: Arc<ProcessMonitor>,
 }
 
@@ -108,8 +111,7 @@ impl LspDaemon {
             }
         }
 
-        // Initialize watchdog with 60-second timeout
-        let watchdog = Watchdog::new(60);
+        // Watchdog is disabled by default (can be enabled via --watchdog flag in lsp init)
         let process_monitor = Arc::new(ProcessMonitor::with_limits(80.0, 1024)); // 80% CPU, 1GB memory
 
         Ok(Self {
@@ -133,7 +135,9 @@ impl LspDaemon {
             connections_cleaned_due_to_staleness: Arc::new(RwLock::new(0)),
             connections_rejected_due_to_limit: Arc::new(RwLock::new(0)),
             connection_durations: Arc::new(RwLock::new(Vec::with_capacity(100))),
-            watchdog,
+            watchdog: Arc::new(tokio::sync::Mutex::new(None)),
+            watchdog_enabled: Arc::new(AtomicBool::new(false)),
+            watchdog_task: Arc::new(tokio::sync::Mutex::new(None)),
             process_monitor,
         })
     }
@@ -156,20 +160,8 @@ impl LspDaemon {
         let listener = IpcListener::bind(&self.socket_path).await?;
         info!("LSP daemon listening on {}", self.socket_path);
 
-        // Set up watchdog recovery callback
-        let shutdown_for_watchdog = self.shutdown.clone();
-        self.watchdog
-            .set_recovery_callback(move || {
-                // Set shutdown flag when watchdog detects unresponsive daemon
-                if let Ok(mut shutdown) = shutdown_for_watchdog.try_write() {
-                    *shutdown = true;
-                    error!("Watchdog triggered daemon shutdown due to unresponsiveness");
-                }
-            })
-            .await;
-
-        // Start watchdog monitoring
-        let _watchdog_task = self.watchdog.start();
+        // Watchdog is started only when explicitly enabled via --watchdog flag
+        // See enable_watchdog() method which is called from handle_init_workspaces
 
         // Set up signal handling for graceful shutdown
         #[cfg(unix)]
@@ -264,8 +256,12 @@ impl LspDaemon {
         });
 
         loop {
-            // Update watchdog heartbeat at the start of each loop iteration
-            self.watchdog.heartbeat();
+            // Update watchdog heartbeat if enabled
+            if self.watchdog_enabled.load(Ordering::Relaxed) {
+                if let Some(ref watchdog) = *self.watchdog.lock().await {
+                    watchdog.heartbeat();
+                }
+            }
 
             // Check shutdown flag
             if *self.shutdown.read().await {
@@ -587,7 +583,13 @@ impl LspDaemon {
                 workspace_root,
                 languages,
                 recursive,
+                enable_watchdog,
             } => {
+                // Enable watchdog if requested and not already running
+                if enable_watchdog && !self.watchdog_enabled.load(Ordering::Relaxed) {
+                    self.enable_watchdog().await;
+                }
+                
                 match self
                     .handle_init_workspaces(workspace_root, languages, recursive)
                     .await
@@ -1044,6 +1046,46 @@ impl LspDaemon {
         Ok((canonical_root, language, config.command))
     }
 
+    async fn enable_watchdog(&self) {
+        if self.watchdog_enabled.load(Ordering::Relaxed) {
+            info!("Watchdog already enabled");
+            return;
+        }
+
+        info!("Enabling watchdog monitoring");
+        
+        // Create and start the watchdog
+        let watchdog = Watchdog::new(60);
+        let shutdown_for_watchdog = self.shutdown.clone();
+        
+        // Set recovery callback
+        watchdog
+            .set_recovery_callback(move || {
+                // Set shutdown flag when watchdog detects unresponsive daemon
+                if let Ok(mut shutdown) = shutdown_for_watchdog.try_write() {
+                    *shutdown = true;
+                    error!("Watchdog triggered daemon shutdown due to unresponsiveness");
+                }
+            })
+            .await;
+
+        // Start watchdog monitoring
+        let watchdog_task = watchdog.start();
+        
+        // Store the watchdog in the struct
+        let mut watchdog_guard = self.watchdog.lock().await;
+        *watchdog_guard = Some(watchdog);
+        
+        // Mark as enabled
+        self.watchdog_enabled.store(true, Ordering::Relaxed);
+        
+        // Store the task handle
+        let mut task_guard = self.watchdog_task.lock().await;
+        *task_guard = Some(watchdog_task);
+        
+        info!("Watchdog monitoring enabled");
+    }
+
     async fn handle_init_workspaces(
         &self,
         workspace_root: PathBuf,
@@ -1205,8 +1247,13 @@ impl LspDaemon {
     async fn cleanup(&mut self) -> Result<()> {
         info!("Cleaning up daemon resources");
 
-        // Stop the watchdog first
-        self.watchdog.stop();
+        // Stop the watchdog if it was enabled
+        if self.watchdog_enabled.load(Ordering::Relaxed) {
+            info!("Stopping watchdog");
+            if let Some(ref watchdog) = *self.watchdog.lock().await {
+                watchdog.stop();
+            }
+        }
 
         // Shutdown all servers gracefully first
         self.server_manager.shutdown_all().await;
@@ -1270,6 +1317,8 @@ impl LspDaemon {
             connections_rejected_due_to_limit: self.connections_rejected_due_to_limit.clone(),
             connection_durations: self.connection_durations.clone(),
             watchdog: self.watchdog.clone(),
+            watchdog_enabled: self.watchdog_enabled.clone(),
+            watchdog_task: self.watchdog_task.clone(),
             process_monitor: self.process_monitor.clone(),
         }
     }

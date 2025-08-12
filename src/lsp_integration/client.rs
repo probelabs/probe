@@ -361,6 +361,7 @@ impl LspClient {
         workspace_root: PathBuf,
         languages: Option<Vec<String>>,
         recursive: bool,
+        enable_watchdog: bool,
     ) -> Result<(Vec<InitializedWorkspace>, Vec<String>)> {
         // Convert language strings to Language enum
         let languages = languages.map(|langs| {
@@ -399,6 +400,7 @@ impl LspClient {
             workspace_root,
             languages,
             recursive,
+            enable_watchdog,
         };
 
         let response = self.send_request(request).await?;
