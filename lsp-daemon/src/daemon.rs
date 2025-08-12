@@ -390,7 +390,7 @@ impl LspDaemon {
                     "[{}] Attempted to send oversized message: {} bytes (max: {} bytes)",
                     client_id, msg_len, MAX_MESSAGE_SIZE
                 );
-                self.connections.remove(&client_id);
+                // Connection cleanup will happen in the defer-like cleanup at the end
                 return Err(anyhow::anyhow!(
                     "Message size {} exceeds maximum allowed size of {} bytes",
                     msg_len,
@@ -407,19 +407,19 @@ impl LspDaemon {
             match timeout(READ_TIMEOUT, stream.read_exact(&mut buffer[4..4 + msg_len])).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
-                    self.connections.remove(&client_id);
                     error!(
                         "[{}] Failed to read message body from client: {}",
                         client_id, e
                     );
+                    // Connection cleanup will happen at the end
                     return Err(e.into());
                 }
                 Err(_) => {
-                    self.connections.remove(&client_id);
                     error!(
                         "[{}] Timeout reading message body (size: {} bytes)",
                         client_id, msg_len
                     );
+                    // Connection cleanup will happen at the end
                     return Err(anyhow!(
                         "Read timeout after {} seconds",
                         READ_TIMEOUT.as_secs()
@@ -431,8 +431,8 @@ impl LspDaemon {
             let request = match MessageCodec::decode_request(&buffer[..4 + msg_len]) {
                 Ok(req) => req,
                 Err(e) => {
-                    self.connections.remove(&client_id);
                     error!("[{}] Failed to decode request: {}", client_id, e);
+                    // Connection cleanup will happen at the end
                     return Err(e);
                 }
             };
