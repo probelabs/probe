@@ -110,19 +110,15 @@ impl LspManager {
             timeout_ms: 10000, // 10 seconds for status command
         };
 
-        let mut client = match tokio::time::timeout(
-            Duration::from_secs(15),
-            LspClient::new(config)
-        ).await {
-            Ok(Ok(client)) => client,
-            Ok(Err(e)) => return Err(anyhow!("Failed to connect to daemon: {}", e)),
-            Err(_) => return Err(anyhow!("Timeout connecting to daemon after 15 seconds")),
-        };
-        
-        let status = match tokio::time::timeout(
-            Duration::from_secs(10),
-            client.get_status()
-        ).await {
+        let mut client =
+            match tokio::time::timeout(Duration::from_secs(15), LspClient::new(config)).await {
+                Ok(Ok(client)) => client,
+                Ok(Err(e)) => return Err(anyhow!("Failed to connect to daemon: {}", e)),
+                Err(_) => return Err(anyhow!("Timeout connecting to daemon after 15 seconds")),
+            };
+
+        let status = match tokio::time::timeout(Duration::from_secs(10), client.get_status()).await
+        {
             Ok(Ok(status)) => status,
             Ok(Err(e)) => return Err(anyhow!("Failed to get status: {}", e)),
             Err(_) => return Err(anyhow!("Timeout getting status after 10 seconds")),
@@ -275,20 +271,15 @@ impl LspManager {
         };
 
         let start_time = std::time::Instant::now();
-        let mut client = match tokio::time::timeout(
-            Duration::from_secs(10),
-            LspClient::new(config)
-        ).await {
-            Ok(Ok(client)) => client,
-            Ok(Err(e)) => return Err(anyhow!("Failed to connect to daemon: {}", e)),
-            Err(_) => return Err(anyhow!("Timeout connecting to daemon after 10 seconds")),
-        };
+        let mut client =
+            match tokio::time::timeout(Duration::from_secs(10), LspClient::new(config)).await {
+                Ok(Ok(client)) => client,
+                Ok(Err(e)) => return Err(anyhow!("Failed to connect to daemon: {}", e)),
+                Err(_) => return Err(anyhow!("Timeout connecting to daemon after 10 seconds")),
+            };
 
-        match tokio::time::timeout(
-            Duration::from_secs(5),
-            client.ping()
-        ).await {
-            Ok(Ok(_)) => {},
+        match tokio::time::timeout(Duration::from_secs(5), client.ping()).await {
+            Ok(Ok(_)) => {}
             Ok(Err(e)) => return Err(anyhow!("Ping failed: {}", e)),
             Err(_) => return Err(anyhow!("Ping timeout after 5 seconds")),
         }

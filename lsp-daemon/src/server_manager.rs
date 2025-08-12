@@ -330,17 +330,21 @@ impl SingleServerManager {
         // Check if server already exists
         if let Some(server_instance) = self.servers.get(&language) {
             // Try to acquire lock with timeout to prevent hanging
-            let server_guard = match tokio::time::timeout(Duration::from_secs(10), server_instance.lock()).await {
-                Ok(guard) => guard,
-                Err(_) => {
-                    warn!(
-                        "Failed to acquire lock for {:?} server within timeout",
-                        language
-                    );
-                    self.health_monitor.mark_unhealthy(language).await;
-                    return Err(anyhow!("Server lock acquisition timeout for {:?}", language));
-                }
-            };
+            let server_guard =
+                match tokio::time::timeout(Duration::from_secs(10), server_instance.lock()).await {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        warn!(
+                            "Failed to acquire lock for {:?} server within timeout",
+                            language
+                        );
+                        self.health_monitor.mark_unhealthy(language).await;
+                        return Err(anyhow!(
+                            "Server lock acquisition timeout for {:?}",
+                            language
+                        ));
+                    }
+                };
 
             let mut server = server_guard;
 
