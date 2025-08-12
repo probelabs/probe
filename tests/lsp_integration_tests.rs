@@ -118,14 +118,8 @@ fn test_extract_with_lsp() -> Result<()> {
     start_daemon_and_wait()?;
 
     // Initialize workspace for rust-analyzer using src directory
-    let (stdout, stderr, success) = run_probe_command(&[
-        "lsp",
-        "init",
-        "-w",
-        "src",
-        "--languages",
-        "rust",
-    ])?;
+    let (stdout, stderr, success) =
+        run_probe_command(&["lsp", "init", "-w", "src", "--languages", "rust"])?;
 
     if !success {
         eprintln!("Init failed. Stdout: {stdout}");
@@ -143,11 +137,7 @@ fn test_extract_with_lsp() -> Result<()> {
     thread::sleep(Duration::from_secs(5));
 
     // Test extraction with LSP using an actual file in the repo
-    let (stdout, stderr, success) = run_probe_command(&[
-        "extract",
-        "src/main.rs:10",
-        "--lsp",
-    ])?;
+    let (stdout, stderr, success) = run_probe_command(&["extract", "src/main.rs:10", "--lsp"])?;
 
     assert!(success, "Extract with LSP should succeed");
     assert!(
@@ -180,11 +170,7 @@ fn test_extract_non_blocking_without_daemon() -> Result<()> {
     // Test that extract doesn't block when daemon is not available
     let start = Instant::now();
 
-    let (stdout, stderr, success) = run_probe_command(&[
-        "extract",
-        "src/main.rs:10",
-        "--lsp",
-    ])?;
+    let (stdout, stderr, success) = run_probe_command(&["extract", "src/main.rs:10", "--lsp"])?;
 
     let elapsed = start.elapsed();
 
@@ -217,13 +203,8 @@ fn test_search_non_blocking_without_daemon() -> Result<()> {
     // Test that search doesn't block when daemon is not available
     let start = Instant::now();
 
-    let (stdout, _stderr, success) = run_probe_command(&[
-        "search",
-        "fn",
-        "src",
-        "--max-results",
-        "1",
-    ])?;
+    let (stdout, _stderr, success) =
+        run_probe_command(&["search", "fn", "src", "--max-results", "1"])?;
 
     let elapsed = start.elapsed();
 
@@ -313,12 +294,12 @@ fn test_daemon_auto_start() -> Result<()> {
     ensure_daemon_stopped();
 
     // Run a command that uses daemon (should auto-start)
-    let (stdout, _, success) =
-        run_probe_command(&["extract", "src/main.rs:1", "--lsp"])?;
+    let (stdout, _, success) = run_probe_command(&["extract", "src/main.rs:1", "--lsp"])?;
 
     assert!(success, "Extract should succeed with auto-start");
     assert!(
-        !stdout.is_empty() && (stdout.contains("use ") || stdout.contains("fn ") || stdout.contains("mod ")),
+        !stdout.is_empty()
+            && (stdout.contains("use ") || stdout.contains("fn ") || stdout.contains("mod ")),
         "Should extract some code"
     );
 
