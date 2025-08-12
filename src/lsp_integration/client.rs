@@ -115,7 +115,7 @@ impl LspClient {
         let socket_path = get_default_socket_path();
         // Use shorter timeout for initial connection attempt
         let connection_timeout = Duration::from_secs(5);
-        
+
         debug!("Attempting to connect to LSP daemon at: {}", socket_path);
 
         // Try to connect to existing daemon and check version compatibility
@@ -235,18 +235,24 @@ impl LspClient {
 
         // Read response with timeout using proper message framing
         let timeout_duration = Duration::from_millis(self.config.timeout_ms);
-        debug!("Waiting for response with timeout: {}ms", self.config.timeout_ms);
+        debug!(
+            "Waiting for response with timeout: {}ms",
+            self.config.timeout_ms
+        );
 
         // Read message length (4 bytes)
         let mut length_buf = [0u8; 4];
         match timeout(timeout_duration, stream.read_exact(&mut length_buf)).await {
-            Ok(Ok(_)) => {},
+            Ok(Ok(_)) => {}
             Ok(Err(e)) => {
                 error!("Failed to read message length: {}", e);
                 return Err(anyhow!("Failed to read message length: {}", e));
             }
             Err(_) => {
-                error!("Timeout reading message length after {}ms", self.config.timeout_ms);
+                error!(
+                    "Timeout reading message length after {}ms",
+                    self.config.timeout_ms
+                );
                 return Err(anyhow!("Timeout reading response from daemon"));
             }
         }
@@ -261,13 +267,19 @@ impl LspClient {
         // Read the complete message body
         let mut message_buf = vec![0u8; message_len];
         match timeout(timeout_duration, stream.read_exact(&mut message_buf)).await {
-            Ok(Ok(_)) => {},
+            Ok(Ok(_)) => {}
             Ok(Err(e)) => {
-                error!("Failed to read message body of {} bytes: {}", message_len, e);
+                error!(
+                    "Failed to read message body of {} bytes: {}",
+                    message_len, e
+                );
                 return Err(anyhow!("Failed to read message body: {}", e));
             }
             Err(_) => {
-                error!("Timeout reading message body of {} bytes after {}ms", message_len, self.config.timeout_ms);
+                error!(
+                    "Timeout reading message body of {} bytes after {}ms",
+                    message_len, self.config.timeout_ms
+                );
                 return Err(anyhow!("Timeout reading message body from daemon"));
             }
         }
