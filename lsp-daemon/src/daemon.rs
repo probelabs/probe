@@ -908,8 +908,8 @@ impl LspDaemon {
             .canonicalize()
             .with_context(|| format!("Failed to resolve absolute path for {file_path:?}"))?;
 
-        // Read file content
-        let content = fs::read_to_string(file_path)?;
+        // Read file content - use the absolute path to ensure consistency
+        let content = fs::read_to_string(&absolute_file_path)?;
 
         // Lock the server instance to use it
         let server = server_instance.lock().await;

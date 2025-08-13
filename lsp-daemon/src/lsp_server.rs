@@ -11,7 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration, Instant};
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 use url::Url;
 
 pub struct LspServer {
@@ -43,7 +43,9 @@ impl LspServer {
         let abs = if p.is_absolute() {
             p.to_path_buf()
         } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(p)
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(p)
         };
         std::fs::canonicalize(&abs).unwrap_or(abs)
     }
@@ -73,18 +75,18 @@ impl LspServer {
     ) -> Result<Self> {
         // For gopls, use the Go module root if we can find it
         let effective_root = if config.language == crate::language_detector::Language::Go {
-            let module_root = Self::find_go_module_root(workspace_root)
-                .unwrap_or_else(|| workspace_root.clone());
-            
+            let module_root =
+                Self::find_go_module_root(workspace_root).unwrap_or_else(|| workspace_root.clone());
+
             // For gopls, we'll run go mod operations after initialization
             // since we can't use async here
             info!("Will prepare Go module at: {:?}", module_root);
-            
+
             module_root
         } else {
             workspace_root.clone()
         };
-        
+
         Self::spawn_internal(config, Some(&effective_root))
     }
 
@@ -106,7 +108,10 @@ impl LspServer {
         // This is critical for gopls which needs to run in the Go module root
         let mut child = tokio::process::Command::new(&command);
         if let Some(workspace) = workspace_root {
-            info!("Setting working directory for {:?} to: {:?}", config.language, workspace);
+            info!(
+                "Setting working directory for {:?} to: {:?}",
+                config.language, workspace
+            );
             child.current_dir(workspace);
         } else if config.language == crate::language_detector::Language::Go {
             info!("No workspace provided for Go, using /tmp as fallback");
@@ -299,19 +304,21 @@ impl LspServer {
             // Find the actual Go module root (where go.mod is)
             let module_root = Self::find_go_module_root(&canonical_root)
                 .unwrap_or_else(|| canonical_root.to_path_buf());
-            
+
             if !Self::paths_equal(&module_root, &canonical_root) {
-                info!("Using Go module root: {:?} instead of workspace: {:?}", 
-                    module_root, canonical_root);
+                info!(
+                    "Using Go module root: {:?} instead of workspace: {:?}",
+                    module_root, canonical_root
+                );
                 self.project_root = Some(Self::canonicalize_for_uri(&module_root));
             }
-            
+
             // Run go mod download and tidy FIRST
             info!("Preparing Go module dependencies before gopls workspace initialization...");
             if let Err(e) = Self::ensure_go_dependencies(&module_root).await {
                 warn!("Failed to ensure Go dependencies: {}", e);
             }
-            
+
             // Now perform gopls-specific initialization with workspace commands
             if let Err(e) = self.initialize_gopls_workspace(&module_root).await {
                 warn!("Gopls workspace initialization had issues: {}", e);
@@ -555,7 +562,7 @@ impl LspServer {
                                 } else {
                                     None
                                 };
-                                
+
                                 if let Some(token) = token_str {
                                     if let Some(value) = params.get("value") {
                                         if let Some(kind) =
@@ -563,7 +570,7 @@ impl LspServer {
                                         {
                                             // Track progress for debugging
                                             debug!("Progress notification - token: {}, kind: {}, value: {:?}", token, kind, value);
-                                            
+
                                             // Check for end of work
                                             if kind == "end" {
                                                 // Check for various completion tokens from different language servers
@@ -571,25 +578,40 @@ impl LspServer {
                                                     || token.contains("Roots Scanned")
                                                     || token.contains("gopls")  // Go-specific progress tokens
                                                     || token.contains("index")  // Generic indexing tokens
-                                                    || token.contains("load")   // Loading/analyzing tokens
+                                                    || token.contains("load")
+                                                // Loading/analyzing tokens
                                                 {
                                                     cache_priming_completed = true;
-                                                    debug!("Indexing completed for token: {}", token);
+                                                    debug!(
+                                                        "Indexing completed for token: {}",
+                                                        token
+                                                    );
                                                 } else {
                                                     // For gopls numeric tokens, check the work title
-                                                    if let Some(title) = value.get("title").and_then(|t| t.as_str()) {
-                                                        if title.contains("Loading") || title.contains("Indexing") {
+                                                    if let Some(title) =
+                                                        value.get("title").and_then(|t| t.as_str())
+                                                    {
+                                                        if title.contains("Loading")
+                                                            || title.contains("Indexing")
+                                                        {
                                                             cache_priming_completed = true;
-                                                            debug!("Gopls indexing completed: {}", title);
+                                                            debug!(
+                                                                "Gopls indexing completed: {}",
+                                                                title
+                                                            );
                                                         }
                                                     }
                                                 }
                                             }
-                                            
+
                                             // Also track begin/report progress for Go
                                             if kind == "begin" {
-                                                if let Some(title) = value.get("title").and_then(|t| t.as_str()) {
-                                                    if title.contains("Loading") || title.contains("Indexing") {
+                                                if let Some(title) =
+                                                    value.get("title").and_then(|t| t.as_str())
+                                                {
+                                                    if title.contains("Loading")
+                                                        || title.contains("Indexing")
+                                                    {
                                                         debug!("Gopls indexing started: {}", title);
                                                     }
                                                 }
@@ -691,9 +713,12 @@ impl LspServer {
                                 debug!("Received workspace/configuration request from server");
                                 // Return empty configurations like OpenCode does - let gopls use defaults
                                 let result = if let Some(params) = msg.get("params") {
-                                    if let Some(items) = params.get("items").and_then(|i| i.as_array()) {
+                                    if let Some(items) =
+                                        params.get("items").and_then(|i| i.as_array())
+                                    {
                                         // Return an empty object for each configuration item
-                                        let configs: Vec<Value> = items.iter().map(|_| json!({})).collect();
+                                        let configs: Vec<Value> =
+                                            items.iter().map(|_| json!({})).collect();
                                         json!(configs)
                                     } else {
                                         json!([{}])
@@ -883,7 +908,7 @@ impl LspServer {
                             }
                             continue; // This was a server request, not our response
                         }
-                        
+
                         // Handle workspace/configuration requests (critical for gopls)
                         if method == "workspace/configuration" {
                             if let Some(server_request_id) = msg_id {
@@ -893,8 +918,11 @@ impl LspServer {
                                 // This matches how the VS Code Go extension behaves and avoids
                                 // unintentionally restricting workspace discovery via directoryFilters.
                                 let result = if let Some(params) = msg.get("params") {
-                                    if let Some(items) = params.get("items").and_then(|i| i.as_array()) {
-                                        let configs: Vec<Value> = items.iter().map(|_| json!({})).collect();
+                                    if let Some(items) =
+                                        params.get("items").and_then(|i| i.as_array())
+                                    {
+                                        let configs: Vec<Value> =
+                                            items.iter().map(|_| json!({})).collect();
                                         json!(configs)
                                     } else {
                                         json!([{}])
@@ -914,7 +942,7 @@ impl LspServer {
                             }
                             continue; // This was a server request, not our response
                         }
-                        
+
                         // Any other request from server - just continue waiting
                         if let Some(server_request_id) = msg_id {
                             debug!(
@@ -924,7 +952,7 @@ impl LspServer {
                         }
                         continue;
                     }
-                    
+
                     if msg_id == Some(id) {
                         // Check if this is actually a response (not a request from the LSP server)
                         if msg.get("method").is_some() {
@@ -967,10 +995,12 @@ impl LspServer {
             Url::from_file_path(&canon).map_err(|_| anyhow!("Failed to convert file path"))?;
 
         let language_id = self.detect_language_id(&canon);
-        
+
         debug!(
             "Opening document: uri={}, language={}, content_length={}",
-            uri, language_id, content.len()
+            uri,
+            language_id,
+            content.len()
         );
 
         let params = json!({
@@ -1037,12 +1067,17 @@ impl LspServer {
             "command": command,
             "arguments": arguments
         });
-        
-        debug!("Executing workspace command: {} with args: {:?}", command, arguments);
-        self.send_request("workspace/executeCommand", params, request_id).await?;
-        
+
+        debug!(
+            "Executing workspace command: {} with args: {:?}",
+            command, arguments
+        );
+        self.send_request("workspace/executeCommand", params, request_id)
+            .await?;
+
         // Give more time for workspace commands
-        self.wait_for_response(request_id, Duration::from_secs(30)).await
+        self.wait_for_response(request_id, Duration::from_secs(30))
+            .await
     }
 
     // Find Go module root by looking for go.mod
@@ -1066,15 +1101,15 @@ impl LspServer {
     // Ensure Go dependencies are downloaded before gopls starts
     async fn ensure_go_dependencies(module_root: &Path) -> Result<()> {
         use tokio::process::Command;
-        
+
         debug!("Running 'go mod download' in {:?}", module_root);
-        
+
         let output = Command::new("go")
             .args(&["mod", "download"])
             .current_dir(module_root)
             .output()
             .await?;
-        
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             warn!("go mod download warning: {}", stderr);
@@ -1082,28 +1117,31 @@ impl LspServer {
         } else {
             debug!("Successfully downloaded Go dependencies");
         }
-        
+
         // Also run go mod tidy to clean up
         let tidy_output = Command::new("go")
             .args(&["mod", "tidy"])
             .current_dir(module_root)
             .output()
             .await?;
-            
+
         if !tidy_output.status.success() {
             let stderr = String::from_utf8_lossy(&tidy_output.stderr);
             warn!("go mod tidy warning: {}", stderr);
         } else {
             debug!("Successfully tidied Go module");
         }
-        
+
         Ok(())
     }
 
     // Simple gopls workspace initialization - following VS Code's minimal approach
     async fn initialize_gopls_workspace(&self, workspace_root: &Path) -> Result<()> {
-        info!("Performing gopls workspace initialization at {:?}", workspace_root);
-        
+        info!(
+            "Performing gopls workspace initialization at {:?}",
+            workspace_root
+        );
+
         // Send basic gopls configuration similar to VS Code
         let config_params = json!({
             "settings": {
@@ -1116,22 +1154,25 @@ impl LspServer {
                 }
             }
         });
-        
-        if let Err(e) = self.send_notification("workspace/didChangeConfiguration", config_params).await {
+
+        if let Err(e) = self
+            .send_notification("workspace/didChangeConfiguration", config_params)
+            .await
+        {
             warn!("Failed to send gopls configuration: {}", e);
         } else {
             info!("Sent basic gopls configuration");
         }
-        
+
         // Allow gopls to naturally discover and index the workspace
         // VS Code doesn't mass-open files during initialization
         info!("Allowing gopls time to naturally index the workspace...");
         tokio::time::sleep(Duration::from_secs(3)).await;
-        
+
         info!("Gopls workspace initialization complete");
         Ok(())
     }
-    
+
     // Safely open a file, handling errors gracefully
     async fn open_file_safely(&self, file_path: &Path) -> Result<()> {
         match tokio::fs::read_to_string(file_path).await {
@@ -1140,7 +1181,7 @@ impl LspServer {
                     debug!("Failed to open {:?}: {}", file_path, e);
                     return Err(e);
                 }
-                
+
                 // Track that we opened it
                 let mut docs = self.opened_documents.lock().await;
                 docs.insert(file_path.to_path_buf());
@@ -1171,16 +1212,19 @@ impl LspServer {
         if self.is_gopls() {
             self.ensure_workspace_for_path(&abs_path).await?;
         }
-        
+
         if !self.is_document_open(&abs_path).await {
             info!("Opening document for LSP analysis: {:?}", abs_path);
-            
+
             // Simple approach: Just open the target file and let gopls handle package detection
             self.open_file_safely(&abs_path).await?;
-            
+
             // For gopls, give it a moment to process the file and establish package context
             if self.is_gopls() {
-                info!("Allowing gopls time to establish package context for {:?}", abs_path);
+                info!(
+                    "Allowing gopls time to establish package context for {:?}",
+                    abs_path
+                );
                 // Much shorter wait - let gopls work naturally like VS Code does
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
@@ -1207,17 +1251,24 @@ impl LspServer {
 
         for attempt in 0..max_attempts {
             if attempt > 0 {
-                debug!("Retrying call hierarchy (attempt {}/{})", attempt + 1, max_attempts);
+                debug!(
+                    "Retrying call hierarchy (attempt {}/{})",
+                    attempt + 1,
+                    max_attempts
+                );
                 // Wait progressively longer between retries
                 tokio::time::sleep(Duration::from_millis(500 * (attempt + 1) as u64)).await;
-                
+
                 // For gopls, ensure document is really open
                 if self.is_gopls() {
                     self.ensure_document_ready(file_path).await?;
                 }
             }
 
-            match self.perform_call_hierarchy_request(file_path, line, column).await {
+            match self
+                .perform_call_hierarchy_request(file_path, line, column)
+                .await
+            {
                 Ok(result) => {
                     // Success! Clean up if needed
                     if self.is_gopls() && self.should_auto_close_documents() {
@@ -1228,13 +1279,22 @@ impl LspServer {
                 }
                 Err(e) => {
                     let error_str = e.to_string();
-                    
+
                     // Enhanced gopls error handling with comprehensive recovery
-                    if self.is_gopls() && (error_str.contains("no package metadata") || error_str.contains("no package for file") || error_str.contains("could not find package")) {
-                        warn!("gopls package metadata error for {:?} (attempt {}/{}): {}", 
-                            file_path, attempt + 1, max_attempts, error_str);
+                    if self.is_gopls()
+                        && (error_str.contains("no package metadata")
+                            || error_str.contains("no package for file")
+                            || error_str.contains("could not find package"))
+                    {
+                        warn!(
+                            "gopls package metadata error for {:?} (attempt {}/{}): {}",
+                            file_path,
+                            attempt + 1,
+                            max_attempts,
+                            error_str
+                        );
                         last_error = Some(e);
-                        
+
                         // Progressive recovery strategy
                         if attempt == 0 {
                             // First retry: Re-open the document and related files
@@ -1244,36 +1304,44 @@ impl LspServer {
                         } else if attempt == 1 {
                             // Second retry: Try workspace commands to refresh gopls state
                             info!("Second retry: Refreshing gopls workspace state...");
-                            
+
                             // Try workspace/symbol to force workspace indexing
                             let symbol_id = self.next_request_id().await;
-                            if let Err(_) = self.send_request("workspace/symbol", json!({"query": "func"}), symbol_id).await {
+                            if let Err(_) = self
+                                .send_request(
+                                    "workspace/symbol",
+                                    json!({"query": "func"}),
+                                    symbol_id,
+                                )
+                                .await
+                            {
                                 debug!("Workspace symbol request failed during recovery");
                             }
-                            
+
                             // Try gopls-specific commands if available - use correct commands for v0.17.0
-                            if let Err(_) = self.execute_command("gopls.workspace_stats", vec![]).await {
+                            if let Err(_) =
+                                self.execute_command("gopls.workspace_stats", vec![]).await
+                            {
                                 debug!("Workspace stats command failed or not available");
                             }
-                            
+
                             // Try gopls.views command which can help refresh workspace state
                             if let Err(_) = self.execute_command("gopls.views", vec![]).await {
                                 debug!("Views command failed or not available");
                             }
-                            
+
                             // Longer wait for gopls to rebuild metadata
                             tokio::time::sleep(Duration::from_secs(4)).await;
-                            
                         } else {
                             // Final retry: Give gopls more time to establish package metadata
                             info!("Final retry: Allowing more time for gopls package indexing...");
-                            
+
                             // Wait longer for gopls to naturally establish package context
                             tokio::time::sleep(Duration::from_secs(5)).await;
                         }
                         continue;
                     }
-                    
+
                     // For other errors or non-gopls servers, fail immediately
                     return Err(e);
                 }
@@ -1281,18 +1349,19 @@ impl LspServer {
         }
 
         // If we exhausted all retries, provide detailed error information
-        let final_error = last_error.unwrap_or_else(|| anyhow!("Call hierarchy failed after {} attempts", max_attempts));
-        
+        let final_error = last_error
+            .unwrap_or_else(|| anyhow!("Call hierarchy failed after {} attempts", max_attempts));
+
         if self.is_gopls() {
             error!(
                 "GOPLS CALL HIERARCHY FAILED: {} attempts exhausted for {:?}. \
                 This suggests gopls cannot establish package metadata for the file. \
                 Ensure the file is part of a valid Go module with go.mod, \
-                and the module is properly structured.", 
+                and the module is properly structured.",
                 max_attempts, file_path
             );
         }
-        
+
         Err(final_error)
     }
 
@@ -1303,7 +1372,12 @@ impl LspServer {
     }
 
     // The actual call hierarchy request logic (extracted for retry)
-    async fn perform_call_hierarchy_request(&self, file_path: &Path, line: u32, column: u32) -> Result<Value> {
+    async fn perform_call_hierarchy_request(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Value> {
         let canon = Self::canonicalize_for_uri(file_path);
         let uri =
             Url::from_file_path(&canon).map_err(|_| anyhow!("Failed to convert file path"))?;
@@ -1321,12 +1395,7 @@ impl LspServer {
         let response = self
             .wait_for_response(request_id, Duration::from_secs(60))
             .await
-            .map_err(|e| {
-                anyhow!(
-                    "Call hierarchy prepare timed out: {}",
-                    e
-                )
-            })?;
+            .map_err(|e| anyhow!("Call hierarchy prepare timed out: {}", e))?;
 
         if let Some(error) = response.get("error") {
             return Err(anyhow!("Call hierarchy prepare failed: {:?}", error));
@@ -1443,8 +1512,12 @@ impl LspServer {
         };
 
         if needs_add {
-            let uri = Url::from_directory_path(&canonical_module)
-                .map_err(|_| anyhow!("Failed to create URI for module root: {:?}", canonical_module))?;
+            let uri = Url::from_directory_path(&canonical_module).map_err(|_| {
+                anyhow!(
+                    "Failed to create URI for module root: {:?}",
+                    canonical_module
+                )
+            })?;
             let name = canonical_module
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -1456,7 +1529,8 @@ impl LspServer {
                 }
             });
             info!("Adding workspace folder for gopls: {:?}", canonical_module);
-            self.send_notification("workspace/didChangeWorkspaceFolders", params).await?;
+            self.send_notification("workspace/didChangeWorkspaceFolders", params)
+                .await?;
             // Give gopls a short moment to incorporate the new view.
             tokio::time::sleep(Duration::from_millis(400)).await;
         }
