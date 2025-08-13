@@ -128,11 +128,12 @@ impl LspRegistry {
             command: "gopls".to_string(),
             args: vec!["serve".to_string(), "-mode=stdio".to_string()],
             initialization_options: Some(serde_json::json!({
-                // Limit gopls to only the current directory to prevent
-                // scanning entire filesystem when no go.mod is found
-                "directoryFilters": ["-", "+."],
-                // Don't expand workspace to the entire module
-                "expandWorkspaceToModule": false,
+                // NOTE: Do not set directoryFilters here.
+                // Misconfiguring filters can exclude the module root and cause
+                // "no package metadata for file" in LSP.
+                // MUST be true for gopls to find package metadata!
+                // When false, causes "no package metadata" errors
+                "expandWorkspaceToModule": true,
                 // Only search workspace packages, not all dependencies
                 "symbolScope": "workspace",
                 // Disable deep completion which can be slow
