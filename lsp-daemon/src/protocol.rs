@@ -73,6 +73,18 @@ pub enum DaemonRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         workspace_hint: Option<PathBuf>,
     },
+    DocumentSymbols {
+        request_id: Uuid,
+        file_path: PathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
+    },
+    WorkspaceSymbols {
+        request_id: Uuid,
+        query: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
+    },
     // System requests
     Status {
         request_id: Uuid,

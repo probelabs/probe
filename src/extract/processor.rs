@@ -122,8 +122,14 @@ pub fn process_file_for_extraction_with_lsp(
                         "[DEBUG] Using position from tree-sitter: line {line}, column {column}"
                     );
                 }
+                // Ensure we use an absolute path for workspace detection
+                let abs_path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    std::env::current_dir().unwrap_or_default().join(path)
+                };
                 result.lsp_info =
-                    get_lsp_symbol_info_sync(path, symbol_name, line, column, debug_mode);
+                    get_lsp_symbol_info_sync(&abs_path, symbol_name, line, column, debug_mode);
             } else if debug_mode {
                 println!(
                     "[DEBUG] No position information available from tree-sitter, skipping LSP"
@@ -396,7 +402,25 @@ pub fn process_file_for_extraction_with_lsp(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&merged_content, &filename);
 
-                Ok(vec![SearchResult {
+                // Attempt to get LSP information for line-based extraction
+                let lsp_info = if enable_lsp {
+                    if debug_mode {
+                        println!("[DEBUG] LSP enabled for line extraction, attempting to get info for line {}", line_num);
+                    }
+                    // Use the original line number requested by the user, not the merged boundaries
+                    // This gives more precise LSP results for call hierarchy
+                    // Ensure we use an absolute path for workspace detection
+                    let abs_path = if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        std::env::current_dir().unwrap_or_default().join(path)
+                    };
+                    get_lsp_symbol_info_sync(&abs_path, "", line_num as u32, 0, debug_mode)
+                } else {
+                    None
+                };
+
+                Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_line".to_string(),
@@ -428,7 +452,7 @@ pub fn process_file_for_extraction_with_lsp(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
-                    lsp_info: None,
+                    lsp_info,
                 })
             }
             _ => {
@@ -461,7 +485,23 @@ pub fn process_file_for_extraction_with_lsp(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&context_code, &filename);
 
-                Ok(vec![SearchResult {
+                // Attempt to get LSP information for line-based extraction fallback
+                let lsp_info = if enable_lsp {
+                    if debug_mode {
+                        println!("[DEBUG] LSP enabled for line fallback extraction, attempting to get info for line {}", line_num);
+                    }
+                    // Ensure we use an absolute path for workspace detection
+                    let abs_path = if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        std::env::current_dir().unwrap_or_default().join(path)
+                    };
+                    get_lsp_symbol_info_sync(&abs_path, "", line_num as u32, 0, debug_mode)
+                } else {
+                    None
+                };
+
+                Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (start_ctx, end_ctx),
                     node_type: "context".to_string(),
@@ -489,7 +529,7 @@ pub fn process_file_for_extraction_with_lsp(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
-                    lsp_info: None,
+                    lsp_info,
                 })
             }
         }
@@ -790,11 +830,46 @@ async fn get_lsp_symbol_info(
 ) -> Option<serde_json::Value> {
     if debug_mode {
         println!("[DEBUG] Attempting to get LSP info for symbol: {symbol_name}");
+        println!("[DEBUG] File path for workspace detection: {:?}", file_path);
     }
 
     // Create non-blocking LSP client that doesn't wait for server to be ready
-    // Find the actual workspace root by looking for Cargo.toml or other project markers
-    let workspace_hint = find_workspace_root(file_path).map(|p| p.to_string_lossy().to_string());
+    // Find the actual workspace root by looking for project markers
+    let workspace_root_result = find_workspace_root(file_path);
+    if debug_mode {
+        println!(
+            "[DEBUG] find_workspace_root returned: {:?}",
+            workspace_root_result
+        );
+    }
+    let workspace_hint = workspace_root_result
+        .map(|p| {
+            if debug_mode {
+                println!(
+                    "[DEBUG] Found workspace root via find_workspace_root: {:?}",
+                    p
+                );
+            }
+            p.to_string_lossy().to_string()
+        })
+        .or_else(|| {
+            // Fallback: for Go files, use the current working directory if we can't find a project root
+            if file_path.extension().and_then(|ext| ext.to_str()) == Some("go") {
+                let cwd = std::env::current_dir().ok();
+                if debug_mode {
+                    println!(
+                        "[DEBUG] Using current working directory fallback for Go file: {:?}",
+                        cwd
+                    );
+                }
+                cwd.map(|p| p.to_string_lossy().to_string())
+            } else {
+                if debug_mode {
+                    println!("[DEBUG] Not a Go file, no workspace fallback applied");
+                }
+                None
+            }
+        });
     let config = LspConfig {
         use_daemon: true,
         workspace_hint: workspace_hint.clone(),

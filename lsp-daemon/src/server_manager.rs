@@ -444,8 +444,9 @@ impl SingleServerManager {
             language, workspace_root
         );
 
-        // Spawn server
-        let mut server = LspServer::spawn(&config)?;
+        // Spawn server with the workspace root so it starts in the correct directory
+        // This is critical for gopls which needs to run in the Go module root
+        let mut server = LspServer::spawn_with_workspace(&config, &workspace_root)?;
 
         // Initialize with the actual workspace from the start
         match server
