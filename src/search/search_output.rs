@@ -178,7 +178,6 @@ pub fn format_and_print_search_results(
     let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
     println!("Total bytes returned: {total_bytes}");
     println!("Total tokens returned: {total_tokens}");
-    println!("Probe version: {}", probe_code::version::get_version());
 }
 
 /// Format and print search results with color highlighting for matching words

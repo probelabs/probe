@@ -470,6 +470,11 @@ pub fn handle_query(
     format: &str,
     no_gitignore: bool,
 ) -> Result<()> {
+    // Print version at the start for text-based formats
+    if format != "json" && format != "xml" {
+        println!("Probe version: {}", probe_code::version::get_version());
+    }
+
     // Only print information for non-JSON/XML formats
     if format != "json" && format != "xml" {
         println!("{} {}", "Pattern:".bold().green(), pattern);
@@ -554,7 +559,6 @@ pub fn handle_query(
 
             println!("Total bytes returned: {total_bytes}");
             println!("Total tokens returned: {total_tokens}");
-            println!("Probe version: {}", probe_code::version::get_version());
         }
     }
 

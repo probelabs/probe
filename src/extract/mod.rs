@@ -70,6 +70,11 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     use arboard::Clipboard;
     use colored::*;
 
+    // Print version at the start for text-based formats
+    if options.format != "json" && options.format != "xml" {
+        println!("Probe version: {}", crate::version::get_version());
+    }
+
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
