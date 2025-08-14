@@ -52,6 +52,11 @@ struct BenchmarkParams {
 }
 
 fn handle_search(params: SearchParams) -> Result<()> {
+    // Print version at the start for text-based formats
+    if params.format != "json" && params.format != "xml" {
+        println!("Probe version: {}", probe_code::version::get_version());
+    }
+
     let use_frequency = params.frequency_search;
 
     println!("{} {}", "Pattern:".bold().green(), params.pattern);
