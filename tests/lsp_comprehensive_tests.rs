@@ -340,7 +340,8 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     assert!(
         total_elapsed < max_concurrent_time,
         "Concurrent operations took {:?}, should be under {:?}",
-        total_elapsed, max_concurrent_time
+        total_elapsed,
+        max_concurrent_time
     );
 
     // Validate all outputs contain LSP information
@@ -399,8 +400,7 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
 
     let start = Instant::now();
     let max_search_time = performance::max_search_time();
-    let (stdout, stderr, success) =
-        run_probe_command_with_timeout(&search_args, max_search_time)?;
+    let (stdout, stderr, success) = run_probe_command_with_timeout(&search_args, max_search_time)?;
     let elapsed = start.elapsed();
 
     // Cleanup before assertions
@@ -449,8 +449,10 @@ fn test_lsp_daemon_status_with_multiple_languages() -> Result<()> {
     wait_for_language_server_ready(performance::language_server_ready_time());
 
     // Check daemon status
-    let (stdout, stderr, success) =
-        run_probe_command_with_timeout(&["lsp", "status"], performance::language_server_ready_time())?;
+    let (stdout, stderr, success) = run_probe_command_with_timeout(
+        &["lsp", "status"],
+        performance::language_server_ready_time(),
+    )?;
 
     // Cleanup before assertions
     cleanup_comprehensive_tests();
@@ -582,8 +584,10 @@ fn test_lsp_performance_benchmark() -> Result<()> {
         ];
 
         let start = Instant::now();
-        let (stdout, stderr, success) =
-            run_probe_command_with_timeout(&extract_args, performance::language_server_ready_time())?;
+        let (stdout, stderr, success) = run_probe_command_with_timeout(
+            &extract_args,
+            performance::language_server_ready_time(),
+        )?;
         let elapsed = start.elapsed();
 
         assert!(
