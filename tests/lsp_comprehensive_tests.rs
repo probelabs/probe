@@ -2,7 +2,7 @@
 //!
 //! This test suite validates that ALL language servers work correctly with probe's LSP daemon.
 //! Unlike the basic LSP integration tests, these tests:
-//! 
+//!
 //! - NEVER skip tests due to missing language servers - they FAIL if dependencies are missing
 //! - Test exact call hierarchy assertions for all supported languages
 //! - Validate performance requirements (extraction < 3s, search < 5s)
@@ -20,9 +20,8 @@ mod common;
 use anyhow::Result;
 use common::{
     call_hierarchy::{validate_incoming_calls, validate_outgoing_calls},
-    ensure_daemon_stopped, fixtures, init_lsp_workspace, performance,
-    require_all_language_servers, run_probe_command_with_timeout, start_daemon_and_wait,
-    wait_for_language_server_ready,
+    ensure_daemon_stopped, fixtures, init_lsp_workspace, performance, require_all_language_servers,
+    run_probe_command_with_timeout, start_daemon_and_wait, wait_for_language_server_ready,
 };
 use std::time::{Duration, Instant};
 
@@ -45,10 +44,10 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
 
     // Start daemon and initialize workspace
     start_daemon_and_wait()?;
-    
+
     let workspace_path = fixtures::get_go_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
-    
+
     // Wait for gopls to fully index the project
     wait_for_language_server_ready(Duration::from_secs(15));
 
@@ -61,15 +60,20 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
     ];
 
     let start = Instant::now();
-    let (stdout, stderr, success) = run_probe_command_with_timeout(&extract_args, performance::MAX_EXTRACT_TIME)?;
+    let (stdout, stderr, success) =
+        run_probe_command_with_timeout(&extract_args, performance::MAX_EXTRACT_TIME)?;
     let elapsed = start.elapsed();
 
     // Cleanup before assertions to avoid daemon issues
     cleanup_comprehensive_tests();
 
     // Validate the command succeeded
-    assert!(success, "Extract command should succeed. Stderr: {}", stderr);
-    
+    assert!(
+        success,
+        "Extract command should succeed. Stderr: {}",
+        stderr
+    );
+
     // Validate performance requirement
     assert!(
         elapsed < performance::MAX_EXTRACT_TIME,
@@ -79,12 +83,24 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
     );
 
     // Validate basic extraction worked
-    assert!(stdout.contains("Calculate"), "Should extract the Calculate function");
-    assert!(stdout.contains("func Calculate"), "Should show function signature");
+    assert!(
+        stdout.contains("Calculate"),
+        "Should extract the Calculate function"
+    );
+    assert!(
+        stdout.contains("func Calculate"),
+        "Should show function signature"
+    );
 
     // Validate LSP call hierarchy information is present
-    assert!(stdout.contains("LSP Information"), "Should contain LSP information section");
-    assert!(stdout.contains("Call Hierarchy"), "Should contain call hierarchy");
+    assert!(
+        stdout.contains("LSP Information"),
+        "Should contain LSP information section"
+    );
+    assert!(
+        stdout.contains("Call Hierarchy"),
+        "Should contain call hierarchy"
+    );
 
     // Exact call hierarchy assertions for Go Calculate function
     // Expected incoming calls: main(), ProcessNumbers(), BusinessLogic.ProcessValue()
@@ -104,10 +120,10 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
 
     // Start daemon and initialize workspace
     start_daemon_and_wait()?;
-    
+
     let workspace_path = fixtures::get_typescript_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["typescript"])?;
-    
+
     // Wait for typescript-language-server to fully index the project
     wait_for_language_server_ready(Duration::from_secs(10));
 
@@ -120,15 +136,20 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
     ];
 
     let start = Instant::now();
-    let (stdout, stderr, success) = run_probe_command_with_timeout(&extract_args, performance::MAX_EXTRACT_TIME)?;
+    let (stdout, stderr, success) =
+        run_probe_command_with_timeout(&extract_args, performance::MAX_EXTRACT_TIME)?;
     let elapsed = start.elapsed();
 
     // Cleanup before assertions to avoid daemon issues
     cleanup_comprehensive_tests();
 
     // Validate the command succeeded
-    assert!(success, "Extract command should succeed. Stderr: {}", stderr);
-    
+    assert!(
+        success,
+        "Extract command should succeed. Stderr: {}",
+        stderr
+    );
+
     // Validate performance requirement
     assert!(
         elapsed < performance::MAX_EXTRACT_TIME,
@@ -138,12 +159,24 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
     );
 
     // Validate basic extraction worked
-    assert!(stdout.contains("calculate"), "Should extract the calculate function");
-    assert!(stdout.contains("function calculate"), "Should show function signature");
+    assert!(
+        stdout.contains("calculate"),
+        "Should extract the calculate function"
+    );
+    assert!(
+        stdout.contains("function calculate"),
+        "Should show function signature"
+    );
 
     // Validate LSP call hierarchy information is present
-    assert!(stdout.contains("LSP Information"), "Should contain LSP information section");
-    assert!(stdout.contains("Call Hierarchy"), "Should contain call hierarchy");
+    assert!(
+        stdout.contains("LSP Information"),
+        "Should contain LSP information section"
+    );
+    assert!(
+        stdout.contains("Call Hierarchy"),
+        "Should contain call hierarchy"
+    );
 
     // Exact call hierarchy assertions for TypeScript calculate function
     // Expected incoming calls: main(), processNumbers(), Calculator.processValue(), BusinessLogic.processValue(), advancedCalculation()
@@ -163,10 +196,10 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
 
     // Start daemon and initialize workspace
     start_daemon_and_wait()?;
-    
+
     let workspace_path = fixtures::get_javascript_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["javascript"])?;
-    
+
     // Wait for typescript-language-server to fully index the JavaScript project
     wait_for_language_server_ready(Duration::from_secs(10));
 
@@ -179,15 +212,20 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
     ];
 
     let start = Instant::now();
-    let (stdout, stderr, success) = run_probe_command_with_timeout(&extract_args, performance::MAX_EXTRACT_TIME)?;
+    let (stdout, stderr, success) =
+        run_probe_command_with_timeout(&extract_args, performance::MAX_EXTRACT_TIME)?;
     let elapsed = start.elapsed();
 
     // Cleanup before assertions to avoid daemon issues
     cleanup_comprehensive_tests();
 
     // Validate the command succeeded
-    assert!(success, "Extract command should succeed. Stderr: {}", stderr);
-    
+    assert!(
+        success,
+        "Extract command should succeed. Stderr: {}",
+        stderr
+    );
+
     // Validate performance requirement
     assert!(
         elapsed < performance::MAX_EXTRACT_TIME,
@@ -197,12 +235,24 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
     );
 
     // Validate basic extraction worked
-    assert!(stdout.contains("calculate"), "Should extract the calculate function");
-    assert!(stdout.contains("function calculate"), "Should show function signature");
+    assert!(
+        stdout.contains("calculate"),
+        "Should extract the calculate function"
+    );
+    assert!(
+        stdout.contains("function calculate"),
+        "Should show function signature"
+    );
 
     // Validate LSP call hierarchy information is present
-    assert!(stdout.contains("LSP Information"), "Should contain LSP information section");
-    assert!(stdout.contains("Call Hierarchy"), "Should contain call hierarchy");
+    assert!(
+        stdout.contains("LSP Information"),
+        "Should contain LSP information section"
+    );
+    assert!(
+        stdout.contains("Call Hierarchy"),
+        "Should contain call hierarchy"
+    );
 
     // Exact call hierarchy assertions for JavaScript calculate function
     // Expected incoming calls: main(), processNumbers(), Calculator.processValue(), BusinessLogic.processValue(), advancedCalculation(), createProcessor()
@@ -222,7 +272,7 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
 
     // Start daemon
     start_daemon_and_wait()?;
-    
+
     // Initialize all language workspaces
     let go_workspace = fixtures::get_go_project1();
     let ts_workspace = fixtures::get_typescript_project1();
@@ -231,7 +281,7 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     init_lsp_workspace(go_workspace.to_str().unwrap(), &["go"])?;
     init_lsp_workspace(ts_workspace.to_str().unwrap(), &["typescript"])?;
     init_lsp_workspace(js_workspace.to_str().unwrap(), &["javascript"])?;
-    
+
     // Wait for all language servers to be ready
     wait_for_language_server_ready(Duration::from_secs(20));
 
@@ -241,21 +291,33 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     // Go extraction
     let go_file = go_workspace.join("calculator.go");
     let (go_stdout, go_stderr, go_success) = run_probe_command_with_timeout(
-        &["extract", &format!("{}:10", go_file.to_string_lossy()), "--lsp"],
+        &[
+            "extract",
+            &format!("{}:10", go_file.to_string_lossy()),
+            "--lsp",
+        ],
         performance::MAX_EXTRACT_TIME,
     )?;
 
     // TypeScript extraction
     let ts_file = ts_workspace.join("src/calculator.ts");
     let (ts_stdout, ts_stderr, ts_success) = run_probe_command_with_timeout(
-        &["extract", &format!("{}:17", ts_file.to_string_lossy()), "--lsp"],
+        &[
+            "extract",
+            &format!("{}:17", ts_file.to_string_lossy()),
+            "--lsp",
+        ],
         performance::MAX_EXTRACT_TIME,
     )?;
 
     // JavaScript extraction
     let js_file = js_workspace.join("src/calculator.js");
     let (js_stdout, js_stderr, js_success) = run_probe_command_with_timeout(
-        &["extract", &format!("{}:14", js_file.to_string_lossy()), "--lsp"],
+        &[
+            "extract",
+            &format!("{}:14", js_file.to_string_lossy()),
+            "--lsp",
+        ],
         performance::MAX_EXTRACT_TIME,
     )?;
 
@@ -265,9 +327,21 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     cleanup_comprehensive_tests();
 
     // Validate all operations succeeded
-    assert!(go_success, "Go extraction should succeed. Stderr: {}", go_stderr);
-    assert!(ts_success, "TypeScript extraction should succeed. Stderr: {}", ts_stderr);
-    assert!(js_success, "JavaScript extraction should succeed. Stderr: {}", js_stderr);
+    assert!(
+        go_success,
+        "Go extraction should succeed. Stderr: {}",
+        go_stderr
+    );
+    assert!(
+        ts_success,
+        "TypeScript extraction should succeed. Stderr: {}",
+        ts_stderr
+    );
+    assert!(
+        js_success,
+        "JavaScript extraction should succeed. Stderr: {}",
+        js_stderr
+    );
 
     // Validate total time is reasonable for concurrent operations
     assert!(
@@ -277,14 +351,32 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     );
 
     // Validate all outputs contain LSP information
-    assert!(go_stdout.contains("LSP Information"), "Go output should contain LSP information");
-    assert!(ts_stdout.contains("LSP Information"), "TypeScript output should contain LSP information");
-    assert!(js_stdout.contains("LSP Information"), "JavaScript output should contain LSP information");
+    assert!(
+        go_stdout.contains("LSP Information"),
+        "Go output should contain LSP information"
+    );
+    assert!(
+        ts_stdout.contains("LSP Information"),
+        "TypeScript output should contain LSP information"
+    );
+    assert!(
+        js_stdout.contains("LSP Information"),
+        "JavaScript output should contain LSP information"
+    );
 
     // Validate call hierarchy is present in all outputs
-    assert!(go_stdout.contains("Call Hierarchy"), "Go output should contain call hierarchy");
-    assert!(ts_stdout.contains("Call Hierarchy"), "TypeScript output should contain call hierarchy");
-    assert!(js_stdout.contains("Call Hierarchy"), "JavaScript output should contain call hierarchy");
+    assert!(
+        go_stdout.contains("Call Hierarchy"),
+        "Go output should contain call hierarchy"
+    );
+    assert!(
+        ts_stdout.contains("Call Hierarchy"),
+        "TypeScript output should contain call hierarchy"
+    );
+    assert!(
+        js_stdout.contains("Call Hierarchy"),
+        "JavaScript output should contain call hierarchy"
+    );
 
     Ok(())
 }
@@ -295,10 +387,10 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
 
     // Start daemon and initialize workspace
     start_daemon_and_wait()?;
-    
+
     let workspace_path = fixtures::get_go_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
-    
+
     // Wait for language server to be ready
     wait_for_language_server_ready(Duration::from_secs(15));
 
@@ -313,7 +405,8 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
     ];
 
     let start = Instant::now();
-    let (stdout, stderr, success) = run_probe_command_with_timeout(&search_args, performance::MAX_SEARCH_TIME)?;
+    let (stdout, stderr, success) =
+        run_probe_command_with_timeout(&search_args, performance::MAX_SEARCH_TIME)?;
     let elapsed = start.elapsed();
 
     // Cleanup before assertions
@@ -321,7 +414,7 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
 
     // Validate the command succeeded
     assert!(success, "Search command should succeed. Stderr: {}", stderr);
-    
+
     // Validate performance requirement
     assert!(
         elapsed < performance::MAX_SEARCH_TIME,
@@ -331,7 +424,10 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
     );
 
     // Validate search results contain expected functions
-    assert!(stdout.contains("Calculate"), "Should find Calculate function");
+    assert!(
+        stdout.contains("Calculate"),
+        "Should find Calculate function"
+    );
     assert!(!stdout.is_empty(), "Should return non-empty results");
 
     // LSP enrichment might not be visible in search results, but the command should succeed
@@ -346,7 +442,7 @@ fn test_lsp_daemon_status_with_multiple_languages() -> Result<()> {
 
     // Start daemon and initialize all language workspaces
     start_daemon_and_wait()?;
-    
+
     let go_workspace = fixtures::get_go_project1();
     let ts_workspace = fixtures::get_typescript_project1();
     let js_workspace = fixtures::get_javascript_project1();
@@ -354,15 +450,13 @@ fn test_lsp_daemon_status_with_multiple_languages() -> Result<()> {
     init_lsp_workspace(go_workspace.to_str().unwrap(), &["go"])?;
     init_lsp_workspace(ts_workspace.to_str().unwrap(), &["typescript"])?;
     init_lsp_workspace(js_workspace.to_str().unwrap(), &["javascript"])?;
-    
+
     // Wait for language servers to initialize
     wait_for_language_server_ready(Duration::from_secs(20));
 
     // Check daemon status
-    let (stdout, stderr, success) = run_probe_command_with_timeout(
-        &["lsp", "status"],
-        Duration::from_secs(10),
-    )?;
+    let (stdout, stderr, success) =
+        run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(10))?;
 
     // Cleanup before assertions
     cleanup_comprehensive_tests();
@@ -371,7 +465,10 @@ fn test_lsp_daemon_status_with_multiple_languages() -> Result<()> {
     assert!(success, "LSP status should succeed. Stderr: {}", stderr);
 
     // Validate status output contains expected information
-    assert!(stdout.contains("LSP Daemon Status"), "Should show daemon status header");
+    assert!(
+        stdout.contains("LSP Daemon Status"),
+        "Should show daemon status header"
+    );
     assert!(stdout.contains("Connected"), "Should show connected status");
 
     // Should show information about multiple language servers
@@ -390,12 +487,12 @@ fn test_lsp_initialization_timeout_handling() -> Result<()> {
 
     // Start daemon
     start_daemon_and_wait()?;
-    
+
     let workspace_path = fixtures::get_go_project1();
 
     // Initialize workspace but don't wait for full indexing
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
-    
+
     // Try extraction immediately (before gopls is fully ready)
     let file_path = workspace_path.join("calculator.go");
     let extract_args = [
@@ -404,16 +501,23 @@ fn test_lsp_initialization_timeout_handling() -> Result<()> {
         "--lsp",
     ];
 
-    let (stdout, _stderr, success) = run_probe_command_with_timeout(&extract_args, Duration::from_secs(30))?;
+    let (stdout, _stderr, success) =
+        run_probe_command_with_timeout(&extract_args, Duration::from_secs(30))?;
 
     // Cleanup before assertions
     cleanup_comprehensive_tests();
 
     // The command should succeed even if LSP isn't fully ready
-    assert!(success, "Extract should succeed even with LSP not fully ready");
-    
+    assert!(
+        success,
+        "Extract should succeed even with LSP not fully ready"
+    );
+
     // Should extract the function even if LSP info is not available
-    assert!(stdout.contains("Calculate"), "Should extract function even without LSP");
+    assert!(
+        stdout.contains("Calculate"),
+        "Should extract function even without LSP"
+    );
 
     // LSP information might or might not be present, depending on timing
     // The important thing is that the command doesn't hang or fail
@@ -427,28 +531,25 @@ fn test_error_recovery_with_invalid_file_paths() -> Result<()> {
 
     // Start daemon
     start_daemon_and_wait()?;
-    
+
     let workspace_path = fixtures::get_go_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
-    
+
     // Wait for language server
     wait_for_language_server_ready(Duration::from_secs(15));
 
     // Try extraction with invalid file path
-    let extract_args = [
-        "extract",
-        "nonexistent_file.go:10",
-        "--lsp",
-    ];
+    let extract_args = ["extract", "nonexistent_file.go:10", "--lsp"];
 
-    let (stdout, stderr, success) = run_probe_command_with_timeout(&extract_args, Duration::from_secs(10))?;
+    let (stdout, stderr, success) =
+        run_probe_command_with_timeout(&extract_args, Duration::from_secs(10))?;
 
     // Cleanup before assertions
     cleanup_comprehensive_tests();
 
     // The command should fail gracefully
     assert!(!success, "Extract should fail for nonexistent file");
-    
+
     // Should provide meaningful error message
     assert!(
         stderr.contains("No such file") || stderr.contains("not found") || stdout.contains("Error"),
@@ -468,10 +569,10 @@ fn test_lsp_performance_benchmark() -> Result<()> {
 
     // Start daemon and initialize workspace
     start_daemon_and_wait()?;
-    
+
     let workspace_path = fixtures::get_go_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
-    
+
     // Wait for language server to be fully ready
     wait_for_language_server_ready(Duration::from_secs(15));
 
@@ -487,12 +588,22 @@ fn test_lsp_performance_benchmark() -> Result<()> {
         ];
 
         let start = Instant::now();
-        let (stdout, stderr, success) = run_probe_command_with_timeout(&extract_args, Duration::from_secs(10))?;
+        let (stdout, stderr, success) =
+            run_probe_command_with_timeout(&extract_args, Duration::from_secs(10))?;
         let elapsed = start.elapsed();
 
-        assert!(success, "Extraction {} should succeed. Stderr: {}", i + 1, stderr);
-        assert!(stdout.contains("Calculate"), "Should extract function in attempt {}", i + 1);
-        
+        assert!(
+            success,
+            "Extraction {} should succeed. Stderr: {}",
+            i + 1,
+            stderr
+        );
+        assert!(
+            stdout.contains("Calculate"),
+            "Should extract function in attempt {}",
+            i + 1
+        );
+
         timings.push(elapsed);
     }
 
@@ -501,10 +612,13 @@ fn test_lsp_performance_benchmark() -> Result<()> {
 
     // Calculate average timing
     let avg_time = timings.iter().sum::<Duration>() / timings.len() as u32;
-    
+
     // Performance expectations (not strict failures, but good to monitor)
     if avg_time > Duration::from_secs(2) {
-        eprintln!("Warning: Average LSP extraction time ({:?}) is slower than expected", avg_time);
+        eprintln!(
+            "Warning: Average LSP extraction time ({:?}) is slower than expected",
+            avg_time
+        );
     }
 
     // All individual timings should be reasonable
