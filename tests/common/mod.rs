@@ -388,7 +388,6 @@ pub fn wait_for_language_server_ready(timeout: Duration) {
     thread::sleep(actual_timeout);
 }
 
-
 /// Test fixture paths
 pub mod fixtures {
     use std::path::PathBuf;
