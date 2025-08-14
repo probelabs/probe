@@ -950,7 +950,7 @@ mod tests {
         // Verify the path was resolved correctly
         assert!(workspace_root.is_absolute());
         assert!(workspace_root.exists());
-        
+
         // On Windows, canonicalization might produce different but equivalent paths
         // (e.g., UNC paths, different drive letter casing, etc.)
         // So we check that both paths canonicalize to the same result
