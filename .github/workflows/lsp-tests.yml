@@ -1,0 +1,98 @@
+name: LSP Tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lsp-tests:
+    name: LSP Tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Setup Rust cache
+        uses: actions/cache@v4
+        timeout-minutes: 5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-lsp-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain', 'rust-toolchain.toml') || 'stable' }}
+          restore-keys: |
+            ${{ runner.os }}-lsp-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-lsp-cargo-
+            ${{ runner.os }}-cargo-
+
+      - name: Install Go for LSP tests
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          
+      - name: Install gopls
+        run: go install golang.org/x/tools/gopls@latest
+
+      - name: Install Node.js for TypeScript/JavaScript LSP tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install TypeScript language server
+        run: npm install -g typescript-language-server typescript
+
+      - name: Show LSP tool versions
+        run: |
+          rustc --version
+          cargo --version
+          go version
+          gopls version
+          node --version
+          npm --version
+          typescript-language-server --version
+
+      - name: Build Rust project
+        run: cargo build
+
+      - name: Build LSP daemon for tests
+        run: |
+          cd lsp-daemon
+          cargo build
+
+      - name: Run multi-workspace LSP tests
+        run: |
+          cd lsp-daemon
+          cargo test --test integration_multi_workspace
+
+      - name: Run LSP integration tests
+        run: cargo test --test lsp_integration_tests
+
+      - name: Run comprehensive LSP tests
+        run: |
+          echo "=== CI Environment Debug Info ==="
+          echo "CI=$CI"
+          echo "GITHUB_ACTIONS=$GITHUB_ACTIONS"
+          echo "RUNNER_OS=$RUNNER_OS"
+          echo "PATH=$PATH"
+          echo "=== Language Server Versions ==="
+          gopls version || echo "gopls version failed"
+          typescript-language-server --version || echo "typescript-language-server version failed"
+          echo "=== Starting LSP comprehensive tests ==="
+          DEBUG=1 cargo test --test lsp_comprehensive_tests -- --nocapture
