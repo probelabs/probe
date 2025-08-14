@@ -254,14 +254,18 @@ impl LspClient {
                         return Err(e);
                     }
 
-                    warn!("LSP request failed with retryable error (attempt {}): {}", retry + 1, e);
+                    warn!(
+                        "LSP request failed with retryable error (attempt {}): {}",
+                        retry + 1,
+                        e
+                    );
                     last_error = Some(e);
 
                     if retry < MAX_RETRIES - 1 {
                         // Reconnect before retry
                         self.stream = None;
                         tokio::time::sleep(Duration::from_millis(500 * (retry + 1) as u64)).await;
-                        
+
                         if let Err(conn_err) = self.connect().await {
                             warn!("Failed to reconnect for retry: {}", conn_err);
                             continue;

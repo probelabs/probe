@@ -183,7 +183,11 @@ pub fn start_daemon_and_wait() -> Result<()> {
 /// Helper to start daemon with specified number of retries
 pub fn start_daemon_and_wait_with_retries(max_retries: u32) -> Result<()> {
     let timeout = performance::daemon_startup_timeout();
-    let max_attempts = if performance::is_ci_environment() { 60 } else { 40 }; // 30s in CI, 20s normally
+    let max_attempts = if performance::is_ci_environment() {
+        60
+    } else {
+        40
+    }; // 30s in CI, 20s normally
 
     for retry in 0..max_retries {
         // Clean up any existing daemon before starting
@@ -208,7 +212,7 @@ pub fn start_daemon_and_wait_with_retries(max_retries: u32) -> Result<()> {
                     } else {
                         Duration::from_millis(1000) // Longer waits for later attempts
                     };
-                    
+
                     thread::sleep(wait_time);
 
                     // Check if daemon is ready
@@ -222,15 +226,22 @@ pub fn start_daemon_and_wait_with_retries(max_retries: u32) -> Result<()> {
                         Ok(output) if output.status.success() => {
                             // Verify daemon is actually functional by checking the status output
                             let stdout = String::from_utf8_lossy(&output.stdout);
-                            if stdout.contains("LSP Daemon Status") || stdout.contains("Connected") {
-                                println!("Daemon started successfully on attempt {} (retry {})", attempt + 1, retry + 1);
+                            if stdout.contains("LSP Daemon Status") || stdout.contains("Connected")
+                            {
+                                println!(
+                                    "Daemon started successfully on attempt {} (retry {})",
+                                    attempt + 1,
+                                    retry + 1
+                                );
                                 return Ok(());
                             }
                         }
                         Ok(output) => {
                             // Status command failed, but maybe daemon is still starting
                             let stderr = String::from_utf8_lossy(&output.stderr);
-                            if stderr.contains("Connection refused") || stderr.contains("No such file") {
+                            if stderr.contains("Connection refused")
+                                || stderr.contains("No such file")
+                            {
                                 // Daemon not yet ready, continue waiting
                                 continue;
                             }
@@ -243,10 +254,18 @@ pub fn start_daemon_and_wait_with_retries(max_retries: u32) -> Result<()> {
                 }
 
                 // If we get here, this retry attempt failed
-                eprintln!("Daemon startup attempt {} failed after waiting {:?}", retry + 1, timeout);
+                eprintln!(
+                    "Daemon startup attempt {} failed after waiting {:?}",
+                    retry + 1,
+                    timeout
+                );
             }
             Err(e) => {
-                eprintln!("Failed to spawn daemon process on attempt {}: {}", retry + 1, e);
+                eprintln!(
+                    "Failed to spawn daemon process on attempt {}: {}",
+                    retry + 1,
+                    e
+                );
             }
         }
     }
@@ -265,7 +284,11 @@ pub fn init_lsp_workspace(workspace_path: &str, languages: &[&str]) -> Result<()
 }
 
 /// Initialize LSP workspace with specified number of retries
-pub fn init_lsp_workspace_with_retries(workspace_path: &str, languages: &[&str], max_retries: u32) -> Result<()> {
+pub fn init_lsp_workspace_with_retries(
+    workspace_path: &str,
+    languages: &[&str],
+    max_retries: u32,
+) -> Result<()> {
     let languages_str = languages.join(",");
     let mut args = vec!["lsp", "init", "-w", workspace_path, "--languages"];
     args.push(&languages_str);
@@ -276,12 +299,15 @@ pub fn init_lsp_workspace_with_retries(workspace_path: &str, languages: &[&str],
         let (stdout, stderr, success) = run_probe_command_with_timeout(&args, timeout)?;
 
         if success {
-            println!("LSP workspace initialization succeeded on attempt {}", retry + 1);
+            println!(
+                "LSP workspace initialization succeeded on attempt {}",
+                retry + 1
+            );
             return Ok(());
         }
 
         // Check for specific error patterns that indicate retryable failures
-        let is_retryable = stderr.contains("early eof") 
+        let is_retryable = stderr.contains("early eof")
             || stderr.contains("Connection refused")
             || stderr.contains("Failed to read message length")
             || stderr.contains("connection reset")
@@ -297,8 +323,12 @@ pub fn init_lsp_workspace_with_retries(workspace_path: &str, languages: &[&str],
             ));
         }
 
-        eprintln!("LSP workspace initialization attempt {} failed (retryable): {}", retry + 1, stderr.trim());
-        
+        eprintln!(
+            "LSP workspace initialization attempt {} failed (retryable): {}",
+            retry + 1,
+            stderr.trim()
+        );
+
         if retry < max_retries - 1 {
             // Wait before retrying, with increasing delays
             let wait_time = Duration::from_millis(1000 * (retry + 1) as u64);
@@ -306,7 +336,8 @@ pub fn init_lsp_workspace_with_retries(workspace_path: &str, languages: &[&str],
             thread::sleep(wait_time);
 
             // Verify daemon is still running, restart if needed
-            let status_check = run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(5));
+            let status_check =
+                run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(5));
             if status_check.is_err() || !status_check.unwrap().2 {
                 eprintln!("Daemon appears to be down, restarting...");
                 ensure_daemon_stopped();
@@ -327,13 +358,19 @@ pub fn wait_for_language_server_ready(timeout: Duration) {
     // Use the larger of the provided timeout or the CI-aware timeout
     let ci_aware_timeout = performance::language_server_ready_time();
     let actual_timeout = std::cmp::max(timeout, ci_aware_timeout);
-    
+
     if performance::is_ci_environment() {
-        println!("CI environment detected: waiting {:?} for language server to be ready", actual_timeout);
+        println!(
+            "CI environment detected: waiting {:?} for language server to be ready",
+            actual_timeout
+        );
     } else {
-        println!("Waiting {:?} for language server to be ready", actual_timeout);
+        println!(
+            "Waiting {:?} for language server to be ready",
+            actual_timeout
+        );
     }
-    
+
     thread::sleep(actual_timeout);
 }
 
@@ -342,25 +379,33 @@ pub fn wait_for_language_server_ready_with_health_check(_workspace_path: &str) -
     let timeout = performance::language_server_ready_time();
     let poll_interval = Duration::from_millis(2000);
     let max_polls = (timeout.as_millis() / poll_interval.as_millis()) as u32;
-    
+
     println!("Waiting for language server to be ready with health checks...");
-    
+
     for poll in 0..max_polls {
         thread::sleep(poll_interval);
-        
+
         // Check daemon status to see if language servers are healthy
-        if let Ok((stdout, _, success)) = run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(5)) {
+        if let Ok((stdout, _, success)) =
+            run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(5))
+        {
             if success && (stdout.contains("Ready") || stdout.contains("Healthy")) {
-                println!("Language server appears ready after {:?}", poll_interval * (poll + 1));
+                println!(
+                    "Language server appears ready after {:?}",
+                    poll_interval * (poll + 1)
+                );
                 return Ok(());
             }
         }
-        
+
         if poll % 5 == 0 && poll > 0 {
-            println!("Still waiting for language server... ({:?} elapsed)", poll_interval * (poll + 1));
+            println!(
+                "Still waiting for language server... ({:?} elapsed)",
+                poll_interval * (poll + 1)
+            );
         }
     }
-    
+
     println!("Timeout waiting for language server health check, proceeding anyway");
     Ok(())
 }
@@ -392,7 +437,7 @@ pub mod performance {
 
     /// Check if running in CI environment
     pub fn is_ci_environment() -> bool {
-        std::env::var("CI").is_ok() 
+        std::env::var("CI").is_ok()
             || std::env::var("GITHUB_ACTIONS").is_ok()
             || std::env::var("TRAVIS").is_ok()
             || std::env::var("CIRCLECI").is_ok()
