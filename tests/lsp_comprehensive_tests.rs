@@ -74,9 +74,7 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
     // Validate performance requirement
     assert!(
         elapsed < max_extract_time,
-        "Extract took {:?}, should be under {:?}",
-        elapsed,
-        max_extract_time
+        "Extract took {elapsed:?}, should be under {max_extract_time:?}"
     );
 
     // Validate basic extraction worked
@@ -147,9 +145,7 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
     // Validate performance requirement
     assert!(
         elapsed < max_extract_time,
-        "Extract took {:?}, should be under {:?}",
-        elapsed,
-        max_extract_time
+        "Extract took {elapsed:?}, should be under {max_extract_time:?}"
     );
 
     // Validate basic extraction worked
@@ -220,9 +216,7 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
     // Validate performance requirement
     assert!(
         elapsed < max_extract_time,
-        "Extract took {:?}, should be under {:?}",
-        elapsed,
-        max_extract_time
+        "Extract took {elapsed:?}, should be under {max_extract_time:?}"
     );
 
     // Validate basic extraction worked
@@ -339,9 +333,7 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     };
     assert!(
         total_elapsed < max_concurrent_time,
-        "Concurrent operations took {:?}, should be under {:?}",
-        total_elapsed,
-        max_concurrent_time
+        "Concurrent operations took {total_elapsed:?}, should be under {max_concurrent_time:?}"
     );
 
     // Validate all outputs contain LSP information
@@ -412,9 +404,7 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
     // Validate performance requirement
     assert!(
         elapsed < max_search_time,
-        "Search took {:?}, should be under {:?}",
-        elapsed,
-        max_search_time
+        "Search took {elapsed:?}, should be under {max_search_time:?}"
     );
 
     // Validate search results contain expected functions
