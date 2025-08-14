@@ -345,10 +345,9 @@ fn format_extraction_internal(
                             } else {
                                 writeln!(output, "  Call Hierarchy:")?;
                             }
-                            
+
                             // Display call hierarchy if available
                             if let Some(call_hierarchy) = &enhanced_symbol.call_hierarchy {
-
                                 if !call_hierarchy.incoming_calls.is_empty() {
                                     if format == "markdown" {
                                         writeln!(output, "#### Incoming Calls:")?;
