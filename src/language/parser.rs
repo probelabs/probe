@@ -1666,7 +1666,9 @@ fn process_cached_line_map(
                         // Keep both - don't remove, don't skip add
                     } else if !is_important && prev_is_important {
                         if debug_mode {
-                            eprintln!("DEBUG: Cache Dedupe: Skipping non-important contained block");
+                            eprintln!(
+                                "DEBUG: Cache Dedupe: Skipping non-important contained block"
+                            );
                         }
                         should_add = false;
                         break;
