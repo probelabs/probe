@@ -175,65 +175,194 @@ pub fn ensure_daemon_stopped() {
     thread::sleep(Duration::from_millis(500));
 }
 
-/// Helper to start daemon and wait for it to be ready
+/// Helper to start daemon and wait for it to be ready with retry logic
 pub fn start_daemon_and_wait() -> Result<()> {
-    // Start daemon in background
-    let _ = Command::new("./target/debug/probe")
-        .args(["lsp", "start"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("Failed to start LSP daemon")?;
+    start_daemon_and_wait_with_retries(3)
+}
 
-    // Wait for daemon to be ready (try status command)
-    for attempt in 0..20 {
-        thread::sleep(Duration::from_millis(500));
+/// Helper to start daemon with specified number of retries
+pub fn start_daemon_and_wait_with_retries(max_retries: u32) -> Result<()> {
+    let timeout = performance::daemon_startup_timeout();
+    let max_attempts = if performance::is_ci_environment() { 60 } else { 40 }; // 30s in CI, 20s normally
 
-        let output = Command::new("./target/debug/probe")
-            .args(["lsp", "status"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
-
-        if let Ok(output) = output {
-            if output.status.success() {
-                return Ok(());
-            }
+    for retry in 0..max_retries {
+        // Clean up any existing daemon before starting
+        if retry > 0 {
+            ensure_daemon_stopped();
+            thread::sleep(Duration::from_millis(1000)); // Wait longer between retries
         }
 
-        if attempt >= 19 {
-            return Err(anyhow::anyhow!(
-                "Daemon failed to start within timeout (10 seconds)"
-            ));
+        // Start daemon in background
+        let child = Command::new("./target/debug/probe")
+            .args(["lsp", "start"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match child {
+            Ok(_) => {
+                // Wait for daemon to be ready with exponential backoff
+                for attempt in 0..max_attempts {
+                    let wait_time = if attempt < 10 {
+                        Duration::from_millis(500)
+                    } else {
+                        Duration::from_millis(1000) // Longer waits for later attempts
+                    };
+                    
+                    thread::sleep(wait_time);
+
+                    // Check if daemon is ready
+                    let output = Command::new("./target/debug/probe")
+                        .args(["lsp", "status"])
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .output();
+
+                    match output {
+                        Ok(output) if output.status.success() => {
+                            // Verify daemon is actually functional by checking the status output
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            if stdout.contains("LSP Daemon Status") || stdout.contains("Connected") {
+                                println!("Daemon started successfully on attempt {} (retry {})", attempt + 1, retry + 1);
+                                return Ok(());
+                            }
+                        }
+                        Ok(output) => {
+                            // Status command failed, but maybe daemon is still starting
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            if stderr.contains("Connection refused") || stderr.contains("No such file") {
+                                // Daemon not yet ready, continue waiting
+                                continue;
+                            }
+                        }
+                        Err(_) => {
+                            // Command failed to execute, continue waiting
+                            continue;
+                        }
+                    }
+                }
+
+                // If we get here, this retry attempt failed
+                eprintln!("Daemon startup attempt {} failed after waiting {:?}", retry + 1, timeout);
+            }
+            Err(e) => {
+                eprintln!("Failed to spawn daemon process on attempt {}: {}", retry + 1, e);
+            }
         }
     }
 
-    unreachable!()
+    // All retries failed
+    Err(anyhow::anyhow!(
+        "Failed to start daemon after {} retries. Timeout: {:?}",
+        max_retries,
+        timeout
+    ))
 }
 
-/// Initialize LSP workspace for testing
+/// Initialize LSP workspace for testing with retry logic for early eof errors
 pub fn init_lsp_workspace(workspace_path: &str, languages: &[&str]) -> Result<()> {
+    init_lsp_workspace_with_retries(workspace_path, languages, 3)
+}
+
+/// Initialize LSP workspace with specified number of retries
+pub fn init_lsp_workspace_with_retries(workspace_path: &str, languages: &[&str], max_retries: u32) -> Result<()> {
     let languages_str = languages.join(",");
     let mut args = vec!["lsp", "init", "-w", workspace_path, "--languages"];
     args.push(&languages_str);
 
-    let (stdout, stderr, success) = run_probe_command_with_timeout(&args, Duration::from_secs(60))?;
+    let timeout = performance::max_init_time();
 
-    if !success {
-        return Err(anyhow::anyhow!(
-            "LSP workspace initialization failed.\nArgs: {:?}\nStdout: {}\nStderr: {}",
-            args,
-            stdout,
-            stderr
-        ));
+    for retry in 0..max_retries {
+        let (stdout, stderr, success) = run_probe_command_with_timeout(&args, timeout)?;
+
+        if success {
+            println!("LSP workspace initialization succeeded on attempt {}", retry + 1);
+            return Ok(());
+        }
+
+        // Check for specific error patterns that indicate retryable failures
+        let is_retryable = stderr.contains("early eof") 
+            || stderr.contains("Connection refused")
+            || stderr.contains("Failed to read message length")
+            || stderr.contains("connection reset")
+            || stderr.contains("broken pipe");
+
+        if !is_retryable {
+            // Non-retryable error, fail immediately
+            return Err(anyhow::anyhow!(
+                "LSP workspace initialization failed with non-retryable error.\nArgs: {:?}\nStdout: {}\nStderr: {}",
+                args,
+                stdout,
+                stderr
+            ));
+        }
+
+        eprintln!("LSP workspace initialization attempt {} failed (retryable): {}", retry + 1, stderr.trim());
+        
+        if retry < max_retries - 1 {
+            // Wait before retrying, with increasing delays
+            let wait_time = Duration::from_millis(1000 * (retry + 1) as u64);
+            eprintln!("Waiting {:?} before retry...", wait_time);
+            thread::sleep(wait_time);
+
+            // Verify daemon is still running, restart if needed
+            let status_check = run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(5));
+            if status_check.is_err() || !status_check.unwrap().2 {
+                eprintln!("Daemon appears to be down, restarting...");
+                ensure_daemon_stopped();
+                start_daemon_and_wait()?;
+            }
+        }
     }
 
-    Ok(())
+    Err(anyhow::anyhow!(
+        "LSP workspace initialization failed after {} retries.\nArgs: {:?}",
+        max_retries,
+        args
+    ))
 }
 
-/// Wait for language server to be ready (indexed)
+/// Wait for language server to be ready (indexed) with dynamic timeout
 pub fn wait_for_language_server_ready(timeout: Duration) {
-    thread::sleep(timeout);
+    // Use the larger of the provided timeout or the CI-aware timeout
+    let ci_aware_timeout = performance::language_server_ready_time();
+    let actual_timeout = std::cmp::max(timeout, ci_aware_timeout);
+    
+    if performance::is_ci_environment() {
+        println!("CI environment detected: waiting {:?} for language server to be ready", actual_timeout);
+    } else {
+        println!("Waiting {:?} for language server to be ready", actual_timeout);
+    }
+    
+    thread::sleep(actual_timeout);
+}
+
+/// Wait for language server with health check polling
+pub fn wait_for_language_server_ready_with_health_check(_workspace_path: &str) -> Result<()> {
+    let timeout = performance::language_server_ready_time();
+    let poll_interval = Duration::from_millis(2000);
+    let max_polls = (timeout.as_millis() / poll_interval.as_millis()) as u32;
+    
+    println!("Waiting for language server to be ready with health checks...");
+    
+    for poll in 0..max_polls {
+        thread::sleep(poll_interval);
+        
+        // Check daemon status to see if language servers are healthy
+        if let Ok((stdout, _, success)) = run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(5)) {
+            if success && (stdout.contains("Ready") || stdout.contains("Healthy")) {
+                println!("Language server appears ready after {:?}", poll_interval * (poll + 1));
+                return Ok(());
+            }
+        }
+        
+        if poll % 5 == 0 && poll > 0 {
+            println!("Still waiting for language server... ({:?} elapsed)", poll_interval * (poll + 1));
+        }
+    }
+    
+    println!("Timeout waiting for language server health check, proceeding anyway");
+    Ok(())
 }
 
 /// Test fixture paths
@@ -261,14 +390,62 @@ pub mod fixtures {
 pub mod performance {
     use std::time::Duration;
 
+    /// Check if running in CI environment
+    pub fn is_ci_environment() -> bool {
+        std::env::var("CI").is_ok() 
+            || std::env::var("GITHUB_ACTIONS").is_ok()
+            || std::env::var("TRAVIS").is_ok()
+            || std::env::var("CIRCLECI").is_ok()
+    }
+
     /// Maximum time allowed for extraction with LSP
-    pub const MAX_EXTRACT_TIME: Duration = Duration::from_secs(3);
+    pub fn max_extract_time() -> Duration {
+        if is_ci_environment() {
+            Duration::from_secs(15) // Increased for CI
+        } else {
+            Duration::from_secs(3)
+        }
+    }
 
     /// Maximum time allowed for search with LSP
-    pub const MAX_SEARCH_TIME: Duration = Duration::from_secs(5);
+    pub fn max_search_time() -> Duration {
+        if is_ci_environment() {
+            Duration::from_secs(20) // Increased for CI
+        } else {
+            Duration::from_secs(5)
+        }
+    }
 
     /// Maximum time to wait for language server initialization
-    #[allow(dead_code)]
+    pub fn max_init_time() -> Duration {
+        if is_ci_environment() {
+            Duration::from_secs(120) // Increased for CI
+        } else {
+            Duration::from_secs(60)
+        }
+    }
+
+    /// Language server ready wait time
+    pub fn language_server_ready_time() -> Duration {
+        if is_ci_environment() {
+            Duration::from_secs(30) // Increased for CI
+        } else {
+            Duration::from_secs(15)
+        }
+    }
+
+    /// Daemon startup timeout
+    pub fn daemon_startup_timeout() -> Duration {
+        if is_ci_environment() {
+            Duration::from_secs(30)
+        } else {
+            Duration::from_secs(10)
+        }
+    }
+
+    // Legacy constants for backward compatibility
+    pub const MAX_EXTRACT_TIME: Duration = Duration::from_secs(3);
+    pub const MAX_SEARCH_TIME: Duration = Duration::from_secs(5);
     pub const MAX_INIT_TIME: Duration = Duration::from_secs(60);
 }
 

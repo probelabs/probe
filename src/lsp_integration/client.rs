@@ -146,7 +146,7 @@ impl LspClient {
                         client_id: Uuid::new_v4(),
                     };
 
-                    match timeout(connection_timeout, self.send_request(request)).await {
+                    match timeout(connection_timeout, self.send_request_internal(request)).await {
                         Ok(Ok(response)) => {
                             if let DaemonResponse::Connected { daemon_version, .. } = response {
                                 debug!("Connected to daemon version: {}", daemon_version);
@@ -203,7 +203,7 @@ impl LspClient {
                         client_id: Uuid::new_v4(),
                     };
 
-                    match timeout(connection_timeout, self.send_request(request)).await {
+                    match timeout(connection_timeout, self.send_request_internal(request)).await {
                         Ok(Ok(response)) => {
                             if let DaemonResponse::Connected { daemon_version, .. } = response {
                                 debug!("Connected to daemon version: {}", daemon_version);
@@ -234,8 +234,53 @@ impl LspClient {
         ))
     }
 
-    /// Send a request to the daemon and wait for response
+    /// Send a request to the daemon with retry logic for connection issues
+    async fn send_request_with_retry(&mut self, request: DaemonRequest) -> Result<DaemonResponse> {
+        const MAX_RETRIES: u32 = 3;
+        let mut last_error = None;
+
+        for retry in 0..MAX_RETRIES {
+            match self.send_request_internal(request.clone()).await {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    let is_retryable = error_msg.contains("early eof")
+                        || error_msg.contains("Failed to read message length")
+                        || error_msg.contains("Connection refused")
+                        || error_msg.contains("connection reset")
+                        || error_msg.contains("broken pipe");
+
+                    if !is_retryable {
+                        return Err(e);
+                    }
+
+                    warn!("LSP request failed with retryable error (attempt {}): {}", retry + 1, e);
+                    last_error = Some(e);
+
+                    if retry < MAX_RETRIES - 1 {
+                        // Reconnect before retry
+                        self.stream = None;
+                        tokio::time::sleep(Duration::from_millis(500 * (retry + 1) as u64)).await;
+                        
+                        if let Err(conn_err) = self.connect().await {
+                            warn!("Failed to reconnect for retry: {}", conn_err);
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow!("All retry attempts failed")))
+    }
+
+    /// Send a request to the daemon and wait for response (public interface with retry)
     async fn send_request(&mut self, request: DaemonRequest) -> Result<DaemonResponse> {
+        self.send_request_with_retry(request).await
+    }
+
+    /// Send a request to the daemon and wait for response (internal implementation)
+    async fn send_request_internal(&mut self, request: DaemonRequest) -> Result<DaemonResponse> {
         let stream = self
             .stream
             .as_mut()
