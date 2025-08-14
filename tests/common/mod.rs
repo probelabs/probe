@@ -158,7 +158,20 @@ pub fn run_probe_command_with_timeout(
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let success = output.status.success();
+    let mut success = output.status.success();
+
+    // Some probe subcommands currently print errors but still exit 0; treat obvious error strings as failures in tests
+    if success {
+        let combined_output = format!("{}{}", stdout.to_lowercase(), stderr.to_lowercase());
+        if combined_output.contains("file does not exist")
+            || combined_output.contains("no such file")
+            || combined_output.contains("not found")
+            || combined_output.contains("error:")
+            || combined_output.contains("encountered") && combined_output.contains("error")
+        {
+            success = false;
+        }
+    }
 
     Ok((stdout, stderr, success))
 }
