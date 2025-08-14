@@ -962,9 +962,7 @@ fn find_function_declaration_at_line(
     let language_impl = get_language_impl(extension)?;
 
     if debug_mode {
-        println!(
-            "[DEBUG] Finding function declaration at line {target_line} in {extension} file"
-        );
+        println!("[DEBUG] Finding function declaration at line {target_line} in {extension} file");
     }
 
     let language = language_impl.get_tree_sitter_language();
@@ -984,9 +982,7 @@ fn find_function_declaration_at_line(
     let target_line_zero_based = target_line.saturating_sub(1) as usize;
 
     if debug_mode {
-        println!(
-            "[DEBUG] Searching for function declaration containing line {target_line} (0-based: {target_line_zero_based})"
-        );
+        println!("[DEBUG] Searching for function declaration containing line {target_line} (0-based: {target_line_zero_based})");
     }
 
     // Recursively search for function declarations that contain the target line
