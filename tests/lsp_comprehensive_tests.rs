@@ -21,7 +21,7 @@ use anyhow::Result;
 use common::{
     call_hierarchy::{validate_incoming_calls, validate_outgoing_calls},
     ensure_daemon_stopped, fixtures, init_lsp_workspace, performance, require_all_language_servers,
-    run_probe_command_with_timeout, start_daemon_and_wait, wait_for_language_server_ready,
+    run_probe_command_with_timeout, start_daemon_and_wait, wait_for_lsp_servers_ready,
 };
 use std::time::{Duration, Instant};
 
@@ -48,8 +48,8 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
     let workspace_path = fixtures::get_go_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
 
-    // Wait for gopls to fully index the project
-    wait_for_language_server_ready(performance::language_server_ready_time());
+    // Wait for gopls to fully index the project using status polling
+    wait_for_lsp_servers_ready(&["Go"], performance::language_server_ready_time())?;
 
     // Test extraction with LSP for the Calculate function
     let file_path = workspace_path.join("calculator.go");
@@ -119,8 +119,8 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
     let workspace_path = fixtures::get_typescript_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["typescript"])?;
 
-    // Wait for typescript-language-server to fully index the project
-    wait_for_language_server_ready(performance::language_server_ready_time());
+    // Wait for typescript-language-server to fully index the project using status polling
+    wait_for_lsp_servers_ready(&["TypeScript"], performance::language_server_ready_time())?;
 
     // Test extraction with LSP for the calculate function
     let file_path = workspace_path.join("src/calculator.ts");
@@ -190,8 +190,8 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
     let workspace_path = fixtures::get_javascript_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["javascript"])?;
 
-    // Wait for typescript-language-server to fully index the JavaScript project
-    wait_for_language_server_ready(performance::language_server_ready_time());
+    // Wait for typescript-language-server to fully index the JavaScript project using status polling
+    wait_for_lsp_servers_ready(&["JavaScript"], performance::language_server_ready_time())?;
 
     // Test extraction with LSP for the calculate function
     let file_path = workspace_path.join("src/calculator.js");
@@ -267,8 +267,11 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     init_lsp_workspace(ts_workspace.to_str().unwrap(), &["typescript"])?;
     init_lsp_workspace(js_workspace.to_str().unwrap(), &["javascript"])?;
 
-    // Wait for all language servers to be ready
-    wait_for_language_server_ready(performance::language_server_ready_time());
+    // Wait for all language servers to be ready using status polling
+    wait_for_lsp_servers_ready(
+        &["Go", "TypeScript", "JavaScript"],
+        performance::language_server_ready_time(),
+    )?;
 
     // Perform concurrent operations on all languages
     let start = Instant::now();
@@ -377,8 +380,8 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
     let workspace_path = fixtures::get_go_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
 
-    // Wait for language server to be ready
-    wait_for_language_server_ready(performance::language_server_ready_time());
+    // Wait for language server to be ready using status polling
+    wait_for_lsp_servers_ready(&["Go"], performance::language_server_ready_time())?;
 
     // Test search with LSP enrichment
     let search_args = [
@@ -435,8 +438,8 @@ fn test_lsp_daemon_status_with_multiple_languages() -> Result<()> {
     init_lsp_workspace(ts_workspace.to_str().unwrap(), &["typescript"])?;
     init_lsp_workspace(js_workspace.to_str().unwrap(), &["javascript"])?;
 
-    // Wait for language servers to initialize
-    wait_for_language_server_ready(performance::language_server_ready_time());
+    // Wait for language servers to initialize using status polling
+    wait_for_lsp_servers_ready(&["Go"], performance::language_server_ready_time())?;
 
     // Check daemon status
     let (stdout, stderr, success) = run_probe_command_with_timeout(
@@ -521,8 +524,8 @@ fn test_error_recovery_with_invalid_file_paths() -> Result<()> {
     let workspace_path = fixtures::get_go_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
 
-    // Wait for language server
-    wait_for_language_server_ready(performance::language_server_ready_time());
+    // Wait for language server using status polling
+    wait_for_lsp_servers_ready(&["Go"], performance::language_server_ready_time())?;
 
     // Try extraction with invalid file path
     let extract_args = ["extract", "nonexistent_file.go:10", "--lsp"];
@@ -559,8 +562,8 @@ fn test_lsp_performance_benchmark() -> Result<()> {
     let workspace_path = fixtures::get_go_project1();
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
 
-    // Wait for language server to be fully ready
-    wait_for_language_server_ready(performance::language_server_ready_time());
+    // Wait for language server to be fully ready using status polling
+    wait_for_lsp_servers_ready(&["Go"], performance::language_server_ready_time())?;
 
     // Perform multiple extractions to test consistency
     let file_path = workspace_path.join("calculator.go");
