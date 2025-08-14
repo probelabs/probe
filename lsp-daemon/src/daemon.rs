@@ -243,12 +243,12 @@ impl LspDaemon {
                 if !pids.is_empty() {
                     debug!("Monitoring {} child processes", pids.len());
                     let now = Instant::now();
-                    
+
                     // Track first seen time for new processes
                     for &pid in &pids {
                         child_first_seen.entry(pid).or_insert(now);
                     }
-                    
+
                     // Only monitor processes that are past the grace period
                     let pids_to_monitor: Vec<u32> = pids
                         .into_iter()
@@ -270,9 +270,10 @@ impl LspDaemon {
                             }
                         })
                         .collect();
-                    
+
                     if !pids_to_monitor.is_empty() {
-                        let unhealthy_pids = process_monitor.monitor_children(pids_to_monitor).await;
+                        let unhealthy_pids =
+                            process_monitor.monitor_children(pids_to_monitor).await;
 
                         if !unhealthy_pids.is_empty() {
                             warn!(
@@ -295,7 +296,7 @@ impl LspDaemon {
                             }
                         }
                     }
-                    
+
                     // Clean up tracking for processes that no longer exist
                     let current_pids: std::collections::HashSet<u32> = {
                         let guard = child_processes_for_monitoring.lock().await;
