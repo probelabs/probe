@@ -577,9 +577,9 @@ async fn get_lsp_info_async(
         Err(e) => {
             // Failed to create client or start server
             if debug_mode {
-                println!("[DEBUG] Failed to create LSP client: {}", e);
+                println!("[DEBUG] Failed to create LSP client: {e}");
             }
-            eprintln!("Warning: LSP enrichment unavailable: {}", e);
+            eprintln!("Warning: LSP enrichment unavailable: {e}");
             return None;
         }
     };

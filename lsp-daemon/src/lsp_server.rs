@@ -71,12 +71,12 @@ impl LspServer {
 
     pub fn spawn_with_workspace(
         config: &LspServerConfig,
-        workspace_root: &PathBuf,
+        workspace_root: &Path,
     ) -> Result<Self> {
         // For gopls, use the Go module root if we can find it
         let effective_root = if config.language == crate::language_detector::Language::Go {
             let module_root =
-                Self::find_go_module_root(workspace_root).unwrap_or_else(|| workspace_root.clone());
+                Self::find_go_module_root(workspace_root).unwrap_or_else(|| workspace_root.to_path_buf());
 
             // For gopls, we'll run go mod operations after initialization
             // since we can't use async here
@@ -84,7 +84,7 @@ impl LspServer {
 
             module_root
         } else {
-            workspace_root.clone()
+            workspace_root.to_path_buf()
         };
 
         Self::spawn_internal(config, Some(&effective_root))
@@ -100,7 +100,7 @@ impl LspServer {
         Self::spawn_internal(config, None)
     }
 
-    fn spawn_internal(config: &LspServerConfig, workspace_root: Option<&PathBuf>) -> Result<Self> {
+    fn spawn_internal(config: &LspServerConfig, workspace_root: Option<&Path>) -> Result<Self> {
         let command = normalize_executable(&config.command);
         info!("Spawning LSP server: {} {:?}", command, config.args);
 
@@ -554,10 +554,8 @@ impl LspServer {
                                         Some(s.to_string())
                                     } else if let Some(n) = token.as_u64() {
                                         Some(n.to_string())
-                                    } else if let Some(n) = token.as_i64() {
-                                        Some(n.to_string())
                                     } else {
-                                        None
+                                        token.as_i64().map(|n| n.to_string())
                                     }
                                 } else {
                                     None
@@ -1105,7 +1103,7 @@ impl LspServer {
         debug!("Running 'go mod download' in {:?}", module_root);
 
         let output = Command::new("go")
-            .args(&["mod", "download"])
+            .args(["mod", "download"])
             .current_dir(module_root)
             .output()
             .await?;
@@ -1120,7 +1118,7 @@ impl LspServer {
 
         // Also run go mod tidy to clean up
         let tidy_output = Command::new("go")
-            .args(&["mod", "tidy"])
+            .args(["mod", "tidy"])
             .current_dir(module_root)
             .output()
             .await?;
@@ -1307,26 +1305,25 @@ impl LspServer {
 
                             // Try workspace/symbol to force workspace indexing
                             let symbol_id = self.next_request_id().await;
-                            if let Err(_) = self
+                            if (self
                                 .send_request(
                                     "workspace/symbol",
                                     json!({"query": "func"}),
                                     symbol_id,
                                 )
-                                .await
+                                .await).is_err()
                             {
                                 debug!("Workspace symbol request failed during recovery");
                             }
 
                             // Try gopls-specific commands if available - use correct commands for v0.17.0
-                            if let Err(_) =
-                                self.execute_command("gopls.workspace_stats", vec![]).await
+                            if (self.execute_command("gopls.workspace_stats", vec![]).await).is_err()
                             {
                                 debug!("Workspace stats command failed or not available");
                             }
 
                             // Try gopls.views command which can help refresh workspace state
-                            if let Err(_) = self.execute_command("gopls.views", vec![]).await {
+                            if (self.execute_command("gopls.views", vec![]).await).is_err() {
                                 debug!("Views command failed or not available");
                             }
 

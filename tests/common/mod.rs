@@ -127,6 +127,7 @@ fn is_command_in_path(command: &str) -> bool {
 }
 
 /// Helper to run probe commands and capture output with timeout
+#[allow(dead_code)]
 pub fn run_probe_command(args: &[&str]) -> Result<(String, String, bool)> {
     run_probe_command_with_timeout(args, Duration::from_secs(30))
 }
@@ -267,6 +268,7 @@ pub mod performance {
     pub const MAX_SEARCH_TIME: Duration = Duration::from_secs(5);
 
     /// Maximum time to wait for language server initialization
+    #[allow(dead_code)]
     pub const MAX_INIT_TIME: Duration = Duration::from_secs(60);
 }
 
@@ -279,8 +281,7 @@ pub mod call_hierarchy {
 
         if actual_count != expected_count {
             return Err(format!(
-                "Expected {} incoming calls, found {}. Section content: {}",
-                expected_count, actual_count, incoming_section
+                "Expected {expected_count} incoming calls, found {actual_count}. Section content: {incoming_section}"
             ));
         }
 
@@ -294,8 +295,7 @@ pub mod call_hierarchy {
 
         if actual_count != expected_count {
             return Err(format!(
-                "Expected {} outgoing calls, found {}. Section content: {}",
-                expected_count, actual_count, outgoing_section
+                "Expected {expected_count} outgoing calls, found {actual_count}. Section content: {outgoing_section}"
             ));
         }
 
@@ -304,7 +304,7 @@ pub mod call_hierarchy {
 
     /// Extract a specific call hierarchy section from output
     fn extract_call_hierarchy_section(output: &str, section_name: &str) -> Result<String, String> {
-        let section_start = format!("## {}", section_name);
+        let section_start = format!("## {section_name}");
 
         if let Some(start_pos) = output.find(&section_start) {
             let after_header = &output[start_pos + section_start.len()..];
@@ -315,7 +315,7 @@ pub mod call_hierarchy {
 
             Ok(section.to_string())
         } else {
-            Err(format!("Section '{}' not found in output", section_name))
+            Err(format!("Section '{section_name}' not found in output"))
         }
     }
 

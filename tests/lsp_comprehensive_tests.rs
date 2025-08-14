@@ -70,8 +70,7 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
     // Validate the command succeeded
     assert!(
         success,
-        "Extract command should succeed. Stderr: {}",
-        stderr
+        "Extract command should succeed. Stderr: {stderr}"
     );
 
     // Validate performance requirement
@@ -146,8 +145,7 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
     // Validate the command succeeded
     assert!(
         success,
-        "Extract command should succeed. Stderr: {}",
-        stderr
+        "Extract command should succeed. Stderr: {stderr}"
     );
 
     // Validate performance requirement
@@ -222,8 +220,7 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
     // Validate the command succeeded
     assert!(
         success,
-        "Extract command should succeed. Stderr: {}",
-        stderr
+        "Extract command should succeed. Stderr: {stderr}"
     );
 
     // Validate performance requirement
@@ -329,25 +326,21 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     // Validate all operations succeeded
     assert!(
         go_success,
-        "Go extraction should succeed. Stderr: {}",
-        go_stderr
+        "Go extraction should succeed. Stderr: {go_stderr}"
     );
     assert!(
         ts_success,
-        "TypeScript extraction should succeed. Stderr: {}",
-        ts_stderr
+        "TypeScript extraction should succeed. Stderr: {ts_stderr}"
     );
     assert!(
         js_success,
-        "JavaScript extraction should succeed. Stderr: {}",
-        js_stderr
+        "JavaScript extraction should succeed. Stderr: {js_stderr}"
     );
 
     // Validate total time is reasonable for concurrent operations
     assert!(
         total_elapsed < Duration::from_secs(15),
-        "Concurrent operations took {:?}, should be under 15s",
-        total_elapsed
+        "Concurrent operations took {total_elapsed:?}, should be under 15s"
     );
 
     // Validate all outputs contain LSP information
@@ -413,7 +406,7 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
     cleanup_comprehensive_tests();
 
     // Validate the command succeeded
-    assert!(success, "Search command should succeed. Stderr: {}", stderr);
+    assert!(success, "Search command should succeed. Stderr: {stderr}");
 
     // Validate performance requirement
     assert!(
@@ -462,7 +455,7 @@ fn test_lsp_daemon_status_with_multiple_languages() -> Result<()> {
     cleanup_comprehensive_tests();
 
     // Validate status command succeeded
-    assert!(success, "LSP status should succeed. Stderr: {}", stderr);
+    assert!(success, "LSP status should succeed. Stderr: {stderr}");
 
     // Validate status output contains expected information
     assert!(
@@ -616,8 +609,7 @@ fn test_lsp_performance_benchmark() -> Result<()> {
     // Performance expectations (not strict failures, but good to monitor)
     if avg_time > Duration::from_secs(2) {
         eprintln!(
-            "Warning: Average LSP extraction time ({:?}) is slower than expected",
-            avg_time
+            "Warning: Average LSP extraction time ({avg_time:?}) is slower than expected"
         );
     }
 
@@ -632,8 +624,8 @@ fn test_lsp_performance_benchmark() -> Result<()> {
     }
 
     println!("LSP Performance Benchmark Results:");
-    println!("  Individual timings: {:?}", timings);
-    println!("  Average time: {:?}", avg_time);
+    println!("  Individual timings: {timings:?}");
+    println!("  Average time: {avg_time:?}");
 
     Ok(())
 }
