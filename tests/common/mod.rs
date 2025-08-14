@@ -332,7 +332,7 @@ pub fn init_lsp_workspace_with_retries(
         if retry < max_retries - 1 {
             // Wait before retrying, with increasing delays
             let wait_time = Duration::from_millis(1000 * (retry + 1) as u64);
-            eprintln!("Waiting {:?} before retry...", wait_time);
+            eprintln!("Waiting {wait_time:?} before retry...");
             thread::sleep(wait_time);
 
             // Verify daemon is still running, restart if needed
@@ -360,21 +360,16 @@ pub fn wait_for_language_server_ready(timeout: Duration) {
     let actual_timeout = std::cmp::max(timeout, ci_aware_timeout);
 
     if performance::is_ci_environment() {
-        println!(
-            "CI environment detected: waiting {:?} for language server to be ready",
-            actual_timeout
-        );
+        println!("CI environment detected: waiting {actual_timeout:?} for language server to be ready");
     } else {
-        println!(
-            "Waiting {:?} for language server to be ready",
-            actual_timeout
-        );
+        println!("Waiting {actual_timeout:?} for language server to be ready");
     }
 
     thread::sleep(actual_timeout);
 }
 
 /// Wait for language server with health check polling
+#[allow(dead_code)]
 pub fn wait_for_language_server_ready_with_health_check(_workspace_path: &str) -> Result<()> {
     let timeout = performance::language_server_ready_time();
     let poll_interval = Duration::from_millis(2000);
@@ -489,8 +484,11 @@ pub mod performance {
     }
 
     // Legacy constants for backward compatibility
+    #[allow(dead_code)]
     pub const MAX_EXTRACT_TIME: Duration = Duration::from_secs(3);
+    #[allow(dead_code)]
     pub const MAX_SEARCH_TIME: Duration = Duration::from_secs(5);
+    #[allow(dead_code)]
     pub const MAX_INIT_TIME: Duration = Duration::from_secs(60);
 }
 
