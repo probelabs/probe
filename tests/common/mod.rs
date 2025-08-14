@@ -388,6 +388,137 @@ pub fn wait_for_language_server_ready(timeout: Duration) {
     thread::sleep(actual_timeout);
 }
 
+/// Wait for LSP servers to be ready by polling their status
+/// This is more efficient and reliable than fixed sleep durations
+pub fn wait_for_lsp_servers_ready(
+    expected_languages: &[&str],
+    max_timeout: Duration,
+) -> Result<()> {
+    let start_time = Instant::now();
+    let mut poll_interval = Duration::from_millis(500); // Start with 500ms
+    let max_poll_interval = Duration::from_secs(2); // Cap at 2 seconds
+
+    if performance::is_ci_environment() {
+        println!(
+            "CI environment detected: polling LSP status for {} languages with max timeout {:?}",
+            expected_languages.len(),
+            max_timeout
+        );
+    } else {
+        println!(
+            "Polling LSP status for {} languages: {}",
+            expected_languages.len(),
+            expected_languages.join(", ")
+        );
+    }
+
+    loop {
+        let elapsed = start_time.elapsed();
+        if elapsed >= max_timeout {
+            return Err(anyhow::anyhow!(
+                "Timeout waiting for LSP servers to be ready after {:?}. Expected languages: {}",
+                elapsed,
+                expected_languages.join(", ")
+            ));
+        }
+
+        // Check LSP status
+        match check_lsp_servers_ready(expected_languages) {
+            Ok(true) => {
+                println!(
+                    "All {} LSP servers are ready after {:?}",
+                    expected_languages.len(),
+                    elapsed
+                );
+                return Ok(());
+            }
+            Ok(false) => {
+                // Not ready yet, continue polling
+                if elapsed.as_secs() % 5 == 0
+                    && elapsed.as_millis() % 1000 < poll_interval.as_millis()
+                {
+                    println!("Still waiting for LSP servers... ({:?} elapsed)", elapsed);
+                }
+            }
+            Err(e) => {
+                // Status check failed, but don't fail immediately in case it's transient
+                if elapsed.as_secs() % 10 == 0
+                    && elapsed.as_millis() % 1000 < poll_interval.as_millis()
+                {
+                    println!("LSP status check failed (will retry): {}", e);
+                }
+            }
+        }
+
+        thread::sleep(poll_interval);
+
+        // Exponential backoff to avoid hammering the LSP daemon
+        poll_interval = std::cmp::min(
+            Duration::from_millis((poll_interval.as_millis() as f64 * 1.2) as u64),
+            max_poll_interval,
+        );
+    }
+}
+
+/// Check if all expected LSP language servers are ready
+fn check_lsp_servers_ready(expected_languages: &[&str]) -> Result<bool> {
+    let output = Command::new("./target/debug/probe")
+        .args(&["lsp", "status"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("Failed to run 'probe lsp status'")?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "LSP status command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let status_output = String::from_utf8_lossy(&output.stdout);
+
+    // Parse the output to check server status
+    for &expected_lang in expected_languages {
+        if !is_language_server_ready(&status_output, expected_lang)? {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+/// Parse LSP status output to check if a specific language server is ready
+fn is_language_server_ready(status_output: &str, language: &str) -> Result<bool> {
+    // Look for pattern like "Go: Available (Ready)"
+    let lang_pattern = format!("{}: Available (Ready)", language);
+
+    if status_output.contains(&lang_pattern) {
+        // Also check that it has ready servers (not just busy ones)
+        // Look for "Servers: Ready: N" where N > 0
+        let lines: Vec<&str> = status_output.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if line.contains(&lang_pattern) {
+                // Look for the "Servers:" line that follows
+                for next_line in lines.iter().skip(i + 1).take(3) {
+                    if next_line.trim().starts_with("Servers:") && next_line.contains("Ready:") {
+                        // Extract the Ready count
+                        if let Some(ready_part) = next_line.split("Ready:").nth(1) {
+                            if let Some(ready_count_str) = ready_part.split(',').next() {
+                                if let Ok(ready_count) = ready_count_str.trim().parse::<u32>() {
+                                    return Ok(ready_count > 0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(false)
+}
+
 /// Test fixture paths
 pub mod fixtures {
     use std::path::PathBuf;
