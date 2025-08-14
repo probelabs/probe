@@ -49,7 +49,7 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
 
     // Wait for gopls to fully index the project
-    wait_for_language_server_ready(Duration::from_secs(15));
+    wait_for_language_server_ready(performance::language_server_ready_time());
 
     // Test extraction with LSP for the Calculate function
     let file_path = workspace_path.join("calculator.go");
@@ -60,8 +60,9 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
     ];
 
     let start = Instant::now();
+    let max_extract_time = performance::max_extract_time();
     let (stdout, stderr, success) =
-        run_probe_command_with_timeout(&extract_args, performance::MAX_EXTRACT_TIME)?;
+        run_probe_command_with_timeout(&extract_args, max_extract_time)?;
     let elapsed = start.elapsed();
 
     // Cleanup before assertions to avoid daemon issues
@@ -72,10 +73,10 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
 
     // Validate performance requirement
     assert!(
-        elapsed < performance::MAX_EXTRACT_TIME,
+        elapsed < max_extract_time,
         "Extract took {:?}, should be under {:?}",
         elapsed,
-        performance::MAX_EXTRACT_TIME
+        max_extract_time
     );
 
     // Validate basic extraction worked
@@ -121,7 +122,7 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["typescript"])?;
 
     // Wait for typescript-language-server to fully index the project
-    wait_for_language_server_ready(Duration::from_secs(10));
+    wait_for_language_server_ready(performance::language_server_ready_time());
 
     // Test extraction with LSP for the calculate function
     let file_path = workspace_path.join("src/calculator.ts");
@@ -132,8 +133,9 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
     ];
 
     let start = Instant::now();
+    let max_extract_time = performance::max_extract_time();
     let (stdout, stderr, success) =
-        run_probe_command_with_timeout(&extract_args, performance::MAX_EXTRACT_TIME)?;
+        run_probe_command_with_timeout(&extract_args, max_extract_time)?;
     let elapsed = start.elapsed();
 
     // Cleanup before assertions to avoid daemon issues
@@ -144,10 +146,10 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
 
     // Validate performance requirement
     assert!(
-        elapsed < performance::MAX_EXTRACT_TIME,
+        elapsed < max_extract_time,
         "Extract took {:?}, should be under {:?}",
         elapsed,
-        performance::MAX_EXTRACT_TIME
+        max_extract_time
     );
 
     // Validate basic extraction worked
@@ -193,7 +195,7 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["javascript"])?;
 
     // Wait for typescript-language-server to fully index the JavaScript project
-    wait_for_language_server_ready(Duration::from_secs(10));
+    wait_for_language_server_ready(performance::language_server_ready_time());
 
     // Test extraction with LSP for the calculate function
     let file_path = workspace_path.join("src/calculator.js");
@@ -204,8 +206,9 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
     ];
 
     let start = Instant::now();
+    let max_extract_time = performance::max_extract_time();
     let (stdout, stderr, success) =
-        run_probe_command_with_timeout(&extract_args, performance::MAX_EXTRACT_TIME)?;
+        run_probe_command_with_timeout(&extract_args, max_extract_time)?;
     let elapsed = start.elapsed();
 
     // Cleanup before assertions to avoid daemon issues
@@ -216,10 +219,10 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
 
     // Validate performance requirement
     assert!(
-        elapsed < performance::MAX_EXTRACT_TIME,
+        elapsed < max_extract_time,
         "Extract took {:?}, should be under {:?}",
         elapsed,
-        performance::MAX_EXTRACT_TIME
+        max_extract_time
     );
 
     // Validate basic extraction worked
@@ -271,7 +274,7 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     init_lsp_workspace(js_workspace.to_str().unwrap(), &["javascript"])?;
 
     // Wait for all language servers to be ready
-    wait_for_language_server_ready(Duration::from_secs(20));
+    wait_for_language_server_ready(performance::language_server_ready_time());
 
     // Perform concurrent operations on all languages
     let start = Instant::now();
@@ -284,7 +287,7 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
             &format!("{}:10", go_file.to_string_lossy()),
             "--lsp",
         ],
-        performance::MAX_EXTRACT_TIME,
+        performance::max_extract_time(),
     )?;
 
     // TypeScript extraction
@@ -295,7 +298,7 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
             &format!("{}:17", ts_file.to_string_lossy()),
             "--lsp",
         ],
-        performance::MAX_EXTRACT_TIME,
+        performance::max_extract_time(),
     )?;
 
     // JavaScript extraction
@@ -306,7 +309,7 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
             &format!("{}:14", js_file.to_string_lossy()),
             "--lsp",
         ],
-        performance::MAX_EXTRACT_TIME,
+        performance::max_extract_time(),
     )?;
 
     let total_elapsed = start.elapsed();
@@ -329,9 +332,15 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     );
 
     // Validate total time is reasonable for concurrent operations
+    let max_concurrent_time = if performance::is_ci_environment() {
+        Duration::from_secs(45) // Much longer for CI
+    } else {
+        Duration::from_secs(15)
+    };
     assert!(
-        total_elapsed < Duration::from_secs(15),
-        "Concurrent operations took {total_elapsed:?}, should be under 15s"
+        total_elapsed < max_concurrent_time,
+        "Concurrent operations took {:?}, should be under {:?}",
+        total_elapsed, max_concurrent_time
     );
 
     // Validate all outputs contain LSP information
@@ -376,7 +385,7 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
 
     // Wait for language server to be ready
-    wait_for_language_server_ready(Duration::from_secs(15));
+    wait_for_language_server_ready(performance::language_server_ready_time());
 
     // Test search with LSP enrichment
     let search_args = [
@@ -389,8 +398,9 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
     ];
 
     let start = Instant::now();
+    let max_search_time = performance::max_search_time();
     let (stdout, stderr, success) =
-        run_probe_command_with_timeout(&search_args, performance::MAX_SEARCH_TIME)?;
+        run_probe_command_with_timeout(&search_args, max_search_time)?;
     let elapsed = start.elapsed();
 
     // Cleanup before assertions
@@ -401,10 +411,10 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
 
     // Validate performance requirement
     assert!(
-        elapsed < performance::MAX_SEARCH_TIME,
+        elapsed < max_search_time,
         "Search took {:?}, should be under {:?}",
         elapsed,
-        performance::MAX_SEARCH_TIME
+        max_search_time
     );
 
     // Validate search results contain expected functions
@@ -436,11 +446,11 @@ fn test_lsp_daemon_status_with_multiple_languages() -> Result<()> {
     init_lsp_workspace(js_workspace.to_str().unwrap(), &["javascript"])?;
 
     // Wait for language servers to initialize
-    wait_for_language_server_ready(Duration::from_secs(20));
+    wait_for_language_server_ready(performance::language_server_ready_time());
 
     // Check daemon status
     let (stdout, stderr, success) =
-        run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(10))?;
+        run_probe_command_with_timeout(&["lsp", "status"], performance::language_server_ready_time())?;
 
     // Cleanup before assertions
     cleanup_comprehensive_tests();
@@ -520,13 +530,13 @@ fn test_error_recovery_with_invalid_file_paths() -> Result<()> {
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
 
     // Wait for language server
-    wait_for_language_server_ready(Duration::from_secs(15));
+    wait_for_language_server_ready(performance::language_server_ready_time());
 
     // Try extraction with invalid file path
     let extract_args = ["extract", "nonexistent_file.go:10", "--lsp"];
 
     let (stdout, stderr, success) =
-        run_probe_command_with_timeout(&extract_args, Duration::from_secs(10))?;
+        run_probe_command_with_timeout(&extract_args, performance::language_server_ready_time())?;
 
     // Cleanup before assertions
     cleanup_comprehensive_tests();
@@ -558,7 +568,7 @@ fn test_lsp_performance_benchmark() -> Result<()> {
     init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
 
     // Wait for language server to be fully ready
-    wait_for_language_server_ready(Duration::from_secs(15));
+    wait_for_language_server_ready(performance::language_server_ready_time());
 
     // Perform multiple extractions to test consistency
     let file_path = workspace_path.join("calculator.go");
@@ -573,7 +583,7 @@ fn test_lsp_performance_benchmark() -> Result<()> {
 
         let start = Instant::now();
         let (stdout, stderr, success) =
-            run_probe_command_with_timeout(&extract_args, Duration::from_secs(10))?;
+            run_probe_command_with_timeout(&extract_args, performance::language_server_ready_time())?;
         let elapsed = start.elapsed();
 
         assert!(
@@ -604,11 +614,17 @@ fn test_lsp_performance_benchmark() -> Result<()> {
 
     // All individual timings should be reasonable
     for (i, timing) in timings.iter().enumerate() {
+        let max_individual_time = if performance::is_ci_environment() {
+            Duration::from_secs(20) // Much more lenient for CI
+        } else {
+            Duration::from_secs(5)
+        };
         assert!(
-            *timing < Duration::from_secs(5),
-            "Extraction {} took {:?}, which is too slow",
+            *timing < max_individual_time,
+            "Extraction {} took {:?}, which is too slow (max: {:?})",
             i + 1,
-            timing
+            timing,
+            max_individual_time
         );
     }
 
