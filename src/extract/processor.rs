@@ -874,16 +874,12 @@ async fn get_lsp_symbol_info(
         attempts += 1;
         if attempts >= max_attempts {
             eprintln!(
-                "LSP server not ready after {} attempts, skipping LSP enrichment for symbol: {}",
-                attempts, symbol_name
+                "LSP server not ready after {attempts} attempts, skipping LSP enrichment for symbol: {symbol_name}"
             );
             return None;
         }
         if debug_mode {
-            println!(
-                "[DEBUG] LSP not ready (attempt #{}), retrying shortly…",
-                attempts
-            );
+            println!("[DEBUG] LSP not ready (attempt #{attempts}), retrying shortly…");
         }
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
     };
