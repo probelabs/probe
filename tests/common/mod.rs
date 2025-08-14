@@ -371,23 +371,6 @@ pub fn init_lsp_workspace_with_retries(
     ))
 }
 
-/// Wait for language server to be ready (indexed) with dynamic timeout
-pub fn wait_for_language_server_ready(timeout: Duration) {
-    // Use the larger of the provided timeout or the CI-aware timeout
-    let ci_aware_timeout = performance::language_server_ready_time();
-    let actual_timeout = std::cmp::max(timeout, ci_aware_timeout);
-
-    if performance::is_ci_environment() {
-        println!(
-            "CI environment detected: waiting {actual_timeout:?} for language server to be ready"
-        );
-    } else {
-        println!("Waiting {actual_timeout:?} for language server to be ready");
-    }
-
-    thread::sleep(actual_timeout);
-}
-
 /// Wait for LSP servers to be ready by polling their status
 /// This is more efficient and reliable than fixed sleep durations
 pub fn wait_for_lsp_servers_ready(
@@ -463,7 +446,7 @@ pub fn wait_for_lsp_servers_ready(
 /// Check if all expected LSP language servers are ready
 fn check_lsp_servers_ready(expected_languages: &[&str]) -> Result<bool> {
     let output = Command::new("./target/debug/probe")
-        .args(&["lsp", "status"])
+        .args(["lsp", "status"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
