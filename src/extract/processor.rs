@@ -374,17 +374,45 @@ pub fn process_file_for_extraction_with_lsp(
                 // Attempt to get LSP information for line-based extraction
                 let lsp_info = if enable_lsp {
                     if debug_mode {
-                        println!("[DEBUG] LSP enabled for line extraction, attempting to get info for line {line_num}");
+                        println!("[DEBUG] LSP enabled for line extraction, finding function declaration for line {line_num}");
                     }
-                    // Use the original line number requested by the user, not the merged boundaries
-                    // This gives more precise LSP results for call hierarchy
                     // Ensure we use an absolute path for workspace detection
                     let abs_path = if path.is_absolute() {
                         path.to_path_buf()
                     } else {
                         std::env::current_dir().unwrap_or_default().join(path)
                     };
-                    get_lsp_symbol_info_sync(&abs_path, "", line_num as u32, 0, debug_mode)
+
+                    // Use tree-sitter to find the function declaration that contains this line
+                    if let Some((symbol_name, decl_line, decl_column)) =
+                        find_function_declaration_at_line(
+                            &content,
+                            &abs_path,
+                            line_num as u32,
+                            debug_mode,
+                        )
+                    {
+                        if debug_mode {
+                            println!(
+                                "[DEBUG] Found enclosing function '{symbol_name}' at line {decl_line}, column {decl_column}"
+                            );
+                        }
+                        get_lsp_symbol_info_sync(
+                            &abs_path,
+                            &symbol_name,
+                            decl_line,
+                            decl_column,
+                            debug_mode,
+                        )
+                    } else {
+                        if debug_mode {
+                            println!(
+                                "[DEBUG] No enclosing function found for line {line_num}, using fallback"
+                            );
+                        }
+                        // Fallback to original behavior if no function declaration found
+                        get_lsp_symbol_info_sync(&abs_path, "", line_num as u32, 0, debug_mode)
+                    }
                 } else {
                     None
                 };
@@ -449,7 +477,7 @@ pub fn process_file_for_extraction_with_lsp(
                 // Attempt to get LSP information for line-based extraction fallback
                 let lsp_info = if enable_lsp {
                     if debug_mode {
-                        println!("[DEBUG] LSP enabled for line fallback extraction, attempting to get info for line {line_num}");
+                        println!("[DEBUG] LSP enabled for line fallback extraction, finding function declaration for line {line_num}");
                     }
                     // Ensure we use an absolute path for workspace detection
                     let abs_path = if path.is_absolute() {
@@ -457,7 +485,33 @@ pub fn process_file_for_extraction_with_lsp(
                     } else {
                         std::env::current_dir().unwrap_or_default().join(path)
                     };
-                    get_lsp_symbol_info_sync(&abs_path, "", line_num as u32, 0, debug_mode)
+
+                    // Use tree-sitter to find the function declaration that contains this line
+                    if let Some((symbol_name, decl_line, decl_column)) =
+                        find_function_declaration_at_line(
+                            &content,
+                            &abs_path,
+                            line_num as u32,
+                            debug_mode,
+                        )
+                    {
+                        if debug_mode {
+                            println!("[DEBUG] Found enclosing function '{symbol_name}' at line {decl_line}, column {decl_column} (fallback)");
+                        }
+                        get_lsp_symbol_info_sync(
+                            &abs_path,
+                            &symbol_name,
+                            decl_line,
+                            decl_column,
+                            debug_mode,
+                        )
+                    } else {
+                        if debug_mode {
+                            println!("[DEBUG] No enclosing function found for line {line_num} (fallback), using original position");
+                        }
+                        // Fallback to original behavior if no function declaration found
+                        get_lsp_symbol_info_sync(&abs_path, "", line_num as u32, 0, debug_mode)
+                    }
                 } else {
                     None
                 };
@@ -883,6 +937,237 @@ async fn get_lsp_symbol_info(
                 }
                 return None;
             }
+        }
+    }
+
+    None
+}
+
+/// Find the function declaration that contains the given line using tree-sitter
+/// Returns (symbol_name, declaration_line, declaration_column) if found
+fn find_function_declaration_at_line(
+    content: &str,
+    file_path: &Path,
+    target_line: u32,
+    debug_mode: bool,
+) -> Option<(String, u32, u32)> {
+    use crate::language::factory::get_language_impl;
+    use tree_sitter::Parser as TSParser;
+
+    let extension = file_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("");
+
+    let language_impl = get_language_impl(extension)?;
+
+    if debug_mode {
+        println!(
+            "[DEBUG] Finding function declaration at line {target_line} in {extension} file"
+        );
+    }
+
+    let language = language_impl.get_tree_sitter_language();
+    let mut parser = TSParser::new();
+    if parser.set_language(&language).is_err() {
+        if debug_mode {
+            println!("[DEBUG] Failed to set language for function declaration search");
+        }
+        return None;
+    }
+
+    let tree = parser.parse(content, None)?;
+    let root_node = tree.root_node();
+    let source = content.as_bytes();
+
+    // Convert 1-based line to 0-based for tree-sitter
+    let target_line_zero_based = target_line.saturating_sub(1) as usize;
+
+    if debug_mode {
+        println!(
+            "[DEBUG] Searching for function declaration containing line {target_line} (0-based: {target_line_zero_based})"
+        );
+    }
+
+    // Recursively search for function declarations that contain the target line
+    find_enclosing_function_node(
+        root_node,
+        target_line_zero_based,
+        source,
+        extension,
+        debug_mode,
+    )
+}
+
+/// Recursively search tree-sitter nodes to find the function declaration containing the target line
+fn find_enclosing_function_node(
+    node: tree_sitter::Node,
+    target_line: usize,
+    source: &[u8],
+    extension: &str,
+    debug_mode: bool,
+) -> Option<(String, u32, u32)> {
+    let node_start_line = node.start_position().row;
+    let node_end_line = node.end_position().row;
+
+    // Skip nodes that don't contain our target line
+    if target_line < node_start_line || target_line > node_end_line {
+        return None;
+    }
+
+    // Check if this node represents a function/method declaration
+    let is_function_like = match extension {
+        "rs" => matches!(node.kind(), "function_item" | "impl_item"),
+        "go" => matches!(node.kind(), "function_declaration" | "method_declaration"),
+        "js" | "jsx" => matches!(
+            node.kind(),
+            "function_declaration"
+                | "function_expression"
+                | "arrow_function"
+                | "method_definition"
+                | "function"
+        ),
+        "ts" | "tsx" => matches!(
+            node.kind(),
+            "function_declaration"
+                | "function_expression"
+                | "arrow_function"
+                | "method_definition"
+                | "function"
+                | "method_signature"
+        ),
+        "py" => matches!(node.kind(), "function_definition"),
+        "java" => matches!(
+            node.kind(),
+            "method_declaration" | "constructor_declaration"
+        ),
+        "cpp" | "cc" | "cxx" | "c++" | "hpp" | "hxx" | "h++" => {
+            matches!(node.kind(), "function_definition" | "function_declarator")
+        }
+        "c" | "h" => matches!(node.kind(), "function_definition" | "function_declarator"),
+        _ => node.kind().contains("function"),
+    };
+
+    if is_function_like {
+        if debug_mode {
+            println!(
+                "[DEBUG] Found {} node at lines {}-{}, extracting identifier",
+                node.kind(),
+                node_start_line + 1,
+                node_end_line + 1
+            );
+        }
+
+        // Extract the identifier from this function-like node
+        if let Some((symbol_name, line, column)) =
+            extract_function_identifier_with_position(node, source, extension, debug_mode)
+        {
+            if debug_mode {
+                println!(
+                    "[DEBUG] Extracted function '{}' at line {}, column {}",
+                    symbol_name,
+                    line + 1,
+                    column
+                );
+            }
+            return Some((symbol_name, line as u32, column as u32));
+        }
+    }
+
+    // Recursively check child nodes (depth-first to find the most specific enclosing function)
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(result) =
+            find_enclosing_function_node(child, target_line, source, extension, debug_mode)
+        {
+            return Some(result);
+        }
+    }
+
+    None
+}
+
+/// Extract the identifier name and its precise position from a function-like tree-sitter node
+fn extract_function_identifier_with_position(
+    node: tree_sitter::Node,
+    source: &[u8],
+    extension: &str,
+    debug_mode: bool,
+) -> Option<(String, usize, usize)> {
+    let mut cursor = node.walk();
+
+    // Language-specific identifier extraction
+    for child in node.children(&mut cursor) {
+        let child_kind = child.kind();
+
+        if debug_mode {
+            println!(
+                "[DEBUG] Examining child node: {} at line {}",
+                child_kind,
+                child.start_position().row + 1
+            );
+        }
+
+        // Check for identifier nodes based on language
+        let is_identifier = match extension {
+            "rs" => child_kind == "identifier",
+            "go" => child_kind == "identifier",
+            "js" | "jsx" | "ts" | "tsx" => {
+                matches!(child_kind, "identifier" | "property_identifier")
+            }
+            "py" => child_kind == "identifier",
+            "java" => child_kind == "identifier",
+            "cpp" | "cc" | "cxx" | "c++" | "hpp" | "hxx" | "h++" | "c" | "h" => {
+                child_kind == "identifier"
+            }
+            _ => child_kind == "identifier",
+        };
+
+        if is_identifier {
+            if let Ok(name) = child.utf8_text(source) {
+                if debug_mode {
+                    println!(
+                        "[DEBUG] Found identifier: '{}' at position ({}, {})",
+                        name,
+                        child.start_position().row,
+                        child.start_position().column
+                    );
+                }
+                // Skip common non-function identifiers
+                if !matches!(name, "function" | "fn" | "def" | "func" | "method") {
+                    return Some((
+                        name.to_string(),
+                        child.start_position().row,
+                        child.start_position().column,
+                    ));
+                }
+            }
+        }
+
+        // For some languages, we might need to look deeper
+        if matches!(extension, "js" | "jsx" | "ts" | "tsx") && child_kind == "property_identifier" {
+            if let Ok(name) = child.utf8_text(source) {
+                if debug_mode {
+                    println!(
+                        "[DEBUG] Found property identifier: '{}' at position ({}, {})",
+                        name,
+                        child.start_position().row,
+                        child.start_position().column
+                    );
+                }
+                return Some((
+                    name.to_string(),
+                    child.start_position().row,
+                    child.start_position().column,
+                ));
+            }
+        }
+
+        // Recursively check for nested identifiers (e.g., for complex function signatures)
+        if let Some(result) =
+            extract_function_identifier_with_position(child, source, extension, debug_mode)
+        {
+            return Some(result);
         }
     }
 
