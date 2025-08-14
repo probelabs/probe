@@ -360,7 +360,9 @@ pub fn wait_for_language_server_ready(timeout: Duration) {
     let actual_timeout = std::cmp::max(timeout, ci_aware_timeout);
 
     if performance::is_ci_environment() {
-        println!("CI environment detected: waiting {actual_timeout:?} for language server to be ready");
+        println!(
+            "CI environment detected: waiting {actual_timeout:?} for language server to be ready"
+        );
     } else {
         println!("Waiting {actual_timeout:?} for language server to be ready");
     }
