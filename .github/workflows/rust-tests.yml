@@ -49,6 +49,14 @@ jobs:
       - name: Install gopls
         run: go install golang.org/x/tools/gopls@latest
 
+      - name: Install Node.js for TypeScript/JavaScript LSP tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install TypeScript language server
+        run: npm install -g typescript-language-server typescript
+
       - name: Show tool versions
         run: |
           rustc --version
@@ -56,6 +64,9 @@ jobs:
           cargo clippy --version
           go version
           gopls version
+          node --version
+          npm --version
+          typescript-language-server --version
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -90,3 +101,6 @@ jobs:
 
       - name: Run LSP integration tests
         run: cargo test --test lsp_integration_tests
+
+      - name: Run comprehensive LSP tests
+        run: cargo test --test lsp_comprehensive_tests
