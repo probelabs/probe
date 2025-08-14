@@ -422,11 +422,6 @@ fn format_extraction_internal(
                     let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
                     writeln!(output, "Total bytes returned: {total_bytes}")?;
                     writeln!(output, "Total tokens returned: {total_tokens}")?;
-                    writeln!(
-                        output,
-                        "Probe version: {}",
-                        probe_code::version::get_version()
-                    )?;
                 }
             }
         }
