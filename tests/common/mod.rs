@@ -388,67 +388,6 @@ pub fn wait_for_language_server_ready(timeout: Duration) {
     thread::sleep(actual_timeout);
 }
 
-/// Wait for language server with health check polling
-pub fn wait_for_language_server_ready_with_health_check(workspace_path: &str) -> Result<()> {
-    let timeout = performance::language_server_ready_time();
-    let poll_interval = Duration::from_millis(3000); // Longer polling for CI
-    let max_polls = (timeout.as_millis() / poll_interval.as_millis()) as u32;
-
-    println!("Waiting for language server to be ready with health checks...");
-
-    // Initial delay for language server startup
-    thread::sleep(Duration::from_secs(5));
-
-    for poll in 0..max_polls {
-        // Try a simple extraction to test if LSP is working with known test files
-        let go_test_file = std::path::Path::new(workspace_path).join("calculator.go");
-        if go_test_file.exists() {
-            // Try a quick LSP-enabled extraction on the calculator file
-            let args = ["extract", &format!("{}:6", go_test_file.display()), "--lsp"];
-            if let Ok((stdout, _, success)) =
-                run_probe_command_with_timeout(&args, Duration::from_secs(15))
-            {
-                if success && stdout.contains("LSP Information") {
-                    println!(
-                        "Language server ready after {:?} - LSP extraction successful",
-                        poll_interval * (poll + 1)
-                    );
-                    return Ok(());
-                }
-            }
-        }
-
-        // Fallback to status check
-        if let Ok((stdout, _, success)) =
-            run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(5))
-        {
-            if success && stdout.contains("Connected") {
-                // Additional check - look for server pools
-                if stdout.contains("Server Pools") || stdout.len() > 200 {
-                    println!(
-                        "Language server status looks healthy after {:?}",
-                        poll_interval * (poll + 1)
-                    );
-                    // Give it a bit more time to fully index
-                    thread::sleep(Duration::from_secs(5));
-                    return Ok(());
-                }
-            }
-        }
-
-        if poll % 3 == 0 && poll > 0 {
-            println!(
-                "Still waiting for language server... ({:?} elapsed)",
-                poll_interval * (poll + 1)
-            );
-        }
-
-        thread::sleep(poll_interval);
-    }
-
-    println!("Timeout waiting for language server health check, proceeding anyway");
-    Ok(())
-}
 
 /// Test fixture paths
 pub mod fixtures {
