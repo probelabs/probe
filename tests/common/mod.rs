@@ -405,9 +405,14 @@ pub fn wait_for_language_server_ready_with_health_check(workspace_path: &str) ->
         if go_test_file.exists() {
             // Try a quick LSP-enabled extraction on the calculator file
             let args = ["extract", &format!("{}:6", go_test_file.display()), "--lsp"];
-            if let Ok((stdout, _, success)) = run_probe_command_with_timeout(&args, Duration::from_secs(15)) {
+            if let Ok((stdout, _, success)) =
+                run_probe_command_with_timeout(&args, Duration::from_secs(15))
+            {
                 if success && stdout.contains("LSP Information") {
-                    println!("Language server ready after {:?} - LSP extraction successful", poll_interval * (poll + 1));
+                    println!(
+                        "Language server ready after {:?} - LSP extraction successful",
+                        poll_interval * (poll + 1)
+                    );
                     return Ok(());
                 }
             }
@@ -420,7 +425,10 @@ pub fn wait_for_language_server_ready_with_health_check(workspace_path: &str) ->
             if success && stdout.contains("Connected") {
                 // Additional check - look for server pools
                 if stdout.contains("Server Pools") || stdout.len() > 200 {
-                    println!("Language server status looks healthy after {:?}", poll_interval * (poll + 1));
+                    println!(
+                        "Language server status looks healthy after {:?}",
+                        poll_interval * (poll + 1)
+                    );
                     // Give it a bit more time to fully index
                     thread::sleep(Duration::from_secs(5));
                     return Ok(());
@@ -434,7 +442,7 @@ pub fn wait_for_language_server_ready_with_health_check(workspace_path: &str) ->
                 poll_interval * (poll + 1)
             );
         }
-        
+
         thread::sleep(poll_interval);
     }
 
@@ -561,11 +569,19 @@ pub mod call_hierarchy {
             let mut end_pos = after_header.len();
             let lines: Vec<&str> = after_header.lines().collect();
             for (idx, line) in lines.iter().enumerate() {
-                if idx > 0 && (
-                    line.starts_with("  ") && line.ends_with(":") && !line.starts_with("    ") ||  // Next section like "  Outgoing Calls:"
-                    (!line.starts_with("    ") && !line.starts_with("  ") && !line.trim().is_empty()) // Unindented non-empty line
-                ) {
-                    end_pos = lines.iter().take(idx).map(|l| l.len() + 1).sum::<usize>().saturating_sub(1);
+                if idx > 0
+                    && (
+                        line.starts_with("  ") && line.ends_with(":") && !line.starts_with("    ") ||  // Next section like "  Outgoing Calls:"
+                    (!line.starts_with("    ") && !line.starts_with("  ") && !line.trim().is_empty())
+                        // Unindented non-empty line
+                    )
+                {
+                    end_pos = lines
+                        .iter()
+                        .take(idx)
+                        .map(|l| l.len() + 1)
+                        .sum::<usize>()
+                        .saturating_sub(1);
                     break;
                 }
             }
@@ -579,7 +595,12 @@ pub mod call_hierarchy {
             let mut end_pos = after_header.len();
             for (idx, line) in after_header.lines().enumerate() {
                 if idx > 0 && !line.starts_with("  ") && !line.trim().is_empty() {
-                    end_pos = after_header[..after_header.len()].lines().take(idx).map(|l| l.len() + 1).sum::<usize>().saturating_sub(1);
+                    end_pos = after_header[..after_header.len()]
+                        .lines()
+                        .take(idx)
+                        .map(|l| l.len() + 1)
+                        .sum::<usize>()
+                        .saturating_sub(1);
                     break;
                 }
             }

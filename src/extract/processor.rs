@@ -948,7 +948,10 @@ async fn get_lsp_symbol_info(
     let mut client = loop {
         if let Some(c) = LspClient::new_non_blocking(config.clone()).await {
             if debug_mode {
-                println!("[DEBUG] LSP client connected successfully (attempt #{})", attempts + 1);
+                println!(
+                    "[DEBUG] LSP client connected successfully (attempt #{})",
+                    attempts + 1
+                );
             }
             break c;
         }
@@ -961,7 +964,10 @@ async fn get_lsp_symbol_info(
             return None;
         }
         if debug_mode {
-            println!("[DEBUG] LSP not ready (attempt #{}), retrying shortly…", attempts);
+            println!(
+                "[DEBUG] LSP not ready (attempt #{}), retrying shortly…",
+                attempts
+            );
         }
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
     };
