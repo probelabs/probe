@@ -103,4 +103,14 @@ jobs:
         run: cargo test --test lsp_integration_tests
 
       - name: Run comprehensive LSP tests
-        run: cargo test --test lsp_comprehensive_tests
+        run: |
+          echo "=== CI Environment Debug Info ==="
+          echo "CI=$CI"
+          echo "GITHUB_ACTIONS=$GITHUB_ACTIONS"
+          echo "RUNNER_OS=$RUNNER_OS"
+          echo "PATH=$PATH"
+          echo "=== Language Server Versions ==="
+          gopls version || echo "gopls version failed"
+          typescript-language-server --version || echo "typescript-language-server version failed"
+          echo "=== Starting LSP tests with debug output ==="
+          DEBUG=1 cargo test --test lsp_comprehensive_tests -- --nocapture

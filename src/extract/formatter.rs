@@ -339,17 +339,15 @@ fn format_extraction_internal(
                             probe_code::lsp_integration::EnhancedSymbolInfo,
                         >(lsp_info.clone())
                         {
+                            // Always show a Call Hierarchy heading so users see the section even if empty
+                            if format == "markdown" {
+                                writeln!(output, "#### Call Hierarchy")?;
+                            } else {
+                                writeln!(output, "  Call Hierarchy:")?;
+                            }
+                            
                             // Display call hierarchy if available
                             if let Some(call_hierarchy) = &enhanced_symbol.call_hierarchy {
-                                if !call_hierarchy.incoming_calls.is_empty()
-                                    || !call_hierarchy.outgoing_calls.is_empty()
-                                {
-                                    if format == "markdown" {
-                                        writeln!(output, "#### Call Hierarchy")?;
-                                    } else {
-                                        writeln!(output, "  Call Hierarchy:")?;
-                                    }
-                                }
 
                                 if !call_hierarchy.incoming_calls.is_empty() {
                                     if format == "markdown" {
@@ -445,10 +443,18 @@ fn format_extraction_internal(
                         } else {
                             // Fallback: display raw JSON if we can't parse it
                             if format == "markdown" {
+                                writeln!(output, "#### Call Hierarchy")?;
+                                writeln!(output, "  No call hierarchy information available")?;
                                 writeln!(output, "```json")?;
                                 writeln!(output, "{}", serde_json::to_string_pretty(lsp_info)?)?;
                                 writeln!(output, "```")?;
                             } else {
+                                writeln!(output, "  Call Hierarchy:")?;
+                                writeln!(
+                                    output,
+                                    "    {}",
+                                    "No call hierarchy information available".dimmed()
+                                )?;
                                 writeln!(
                                     output,
                                     "  Raw LSP Data: {}",

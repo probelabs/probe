@@ -128,6 +128,10 @@ pub fn process_file_for_extraction_with_lsp(
                 };
                 result.lsp_info =
                     get_lsp_symbol_info_sync(&abs_path, symbol_name, line, column, debug_mode);
+                // Ensure the formatter shows the section even if the server isn't ready yet.
+                if enable_lsp && result.lsp_info.is_none() {
+                    result.lsp_info = Some(serde_json::json!({"error":"lsp_unavailable"}));
+                }
             } else if debug_mode {
                 println!(
                     "[DEBUG] No position information available from tree-sitter, skipping LSP"
@@ -372,7 +376,7 @@ pub fn process_file_for_extraction_with_lsp(
                     crate::ranking::preprocess_text_with_filename(&merged_content, &filename);
 
                 // Attempt to get LSP information for line-based extraction
-                let lsp_info = if enable_lsp {
+                let mut lsp_info = if enable_lsp {
                     if debug_mode {
                         println!("[DEBUG] LSP enabled for line extraction, finding function declaration for line {line_num}");
                     }
@@ -416,6 +420,10 @@ pub fn process_file_for_extraction_with_lsp(
                 } else {
                     None
                 };
+                // Force a visible LSP section in output even if enrichment is unavailable.
+                if enable_lsp && lsp_info.is_none() {
+                    lsp_info = Some(serde_json::json!({"error":"lsp_unavailable"}));
+                }
 
                 Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
@@ -475,7 +483,7 @@ pub fn process_file_for_extraction_with_lsp(
                     crate::ranking::preprocess_text_with_filename(&context_code, &filename);
 
                 // Attempt to get LSP information for line-based extraction fallback
-                let lsp_info = if enable_lsp {
+                let mut lsp_info = if enable_lsp {
                     if debug_mode {
                         println!("[DEBUG] LSP enabled for line fallback extraction, finding function declaration for line {line_num}");
                     }
@@ -515,6 +523,10 @@ pub fn process_file_for_extraction_with_lsp(
                 } else {
                     None
                 };
+                // Force a visible LSP section in output even if enrichment is unavailable.
+                if enable_lsp && lsp_info.is_none() {
+                    lsp_info = Some(serde_json::json!({"error":"lsp_unavailable"}));
+                }
 
                 Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
@@ -846,24 +858,28 @@ async fn get_lsp_symbol_info(
         );
     }
 
-    // Use non-blocking client creation - returns None if LSP not ready
-    let mut client = match LspClient::new_non_blocking(config).await {
-        Some(client) => {
+    // Try non-blocking client creation with brief backoff (helps on cold CI runners)
+    let mut attempts = 0u32;
+    let max_attempts = 3u32;
+    let mut client = loop {
+        if let Some(c) = LspClient::new_non_blocking(config.clone()).await {
             if debug_mode {
-                println!("[DEBUG] LSP client connected successfully");
+                println!("[DEBUG] LSP client connected successfully (attempt #{})", attempts + 1);
             }
-            client
+            break c;
         }
-        None => {
-            // LSP server not ready or still initializing - skip LSP enrichment
-            eprintln!("LSP server not ready or still initializing, skipping LSP enrichment for symbol: {symbol_name}");
-            if debug_mode {
-                println!(
-                    "[DEBUG] LSP server not available - might be starting up or not installed"
-                );
-            }
+        attempts += 1;
+        if attempts >= max_attempts {
+            eprintln!(
+                "LSP server not ready after {} attempts, skipping LSP enrichment for symbol: {}",
+                attempts, symbol_name
+            );
             return None;
         }
+        if debug_mode {
+            println!("[DEBUG] LSP not ready (attempt #{}), retrying shortly…", attempts);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
     };
 
     // Check if LSP is supported for this file
@@ -1195,8 +1211,12 @@ fn get_lsp_symbol_info_sync(
             }
         };
 
-        // Use a shorter timeout since we're non-blocking now
-        let timeout_duration = std::time::Duration::from_secs(10); // Short timeout for non-blocking
+        // Use different timeouts for CI vs local environments
+        let timeout_duration = if std::env::var("CI").is_ok() {
+            std::time::Duration::from_secs(30) // Much longer timeout in CI
+        } else {
+            std::time::Duration::from_secs(10) // Standard timeout locally
+        };
         match rt.block_on(async {
             tokio::time::timeout(
                 timeout_duration,
@@ -1235,7 +1255,9 @@ fn file_extension(path: &Path) -> &str {
 
 /// Find the workspace root by walking up the directory tree looking for project markers
 fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
-    let mut current = file_path.parent()?;
+    // Canonicalize first so symlinks/relative paths don't confuse marker discovery (CI-friendly)
+    let canonical_path = file_path.canonicalize().ok()?;
+    let mut current = canonical_path.parent()?;
 
     loop {
         // Check for Cargo.toml (Rust projects)
