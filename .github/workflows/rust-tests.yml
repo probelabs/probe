@@ -112,5 +112,5 @@ jobs:
           echo "=== Language Server Versions ==="
           gopls version || echo "gopls version failed"
           typescript-language-server --version || echo "typescript-language-server version failed"
-          echo "=== Starting LSP tests with debug output ==="
+          echo "=== Starting LSP comprehensive tests ==="
           DEBUG=1 cargo test --test lsp_comprehensive_tests -- --nocapture
