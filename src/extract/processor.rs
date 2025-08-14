@@ -374,7 +374,7 @@ pub fn process_file_for_extraction_with_lsp(
                 // Attempt to get LSP information for line-based extraction
                 let lsp_info = if enable_lsp {
                     if debug_mode {
-                        println!("[DEBUG] LSP enabled for line extraction, attempting to get info for line {}", line_num);
+                        println!("[DEBUG] LSP enabled for line extraction, attempting to get info for line {line_num}");
                     }
                     // Use the original line number requested by the user, not the merged boundaries
                     // This gives more precise LSP results for call hierarchy
@@ -449,7 +449,7 @@ pub fn process_file_for_extraction_with_lsp(
                 // Attempt to get LSP information for line-based extraction fallback
                 let lsp_info = if enable_lsp {
                     if debug_mode {
-                        println!("[DEBUG] LSP enabled for line fallback extraction, attempting to get info for line {}", line_num);
+                        println!("[DEBUG] LSP enabled for line fallback extraction, attempting to get info for line {line_num}");
                     }
                     // Ensure we use an absolute path for workspace detection
                     let abs_path = if path.is_absolute() {
@@ -746,7 +746,7 @@ async fn get_lsp_symbol_info(
 ) -> Option<serde_json::Value> {
     if debug_mode {
         println!("[DEBUG] Attempting to get LSP info for symbol: {symbol_name}");
-        println!("[DEBUG] File path for workspace detection: {:?}", file_path);
+        println!("[DEBUG] File path for workspace detection: {file_path:?}");
     }
 
     // Create non-blocking LSP client that doesn't wait for server to be ready
@@ -754,16 +754,14 @@ async fn get_lsp_symbol_info(
     let workspace_root_result = find_workspace_root(file_path);
     if debug_mode {
         println!(
-            "[DEBUG] find_workspace_root returned: {:?}",
-            workspace_root_result
+            "[DEBUG] find_workspace_root returned: {workspace_root_result:?}"
         );
     }
     let workspace_hint = workspace_root_result
         .map(|p| {
             if debug_mode {
                 println!(
-                    "[DEBUG] Found workspace root via find_workspace_root: {:?}",
-                    p
+                    "[DEBUG] Found workspace root via find_workspace_root: {p:?}"
                 );
             }
             p.to_string_lossy().to_string()
@@ -774,8 +772,7 @@ async fn get_lsp_symbol_info(
                 let cwd = std::env::current_dir().ok();
                 if debug_mode {
                     println!(
-                        "[DEBUG] Using current working directory fallback for Go file: {:?}",
-                        cwd
+                        "[DEBUG] Using current working directory fallback for Go file: {cwd:?}"
                     );
                 }
                 cwd.map(|p| p.to_string_lossy().to_string())

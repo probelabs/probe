@@ -31,7 +31,7 @@ impl Drop for LspClient {
         if let Some(mut stream) = self.stream.take() {
             // Try to send a disconnect message before closing
             // We use block_on here since Drop is not async
-            let _ = futures::executor::block_on(async {
+            futures::executor::block_on(async {
                 // Best effort - ignore errors since we're dropping anyway
                 let _ = stream.flush().await;
             });
