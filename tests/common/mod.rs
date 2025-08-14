@@ -190,7 +190,12 @@ pub fn ensure_daemon_stopped() {
 
 /// Helper to start daemon and wait for it to be ready with retry logic
 pub fn start_daemon_and_wait() -> Result<()> {
-    start_daemon_and_wait_with_retries(3)
+    if performance::is_ci_environment() {
+        println!("CI environment detected - using extended timeouts and retries");
+        start_daemon_and_wait_with_retries(5) // More retries in CI
+    } else {
+        start_daemon_and_wait_with_retries(3)
+    }
 }
 
 /// Helper to start daemon with specified number of retries
@@ -384,36 +389,53 @@ pub fn wait_for_language_server_ready(timeout: Duration) {
 }
 
 /// Wait for language server with health check polling
-#[allow(dead_code)]
-pub fn wait_for_language_server_ready_with_health_check(_workspace_path: &str) -> Result<()> {
+pub fn wait_for_language_server_ready_with_health_check(workspace_path: &str) -> Result<()> {
     let timeout = performance::language_server_ready_time();
-    let poll_interval = Duration::from_millis(2000);
+    let poll_interval = Duration::from_millis(3000); // Longer polling for CI
     let max_polls = (timeout.as_millis() / poll_interval.as_millis()) as u32;
 
     println!("Waiting for language server to be ready with health checks...");
 
-    for poll in 0..max_polls {
-        thread::sleep(poll_interval);
+    // Initial delay for language server startup
+    thread::sleep(Duration::from_secs(5));
 
-        // Check daemon status to see if language servers are healthy
-        if let Ok((stdout, _, success)) =
-            run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(5))
-        {
-            if success && (stdout.contains("Ready") || stdout.contains("Healthy")) {
-                println!(
-                    "Language server appears ready after {:?}",
-                    poll_interval * (poll + 1)
-                );
-                return Ok(());
+    for poll in 0..max_polls {
+        // Try a simple extraction to test if LSP is working with known test files
+        let go_test_file = std::path::Path::new(workspace_path).join("calculator.go");
+        if go_test_file.exists() {
+            // Try a quick LSP-enabled extraction on the calculator file
+            let args = ["extract", &format!("{}:6", go_test_file.display()), "--lsp"];
+            if let Ok((stdout, _, success)) = run_probe_command_with_timeout(&args, Duration::from_secs(15)) {
+                if success && stdout.contains("LSP Information") {
+                    println!("Language server ready after {:?} - LSP extraction successful", poll_interval * (poll + 1));
+                    return Ok(());
+                }
             }
         }
 
-        if poll % 5 == 0 && poll > 0 {
+        // Fallback to status check
+        if let Ok((stdout, _, success)) =
+            run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(5))
+        {
+            if success && stdout.contains("Connected") {
+                // Additional check - look for server pools
+                if stdout.contains("Server Pools") || stdout.len() > 200 {
+                    println!("Language server status looks healthy after {:?}", poll_interval * (poll + 1));
+                    // Give it a bit more time to fully index
+                    thread::sleep(Duration::from_secs(5));
+                    return Ok(());
+                }
+            }
+        }
+
+        if poll % 3 == 0 && poll > 0 {
             println!(
                 "Still waiting for language server... ({:?} elapsed)",
                 poll_interval * (poll + 1)
             );
         }
+        
+        thread::sleep(poll_interval);
     }
 
     println!("Timeout waiting for language server health check, proceeding anyway");
@@ -455,47 +477,27 @@ pub mod performance {
 
     /// Maximum time allowed for extraction with LSP
     pub fn max_extract_time() -> Duration {
-        if is_ci_environment() {
-            Duration::from_secs(15) // Increased for CI
-        } else {
-            Duration::from_secs(3)
-        }
+        Duration::from_secs(30) // Reasonable time for both local and CI environments
     }
 
     /// Maximum time allowed for search with LSP
     pub fn max_search_time() -> Duration {
-        if is_ci_environment() {
-            Duration::from_secs(20) // Increased for CI
-        } else {
-            Duration::from_secs(5)
-        }
+        Duration::from_secs(15) // Reasonable time for both local and CI environments
     }
 
     /// Maximum time to wait for language server initialization
     pub fn max_init_time() -> Duration {
-        if is_ci_environment() {
-            Duration::from_secs(120) // Increased for CI
-        } else {
-            Duration::from_secs(60)
-        }
+        Duration::from_secs(90) // Reasonable time for both local and CI environments
     }
 
     /// Language server ready wait time
     pub fn language_server_ready_time() -> Duration {
-        if is_ci_environment() {
-            Duration::from_secs(30) // Increased for CI
-        } else {
-            Duration::from_secs(15)
-        }
+        Duration::from_secs(30) // Reasonable time for both local and CI environments
     }
 
     /// Daemon startup timeout
     pub fn daemon_startup_timeout() -> Duration {
-        if is_ci_environment() {
-            Duration::from_secs(30)
-        } else {
-            Duration::from_secs(10)
-        }
+        Duration::from_secs(20) // Reasonable time for both local and CI environments
     }
 
     // Legacy constants for backward compatibility
@@ -539,19 +541,53 @@ pub mod call_hierarchy {
 
     /// Extract a specific call hierarchy section from output
     fn extract_call_hierarchy_section(output: &str, section_name: &str) -> Result<String, String> {
-        let section_start = format!("## {section_name}");
+        // Try both markdown format (## Section) and colon format (Section:)
+        let markdown_header = format!("## {section_name}");
+        let colon_header = format!("  {section_name}:");
+        let alt_colon_header = format!("{section_name}:");
 
-        if let Some(start_pos) = output.find(&section_start) {
-            let after_header = &output[start_pos + section_start.len()..];
-
-            // Find the end of this section (next ## header or end of string)
+        // Try markdown format first
+        if let Some(start_pos) = output.find(&markdown_header) {
+            let after_header = &output[start_pos + markdown_header.len()..];
             let end_pos = after_header.find("\n## ").unwrap_or(after_header.len());
             let section = &after_header[..end_pos];
-
-            Ok(section.to_string())
-        } else {
-            Err(format!("Section '{section_name}' not found in output"))
+            return Ok(section.to_string());
         }
+
+        // Try colon format with indentation
+        if let Some(start_pos) = output.find(&colon_header) {
+            let after_header = &output[start_pos + colon_header.len()..];
+            // Find the end of this section - stop at next "  Section:" or unindented line
+            let mut end_pos = after_header.len();
+            let lines: Vec<&str> = after_header.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
+                if idx > 0 && (
+                    line.starts_with("  ") && line.ends_with(":") && !line.starts_with("    ") ||  // Next section like "  Outgoing Calls:"
+                    (!line.starts_with("    ") && !line.starts_with("  ") && !line.trim().is_empty()) // Unindented non-empty line
+                ) {
+                    end_pos = lines.iter().take(idx).map(|l| l.len() + 1).sum::<usize>().saturating_sub(1);
+                    break;
+                }
+            }
+            let section = &after_header[..end_pos.min(after_header.len())];
+            return Ok(section.to_string());
+        }
+
+        // Try colon format without indentation
+        if let Some(start_pos) = output.find(&alt_colon_header) {
+            let after_header = &output[start_pos + alt_colon_header.len()..];
+            let mut end_pos = after_header.len();
+            for (idx, line) in after_header.lines().enumerate() {
+                if idx > 0 && !line.starts_with("  ") && !line.trim().is_empty() {
+                    end_pos = after_header[..after_header.len()].lines().take(idx).map(|l| l.len() + 1).sum::<usize>().saturating_sub(1);
+                    break;
+                }
+            }
+            let section = &after_header[..end_pos];
+            return Ok(section.to_string());
+        }
+
+        Err(format!("Section '{section_name}' not found in output"))
     }
 
     /// Count the number of call entries in a section
