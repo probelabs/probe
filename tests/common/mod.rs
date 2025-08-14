@@ -26,7 +26,9 @@ impl LanguageServer {
     pub fn display_name(&self) -> &'static str {
         match self {
             LanguageServer::Gopls => "gopls (Go language server)",
-            LanguageServer::TypeScriptLanguageServer => "typescript-language-server (TypeScript/JavaScript language server)",
+            LanguageServer::TypeScriptLanguageServer => {
+                "typescript-language-server (TypeScript/JavaScript language server)"
+            }
         }
     }
 
@@ -34,7 +36,9 @@ impl LanguageServer {
     pub fn installation_instructions(&self) -> &'static str {
         match self {
             LanguageServer::Gopls => "Install with: go install golang.org/x/tools/gopls@latest",
-            LanguageServer::TypeScriptLanguageServer => "Install with: npm install -g typescript-language-server typescript",
+            LanguageServer::TypeScriptLanguageServer => {
+                "Install with: npm install -g typescript-language-server typescript"
+            }
         }
     }
 }
@@ -56,8 +60,9 @@ pub fn require_all_language_servers() -> Result<()> {
     }
 
     if !missing_servers.is_empty() {
-        let mut error_msg = String::from("CRITICAL: Missing required language servers for CI tests:\n\n");
-        
+        let mut error_msg =
+            String::from("CRITICAL: Missing required language servers for CI tests:\n\n");
+
         for server in missing_servers {
             error_msg.push_str(&format!(
                 "❌ {} is not available\n   {}\n   Ensure it's in PATH: {}\n\n",
@@ -66,7 +71,7 @@ pub fn require_all_language_servers() -> Result<()> {
                 server.command_name()
             ));
         }
-        
+
         error_msg.push_str("ALL language servers are required for comprehensive LSP tests.\n");
         error_msg.push_str("This test suite does NOT skip missing dependencies.\n");
         error_msg.push_str("Install all required language servers and ensure they are in PATH.");
@@ -86,24 +91,20 @@ pub fn is_language_server_available(server: LanguageServer) -> bool {
 
     // Additional validation: try to get version to ensure it's functional
     match server {
-        LanguageServer::Gopls => {
-            Command::new("gopls")
-                .arg("version")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|status| status.success())
-                .unwrap_or(false)
-        }
-        LanguageServer::TypeScriptLanguageServer => {
-            Command::new("typescript-language-server")
-                .arg("--version")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|status| status.success())
-                .unwrap_or(false)
-        }
+        LanguageServer::Gopls => Command::new("gopls")
+            .arg("version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false),
+        LanguageServer::TypeScriptLanguageServer => Command::new("typescript-language-server")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false),
     }
 }
 
@@ -115,12 +116,12 @@ fn is_command_in_path(command: &str) -> bool {
         .any(|path| {
             let mut cmd_path = std::path::PathBuf::from(path);
             cmd_path.push(command);
-            
+
             // On Windows, try with .exe extension too
             if cfg!(windows) {
                 cmd_path.set_extension("exe");
             }
-            
+
             cmd_path.exists() && cmd_path.is_file()
         })
 }
@@ -131,9 +132,12 @@ pub fn run_probe_command(args: &[&str]) -> Result<(String, String, bool)> {
 }
 
 /// Helper to run probe commands with custom timeout
-pub fn run_probe_command_with_timeout(args: &[&str], timeout: Duration) -> Result<(String, String, bool)> {
+pub fn run_probe_command_with_timeout(
+    args: &[&str],
+    timeout: Duration,
+) -> Result<(String, String, bool)> {
     let start = Instant::now();
-    
+
     let output = Command::new("./target/debug/probe")
         .args(args)
         .stdout(Stdio::piped())
@@ -197,7 +201,9 @@ pub fn start_daemon_and_wait() -> Result<()> {
         }
 
         if attempt >= 19 {
-            return Err(anyhow::anyhow!("Daemon failed to start within timeout (10 seconds)"));
+            return Err(anyhow::anyhow!(
+                "Daemon failed to start within timeout (10 seconds)"
+            ));
         }
     }
 
@@ -270,14 +276,14 @@ pub mod call_hierarchy {
     pub fn validate_incoming_calls(output: &str, expected_count: usize) -> Result<(), String> {
         let incoming_section = extract_call_hierarchy_section(output, "Incoming Calls")?;
         let actual_count = count_call_entries(&incoming_section);
-        
+
         if actual_count != expected_count {
             return Err(format!(
                 "Expected {} incoming calls, found {}. Section content: {}",
                 expected_count, actual_count, incoming_section
             ));
         }
-        
+
         Ok(())
     }
 
@@ -285,28 +291,28 @@ pub mod call_hierarchy {
     pub fn validate_outgoing_calls(output: &str, expected_count: usize) -> Result<(), String> {
         let outgoing_section = extract_call_hierarchy_section(output, "Outgoing Calls")?;
         let actual_count = count_call_entries(&outgoing_section);
-        
+
         if actual_count != expected_count {
             return Err(format!(
                 "Expected {} outgoing calls, found {}. Section content: {}",
                 expected_count, actual_count, outgoing_section
             ));
         }
-        
+
         Ok(())
     }
 
     /// Extract a specific call hierarchy section from output
     fn extract_call_hierarchy_section(output: &str, section_name: &str) -> Result<String, String> {
         let section_start = format!("## {}", section_name);
-        
+
         if let Some(start_pos) = output.find(&section_start) {
             let after_header = &output[start_pos + section_start.len()..];
-            
+
             // Find the end of this section (next ## header or end of string)
             let end_pos = after_header.find("\n## ").unwrap_or(after_header.len());
             let section = &after_header[..end_pos];
-            
+
             Ok(section.to_string())
         } else {
             Err(format!("Section '{}' not found in output", section_name))
@@ -333,7 +339,10 @@ mod tests {
     #[test]
     fn test_language_server_enum() {
         assert_eq!(LanguageServer::Gopls.command_name(), "gopls");
-        assert_eq!(LanguageServer::TypeScriptLanguageServer.command_name(), "typescript-language-server");
+        assert_eq!(
+            LanguageServer::TypeScriptLanguageServer.command_name(),
+            "typescript-language-server"
+        );
     }
 
     #[test]
@@ -351,7 +360,7 @@ mod tests {
 
         assert!(call_hierarchy::validate_incoming_calls(mock_output, 2).is_ok());
         assert!(call_hierarchy::validate_outgoing_calls(mock_output, 3).is_ok());
-        
+
         // Test failure cases
         assert!(call_hierarchy::validate_incoming_calls(mock_output, 3).is_err());
         assert!(call_hierarchy::validate_outgoing_calls(mock_output, 2).is_err());
