@@ -950,7 +950,13 @@ mod tests {
         // Verify the path was resolved correctly
         assert!(workspace_root.is_absolute());
         assert!(workspace_root.exists());
-        assert_eq!(workspace_root, test_subdir.canonicalize().unwrap());
+        
+        // On Windows, canonicalization might produce different but equivalent paths
+        // (e.g., UNC paths, different drive letter casing, etc.)
+        // So we check that both paths canonicalize to the same result
+        let expected_canonical = test_subdir.canonicalize().unwrap();
+        let actual_canonical = workspace_root.canonicalize().unwrap();
+        assert_eq!(actual_canonical, expected_canonical);
     }
 
     #[test]
