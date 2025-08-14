@@ -753,16 +753,12 @@ async fn get_lsp_symbol_info(
     // Find the actual workspace root by looking for project markers
     let workspace_root_result = find_workspace_root(file_path);
     if debug_mode {
-        println!(
-            "[DEBUG] find_workspace_root returned: {workspace_root_result:?}"
-        );
+        println!("[DEBUG] find_workspace_root returned: {workspace_root_result:?}");
     }
     let workspace_hint = workspace_root_result
         .map(|p| {
             if debug_mode {
-                println!(
-                    "[DEBUG] Found workspace root via find_workspace_root: {p:?}"
-                );
+                println!("[DEBUG] Found workspace root via find_workspace_root: {p:?}");
             }
             p.to_string_lossy().to_string()
         })

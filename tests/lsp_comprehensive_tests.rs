@@ -68,10 +68,7 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
     cleanup_comprehensive_tests();
 
     // Validate the command succeeded
-    assert!(
-        success,
-        "Extract command should succeed. Stderr: {stderr}"
-    );
+    assert!(success, "Extract command should succeed. Stderr: {stderr}");
 
     // Validate performance requirement
     assert!(
@@ -143,10 +140,7 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
     cleanup_comprehensive_tests();
 
     // Validate the command succeeded
-    assert!(
-        success,
-        "Extract command should succeed. Stderr: {stderr}"
-    );
+    assert!(success, "Extract command should succeed. Stderr: {stderr}");
 
     // Validate performance requirement
     assert!(
@@ -218,10 +212,7 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
     cleanup_comprehensive_tests();
 
     // Validate the command succeeded
-    assert!(
-        success,
-        "Extract command should succeed. Stderr: {stderr}"
-    );
+    assert!(success, "Extract command should succeed. Stderr: {stderr}");
 
     // Validate performance requirement
     assert!(
@@ -608,9 +599,7 @@ fn test_lsp_performance_benchmark() -> Result<()> {
 
     // Performance expectations (not strict failures, but good to monitor)
     if avg_time > Duration::from_secs(2) {
-        eprintln!(
-            "Warning: Average LSP extraction time ({avg_time:?}) is slower than expected"
-        );
+        eprintln!("Warning: Average LSP extraction time ({avg_time:?}) is slower than expected");
     }
 
     // All individual timings should be reasonable
