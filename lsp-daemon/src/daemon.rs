@@ -59,6 +59,8 @@ pub struct LspDaemon {
     watchdog_enabled: Arc<AtomicBool>,
     watchdog_task: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     process_monitor: Arc<ProcessMonitor>,
+    child_first_seen: Arc<DashMap<u32, Instant>>,
+    index_grace_secs: u64,
 }
 
 impl LspDaemon {
@@ -114,6 +116,12 @@ impl LspDaemon {
         // Watchdog is disabled by default (can be enabled via --watchdog flag in lsp init)
         let process_monitor = Arc::new(ProcessMonitor::with_limits(80.0, 1024)); // 80% CPU, 1GB memory
 
+        // Initialize indexing grace period from environment variable
+        let index_grace_secs = std::env::var("LSP_INDEX_GRACE_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30); // Default 30 seconds for language server indexing
+
         Ok(Self {
             socket_path,
             registry,
@@ -139,6 +147,8 @@ impl LspDaemon {
             watchdog_enabled: Arc::new(AtomicBool::new(false)),
             watchdog_task: Arc::new(tokio::sync::Mutex::new(None)),
             process_monitor,
+            child_first_seen: Arc::new(DashMap::new()),
+            index_grace_secs,
         })
     }
 
@@ -215,9 +225,11 @@ impl LspDaemon {
         let _health_monitor_task = self.server_manager.start_health_monitoring();
         info!("Started health monitoring for LSP servers");
 
-        // Start process monitoring task
+        // Start process monitoring task with grace period for indexing
         let process_monitor = self.process_monitor.clone();
         let child_processes_for_monitoring = self.child_processes.clone();
+        let child_first_seen = self.child_first_seen.clone();
+        let index_grace_secs = self.index_grace_secs;
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30)); // Check every 30 seconds
             loop {
@@ -230,27 +242,66 @@ impl LspDaemon {
 
                 if !pids.is_empty() {
                     debug!("Monitoring {} child processes", pids.len());
-                    let unhealthy_pids = process_monitor.monitor_children(pids).await;
-
-                    if !unhealthy_pids.is_empty() {
-                        warn!(
-                            "Found {} unhealthy child processes: {:?}",
-                            unhealthy_pids.len(),
-                            unhealthy_pids
-                        );
-
-                        // Kill unhealthy processes
-                        #[cfg(unix)]
-                        for pid in unhealthy_pids {
-                            unsafe {
-                                if libc::kill(pid as i32, libc::SIGTERM) == 0 {
-                                    warn!("Sent SIGTERM to unhealthy process {}", pid);
+                    let now = Instant::now();
+                    
+                    // Track first seen time for new processes
+                    for &pid in &pids {
+                        child_first_seen.entry(pid).or_insert(now);
+                    }
+                    
+                    // Only monitor processes that are past the grace period
+                    let pids_to_monitor: Vec<u32> = pids
+                        .into_iter()
+                        .filter(|&pid| {
+                            if let Some(first_seen) = child_first_seen.get(&pid) {
+                                let age = now.duration_since(*first_seen);
+                                if age < Duration::from_secs(index_grace_secs) {
+                                    debug!(
+                                        "Process {} is in grace period (age: {:?}, grace: {}s)",
+                                        pid, age, index_grace_secs
+                                    );
+                                    false
                                 } else {
-                                    warn!("Failed to send SIGTERM to process {}", pid);
+                                    true
+                                }
+                            } else {
+                                // Should not happen since we just inserted it, but be safe
+                                true
+                            }
+                        })
+                        .collect();
+                    
+                    if !pids_to_monitor.is_empty() {
+                        let unhealthy_pids = process_monitor.monitor_children(pids_to_monitor).await;
+
+                        if !unhealthy_pids.is_empty() {
+                            warn!(
+                                "Found {} unhealthy child processes (past grace period): {:?}",
+                                unhealthy_pids.len(),
+                                unhealthy_pids
+                            );
+
+                            // Kill unhealthy processes and remove from tracking
+                            #[cfg(unix)]
+                            for pid in &unhealthy_pids {
+                                child_first_seen.remove(pid);
+                                unsafe {
+                                    if libc::kill(*pid as i32, libc::SIGTERM) == 0 {
+                                        warn!("Sent SIGTERM to unhealthy process {}", pid);
+                                    } else {
+                                        warn!("Failed to send SIGTERM to process {}", pid);
+                                    }
                                 }
                             }
                         }
                     }
+                    
+                    // Clean up tracking for processes that no longer exist
+                    let current_pids: std::collections::HashSet<u32> = {
+                        let guard = child_processes_for_monitoring.lock().await;
+                        guard.iter().copied().collect()
+                    };
+                    child_first_seen.retain(|&pid, _| current_pids.contains(&pid));
                 }
             }
         });
@@ -920,12 +971,32 @@ impl LspDaemon {
             .open_document(&absolute_file_path, &content)
             .await?;
 
-        // Give rust-analyzer a brief moment to process the document
-        // Reduced from 10+2 seconds to 2 seconds since we have retry logic
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        // Adaptive timing for Go/TypeScript in CI environments
+        let is_ci = std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok();
+        let (initial_wait, max_attempts, retry_delay) = match language {
+            Language::Go | Language::TypeScript | Language::JavaScript if is_ci => {
+                // Go and TypeScript need more time in CI for indexing
+                (15, 5, 5) // 15s initial wait, 5 attempts, 5s between attempts
+            }
+            Language::Go | Language::TypeScript | Language::JavaScript => {
+                // Local development - faster but still accommodating
+                (5, 3, 3) // 5s initial wait, 3 attempts, 3s between attempts
+            }
+            _ => {
+                // Rust and other languages - works well with shorter waits
+                (2, 3, 2) // 2s initial wait, 3 attempts, 2s between attempts
+            }
+        };
 
-        // Try call hierarchy with retry logic - allow multiple attempts with shorter wait
-        let max_attempts = 3; // Multiple attempts to handle cases where rust-analyzer needs more time
+        debug!(
+            "Using adaptive timing for {:?}: initial_wait={}s, max_attempts={}, retry_delay={}s (CI={})",
+            language, initial_wait, max_attempts, retry_delay, is_ci
+        );
+
+        // Give language server time to process and index
+        tokio::time::sleep(tokio::time::Duration::from_secs(initial_wait)).await;
+
+        // Try call hierarchy with adaptive retry logic
         let mut attempt = 1;
         let mut result = None;
 
@@ -974,8 +1045,8 @@ impl LspDaemon {
 
             attempt += 1;
             if attempt <= max_attempts {
-                // Shorter wait between attempts - 2 seconds instead of 5
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                // Adaptive retry delay
+                tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay)).await;
             }
         }
 
@@ -1320,6 +1391,8 @@ impl LspDaemon {
             watchdog_enabled: self.watchdog_enabled.clone(),
             watchdog_task: self.watchdog_task.clone(),
             process_monitor: self.process_monitor.clone(),
+            child_first_seen: self.child_first_seen.clone(),
+            index_grace_secs: self.index_grace_secs,
         }
     }
 }
