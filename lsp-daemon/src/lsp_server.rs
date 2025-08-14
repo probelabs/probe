@@ -69,14 +69,11 @@ impl LspServer {
         child_opt.as_ref().and_then(|child| child.id())
     }
 
-    pub fn spawn_with_workspace(
-        config: &LspServerConfig,
-        workspace_root: &Path,
-    ) -> Result<Self> {
+    pub fn spawn_with_workspace(config: &LspServerConfig, workspace_root: &Path) -> Result<Self> {
         // For gopls, use the Go module root if we can find it
         let effective_root = if config.language == crate::language_detector::Language::Go {
-            let module_root =
-                Self::find_go_module_root(workspace_root).unwrap_or_else(|| workspace_root.to_path_buf());
+            let module_root = Self::find_go_module_root(workspace_root)
+                .unwrap_or_else(|| workspace_root.to_path_buf());
 
             // For gopls, we'll run go mod operations after initialization
             // since we can't use async here
@@ -1311,13 +1308,15 @@ impl LspServer {
                                     json!({"query": "func"}),
                                     symbol_id,
                                 )
-                                .await).is_err()
+                                .await)
+                                .is_err()
                             {
                                 debug!("Workspace symbol request failed during recovery");
                             }
 
                             // Try gopls-specific commands if available - use correct commands for v0.17.0
-                            if (self.execute_command("gopls.workspace_stats", vec![]).await).is_err()
+                            if (self.execute_command("gopls.workspace_stats", vec![]).await)
+                                .is_err()
                             {
                                 debug!("Workspace stats command failed or not available");
                             }
