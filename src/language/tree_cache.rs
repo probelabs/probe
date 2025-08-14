@@ -89,7 +89,7 @@ pub fn get_or_parse_tree(
                 }
 
                 if debug_mode {
-                    println!("[DEBUG] Cache hit for file: {file_path}");
+                    eprintln!("[DEBUG] Cache hit for file: {file_path}");
                 }
                 // PHASE 4 OPTIMIZATION: Now update LRU order with get
                 let (cached_tree, _) = cache.get(file_path).unwrap();
@@ -99,11 +99,11 @@ pub fn get_or_parse_tree(
                 // PHASE 4 OPTIMIZATION: LRU cache uses pop instead of remove
                 cache.pop(file_path);
                 if debug_mode {
-                    println!("[DEBUG] Cache invalidated for file: {file_path} (content changed)");
+                    eprintln!("[DEBUG] Cache invalidated for file: {file_path} (content changed)");
                 }
             }
         } else if debug_mode {
-            println!("[DEBUG] Cache miss for file: {file_path}");
+            eprintln!("[DEBUG] Cache miss for file: {file_path}");
         }
     }
 
@@ -121,8 +121,8 @@ pub fn get_or_parse_tree(
         cache.put(file_path.to_string(), (tree.clone(), content_hash));
 
         if debug_mode {
-            println!("[DEBUG] Cached parsed tree for file: {file_path}");
-            println!("[DEBUG] Current cache size: {} entries", cache.len());
+            eprintln!("[DEBUG] Cached parsed tree for file: {file_path}");
+            eprintln!("[DEBUG] Current cache size: {} entries", cache.len());
         }
     }
 
@@ -170,7 +170,7 @@ pub fn get_or_parse_tree_pooled(file_path: &str, content: &str, extension: &str)
                 }
 
                 if debug_mode {
-                    println!("[DEBUG] Tree cache hit for file: {file_path}");
+                    eprintln!("[DEBUG] Tree cache hit for file: {file_path}");
                 }
                 // PHASE 4 OPTIMIZATION: Now update LRU order with get
                 let (cached_tree, _) = cache.get(file_path).unwrap();
@@ -186,7 +186,7 @@ pub fn get_or_parse_tree_pooled(file_path: &str, content: &str, extension: &str)
                 }
             }
         } else if debug_mode {
-            println!("[DEBUG] Tree cache miss for file: {file_path}");
+            eprintln!("[DEBUG] Tree cache miss for file: {file_path}");
         }
     }
 
@@ -211,8 +211,8 @@ pub fn get_or_parse_tree_pooled(file_path: &str, content: &str, extension: &str)
         cache.put(file_path.to_string(), (tree.clone(), content_hash));
 
         if debug_mode {
-            println!("[DEBUG] Cached parsed tree for file: {file_path}");
-            println!("[DEBUG] Current tree cache size: {} entries", cache.len());
+            eprintln!("[DEBUG] Cached parsed tree for file: {file_path}");
+            eprintln!("[DEBUG] Current tree cache size: {} entries", cache.len());
         }
     }
 
@@ -230,7 +230,7 @@ pub fn clear_tree_cache() {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("[DEBUG] Clearing tree cache ({} entries)", cache.len());
+        eprintln!("[DEBUG] Clearing tree cache ({} entries)", cache.len());
     }
 
     cache.clear();
@@ -255,7 +255,7 @@ pub fn invalidate_cache_entry(file_path: &str) {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if cache.pop(file_path).is_some() && debug_mode {
-        println!("[DEBUG] Removed file from cache: {file_path}");
+        eprintln!("[DEBUG] Removed file from cache: {file_path}");
     }
 }
 
