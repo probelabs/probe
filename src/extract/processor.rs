@@ -881,7 +881,8 @@ async fn get_lsp_symbol_info(
         if debug_mode {
             println!("[DEBUG] LSP not ready (attempt #{attempts}), retrying shortly…");
         }
-        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        // Shorter delay to avoid breaking non-blocking test expectations
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     };
 
     // Check if LSP is supported for this file
