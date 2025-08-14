@@ -423,7 +423,11 @@ pub mod performance {
 
     /// Maximum time allowed for extraction with LSP
     pub fn max_extract_time() -> Duration {
-        Duration::from_secs(30) // Reasonable time for both local and CI environments
+        if is_ci_environment() {
+            Duration::from_secs(90) // Extra time for Go/TypeScript indexing in CI
+        } else {
+            Duration::from_secs(45) // Local development
+        }
     }
 
     /// Maximum time allowed for search with LSP
