@@ -72,40 +72,45 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     use arboard::Clipboard;
     use colored::*;
 
+    // Print version at the start for text-based formats
+    if options.format != "json" && options.format != "xml" {
+        println!("Probe version: {}", crate::version::get_version());
+    }
+
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("\n[DEBUG] ===== Extract Command Started =====");
-        println!("[DEBUG] Files to process: {files:?}", files = options.files);
-        println!(
+        eprintln!("\n[DEBUG] ===== Extract Command Started =====");
+        eprintln!("[DEBUG] Files to process: {files:?}", files = options.files);
+        eprintln!(
             "[DEBUG] Custom ignores: {custom_ignores:?}",
             custom_ignores = options.custom_ignores
         );
-        println!(
+        eprintln!(
             "[DEBUG] Context lines: {context_lines}",
             context_lines = options.context_lines
         );
-        println!("[DEBUG] Output format: {format}", format = options.format);
-        println!(
+        eprintln!("[DEBUG] Output format: {format}", format = options.format);
+        eprintln!(
             "[DEBUG] Read from clipboard: {from_clipboard}",
             from_clipboard = options.from_clipboard
         );
-        println!(
+        eprintln!(
             "[DEBUG] Write to clipboard: {to_clipboard}",
             to_clipboard = options.to_clipboard
         );
-        println!("[DEBUG] Dry run: {dry_run}", dry_run = options.dry_run);
-        println!("[DEBUG] Parse as git diff: {diff}", diff = options.diff);
-        println!(
+        eprintln!("[DEBUG] Dry run: {dry_run}", dry_run = options.dry_run);
+        eprintln!("[DEBUG] Parse as git diff: {diff}", diff = options.diff);
+        eprintln!(
             "[DEBUG] Allow tests: {allow_tests}",
             allow_tests = options.allow_tests
         );
-        println!(
+        eprintln!(
             "[DEBUG] Prompt template: {prompt:?}",
             prompt = options.prompt
         );
-        println!(
+        eprintln!(
             "[DEBUG] Instructions: {instructions:?}",
             instructions = options.instructions
         );
@@ -121,7 +126,9 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
     if options.from_clipboard {
         // Read from clipboard
-        println!("{}", "Reading from clipboard...".bold().blue());
+        if options.format != "json" && options.format != "xml" {
+            println!("{}", "Reading from clipboard...".bold().blue());
+        }
         let mut clipboard = Clipboard::new()?;
         let buffer = clipboard.get_text()?;
 
@@ -129,7 +136,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         if options.keep_input {
             original_input = Some(buffer.clone());
             if debug_mode {
-                println!(
+                eprintln!(
                     "[DEBUG] Stored original clipboard input: {} bytes",
                     original_input.as_ref().map_or(0, |s| s.len())
                 );
@@ -137,7 +144,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         }
 
         if debug_mode {
-            println!(
+            eprintln!(
                 "[DEBUG] Reading from clipboard, content length: {} bytes",
                 buffer.len()
             );
@@ -149,7 +156,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         if is_diff_format {
             // Parse as git diff format
             if debug_mode {
-                println!("[DEBUG] Parsing clipboard content as git diff format");
+                eprintln!("[DEBUG] Parsing clipboard content as git diff format");
             }
             file_paths = extract_file_paths_from_git_diff(&buffer, options.allow_tests);
         } else {
@@ -158,12 +165,12 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         }
 
         if debug_mode {
-            println!(
+            eprintln!(
                 "[DEBUG] Extracted {} file paths from clipboard",
                 file_paths.len()
             );
             for (path, start, end, symbol, lines) in &file_paths {
-                println!(
+                eprintln!(
                     "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?}, specific lines: {:?})",
                     path,
                     start,
@@ -175,17 +182,21 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         }
 
         if file_paths.is_empty() {
-            println!("{}", "No file paths found in clipboard.".yellow().bold());
+            if options.format != "json" && options.format != "xml" {
+                println!("{}", "No file paths found in clipboard.".yellow().bold());
+            }
             return Ok(());
         }
     } else if let Some(input_file_path) = &options.input_file {
         // Read from input file
-        println!(
-            "{}",
-            format!("Reading from file: {input_file_path}...")
-                .bold()
-                .blue()
-        );
+        if options.format != "json" && options.format != "xml" {
+            println!(
+                "{}",
+                format!("Reading from file: {input_file_path}...")
+                    .bold()
+                    .blue()
+            );
+        }
 
         // Check if the file exists
         let input_path = std::path::Path::new(input_file_path);
@@ -203,7 +214,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         if options.keep_input {
             original_input = Some(buffer.clone());
             if debug_mode {
-                println!(
+                eprintln!(
                     "[DEBUG] Stored original file input: {} bytes",
                     original_input.as_ref().map_or(0, |s| s.len())
                 );
@@ -211,7 +222,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         }
 
         if debug_mode {
-            println!(
+            eprintln!(
                 "[DEBUG] Reading from file, content length: {} bytes",
                 buffer.len()
             );
@@ -223,7 +234,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         if is_diff_format {
             // Parse as git diff format
             if debug_mode {
-                println!("[DEBUG] Parsing file content as git diff format");
+                eprintln!("[DEBUG] Parsing file content as git diff format");
             }
             file_paths = extract_file_paths_from_git_diff(&buffer, options.allow_tests);
         } else {
@@ -232,12 +243,12 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         }
 
         if debug_mode {
-            println!(
+            eprintln!(
                 "[DEBUG] Extracted {} file paths from input file",
                 file_paths.len()
             );
             for (path, start, end, symbol, lines) in &file_paths {
-                println!(
+                eprintln!(
                     "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?}, specific lines: {:?})",
                     path,
                     start,
@@ -249,12 +260,14 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         }
 
         if file_paths.is_empty() {
-            println!(
-                "{}",
-                format!("No file paths found in input file: {input_file_path}")
-                    .yellow()
-                    .bold()
-            );
+            if options.format != "json" && options.format != "xml" {
+                println!(
+                    "{}",
+                    format!("No file paths found in input file: {input_file_path}")
+                        .yellow()
+                        .bold()
+                );
+            }
             return Ok(());
         }
     } else if options.files.is_empty() {
@@ -263,7 +276,9 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
         if is_stdin_available {
             // Read from stdin
-            println!("{}", "Reading from stdin...".bold().blue());
+            if options.format != "json" && options.format != "xml" {
+                println!("{}", "Reading from stdin...".bold().blue());
+            }
             let mut buffer = String::new();
             std::io::stdin().read_to_string(&mut buffer)?;
 
@@ -271,7 +286,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             if options.keep_input {
                 original_input = Some(buffer.clone());
                 if debug_mode {
-                    println!(
+                    eprintln!(
                         "[DEBUG] Stored original stdin input: {} bytes",
                         original_input.as_ref().map_or(0, |s| s.len())
                     );
@@ -279,7 +294,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             }
 
             if debug_mode {
-                println!(
+                eprintln!(
                     "[DEBUG] Reading from stdin, content length: {} bytes",
                     buffer.len()
                 );
@@ -291,7 +306,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             if is_diff_format {
                 // Parse as git diff format
                 if debug_mode {
-                    println!("[DEBUG] Parsing stdin content as git diff format");
+                    eprintln!("[DEBUG] Parsing stdin content as git diff format");
                 }
                 file_paths = extract_file_paths_from_git_diff(&buffer, options.allow_tests);
             } else {
@@ -300,23 +315,25 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             }
         } else {
             // No arguments and no stdin, show help
-            println!(
-                "{}",
-                "No files specified and no stdin input detected."
-                    .yellow()
-                    .bold()
-            );
-            println!("{}", "Use --help for usage information.".blue());
+            if options.format != "json" && options.format != "xml" {
+                println!(
+                    "{}",
+                    "No files specified and no stdin input detected."
+                        .yellow()
+                        .bold()
+                );
+                println!("{}", "Use --help for usage information.".blue());
+            }
             return Ok(());
         }
 
         if debug_mode {
-            println!(
+            eprintln!(
                 "[DEBUG] Extracted {} file paths from stdin",
                 file_paths.len()
             );
             for (path, start, end, symbol, lines) in &file_paths {
-                println!(
+                eprintln!(
                     "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?}, specific lines: {:?})",
                     path,
                     start,
@@ -328,20 +345,22 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         }
 
         if file_paths.is_empty() {
-            println!("{}", "No file paths found in stdin.".yellow().bold());
+            if options.format != "json" && options.format != "xml" {
+                println!("{}", "No file paths found in stdin.".yellow().bold());
+            }
             return Ok(());
         }
     } else {
         // Parse command-line arguments
         if debug_mode {
-            println!("[DEBUG] Parsing command-line arguments");
+            eprintln!("[DEBUG] Parsing command-line arguments");
         }
 
         // Store the original input if keep_input is true
         if options.keep_input {
             original_input = Some(options.files.join(" "));
             if debug_mode {
-                println!(
+                eprintln!(
                     "[DEBUG] Stored original command-line input: {}",
                     original_input.as_ref().unwrap_or(&String::new())
                 );
@@ -350,19 +369,19 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
         for file in &options.files {
             if debug_mode {
-                println!("[DEBUG] Parsing file argument: {file}");
+                eprintln!("[DEBUG] Parsing file argument: {file}");
             }
 
             let paths = file_paths::parse_file_with_line(file, options.allow_tests);
 
             if debug_mode {
-                println!(
+                eprintln!(
                     "[DEBUG] Parsed {} paths from argument '{}'",
                     paths.len(),
                     file
                 );
                 for (path, start, end, symbol, lines) in &paths {
-                    println!(
+                    eprintln!(
                         "[DEBUG]   - {:?} (lines: {:?}-{:?}, symbol: {:?}, specific lines: {:?})",
                         path,
                         start,
@@ -429,7 +448,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     // Process prompt template and instructions if provided
     let system_prompt = if let Some(prompt_template) = &options.prompt {
         if debug_mode {
-            println!("[DEBUG] Processing prompt template: {prompt_template:?}");
+            eprintln!("[DEBUG] Processing prompt template: {prompt_template:?}");
         }
         match prompt_template.get_content() {
             Ok(content) => {
@@ -447,7 +466,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                     text = format!("Error loading prompt template: {e}").red()
                 );
                 if debug_mode {
-                    println!("[DEBUG] Error loading prompt template: {e}");
+                    eprintln!("[DEBUG] Error loading prompt template: {e}");
                 }
                 None
             }
@@ -511,24 +530,24 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     // Process files in parallel
     file_params.par_iter().for_each(|params| {
         if params.debug_mode {
-            println!("\n[DEBUG] Processing file: {:?}", params.path);
-            println!("[DEBUG] Start line: {:?}", params.start_line);
-            println!("[DEBUG] End line: {:?}", params.end_line);
-            println!("[DEBUG] Symbol: {:?}", params.symbol);
-            println!(
+            eprintln!("\n[DEBUG] Processing file: {:?}", params.path);
+            eprintln!("[DEBUG] Start line: {:?}", params.start_line);
+            eprintln!("[DEBUG] End line: {:?}", params.end_line);
+            eprintln!("[DEBUG] Symbol: {:?}", params.symbol);
+            eprintln!(
                 "[DEBUG] Specific lines: {:?}",
                 params.specific_lines.as_ref().map(|l| l.len())
             );
 
             // Check if file exists
             if params.path.exists() {
-                println!("[DEBUG] File exists: Yes");
+                eprintln!("[DEBUG] File exists: Yes");
 
                 // Get file extension and language
                 if let Some(ext) = params.path.extension().and_then(|e| e.to_str()) {
                     let language = formatter::get_language_from_extension(ext);
-                    println!("[DEBUG] File extension: {ext}");
-                    println!(
+                    eprintln!("[DEBUG] File extension: {ext}");
+                    eprintln!(
                         "[DEBUG] Detected language: {}",
                         if language.is_empty() {
                             "unknown"
@@ -537,17 +556,17 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                         }
                     );
                 } else {
-                    println!("[DEBUG] File has no extension");
+                    eprintln!("[DEBUG] File has no extension");
                 }
             } else {
-                println!("[DEBUG] File exists: No");
+                eprintln!("[DEBUG] File exists: No");
             }
         }
 
         // The allow_tests check is now handled in the file path extraction functions
         // We only need to check if this is a test file for debugging purposes
         if params.debug_mode && crate::language::is_test_file(&params.path) && !params.allow_tests {
-            println!("[DEBUG] Test file detected: {:?}", params.path);
+            eprintln!("[DEBUG] Test file detected: {:?}", params.path);
         }
 
         match processor::process_file_for_extraction_with_lsp(
@@ -562,11 +581,11 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         ) {
             Ok(result) => {
                 if params.debug_mode {
-                    println!("[DEBUG] Successfully extracted code from {:?}", params.path);
-                    println!("[DEBUG] Extracted lines: {:?}", result.lines);
-                    println!("[DEBUG] Node type: {}", result.node_type);
-                    println!("[DEBUG] Code length: {} bytes", result.code.len());
-                    println!(
+                    eprintln!("[DEBUG] Successfully extracted code from {:?}", params.path);
+                    eprintln!("[DEBUG] Extracted lines: {:?}", result.lines);
+                    eprintln!("[DEBUG] Node type: {}", result.node_type);
+                    eprintln!("[DEBUG] Code length: {} bytes", result.code.len());
+                    eprintln!(
                         "[DEBUG] Estimated tokens: {}",
                         crate::search::search_tokens::count_tokens(&result.code)
                     );
@@ -583,7 +602,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                     e = e
                 );
                 if params.debug_mode {
-                    println!("[DEBUG] Error: {error_msg}");
+                    eprintln!("[DEBUG] Error: {error_msg}");
                 }
                 // Only print error messages for non-JSON/XML formats
                 if params.format != "json" && params.format != "xml" {
@@ -608,7 +627,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
 
     // Deduplicate results based on file path and line range
     if debug_mode {
-        println!(
+        eprintln!(
             "[DEBUG] Before deduplication: {len} results",
             len = results.len()
         );
@@ -632,9 +651,9 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     });
 
     if debug_mode {
-        println!("[DEBUG] Sorted results by file path and range size");
+        eprintln!("[DEBUG] Sorted results by file path and range size");
         for (i, result) in results.iter().enumerate() {
-            println!(
+            eprintln!(
                 "[DEBUG] Result {}: {} (lines {}-{}, size: {})",
                 i,
                 result.file,
@@ -666,7 +685,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         if !seen_exact.insert(key) {
             to_retain[i] = false;
             if debug_mode {
-                println!("[DEBUG] Removing exact duplicate: {file_i} (lines {start_i}-{end_i})");
+                eprintln!("[DEBUG] Removing exact duplicate: {file_i} (lines {start_i}-{end_i})");
             }
             continue;
         }
@@ -691,7 +710,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             if start_j >= start_i && end_j <= end_i {
                 to_retain[j] = false;
                 if debug_mode {
-                    println!("[DEBUG] Removing nested duplicate: {file_j} (lines {start_j}-{end_j}) contained within (lines {start_i}-{end_i})");
+                    eprintln!("[DEBUG] Removing nested duplicate: {file_j} (lines {start_j}-{end_j}) contained within (lines {start_i}-{end_i})");
                 }
             }
         }
@@ -710,18 +729,18 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     results = new_results;
 
     if debug_mode {
-        println!(
+        eprintln!(
             "[DEBUG] After deduplication: {len} results",
             len = results.len()
         );
     }
 
     if debug_mode {
-        println!("\n[DEBUG] ===== Extraction Summary =====");
-        println!("[DEBUG] Total results: {}", results.len());
-        println!("[DEBUG] Total errors: {}", errors.len());
-        println!("[DEBUG] Output format: {}", options.format);
-        println!("[DEBUG] Dry run: {}", options.dry_run);
+        eprintln!("\n[DEBUG] ===== Extraction Summary =====");
+        eprintln!("[DEBUG] Total results: {}", results.len());
+        eprintln!("[DEBUG] Total errors: {}", errors.len());
+        eprintln!("[DEBUG] Output format: {}", options.format);
+        eprintln!("[DEBUG] Dry run: {}", options.dry_run);
     }
 
     // Format the results
@@ -786,7 +805,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 eprintln!("{}", format!("Error formatting results: {e}").red());
             }
             if debug_mode {
-                println!("[DEBUG] Error formatting results: {e}");
+                eprintln!("[DEBUG] Error formatting results: {e}");
             }
         }
     }
@@ -803,7 +822,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     }
 
     if debug_mode {
-        println!("[DEBUG] ===== Extract Command Completed =====");
+        eprintln!("[DEBUG] ===== Extract Command Completed =====");
     }
 
     Ok(())

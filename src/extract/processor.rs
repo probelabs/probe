@@ -64,21 +64,21 @@ pub fn process_file_for_extraction_with_lsp(
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("\n[DEBUG] ===== Processing File for Extraction =====");
-        println!("[DEBUG] File path: {path:?}");
-        println!("[DEBUG] Start line: {start_line:?}");
-        println!("[DEBUG] End line: {end_line:?}");
-        println!("[DEBUG] Symbol: {symbol:?}");
-        println!("[DEBUG] Allow tests: {allow_tests}");
-        println!("[DEBUG] Context lines: {context_lines}");
-        println!("[DEBUG] Specific lines: {specific_lines:?}");
-        println!("[DEBUG] LSP enabled: {enable_lsp}");
+        eprintln!("\n[DEBUG] ===== Processing File for Extraction =====");
+        eprintln!("[DEBUG] File path: {path:?}");
+        eprintln!("[DEBUG] Start line: {start_line:?}");
+        eprintln!("[DEBUG] End line: {end_line:?}");
+        eprintln!("[DEBUG] Symbol: {symbol:?}");
+        eprintln!("[DEBUG] Allow tests: {allow_tests}");
+        eprintln!("[DEBUG] Context lines: {context_lines}");
+        eprintln!("[DEBUG] Specific lines: {specific_lines:?}");
+        eprintln!("[DEBUG] LSP enabled: {enable_lsp}");
     }
 
     // Check if the file exists
     if !path.exists() {
         if debug_mode {
-            println!("[DEBUG] Error: File does not exist");
+            eprintln!("[DEBUG] Error: File does not exist");
         }
         return Err(anyhow::anyhow!("File does not exist: {:?}", path));
     }
@@ -88,15 +88,15 @@ pub fn process_file_for_extraction_with_lsp(
     let lines: Vec<&str> = content.lines().collect();
 
     if debug_mode {
-        println!("[DEBUG] File read successfully");
-        println!("[DEBUG] File size: {} bytes", content.len());
-        println!("[DEBUG] Line count: {}", lines.len());
+        eprintln!("[DEBUG] File read successfully");
+        eprintln!("[DEBUG] File size: {} bytes", content.len());
+        eprintln!("[DEBUG] Line count: {}", lines.len());
     }
 
     // If we have a symbol, find it in the file
     if let Some(symbol_name) = symbol {
         if debug_mode {
-            println!("[DEBUG] Looking for symbol: {symbol_name}");
+            eprintln!("[DEBUG] Looking for symbol: {symbol_name}");
         }
 
         // Find the symbol in the file first and get position information
@@ -145,7 +145,7 @@ pub fn process_file_for_extraction_with_lsp(
     // If we have a line range (start_line, end_line), gather AST blocks overlapping that range.
     if let (Some(start), Some(end)) = (start_line, end_line) {
         if debug_mode {
-            println!("[DEBUG] Extracting line range: {start}-{end} (with AST merging)");
+            eprintln!("[DEBUG] Extracting line range: {start}-{end} (with AST merging)");
         }
 
         // Clamp line numbers to valid ranges instead of failing
@@ -166,7 +166,7 @@ pub fn process_file_for_extraction_with_lsp(
         }
 
         if debug_mode && (clamped_start != start || clamped_end != end) {
-            println!(
+            eprintln!(
                 "[DEBUG] Requested lines {start}-{end} out of range; clamping to {clamped_start}-{clamped_end}"
             );
         }
@@ -214,7 +214,7 @@ pub fn process_file_for_extraction_with_lsp(
                 let merged_end = max_end + 1;
 
                 if debug_mode {
-                    println!(
+                    eprintln!(
                         "[DEBUG] Found {} overlapping AST blocks, merging into lines {}-{}",
                         blocks.len(),
                         merged_start,
@@ -262,7 +262,7 @@ pub fn process_file_for_extraction_with_lsp(
             _ => {
                 // Fallback to literal extraction of lines [start..end]
                 if debug_mode {
-                    println!(
+                    eprintln!(
                         "[DEBUG] No AST blocks found for the range {start}-{end}, falling back to literal lines"
                     );
                 }
@@ -309,13 +309,13 @@ pub fn process_file_for_extraction_with_lsp(
     // Single line extraction
     else if let Some(line_num) = start_line {
         if debug_mode {
-            println!("[DEBUG] Single line extraction requested: line {line_num}");
+            eprintln!("[DEBUG] Single line extraction requested: line {line_num}");
         }
         // Clamp line number to valid range instead of failing
         let clamped_line_num = line_num.clamp(1, lines.len());
 
         if debug_mode && clamped_line_num != line_num {
-            println!(
+            eprintln!(
                 "[DEBUG] Requested line {line_num} out of bounds; clamping to {clamped_line_num}"
             );
         }
@@ -357,7 +357,7 @@ pub fn process_file_for_extraction_with_lsp(
                 let merged_end = max_end + 1;
 
                 if debug_mode {
-                    println!(
+                    eprintln!(
                         "[DEBUG] Found {} AST blocks for line {}, merging into lines {}-{}",
                         blocks.len(),
                         line_num,
@@ -455,7 +455,7 @@ pub fn process_file_for_extraction_with_lsp(
             _ => {
                 // If no AST block found, fallback to the line + context
                 if debug_mode {
-                    println!(
+                    eprintln!(
                         "[DEBUG] No AST blocks found for line {line_num}, using context-based fallback"
                     );
                 }
@@ -559,12 +559,12 @@ pub fn process_file_for_extraction_with_lsp(
     } else if let Some(lines_set) = specific_lines {
         // We have specific lines to extract
         if debug_mode {
-            println!("[DEBUG] Extracting specific lines: {lines_set:?}");
+            eprintln!("[DEBUG] Extracting specific lines: {lines_set:?}");
         }
 
         if lines_set.is_empty() {
             if debug_mode {
-                println!("[DEBUG] No specific lines provided, returning entire file content");
+                eprintln!("[DEBUG] No specific lines provided, returning entire file content");
             }
 
             // Tokenize the content
@@ -620,7 +620,7 @@ pub fn process_file_for_extraction_with_lsp(
         }
 
         if debug_mode && any_clamped {
-            println!(
+            eprintln!(
                 "[DEBUG] Some requested lines were out of bounds; clamping to valid range 1-{}",
                 lines.len()
             );
@@ -655,7 +655,7 @@ pub fn process_file_for_extraction_with_lsp(
                 let merged_end = max_end + 1;
 
                 if debug_mode {
-                    println!(
+                    eprintln!(
                         "[DEBUG] Found {} AST blocks for specific lines, merging into lines {}-{}",
                         blocks.len(),
                         merged_start,
@@ -703,7 +703,7 @@ pub fn process_file_for_extraction_with_lsp(
             _ => {
                 // Fallback to literal extraction of the specific lines
                 if debug_mode {
-                    println!(
+                    eprintln!(
                         "[DEBUG] No AST blocks found for specific lines, falling back to literal lines"
                     );
                 }
@@ -763,7 +763,7 @@ pub fn process_file_for_extraction_with_lsp(
     } else {
         // No line specified, return the entire file
         if debug_mode {
-            println!("[DEBUG] No line or range specified, returning entire file content");
+            eprintln!("[DEBUG] No line or range specified, returning entire file content");
         }
 
         // Tokenize the content
