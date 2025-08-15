@@ -72,11 +72,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
     } else {
         raw_root.clone()
     };
-    println!(
-        "{} {}",
-        "Path:".bold().green(),
-        canonical_root.display()
-    );
+    println!("{} {}", "Path:".bold().green(), canonical_root.display());
 
     // Show advanced options if they differ from defaults
     let mut advanced_options = Vec::<String>::new();

@@ -317,7 +317,11 @@ impl LspClient {
                     "Timeout reading message length after {}ms",
                     self.config.timeout_ms
                 );
-                return Err(anyhow!("Timeout reading response from daemon"));
+                let sp = get_default_socket_path();
+                return Err(anyhow!(
+                    "Timeout connecting to daemon after {}ms (socket: {})", 
+                    self.config.timeout_ms, sp
+                ));
             }
         }
         let message_len = u32::from_be_bytes(length_buf) as usize;
@@ -344,7 +348,11 @@ impl LspClient {
                     "Timeout reading message body of {} bytes after {}ms",
                     message_len, self.config.timeout_ms
                 );
-                return Err(anyhow!("Timeout reading message body from daemon"));
+                let sp = get_default_socket_path();
+                return Err(anyhow!(
+                    "Timeout waiting for daemon response after {}ms (socket: {})", 
+                    self.config.timeout_ms, sp
+                ));
             }
         }
 
@@ -817,13 +825,20 @@ async fn start_embedded_daemon_background() -> Result<()> {
 
     // Start daemon using "probe lsp start" command
     // Environment variables are inherited by default
-    std::process::Command::new(&probe_binary)
-        .args(["lsp", "start"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| anyhow!("Failed to spawn embedded daemon: {}", e))?;
+    let mut cmd = std::process::Command::new(&probe_binary);
+    cmd.args(["lsp", "start"])
+        .stdin(std::process::Stdio::null());
+    // In CI or when debugging, inherit stdout/stderr so early failures (bind/lock) are visible.
+    // Enable by setting LSP_VERBOSE_SPAWN=1 in the environment.
+    if std::env::var("LSP_VERBOSE_SPAWN").ok().as_deref() == Some("1") {
+        cmd.stdout(std::process::Stdio::inherit())
+           .stderr(std::process::Stdio::inherit());
+    } else {
+        cmd.stdout(std::process::Stdio::null())
+           .stderr(std::process::Stdio::null());
+    }
+    cmd.spawn()
+       .map_err(|e| anyhow!("Failed to spawn embedded daemon: {}", e))?;
 
     info!("Started embedded daemon in background");
 
