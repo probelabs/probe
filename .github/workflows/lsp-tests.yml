@@ -15,7 +15,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
+        # Temporarily disable windows-latest for experimental timing data collection
+        # Due to persistent Windows PATH inheritance issues with typescript-language-server
 
     steps:
       - uses: actions/checkout@v4
