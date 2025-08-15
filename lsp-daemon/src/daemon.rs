@@ -825,9 +825,21 @@ impl LspDaemon {
                         let server_key = format!("{:?}", s.language);
                         let health = health_status.get(&server_key);
 
+                        // Consider a server "ready" if either:
+                        // 1) we know it's initialized, or
+                        // 2) the health monitor reports it as healthy (the stats lock may be busy
+                        //    while the server is in active use, which used to surface as initialized=false).
+                        let is_ready = if s.initialized {
+                            true
+                        } else if let Some(h) = health {
+                            h.is_healthy && !h.is_circuit_breaker_open()
+                        } else {
+                            false
+                        };
+
                         PoolStatus {
                             language: s.language,
-                            ready_servers: if s.initialized { 1 } else { 0 },
+                            ready_servers: if is_ready { 1 } else { 0 },
                             busy_servers: 0, // No busy concept in single server model
                             total_servers: 1,
                             workspaces: s

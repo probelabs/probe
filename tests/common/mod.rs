@@ -6,6 +6,47 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// Strip ANSI escape sequences (CSI etc.) so we can parse colored output reliably.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '\u{1B}' {
+            // Handle ESC [ ... final-byte
+            if let Some('[') = it.peek().copied() {
+                it.next(); // consume '['
+                           // Parameter bytes 0x30..=0x3F
+                while let Some(&ch) = it.peek() {
+                    let u = ch as u32;
+                    if (0x30..=0x3F).contains(&u) {
+                        it.next();
+                    } else {
+                        break;
+                    }
+                }
+                // Intermediate bytes 0x20..=0x2F
+                while let Some(&ch) = it.peek() {
+                    let u = ch as u32;
+                    if (0x20..=0x2F).contains(&u) {
+                        it.next();
+                    } else {
+                        break;
+                    }
+                }
+                // Final byte 0x40..=0x7E
+                let _ = it.next();
+                continue;
+            } else {
+                // Other two-byte ESC sequences: drop next char if present
+                let _ = it.next();
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Language server types supported by the test suite
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LanguageServer {
@@ -624,7 +665,14 @@ fn check_lsp_servers_ready(expected_languages: &[&str]) -> Result<bool> {
     let mut last_error = None;
 
     for attempt in 0..MAX_RETRIES {
-        let output = Command::new("./target/debug/probe")
+        // Force no-color/plain output so the parser isn't confused by ANSI in CI.
+        let mut cmd = Command::new("./target/debug/probe");
+        let output = cmd
+            .env("NO_COLOR", "1")
+            .env("CLICOLOR", "0")
+            .env("CLICOLOR_FORCE", "0")
+            .env("FORCE_COLOR", "0")
+            .env("TERM", "dumb")
             .args(["lsp", "status"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -679,7 +727,8 @@ fn check_lsp_servers_ready(expected_languages: &[&str]) -> Result<bool> {
 fn is_language_server_ready(status_output: &str, language: &str) -> Result<bool> {
     // Look for a section that begins with e.g. "Go:" or "TypeScript:" and contains "Available (Ready)".
     // Within that section, prefer to read an explicit "Servers: Ready: N" value (N > 0).
-    let lines: Vec<&str> = status_output.lines().collect();
+    let clean_output = strip_ansi(status_output);
+    let lines: Vec<&str> = clean_output.lines().collect();
     // Accept common aliases / combined headers and tolerate colonless variants.
     let lang_lc = language.to_ascii_lowercase();
     let mut header_prefixes: Vec<String> = vec![
@@ -737,24 +786,36 @@ fn is_language_server_ready(status_output: &str, language: &str) -> Result<bool>
             continue;
         }
 
-        let header_says_ready =
-            trimmed.contains("Available (Ready)") || trimmed.contains("(Ready)");
+        // Header-level ready marker (case-insensitive, tolerant of extra words)
+        let header_says_ready = trimmed_lc.contains("(ready)");
 
         // Search forward until the next top-level section (a non-indented line ending with ':')
         // and try to find "Servers: ... Ready: <N>".
         let mut ready_count: Option<u32> = None;
+        let mut workspaces_count: u32 = 0;
+        let mut uptime_secs: u64 = 0;
+
         for &next in lines.iter().skip(i + 1) {
             let t = next.trim();
+            let t_lc = t.to_ascii_lowercase();
 
             // Stop if we hit the start of another section.
-            if !next.starts_with(' ') && t.ends_with(':') && !t.starts_with("Servers:") {
+            if !next.starts_with(' ')
+                && t.ends_with(':')
+                && !(t_lc.starts_with("servers")
+                    || t_lc.starts_with("server")
+                    || t_lc.starts_with("instances"))
+            {
                 break;
             }
 
-            if t.starts_with("Servers:") {
+            if t_lc.starts_with("servers")
+                || t_lc.starts_with("server")
+                || t_lc.starts_with("instances")
+            {
                 // Be tolerant of "Ready: 1", "Ready 1", "Ready servers: 1", or "Ready: 1/3".
-                if let Some(idx) = t.find("Ready") {
-                    let after = &t[idx + "Ready".len()..];
+                if let Some(idx) = t_lc.find("ready") {
+                    let after = &t_lc[idx + "ready".len()..];
                     let digits: String = after
                         .chars()
                         .skip_while(|c| !c.is_ascii_digit())
@@ -766,6 +827,48 @@ fn is_language_server_ready(status_output: &str, language: &str) -> Result<bool>
                     }
                 }
             }
+
+            if t_lc.starts_with("workspaces") {
+                // Expect "Workspaces: (N)"
+                if let Some(start) = t.find('(') {
+                    let digits: String = t[start + 1..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect();
+                    if let Ok(n) = digits.parse::<u32>() {
+                        workspaces_count = n;
+                    }
+                }
+            }
+
+            if t_lc.starts_with("uptime") {
+                // Expect "Uptime: 5s" (tolerate ms/m/h)
+                if let Some(after_colon) = t.split(':').nth(1) {
+                    let ts = after_colon.trim();
+                    // Simple unit parser: e.g., "500ms", "5s", "2m", "1h"
+                    let (num_str, unit_str): (String, String) =
+                        ts.chars()
+                            .fold((String::new(), String::new()), |(mut n, mut u), ch| {
+                                if ch.is_ascii_digit() {
+                                    if u.is_empty() {
+                                        n.push(ch);
+                                    }
+                                } else if !ch.is_whitespace() {
+                                    u.push(ch);
+                                }
+                                (n, u)
+                            });
+                    if let Ok(n) = num_str.parse::<u64>() {
+                        uptime_secs = match unit_str.as_str() {
+                            "ms" => 0,
+                            "s" => n,
+                            "m" => n * 60,
+                            "h" => n * 3600,
+                            _ => 0,
+                        };
+                    }
+                }
+            }
         }
 
         // Prefer explicit server counts when available; otherwise fall back to the header.
@@ -773,6 +876,20 @@ fn is_language_server_ready(status_output: &str, language: &str) -> Result<bool>
             // Authoritative: any Ready > 0 means the language is usable even if header still says "(Indexing)".
             return Ok(n > 0);
         }
+
+        // Go-specific, last-resort fallback:
+        // If gopls has at least one workspace and has been up for a reasonable grace period,
+        // treat the server as ready. This matches daemon's indexing grace design.
+        if lang_lc == "go" {
+            let grace: u64 = std::env::var("LSP_INDEX_GRACE_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30);
+            if workspaces_count > 0 && uptime_secs >= grace {
+                return Ok(true);
+            }
+        }
+
         return Ok(header_says_ready);
     }
 
