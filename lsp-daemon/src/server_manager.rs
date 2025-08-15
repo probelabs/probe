@@ -10,6 +10,8 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+// Provide a grace period where health checks won't restart new, CPU-heavy servers
+const STARTUP_HEALTH_GRACE_SECS: u64 = 180;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant};
 use tracing::{debug, info, warn};
@@ -74,7 +76,7 @@ impl SingleServerManager {
         child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
     ) -> Self {
         let health_monitor = Arc::new(HealthMonitor::new());
-        let process_monitor = Arc::new(ProcessMonitor::with_limits(80.0, 1024)); // 80% CPU, 1GB memory
+        let process_monitor = Arc::new(ProcessMonitor::with_limits(95.0, 2048)); // 95% CPU, 2GB memory (TSServer-friendly)
         Self {
             servers: Arc::new(DashMap::new()),
             registry,
@@ -89,7 +91,7 @@ impl SingleServerManager {
         child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
         health_monitor: Arc<HealthMonitor>,
     ) -> Self {
-        let process_monitor = Arc::new(ProcessMonitor::with_limits(80.0, 1024)); // 80% CPU, 1GB memory
+        let process_monitor = Arc::new(ProcessMonitor::with_limits(95.0, 2048)); // 95% CPU, 2GB memory (TSServer-friendly)
         Self {
             servers: Arc::new(DashMap::new()),
             registry,
@@ -148,6 +150,15 @@ impl SingleServerManager {
                         Ok(server) => {
                             if let Some(server_pid) = server.server.get_pid() {
                                 if server_pid == unhealthy_pid {
+                                    // Skip restarts during a warm-up window to allow heavy indexers (e.g., tsserver) to settle
+                                    let elapsed = server.start_time.elapsed();
+                                    if elapsed < Duration::from_secs(STARTUP_HEALTH_GRACE_SECS) {
+                                        debug!(
+                                            "Process {} ({:?}) above limits but within warm-up grace ({:?}); skipping restart",
+                                            unhealthy_pid, language, elapsed
+                                        );
+                                        continue;
+                                    }
                                     warn!(
                                         "Process {} belongs to {:?} server - marking for restart",
                                         unhealthy_pid, language
