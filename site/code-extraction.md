@@ -40,6 +40,35 @@ Probe supports several ways to specify what code to extract:
 - **Multiple files**: `file1.rs:10 file2.go:15`
 - **Glob patterns**: `src/*.rs:42`
 
+### MARKDOWN FORMATTING SUPPORT
+
+Probe automatically handles markdown formatting when extracting file paths from text input:
+
+#### Supported Markdown Patterns
+- **Bold formatting**: `**src/main.rs:42**` → extracts `src/main.rs:42`
+- **Italic formatting**: `*lib/utils.rs#helper*` → extracts `lib/utils.rs#helper`
+- **Strikethrough**: `~~old/deprecated.py~~` → extracts `old/deprecated.py`
+- **Code blocks**: `` `config/settings.json:10` `` → extracts `config/settings.json:10`
+- **Mixed formatting**: `***Important: `src/config.rs:25`***` → extracts `src/config.rs:25`
+
+#### Real-World Use Cases
+- **GitHub Issues**: Copy file patterns directly from issue descriptions
+- **Documentation**: Extract paths from markdown documentation
+- **Chat Messages**: Process file references from team chat
+- **Code Reviews**: Handle formatted file paths from review comments
+
+#### Example Usage
+```bash
+# Extract from markdown-formatted text
+echo "**src/main.rs:42** needs review" | probe extract --from-clipboard
+
+# Process GitHub issue content
+probe extract --input-file github-issue.md
+
+# Handle complex markdown patterns
+echo "Check ***`src/parser.rs:100-150`*** for implementation" | probe extract -
+```
+
 ## AST PARSING
 
 Probe uses Abstract Syntax Tree (AST) parsing to understand code structure:
