@@ -743,15 +743,25 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         // Initialize git repo to make .gitignore work with the ignore crate
-        std::process::Command::new("git")
+        let git_init_output = std::process::Command::new("git")
             .arg("init")
             .current_dir(temp_dir.path())
             .output()
             .expect("Failed to initialize git repo");
 
+        // Ensure git init was successful
+        assert!(
+            git_init_output.status.success(),
+            "Git init failed: {}",
+            String::from_utf8_lossy(&git_init_output.stderr)
+        );
+
         // Create a .gitignore file
         let gitignore_content = "*.ignored\nignored_dir/\n";
         fs::write(temp_dir.path().join(".gitignore"), gitignore_content).unwrap();
+
+        // Ensure .gitignore is properly written to disk before proceeding
+        std::thread::sleep(std::time::Duration::from_millis(10));
 
         // Create files that would normally be ignored by .gitignore
         let ignored_file = temp_dir.path().join("test.ignored");

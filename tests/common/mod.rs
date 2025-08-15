@@ -622,7 +622,7 @@ fn check_lsp_servers_ready(expected_languages: &[&str]) -> Result<bool> {
     // Retry logic for daemon connection issues
     const MAX_RETRIES: u32 = 3;
     let mut last_error = None;
-    
+
     for attempt in 0..MAX_RETRIES {
         let output = Command::new("./target/debug/probe")
             .args(["lsp", "status"])
@@ -630,7 +630,7 @@ fn check_lsp_servers_ready(expected_languages: &[&str]) -> Result<bool> {
             .stderr(Stdio::piped())
             .output()
             .context("Failed to run 'probe lsp status'")?;
-        
+
         if output.status.success() {
             let status_output = String::from_utf8_lossy(&output.stdout);
             // Parse the output to check server status
@@ -642,17 +642,25 @@ fn check_lsp_servers_ready(expected_languages: &[&str]) -> Result<bool> {
             return Ok(true);
         } else {
             let stderr_str = String::from_utf8_lossy(&output.stderr);
-            let is_daemon_connection_issue = stderr_str.contains("connection refused") 
+            let is_daemon_connection_issue = stderr_str.contains("connection refused")
                 || stderr_str.contains("Connection refused")
                 || stderr_str.contains("timeout")
-                || stderr_str.contains("daemon") 
+                || stderr_str.contains("daemon")
                 || stderr_str.contains("socket");
-            
+
             if is_daemon_connection_issue && attempt < MAX_RETRIES - 1 {
-                eprintln!("LSP daemon connection issue on attempt {}/{}: {}", attempt + 1, MAX_RETRIES, stderr_str);
+                eprintln!(
+                    "LSP daemon connection issue on attempt {}/{}: {}",
+                    attempt + 1,
+                    MAX_RETRIES,
+                    stderr_str
+                );
                 eprintln!("Retrying after 2 seconds...");
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                last_error = Some(anyhow::anyhow!("LSP daemon connection failed: {}", stderr_str));
+                last_error = Some(anyhow::anyhow!(
+                    "LSP daemon connection failed: {}",
+                    stderr_str
+                ));
                 continue;
             } else {
                 return Err(anyhow::anyhow!(
@@ -663,7 +671,7 @@ fn check_lsp_servers_ready(expected_languages: &[&str]) -> Result<bool> {
             }
         }
     }
-    
+
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("All LSP status attempts failed")))
 }
 

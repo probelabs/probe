@@ -130,6 +130,8 @@ impl SingleServerManager {
 
         debug!("Checking health of {} child processes", pids.len());
         let unhealthy_pids = self.process_monitor.monitor_children(pids.clone()).await;
+        // Track which unhealthy PIDs we are actually allowed to kill (outside warm-up grace)
+        let mut kill_list: std::collections::HashSet<u32> = std::collections::HashSet::new();
 
         if !unhealthy_pids.is_empty() {
             warn!(
@@ -157,6 +159,8 @@ impl SingleServerManager {
                                             "Process {} ({:?}) above limits but within warm-up grace ({:?}); skipping restart",
                                             unhealthy_pid, language, elapsed
                                         );
+                                        // IMPORTANT: also do NOT kill it if within warm-up grace
+                                        // We intentionally avoid adding this PID to the kill list.
                                         continue;
                                     }
                                     warn!(
@@ -166,6 +170,8 @@ impl SingleServerManager {
 
                                     // Mark server as unhealthy to trigger restart
                                     self.health_monitor.mark_unhealthy(language).await;
+                                    // This PID is past grace; it is safe to terminate.
+                                    kill_list.insert(unhealthy_pid);
                                     break;
                                 }
                             }
@@ -178,9 +184,9 @@ impl SingleServerManager {
                 }
             }
 
-            // Kill unhealthy processes directly
+            // Kill only the processes that are past the warm-up grace period
             #[cfg(unix)]
-            for &pid in &unhealthy_pids {
+            for &pid in &kill_list {
                 unsafe {
                     if libc::kill(pid as i32, libc::SIGTERM) == 0 {
                         warn!("Sent SIGTERM to unhealthy process {}", pid);
@@ -190,13 +196,13 @@ impl SingleServerManager {
                 }
             }
 
-            // Remove killed PIDs from tracking
+            // Remove only killed PIDs from tracking
             {
                 let mut pids_guard = self.child_processes.lock().await;
-                pids_guard.retain(|&pid| !unhealthy_pids.contains(&pid));
+                pids_guard.retain(|&pid| !kill_list.contains(&pid));
                 info!(
                     "Removed {} unhealthy processes from tracking, {} remain",
-                    unhealthy_pids.len(),
+                    kill_list.len(),
                     pids_guard.len()
                 );
             }
@@ -286,14 +292,14 @@ impl SingleServerManager {
                     return Ok(server_instance.clone());
                 }
                 Err(_) => {
-                    // Server might be stuck, mark as unhealthy and recreate
+                    // Server may be busy (e.g., indexing). Don't thrash by removing/recreating immediately.
                     warn!(
-                        "Server {:?} appears to be unresponsive, will recreate",
+                        "Server {:?} lock busy; marking unhealthy but not recreating immediately",
                         language
                     );
                     self.health_monitor.mark_unhealthy(language).await;
-                    self.servers.remove(&language);
-                    // Fall through to create new server
+                    // Return the existing instance and allow the health monitor to decide on restart later.
+                    return Ok(server_instance.clone());
                 }
             }
         }
@@ -549,8 +555,8 @@ impl SingleServerManager {
             .send_notification("workspace/didChangeWorkspaceFolders", params)
             .await?;
 
-        // Wait briefly for server to index the new workspace
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Wait briefly for server to notice/index the new workspace
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Mark workspace as registered
         server_instance.add_workspace(workspace_root.clone());
@@ -662,7 +668,7 @@ impl SingleServerManager {
         self.servers.clear();
 
         // Force kill all tracked child processes if any remain
-        let pids = self.child_processes.lock().await;
+        let mut pids = self.child_processes.lock().await;
         if !pids.is_empty() {
             info!("Force killing {} tracked child processes", pids.len());
             #[cfg(unix)]
@@ -695,6 +701,10 @@ impl SingleServerManager {
             for &_pid in pids.iter() {
                 // Windows: process cleanup handled differently
             }
+
+            // IMPORTANT: clear tracked PIDs so follow-up tests don't "inherit" stale processes
+            pids.clear();
+            debug!("Cleared tracked child process list after shutdown");
         }
     }
 

@@ -35,7 +35,7 @@ use uuid::Uuid;
 // or removing the lock when cleaning up the socket file.
 #[inline]
 fn pid_lock_path(socket_path: &str) -> String {
-    format!("{}.lock", socket_path)
+    format!("{socket_path}.lock")
 }
 
 pub struct LspDaemon {
@@ -168,7 +168,10 @@ impl LspDaemon {
             .try_lock()
             .map_err(|e| anyhow!("Failed to acquire daemon lock: {}", e))?;
         self.pid_lock = Some(pid_lock);
-        debug!("Acquired daemon PID lock at {} (socket: {})", lock_path, self.socket_path);
+        debug!(
+            "Acquired daemon PID lock at {} (socket: {})",
+            lock_path, self.socket_path
+        );
 
         // Set up process group for child management
         #[cfg(unix)]
