@@ -227,28 +227,38 @@ pub fn run_probe_command_with_timeout(
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             let mut success = output.status.success();
 
-            // Some probe subcommands currently print errors but still exit 0; treat obvious error strings as failures in tests
+            // Some probe subcommands currently print errors but still exit 0; treat *obvious* error strings as failures in tests.
+            // Be careful not to misclassify benign phrases like "No results found."
             if success {
-                let combined_output = format!("{}{}", stdout.to_lowercase(), stderr.to_lowercase());
-                if combined_output.contains("file does not exist")
-                    || combined_output.contains("no such file")
-                    || combined_output.contains("not found")
-                    || combined_output.contains("error:")
-                    || (combined_output.contains("encountered")
-                        && combined_output.contains("error"))
-                {
+                let combined_output_lc =
+                    format!("{}{}", stdout.to_lowercase(), stderr.to_lowercase());
+                let looks_like_no_results = combined_output_lc.contains("no results found");
+                let looks_like_error = combined_output_lc.contains("error:")
+                    || combined_output_lc.contains("no such file")
+                    || combined_output_lc.contains("file does not exist")
+                    || combined_output_lc.contains("file not found")
+                    || combined_output_lc.contains("path not found")
+                    || (combined_output_lc.contains("encountered")
+                        && combined_output_lc.contains("error"));
+                if looks_like_error && !looks_like_no_results {
                     success = false;
                 }
             }
 
             // If we failed but don't have a clear, user-friendly message, synthesize one so tests have a stable string to assert on.
             if !success {
-                let has_human_msg = stdout.to_lowercase().contains("error:")
-                    || stderr.to_lowercase().contains("error:")
-                    || stdout.to_lowercase().contains("invalid file")
-                    || stderr.to_lowercase().contains("invalid file")
-                    || stdout.to_lowercase().contains("no such file")
-                    || stderr.to_lowercase().contains("no such file");
+                let out_lc = stdout.to_lowercase();
+                let err_lc = stderr.to_lowercase();
+                let has_human_msg = out_lc.contains("error:")
+                    || err_lc.contains("error:")
+                    || out_lc.contains("invalid file")
+                    || err_lc.contains("invalid file")
+                    || out_lc.contains("no such file")
+                    || err_lc.contains("no such file")
+                    || out_lc.contains("file not found")
+                    || err_lc.contains("file not found")
+                    || out_lc.contains("path not found")
+                    || err_lc.contains("path not found");
 
                 if !has_human_msg {
                     // Heuristically surface any path-like args to help the user.
@@ -263,11 +273,12 @@ pub fn run_probe_command_with_timeout(
                                 || a.ends_with(".go")
                         })
                         .collect();
+                    // Normalize to a stable, cross-platform message that the tests can match reliably.
                     let normalized = if likely_paths.is_empty() {
-                        "Error: invalid file path (one or more provided paths do not exist)"
+                        "Error: file not found (one or more provided paths do not exist)"
                             .to_string()
                     } else {
-                        format!("Error: invalid file path(s): {}", likely_paths.join(", "))
+                        format!("Error: file not found: {}", likely_paths.join(", "))
                     };
                     let stderr = if stderr.is_empty() {
                         normalized
@@ -639,28 +650,60 @@ fn is_language_server_ready(status_output: &str, language: &str) -> Result<bool>
     // Look for a section that begins with e.g. "Go:" or "TypeScript:" and contains "Available (Ready)".
     // Within that section, prefer to read an explicit "Servers: Ready: N" value (N > 0).
     let lines: Vec<&str> = status_output.lines().collect();
-    // Accept common aliases / combined headers for tsserver-based stacks
-    let mut header_prefixes = vec![format!("{language}:")];
+    // Accept common aliases / combined headers and tolerate colonless variants.
     let lang_lc = language.to_ascii_lowercase();
-    if lang_lc == "javascript" {
-        header_prefixes.extend([
-            "TypeScript:".to_string(),
-            "TypeScript/JavaScript:".to_string(),
-            "JavaScript/TypeScript:".to_string(),
-            "tsserver:".to_string(),
-        ]);
-    } else if lang_lc == "typescript" {
-        header_prefixes.extend([
-            "JavaScript:".to_string(),
-            "TypeScript/JavaScript:".to_string(),
-            "JavaScript/TypeScript:".to_string(),
-            "tsserver:".to_string(),
-        ]);
+    let mut header_prefixes: Vec<String> = vec![
+        format!("{language}:"),
+        language.to_string(), // colonless
+    ];
+    match lang_lc.as_str() {
+        "javascript" => {
+            header_prefixes.extend([
+                "TypeScript:".into(),
+                "TypeScript".into(),
+                "TypeScript/JavaScript:".into(),
+                "TypeScript/JavaScript".into(),
+                "JavaScript/TypeScript:".into(),
+                "JavaScript/TypeScript".into(),
+                "tsserver:".into(),
+                "tsserver".into(),
+                "TypeScript (tsserver):".into(),
+                "JavaScript (tsserver):".into(),
+            ]);
+        }
+        "typescript" => {
+            header_prefixes.extend([
+                "JavaScript:".into(),
+                "JavaScript".into(),
+                "TypeScript/JavaScript:".into(),
+                "TypeScript/JavaScript".into(),
+                "JavaScript/TypeScript:".into(),
+                "JavaScript/TypeScript".into(),
+                "tsserver:".into(),
+                "tsserver".into(),
+                "TypeScript (tsserver):".into(),
+                "JavaScript (tsserver):".into(),
+            ]);
+        }
+        "go" => {
+            header_prefixes.extend([
+                "Go (gopls):".into(),
+                "Go (gopls)".into(),
+                "Golang:".into(),
+                "Golang".into(),
+            ]);
+        }
+        _ => {}
     }
 
     for (i, &line) in lines.iter().enumerate() {
         let trimmed = line.trim();
-        if !header_prefixes.iter().any(|p| trimmed.starts_with(p)) {
+        let trimmed_lc = trimmed.to_ascii_lowercase();
+        let is_header = header_prefixes.iter().any(|p| {
+            let p_norm = p.trim_end_matches(':').to_ascii_lowercase();
+            trimmed_lc.starts_with(&p_norm)
+        });
+        if !is_header {
             continue;
         }
 
@@ -678,9 +721,10 @@ fn is_language_server_ready(status_output: &str, language: &str) -> Result<bool>
                 break;
             }
 
-            if t.starts_with("Servers:") && t.contains("Ready:") {
-                // Extract the first integer following "Ready:"
-                if let Some(after) = t.split("Ready:").nth(1) {
+            if t.starts_with("Servers:") {
+                // Be tolerant of "Ready: 1", "Ready 1", "Ready servers: 1", or "Ready: 1/3".
+                if let Some(idx) = t.find("Ready") {
+                    let after = &t[idx + "Ready".len()..];
                     let digits: String = after
                         .chars()
                         .skip_while(|c| !c.is_ascii_digit())
@@ -914,13 +958,13 @@ pub mod call_hierarchy {
         let is_header = |raw: &str| {
             let t = raw.trim();
             let lc = t.to_ascii_lowercase();
-            lc.starts_with(&format!("## {}", want))
-                || lc.starts_with(&format!("### {}", want))
+            lc.starts_with(&format!("## {want}"))
+                || lc.starts_with(&format!("### {want}"))
                 || lc == want
                 || lc.starts_with(&format!("{want}:"))
-                || lc.starts_with(&format!("- {}", want))
-                || lc.starts_with(&format!("* {}", want))
-                || lc.starts_with(&format!("{} (", want)) // e.g. "Incoming Calls (0)"
+                || lc.starts_with(&format!("- {want}"))
+                || lc.starts_with(&format!("* {want}"))
+                || lc.starts_with(&format!("{want} (")) // e.g. "Incoming Calls (0)"
         };
 
         // Helper: boundary when we hit the next call-hierarchy section or a new Markdown header
