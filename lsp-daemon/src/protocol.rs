@@ -460,12 +460,24 @@ fn default_call_hierarchy_item() -> CallHierarchyItem {
         kind: "unknown".to_string(),
         uri: "".to_string(),
         range: Range {
-            start: Position { line: 0, character: 0 },
-            end: Position { line: 0, character: 0 },
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 0,
+            },
         },
         selection_range: Range {
-            start: Position { line: 0, character: 0 },
-            end: Position { line: 0, character: 0 },
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 0,
+            },
         },
     }
 }
@@ -555,7 +567,12 @@ fn parse_call_hierarchy_item(value: &Value) -> Result<CallHierarchyItem> {
             .unwrap_or("")
             .to_string(),
         range: parse_range(value.get("range").unwrap_or(&json!({})))?,
-        selection_range: parse_range(value.get("selectionRange").or_else(|| value.get("range")).unwrap_or(&json!({})))?,
+        selection_range: parse_range(
+            value
+                .get("selectionRange")
+                .or_else(|| value.get("range"))
+                .unwrap_or(&json!({})),
+        )?,
     })
 }
 
