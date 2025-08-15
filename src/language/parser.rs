@@ -2001,7 +2001,7 @@ fn test_function() {
         assert!(result.is_ok(), "Should succeed for supported language");
         let blocks = result.unwrap();
         assert!(
-            blocks.len() > 0,
+            !blocks.is_empty(),
             "Should return code blocks for supported language"
         );
 

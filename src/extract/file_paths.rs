@@ -128,9 +128,8 @@ pub fn extract_file_paths_from_git_diff(text: &str, allow_tests: bool) -> Vec<Fi
             if !is_ignored_by_gitignore(file_path) && (allow_tests || !is_test) {
                 if debug_mode {
                     println!(
-                        "[DEBUG] Adding file with {} changed lines: {:?}",
-                        changed_lines.len(),
-                        file_path
+                        "[DEBUG] Adding file with {} changed lines: {file_path:?}",
+                        changed_lines.len()
                     );
                 }
                 // Use the min and max values in the HashSet for start and end lines
@@ -1436,10 +1435,9 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
         - each.key should reference the instance
         
         Actual files:
-        - {}:42
-        - {}:100-200
-        "#,
-            main_path, test_path
+        - {main_path}:42
+        - {test_path}:100-200
+        "#
         );
 
         let results = extract_file_paths_from_text(&text, true);
@@ -1451,21 +1449,18 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
             .collect();
 
         println!(
-            "DEBUG: Extracted {} files: {:?}",
-            file_names.len(),
-            file_names
+            "DEBUG: Extracted {} files: {file_names:?}",
+            file_names.len()
         );
 
         // Should find these files
         assert!(
             file_names.contains(&main_path.to_string()),
-            "Should contain main.rs path: {}",
-            main_path
+            "Should contain main.rs path: {main_path}"
         );
         assert!(
             file_names.contains(&test_path.to_string()),
-            "Should contain test.go path: {}",
-            test_path
+            "Should contain test.go path: {test_path}"
         );
 
         // Should NOT find these code constructs (they don't exist as files)
@@ -1480,10 +1475,10 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
         for pattern in &unwanted_patterns {
             let found = file_names.iter().any(|f| f.ends_with(pattern));
             if found {
-                println!("ERROR: Found unwanted pattern '{}' in file list", pattern);
-                println!("  Full file list: {:?}", file_names);
+                println!("ERROR: Found unwanted pattern '{pattern}' in file list");
+                println!("  Full file list: {file_names:?}");
             }
-            assert!(!found, "Unexpectedly found pattern: {}", pattern);
+            assert!(!found, "Unexpectedly found pattern: {pattern}");
         }
 
         // Should have exactly 2 valid files

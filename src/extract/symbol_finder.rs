@@ -45,8 +45,7 @@ pub fn find_symbol_in_file(
         if is_nested_symbol {
             println!("[DEBUG] Searching for nested symbol '{symbol}' in file {path:?}");
             println!(
-                "[DEBUG] Symbol parts: {:?} (parent: '{}', child: '{}')",
-                symbol_parts,
+                "[DEBUG] Symbol parts: {symbol_parts:?} (parent: '{}', child: '{}')",
                 symbol_parts[0],
                 symbol_parts.last().unwrap_or(&"")
             );
@@ -675,7 +674,7 @@ mod tests {
 }"#;
 
         let mut file = fs::File::create(&test_file).unwrap();
-        write!(file, "{}", content).unwrap();
+        write!(file, "{content}").unwrap();
 
         // Try to find a symbol in a .tf file (unsupported language)
         let result = find_symbol_in_file(&test_file, "nodes", content, true, 0);
@@ -706,7 +705,7 @@ fn test_function() {
 }"#;
 
         let mut file = fs::File::create(&test_file).unwrap();
-        write!(file, "{}", content).unwrap();
+        write!(file, "{content}").unwrap();
 
         // Try to find a symbol in a .rs file (supported language)
         let result = find_symbol_in_file(&test_file, "test_function", content, true, 0);
