@@ -85,6 +85,8 @@ jobs:
         run: cargo test --test lsp_integration_tests
 
       - name: Run comprehensive LSP tests
+        env:
+          DEBUG: 1
         run: |
           echo "=== CI Environment Debug Info ==="
           echo "CI=$CI"
@@ -95,4 +97,4 @@ jobs:
           gopls version || echo "gopls version failed"
           typescript-language-server --version || echo "typescript-language-server version failed"
           echo "=== Starting LSP comprehensive tests ==="
-          DEBUG=1 cargo test --test lsp_comprehensive_tests -- --nocapture
+          cargo test --test lsp_comprehensive_tests -- --nocapture
