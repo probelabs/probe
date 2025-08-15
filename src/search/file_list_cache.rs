@@ -761,7 +761,7 @@ mod tests {
         fs::write(temp_dir.path().join(".gitignore"), gitignore_content).unwrap();
 
         // Ensure .gitignore is properly written to disk before proceeding
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
         // Create files that would normally be ignored by .gitignore
         let ignored_file = temp_dir.path().join("test.ignored");
