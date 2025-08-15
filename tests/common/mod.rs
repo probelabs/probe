@@ -37,7 +37,7 @@ impl LanguageServer {
         match self {
             LanguageServer::Gopls => "Install with: go install golang.org/x/tools/gopls@latest",
             LanguageServer::TypeScriptLanguageServer => {
-                "Install with: npm install -g typescript-language-server typescript"
+                "Install with: npm install -g typescript-language-server typescript\nWindows: ensure %AppData%\\npm (npm global bin) is on PATH."
             }
         }
     }
@@ -110,20 +110,79 @@ pub fn is_language_server_available(server: LanguageServer) -> bool {
 
 /// Check if a command exists in PATH
 fn is_command_in_path(command: &str) -> bool {
-    env::var("PATH")
-        .unwrap_or_default()
-        .split(if cfg!(windows) { ';' } else { ':' })
-        .any(|path| {
-            let mut cmd_path = std::path::PathBuf::from(path);
-            cmd_path.push(command);
+    // Use OS-appropriate PATH parsing and (on Windows) respect PATHEXT.
+    let paths = env::var_os("PATH").unwrap_or_default();
+    let mut found = false;
 
-            // On Windows, try with .exe extension too
-            if cfg!(windows) {
-                cmd_path.set_extension("exe");
+    #[cfg(windows)]
+    {
+        use std::ffi::OsString;
+
+        let pathext =
+            env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+        let exts: Vec<String> = pathext
+            .to_string_lossy()
+            .split(';')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim().trim_start_matches('.').to_ascii_lowercase())
+            .collect();
+
+        for dir in std::env::split_paths(&paths) {
+            if dir.as_os_str().is_empty() {
+                continue;
+            }
+            let mut base = dir.join(command);
+
+            // If the command already has an extension, check as-is.
+            if base.is_file() {
+                found = true;
+                break;
             }
 
-            cmd_path.exists() && cmd_path.is_file()
-        })
+            // Try each PATHEXT to account for .cmd/.bat launchers produced by npm.
+            for ext in &exts {
+                let mut with_ext = base.clone();
+                with_ext.set_extension(ext);
+                if with_ext.is_file() {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        for dir in std::env::split_paths(&paths) {
+            if dir.as_os_str().is_empty() {
+                continue;
+            }
+            let candidate = dir.join(command);
+            if candidate.is_file() {
+                // On Unix, also require the executable bit.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = std::fs::metadata(&candidate) {
+                        if meta.permissions().mode() & 0o111 != 0 {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    found
 }
 
 /// Helper to run probe commands and capture output with timeout
@@ -139,41 +198,75 @@ pub fn run_probe_command_with_timeout(
 ) -> Result<(String, String, bool)> {
     let start = Instant::now();
 
-    let output = Command::new("./target/debug/probe")
+    let mut child = Command::new("./target/debug/probe")
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
-        .context("Failed to execute probe command")?;
+        .spawn()
+        .with_context(|| format!("Failed to execute probe command: probe {}", args.join(" ")))?;
 
-    let elapsed = start.elapsed();
-    if elapsed > timeout {
-        return Err(anyhow::anyhow!(
-            "Command timed out after {:?} (limit: {:?}): probe {}",
-            elapsed,
-            timeout,
-            args.join(" ")
-        ));
-    }
+    // Poll until the process exits or the timeout elapses; kill on timeout.
+    loop {
+        if let Some(_status) = child.try_wait().context("Failed to poll probe process")? {
+            // Process finished; collect outputs.
+            let output = child
+                .wait_with_output()
+                .context("Failed to collect probe output")?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let mut success = output.status.success();
+            let elapsed = start.elapsed();
+            if elapsed > timeout {
+                return Err(anyhow::anyhow!(
+                    "Command timed out after {:?} (limit: {:?}): probe {}",
+                    elapsed,
+                    timeout,
+                    args.join(" ")
+                ));
+            }
 
-    // Some probe subcommands currently print errors but still exit 0; treat obvious error strings as failures in tests
-    if success {
-        let combined_output = format!("{}{}", stdout.to_lowercase(), stderr.to_lowercase());
-        if combined_output.contains("file does not exist")
-            || combined_output.contains("no such file")
-            || combined_output.contains("not found")
-            || combined_output.contains("error:")
-            || combined_output.contains("encountered") && combined_output.contains("error")
-        {
-            success = false;
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let mut success = output.status.success();
+
+            // Some probe subcommands currently print errors but still exit 0; treat obvious error strings as failures in tests
+            if success {
+                let combined_output = format!("{}{}", stdout.to_lowercase(), stderr.to_lowercase());
+                if combined_output.contains("file does not exist")
+                    || combined_output.contains("no such file")
+                    || combined_output.contains("not found")
+                    || combined_output.contains("error:")
+                    || (combined_output.contains("encountered")
+                        && combined_output.contains("error"))
+                {
+                    success = false;
+                }
+            }
+
+            return Ok((stdout, stderr, success));
         }
-    }
 
-    Ok((stdout, stderr, success))
+        // Still running?
+        if start.elapsed() >= timeout {
+            // Hard timeout: kill and surface an error, but return whatever output we can capture.
+            let _ = child.kill();
+            let output = child
+                .wait_with_output()
+                .context("Failed to collect probe output after kill")?;
+
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+            return Err(anyhow::anyhow!(
+                "Command timed out after {:?} (limit: {:?}): probe {}\n--- partial stdout ---\n{}\n--- partial stderr ---\n{}",
+                start.elapsed(),
+                timeout,
+                args.join(" "),
+                stdout,
+                stderr
+            ));
+        }
+
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// Helper to ensure daemon is stopped (cleanup)
@@ -506,29 +599,52 @@ fn check_lsp_servers_ready(expected_languages: &[&str]) -> Result<bool> {
 
 /// Parse LSP status output to check if a specific language server is ready
 fn is_language_server_ready(status_output: &str, language: &str) -> Result<bool> {
-    // Look for pattern like "Go: Available (Ready)"
-    let lang_pattern = format!("{language}: Available (Ready)");
+    // Look for a section that begins with e.g. "Go:" or "TypeScript:" and contains "Available (Ready)".
+    // Within that section, prefer to read an explicit "Servers: Ready: N" value (N > 0).
+    let lines: Vec<&str> = status_output.lines().collect();
+    let header_prefix = format!("{language}:");
 
-    if status_output.contains(&lang_pattern) {
-        // Also check that it has ready servers (not just busy ones)
-        // Look for "Servers: Ready: N" where N > 0
-        let lines: Vec<&str> = status_output.lines().collect();
-        for (i, line) in lines.iter().enumerate() {
-            if line.contains(&lang_pattern) {
-                // Look for the "Servers:" line that follows
-                for next_line in lines.iter().skip(i + 1).take(3) {
-                    if next_line.trim().starts_with("Servers:") && next_line.contains("Ready:") {
-                        // Extract the Ready count
-                        if let Some(ready_part) = next_line.split("Ready:").nth(1) {
-                            if let Some(ready_count_str) = ready_part.split(',').next() {
-                                if let Ok(ready_count) = ready_count_str.trim().parse::<u32>() {
-                                    return Ok(ready_count > 0);
-                                }
-                            }
-                        }
+    for (i, &line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with(&header_prefix) {
+            continue;
+        }
+
+        let header_says_ready =
+            trimmed.contains("Available (Ready)") || trimmed.contains("(Ready)");
+
+        // Search forward until the next top-level section (a non-indented line ending with ':')
+        // and try to find "Servers: ... Ready: <N>".
+        let mut ready_count: Option<u32> = None;
+        for &next in lines.iter().skip(i + 1) {
+            let t = next.trim();
+
+            // Stop if we hit the start of another section.
+            if !next.starts_with(' ') && t.ends_with(':') && !t.starts_with("Servers:") {
+                break;
+            }
+
+            if t.starts_with("Servers:") && t.contains("Ready:") {
+                // Extract the first integer following "Ready:"
+                if let Some(after) = t.split("Ready:").nth(1) {
+                    let digits: String = after
+                        .chars()
+                        .skip_while(|c| !c.is_ascii_digit())
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect();
+                    if let Ok(n) = digits.parse::<u32>() {
+                        ready_count = Some(n);
+                        break;
                     }
                 }
             }
+        }
+
+        // Prefer explicit server counts when available; otherwise fall back to the header.
+        if let Some(n) = ready_count {
+            return Ok(header_says_ready && n > 0);
+        } else {
+            return Ok(header_says_ready);
         }
     }
 
@@ -640,17 +756,16 @@ pub fn extract_with_call_hierarchy_retry(
             );
         }
 
-        // Run the extract command
-        let (stdout, stderr, success) = run_probe_command_with_timeout(extract_args, timeout)?;
+        // Run the extract command with the remaining time budget for this attempt
+        let remaining = timeout.saturating_sub(elapsed);
+        let (stdout, stderr, success) = run_probe_command_with_timeout(extract_args, remaining)?;
 
         if !success {
             if attempt >= max_attempts {
                 return Ok((stdout, stderr, success)); // Return the failure
             }
             if is_ci {
-                println!(
-                    "❌ Extract command failed on attempt {attempt}, retrying..."
-                );
+                println!("❌ Extract command failed on attempt {attempt}, retrying...");
             }
             attempt += 1;
             thread::sleep(retry_delay);
