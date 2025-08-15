@@ -71,8 +71,49 @@ pub fn find_symbol_in_file(
     }
 
     // Get the language implementation for this extension
-    let language_impl = crate::language::factory::get_language_impl(extension)
-        .ok_or_else(|| anyhow::anyhow!("Unsupported language extension: {}", extension))?;
+    // If unsupported, fall back to returning the full file
+    let language_impl = match crate::language::factory::get_language_impl(extension) {
+        Some(impl_) => impl_,
+        None => {
+            if debug_mode {
+                println!("[DEBUG] Language extension '{extension}' not supported for AST parsing, returning full file");
+            }
+            // Return the entire file as a SearchResult when language is unsupported
+            let lines: Vec<&str> = content.lines().collect();
+            let filename = path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let tokenized_content =
+                crate::ranking::preprocess_text_with_filename(content, &filename);
+
+            return Ok(SearchResult {
+                file: path.to_string_lossy().to_string(),
+                lines: (1, lines.len()),
+                node_type: "file".to_string(),
+                code: content.to_string(),
+                matched_by_filename: None,
+                rank: None,
+                score: None,
+                tfidf_score: None,
+                bm25_score: None,
+                tfidf_rank: None,
+                bm25_rank: None,
+                new_score: None,
+                hybrid2_rank: None,
+                combined_score_rank: None,
+                file_unique_terms: None,
+                file_total_matches: None,
+                file_match_rank: None,
+                block_unique_terms: None,
+                block_total_matches: None,
+                parent_file_id: None,
+                block_id: None,
+                matched_keywords: None,
+                tokenized_content: Some(tokenized_content),
+            });
+        }
+    };
 
     if debug_mode {
         println!("[DEBUG] Language detected: {extension}");
@@ -611,4 +652,73 @@ pub fn find_symbol_in_file(
         symbol,
         path
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+
+    #[test]
+    fn test_find_symbol_unsupported_language_returns_full_file() {
+        // Create a temporary terraform file for testing
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_symbol_terraform.tf");
+
+        let content = r#"resource "test" "example" {
+  name = "test"
+  
+  variable "nodes" {
+    type = map(number)
+  }
+}"#;
+
+        let mut file = fs::File::create(&test_file).unwrap();
+        write!(file, "{}", content).unwrap();
+
+        // Try to find a symbol in a .tf file (unsupported language)
+        let result = find_symbol_in_file(&test_file, "nodes", content, true, 0);
+
+        // Should return Ok with the full file content
+        assert!(result.is_ok());
+        let search_result = result.unwrap();
+        assert_eq!(search_result.node_type, "file");
+        assert_eq!(search_result.code, content);
+        assert_eq!(search_result.lines, (1, 7)); // 7 lines in the content
+
+        // Clean up
+        let _ = fs::remove_file(&test_file);
+    }
+
+    #[test]
+    fn test_find_symbol_in_rust_file() {
+        // Create a temporary rust file for testing
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_symbol_rust.rs");
+
+        let content = r#"fn hello_world() {
+    println!("Hello, world!");
+}
+
+fn test_function() {
+    let x = 42;
+}"#;
+
+        let mut file = fs::File::create(&test_file).unwrap();
+        write!(file, "{}", content).unwrap();
+
+        // Try to find a symbol in a .rs file (supported language)
+        let result = find_symbol_in_file(&test_file, "test_function", content, true, 0);
+
+        // Should return Ok with just the test_function
+        assert!(result.is_ok());
+        let search_result = result.unwrap();
+        assert_eq!(search_result.node_type, "function_item");
+        assert!(search_result.code.contains("fn test_function()"));
+        assert!(search_result.code.contains("let x = 42"));
+
+        // Clean up
+        let _ = fs::remove_file(&test_file);
+    }
 }
