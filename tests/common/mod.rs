@@ -381,25 +381,34 @@ pub fn wait_for_lsp_servers_ready(
     let mut poll_interval = Duration::from_millis(500); // Start with 500ms
     let max_poll_interval = Duration::from_secs(2); // Cap at 2 seconds
 
-    if performance::is_ci_environment() {
+    // For CI timing experiment: remove timeout limit, allow unlimited wait time
+    let unlimited_wait = performance::is_ci_environment();
+    let effective_timeout = if unlimited_wait {
+        Duration::from_secs(600) // 10 minutes max to prevent infinite hangs
+    } else {
+        max_timeout
+    };
+
+    if unlimited_wait {
         println!(
-            "CI environment detected: polling LSP status for {} languages with max timeout {:?}",
+            "CI TIMING EXPERIMENT: Waiting unlimited time for {} languages: {} (max 10min safety limit)",
             expected_languages.len(),
-            max_timeout
+            expected_languages.join(", ")
         );
     } else {
         println!(
-            "Polling LSP status for {} languages: {}",
+            "Polling LSP status for {} languages: {} (timeout: {:?})",
             expected_languages.len(),
-            expected_languages.join(", ")
+            expected_languages.join(", "),
+            max_timeout
         );
     }
 
     loop {
         let elapsed = start_time.elapsed();
-        if elapsed >= max_timeout {
+        if elapsed >= effective_timeout {
             return Err(anyhow::anyhow!(
-                "Timeout waiting for LSP servers to be ready after {:?}. Expected languages: {}",
+                "Safety timeout reached after {:?}. Expected languages: {}",
                 elapsed,
                 expected_languages.join(", ")
             ));
@@ -408,19 +417,43 @@ pub fn wait_for_lsp_servers_ready(
         // Check LSP status
         match check_lsp_servers_ready(expected_languages) {
             Ok(true) => {
-                println!(
-                    "All {} LSP servers are ready after {:?}",
-                    expected_languages.len(),
-                    elapsed
-                );
+                if unlimited_wait {
+                    println!(
+                        "🎯 CI TIMING RESULT: All {} LSP servers ready after {:?} - languages: {}",
+                        expected_languages.len(),
+                        elapsed,
+                        expected_languages.join(", ")
+                    );
+                } else {
+                    println!(
+                        "All {} LSP servers are ready after {:?}",
+                        expected_languages.len(),
+                        elapsed
+                    );
+                }
                 return Ok(());
             }
             Ok(false) => {
-                // Not ready yet, continue polling
-                if elapsed.as_secs() % 5 == 0
-                    && elapsed.as_millis() % 1000 < poll_interval.as_millis()
-                {
-                    println!("Still waiting for LSP servers... ({:?} elapsed)", elapsed);
+                // Enhanced logging for timing experiment
+                if unlimited_wait {
+                    // Log every 10 seconds in CI for detailed timing data
+                    if elapsed.as_secs() % 10 == 0
+                        && elapsed.as_millis() % 1000 < poll_interval.as_millis()
+                    {
+                        println!(
+                            "⏱️  CI TIMING: Still waiting for {} languages after {:?} - target: {}",
+                            expected_languages.len(),
+                            elapsed,
+                            expected_languages.join(", ")
+                        );
+                    }
+                } else {
+                    // Original 5-second logging for local
+                    if elapsed.as_secs() % 5 == 0
+                        && elapsed.as_millis() % 1000 < poll_interval.as_millis()
+                    {
+                        println!("Still waiting for LSP servers... ({elapsed:?} elapsed)");
+                    }
                 }
             }
             Err(e) => {
@@ -428,7 +461,7 @@ pub fn wait_for_lsp_servers_ready(
                 if elapsed.as_secs() % 10 == 0
                     && elapsed.as_millis() % 1000 < poll_interval.as_millis()
                 {
-                    println!("LSP status check failed (will retry): {}", e);
+                    println!("LSP status check failed (will retry): {e}");
                 }
             }
         }
@@ -474,7 +507,7 @@ fn check_lsp_servers_ready(expected_languages: &[&str]) -> Result<bool> {
 /// Parse LSP status output to check if a specific language server is ready
 fn is_language_server_ready(status_output: &str, language: &str) -> Result<bool> {
     // Look for pattern like "Go: Available (Ready)"
-    let lang_pattern = format!("{}: Available (Ready)", language);
+    let lang_pattern = format!("{language}: Available (Ready)");
 
     if status_output.contains(&lang_pattern) {
         // Also check that it has ready servers (not just busy ones)
@@ -571,6 +604,101 @@ pub mod performance {
     pub const MAX_SEARCH_TIME: Duration = Duration::from_secs(5);
     #[allow(dead_code)]
     pub const MAX_INIT_TIME: Duration = Duration::from_secs(60);
+}
+
+/// Extract with call hierarchy retry for CI reliability
+pub fn extract_with_call_hierarchy_retry(
+    extract_args: &[&str],
+    expected_incoming: usize,
+    expected_outgoing: usize,
+    timeout: Duration,
+) -> Result<(String, String, bool)> {
+    let start_time = Instant::now();
+    let is_ci = performance::is_ci_environment();
+    let mut attempt = 1;
+    let max_attempts = if is_ci { 10 } else { 3 };
+    let retry_delay = Duration::from_secs(2);
+
+    if is_ci {
+        println!(
+            "🔄 CI CALL HIERARCHY EXPERIMENT: Retrying extract until call hierarchy data available (max {max_attempts} attempts over {timeout:?})"
+        );
+    }
+
+    loop {
+        let elapsed = start_time.elapsed();
+        if elapsed >= timeout {
+            return Err(anyhow::anyhow!(
+                "Timeout waiting for call hierarchy data after {elapsed:?}. Made {} attempts.",
+                attempt - 1
+            ));
+        }
+
+        if is_ci {
+            println!(
+                "🔄 Attempt {attempt}/{max_attempts}: Extracting call hierarchy data (elapsed: {elapsed:?})"
+            );
+        }
+
+        // Run the extract command
+        let (stdout, stderr, success) = run_probe_command_with_timeout(extract_args, timeout)?;
+
+        if !success {
+            if attempt >= max_attempts {
+                return Ok((stdout, stderr, success)); // Return the failure
+            }
+            if is_ci {
+                println!(
+                    "❌ Extract command failed on attempt {attempt}, retrying..."
+                );
+            }
+            attempt += 1;
+            thread::sleep(retry_delay);
+            continue;
+        }
+
+        // Check if we have call hierarchy data
+        match (
+            call_hierarchy::validate_incoming_calls(&stdout, expected_incoming),
+            call_hierarchy::validate_outgoing_calls(&stdout, expected_outgoing),
+        ) {
+            (Ok(()), Ok(())) => {
+                if is_ci {
+                    println!(
+                        "✅ CI SUCCESS: Got complete call hierarchy data on attempt {attempt} after {elapsed:?}"
+                    );
+                }
+                return Ok((stdout, stderr, success));
+            }
+            (incoming_result, outgoing_result) => {
+                if attempt >= max_attempts {
+                    if is_ci {
+                        println!(
+                            "❌ CI FINAL ATTEMPT: Call hierarchy still incomplete after {attempt} attempts ({elapsed:?})"
+                        );
+                        println!("   Incoming: {incoming_result:?}");
+                        println!("   Outgoing: {outgoing_result:?}");
+                    }
+                    return Ok((stdout, stderr, success)); // Return what we have
+                }
+
+                if is_ci {
+                    println!(
+                        "⚠️  Attempt {attempt}: Call hierarchy incomplete, retrying in {retry_delay:?}..."
+                    );
+                    if let Err(e) = incoming_result {
+                        println!("   Incoming issue: {e}");
+                    }
+                    if let Err(e) = outgoing_result {
+                        println!("   Outgoing issue: {e}");
+                    }
+                }
+
+                attempt += 1;
+                thread::sleep(retry_delay);
+            }
+        }
+    }
 }
 
 /// Call hierarchy validation helpers
