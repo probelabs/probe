@@ -98,11 +98,16 @@ jobs:
           echo "PATH=$PATH"
           echo "=== Ensuring npm global binaries are in PATH ==="
           if [ "$RUNNER_OS" = "Windows" ]; then
-            echo "Windows detected - adding npm global path"
+            echo "Windows detected - adding npm global path to system PATH"
             NPM_GLOBAL=$(npm config get prefix)
             echo "NPM global prefix: $NPM_GLOBAL"
-            export PATH="$NPM_GLOBAL:$PATH"
+            # Convert Windows path format and add to system PATH for test execution
+            NPM_GLOBAL_UNIX=$(cygpath -u "$NPM_GLOBAL" 2>/dev/null || echo "$NPM_GLOBAL")
+            export PATH="$NPM_GLOBAL_UNIX:$NPM_GLOBAL:$PATH"
             echo "Updated PATH: $PATH"
+            # Also add to Windows system PATH for the test processes
+            echo "$NPM_GLOBAL" >> "$GITHUB_PATH"
+            echo "Added to GITHUB_PATH: $NPM_GLOBAL"
           fi
           echo "=== Language Server Versions ==="
           gopls version || echo "gopls version failed"
