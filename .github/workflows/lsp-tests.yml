@@ -89,6 +89,7 @@ jobs:
       - name: Run comprehensive LSP tests
         env:
           DEBUG: 1
+        shell: bash
         run: |
           echo "=== CI Environment Debug Info ==="
           echo "CI=$CI"
