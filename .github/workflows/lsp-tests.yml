@@ -56,7 +56,9 @@ jobs:
           node-version: '20'
           
       - name: Install TypeScript language server
-        run: npm install -g typescript-language-server typescript
+        run: |
+          npm install -g typescript-language-server typescript
+          echo "NPM global bin path: $(npm config get prefix)"
 
       - name: Show LSP tool versions
         run: |
@@ -93,6 +95,14 @@ jobs:
           echo "GITHUB_ACTIONS=$GITHUB_ACTIONS"
           echo "RUNNER_OS=$RUNNER_OS"
           echo "PATH=$PATH"
+          echo "=== Ensuring npm global binaries are in PATH ==="
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "Windows detected - adding npm global path"
+            NPM_GLOBAL=$(npm config get prefix)
+            echo "NPM global prefix: $NPM_GLOBAL"
+            export PATH="$NPM_GLOBAL:$PATH"
+            echo "Updated PATH: $PATH"
+          fi
           echo "=== Language Server Versions ==="
           gopls version || echo "gopls version failed"
           typescript-language-server --version || echo "typescript-language-server version failed"
