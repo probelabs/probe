@@ -319,8 +319,9 @@ impl LspClient {
                 );
                 let sp = get_default_socket_path();
                 return Err(anyhow!(
-                    "Timeout connecting to daemon after {}ms (socket: {})", 
-                    self.config.timeout_ms, sp
+                    "Timeout connecting to daemon after {}ms (socket: {})",
+                    self.config.timeout_ms,
+                    sp
                 ));
             }
         }
@@ -350,8 +351,9 @@ impl LspClient {
                 );
                 let sp = get_default_socket_path();
                 return Err(anyhow!(
-                    "Timeout waiting for daemon response after {}ms (socket: {})", 
-                    self.config.timeout_ms, sp
+                    "Timeout waiting for daemon response after {}ms (socket: {})",
+                    self.config.timeout_ms,
+                    sp
                 ));
             }
         }
@@ -832,13 +834,13 @@ async fn start_embedded_daemon_background() -> Result<()> {
     // Enable by setting LSP_VERBOSE_SPAWN=1 in the environment.
     if std::env::var("LSP_VERBOSE_SPAWN").ok().as_deref() == Some("1") {
         cmd.stdout(std::process::Stdio::inherit())
-           .stderr(std::process::Stdio::inherit());
+            .stderr(std::process::Stdio::inherit());
     } else {
         cmd.stdout(std::process::Stdio::null())
-           .stderr(std::process::Stdio::null());
+            .stderr(std::process::Stdio::null());
     }
     cmd.spawn()
-       .map_err(|e| anyhow!("Failed to spawn embedded daemon: {}", e))?;
+        .map_err(|e| anyhow!("Failed to spawn embedded daemon: {}", e))?;
 
     info!("Started embedded daemon in background");
 
