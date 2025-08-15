@@ -1016,7 +1016,8 @@ mod tests {
 
     #[test]
     fn test_markdown_line_ranges_with_formatting() {
-        let text = "Check **src/parser.rs:100-150** and *tests/unit.rs:50-75* for the implementation.";
+        let text =
+            "Check **src/parser.rs:100-150** and *tests/unit.rs:50-75* for the implementation.";
         let results = extract_file_paths_from_text(text, true);
 
         assert_eq!(results.len(), 2);
@@ -1075,7 +1076,8 @@ More details in ~~old/readme.md~~ and *docs/guide.md:10-20*.
 
     #[test]
     fn test_nested_markdown_formatting() {
-        let text = "***Important file: `src/config.rs:25`*** and ~~***deprecated: `old/legacy.py`***~~";
+        let text =
+            "***Important file: `src/config.rs:25`*** and ~~***deprecated: `old/legacy.py`***~~";
         let results = extract_file_paths_from_text(text, true);
 
         assert_eq!(results.len(), 2);
@@ -1149,7 +1151,10 @@ Errors: {src/error.rs:25}, (tests/unit.rs#test_error), [lib/handler.rs:100-200],
         let results = extract_file_paths_from_text(text, true);
 
         // Just verify we get some results - the exact count may vary based on parsing
-        assert!(!results.is_empty(), "Should detect at least some file paths");
+        assert!(
+            !results.is_empty(),
+            "Should detect at least some file paths"
+        );
 
         let file_names: Vec<String> = results
             .iter()
@@ -1158,9 +1163,14 @@ Errors: {src/error.rs:25}, (tests/unit.rs#test_error), [lib/handler.rs:100-200],
 
         // Verify that at least some common patterns work
         let has_rust_file = file_names.iter().any(|name| name.ends_with(".rs"));
-        let has_config_file = file_names.iter().any(|name| name.contains("config") || name.ends_with(".toml"));
-        
-        assert!(has_rust_file || has_config_file, "Should detect at least some file patterns");
+        let has_config_file = file_names
+            .iter()
+            .any(|name| name.contains("config") || name.ends_with(".toml"));
+
+        assert!(
+            has_rust_file || has_config_file,
+            "Should detect at least some file patterns"
+        );
     }
 
     #[test]
@@ -1231,7 +1241,10 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
         let results = extract_file_paths_from_text(text, true);
 
         // The regex may match more patterns than expected, so just verify basic behavior
-        assert!(!results.is_empty(), "Should detect at least some file paths");
+        assert!(
+            !results.is_empty(),
+            "Should detect at least some file paths"
+        );
 
         let file_names: Vec<String> = results
             .iter()
