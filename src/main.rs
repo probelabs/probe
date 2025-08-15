@@ -70,15 +70,22 @@ fn handle_search(params: SearchParams) -> Result<()> {
 
     let use_frequency = params.frequency_search;
 
-    // Don't print these headers for JSON/XML formats (only if verbose)
-    if params.verbose && params.format != "json" && params.format != "xml" {
-        println!("{} {}", "Pattern:".bold().green(), params.pattern);
-        println!(
-            "{} {}",
-            "Path:".bold().green(),
-            params.paths.first().unwrap().display()
-        );
-    }
+    println!("{} {}", "Pattern:".bold().green(), params.pattern);
+    // Normalize the search root early. Some downstream code paths are stricter about absolute paths.
+    let raw_root = params.paths.first().unwrap();
+    let canonical_root = if raw_root.exists() {
+        match raw_root.canonicalize() {
+            Ok(p) => p,
+            Err(_) => raw_root.clone(),
+        }
+    } else {
+        raw_root.clone()
+    };
+    println!(
+        "{} {}",
+        "Path:".bold().green(),
+        canonical_root.display()
+    );
 
     // Show advanced options if they differ from defaults
     let mut advanced_options = Vec::<String>::new();
@@ -139,7 +146,8 @@ fn handle_search(params: SearchParams) -> Result<()> {
     let query = vec![params.pattern.clone()];
 
     let search_options = SearchOptions {
-        path: params.paths.first().unwrap(),
+        // Pass a normalized path so directory roots are always accepted.
+        path: &canonical_root,
         queries: &query,
         files_only: params.files_only,
         custom_ignores: &params.ignore,
