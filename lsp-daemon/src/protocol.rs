@@ -5,6 +5,9 @@ use serde_json::Value;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// Shared limit for length-prefixed messages (also used by daemon).
+pub const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonRequest {
@@ -394,8 +397,7 @@ impl MessageCodec {
     }
 
     pub fn decode_request(bytes: &[u8]) -> Result<DaemonRequest> {
-        // Maximum message size: 10MB (must match daemon.rs)
-        const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+        // Maximum message size is shared with the daemon (see MAX_MESSAGE_SIZE).
 
         if bytes.len() < 4 {
             return Err(anyhow::anyhow!("Message too short"));
@@ -423,8 +425,7 @@ impl MessageCodec {
     }
 
     pub fn decode_response(bytes: &[u8]) -> Result<DaemonResponse> {
-        // Maximum message size: 10MB (must match daemon.rs)
-        const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+        // Maximum message size is shared with the daemon (see MAX_MESSAGE_SIZE).
 
         if bytes.len() < 4 {
             return Err(anyhow::anyhow!("Message too short"));
@@ -452,39 +453,49 @@ impl MessageCodec {
     }
 }
 
+// Small helper to build a default/empty CallHierarchyItem
+fn default_call_hierarchy_item() -> CallHierarchyItem {
+    CallHierarchyItem {
+        name: "unknown".to_string(),
+        kind: "unknown".to_string(),
+        uri: "".to_string(),
+        range: Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 0, character: 0 },
+        },
+        selection_range: Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 0, character: 0 },
+        },
+    }
+}
+
 // Helper function to convert from serde_json::Value to our types
 pub fn parse_call_hierarchy_from_lsp(value: &Value) -> Result<CallHierarchyResult> {
+    // Accept alternative shapes: when LSP returns an array (prepare call result),
+    // take the first element as the root item and leave incoming/outgoing empty.
+    if let Some(arr) = value.as_array() {
+        if let Some(first) = arr.first() {
+            return Ok(CallHierarchyResult {
+                item: parse_call_hierarchy_item(first)?,
+                incoming: vec![],
+                outgoing: vec![],
+            });
+        } else {
+            return Ok(CallHierarchyResult {
+                item: default_call_hierarchy_item(),
+                incoming: vec![],
+                outgoing: vec![],
+            });
+        }
+    }
     // Handle case where rust-analyzer returns empty call hierarchy (no item)
     let item = match value.get("item") {
         Some(item) => item,
         None => {
             // Return empty call hierarchy result
             return Ok(CallHierarchyResult {
-                item: CallHierarchyItem {
-                    name: "unknown".to_string(),
-                    kind: "unknown".to_string(),
-                    uri: "".to_string(),
-                    range: Range {
-                        start: Position {
-                            line: 0,
-                            character: 0,
-                        },
-                        end: Position {
-                            line: 0,
-                            character: 0,
-                        },
-                    },
-                    selection_range: Range {
-                        start: Position {
-                            line: 0,
-                            character: 0,
-                        },
-                        end: Position {
-                            line: 0,
-                            character: 0,
-                        },
-                    },
-                },
+                item: default_call_hierarchy_item(),
                 incoming: vec![],
                 outgoing: vec![],
             });
@@ -525,18 +536,26 @@ fn parse_call_hierarchy_item(value: &Value) -> Result<CallHierarchyItem> {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string(),
-        kind: value
-            .get("kind")
-            .and_then(|v| v.as_u64())
-            .map(|k| k.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
+        // Accept numeric or string kinds
+        kind: match value.get("kind") {
+            Some(kv) => {
+                if let Some(num) = kv.as_u64() {
+                    num.to_string()
+                } else {
+                    kv.as_str().unwrap_or("unknown").to_string()
+                }
+            }
+            None => "unknown".to_string(),
+        },
+        // Accept targetUri as a fallback
         uri: value
             .get("uri")
+            .or_else(|| value.get("targetUri"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
         range: parse_range(value.get("range").unwrap_or(&json!({})))?,
-        selection_range: parse_range(value.get("selectionRange").unwrap_or(&json!({})))?,
+        selection_range: parse_range(value.get("selectionRange").or_else(|| value.get("range")).unwrap_or(&json!({})))?,
     })
 }
 
@@ -550,6 +569,7 @@ fn parse_call_hierarchy_call(value: &Value) -> Result<CallHierarchyCall> {
 
     let from_ranges = value
         .get("fromRanges")
+        .or_else(|| value.get("toRanges"))
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|r| parse_range(r).ok()).collect())
         .unwrap_or_default();
@@ -655,5 +675,74 @@ mod tests {
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Message too short"));
+    }
+
+    #[test]
+    fn test_message_codec_large_request() {
+        // Create a large request (GetLogs), encode and decode it
+        let request = DaemonRequest::GetLogs {
+            request_id: Uuid::new_v4(),
+            lines: 1000,
+        };
+        let encoded = MessageCodec::encode(&request).expect("encode");
+        let decoded = MessageCodec::decode_request(&encoded).expect("decode");
+        match decoded {
+            DaemonRequest::GetLogs { lines, .. } => assert_eq!(lines, 1000),
+            _ => panic!("expected GetLogs"),
+        }
+    }
+
+    #[test]
+    fn test_parse_call_hierarchy_accepts_string_kind_and_to_ranges() {
+        let v = serde_json::json!({
+            "item": {
+                "name": "root",
+                "kind": "Function",
+                "uri": "file:///root.rs",
+                "range": { "start": {"line":1, "character":2}, "end": {"line":1, "character":10} },
+                "selectionRange": { "start": {"line":1, "character":2}, "end": {"line":1, "character":10} }
+            },
+            "incoming": [{
+                "from": {
+                    "name": "caller",
+                    "kind": "Method",
+                    "uri": "file:///caller.rs",
+                    "range": { "start": {"line":0, "character":0}, "end": {"line":0, "character":1} },
+                    "selectionRange": { "start": {"line":0, "character":0}, "end": {"line":0, "character":1} }
+                },
+                "fromRanges": [ { "start": {"line":0, "character":0}, "end": {"line":0, "character":1} } ]
+            }],
+            "outgoing": [{
+                "to": {
+                    "name": "callee",
+                    "kind": 12,
+                    "targetUri": "file:///callee.rs",
+                    "range": { "start": {"line":2, "character":0}, "end": {"line":2, "character":1} },
+                    "selectionRange": { "start": {"line":2, "character":0}, "end": {"line":2, "character":1} }
+                },
+                "toRanges": [ { "start": {"line":2, "character":0}, "end": {"line":2, "character":1} } ]
+            }]
+        });
+        let result = parse_call_hierarchy_from_lsp(&v).expect("parse ok");
+        assert_eq!(result.item.kind, "Function");
+        assert_eq!(result.incoming.len(), 1);
+        assert_eq!(result.outgoing.len(), 1);
+        assert_eq!(result.outgoing[0].from.kind, "12");
+        assert_eq!(result.outgoing[0].from.uri, "file:///callee.rs");
+        assert_eq!(result.outgoing[0].from_ranges.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_call_hierarchy_array_item_defaults() {
+        let v = serde_json::json!([{
+            "name": "root",
+            "kind": 3,
+            "uri": "file:///root.rs",
+            "range": { "start": {"line":3, "character":0}, "end": {"line":3, "character":5} }
+        }]);
+        let result = parse_call_hierarchy_from_lsp(&v).expect("parse");
+        assert_eq!(result.item.name, "root");
+        assert!(result.incoming.is_empty());
+        assert!(result.outgoing.is_empty());
     }
 }
