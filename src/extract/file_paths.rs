@@ -593,9 +593,9 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
     // But only if they haven't been processed already
     // Allow more flexible word boundaries including after punctuation and symbols
     // Regex pattern that supports both Unix and Windows paths
-    // On Windows, paths can contain backslashes and colons (for drive letters)
+    // On Windows, paths can contain backslashes, tildes (in short names), and colons (for drive letters)
     let simple_file_regex =
-        Regex::new(r"(?:^|[\s\r\n\*\(\)\[\]\{\}<>;,!?])([a-zA-Z]:[\\\/])?([a-zA-Z0-9_\-./\\\*\{\}]+\.[a-zA-Z0-9]+)")
+        Regex::new(r"(?:^|[\s\r\n\*\(\)\[\]\{\}<>;,!?])([a-zA-Z]:[\\\/])?([a-zA-Z0-9_\-./\\~\*\{\}]+\.[a-zA-Z0-9]+)")
             .unwrap();
 
     for cap in simple_file_regex.captures_iter(text) {
