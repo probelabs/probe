@@ -202,8 +202,7 @@ pub struct DirectLspClient;
 impl DirectLspClient {
     pub async fn call_hierarchy(file_path: &Path, pattern: &str) -> Result<CallHierarchyResult> {
         eprintln!(
-            "DirectLspClient::call_hierarchy called with file: {:?}, pattern: {}",
-            file_path, pattern
+            "DirectLspClient::call_hierarchy called with file: {file_path:?}, pattern: {pattern}"
         );
         use lsp_daemon::lsp_registry::LspRegistry;
         use lsp_daemon::lsp_server::LspServer;
@@ -238,10 +237,7 @@ impl DirectLspClient {
         let (line, column) = find_pattern_position(&content, pattern)
             .ok_or_else(|| anyhow!("Pattern '{}' not found in file", pattern))?;
 
-        eprintln!(
-            "Found pattern '{}' at line {}, column {}",
-            pattern, line, column
-        );
+        eprintln!("Found pattern '{pattern}' at line {line}, column {column}");
 
         // Open document
         server.open_document(file_path, &content).await?;
