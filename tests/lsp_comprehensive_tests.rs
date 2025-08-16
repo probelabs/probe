@@ -417,27 +417,46 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
 
 #[test]
 fn test_search_with_lsp_enrichment_performance() -> Result<()> {
-    setup_comprehensive_tests()?;
+    eprintln!("=== Starting test_search_with_lsp_enrichment_performance ===");
+
+    setup_comprehensive_tests().map_err(|e| {
+        eprintln!("ERROR: setup_comprehensive_tests failed: {e}");
+        e
+    })?;
 
     // Initialize test namespace for isolation
     let socket_path = init_test_namespace("test_search_with_lsp_enrichment_performance");
+    eprintln!("Test namespace initialized with socket: {socket_path:?}");
 
     // Start daemon and initialize workspace
-    start_daemon_and_wait_with_config(Some(&socket_path))?;
+    start_daemon_and_wait_with_config(Some(&socket_path)).map_err(|e| {
+        eprintln!("ERROR: Failed to start daemon: {e}");
+        e
+    })?;
 
     let workspace_path = fixtures::get_go_project1();
+    eprintln!("Using workspace path: {workspace_path:?}");
+
     init_lsp_workspace_with_config(
         workspace_path.to_str().unwrap(),
         &["go"],
         Some(&socket_path),
-    )?;
+    )
+    .map_err(|e| {
+        eprintln!("ERROR: Failed to initialize LSP workspace: {e}");
+        e
+    })?;
 
     // Wait for language server to be ready using status polling
     wait_for_lsp_servers_ready_with_config(
         &["Go"],
         performance::language_server_ready_time(),
         Some(&socket_path),
-    )?;
+    )
+    .map_err(|e| {
+        eprintln!("ERROR: Failed waiting for LSP servers: {e}");
+        e
+    })?;
 
     // Test search with LSP enrichment
     let search_args = [
@@ -449,11 +468,18 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
         "--lsp",
     ];
 
+    eprintln!("Running search with args: {search_args:?}");
     let start = Instant::now();
     let max_search_time = performance::max_search_time();
     let (stdout, stderr, success) =
-        run_probe_command_with_config(&search_args, max_search_time, Some(&socket_path))?;
+        run_probe_command_with_config(&search_args, max_search_time, Some(&socket_path)).map_err(
+            |e| {
+                eprintln!("ERROR: Search command failed: {e}");
+                e
+            },
+        )?;
     let elapsed = start.elapsed();
+    eprintln!("Search completed in {elapsed:?}, success={success}");
 
     // Cleanup before assertions
     ensure_daemon_stopped_with_config(Some(&socket_path));
