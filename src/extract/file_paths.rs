@@ -592,12 +592,18 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
     // Finally, match file paths without line numbers or symbols
     // But only if they haven't been processed already
     // Allow more flexible word boundaries including after punctuation and symbols
+    // Regex pattern that supports both Unix and Windows paths
+    // On Windows, paths can contain backslashes and colons (for drive letters)
     let simple_file_regex =
-        Regex::new(r"(?:^|[\s\r\n\*\(\)\[\]\{\}<>:;,!?])([a-zA-Z0-9_\-./\*\{\}]+\.[a-zA-Z0-9]+)")
+        Regex::new(r"(?:^|[\s\r\n\*\(\)\[\]\{\}<>;,!?])([a-zA-Z]:[\\\/])?([a-zA-Z0-9_\-./\\\*\{\}]+\.[a-zA-Z0-9]+)")
             .unwrap();
 
     for cap in simple_file_regex.captures_iter(text) {
-        let file_path = cap.get(1).unwrap().as_str();
+        // Combine the optional drive letter (group 1) with the path (group 2)
+        let drive = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let path_part = cap.get(2).unwrap().as_str();
+        let file_path = format!("{drive}{path_part}");
+        let file_path = file_path.as_str();
 
         if debug_mode {
             println!("DEBUG: simple_file_regex matched: '{file_path}'");
@@ -637,7 +643,18 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
                     Ok(path) => {
                         // Even if resolve_path returns Ok, we need to validate it's a real file
                         // resolve_path returns Ok(PathBuf::from(path)) for non-special paths
-                        if !file_path.contains(':') && !file_path.starts_with("/dep/") {
+                        // Check if this is a special path (with language prefix or /dep/) or a Windows path
+                        let is_windows_path = file_path.len() >= 2
+                            && file_path.chars().nth(1) == Some(':')
+                            && file_path
+                                .chars()
+                                .next()
+                                .map(|c| c.is_ascii_alphabetic())
+                                .unwrap_or(false);
+                        let is_special_path = (file_path.contains(':') && !is_windows_path)
+                            || file_path.starts_with("/dep/");
+
+                        if !is_special_path {
                             // This is a regular path that resolve_path just passed through
                             // Apply our file path validation
                             if !is_likely_file_path(file_path) {
