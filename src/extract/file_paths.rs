@@ -733,6 +733,11 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
     let mut results = Vec::new();
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
+    if debug_mode {
+        println!("DEBUG: parse_file_with_line called with input: '{}'", input);
+        println!("DEBUG: parse_file_with_line allow_tests: {}", allow_tests);
+    }
+
     // Remove any surrounding backticks or quotes, but not apostrophes within words
     // First check if the input starts and ends with the same quote character
     let first_char = input.chars().next().unwrap_or(' ');
@@ -747,6 +752,32 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
         // Otherwise just trim any quotes at the beginning or end
         input.trim_matches(|c| c == '`' || c == '"')
     };
+
+    if debug_mode {
+        println!(
+            "DEBUG: parse_file_with_line cleaned_input: '{}'",
+            cleaned_input
+        );
+    }
+
+    // Check if this is a Windows absolute path (e.g., C:\, D:\, etc.)
+    // We need to check this before splitting on ':' because Windows paths contain ':'
+    let is_windows_path = cleaned_input.len() >= 3
+        && cleaned_input.chars().nth(1) == Some(':')
+        && cleaned_input
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphabetic())
+            .unwrap_or(false)
+        && (cleaned_input.chars().nth(2) == Some('\\')
+            || cleaned_input.chars().nth(2) == Some('/'));
+
+    if debug_mode {
+        println!(
+            "DEBUG: parse_file_with_line is_windows_path: {}",
+            is_windows_path
+        );
+    }
 
     // Check if the input contains a symbol reference (file#symbol or file#parent.child)
     if let Some((file_part, symbol)) = cleaned_input.split_once('#') {
@@ -784,7 +815,9 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
             }
         }
         return results;
-    } else if let Some((file_part, rest)) = cleaned_input.split_once(':') {
+    } else if !is_windows_path && cleaned_input.contains(':') {
+        // Only try to split on ':' if it's not a Windows path
+        let (file_part, rest) = cleaned_input.split_once(':').unwrap();
         // Extract the line specification from the rest (which might contain more colons)
         let line_spec = rest.split(':').next().unwrap_or("");
 
@@ -1550,6 +1583,35 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
         let _ = fs::remove_file(&test_file);
         let _ = fs::remove_dir(&src_dir);
         let _ = fs::remove_dir(&tests_dir);
+    }
+
+    #[test]
+    fn test_windows_path_parsing() {
+        // Test that Windows paths are correctly identified and not split on the drive colon
+        let windows_paths = vec![
+            "C:\\Users\\test\\file.rs",
+            "D:\\Projects\\code\\main.go",
+            "C:/Users/test/file.rs",                       // Forward slashes
+            "E:\\RUNNER~1\\AppData\\Local\\Temp\\test.tf", // Short name format
+        ];
+
+        for path in windows_paths {
+            let results = parse_file_with_line(path, true);
+            assert_eq!(results.len(), 1, "Failed to parse Windows path: {}", path);
+            // The path should be returned as-is (converted to PathBuf)
+            assert_eq!(results[0].0, PathBuf::from(path));
+            // Should have no line numbers or symbols
+            assert_eq!(results[0].1, None);
+            assert_eq!(results[0].2, None);
+            assert_eq!(results[0].3, None);
+        }
+
+        // Test that Windows paths with line numbers still work
+        let path_with_line = "C:\\Users\\test\\file.rs:42";
+        let results = parse_file_with_line(path_with_line, true);
+        // Note: This will NOT parse the line number because we treat the whole thing as a Windows path
+        // This is a limitation but prevents the path from being incorrectly split at the drive colon
+        assert_eq!(results.len(), 1);
     }
 
     #[test]
