@@ -341,3 +341,4 @@ This guide includes:
 - Socket path discovery
 - Connection management best practices
 - Debugging tips and common issues# Trigger CI re-run
+# Triggering CI re-run
