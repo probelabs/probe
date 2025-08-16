@@ -726,18 +726,38 @@ impl LspManager {
             // Try to canonicalize, but if it fails and the path exists, use the absolute path as-is
             match abs.canonicalize() {
                 Ok(canonical) => canonical,
-                Err(_) if abs.exists() => {
-                    // Path exists but can't be canonicalized (e.g., symlink issues in CI)
-                    // Use the absolute path as-is
-                    eprintln!("Warning: Could not canonicalize path {abs:?}, using as-is");
-                    abs
-                }
-                Err(e) => {
-                    return Err(anyhow::anyhow!(
-                        "Failed to resolve workspace path '{}': {}",
+                Err(canon_err) => {
+                    // Debug: Check if path exists
+                    eprintln!(
+                        "Canonicalization failed for {}: {}",
                         abs.display(),
-                        e
-                    ))
+                        canon_err
+                    );
+                    eprintln!("Checking if path exists: {}", abs.exists());
+
+                    if abs.exists() {
+                        // Path exists but can't be canonicalized (e.g., symlink issues in CI)
+                        // Use the absolute path as-is
+                        eprintln!(
+                            "Warning: Path exists but could not canonicalize {abs:?}, using as-is"
+                        );
+                        abs
+                    } else {
+                        // Path doesn't exist - provide detailed error
+                        eprintln!("Path does not exist: {}", abs.display());
+                        // Check parent directory
+                        if let Some(parent) = abs.parent() {
+                            eprintln!(
+                                "Parent directory {} exists: {}",
+                                parent.display(),
+                                parent.exists()
+                            );
+                        }
+                        return Err(anyhow::anyhow!(
+                            "Workspace path does not exist: '{}'",
+                            abs.display()
+                        ));
+                    }
                 }
             }
         } else {
@@ -750,6 +770,23 @@ impl LspManager {
 
         // Validate workspace exists (after canonicalization for relative paths)
         if !workspace_root.exists() {
+            // Double-check with metadata to see if it's a permission issue
+            if let Err(e) = std::fs::metadata(&workspace_root) {
+                eprintln!(
+                    "Failed to get metadata for workspace {}: {}",
+                    workspace_root.display(),
+                    e
+                );
+            }
+            // Try listing parent directory to see what's there
+            if let Some(parent) = workspace_root.parent() {
+                if let Ok(entries) = std::fs::read_dir(parent) {
+                    eprintln!("Contents of parent directory {}:", parent.display());
+                    for entry in entries.flatten() {
+                        eprintln!("  - {:?}", entry.file_name());
+                    }
+                }
+            }
             return Err(anyhow::anyhow!(
                 "Workspace does not exist: {}",
                 workspace_root.display()
