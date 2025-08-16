@@ -909,23 +909,67 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
             }
         } else {
             // Check if the path needs special resolution (e.g., go:github.com/user/repo)
+            if debug_mode {
+                println!(
+                    "DEBUG: parse_file_with_line - Processing plain file path: '{}'",
+                    cleaned_input
+                );
+            }
             match resolve_path(cleaned_input) {
                 Ok(path) => {
+                    if debug_mode {
+                        println!(
+                            "DEBUG: parse_file_with_line - resolve_path succeeded: {:?}",
+                            path
+                        );
+                        println!(
+                            "DEBUG: parse_file_with_line - Path exists: {}",
+                            path.exists()
+                        );
+                    }
                     let is_test = is_test_file(&path);
-                    if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                    let is_ignored = is_ignored_by_gitignore(&path);
+                    if debug_mode {
+                        println!("DEBUG: parse_file_with_line - is_test_file: {}", is_test);
+                        println!(
+                            "DEBUG: parse_file_with_line - is_ignored_by_gitignore: {}",
+                            is_ignored
+                        );
+                        println!("DEBUG: parse_file_with_line - allow_tests: {}", allow_tests);
+                        println!(
+                            "DEBUG: parse_file_with_line - Should include: {}",
+                            !is_ignored && (allow_tests || !is_test)
+                        );
+                    }
+                    if !is_ignored && (allow_tests || !is_test) {
+                        if debug_mode {
+                            println!("DEBUG: parse_file_with_line - Adding path to results");
+                        }
                         results.push((path, None, None, None, None));
                     }
                 }
                 Err(err) => {
                     // If resolution fails, log the error and try with the original path
-                    if std::env::var("DEBUG").unwrap_or_default() == "1" {
-                        println!("DEBUG: Failed to resolve path '{cleaned_input}': {err}");
+                    if debug_mode {
+                        println!("DEBUG: parse_file_with_line - Failed to resolve path '{cleaned_input}': {err}");
                     }
 
                     // Fall back to the original path
                     let path = PathBuf::from(cleaned_input);
                     let is_test = is_test_file(&path);
-                    if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
+                    let is_ignored = is_ignored_by_gitignore(&path);
+                    if debug_mode {
+                        println!("DEBUG: parse_file_with_line - Fallback path: {:?}", path);
+                        println!(
+                            "DEBUG: parse_file_with_line - Fallback is_test_file: {}",
+                            is_test
+                        );
+                        println!(
+                            "DEBUG: parse_file_with_line - Fallback is_ignored_by_gitignore: {}",
+                            is_ignored
+                        );
+                    }
+                    if !is_ignored && (allow_tests || !is_test) {
                         results.push((path, None, None, None, None));
                     }
                 }
@@ -1524,13 +1568,35 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
         writeln!(file, "resource \"test\" \"example\" {{").unwrap();
         writeln!(file, "  name = \"test\"").unwrap();
         writeln!(file, "}}").unwrap();
+        // Ensure the file is flushed to disk
+        file.flush().unwrap();
+        drop(file);
+
+        // Verify the file was created
+        assert!(
+            test_file.exists(),
+            "Test file was not created: {:?}",
+            test_file
+        );
 
         // Test extracting from a .tf file
         let file_str = test_file.to_str().unwrap();
+        eprintln!("DEBUG: Testing with file path: {}", file_str);
+        eprintln!("DEBUG: File exists: {}", test_file.exists());
+        eprintln!("DEBUG: File absolute path: {:?}", test_file.canonicalize());
+
+        // Enable debug mode
+        std::env::set_var("DEBUG", "1");
         let results = parse_file_with_line(file_str, true);
+        std::env::remove_var("DEBUG");
+
+        eprintln!("DEBUG: Got {} results", results.len());
+        if !results.is_empty() {
+            eprintln!("DEBUG: First result path: {:?}", results[0].0);
+        }
 
         // Should return the file even though .tf is not a supported tree-sitter language
-        assert_eq!(results.len(), 1);
+        assert_eq!(results.len(), 1, "Expected 1 result for path: {}", file_str);
         assert_eq!(results[0].0, test_file);
 
         // Clean up
