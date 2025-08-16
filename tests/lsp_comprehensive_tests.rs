@@ -663,6 +663,12 @@ fn test_error_recovery_with_invalid_file_paths() -> Result<()> {
 /// Performance benchmark test - not a strict requirement but useful for monitoring
 #[test]
 fn test_lsp_performance_benchmark() -> Result<()> {
+    // Skip performance benchmarks in CI - they're unreliable due to varying resources
+    if performance::is_ci_environment() {
+        eprintln!("Skipping performance benchmark in CI environment");
+        return Ok(());
+    }
+
     setup_comprehensive_tests()?;
 
     // Initialize test namespace for isolation
