@@ -168,31 +168,35 @@ pub fn find_symbol_in_file_with_position(
             let tokenized_content =
                 crate::ranking::preprocess_text_with_filename(content, &filename);
 
-            return Ok(SearchResult {
-                file: path.to_string_lossy().to_string(),
-                lines: (1, lines.len()),
-                node_type: "file".to_string(),
-                code: content.to_string(),
-                matched_by_filename: None,
-                rank: None,
-                score: None,
-                tfidf_score: None,
-                bm25_score: None,
-                tfidf_rank: None,
-                bm25_rank: None,
-                new_score: None,
-                hybrid2_rank: None,
-                combined_score_rank: None,
-                file_unique_terms: None,
-                file_total_matches: None,
-                file_match_rank: None,
-                block_unique_terms: None,
-                block_total_matches: None,
-                parent_file_id: None,
-                block_id: None,
-                matched_keywords: None,
-                tokenized_content: Some(tokenized_content),
-            });
+            return Ok((
+                SearchResult {
+                    file: path.to_string_lossy().to_string(),
+                    lines: (1, lines.len()),
+                    node_type: "file".to_string(),
+                    code: content.to_string(),
+                    matched_by_filename: None,
+                    rank: None,
+                    score: None,
+                    tfidf_score: None,
+                    bm25_score: None,
+                    tfidf_rank: None,
+                    bm25_rank: None,
+                    new_score: None,
+                    hybrid2_rank: None,
+                    combined_score_rank: None,
+                    file_unique_terms: None,
+                    file_total_matches: None,
+                    file_match_rank: None,
+                    block_unique_terms: None,
+                    block_total_matches: None,
+                    parent_file_id: None,
+                    block_id: None,
+                    matched_keywords: None,
+                    tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
+                },
+                None,
+            ));
         }
     };
 
