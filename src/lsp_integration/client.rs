@@ -29,12 +29,17 @@ impl Drop for LspClient {
     fn drop(&mut self) {
         // Ensure the stream is properly closed when the client is dropped
         if let Some(mut stream) = self.stream.take() {
-            // Try to send a disconnect message before closing
+            // Try to flush and properly close the stream
             // We use block_on here since Drop is not async
-            futures::executor::block_on(async {
-                // Best effort - ignore errors since we're dropping anyway
-                let _ = stream.flush().await;
-            });
+            // Using std::thread::spawn to avoid runtime issues during drop
+            let _ = std::thread::spawn(move || {
+                futures::executor::block_on(async move {
+                    // Best effort - ignore errors since we're dropping anyway
+                    let _ = stream.flush().await;
+                    let _ = stream.shutdown().await;
+                });
+            })
+            .join();
             debug!("LspClient dropped, connection closed");
         }
     }
