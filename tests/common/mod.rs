@@ -613,24 +613,34 @@ pub fn init_lsp_workspace_with_config(
     languages: &[&str],
     socket_path: Option<&Path>,
 ) -> Result<()> {
+    // Debug: Log the original workspace path
+    eprintln!("init_lsp_workspace_with_config: workspace_path={workspace_path}");
+    eprintln!(
+        "  exists: {}",
+        std::path::Path::new(workspace_path).exists()
+    );
+
     // Try to canonicalize, but if it fails (e.g., in CI with symlinks), use the original path
     // The daemon should handle both absolute and relative paths correctly
     let path_to_use = if let Ok(canonical) = std::fs::canonicalize(workspace_path) {
+        eprintln!("  canonicalized to: {}", canonical.display());
         canonical.to_string_lossy().to_string()
     } else {
+        eprintln!("  canonicalization failed, making absolute");
         // If canonicalization fails, ensure we have an absolute path
         let path = PathBuf::from(workspace_path);
         if path.is_absolute() {
             workspace_path.to_string()
         } else {
             // Make it absolute relative to current directory
-            std::env::current_dir()
+            let abs = std::env::current_dir()
                 .unwrap_or_else(|_| PathBuf::from("."))
-                .join(&path)
-                .to_string_lossy()
-                .to_string()
+                .join(&path);
+            eprintln!("  made absolute: {}", abs.display());
+            abs.to_string_lossy().to_string()
         }
     };
+    eprintln!("  final path_to_use: {path_to_use}");
     init_lsp_workspace_with_retries_config(&path_to_use, languages, 3, socket_path)
 }
 
@@ -658,7 +668,20 @@ pub fn init_lsp_workspace_with_retries_config(
     let timeout = performance::max_init_time();
 
     for retry in 0..max_retries {
+        eprintln!("LSP init attempt {} with args: {:?}", retry + 1, args);
         let (stdout, stderr, success) = run_probe_command_with_config(&args, timeout, socket_path)?;
+        eprintln!(
+            "  Result: success={}, stdout len={}, stderr len={}",
+            success,
+            stdout.len(),
+            stderr.len()
+        );
+        if !stdout.is_empty() {
+            eprintln!("  Stdout: {stdout}");
+        }
+        if !stderr.is_empty() {
+            eprintln!("  Stderr: {stderr}");
+        }
 
         if success {
             println!(
@@ -677,6 +700,7 @@ pub fn init_lsp_workspace_with_retries_config(
 
         if !is_retryable {
             // Non-retryable error, fail immediately
+            eprintln!("Non-retryable error detected");
             return Err(anyhow::anyhow!(
                 "LSP workspace initialization failed with non-retryable error.\nArgs: {:?}\nStdout: {}\nStderr: {}",
                 args,
@@ -1095,15 +1119,39 @@ pub mod fixtures {
     }
 
     pub fn get_go_project1() -> PathBuf {
-        get_fixtures_dir().join("go/project1")
+        let path = get_fixtures_dir().join("go/project1");
+        eprintln!("fixtures::get_go_project1() -> {}", path.display());
+        eprintln!("  exists: {}", path.exists());
+        if !path.exists() {
+            eprintln!("  ERROR: Go project1 fixture does not exist!");
+            eprintln!("  CARGO_MANIFEST_DIR: {}", env!("CARGO_MANIFEST_DIR"));
+            eprintln!("  Current dir: {:?}", std::env::current_dir());
+        }
+        path
     }
 
     pub fn get_typescript_project1() -> PathBuf {
-        get_fixtures_dir().join("typescript/project1")
+        let path = get_fixtures_dir().join("typescript/project1");
+        eprintln!("fixtures::get_typescript_project1() -> {}", path.display());
+        eprintln!("  exists: {}", path.exists());
+        if !path.exists() {
+            eprintln!("  ERROR: TypeScript project1 fixture does not exist!");
+            eprintln!("  CARGO_MANIFEST_DIR: {}", env!("CARGO_MANIFEST_DIR"));
+            eprintln!("  Current dir: {:?}", std::env::current_dir());
+        }
+        path
     }
 
     pub fn get_javascript_project1() -> PathBuf {
-        get_fixtures_dir().join("javascript/project1")
+        let path = get_fixtures_dir().join("javascript/project1");
+        eprintln!("fixtures::get_javascript_project1() -> {}", path.display());
+        eprintln!("  exists: {}", path.exists());
+        if !path.exists() {
+            eprintln!("  ERROR: JavaScript project1 fixture does not exist!");
+            eprintln!("  CARGO_MANIFEST_DIR: {}", env!("CARGO_MANIFEST_DIR"));
+            eprintln!("  Current dir: {:?}", std::env::current_dir());
+        }
+        path
     }
 }
 
