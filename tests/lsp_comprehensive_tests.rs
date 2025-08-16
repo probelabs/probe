@@ -24,9 +24,10 @@ mod common;
 
 use anyhow::Result;
 use common::{
-    ensure_daemon_stopped, extract_with_call_hierarchy_retry, fixtures, init_lsp_workspace,
-    performance, require_all_language_servers, run_probe_command_with_timeout,
-    start_daemon_and_wait, wait_for_lsp_servers_ready,
+    cleanup_test_namespace, ensure_daemon_stopped_with_config,
+    extract_with_call_hierarchy_retry_config, fixtures, init_lsp_workspace_with_config,
+    init_test_namespace, performance, require_all_language_servers, run_probe_command_with_config,
+    start_daemon_and_wait_with_config, wait_for_lsp_servers_ready_with_config,
 };
 use std::time::{Duration, Instant};
 
@@ -34,27 +35,33 @@ use std::time::{Duration, Instant};
 /// This function FAILS the test if any language server is missing
 fn setup_comprehensive_tests() -> Result<()> {
     require_all_language_servers()?;
-    ensure_daemon_stopped();
+    common::ensure_daemon_stopped();
     Ok(())
-}
-
-/// Cleanup function for all tests
-fn cleanup_comprehensive_tests() {
-    ensure_daemon_stopped();
 }
 
 #[test]
 fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
     setup_comprehensive_tests()?;
 
-    // Start daemon and initialize workspace
-    start_daemon_and_wait()?;
+    // Initialize test namespace for isolation
+    let socket_path = init_test_namespace("test_go_lsp_call_hierarchy_exact");
+
+    // Start daemon with isolated socket
+    start_daemon_and_wait_with_config(Some(&socket_path))?;
 
     let workspace_path = fixtures::get_go_project1();
-    init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
+    init_lsp_workspace_with_config(
+        workspace_path.to_str().unwrap(),
+        &["go"],
+        Some(&socket_path),
+    )?;
 
     // Wait for gopls to fully index the project using status polling
-    wait_for_lsp_servers_ready(&["Go"], performance::language_server_ready_time())?;
+    wait_for_lsp_servers_ready_with_config(
+        &["Go"],
+        performance::language_server_ready_time(),
+        Some(&socket_path),
+    )?;
 
     // Test extraction with LSP for the Calculate function
     let file_path = workspace_path.join("calculator.go");
@@ -65,15 +72,17 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
     ];
 
     let max_extract_time = performance::max_extract_time();
-    let (stdout, stderr, success) = extract_with_call_hierarchy_retry(
+    let (stdout, stderr, success) = extract_with_call_hierarchy_retry_config(
         &extract_args,
         3, // Expected incoming calls: main(), ProcessNumbers(), BusinessLogic.ProcessValue()
         3, // Expected outgoing calls: Add(), Multiply(), Subtract() (conditional)
         max_extract_time,
+        Some(&socket_path),
     )?;
 
     // Cleanup before assertions to avoid daemon issues
-    cleanup_comprehensive_tests();
+    ensure_daemon_stopped_with_config(Some(&socket_path));
+    cleanup_test_namespace(&socket_path);
 
     // Validate the command succeeded
     assert!(success, "Extract command should succeed. Stderr: {stderr}");
@@ -108,14 +117,25 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
 fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
     setup_comprehensive_tests()?;
 
-    // Start daemon and initialize workspace
-    start_daemon_and_wait()?;
+    // Initialize test namespace for isolation
+    let socket_path = init_test_namespace("test_typescript_lsp_call_hierarchy_exact");
+
+    // Start daemon with isolated socket
+    start_daemon_and_wait_with_config(Some(&socket_path))?;
 
     let workspace_path = fixtures::get_typescript_project1();
-    init_lsp_workspace(workspace_path.to_str().unwrap(), &["typescript"])?;
+    init_lsp_workspace_with_config(
+        workspace_path.to_str().unwrap(),
+        &["typescript"],
+        Some(&socket_path),
+    )?;
 
     // Wait for typescript-language-server to fully index the project using status polling
-    wait_for_lsp_servers_ready(&["TypeScript"], performance::language_server_ready_time())?;
+    wait_for_lsp_servers_ready_with_config(
+        &["TypeScript"],
+        performance::language_server_ready_time(),
+        Some(&socket_path),
+    )?;
 
     // Test extraction with LSP for the calculate function
     let file_path = workspace_path.join("src/calculator.ts");
@@ -126,15 +146,17 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
     ];
 
     let max_extract_time = performance::max_extract_time();
-    let (stdout, stderr, success) = extract_with_call_hierarchy_retry(
+    let (stdout, stderr, success) = extract_with_call_hierarchy_retry_config(
         &extract_args,
         6, // Expected incoming calls: advancedCalculation(), processValue(), processArray(), main(), processNumbers(), processValue()
         3, // Expected outgoing calls: add(), multiply(), subtract() (conditional)
         max_extract_time,
+        Some(&socket_path),
     )?;
 
     // Cleanup before assertions to avoid daemon issues
-    cleanup_comprehensive_tests();
+    ensure_daemon_stopped_with_config(Some(&socket_path));
+    cleanup_test_namespace(&socket_path);
 
     // Validate the command succeeded
     assert!(success, "Extract command should succeed. Stderr: {stderr}");
@@ -169,14 +191,25 @@ fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
 fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
     setup_comprehensive_tests()?;
 
-    // Start daemon and initialize workspace
-    start_daemon_and_wait()?;
+    // Initialize test namespace for isolation
+    let socket_path = init_test_namespace("test_javascript_lsp_call_hierarchy_exact");
+
+    // Start daemon with isolated socket
+    start_daemon_and_wait_with_config(Some(&socket_path))?;
 
     let workspace_path = fixtures::get_javascript_project1();
-    init_lsp_workspace(workspace_path.to_str().unwrap(), &["javascript"])?;
+    init_lsp_workspace_with_config(
+        workspace_path.to_str().unwrap(),
+        &["javascript"],
+        Some(&socket_path),
+    )?;
 
     // Wait for typescript-language-server to fully index the JavaScript project using status polling
-    wait_for_lsp_servers_ready(&["JavaScript"], performance::language_server_ready_time())?;
+    wait_for_lsp_servers_ready_with_config(
+        &["JavaScript"],
+        performance::language_server_ready_time(),
+        Some(&socket_path),
+    )?;
 
     // Test extraction with LSP for the calculate function
     let file_path = workspace_path.join("src/calculator.js");
@@ -187,15 +220,17 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
     ];
 
     let max_extract_time = performance::max_extract_time();
-    let (stdout, stderr, success) = extract_with_call_hierarchy_retry(
+    let (stdout, stderr, success) = extract_with_call_hierarchy_retry_config(
         &extract_args,
         4, // Expected incoming calls: advancedCalculation(), processValue(), processArray(), createProcessor()
         3, // Expected outgoing calls: add(), multiply(), subtract() (conditional)
         max_extract_time,
+        Some(&socket_path),
     )?;
 
     // Cleanup before assertions to avoid daemon issues
-    cleanup_comprehensive_tests();
+    ensure_daemon_stopped_with_config(Some(&socket_path));
+    cleanup_test_namespace(&socket_path);
 
     // Validate the command succeeded
     assert!(success, "Extract command should succeed. Stderr: {stderr}");
@@ -230,22 +265,34 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
 fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     setup_comprehensive_tests()?;
 
-    // Start daemon
-    start_daemon_and_wait()?;
+    // Initialize test namespace for isolation
+    let socket_path = init_test_namespace("test_concurrent_multi_language_lsp_operations");
+
+    // Start daemon with isolated socket
+    start_daemon_and_wait_with_config(Some(&socket_path))?;
 
     // Initialize all language workspaces
     let go_workspace = fixtures::get_go_project1();
     let ts_workspace = fixtures::get_typescript_project1();
     let js_workspace = fixtures::get_javascript_project1();
 
-    init_lsp_workspace(go_workspace.to_str().unwrap(), &["go"])?;
-    init_lsp_workspace(ts_workspace.to_str().unwrap(), &["typescript"])?;
-    init_lsp_workspace(js_workspace.to_str().unwrap(), &["javascript"])?;
+    init_lsp_workspace_with_config(go_workspace.to_str().unwrap(), &["go"], Some(&socket_path))?;
+    init_lsp_workspace_with_config(
+        ts_workspace.to_str().unwrap(),
+        &["typescript"],
+        Some(&socket_path),
+    )?;
+    init_lsp_workspace_with_config(
+        js_workspace.to_str().unwrap(),
+        &["javascript"],
+        Some(&socket_path),
+    )?;
 
     // Wait for all language servers to be ready using status polling
-    wait_for_lsp_servers_ready(
+    wait_for_lsp_servers_ready_with_config(
         &["Go", "TypeScript", "JavaScript"],
         performance::language_server_ready_time(),
+        Some(&socket_path),
     )?;
 
     // Perform concurrent operations on all languages
@@ -261,18 +308,33 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     // Run all three extractions concurrently using threads
     // We need to clone/move all data into the threads
     let go_file_str = format!("{}:10", go_file.to_string_lossy());
+    let socket_path_clone1 = socket_path.clone();
     let go_handle = std::thread::spawn(move || {
-        run_probe_command_with_timeout(&["extract", &go_file_str, "--lsp"], timeout)
+        run_probe_command_with_config(
+            &["extract", &go_file_str, "--lsp"],
+            timeout,
+            Some(&socket_path_clone1),
+        )
     });
 
     let ts_file_str = format!("{}:17", ts_file.to_string_lossy());
+    let socket_path_clone2 = socket_path.clone();
     let ts_handle = std::thread::spawn(move || {
-        run_probe_command_with_timeout(&["extract", &ts_file_str, "--lsp"], timeout)
+        run_probe_command_with_config(
+            &["extract", &ts_file_str, "--lsp"],
+            timeout,
+            Some(&socket_path_clone2),
+        )
     });
 
     let js_file_str = format!("{}:14", js_file.to_string_lossy());
+    let socket_path_clone3 = socket_path.clone();
     let js_handle = std::thread::spawn(move || {
-        run_probe_command_with_timeout(&["extract", &js_file_str, "--lsp"], timeout)
+        run_probe_command_with_config(
+            &["extract", &js_file_str, "--lsp"],
+            timeout,
+            Some(&socket_path_clone3),
+        )
     });
 
     // Wait for all threads to complete and collect results
@@ -290,7 +352,8 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     let total_elapsed = start.elapsed();
 
     // Cleanup before assertions
-    cleanup_comprehensive_tests();
+    ensure_daemon_stopped_with_config(Some(&socket_path));
+    cleanup_test_namespace(&socket_path);
 
     // Validate all operations succeeded
     assert!(
@@ -352,14 +415,25 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
 fn test_search_with_lsp_enrichment_performance() -> Result<()> {
     setup_comprehensive_tests()?;
 
+    // Initialize test namespace for isolation
+    let socket_path = init_test_namespace("test_search_with_lsp_enrichment_performance");
+
     // Start daemon and initialize workspace
-    start_daemon_and_wait()?;
+    start_daemon_and_wait_with_config(Some(&socket_path))?;
 
     let workspace_path = fixtures::get_go_project1();
-    init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
+    init_lsp_workspace_with_config(
+        workspace_path.to_str().unwrap(),
+        &["go"],
+        Some(&socket_path),
+    )?;
 
     // Wait for language server to be ready using status polling
-    wait_for_lsp_servers_ready(&["Go"], performance::language_server_ready_time())?;
+    wait_for_lsp_servers_ready_with_config(
+        &["Go"],
+        performance::language_server_ready_time(),
+        Some(&socket_path),
+    )?;
 
     // Test search with LSP enrichment
     let search_args = [
@@ -373,11 +447,13 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
 
     let start = Instant::now();
     let max_search_time = performance::max_search_time();
-    let (stdout, stderr, success) = run_probe_command_with_timeout(&search_args, max_search_time)?;
+    let (stdout, stderr, success) =
+        run_probe_command_with_config(&search_args, max_search_time, Some(&socket_path))?;
     let elapsed = start.elapsed();
 
     // Cleanup before assertions
-    cleanup_comprehensive_tests();
+    ensure_daemon_stopped_with_config(Some(&socket_path));
+    cleanup_test_namespace(&socket_path);
 
     // Validate the command succeeded
     assert!(success, "Search command should succeed. Stderr: {stderr}");
@@ -405,28 +481,45 @@ fn test_search_with_lsp_enrichment_performance() -> Result<()> {
 fn test_lsp_daemon_status_with_multiple_languages() -> Result<()> {
     setup_comprehensive_tests()?;
 
+    // Initialize test namespace for isolation
+    let socket_path = init_test_namespace("test_lsp_daemon_status_with_multiple_languages");
+
     // Start daemon and initialize all language workspaces
-    start_daemon_and_wait()?;
+    start_daemon_and_wait_with_config(Some(&socket_path))?;
 
     let go_workspace = fixtures::get_go_project1();
     let ts_workspace = fixtures::get_typescript_project1();
     let js_workspace = fixtures::get_javascript_project1();
 
-    init_lsp_workspace(go_workspace.to_str().unwrap(), &["go"])?;
-    init_lsp_workspace(ts_workspace.to_str().unwrap(), &["typescript"])?;
-    init_lsp_workspace(js_workspace.to_str().unwrap(), &["javascript"])?;
+    init_lsp_workspace_with_config(go_workspace.to_str().unwrap(), &["go"], Some(&socket_path))?;
+    init_lsp_workspace_with_config(
+        ts_workspace.to_str().unwrap(),
+        &["typescript"],
+        Some(&socket_path),
+    )?;
+    init_lsp_workspace_with_config(
+        js_workspace.to_str().unwrap(),
+        &["javascript"],
+        Some(&socket_path),
+    )?;
 
     // Wait for language servers to initialize using status polling
-    wait_for_lsp_servers_ready(&["Go"], performance::language_server_ready_time())?;
+    wait_for_lsp_servers_ready_with_config(
+        &["Go"],
+        performance::language_server_ready_time(),
+        Some(&socket_path),
+    )?;
 
     // Check daemon status
-    let (stdout, stderr, success) = run_probe_command_with_timeout(
+    let (stdout, stderr, success) = run_probe_command_with_config(
         &["lsp", "status"],
         performance::language_server_ready_time(),
+        Some(&socket_path),
     )?;
 
     // Cleanup before assertions
-    cleanup_comprehensive_tests();
+    ensure_daemon_stopped_with_config(Some(&socket_path));
+    cleanup_test_namespace(&socket_path);
 
     // Validate status command succeeded
     assert!(success, "LSP status should succeed. Stderr: {stderr}");
@@ -452,13 +545,20 @@ fn test_lsp_daemon_status_with_multiple_languages() -> Result<()> {
 fn test_lsp_initialization_timeout_handling() -> Result<()> {
     setup_comprehensive_tests()?;
 
+    // Initialize test namespace for isolation
+    let socket_path = init_test_namespace("test_lsp_initialization_timeout_handling");
+
     // Start daemon
-    start_daemon_and_wait()?;
+    start_daemon_and_wait_with_config(Some(&socket_path))?;
 
     let workspace_path = fixtures::get_go_project1();
 
     // Initialize workspace but don't wait for full indexing
-    init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
+    init_lsp_workspace_with_config(
+        workspace_path.to_str().unwrap(),
+        &["go"],
+        Some(&socket_path),
+    )?;
 
     // Try extraction immediately (before gopls is fully ready)
     let file_path = workspace_path.join("calculator.go");
@@ -469,10 +569,11 @@ fn test_lsp_initialization_timeout_handling() -> Result<()> {
     ];
 
     let (stdout, _stderr, success) =
-        run_probe_command_with_timeout(&extract_args, Duration::from_secs(30))?;
+        run_probe_command_with_config(&extract_args, Duration::from_secs(30), Some(&socket_path))?;
 
     // Cleanup before assertions
-    cleanup_comprehensive_tests();
+    ensure_daemon_stopped_with_config(Some(&socket_path));
+    cleanup_test_namespace(&socket_path);
 
     // The command should succeed even if LSP isn't fully ready
     assert!(
@@ -496,23 +597,38 @@ fn test_lsp_initialization_timeout_handling() -> Result<()> {
 fn test_error_recovery_with_invalid_file_paths() -> Result<()> {
     setup_comprehensive_tests()?;
 
+    // Initialize test namespace for isolation
+    let socket_path = init_test_namespace("test_error_recovery_with_invalid_file_paths");
+
     // Start daemon
-    start_daemon_and_wait()?;
+    start_daemon_and_wait_with_config(Some(&socket_path))?;
 
     let workspace_path = fixtures::get_go_project1();
-    init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
+    init_lsp_workspace_with_config(
+        workspace_path.to_str().unwrap(),
+        &["go"],
+        Some(&socket_path),
+    )?;
 
     // Wait for language server using status polling
-    wait_for_lsp_servers_ready(&["Go"], performance::language_server_ready_time())?;
+    wait_for_lsp_servers_ready_with_config(
+        &["Go"],
+        performance::language_server_ready_time(),
+        Some(&socket_path),
+    )?;
 
     // Try extraction with invalid file path
     let extract_args = ["extract", "nonexistent_file.go:10", "--lsp"];
 
-    let (stdout, stderr, success) =
-        run_probe_command_with_timeout(&extract_args, performance::language_server_ready_time())?;
+    let (stdout, stderr, success) = run_probe_command_with_config(
+        &extract_args,
+        performance::language_server_ready_time(),
+        Some(&socket_path),
+    )?;
 
     // Cleanup before assertions
-    cleanup_comprehensive_tests();
+    ensure_daemon_stopped_with_config(Some(&socket_path));
+    cleanup_test_namespace(&socket_path);
 
     // The command should fail gracefully. Some CLIs print a clear error but still exit 0.
     // Accept either a non-zero exit OR a clear missing-file error message in output.
@@ -544,14 +660,25 @@ fn test_error_recovery_with_invalid_file_paths() -> Result<()> {
 fn test_lsp_performance_benchmark() -> Result<()> {
     setup_comprehensive_tests()?;
 
+    // Initialize test namespace for isolation
+    let socket_path = init_test_namespace("test_lsp_performance_benchmark");
+
     // Start daemon and initialize workspace
-    start_daemon_and_wait()?;
+    start_daemon_and_wait_with_config(Some(&socket_path))?;
 
     let workspace_path = fixtures::get_go_project1();
-    init_lsp_workspace(workspace_path.to_str().unwrap(), &["go"])?;
+    init_lsp_workspace_with_config(
+        workspace_path.to_str().unwrap(),
+        &["go"],
+        Some(&socket_path),
+    )?;
 
     // Wait for language server to be fully ready using status polling
-    wait_for_lsp_servers_ready(&["Go"], performance::language_server_ready_time())?;
+    wait_for_lsp_servers_ready_with_config(
+        &["Go"],
+        performance::language_server_ready_time(),
+        Some(&socket_path),
+    )?;
 
     // Perform multiple extractions to test consistency
     let file_path = workspace_path.join("calculator.go");
@@ -563,8 +690,11 @@ fn test_lsp_performance_benchmark() -> Result<()> {
         &format!("{}:10", file_path.to_string_lossy()),
         "--lsp",
     ];
-    let _ =
-        run_probe_command_with_timeout(&warm_up_args, performance::language_server_ready_time());
+    let _ = run_probe_command_with_config(
+        &warm_up_args,
+        performance::language_server_ready_time(),
+        Some(&socket_path),
+    );
 
     let mut timings = Vec::new();
 
@@ -576,9 +706,10 @@ fn test_lsp_performance_benchmark() -> Result<()> {
         ];
 
         let start = Instant::now();
-        let (stdout, stderr, success) = run_probe_command_with_timeout(
+        let (stdout, stderr, success) = run_probe_command_with_config(
             &extract_args,
             performance::language_server_ready_time(),
+            Some(&socket_path),
         )?;
         let elapsed = start.elapsed();
 
@@ -598,7 +729,8 @@ fn test_lsp_performance_benchmark() -> Result<()> {
     }
 
     // Cleanup before assertions
-    cleanup_comprehensive_tests();
+    ensure_daemon_stopped_with_config(Some(&socket_path));
+    cleanup_test_namespace(&socket_path);
 
     // Calculate average timing
     let avg_time = timings.iter().sum::<Duration>() / timings.len() as u32;

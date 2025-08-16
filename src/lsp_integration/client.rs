@@ -20,6 +20,16 @@ enum DaemonHealth {
     Unhealthy,
 }
 
+/// Resolve the socket path with optional override.
+/// If PROBE_LSP_SOCKET_PATH is set, we use it; otherwise fall back to the default.
+fn effective_socket_path() -> String {
+    if let Ok(p) = std::env::var("PROBE_LSP_SOCKET_PATH") {
+        return p;
+    }
+    // Default (typically under TMPDIR)
+    get_default_socket_path()
+}
+
 pub struct LspClient {
     stream: Option<IpcStream>,
     config: LspConfig,
@@ -83,7 +93,7 @@ impl LspClient {
     /// Try to connect without waiting for server to be ready
     /// This is used for non-blocking operations
     async fn try_connect_no_wait(&mut self) -> Result<()> {
-        let socket_path = get_default_socket_path();
+        let socket_path = effective_socket_path();
 
         // Very short timeout - just check if daemon is there
         let quick_timeout = Duration::from_millis(100);
@@ -132,7 +142,7 @@ impl LspClient {
 
     /// Connect to the LSP daemon, auto-starting if necessary
     async fn connect(&mut self) -> Result<()> {
-        let socket_path = get_default_socket_path();
+        let socket_path = effective_socket_path();
         // Use shorter timeout for initial connection attempt
         let connection_timeout = Duration::from_secs(5);
 
@@ -322,7 +332,7 @@ impl LspClient {
                     "Timeout reading message length after {}ms",
                     self.config.timeout_ms
                 );
-                let sp = get_default_socket_path();
+                let sp = effective_socket_path();
                 return Err(anyhow!(
                     "Timeout connecting to daemon after {}ms (socket: {})",
                     self.config.timeout_ms,
@@ -354,7 +364,7 @@ impl LspClient {
                     "Timeout reading message body of {} bytes after {}ms",
                     message_len, self.config.timeout_ms
                 );
-                let sp = get_default_socket_path();
+                let sp = effective_socket_path();
                 return Err(anyhow!(
                     "Timeout waiting for daemon response after {}ms (socket: {})",
                     self.config.timeout_ms,
@@ -625,7 +635,7 @@ fn get_probe_version_info() -> (String, String, String) {
 
 /// Check daemon health and version compatibility
 async fn check_daemon_health() -> Result<DaemonHealth> {
-    let socket_path = get_default_socket_path();
+    let socket_path = effective_socket_path();
 
     // Try to connect to existing daemon
     let mut stream = match timeout(Duration::from_secs(2), IpcStream::connect(&socket_path)).await {
@@ -675,7 +685,7 @@ async fn check_daemon_health() -> Result<DaemonHealth> {
 
 /// Check if daemon version matches probe binary version
 async fn check_daemon_version_compatibility() -> Result<bool> {
-    let socket_path = get_default_socket_path();
+    let socket_path = effective_socket_path();
 
     // Try to connect to existing daemon
     match IpcStream::connect(&socket_path).await {
@@ -738,7 +748,7 @@ async fn check_daemon_version_compatibility() -> Result<bool> {
 
 /// Shutdown existing daemon gracefully
 async fn shutdown_existing_daemon() -> Result<()> {
-    let socket_path = get_default_socket_path();
+    let socket_path = effective_socket_path();
 
     match IpcStream::connect(&socket_path).await {
         Ok(mut stream) => {
@@ -793,7 +803,7 @@ fn get_client_lock_path() -> String {
 
 /// Start embedded LSP daemon in the background using probe binary
 async fn start_embedded_daemon_background() -> Result<()> {
-    let socket_path = get_default_socket_path();
+    let socket_path = effective_socket_path();
 
     // Use file-based locking for cross-process coordination
     let _lock = acquire_client_startup_lock()?;
