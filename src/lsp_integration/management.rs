@@ -723,12 +723,23 @@ impl LspManager {
                     .context("Failed to get current directory")?
                     .join(&path)
             };
-            abs.canonicalize().with_context(|| {
-                format!(
-                    "Failed to resolve workspace path '{}'. Make sure the path exists and is accessible",
-                    abs.display()
-                )
-            })?
+            // Try to canonicalize, but if it fails and the path exists, use the absolute path as-is
+            match abs.canonicalize() {
+                Ok(canonical) => canonical,
+                Err(_) if abs.exists() => {
+                    // Path exists but can't be canonicalized (e.g., symlink issues in CI)
+                    // Use the absolute path as-is
+                    eprintln!("Warning: Could not canonicalize path {abs:?}, using as-is");
+                    abs
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Failed to resolve workspace path '{}': {}",
+                        abs.display(),
+                        e
+                    ))
+                }
+            }
         } else {
             // Default to current directory, canonicalized
             std::env::current_dir()
