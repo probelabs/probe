@@ -79,8 +79,6 @@ pub trait PathResolver {
 /// * `Ok(PathBuf)` - The resolved filesystem path
 /// * `Err(String)` - An error message if resolution fails
 pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
     // Check if this is a Windows absolute path (e.g., C:\, D:\, etc.)
     // Windows paths have a drive letter followed by a colon and backslash or forward slash
     if path.len() >= 3 {
@@ -90,12 +88,6 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
             && (chars[2] == '\\' || chars[2] == '/')
         {
             // This is a Windows absolute path, return it as-is
-            if debug_mode {
-                println!(
-                    "DEBUG: resolve_path - Detected Windows absolute path: {}",
-                    path
-                );
-            }
             return Ok(PathBuf::from(path));
         }
     }
