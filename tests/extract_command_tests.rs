@@ -1699,3 +1699,133 @@ fn main() {
         "Output should contain the original input content"
     );
 }
+
+#[test]
+fn test_extract_unsupported_file_type_symbol() {
+    use tempfile::TempDir;
+
+    // Create a temporary Terraform file (unsupported by tree-sitter)
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let file_path = temp_dir.path().join("main.tf");
+    let content = r#"# Terraform configuration
+resource "aws_instance" "example" {
+  ami           = "ami-0c55b159cbfafe1f0"
+  instance_type = "t2.micro"
+  
+  tags = {
+    Name = "ExampleInstance"
+  }
+}
+
+output "instance_id" {
+  value = aws_instance.example.id
+}
+"#;
+    fs::write(&file_path, content).unwrap();
+
+    // Test extracting a symbol from an unsupported file type
+    // Should return the full file content as fallback
+    let result = process_file_for_extraction(
+        &file_path,
+        None,                 // start_line
+        None,                 // end_line
+        Some("aws_instance"), // symbol
+        false,                // allow_tests
+        0,                    // context_lines
+        None,                 // specific_line_numbers
+    )
+    .unwrap();
+
+    // Should return full file content as fallback
+    assert_eq!(
+        result.node_type, "file",
+        "Should return file type for unsupported language"
+    );
+    assert_eq!(result.code, content, "Should return full file content");
+    assert_eq!(result.lines, (1, 13), "Should return all lines");
+}
+
+#[test]
+fn test_extract_unsupported_file_type_lines() {
+    use tempfile::TempDir;
+
+    // Create a temporary YAML file (another unsupported type)
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let file_path = temp_dir.path().join("config.yml");
+    let content = r#"version: '3'
+services:
+  web:
+    image: nginx:latest
+    ports:
+      - "80:80"
+  database:
+    image: postgres:13
+    environment:
+      POSTGRES_PASSWORD: secret
+"#;
+    fs::write(&file_path, content).unwrap();
+
+    // Test extracting specific lines from an unsupported file type
+    let result = process_file_for_extraction(
+        &file_path,
+        Some(3), // start_line
+        Some(6), // end_line
+        None,    // symbol
+        false,   // allow_tests
+        0,       // context_lines
+        None,    // specific_line_numbers
+    )
+    .unwrap();
+
+    // Should return the requested lines
+    assert_eq!(result.lines, (3, 6), "Should return requested line range");
+    assert!(result.code.contains("web:"), "Should contain web service");
+    assert!(
+        result.code.contains("image: nginx"),
+        "Should contain nginx image"
+    );
+    assert!(result.code.contains("80:80"), "Should contain port mapping");
+}
+
+#[test]
+fn test_extract_cli_unsupported_file_type() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let file_path = temp_dir.path().join("data.jsonl");
+    let content = r#"{"id": 1, "name": "Alice", "age": 30}
+{"id": 2, "name": "Bob", "age": 25}
+{"id": 3, "name": "Charlie", "age": 35}
+"#;
+    fs::write(&file_path, content).unwrap();
+
+    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    // Run the extract command on an unsupported file type
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--manifest-path",
+            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
+            "--",
+            "extract",
+            &format!("{}:2", file_path.to_string_lossy()),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    // Should succeed even with unsupported file type
+    assert!(
+        output.status.success(),
+        "Command should succeed for unsupported file type. Stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should contain the requested line
+    assert!(
+        stdout.contains("Bob"),
+        "Output should contain the second line with Bob"
+    );
+}

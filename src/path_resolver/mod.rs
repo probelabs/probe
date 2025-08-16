@@ -79,6 +79,19 @@ pub trait PathResolver {
 /// * `Ok(PathBuf)` - The resolved filesystem path
 /// * `Err(String)` - An error message if resolution fails
 pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
+    // Check if this is a Windows absolute path (e.g., C:\, D:\, etc.)
+    // Windows paths have a drive letter followed by a colon and backslash or forward slash
+    if path.len() >= 3 {
+        let chars: Vec<char> = path.chars().collect();
+        if chars[1] == ':'
+            && chars[0].is_ascii_alphabetic()
+            && (chars[2] == '\\' || chars[2] == '/')
+        {
+            // This is a Windows absolute path, return it as-is
+            return Ok(PathBuf::from(path));
+        }
+    }
+
     // Create instances of all resolvers
     let resolvers: Vec<Box<dyn PathResolver>> = vec![
         Box::new(GoPathResolver::new()),
