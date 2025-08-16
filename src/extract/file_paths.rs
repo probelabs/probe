@@ -1514,9 +1514,11 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
         use std::fs;
         use std::io::Write;
 
-        // Create a temporary terraform file for testing
+        // Create a temporary terraform file for testing in a subdirectory
         let temp_dir = std::env::temp_dir();
-        let test_file = temp_dir.join("test_extract_terraform.tf");
+        let test_dir = temp_dir.join("parse_test_dir");
+        let _ = fs::create_dir_all(&test_dir);
+        let test_file = test_dir.join("main.tf");
 
         let mut file = fs::File::create(&test_file).unwrap();
         writeln!(file, "resource \"test\" \"example\" {{").unwrap();
@@ -1533,5 +1535,6 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
 
         // Clean up
         let _ = fs::remove_file(&test_file);
+        let _ = fs::remove_dir(&test_dir);
     }
 }
