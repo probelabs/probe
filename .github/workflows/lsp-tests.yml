@@ -115,4 +115,5 @@ jobs:
           gopls version || echo "gopls version failed"
           typescript-language-server --version || echo "typescript-language-server version failed"
           echo "=== Starting LSP comprehensive tests ==="
-          cargo test --test lsp_comprehensive_tests -- --nocapture
+          echo "NOTE: Running tests sequentially with --test-threads=1 to avoid race conditions"
+          cargo test --test lsp_comprehensive_tests -- --nocapture --test-threads=1
