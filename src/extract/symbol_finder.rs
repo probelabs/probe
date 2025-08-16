@@ -154,8 +154,53 @@ pub fn find_symbol_in_file_with_position(
     }
 
     // Get the language implementation for this extension
-    let language_impl = crate::language::factory::get_language_impl(extension)
-        .ok_or_else(|| anyhow::anyhow!("Unsupported language extension: {}", extension))?;
+    // If unsupported, fall back to returning the full file
+    let language_impl = match crate::language::factory::get_language_impl(extension) {
+        Some(impl_) => impl_,
+        None => {
+            if debug_mode {
+                println!("[DEBUG] Language extension '{extension}' not supported for AST parsing, returning full file");
+            }
+            // Return the entire file as a SearchResult when language is unsupported
+            let lines: Vec<&str> = content.lines().collect();
+            let filename = path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let tokenized_content =
+                crate::ranking::preprocess_text_with_filename(content, &filename);
+
+            return Ok((
+                SearchResult {
+                    file: path.to_string_lossy().to_string(),
+                    lines: (1, lines.len()),
+                    node_type: "file".to_string(),
+                    code: content.to_string(),
+                    matched_by_filename: None,
+                    rank: None,
+                    score: None,
+                    tfidf_score: None,
+                    bm25_score: None,
+                    tfidf_rank: None,
+                    bm25_rank: None,
+                    new_score: None,
+                    hybrid2_rank: None,
+                    combined_score_rank: None,
+                    file_unique_terms: None,
+                    file_total_matches: None,
+                    file_match_rank: None,
+                    block_unique_terms: None,
+                    block_total_matches: None,
+                    parent_file_id: None,
+                    block_id: None,
+                    matched_keywords: None,
+                    tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
+                },
+                None,
+            ));
+        }
+    };
 
     if debug_mode {
         println!("[DEBUG] Language detected: {extension}");
