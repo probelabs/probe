@@ -613,12 +613,25 @@ pub fn init_lsp_workspace_with_config(
     languages: &[&str],
     socket_path: Option<&Path>,
 ) -> Result<()> {
-    // Normalize the path we pass to the CLI to match what the daemon will store.
-    // This prevents workspace identity mismatches in environments with symlinks.
-    let canonical =
-        std::fs::canonicalize(workspace_path).unwrap_or_else(|_| PathBuf::from(workspace_path));
-    let canonical_str = canonical.to_string_lossy().to_string();
-    init_lsp_workspace_with_retries_config(&canonical_str, languages, 3, socket_path)
+    // Try to canonicalize, but if it fails (e.g., in CI with symlinks), use the original path
+    // The daemon should handle both absolute and relative paths correctly
+    let path_to_use = if let Ok(canonical) = std::fs::canonicalize(workspace_path) {
+        canonical.to_string_lossy().to_string()
+    } else {
+        // If canonicalization fails, ensure we have an absolute path
+        let path = PathBuf::from(workspace_path);
+        if path.is_absolute() {
+            workspace_path.to_string()
+        } else {
+            // Make it absolute relative to current directory
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(&path)
+                .to_string_lossy()
+                .to_string()
+        }
+    };
+    init_lsp_workspace_with_retries_config(&path_to_use, languages, 3, socket_path)
 }
 
 /// Initialize LSP workspace with specified number of retries
@@ -1074,10 +1087,11 @@ pub mod fixtures {
     pub fn get_fixtures_dir() -> PathBuf {
         // Resolve relative to the crate root and normalize (works both locally and in CI).
         // Using CARGO_MANIFEST_DIR de-couples us from the process CWD.
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        // Don't use canonicalize() as it can cause issues with symlinks in CI
+        // Just return the constructed path as-is
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
-            .join("fixtures");
-        p.canonicalize().unwrap_or(p)
+            .join("fixtures")
     }
 
     pub fn get_go_project1() -> PathBuf {
