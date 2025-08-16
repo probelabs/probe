@@ -714,20 +714,21 @@ impl LspManager {
         // Determine workspace root
         let workspace_root = if let Some(ws) = workspace {
             let path = PathBuf::from(ws);
-            // Convert relative paths to absolute paths for URI conversion
-            if path.is_absolute() {
+            // Always normalize to canonical absolute path to avoid mismatches due to symlinks
+            // (e.g., /var vs /private/var on macOS) or case differences on Windows.
+            let abs = if path.is_absolute() {
                 path
             } else {
-                // For relative paths, resolve them relative to current directory
                 std::env::current_dir()
                     .context("Failed to get current directory")?
                     .join(&path)
-                    .canonicalize()
-                    .context(format!(
-                        "Failed to resolve workspace path '{}'. Make sure the path exists and is accessible",
-                        path.display()
-                    ))?
-            }
+            };
+            abs.canonicalize().with_context(|| {
+                format!(
+                    "Failed to resolve workspace path '{}'. Make sure the path exists and is accessible",
+                    abs.display()
+                )
+            })?
         } else {
             // Default to current directory, canonicalized
             std::env::current_dir()
