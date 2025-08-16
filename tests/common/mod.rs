@@ -1067,7 +1067,12 @@ pub mod fixtures {
     use std::path::PathBuf;
 
     pub fn get_fixtures_dir() -> PathBuf {
-        PathBuf::from("tests/fixtures")
+        // Get the absolute path to the fixtures directory
+        // This works from the project root where tests are run
+        std::env::current_dir()
+            .unwrap()
+            .join("tests")
+            .join("fixtures")
     }
 
     pub fn get_go_project1() -> PathBuf {
