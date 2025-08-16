@@ -246,38 +246,41 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     // Perform concurrent operations on all languages
     let start = Instant::now();
 
-    // Go extraction
+    // Prepare extraction files
     let go_file = go_workspace.join("calculator.go");
-    let (go_stdout, go_stderr, go_success) = run_probe_command_with_timeout(
-        &[
-            "extract",
-            &format!("{}:10", go_file.to_string_lossy()),
-            "--lsp",
-        ],
-        performance::max_extract_time(),
-    )?;
-
-    // TypeScript extraction
     let ts_file = ts_workspace.join("src/calculator.ts");
-    let (ts_stdout, ts_stderr, ts_success) = run_probe_command_with_timeout(
-        &[
-            "extract",
-            &format!("{}:17", ts_file.to_string_lossy()),
-            "--lsp",
-        ],
-        performance::max_extract_time(),
-    )?;
-
-    // JavaScript extraction
     let js_file = js_workspace.join("src/calculator.js");
-    let (js_stdout, js_stderr, js_success) = run_probe_command_with_timeout(
-        &[
-            "extract",
-            &format!("{}:14", js_file.to_string_lossy()),
-            "--lsp",
-        ],
-        performance::max_extract_time(),
-    )?;
+
+    let timeout = performance::max_extract_time();
+
+    // Run all three extractions concurrently using threads
+    // We need to clone/move all data into the threads
+    let go_file_str = format!("{}:10", go_file.to_string_lossy());
+    let go_handle = std::thread::spawn(move || {
+        run_probe_command_with_timeout(&["extract", &go_file_str, "--lsp"], timeout)
+    });
+
+    let ts_file_str = format!("{}:17", ts_file.to_string_lossy());
+    let ts_handle = std::thread::spawn(move || {
+        run_probe_command_with_timeout(&["extract", &ts_file_str, "--lsp"], timeout)
+    });
+
+    let js_file_str = format!("{}:14", js_file.to_string_lossy());
+    let js_handle = std::thread::spawn(move || {
+        run_probe_command_with_timeout(&["extract", &js_file_str, "--lsp"], timeout)
+    });
+
+    // Wait for all threads to complete and collect results
+    let (go_stdout, go_stderr, go_success) =
+        go_handle.join().expect("Go extraction thread panicked")?;
+
+    let (ts_stdout, ts_stderr, ts_success) = ts_handle
+        .join()
+        .expect("TypeScript extraction thread panicked")?;
+
+    let (js_stdout, js_stderr, js_success) = js_handle
+        .join()
+        .expect("JavaScript extraction thread panicked")?;
 
     let total_elapsed = start.elapsed();
 
@@ -547,6 +550,17 @@ fn test_lsp_performance_benchmark() -> Result<()> {
 
     // Perform multiple extractions to test consistency
     let file_path = workspace_path.join("calculator.go");
+
+    // Warm-up extraction to ensure language server is fully indexed
+    // This is not counted in the performance metrics
+    let warm_up_args = [
+        "extract",
+        &format!("{}:10", file_path.to_string_lossy()),
+        "--lsp",
+    ];
+    let _ =
+        run_probe_command_with_timeout(&warm_up_args, performance::language_server_ready_time());
+
     let mut timings = Vec::new();
 
     for i in 0..3 {

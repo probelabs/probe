@@ -988,15 +988,6 @@ impl LspDaemon {
         // Read file content - use the absolute path to ensure consistency
         let content = fs::read_to_string(&absolute_file_path)?;
 
-        // Lock the server instance to use it
-        let server = server_instance.lock().await;
-
-        // Open document
-        server
-            .server
-            .open_document(&absolute_file_path, &content)
-            .await?;
-
         // Adaptive timing for Go/TypeScript in CI environments
         let is_ci = std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok();
         let (initial_wait, max_attempts, retry_delay) = match language {
@@ -1005,12 +996,12 @@ impl LspDaemon {
                 (15, 5, 5) // 15s initial wait, 5 attempts, 5s between attempts
             }
             Language::Go | Language::TypeScript | Language::JavaScript => {
-                // Local development - faster but still accommodating
-                (5, 3, 3) // 5s initial wait, 3 attempts, 3s between attempts
+                // Local development - reduced wait times for better performance
+                (3, 3, 2) // 3s initial wait, 3 attempts, 2s between attempts
             }
             _ => {
                 // Rust and other languages - works well with shorter waits
-                (2, 3, 2) // 2s initial wait, 3 attempts, 2s between attempts
+                (1, 3, 1) // 1s initial wait, 3 attempts, 1s between attempts
             }
         };
 
@@ -1019,7 +1010,19 @@ impl LspDaemon {
             language, initial_wait, max_attempts, retry_delay, is_ci
         );
 
-        // Give language server time to process and index
+        // Open document and give language server time to process
+        {
+            // Lock the server instance only for document opening
+            let server = server_instance.lock().await;
+            server
+                .server
+                .open_document(&absolute_file_path, &content)
+                .await?;
+            // Lock is automatically released here when server goes out of scope
+        }
+
+        // Give language server time to process and index OUTSIDE the lock
+        // This allows other requests to proceed while we wait
         tokio::time::sleep(tokio::time::Duration::from_secs(initial_wait)).await;
 
         // Try call hierarchy with adaptive retry logic
@@ -1028,10 +1031,15 @@ impl LspDaemon {
 
         while attempt <= max_attempts {
             debug!("Call hierarchy attempt {} at {}:{}", attempt, line, column);
-            let call_result = server
-                .server
-                .call_hierarchy(&absolute_file_path, line, column)
-                .await;
+
+            // Lock the server instance only for the call hierarchy request
+            let call_result = {
+                let server = server_instance.lock().await;
+                server
+                    .server
+                    .call_hierarchy(&absolute_file_path, line, column)
+                    .await
+            };
 
             match call_result {
                 Ok(response) => {
@@ -1083,8 +1091,11 @@ impl LspDaemon {
             )
         })?;
 
-        // Close document
-        server.server.close_document(&absolute_file_path).await?;
+        // Close document - lock server instance briefly
+        {
+            let server = server_instance.lock().await;
+            server.server.close_document(&absolute_file_path).await?;
+        }
 
         // Parse result
         parse_call_hierarchy_from_lsp(&result)
