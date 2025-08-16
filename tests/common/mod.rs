@@ -360,13 +360,24 @@ pub fn run_probe_command_with_timeout(
 
 /// Helper to ensure daemon is stopped (cleanup)
 pub fn ensure_daemon_stopped() {
+    // Use spawn() instead of output() to avoid hanging if shutdown command blocks
     let _ = Command::new("./target/debug/probe")
         .args(["lsp", "shutdown"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .output();
+        .spawn();
 
-    // Give it a moment to fully shutdown
+    // Give it a moment to send the shutdown signal
+    thread::sleep(Duration::from_millis(100));
+
+    // Force kill any remaining probe lsp processes
+    let _ = Command::new("pkill")
+        .args(["-f", "probe lsp"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
+    // Give processes time to fully shutdown
     thread::sleep(Duration::from_millis(500));
 }
 
