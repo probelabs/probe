@@ -613,7 +613,12 @@ pub fn init_lsp_workspace_with_config(
     languages: &[&str],
     socket_path: Option<&Path>,
 ) -> Result<()> {
-    init_lsp_workspace_with_retries_config(workspace_path, languages, 3, socket_path)
+    // Normalize the path we pass to the CLI to match what the daemon will store.
+    // This prevents workspace identity mismatches in environments with symlinks.
+    let canonical =
+        std::fs::canonicalize(workspace_path).unwrap_or_else(|_| PathBuf::from(workspace_path));
+    let canonical_str = canonical.to_string_lossy().to_string();
+    init_lsp_workspace_with_retries_config(&canonical_str, languages, 3, socket_path)
 }
 
 /// Initialize LSP workspace with specified number of retries
@@ -1067,12 +1072,12 @@ pub mod fixtures {
     use std::path::PathBuf;
 
     pub fn get_fixtures_dir() -> PathBuf {
-        // Get the absolute path to the fixtures directory
-        // This works from the project root where tests are run
-        std::env::current_dir()
-            .unwrap()
+        // Resolve relative to the crate root and normalize (works both locally and in CI).
+        // Using CARGO_MANIFEST_DIR de-couples us from the process CWD.
+        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
-            .join("fixtures")
+            .join("fixtures");
+        p.canonicalize().unwrap_or(p)
     }
 
     pub fn get_go_project1() -> PathBuf {
