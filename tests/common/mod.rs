@@ -173,7 +173,7 @@ fn is_command_in_path(command: &str) -> bool {
             if dir.as_os_str().is_empty() {
                 continue;
             }
-            let mut base = dir.join(command);
+            let base = dir.join(command);
 
             // If the command already has an extension, check as-is.
             if base.is_file() {
