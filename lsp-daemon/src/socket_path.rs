@@ -2,6 +2,11 @@ use std::path::PathBuf;
 
 /// Get the default socket/pipe path for the current platform
 pub fn get_default_socket_path() -> String {
+    // Check for environment variable override first
+    if let Ok(path) = std::env::var("PROBE_LSP_SOCKET_PATH") {
+        return path;
+    }
+
     #[cfg(unix)]
     {
         std::env::temp_dir()

@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use std::env;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -226,6 +227,67 @@ fn is_command_in_path(command: &str) -> bool {
     found
 }
 
+/// Initialize test namespace for socket isolation
+/// Returns the test-specific socket path to use
+pub fn init_test_namespace(test_name: &str) -> PathBuf {
+    // Create a shorter unique test directory to avoid Unix socket path length limits (SUN_LEN ~104 chars)
+    let temp_dir = std::env::temp_dir();
+
+    // Use a shorter naming scheme: just the process ID and a hash of the test name
+    let test_hash = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        test_name.hash(&mut hasher);
+        format!("{:x}", hasher.finish() & 0xFFFF) // Use last 4 hex digits
+    };
+    let test_id = format!("p{}-{}", std::process::id(), test_hash);
+    let test_dir = temp_dir.join(test_id);
+
+    // Create the directory if it doesn't exist
+    if !test_dir.exists() {
+        std::fs::create_dir_all(&test_dir).unwrap_or_else(|e| {
+            eprintln!("Warning: Failed to create test directory {test_dir:?}: {e}");
+        });
+    }
+
+    // Use shorter socket filename to further reduce path length
+    test_dir.join("lsp.sock")
+}
+
+/// Clean up test namespace
+pub fn cleanup_test_namespace(socket_path: &Path) {
+    // Remove the socket file if it exists
+    if socket_path.exists() {
+        let _ = std::fs::remove_file(socket_path);
+    }
+
+    // Try to remove the parent directory (if empty)
+    if let Some(parent) = socket_path.parent() {
+        let _ = std::fs::remove_dir(parent);
+    }
+}
+
+/// Get base probe command with test-specific configuration
+fn probe_cmd_base(socket_path: Option<&Path>) -> Command {
+    let mut cmd = Command::new("./target/debug/probe");
+
+    // Set test-specific environment variables
+    if let Some(socket) = socket_path {
+        cmd.env(
+            "PROBE_LSP_SOCKET_PATH",
+            socket.to_string_lossy().to_string(),
+        );
+
+        // Also set TMPDIR to isolate temporary files per test
+        if let Some(parent) = socket.parent() {
+            cmd.env("TMPDIR", parent.to_string_lossy().to_string());
+        }
+    }
+
+    cmd
+}
+
 /// Helper to run probe commands and capture output with timeout
 #[allow(dead_code)]
 pub fn run_probe_command(args: &[&str]) -> Result<(String, String, bool)> {
@@ -237,9 +299,18 @@ pub fn run_probe_command_with_timeout(
     args: &[&str],
     timeout: Duration,
 ) -> Result<(String, String, bool)> {
+    run_probe_command_with_config(args, timeout, None)
+}
+
+/// Helper to run probe commands with custom timeout and socket path
+pub fn run_probe_command_with_config(
+    args: &[&str],
+    timeout: Duration,
+    socket_path: Option<&Path>,
+) -> Result<(String, String, bool)> {
     let start = Instant::now();
 
-    let mut child = Command::new("./target/debug/probe")
+    let mut child = probe_cmd_base(socket_path)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -360,8 +431,13 @@ pub fn run_probe_command_with_timeout(
 
 /// Helper to ensure daemon is stopped (cleanup)
 pub fn ensure_daemon_stopped() {
+    ensure_daemon_stopped_with_config(None)
+}
+
+/// Helper to ensure daemon is stopped with specific socket path
+pub fn ensure_daemon_stopped_with_config(socket_path: Option<&Path>) {
     // Use spawn() instead of output() to avoid hanging if shutdown command blocks
-    let _ = Command::new("./target/debug/probe")
+    let _ = probe_cmd_base(socket_path)
         .args(["lsp", "shutdown"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -370,29 +446,65 @@ pub fn ensure_daemon_stopped() {
     // Give it a moment to send the shutdown signal
     thread::sleep(Duration::from_millis(100));
 
-    // Force kill any remaining probe lsp processes
-    let _ = Command::new("pkill")
-        .args(["-f", "probe lsp"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+    // If socket path is provided, poll for its disappearance (more deterministic)
+    if let Some(socket) = socket_path {
+        let start = Instant::now();
+        let poll_timeout = Duration::from_secs(2);
 
-    // Give processes time to fully shutdown
-    thread::sleep(Duration::from_millis(500));
+        while socket.exists() && start.elapsed() < poll_timeout {
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        // Clean up socket file if still exists
+        if socket.exists() {
+            let _ = std::fs::remove_file(socket);
+        }
+
+        // Also check for lock file and remove if exists
+        let lock_path = socket.with_extension("lock");
+        if lock_path.exists() {
+            let _ = std::fs::remove_file(&lock_path);
+        }
+    } else {
+        // Fallback: Force kill any remaining probe lsp processes
+        let _ = Command::new("pkill")
+            .args(["-f", "probe lsp"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        // Give processes time to fully shutdown
+        thread::sleep(Duration::from_millis(500));
+    }
 }
 
 /// Helper to start daemon and wait for it to be ready with retry logic
+#[allow(dead_code)]
 pub fn start_daemon_and_wait() -> Result<()> {
+    start_daemon_and_wait_with_config(None)
+}
+
+/// Helper to start daemon with specific socket path
+pub fn start_daemon_and_wait_with_config(socket_path: Option<&Path>) -> Result<()> {
     if performance::is_ci_environment() {
         println!("CI environment detected - using extended timeouts and retries");
-        start_daemon_and_wait_with_retries(5) // More retries in CI
+        start_daemon_and_wait_with_retries_config(5, socket_path) // More retries in CI
     } else {
-        start_daemon_and_wait_with_retries(3)
+        start_daemon_and_wait_with_retries_config(3, socket_path)
     }
 }
 
 /// Helper to start daemon with specified number of retries
+#[allow(dead_code)]
 pub fn start_daemon_and_wait_with_retries(max_retries: u32) -> Result<()> {
+    start_daemon_and_wait_with_retries_config(max_retries, None)
+}
+
+/// Helper to start daemon with specified number of retries and socket path
+pub fn start_daemon_and_wait_with_retries_config(
+    max_retries: u32,
+    socket_path: Option<&Path>,
+) -> Result<()> {
     let timeout = performance::daemon_startup_timeout();
     let max_attempts = if performance::is_ci_environment() {
         60
@@ -403,12 +515,12 @@ pub fn start_daemon_and_wait_with_retries(max_retries: u32) -> Result<()> {
     for retry in 0..max_retries {
         // Clean up any existing daemon before starting
         if retry > 0 {
-            ensure_daemon_stopped();
+            ensure_daemon_stopped_with_config(socket_path);
             thread::sleep(Duration::from_millis(1000)); // Wait longer between retries
         }
 
         // Start daemon in background
-        let child = Command::new("./target/debug/probe")
+        let child = probe_cmd_base(socket_path)
             .args(["lsp", "start"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -427,7 +539,7 @@ pub fn start_daemon_and_wait_with_retries(max_retries: u32) -> Result<()> {
                     thread::sleep(wait_time);
 
                     // Check if daemon is ready
-                    let output = Command::new("./target/debug/probe")
+                    let output = probe_cmd_base(socket_path)
                         .args(["lsp", "status"])
                         .stdout(Stdio::piped())
                         .stderr(Stdio::piped())
@@ -490,15 +602,36 @@ pub fn start_daemon_and_wait_with_retries(max_retries: u32) -> Result<()> {
 }
 
 /// Initialize LSP workspace for testing with retry logic for early eof errors
+#[allow(dead_code)]
 pub fn init_lsp_workspace(workspace_path: &str, languages: &[&str]) -> Result<()> {
-    init_lsp_workspace_with_retries(workspace_path, languages, 3)
+    init_lsp_workspace_with_config(workspace_path, languages, None)
+}
+
+/// Initialize LSP workspace with specific socket path
+pub fn init_lsp_workspace_with_config(
+    workspace_path: &str,
+    languages: &[&str],
+    socket_path: Option<&Path>,
+) -> Result<()> {
+    init_lsp_workspace_with_retries_config(workspace_path, languages, 3, socket_path)
 }
 
 /// Initialize LSP workspace with specified number of retries
+#[allow(dead_code)]
 pub fn init_lsp_workspace_with_retries(
     workspace_path: &str,
     languages: &[&str],
     max_retries: u32,
+) -> Result<()> {
+    init_lsp_workspace_with_retries_config(workspace_path, languages, max_retries, None)
+}
+
+/// Initialize LSP workspace with specified number of retries and socket path
+pub fn init_lsp_workspace_with_retries_config(
+    workspace_path: &str,
+    languages: &[&str],
+    max_retries: u32,
+    socket_path: Option<&Path>,
 ) -> Result<()> {
     let languages_str = languages.join(",");
     let mut args = vec!["lsp", "init", "-w", workspace_path, "--languages"];
@@ -507,7 +640,7 @@ pub fn init_lsp_workspace_with_retries(
     let timeout = performance::max_init_time();
 
     for retry in 0..max_retries {
-        let (stdout, stderr, success) = run_probe_command_with_timeout(&args, timeout)?;
+        let (stdout, stderr, success) = run_probe_command_with_config(&args, timeout, socket_path)?;
 
         if success {
             println!(
@@ -547,12 +680,15 @@ pub fn init_lsp_workspace_with_retries(
             thread::sleep(wait_time);
 
             // Verify daemon is still running, restart if needed
-            let status_check =
-                run_probe_command_with_timeout(&["lsp", "status"], Duration::from_secs(5));
+            let status_check = run_probe_command_with_config(
+                &["lsp", "status"],
+                Duration::from_secs(5),
+                socket_path,
+            );
             if status_check.is_err() || !status_check.unwrap().2 {
                 eprintln!("Daemon appears to be down, restarting...");
-                ensure_daemon_stopped();
-                start_daemon_and_wait()?;
+                ensure_daemon_stopped_with_config(socket_path);
+                start_daemon_and_wait_with_config(socket_path)?;
             }
         }
     }
@@ -566,9 +702,19 @@ pub fn init_lsp_workspace_with_retries(
 
 /// Wait for LSP servers to be ready by polling their status
 /// This is more efficient and reliable than fixed sleep durations
+#[allow(dead_code)]
 pub fn wait_for_lsp_servers_ready(
     expected_languages: &[&str],
     max_timeout: Duration,
+) -> Result<()> {
+    wait_for_lsp_servers_ready_with_config(expected_languages, max_timeout, None)
+}
+
+/// Wait for LSP servers with specific socket path
+pub fn wait_for_lsp_servers_ready_with_config(
+    expected_languages: &[&str],
+    max_timeout: Duration,
+    socket_path: Option<&Path>,
 ) -> Result<()> {
     let start_time = Instant::now();
     let mut poll_interval = Duration::from_millis(500); // Start with 500ms
@@ -608,7 +754,7 @@ pub fn wait_for_lsp_servers_ready(
         }
 
         // Check LSP status
-        match check_lsp_servers_ready(expected_languages) {
+        match check_lsp_servers_ready_with_config(expected_languages, socket_path) {
             Ok(true) => {
                 if unlimited_wait {
                     println!(
@@ -670,14 +816,23 @@ pub fn wait_for_lsp_servers_ready(
 }
 
 /// Check if all expected LSP language servers are ready
+#[allow(dead_code)]
 fn check_lsp_servers_ready(expected_languages: &[&str]) -> Result<bool> {
+    check_lsp_servers_ready_with_config(expected_languages, None)
+}
+
+/// Check if all expected LSP language servers are ready with specific socket path
+fn check_lsp_servers_ready_with_config(
+    expected_languages: &[&str],
+    socket_path: Option<&Path>,
+) -> Result<bool> {
     // Retry logic for daemon connection issues
     const MAX_RETRIES: u32 = 3;
     let mut last_error = None;
 
     for attempt in 0..MAX_RETRIES {
         // Force no-color/plain output so the parser isn't confused by ANSI in CI.
-        let mut cmd = Command::new("./target/debug/probe");
+        let mut cmd = probe_cmd_base(socket_path);
         let output = cmd
             .env("NO_COLOR", "1")
             .env("CLICOLOR", "0")
@@ -979,11 +1134,29 @@ pub mod performance {
 }
 
 /// Extract with call hierarchy retry for CI reliability
+#[allow(dead_code)]
 pub fn extract_with_call_hierarchy_retry(
     extract_args: &[&str],
     expected_incoming: usize,
     expected_outgoing: usize,
     timeout: Duration,
+) -> Result<(String, String, bool)> {
+    extract_with_call_hierarchy_retry_config(
+        extract_args,
+        expected_incoming,
+        expected_outgoing,
+        timeout,
+        None,
+    )
+}
+
+/// Extract with call hierarchy retry with specific socket path
+pub fn extract_with_call_hierarchy_retry_config(
+    extract_args: &[&str],
+    expected_incoming: usize,
+    expected_outgoing: usize,
+    timeout: Duration,
+    socket_path: Option<&Path>,
 ) -> Result<(String, String, bool)> {
     let start_time = Instant::now();
     let is_ci = performance::is_ci_environment();
@@ -1014,7 +1187,8 @@ pub fn extract_with_call_hierarchy_retry(
 
         // Run the extract command with the remaining time budget for this attempt
         let remaining = timeout.saturating_sub(elapsed);
-        let (stdout, stderr, success) = run_probe_command_with_timeout(extract_args, remaining)?;
+        let (stdout, stderr, success) =
+            run_probe_command_with_config(extract_args, remaining, socket_path)?;
 
         if !success {
             if attempt >= max_attempts {

@@ -425,9 +425,9 @@ impl LspDaemon {
                 break;
             }
 
-            // Read message length with timeout
-            let n = match timeout(READ_TIMEOUT, stream.read(&mut buffer[..4])).await {
-                Ok(Ok(n)) => n,
+            // Read message length (exactly 4 bytes) with timeout
+            match timeout(READ_TIMEOUT, stream.read_exact(&mut buffer[..4])).await {
+                Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
                     debug!("Read error from client {}: {}", client_id, e);
                     break;
@@ -439,12 +439,6 @@ impl LspDaemon {
                     );
                     break;
                 }
-            };
-
-            if n == 0 {
-                // Connection closed - clean up is done at the end of the function
-                debug!("Connection closed by client: {}", client_id);
-                break;
             }
 
             let msg_len = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
@@ -1363,11 +1357,21 @@ impl LspDaemon {
             }
         }
 
-        // Shutdown all servers gracefully first
-        self.server_manager.shutdown_all().await;
+        // Shutdown all servers gracefully first, but don't block forever
+        match tokio::time::timeout(Duration::from_secs(5), self.server_manager.shutdown_all()).await
+        {
+            Ok(_) => {
+                debug!("Language servers shut down cleanly");
+            }
+            Err(_) => {
+                warn!(
+                    "Timed out waiting for language servers to shutdown; proceeding with forced cleanup"
+                );
+            }
+        }
 
-        // Give servers a moment to shutdown gracefully
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        // Small grace period
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         // Kill any remaining child processes directly
         let child_pids = self.child_processes.lock().await;
@@ -1502,7 +1506,9 @@ fn find_daemon_binary() -> Result<PathBuf> {
 }
 
 pub async fn start_daemon_background() -> Result<()> {
-    let socket_path = get_default_socket_path();
+    // Allow tests or callers to override the socket explicitly
+    let socket_path =
+        std::env::var("PROBE_LSP_SOCKET_PATH").unwrap_or_else(|_| get_default_socket_path());
 
     // Check if daemon is already running by trying to connect
     if (crate::ipc::IpcStream::connect(&socket_path).await).is_ok() {
