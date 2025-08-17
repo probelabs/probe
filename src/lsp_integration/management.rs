@@ -3,11 +3,17 @@ use colored::*;
 use serde_json::json;
 use std::path::Path;
 use std::time::Duration;
+use tokio::time::{self, MissedTickBehavior};
 
 use crate::lsp_integration::client::LspClient;
 use crate::lsp_integration::types::*;
 use crate::lsp_integration::LspSubcommands;
 use lsp_daemon::{LogEntry, LogLevel, LspDaemon};
+
+// Follow-mode tuning: keep polling light to avoid hammering the daemon and the filesystem.
+const LOG_FOLLOW_POLL_MS: u64 = 500;
+const LOG_FETCH_LIMIT: usize = 200;
+const LOG_RPC_TIMEOUT_MS: u64 = 2000;
 
 pub struct LspManager;
 
@@ -455,15 +461,24 @@ impl LspManager {
             );
             println!("{}", "─".repeat(60).dimmed());
 
-            // First show the last N lines
-            let entries = match client.get_logs(lines).await {
-                Ok(entries) => {
+            // First show the last N lines with timeout
+            let entries = match time::timeout(
+                Duration::from_millis(LOG_RPC_TIMEOUT_MS),
+                client.get_logs(lines),
+            )
+            .await
+            {
+                Err(_) => {
+                    println!("{} Failed to get logs: timed out", "❌".red());
+                    return Ok(());
+                }
+                Ok(Ok(entries)) => {
                     for entry in &entries {
                         Self::print_log_entry(entry);
                     }
                     entries
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     println!("{} Failed to get logs: {}", "❌".red(), e);
                     return Ok(());
                 }
@@ -473,37 +488,52 @@ impl LspManager {
             // We track the count because multiple entries can have the same timestamp
             let mut last_seen_count = entries.len();
 
-            // Poll for new logs every 500ms
-            loop {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+            // Poll for new logs with interval to avoid backlog
+            let mut ticker = time::interval(Duration::from_millis(LOG_FOLLOW_POLL_MS));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-                match client.get_logs(1000).await {
-                    Ok(new_entries) => {
+            loop {
+                ticker.tick().await;
+
+                // Bound the RPC to avoid wedging follow-mode forever if the daemon/socket stalls
+                match time::timeout(
+                    Duration::from_millis(LOG_RPC_TIMEOUT_MS),
+                    client.get_logs(LOG_FETCH_LIMIT),
+                )
+                .await
+                {
+                    Err(_) => {
+                        // Timed out talking to the daemon; continue polling without blocking the UI
+                        continue;
+                    }
+                    Ok(Ok(new_entries)) => {
                         // Show only truly new entries beyond what we've already displayed
                         if new_entries.len() > last_seen_count {
-                            // We have new entries! Show only the new ones
                             for entry in new_entries.iter().skip(last_seen_count) {
                                 Self::print_log_entry(entry);
                             }
-                            last_seen_count = new_entries.len();
                         }
-                        // If the log buffer was rotated (fewer entries than before),
-                        // we might have missed some logs, but that's ok - just update our count
-                        else if new_entries.len() < last_seen_count {
-                            last_seen_count = new_entries.len();
-                        }
-                        // Otherwise, no new logs - just continue polling
+                        // Update count whether we showed new logs or not
+                        last_seen_count = new_entries.len();
                     }
-                    Err(_) => {
-                        // Daemon might have been shutdown
+                    Ok(Err(_)) => {
+                        // Daemon might have been shutdown; exit follow mode gracefully
                         break;
                     }
                 }
             }
         } else {
-            // Show last N lines
-            match client.get_logs(lines).await {
-                Ok(entries) => {
+            // Show last N lines with timeout
+            match time::timeout(
+                Duration::from_millis(LOG_RPC_TIMEOUT_MS),
+                client.get_logs(lines),
+            )
+            .await
+            {
+                Err(_) => {
+                    println!("{} Failed to get logs: timed out", "❌".red());
+                }
+                Ok(Ok(entries)) => {
                     if entries.is_empty() {
                         println!("{}", "No logs available".yellow());
                         return Ok(());
@@ -529,7 +559,7 @@ impl LspManager {
                         "probe lsp restart".cyan()
                     );
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     println!("{} Failed to get logs: {}", "❌".red(), e);
                 }
             }
