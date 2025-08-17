@@ -1168,22 +1168,42 @@ impl LspServer {
         Ok(())
     }
 
-    // Safely open a file, handling errors gracefully
+    // Safely open a file, handling errors gracefully with atomic operation
     async fn open_file_safely(&self, file_path: &Path) -> Result<()> {
-        match tokio::fs::read_to_string(file_path).await {
+        let canonical_path = Self::canonicalize_for_uri(file_path);
+
+        // Use atomic check-and-set to prevent duplicate document opening
+        {
+            let mut docs = self.opened_documents.lock().await;
+            if docs.contains(&canonical_path) {
+                debug!(
+                    "Document {:?} already opened by another thread",
+                    canonical_path
+                );
+                return Ok(());
+            }
+            // Mark as opened immediately to prevent race condition
+            docs.insert(canonical_path.clone());
+        }
+
+        // Read file content and send didOpen notification
+        match tokio::fs::read_to_string(&canonical_path).await {
             Ok(content) => {
-                if let Err(e) = self.open_document(file_path, &content).await {
-                    debug!("Failed to open {:?}: {}", file_path, e);
+                if let Err(e) = self.open_document(&canonical_path, &content).await {
+                    // Remove from opened set if opening failed
+                    let mut docs = self.opened_documents.lock().await;
+                    docs.remove(&canonical_path);
+                    debug!("Failed to open {:?}: {}", canonical_path, e);
                     return Err(e);
                 }
-
-                // Track that we opened it
-                let mut docs = self.opened_documents.lock().await;
-                docs.insert(file_path.to_path_buf());
+                debug!("Successfully opened document: {:?}", canonical_path);
                 Ok(())
             }
             Err(e) => {
-                debug!("Failed to read file {:?}: {}", file_path, e);
+                // Remove from opened set if reading failed
+                let mut docs = self.opened_documents.lock().await;
+                docs.remove(&canonical_path);
+                debug!("Failed to read file {:?}: {}", canonical_path, e);
                 Err(anyhow!("Failed to read file: {}", e))
             }
         }
@@ -1191,8 +1211,9 @@ impl LspServer {
 
     // Helper to check if a document is already opened
     async fn is_document_open(&self, file_path: &Path) -> bool {
+        let canonical_path = Self::canonicalize_for_uri(file_path);
         let docs = self.opened_documents.lock().await;
-        docs.contains(file_path)
+        docs.contains(&canonical_path)
     }
 
     // Simple document readiness for gopls - VS Code's approach
@@ -1211,7 +1232,7 @@ impl LspServer {
         if !self.is_document_open(&abs_path).await {
             info!("Opening document for LSP analysis: {:?}", abs_path);
 
-            // Simple approach: Just open the target file and let gopls handle package detection
+            // Use atomic open operation to prevent duplicate DidOpenTextDocument
             self.open_file_safely(&abs_path).await?;
 
             // For gopls, give it a moment to process the file and establish package context
