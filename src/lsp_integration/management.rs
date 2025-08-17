@@ -469,25 +469,30 @@ impl LspManager {
                 }
             };
 
-            // Keep track of the last timestamp to avoid duplicates
-            let mut last_timestamp = entries.last().map(|e| e.timestamp.clone());
+            // Keep track of how many entries we've seen to avoid duplicates
+            // We track the count because multiple entries can have the same timestamp
+            let mut last_seen_count = entries.len();
 
             // Poll for new logs every 500ms
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
 
-                match client.get_logs(100).await {
+                match client.get_logs(1000).await {
                     Ok(new_entries) => {
-                        // Show only new entries after the last timestamp
-                        let mut found_last = last_timestamp.is_none();
-                        for entry in &new_entries {
-                            if found_last {
+                        // Show only truly new entries beyond what we've already displayed
+                        if new_entries.len() > last_seen_count {
+                            // We have new entries! Show only the new ones
+                            for entry in new_entries.iter().skip(last_seen_count) {
                                 Self::print_log_entry(entry);
-                                last_timestamp = Some(entry.timestamp.clone());
-                            } else if Some(&entry.timestamp) == last_timestamp.as_ref() {
-                                found_last = true;
                             }
+                            last_seen_count = new_entries.len();
                         }
+                        // If the log buffer was rotated (fewer entries than before),
+                        // we might have missed some logs, but that's ok - just update our count
+                        else if new_entries.len() < last_seen_count {
+                            last_seen_count = new_entries.len();
+                        }
+                        // Otherwise, no new logs - just continue polling
                     }
                     Err(_) => {
                         // Daemon might have been shutdown
