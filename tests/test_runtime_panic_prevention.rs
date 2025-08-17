@@ -3,8 +3,6 @@
 //! This test file contains tests that would have failed before the fix
 //! and now pass, proving that our fix works correctly.
 
-use anyhow::Result;
-
 /// This test simulates the EXACT problem that was occurring
 /// It would panic before the fix with:
 /// "Cannot start a runtime from within a runtime"
