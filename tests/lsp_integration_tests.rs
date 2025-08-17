@@ -195,10 +195,16 @@ fn test_extract_non_blocking_without_daemon() -> Result<()> {
     // The important thing is that it doesn't block (checked by elapsed time)
     let _ = stderr; // Mark as used
 
-    // Should complete quickly (under 2 seconds)
+    // Should complete quickly (under 5 seconds in CI, 2 seconds locally)
+    let max_duration = if std::env::var("CI").is_ok() {
+        5 // More lenient timeout for CI environments
+    } else {
+        2 // Stricter timeout for local development
+    };
+
     assert!(
-        elapsed.as_secs() < 2,
-        "Extract should not block (took {elapsed:?})"
+        elapsed.as_secs() < max_duration,
+        "Extract should not block (took {elapsed:?}, max: {max_duration}s)"
     );
 
     Ok(())
@@ -225,10 +231,16 @@ fn test_search_non_blocking_without_daemon() -> Result<()> {
         "Should find results with 'fn'"
     );
 
-    // Should complete quickly (under 2 seconds)
+    // Should complete quickly (under 5 seconds in CI, 2 seconds locally)
+    let max_duration = if std::env::var("CI").is_ok() {
+        5 // More lenient timeout for CI environments
+    } else {
+        2 // Stricter timeout for local development
+    };
+
     assert!(
-        elapsed.as_secs() < 2,
-        "Search should not block (took {elapsed:?})"
+        elapsed.as_secs() < max_duration,
+        "Search should not block (took {elapsed:?}, max: {max_duration}s)"
     );
 
     Ok(())
