@@ -47,79 +47,30 @@ pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool
             return;
         }
 
-        let mut collected: Vec<serde_json::Value> = Vec::new();
+        // Process symbols in PARALLEL for better performance
+        let file_path = result.file.clone();
+        let node_type = result.node_type.clone();
 
-        for symbol_info in symbols {
-            // Check cache
-            let cache_key = (
-                result.file.clone(),
-                symbol_info.name.clone(),
-                symbol_info.line,
-                symbol_info.column,
-            );
-
-            let cached_value = if let Ok(cache) = LSP_CACHE.lock() {
-                cache.get(&cache_key).cloned()
-            } else {
-                None
-            };
-
-            let mut info_opt = cached_value.map(|a| (*a).clone());
-            if info_opt.is_none() {
-                // Fetch LSP info for this symbol
-                info_opt = get_lsp_info_for_result(
-                    &result.file,
-                    &symbol_info.name,
-                    symbol_info.line,
-                    symbol_info.column,
-                    debug_mode,
-                );
-                // Cache on success
-                if let Some(ref info) = info_opt {
-                    if let Ok(mut cache) = LSP_CACHE.lock() {
-                        cache.insert(cache_key, Arc::new(info.clone()));
-                    }
-                }
-            } else if debug_mode {
-                println!(
-                    "[DEBUG] Using cached LSP info for {} at {}:{}:{}",
-                    symbol_info.name, result.file, symbol_info.line, symbol_info.column
-                );
+        let collected: Vec<serde_json::Value> = if symbols.len() > 1 {
+            if debug_mode {
+                println!("[DEBUG] Processing {} symbols in parallel", symbols.len());
             }
-
-            // Ensure the "symbol" name is present in the output object
-            if let Some(mut v) = info_opt {
-                match v.as_object_mut() {
-                    Some(map) => {
-                        map.entry("symbol".to_string())
-                            .or_insert_with(|| json!(symbol_info.name.clone()));
-
-                        // Add node_type and range for merged blocks
-                        map.insert("node_type".to_string(), json!(result.node_type.clone()));
-                        map.insert(
-                            "range".to_string(),
-                            json!({
-                                "lines": [symbol_info.line, symbol_info.line + 5] // Approximate range
-                            }),
-                        );
-
-                        collected.push(serde_json::Value::Object(map.clone()));
-                    }
-                    None => {
-                        collected.push(json!({
-                            "symbol": symbol_info.name.clone(),
-                            "raw": v
-                        }));
-                    }
-                }
-            } else {
-                // LSP lookup failed; still record the symbol name so merged blocks are complete
-                collected.push(json!({
-                    "symbol": symbol_info.name.clone(),
-                    "node_type": result.node_type.clone()
-                }));
-            }
-        }
+            // Use parallel processing for multiple symbols to reduce total time
+            symbols
+                .into_par_iter()
+                .filter_map(|symbol_info| {
+                    process_single_symbol(&file_path, &node_type, symbol_info, debug_mode)
+                })
+                .collect()
+        } else {
+            // For single symbol, use sequential processing
+            symbols
+                .into_iter()
+                .filter_map(|symbol_info| {
+                    process_single_symbol(&file_path, &node_type, symbol_info, debug_mode)
+                })
+                .collect()
+        };
 
         // Single vs merged shape
         result.lsp_info = if collected.len() == 1 {
@@ -147,10 +98,87 @@ pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool
 }
 
 /// Information about a symbol extracted from a code block
+#[derive(Clone)]
 struct SymbolInfo {
     name: String,
     line: u32,
     column: u32,
+}
+
+/// Process a single symbol and get its LSP information
+fn process_single_symbol(
+    file_path: &str,
+    node_type: &str,
+    symbol_info: SymbolInfo,
+    debug_mode: bool,
+) -> Option<serde_json::Value> {
+    // Check cache
+    let cache_key = (
+        file_path.to_string(),
+        symbol_info.name.clone(),
+        symbol_info.line,
+        symbol_info.column,
+    );
+
+    let cached_value = if let Ok(cache) = LSP_CACHE.lock() {
+        cache.get(&cache_key).cloned()
+    } else {
+        None
+    };
+
+    let mut info_opt = cached_value.map(|a| (*a).clone());
+    if info_opt.is_none() {
+        // Fetch LSP info for this symbol
+        info_opt = get_lsp_info_for_result(
+            file_path,
+            &symbol_info.name,
+            symbol_info.line,
+            symbol_info.column,
+            debug_mode,
+        );
+        // Cache on success
+        if let Some(ref info) = info_opt {
+            if let Ok(mut cache) = LSP_CACHE.lock() {
+                cache.insert(cache_key, Arc::new(info.clone()));
+            }
+        }
+    } else if debug_mode {
+        println!(
+            "[DEBUG] Using cached LSP info for {} at {}:{}:{}",
+            symbol_info.name, file_path, symbol_info.line, symbol_info.column
+        );
+    }
+
+    // Build the result JSON
+    if let Some(mut v) = info_opt {
+        match v.as_object_mut() {
+            Some(map) => {
+                map.entry("symbol".to_string())
+                    .or_insert_with(|| json!(symbol_info.name.clone()));
+
+                // Add node_type and range for merged blocks
+                map.insert("node_type".to_string(), json!(node_type.to_string()));
+                map.insert(
+                    "range".to_string(),
+                    json!({
+                        "lines": [symbol_info.line, symbol_info.line + 5] // Approximate range
+                    }),
+                );
+
+                Some(serde_json::Value::Object(map.clone()))
+            }
+            None => Some(json!({
+                "symbol": symbol_info.name,
+                "raw": v
+            })),
+        }
+    } else {
+        // LSP lookup failed; still record the symbol name
+        Some(json!({
+            "symbol": symbol_info.name,
+            "node_type": node_type.to_string()
+        }))
+    }
 }
 
 /// Extract ALL symbols from a (possibly merged) code block using tree-sitter.
@@ -794,9 +822,16 @@ async fn get_lsp_info_async(
         }
     };
 
-    // Try to get symbol info with shorter timeout for search
+    // Try to get symbol info with timeout suitable for CI environments
+    // Use shorter timeout when processing multiple symbols to avoid cumulative delays
+    let timeout_secs = if std::env::var("CI").is_ok() {
+        5 // Shorter timeout in CI to avoid test timeouts when processing multiple symbols
+    } else {
+        10 // Normal timeout for local development
+    };
+
     match tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(timeout_secs),
         client.get_symbol_info(file_path, symbol_name, line, column),
     )
     .await
