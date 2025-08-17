@@ -122,7 +122,21 @@ impl LspManager {
         let mut client =
             match tokio::time::timeout(Duration::from_secs(25), LspClient::new(config)).await {
                 Ok(Ok(client)) => client,
-                Ok(Err(e)) => return Err(anyhow!("Failed to connect to daemon: {}", e)),
+                Ok(Err(e)) => {
+                    // Check if this is a version mismatch restart
+                    if e.to_string()
+                        .contains("LSP daemon restarting due to version change")
+                    {
+                        eprintln!(
+                            "\nℹ️  {}",
+                            "LSP daemon is restarting due to version change.".yellow()
+                        );
+                        eprintln!("   Please wait a few seconds and try again.");
+                        eprintln!("   The daemon will be ready shortly.");
+                        return Ok(());
+                    }
+                    return Err(anyhow!("Failed to connect to daemon: {}", e));
+                }
                 Err(_) => return Err(anyhow!("Timeout connecting to daemon after 25 seconds")),
             };
 

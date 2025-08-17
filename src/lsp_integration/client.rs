@@ -179,7 +179,8 @@ impl LspClient {
                     }
                 } else {
                     info!("Daemon version mismatch detected, will restart daemon...");
-                    // Close this connection, daemon will be restarted below
+                    // Return early with a specific error for version mismatch restart
+                    return Err(anyhow!("LSP daemon restarting due to version change. Please try again in a few seconds."));
                 }
             }
             Ok(Err(e)) => {
@@ -818,7 +819,9 @@ async fn start_embedded_daemon_background() -> Result<()> {
             return Ok(());
         }
         Ok(DaemonHealth::VersionMismatch) => {
-            info!("Daemon version mismatch detected, restarting daemon...");
+            eprintln!("\n🔄 LSP daemon version mismatch detected.");
+            eprintln!("   Restarting daemon with new version...");
+            eprintln!("   This may take a few seconds on first run.");
             shutdown_existing_daemon().await?;
         }
         Ok(DaemonHealth::Unhealthy) => {
