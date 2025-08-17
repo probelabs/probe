@@ -110,11 +110,14 @@ impl LspManager {
             timeout_ms: 10000, // 10 seconds for status command
         };
 
+        // On first run, daemon needs to start which can take up to 10s
+        // Plus additional time for connection establishment and version check
+        // Total timeout should be at least 20s to avoid false timeouts on first run
         let mut client =
-            match tokio::time::timeout(Duration::from_secs(15), LspClient::new(config)).await {
+            match tokio::time::timeout(Duration::from_secs(25), LspClient::new(config)).await {
                 Ok(Ok(client)) => client,
                 Ok(Err(e)) => return Err(anyhow!("Failed to connect to daemon: {}", e)),
-                Err(_) => return Err(anyhow!("Timeout connecting to daemon after 15 seconds")),
+                Err(_) => return Err(anyhow!("Timeout connecting to daemon after 25 seconds")),
             };
 
         let status = match tokio::time::timeout(Duration::from_secs(10), client.get_status()).await

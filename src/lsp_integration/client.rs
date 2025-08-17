@@ -191,10 +191,11 @@ impl LspClient {
         }
 
         // Auto-start daemon
-        info!("Starting embedded LSP daemon...");
+        info!("Starting embedded LSP daemon (this may take a few seconds on first run)...");
         match timeout(Duration::from_secs(10), start_embedded_daemon_background()).await {
             Ok(Ok(_)) => {
                 // Successfully started
+                info!("LSP daemon started successfully, waiting for it to be ready...");
             }
             Ok(Err(e)) => {
                 return Err(anyhow!("Failed to start LSP daemon: {}", e));
@@ -204,9 +205,11 @@ impl LspClient {
             }
         }
 
-        // Wait for daemon to be ready with exponential backoff
-        for attempt in 0..10 {
-            sleep(Duration::from_millis(100 * 2_u64.pow(attempt))).await;
+        // Wait for daemon to be ready with improved timing
+        // First attempts are quick, then we slow down to avoid spamming
+        let retry_delays = [100, 200, 300, 500, 1000, 1000, 2000, 2000, 3000, 3000];
+        for (attempt, delay_ms) in retry_delays.iter().enumerate() {
+            sleep(Duration::from_millis(*delay_ms)).await;
 
             match timeout(connection_timeout, IpcStream::connect(&socket_path)).await {
                 Ok(Ok(stream)) => {
@@ -235,8 +238,8 @@ impl LspClient {
                         }
                     }
                 }
-                Ok(Err(_)) => {
-                    debug!("Connection attempt {} failed", attempt + 1);
+                Ok(Err(e)) => {
+                    debug!("Connection attempt {} failed: {}", attempt + 1, e);
                 }
                 Err(_) => {
                     debug!("Connection attempt {} timed out", attempt + 1);
