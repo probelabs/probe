@@ -17,9 +17,17 @@ type CacheValue = Arc<serde_json::Value>;
 // Type alias for the cache map
 type CacheMap = HashMap<CacheKey, CacheValue>;
 
+// Type alias for in-flight request tracking
+type InFlightValue = Arc<tokio::sync::Mutex<Option<serde_json::Value>>>;
+type InFlightMap = HashMap<CacheKey, InFlightValue>;
+
 // Global cache for LSP results to avoid redundant calls
 lazy_static::lazy_static! {
     static ref LSP_CACHE: Arc<Mutex<CacheMap>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    // Track in-flight requests to prevent duplicate concurrent requests
+    static ref IN_FLIGHT_REQUESTS: Arc<Mutex<InFlightMap>> =
         Arc::new(Mutex::new(HashMap::new()));
 }
 
@@ -112,7 +120,7 @@ fn process_single_symbol(
     symbol_info: SymbolInfo,
     debug_mode: bool,
 ) -> Option<serde_json::Value> {
-    // Check cache
+    // Check cache first
     let cache_key = (
         file_path.to_string(),
         symbol_info.name.clone(),
@@ -120,33 +128,106 @@ fn process_single_symbol(
         symbol_info.column,
     );
 
+    // Check completed cache
     let cached_value = if let Ok(cache) = LSP_CACHE.lock() {
         cache.get(&cache_key).cloned()
     } else {
         None
     };
 
-    let mut info_opt = cached_value.map(|a| (*a).clone());
-    if info_opt.is_none() {
-        // Fetch LSP info for this symbol
-        info_opt = get_lsp_info_for_result(
-            file_path,
-            &symbol_info.name,
-            symbol_info.line,
-            symbol_info.column,
-            debug_mode,
-        );
-        // Cache on success
-        if let Some(ref info) = info_opt {
-            if let Ok(mut cache) = LSP_CACHE.lock() {
-                cache.insert(cache_key, Arc::new(info.clone()));
-            }
+    if let Some(cached) = cached_value {
+        if debug_mode {
+            println!(
+                "[DEBUG] Using cached LSP info for {} at {}:{}:{}",
+                symbol_info.name, file_path, symbol_info.line, symbol_info.column
+            );
         }
-    } else if debug_mode {
-        println!(
-            "[DEBUG] Using cached LSP info for {} at {}:{}:{}",
-            symbol_info.name, file_path, symbol_info.line, symbol_info.column
-        );
+        return Some((*cached).clone());
+    }
+
+    // Check for in-flight requests and either wait for existing or start new
+    let in_flight_mutex = {
+        let mut in_flight = IN_FLIGHT_REQUESTS.lock().ok()?;
+        if let Some(existing_mutex) = in_flight.get(&cache_key) {
+            if debug_mode {
+                println!(
+                    "[DEBUG] Waiting for in-flight LSP request for {} at {}:{}:{}",
+                    symbol_info.name, file_path, symbol_info.line, symbol_info.column
+                );
+            }
+            existing_mutex.clone()
+        } else {
+            // Start new request
+            let new_mutex = Arc::new(tokio::sync::Mutex::new(None));
+            in_flight.insert(cache_key.clone(), new_mutex.clone());
+            new_mutex
+        }
+    };
+
+    // Handle both sync and async contexts properly
+    let info_opt = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        // We're already in a runtime, use it
+        tokio::task::block_in_place(|| {
+            handle.block_on(async {
+                let mut guard = in_flight_mutex.lock().await;
+
+                // Check if another thread already completed the request
+                if let Some(result) = guard.as_ref() {
+                    return Some(result.clone());
+                }
+
+                // We're the first thread to get here, make the actual LSP request
+                let result = get_lsp_info_for_result(
+                    file_path,
+                    &symbol_info.name,
+                    symbol_info.line,
+                    symbol_info.column,
+                    debug_mode,
+                );
+
+                // Store result in the in-flight guard
+                *guard = result.clone();
+
+                result
+            })
+        })
+    } else {
+        // No runtime exists, create one
+        let rt = tokio::runtime::Runtime::new().ok()?;
+        rt.block_on(async {
+            let mut guard = in_flight_mutex.lock().await;
+
+            // Check if another thread already completed the request
+            if let Some(result) = guard.as_ref() {
+                return Some(result.clone());
+            }
+
+            // We're the first thread to get here, make the actual LSP request
+            let result = get_lsp_info_for_result(
+                file_path,
+                &symbol_info.name,
+                symbol_info.line,
+                symbol_info.column,
+                debug_mode,
+            );
+
+            // Store result in the in-flight guard
+            *guard = result.clone();
+
+            result
+        })
+    };
+
+    // Clean up in-flight tracking and cache the result
+    if let Ok(mut in_flight) = IN_FLIGHT_REQUESTS.lock() {
+        in_flight.remove(&cache_key);
+    }
+
+    // Cache successful results
+    if let Some(ref info) = info_opt {
+        if let Ok(mut cache) = LSP_CACHE.lock() {
+            cache.insert(cache_key, Arc::new(info.clone()));
+        }
     }
 
     // Build the result JSON
@@ -297,8 +378,8 @@ fn find_all_function_symbols(
     seen: &mut HashSet<(String, u32, u32)>,
     debug_mode: bool,
 ) {
-    // Check if this node is a function-like construct
-    let is_function_like = matches!(
+    // Check if this node is a callable function-like construct (exclude structs, traits, etc.)
+    let is_callable = matches!(
         node.kind(),
         "function_item"
             | "function_definition"
@@ -307,13 +388,12 @@ fn find_all_function_symbols(
             | "method_declaration"
             | "function"
             | "method"
-            | "class_definition"
-            | "struct_item"
-            | "impl_item"
-            | "trait_item"
     );
 
-    if is_function_like {
+    // Include class definitions but validate they have methods
+    let is_class_like = matches!(node.kind(), "class_definition" | "impl_item");
+
+    if is_callable || is_class_like {
         // Find the identifier child node
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -322,14 +402,32 @@ fn find_all_function_symbols(
                 || child.kind() == "type_identifier"
             {
                 if let Ok(name) = child.utf8_text(content) {
+                    // Skip common non-callable identifiers
+                    if name.is_empty()
+                        || name.len() > 100
+                        || name.starts_with('_') && name.len() == 1
+                    {
+                        continue;
+                    }
+
                     let line = (base_line - 1 + child.start_position().row) as u32;
                     let column = child.start_position().column as u32;
+
+                    // For class-like nodes, verify they contain methods before adding
+                    if is_class_like && !class_has_callable_methods(node, content) {
+                        if debug_mode {
+                            println!(
+                                "[DEBUG] Skipping class/impl '{name}' with no callable methods at line {line}"
+                            );
+                        }
+                        continue;
+                    }
 
                     // Dedup by (name, line, column)
                     if seen.insert((name.to_string(), line, column)) {
                         if debug_mode {
                             println!(
-                                "[DEBUG] Found symbol '{name}' at line {line} column {column} via tree-sitter"
+                                "[DEBUG] Found callable symbol '{name}' at line {line} column {column} via tree-sitter"
                             );
                         }
                         symbols.push(SymbolInfo {
@@ -349,6 +447,26 @@ fn find_all_function_symbols(
     for child in node.children(&mut cursor) {
         find_all_function_symbols(child, content, base_line, symbols, seen, debug_mode);
     }
+}
+
+/// Check if a class or impl block contains callable methods
+fn class_has_callable_methods(node: tree_sitter::Node, _content: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "function_item" | "function_definition" | "method_definition" | "method" => {
+                // Found a callable method
+                return true;
+            }
+            _ => {
+                // Recursively check child nodes
+                if class_has_callable_methods(child, _content) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 // Removed unused function - functionality merged into extract_symbols_from_code_block_with_positions
@@ -808,16 +926,26 @@ async fn get_lsp_info_async(
     let mut client = match LspClient::new(config).await {
         Ok(client) => {
             if debug_mode {
-                println!("[DEBUG] LSP client connected successfully");
+                println!("[DEBUG] LSP client connected successfully for {symbol_name}");
             }
             client
         }
         Err(e) => {
             // Failed to create client or start server
             if debug_mode {
-                println!("[DEBUG] Failed to create LSP client: {e}");
+                println!("[DEBUG] Failed to create LSP client for symbol '{symbol_name}': {e}");
             }
-            eprintln!("Warning: LSP enrichment unavailable: {e}");
+            // Don't spam stderr for each symbol failure - just debug log
+            if std::env::var("LSP_LOG").unwrap_or_default() == "1" {
+                eprintln!(
+                    "LSP Warning: Failed to connect for symbol '{}' at {}:{}:{}: {}",
+                    symbol_name,
+                    file_path.display(),
+                    line,
+                    column,
+                    e
+                );
+            }
             return None;
         }
     };
@@ -854,19 +982,34 @@ async fn get_lsp_info_async(
         }
         Ok(Ok(None)) => {
             if debug_mode {
-                println!("[DEBUG] No LSP info available for {symbol_name}");
+                println!("[DEBUG] No LSP info available for symbol '{}' at {}:{}:{} (likely not a callable position)", 
+                    symbol_name, file_path.display(), line, column);
             }
             None
         }
         Ok(Err(e)) => {
-            if debug_mode {
-                println!("[DEBUG] LSP query failed for {symbol_name}: {e}");
+            if debug_mode || std::env::var("LSP_LOG").unwrap_or_default() == "1" {
+                println!(
+                    "[DEBUG] LSP query failed for symbol '{}' at {}:{}:{}: {}",
+                    symbol_name,
+                    file_path.display(),
+                    line,
+                    column,
+                    e
+                );
             }
             None
         }
         Err(_) => {
-            if debug_mode {
-                println!("[DEBUG] LSP query timed out for {symbol_name}");
+            if debug_mode || std::env::var("LSP_LOG").unwrap_or_default() == "1" {
+                println!(
+                    "[DEBUG] LSP query timed out for symbol '{}' at {}:{}:{} after {}s",
+                    symbol_name,
+                    file_path.display(),
+                    line,
+                    column,
+                    timeout_secs
+                );
             }
             None
         }
