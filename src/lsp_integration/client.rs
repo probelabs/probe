@@ -179,8 +179,17 @@ impl LspClient {
                     }
                 } else {
                     info!("Daemon version mismatch detected, will restart daemon...");
-                    // Return early with a specific error for version mismatch restart
-                    return Err(anyhow!("LSP daemon restarting due to version change. Please try again in a few seconds."));
+                    eprintln!("\n🔄 LSP daemon version mismatch detected.");
+                    eprintln!("   Shutting down old daemon...");
+
+                    // Shutdown the existing daemon
+                    drop(stream); // Close our connection first
+                    if let Err(e) = shutdown_existing_daemon().await {
+                        warn!("Failed to shutdown existing daemon: {}", e);
+                    }
+
+                    // Let the normal flow below handle starting the new daemon
+                    // by falling through to the auto-start section
                 }
             }
             Ok(Err(e)) => {
