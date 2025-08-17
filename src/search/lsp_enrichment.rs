@@ -5,7 +5,7 @@ use probe_code::lsp_integration::{LspClient, LspConfig};
 use probe_code::models::SearchResult;
 use rayon::prelude::*;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
@@ -41,10 +41,16 @@ pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool
             return;
         }
 
-        // Try to extract symbol information from the code block with precise position
-        if let Some(symbol_info) = extract_symbol_from_code_block_with_position(result, debug_mode)
-        {
-            // Check cache first
+        // Extract ALL symbols from (possibly merged) block
+        let symbols = extract_symbols_from_code_block_with_positions(result, debug_mode);
+        if symbols.is_empty() {
+            return;
+        }
+
+        let mut collected: Vec<serde_json::Value> = Vec::new();
+
+        for symbol_info in symbols {
+            // Check cache
             let cache_key = (
                 result.file.clone(),
                 symbol_info.name.clone(),
@@ -52,42 +58,75 @@ pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool
                 symbol_info.column,
             );
 
-            let cached_value = {
-                if let Ok(cache) = LSP_CACHE.lock() {
-                    cache.get(&cache_key).cloned()
-                } else {
-                    None
-                }
+            let cached_value = if let Ok(cache) = LSP_CACHE.lock() {
+                cache.get(&cache_key).cloned()
+            } else {
+                None
             };
 
-            if let Some(cached) = cached_value {
-                if debug_mode {
-                    println!(
-                        "[DEBUG] Using cached LSP info for {} at {}:{}:{}",
-                        symbol_info.name, result.file, symbol_info.line, symbol_info.column
-                    );
-                }
-                result.lsp_info = Some((*cached).clone());
-            } else {
-                // Get LSP information for the symbol
-                let lsp_info = get_lsp_info_for_result(
+            let mut info_opt = cached_value.map(|a| (*a).clone());
+            if info_opt.is_none() {
+                // Fetch LSP info for this symbol
+                info_opt = get_lsp_info_for_result(
                     &result.file,
                     &symbol_info.name,
                     symbol_info.line,
                     symbol_info.column,
                     debug_mode,
                 );
-
-                // Cache the result if successful
-                if let Some(ref info) = lsp_info {
+                // Cache on success
+                if let Some(ref info) = info_opt {
                     if let Ok(mut cache) = LSP_CACHE.lock() {
                         cache.insert(cache_key, Arc::new(info.clone()));
                     }
                 }
+            } else if debug_mode {
+                println!(
+                    "[DEBUG] Using cached LSP info for {} at {}:{}:{}",
+                    symbol_info.name, result.file, symbol_info.line, symbol_info.column
+                );
+            }
 
-                result.lsp_info = lsp_info;
+            // Ensure the "symbol" name is present in the output object
+            if let Some(mut v) = info_opt {
+                match v.as_object_mut() {
+                    Some(map) => {
+                        map.entry("symbol".to_string())
+                            .or_insert_with(|| json!(symbol_info.name.clone()));
+
+                        // Add node_type and range for merged blocks
+                        map.insert("node_type".to_string(), json!(result.node_type.clone()));
+                        map.insert(
+                            "range".to_string(),
+                            json!({
+                                "lines": [symbol_info.line, symbol_info.line + 5] // Approximate range
+                            }),
+                        );
+
+                        collected.push(serde_json::Value::Object(map.clone()));
+                    }
+                    None => {
+                        collected.push(json!({
+                            "symbol": symbol_info.name.clone(),
+                            "raw": v
+                        }));
+                    }
+                }
+            } else {
+                // LSP lookup failed; still record the symbol name so merged blocks are complete
+                collected.push(json!({
+                    "symbol": symbol_info.name.clone(),
+                    "node_type": result.node_type.clone()
+                }));
             }
         }
+
+        // Single vs merged shape
+        result.lsp_info = if collected.len() == 1 {
+            Some(collected.into_iter().next().unwrap())
+        } else {
+            Some(json!({ "merged": true, "symbols": collected }))
+        };
     });
 
     if debug_mode {
@@ -114,9 +153,180 @@ struct SymbolInfo {
     column: u32,
 }
 
-/// Extract symbol information from a code block with precise position using tree-sitter
-/// This function parses the code block to find the exact position of the symbol.
-fn extract_symbol_from_code_block_with_position(
+/// Extract ALL symbols from a (possibly merged) code block using tree-sitter.
+/// Returns a vector of SymbolInfo for each function/method found in the block.
+fn extract_symbols_from_code_block_with_positions(
+    result: &SearchResult,
+    debug_mode: bool,
+) -> Vec<SymbolInfo> {
+    let file_path = Path::new(&result.file);
+    let extension = match file_path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => ext,
+        None => {
+            if debug_mode {
+                println!("[DEBUG] No file extension found for {}", result.file);
+            }
+            // Fall back to single-symbol extraction
+            return extract_symbol_from_code_block_with_position_original(result, debug_mode)
+                .map(|s| vec![s])
+                .unwrap_or_default();
+        }
+    };
+
+    // Get the language implementation
+    let language_impl = match get_language_impl(extension) {
+        Some(impl_) => impl_,
+        None => {
+            if debug_mode {
+                println!("[DEBUG] No language implementation for extension: {extension}");
+            }
+            // Fall back to single-symbol extraction
+            return extract_symbol_from_code_block_with_position_original(result, debug_mode)
+                .map(|s| vec![s])
+                .unwrap_or_default();
+        }
+    };
+
+    // Get a parser from the pool
+    let mut parser = match get_pooled_parser(extension) {
+        Ok(p) => p,
+        Err(_) => {
+            if debug_mode {
+                println!("[DEBUG] Failed to get parser for extension: {extension}");
+            }
+            // Fall back to single-symbol extraction
+            return extract_symbol_from_code_block_with_position_original(result, debug_mode)
+                .map(|s| vec![s])
+                .unwrap_or_default();
+        }
+    };
+
+    // Set the language
+    if parser
+        .set_language(&language_impl.get_tree_sitter_language())
+        .is_err()
+    {
+        return_pooled_parser(extension, parser);
+        // Fall back to single-symbol extraction
+        return extract_symbol_from_code_block_with_position_original(result, debug_mode)
+            .map(|s| vec![s])
+            .unwrap_or_default();
+    }
+
+    // Parse the code block
+    let tree = match parser.parse(&result.code, None) {
+        Some(t) => t,
+        None => {
+            return_pooled_parser(extension, parser);
+            // Fall back to single-symbol extraction
+            return extract_symbol_from_code_block_with_position_original(result, debug_mode)
+                .map(|s| vec![s])
+                .unwrap_or_default();
+        }
+    };
+
+    let root_node = tree.root_node();
+    let mut symbols = Vec::new();
+    let mut seen = HashSet::<(String, u32, u32)>::new();
+
+    // Find all function-like nodes in the tree
+    find_all_function_symbols(
+        root_node,
+        result.code.as_bytes(),
+        result.lines.0,
+        &mut symbols,
+        &mut seen,
+        debug_mode,
+    );
+
+    // Return the parser to the pool
+    return_pooled_parser(extension, parser);
+
+    if debug_mode {
+        println!(
+            "[DEBUG] Found {} symbols in merged block using tree-sitter",
+            symbols.len()
+        );
+    }
+
+    // If no symbols found via tree-sitter, fall back to single-symbol extraction
+    if symbols.is_empty() {
+        if let Some(one) = extract_symbol_from_code_block_with_position_original(result, debug_mode)
+        {
+            symbols.push(one);
+        }
+    }
+
+    symbols
+}
+
+/// Recursively find all function-like symbols in the tree-sitter AST
+fn find_all_function_symbols(
+    node: tree_sitter::Node,
+    content: &[u8],
+    base_line: usize,
+    symbols: &mut Vec<SymbolInfo>,
+    seen: &mut HashSet<(String, u32, u32)>,
+    debug_mode: bool,
+) {
+    // Check if this node is a function-like construct
+    let is_function_like = matches!(
+        node.kind(),
+        "function_item"
+            | "function_definition"
+            | "method_definition"
+            | "function_declaration"
+            | "method_declaration"
+            | "function"
+            | "method"
+            | "class_definition"
+            | "struct_item"
+            | "impl_item"
+            | "trait_item"
+    );
+
+    if is_function_like {
+        // Find the identifier child node
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "identifier"
+                || child.kind() == "field_identifier"
+                || child.kind() == "type_identifier"
+            {
+                if let Ok(name) = child.utf8_text(content) {
+                    let line = (base_line - 1 + child.start_position().row) as u32;
+                    let column = child.start_position().column as u32;
+
+                    // Dedup by (name, line, column)
+                    if seen.insert((name.to_string(), line, column)) {
+                        if debug_mode {
+                            println!(
+                                "[DEBUG] Found symbol '{name}' at line {line} column {column} via tree-sitter"
+                            );
+                        }
+                        symbols.push(SymbolInfo {
+                            name: name.to_string(),
+                            line,
+                            column,
+                        });
+                    }
+                }
+                break; // Only take the first identifier as the function name
+            }
+        }
+    }
+
+    // Recursively search children
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        find_all_function_symbols(child, content, base_line, symbols, seen, debug_mode);
+    }
+}
+
+// Removed unused function - functionality merged into extract_symbols_from_code_block_with_positions
+
+/// Original single-symbol extraction logic (renamed for internal use)
+fn extract_symbol_from_code_block_with_position_original(
     result: &SearchResult,
     debug_mode: bool,
 ) -> Option<SymbolInfo> {
