@@ -219,14 +219,24 @@ impl LanguageDetector {
         Ok(workspaces)
     }
 
-    /// Recursively discover nested workspaces
+    /// Recursively discover nested workspaces with depth tracking
     fn discover_nested_workspaces(
         &self,
         dir: &Path,
         workspaces: &mut HashMap<PathBuf, HashSet<Language>>,
     ) -> Result<()> {
-        // Skip if we already identified this as a workspace
-        if workspaces.contains_key(dir) {
+        self.discover_nested_workspaces_with_depth(dir, workspaces, 0, 10)
+    }
+
+    fn discover_nested_workspaces_with_depth(
+        &self,
+        dir: &Path,
+        workspaces: &mut HashMap<PathBuf, HashSet<Language>>,
+        current_depth: usize,
+        max_depth: usize,
+    ) -> Result<()> {
+        // Prevent excessive recursion
+        if current_depth >= max_depth {
             return Ok(());
         }
 
@@ -244,6 +254,10 @@ impl LanguageDetector {
                         || name == "build"
                         || name == "vendor"
                         || name == "__pycache__"
+                        || name == ".git"
+                        || name == "out"
+                        || name == "bin"
+                        || name == "obj"
                     {
                         continue;
                     }
@@ -254,13 +268,18 @@ impl LanguageDetector {
                     if let Some(languages) = self.detect_workspace_languages(&path)? {
                         if !languages.is_empty() {
                             workspaces.insert(path.clone(), languages);
-                            // Don't recurse into identified workspaces
-                            continue;
+                            // IMPORTANT: Continue recursing to find nested workspaces
+                            // This allows discovery of monorepo sub-projects
                         }
                     }
 
-                    // Recurse into subdirectory
-                    self.discover_nested_workspaces(&path, workspaces)?;
+                    // Always recurse into subdirectory to find all nested workspaces
+                    self.discover_nested_workspaces_with_depth(
+                        &path,
+                        workspaces,
+                        current_depth + 1,
+                        max_depth,
+                    )?;
                 }
             }
         }
