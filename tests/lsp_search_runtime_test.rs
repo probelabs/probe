@@ -3,7 +3,10 @@
 //! This test is designed to catch the runtime panic that occurs when
 //! search with LSP enrichment is called from an async context.
 
+mod common;
+
 use anyhow::Result;
+use common::LspTestGuard;
 use probe_code::models::SearchResult;
 use probe_code::search::lsp_enrichment::enrich_results_with_lsp;
 use std::env;
@@ -15,6 +18,8 @@ use std::path::PathBuf;
 /// - Calling enrich_results_with_lsp which was creating a new runtime
 #[tokio::test]
 async fn test_lsp_enrichment_in_async_context() -> Result<()> {
+    let _guard = LspTestGuard::new("test_lsp_enrichment_in_async_context");
+
     // Create a sample search result
     let mut results = vec![create_test_search_result()];
 
@@ -36,6 +41,8 @@ async fn test_lsp_enrichment_in_async_context() -> Result<()> {
 /// Test the same functionality but from sync context (how unit tests run)
 #[test]
 fn test_lsp_enrichment_in_sync_context() -> Result<()> {
+    let _guard = LspTestGuard::new("test_lsp_enrichment_in_sync_context");
+
     // Create a sample search result
     let mut results = vec![create_test_search_result()];
 
@@ -51,6 +58,8 @@ fn test_lsp_enrichment_in_sync_context() -> Result<()> {
 /// Test that the runtime detection works correctly
 #[test]
 fn test_runtime_detection() {
+    let _guard = LspTestGuard::new("test_runtime_detection");
+
     // Outside of async context
     assert!(
         tokio::runtime::Handle::try_current().is_err(),
@@ -70,6 +79,8 @@ fn test_runtime_detection() {
 /// Test that we can handle nested async operations correctly
 #[tokio::test]
 async fn test_nested_async_operations() -> Result<()> {
+    let _guard = LspTestGuard::new("test_nested_async_operations");
+
     // Simulate what happens in the search command
     let handle = tokio::spawn(async {
         // This is like the search_runner being in async context
@@ -126,6 +137,8 @@ fn create_test_search_result() -> SearchResult {
 #[test]
 #[ignore] // Ignore by default as it requires LSP daemon
 fn test_search_command_with_lsp_integration() -> Result<()> {
+    let _guard = LspTestGuard::new("test_search_command_with_lsp_integration");
+
     use std::process::Command;
 
     // Build the project first to ensure binary exists

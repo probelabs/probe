@@ -7,7 +7,10 @@
 //! due to daemon coordination and language server initialization timing.
 //! To run all tests including ignored ones locally, use: cargo test -- --ignored
 
+mod common;
+
 use anyhow::Result;
+use common::LspTestGuard;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -69,6 +72,8 @@ fn start_daemon_and_wait() -> Result<()> {
 #[test]
 #[ignore = "Flaky in CI - requires daemon coordination"]
 fn test_lsp_daemon_lifecycle() -> Result<()> {
+    let _guard = LspTestGuard::new("test_lsp_daemon_lifecycle");
+
     // Ensure clean state
     ensure_daemon_stopped();
 
@@ -117,6 +122,8 @@ fn test_lsp_daemon_lifecycle() -> Result<()> {
 #[test]
 #[ignore = "Flaky in CI - requires LSP server initialization"]
 fn test_extract_with_lsp() -> Result<()> {
+    let _guard = LspTestGuard::new("test_extract_with_lsp");
+
     // Ensure clean state
     ensure_daemon_stopped();
 
@@ -173,6 +180,8 @@ fn test_extract_with_lsp() -> Result<()> {
 
 #[test]
 fn test_extract_non_blocking_without_daemon() -> Result<()> {
+    let _guard = LspTestGuard::new("test_extract_non_blocking_without_daemon");
+
     use std::time::Instant;
 
     // Ensure daemon is NOT running
@@ -212,6 +221,8 @@ fn test_extract_non_blocking_without_daemon() -> Result<()> {
 
 #[test]
 fn test_search_non_blocking_without_daemon() -> Result<()> {
+    let _guard = LspTestGuard::new("test_search_non_blocking_without_daemon");
+
     use std::time::Instant;
 
     // Ensure daemon is NOT running
@@ -249,6 +260,8 @@ fn test_search_non_blocking_without_daemon() -> Result<()> {
 #[test]
 #[ignore = "Flaky in CI - requires multiple language servers"]
 fn test_lsp_with_multiple_languages() -> Result<()> {
+    let _guard = LspTestGuard::new("test_lsp_with_multiple_languages");
+
     // Ensure clean state
     ensure_daemon_stopped();
 
@@ -304,6 +317,8 @@ fn test_lsp_with_multiple_languages() -> Result<()> {
 #[test]
 #[ignore = "Flaky in CI - requires daemon with logging"]
 fn test_lsp_logs() -> Result<()> {
+    let _guard = LspTestGuard::new("test_lsp_logs");
+
     // Ensure clean state
     ensure_daemon_stopped();
 
@@ -334,6 +349,8 @@ fn test_lsp_logs() -> Result<()> {
 #[test]
 #[ignore = "Flaky in CI - requires daemon auto-start"]
 fn test_daemon_auto_start() -> Result<()> {
+    let _guard = LspTestGuard::new("test_daemon_auto_start");
+
     // Ensure daemon is not running
     ensure_daemon_stopped();
 

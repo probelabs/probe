@@ -3,6 +3,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 /// Shared limit for length-prefixed messages (also used by daemon).
@@ -104,6 +106,8 @@ pub enum DaemonRequest {
     GetLogs {
         request_id: Uuid,
         lines: usize,
+        #[serde(default)]
+        since_sequence: Option<u64>, // New optional field for sequence-based retrieval
     },
 }
 
@@ -341,6 +345,8 @@ pub enum ServerStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
+    #[serde(default)] // For backward compatibility
+    pub sequence: u64,
     pub timestamp: String,
     pub level: LogLevel,
     pub target: String,
@@ -377,6 +383,15 @@ impl MessageCodec {
         let json = serde_json::to_string(msg)?;
         let bytes = json.as_bytes();
 
+        // Validate message size before encoding
+        if bytes.len() > MAX_MESSAGE_SIZE {
+            return Err(anyhow::anyhow!(
+                "Message size {} exceeds maximum allowed size of {} bytes",
+                bytes.len(),
+                MAX_MESSAGE_SIZE
+            ));
+        }
+
         // Simple length-prefixed encoding
         let mut encoded = Vec::new();
         encoded.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
@@ -388,6 +403,15 @@ impl MessageCodec {
     pub fn encode_response(msg: &DaemonResponse) -> Result<Vec<u8>> {
         let json = serde_json::to_string(msg)?;
         let bytes = json.as_bytes();
+
+        // Validate message size before encoding
+        if bytes.len() > MAX_MESSAGE_SIZE {
+            return Err(anyhow::anyhow!(
+                "Message size {} exceeds maximum allowed size of {} bytes",
+                bytes.len(),
+                MAX_MESSAGE_SIZE
+            ));
+        }
 
         let mut encoded = Vec::new();
         encoded.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
@@ -450,6 +474,96 @@ impl MessageCodec {
         let response = serde_json::from_slice(json_bytes)?;
 
         Ok(response)
+    }
+
+    /// Decode a framed message with size validation
+    pub fn decode_framed(bytes: &[u8]) -> Result<(usize, Vec<u8>)> {
+        if bytes.len() < 4 {
+            return Err(anyhow::anyhow!("Message too short for framing"));
+        }
+
+        let len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+
+        // Validate message size to prevent excessive memory allocation
+        if len > MAX_MESSAGE_SIZE {
+            return Err(anyhow::anyhow!(
+                "Message size {} exceeds maximum allowed size of {} bytes",
+                len,
+                MAX_MESSAGE_SIZE
+            ));
+        }
+
+        if bytes.len() < 4 + len {
+            return Err(anyhow::anyhow!("Incomplete message"));
+        }
+
+        Ok((4 + len, bytes[4..4 + len].to_vec()))
+    }
+
+    /// Async method to read a framed message with timeout
+    pub async fn read_framed<R>(reader: &mut R, read_timeout: Duration) -> Result<Vec<u8>>
+    where
+        R: AsyncReadExt + Unpin,
+    {
+        // Read length prefix with timeout
+        let mut length_buf = [0u8; 4];
+        timeout(read_timeout, reader.read_exact(&mut length_buf))
+            .await
+            .map_err(|_| anyhow::anyhow!("Timeout reading message length"))?
+            .map_err(|e| anyhow::anyhow!("Failed to read message length: {}", e))?;
+
+        let message_len = u32::from_be_bytes(length_buf) as usize;
+
+        // Validate message size
+        if message_len > MAX_MESSAGE_SIZE {
+            return Err(anyhow::anyhow!(
+                "Message size {} exceeds maximum allowed size of {} bytes",
+                message_len,
+                MAX_MESSAGE_SIZE
+            ));
+        }
+
+        // Read message body with timeout
+        let mut message_buf = vec![0u8; message_len];
+        timeout(read_timeout, reader.read_exact(&mut message_buf))
+            .await
+            .map_err(|_| anyhow::anyhow!("Timeout reading message body"))?
+            .map_err(|e| anyhow::anyhow!("Failed to read message body: {}", e))?;
+
+        Ok(message_buf)
+    }
+
+    /// Async method to write a framed message with timeout
+    pub async fn write_framed<W>(writer: &mut W, data: &[u8], write_timeout: Duration) -> Result<()>
+    where
+        W: AsyncWriteExt + Unpin,
+    {
+        // Validate message size
+        if data.len() > MAX_MESSAGE_SIZE {
+            return Err(anyhow::anyhow!(
+                "Message size {} exceeds maximum allowed size of {} bytes",
+                data.len(),
+                MAX_MESSAGE_SIZE
+            ));
+        }
+
+        // Write length prefix and data with timeout
+        let length_bytes = (data.len() as u32).to_be_bytes();
+        let mut frame = Vec::with_capacity(4 + data.len());
+        frame.extend_from_slice(&length_bytes);
+        frame.extend_from_slice(data);
+
+        timeout(write_timeout, writer.write_all(&frame))
+            .await
+            .map_err(|_| anyhow::anyhow!("Timeout writing message"))?
+            .map_err(|e| anyhow::anyhow!("Failed to write message: {}", e))?;
+
+        timeout(write_timeout, writer.flush())
+            .await
+            .map_err(|_| anyhow::anyhow!("Timeout flushing message"))?
+            .map_err(|e| anyhow::anyhow!("Failed to flush message: {}", e))?;
+
+        Ok(())
     }
 }
 
@@ -627,6 +741,7 @@ mod tests {
         let mut large_log_entries = Vec::new();
         for i in 0..100 {
             large_log_entries.push(LogEntry {
+                sequence: i as u64,
                 timestamp: format!("2024-01-01 12:00:{:02}.000 UTC", i % 60),
                 level: LogLevel::Info,
                 target: "test".to_string(),
@@ -700,13 +815,85 @@ mod tests {
         let request = DaemonRequest::GetLogs {
             request_id: Uuid::new_v4(),
             lines: 1000,
+            since_sequence: None,
         };
         let encoded = MessageCodec::encode(&request).expect("encode");
         let decoded = MessageCodec::decode_request(&encoded).expect("decode");
         match decoded {
-            DaemonRequest::GetLogs { lines, .. } => assert_eq!(lines, 1000),
+            DaemonRequest::GetLogs {
+                lines,
+                since_sequence,
+                ..
+            } => {
+                assert_eq!(lines, 1000);
+                assert_eq!(since_sequence, None);
+            }
             _ => panic!("expected GetLogs"),
         }
+    }
+
+    #[test]
+    fn test_get_logs_request_with_sequence() {
+        // Test GetLogs request with sequence parameter
+        let request = DaemonRequest::GetLogs {
+            request_id: Uuid::new_v4(),
+            lines: 50,
+            since_sequence: Some(123),
+        };
+        let encoded = MessageCodec::encode(&request).expect("encode");
+        let decoded = MessageCodec::decode_request(&encoded).expect("decode");
+        match decoded {
+            DaemonRequest::GetLogs {
+                lines,
+                since_sequence,
+                ..
+            } => {
+                assert_eq!(lines, 50);
+                assert_eq!(since_sequence, Some(123));
+            }
+            _ => panic!("expected GetLogs"),
+        }
+    }
+
+    #[test]
+    fn test_log_entry_sequence_serialization() {
+        // Test LogEntry with sequence number serializes correctly
+        let entry = LogEntry {
+            sequence: 42,
+            timestamp: "2024-01-01 12:00:00.000 UTC".to_string(),
+            level: LogLevel::Info,
+            target: "test".to_string(),
+            message: "Test message".to_string(),
+            file: Some("test.rs".to_string()),
+            line: Some(10),
+        };
+
+        let serialized = serde_json::to_string(&entry).expect("serialize");
+        let deserialized: LogEntry = serde_json::from_str(&serialized).expect("deserialize");
+
+        assert_eq!(deserialized.sequence, 42);
+        assert_eq!(deserialized.timestamp, entry.timestamp);
+        assert_eq!(deserialized.message, entry.message);
+    }
+
+    #[test]
+    fn test_log_entry_backward_compatibility() {
+        // Test that LogEntry without sequence field can be deserialized (backward compatibility)
+        let json_without_sequence = r#"{
+            "timestamp": "2024-01-01 12:00:00.000 UTC",
+            "level": "Info",
+            "target": "test",
+            "message": "Test message",
+            "file": "test.rs",
+            "line": 10
+        }"#;
+
+        let deserialized: LogEntry =
+            serde_json::from_str(json_without_sequence).expect("deserialize");
+
+        assert_eq!(deserialized.sequence, 0); // Default value
+        assert_eq!(deserialized.timestamp, "2024-01-01 12:00:00.000 UTC");
+        assert_eq!(deserialized.message, "Test message");
     }
 
     #[test]

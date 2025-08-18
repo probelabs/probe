@@ -12,6 +12,7 @@ async fn test_daemon_logging_basic() -> Result<()> {
 
     // Test that we can create log entries
     let test_entry = LogEntry {
+        sequence: 0, // Will be set by push
         timestamp: "2024-01-01 12:00:00.000 UTC".to_string(),
         level: LogLevel::Info,
         target: "test_target".to_string(),
@@ -38,6 +39,7 @@ async fn test_daemon_logging_basic() -> Result<()> {
     let _logs_request = DaemonRequest::GetLogs {
         request_id: Uuid::new_v4(),
         lines: 50,
+        since_sequence: None,
     };
 
     // The handle_request method is not public, so we'll test the log buffer directly

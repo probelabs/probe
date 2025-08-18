@@ -466,7 +466,7 @@ impl LspManager {
         };
 
         if follow {
-            // Follow mode - poll for new logs
+            // Follow mode - poll for new logs using sequence numbers
             println!(
                 "{}",
                 "Following LSP daemon log (Ctrl+C to stop)..."
@@ -498,9 +498,12 @@ impl LspManager {
                 }
             };
 
-            // Keep track of how many entries we've seen to avoid duplicates
-            // We track the count because multiple entries can have the same timestamp
-            let mut last_seen_count = entries.len();
+            // Track the last sequence number seen to avoid duplicates
+            let mut last_seen_sequence = entries
+                .iter()
+                .map(|entry| entry.sequence)
+                .max()
+                .unwrap_or(0);
 
             // Poll for new logs with interval to avoid backlog
             let mut ticker = time::interval(Duration::from_millis(LOG_FOLLOW_POLL_MS));
@@ -512,7 +515,7 @@ impl LspManager {
                 // Bound the RPC to avoid wedging follow-mode forever if the daemon/socket stalls
                 match time::timeout(
                     Duration::from_millis(LOG_RPC_TIMEOUT_MS),
-                    client.get_logs(LOG_FETCH_LIMIT),
+                    client.get_logs_since(last_seen_sequence, LOG_FETCH_LIMIT),
                 )
                 .await
                 {
@@ -521,18 +524,21 @@ impl LspManager {
                         continue;
                     }
                     Ok(Ok(new_entries)) => {
-                        // Show only truly new entries beyond what we've already displayed
-                        if new_entries.len() > last_seen_count {
-                            for entry in new_entries.iter().skip(last_seen_count) {
+                        // Show only entries with sequence numbers newer than our last seen
+                        for entry in &new_entries {
+                            if entry.sequence > last_seen_sequence {
                                 Self::print_log_entry(entry);
+                                last_seen_sequence = entry.sequence;
                             }
                         }
-                        // Update count whether we showed new logs or not
-                        last_seen_count = new_entries.len();
                     }
-                    Ok(Err(_)) => {
-                        // Daemon might have been shutdown; exit follow mode gracefully
-                        break;
+                    Ok(Err(_e)) => {
+                        // Check if daemon is still running
+                        if client.ping().await.is_err() {
+                            println!("\n{}", "Daemon connection lost".yellow());
+                            break;
+                        }
+                        // Otherwise, continue polling
                     }
                 }
             }

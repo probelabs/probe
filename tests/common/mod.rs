@@ -1,4 +1,5 @@
 //! Common test utilities and helpers for LSP integration tests
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use std::env;
@@ -1434,6 +1435,122 @@ pub mod call_hierarchy {
     }
 }
 
+/// Test guard that ensures LSP processes are cleaned up properly
+///
+/// This guard tracks LSP process counts before and after tests,
+/// and forcibly kills any leaked processes to prevent test interference.
+pub struct LspTestGuard {
+    initial_process_count: usize,
+    test_name: String,
+}
+
+impl LspTestGuard {
+    /// Create a new test guard for the given test
+    pub fn new(test_name: &str) -> Self {
+        // Kill any existing LSP processes before test
+        cleanup_leaked_lsp_processes();
+        let count = count_lsp_processes();
+
+        eprintln!("🧪 LspTestGuard: Starting test '{test_name}' with {count} LSP processes");
+
+        Self {
+            initial_process_count: count,
+            test_name: test_name.to_string(),
+        }
+    }
+}
+
+impl Drop for LspTestGuard {
+    fn drop(&mut self) {
+        eprintln!("🧪 LspTestGuard: Cleaning up test '{}'", self.test_name);
+
+        // Force cleanup of any leaked processes
+        cleanup_leaked_lsp_processes();
+        let final_count = count_lsp_processes();
+
+        if final_count > self.initial_process_count {
+            eprintln!(
+                "⚠️  LSP process leak detected in test '{}': Initial: {}, Final: {} (+{})",
+                self.test_name,
+                self.initial_process_count,
+                final_count,
+                final_count - self.initial_process_count
+            );
+
+            // Try one more aggressive cleanup
+            force_kill_lsp_processes();
+            let after_force_kill = count_lsp_processes();
+
+            if after_force_kill > self.initial_process_count {
+                panic!(
+                    "❌ CRITICAL: Could not clean up LSP process leaks in test '{}'. \
+                     Still have {} processes after forced cleanup (initial: {})",
+                    self.test_name, after_force_kill, self.initial_process_count
+                );
+            } else {
+                eprintln!("✅ Successfully cleaned up leaked processes");
+            }
+        } else {
+            eprintln!(
+                "✅ Test '{}' completed without process leaks",
+                self.test_name
+            );
+        }
+    }
+}
+
+/// Count LSP-related processes
+fn count_lsp_processes() -> usize {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("ps aux | grep -E 'probe.*lsp|lsp.*test|lsp.*daemon' | grep -v grep | wc -l")
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0),
+        _ => 0, // If command fails, assume no processes
+    }
+}
+
+/// Clean up test-related LSP processes
+fn cleanup_leaked_lsp_processes() {
+    // Try to gracefully shutdown any probe lsp daemons first
+    let _ = std::process::Command::new("pkill")
+        .args(["-f", "probe lsp"])
+        .output();
+
+    // Give them time to exit gracefully
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Kill any remaining LSP-related test processes
+    let _ = std::process::Command::new("pkill")
+        .args(["-f", "lsp.*test"])
+        .output();
+
+    // Give processes time to exit
+    std::thread::sleep(std::time::Duration::from_millis(100));
+}
+
+/// Force kill all LSP processes (last resort)
+fn force_kill_lsp_processes() {
+    eprintln!("🔥 Force killing all LSP processes...");
+
+    // Use SIGKILL to force kill
+    let _ = std::process::Command::new("pkill")
+        .args(["-9", "-f", "probe lsp"])
+        .output();
+
+    let _ = std::process::Command::new("pkill")
+        .args(["-9", "-f", "lsp.*daemon"])
+        .output();
+
+    // Give the OS time to clean up
+    std::thread::sleep(std::time::Duration::from_millis(500));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1466,5 +1583,11 @@ mod tests {
         // Test failure cases
         assert!(call_hierarchy::validate_incoming_calls(mock_output, 3).is_err());
         assert!(call_hierarchy::validate_outgoing_calls(mock_output, 2).is_err());
+    }
+
+    #[test]
+    fn test_lsp_test_guard_no_leak() {
+        let _guard = LspTestGuard::new("test_lsp_test_guard_no_leak");
+        // This test should pass without any process leaks
     }
 }
