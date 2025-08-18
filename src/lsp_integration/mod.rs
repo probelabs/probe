@@ -1,3 +1,4 @@
+pub mod call_graph_cache;
 pub mod client;
 pub mod management;
 pub mod types;
