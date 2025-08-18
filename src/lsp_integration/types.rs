@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// LSP daemon status information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +87,54 @@ impl Default for LspConfig {
             use_daemon: true,
             workspace_hint: None,
             timeout_ms: 30000,
+        }
+    }
+}
+
+/// Stable identifier of a symbol at a file path, independent of content hash.
+/// Edges in the call graph are stored at this level.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct NodeId {
+    pub symbol: String,
+    pub file: PathBuf,
+}
+
+/// Content-addressed key for a particular version of a symbol.
+/// This is used to cache a computed CallHierarchyInfo snapshot safely.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct NodeKey {
+    pub symbol: String,
+    pub file: PathBuf,
+    /// Lowercase hex MD5 of the content used to compute the call graph for this symbol.
+    pub content_md5: String,
+}
+
+impl NodeId {
+    /// Create a NodeId with canonicalized path (best-effort).
+    pub fn new<S: Into<String>>(symbol: S, file: PathBuf) -> Self {
+        let canonical = file.canonicalize().unwrap_or(file);
+        Self {
+            symbol: symbol.into(),
+            file: canonical,
+        }
+    }
+}
+
+impl NodeKey {
+    pub fn new<S: Into<String>>(symbol: S, file: PathBuf, content_md5: String) -> Self {
+        let canonical = file.canonicalize().unwrap_or(file);
+        Self {
+            symbol: symbol.into(),
+            file: canonical,
+            content_md5,
+        }
+    }
+
+    /// The stable identity for this versioned key.
+    pub fn id(&self) -> NodeId {
+        NodeId {
+            symbol: self.symbol.clone(),
+            file: self.file.clone(),
         }
     }
 }
