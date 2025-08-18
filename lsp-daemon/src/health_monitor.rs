@@ -165,9 +165,16 @@ impl HealthMonitor {
                             stat.language, server_health.consecutive_failures
                         );
 
-                        // TODO: Implement server restart logic
-                        // This would involve shutting down the unhealthy server and
-                        // letting the server manager create a new one on next request
+                        // Actively restart the unhealthy server. This removes the dead instance and
+                        // respawns a fresh one (when possible) using the last known bootstrap workspace.
+                        if let Err(e) = server_manager
+                            .restart_server_if_unhealthy(stat.language)
+                            .await
+                        {
+                            error!("Failed to restart {:?} server: {}", stat.language, e);
+                        }
+                        // Avoid hammering the same server again in this tick.
+                        continue;
                     }
                 }
             }

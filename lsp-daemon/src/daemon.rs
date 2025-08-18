@@ -20,12 +20,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use tokio::time::{timeout, Duration};
 
-// Timeout constants for client connection handling
-const READ_TIMEOUT: Duration = Duration::from_secs(30);
+// Connection management constants
+const MAX_CONCURRENT_CONNECTIONS: u32 = 64;
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const REQ_TIMEOUT: Duration = Duration::from_secs(25);
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::prelude::*;
@@ -45,6 +48,7 @@ pub struct LspDaemon {
     server_manager: Arc<SingleServerManager>,
     workspace_resolver: Arc<tokio::sync::Mutex<WorkspaceResolver>>,
     connections: Arc<DashMap<Uuid, Instant>>,
+    connection_semaphore: Arc<Semaphore>, // Limit concurrent connections
     start_time: Instant,
     request_count: Arc<RwLock<u64>>,
     shutdown: Arc<RwLock<bool>>,
@@ -136,6 +140,7 @@ impl LspDaemon {
             server_manager,
             workspace_resolver,
             connections: Arc::new(DashMap::new()),
+            connection_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS as usize)),
             start_time: Instant::now(),
             request_count: Arc::new(RwLock::new(0)),
             shutdown: Arc::new(RwLock::new(false)),
@@ -339,52 +344,38 @@ impl LspDaemon {
                     accept_result = listener.accept() => {
                         match accept_result {
                             Ok(stream) => {
-                        // Check if we've reached the connection limit
-                        const MAX_CONNECTIONS: usize = 100; // Reasonable limit for concurrent connections
+                                // Acquire semaphore permit before spawning handler
+                                let semaphore = self.connection_semaphore.clone();
+                                match semaphore.try_acquire_owned() {
+                                    Ok(permit) => {
+                                        // Track accepted connection
+                                        *self.total_connections_accepted.write().await += 1;
 
-                        let current_connections = self.connections.len();
-                        if current_connections >= MAX_CONNECTIONS {
-                            // Clean up stale connections first
-                            let cleaned = self.cleanup_stale_connections();
-
-                            // Check again after cleanup
-                            let connections_after_cleanup = self.connections.len();
-                            if connections_after_cleanup >= MAX_CONNECTIONS {
-                                // Update rejection metrics
-                                *self.connections_rejected_due_to_limit.write().await += 1;
-
-                                warn!(
-                                    "Maximum connection limit reached ({}/{}), cleaned {} stale connections, rejecting new connection",
-                                    connections_after_cleanup, MAX_CONNECTIONS, cleaned
-                                );
-                                // Drop the stream to close the connection
-                                drop(stream);
-                                // Wait a bit to prevent tight loop
-                                tokio::time::sleep(Duration::from_millis(100)).await;
-                                continue;
-                            } else {
-                                info!(
-                                    "Cleaned {} stale connections, now have {}/{} connections, accepting new connection",
-                                    cleaned, connections_after_cleanup, MAX_CONNECTIONS
-                                );
+                                        let daemon = self.clone_refs();
+                                        tokio::spawn(async move {
+                                            // Hold permit for duration of connection
+                                            let _permit = permit;
+                                            if let Err(e) = daemon.handle_connection(stream).await {
+                                                error!("Error handling connection: {}", e);
+                                            }
+                                        });
+                                    }
+                                    Err(_) => {
+                                        // No permits available - reject connection
+                                        *self.connections_rejected_due_to_limit.write().await += 1;
+                                        warn!(
+                                            "Connection limit reached ({} connections), rejecting new connection",
+                                            MAX_CONCURRENT_CONNECTIONS
+                                        );
+                                        drop(stream); // Close connection immediately
+                                    }
+                                }
                             }
-                        }
-
-                        // Track accepted connection
-                        *self.total_connections_accepted.write().await += 1;
-
-                        let daemon = self.clone_refs();
-                        tokio::spawn(async move {
-                            if let Err(e) = daemon.handle_client(stream).await {
-                                error!("Error handling client: {}", e);
+                            Err(e) => {
+                                error!("Error accepting connection: {}", e);
                             }
-                                });
-                        }
-                        Err(e) => {
-                            error!("Error accepting connection: {}", e);
                         }
                     }
-                }
                 _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
                     // Periodic check for shutdown flag
                     if *self.shutdown.read().await {
@@ -400,21 +391,30 @@ impl LspDaemon {
         Ok(())
     }
 
-    async fn handle_client(&self, mut stream: IpcStream) -> Result<()> {
-        // Maximum message size: 10MB (reasonable for LSP messages)
-        const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
-
+    async fn handle_connection(&self, stream: IpcStream) -> Result<()> {
         let client_id = Uuid::new_v4();
         info!("New client connected: {}", client_id);
 
-        // Store connection timestamp
-        self.connections.insert(client_id, Instant::now());
-
-        let mut buffer = vec![0; 65536]; // 64KB initial buffer
-
         let connection_start = Instant::now();
+        let mut last_activity = Instant::now();
+
+        // Store connection timestamp
+        self.connections.insert(client_id, last_activity);
+
+        // Split stream for concurrent read/write operations
+        let (mut reader, mut writer) = stream.into_split();
 
         loop {
+            // Check for idle timeout
+            if last_activity.elapsed() > IDLE_TIMEOUT {
+                warn!(
+                    "Connection idle timeout for client {} - closing after {}s",
+                    client_id,
+                    IDLE_TIMEOUT.as_secs()
+                );
+                break;
+            }
+
             // Check for overall connection timeout
             if connection_start.elapsed() > CONNECTION_TIMEOUT {
                 warn!(
@@ -425,87 +425,93 @@ impl LspDaemon {
                 break;
             }
 
-            // Read message length (exactly 4 bytes) with timeout
-            match timeout(READ_TIMEOUT, stream.read_exact(&mut buffer[..4])).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    debug!("Read error from client {}: {}", client_id, e);
-                    break;
-                }
-                Err(_) => {
-                    warn!(
-                        "Read timeout from client {} - closing connection",
-                        client_id
-                    );
-                    break;
-                }
-            }
-
-            let msg_len = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
-
-            // Validate message size to prevent OOM attacks
-            if msg_len > MAX_MESSAGE_SIZE {
-                error!(
-                    "[{}] Attempted to send oversized message: {} bytes (max: {} bytes)",
-                    client_id, msg_len, MAX_MESSAGE_SIZE
+            // Check if shutdown was requested
+            if *self.shutdown.read().await {
+                info!(
+                    "Daemon shutting down, closing client connection {}",
+                    client_id
                 );
-                // Connection cleanup will happen in the defer-like cleanup at the end
-                return Err(anyhow::anyhow!(
-                    "Message size {} exceeds maximum allowed size of {} bytes",
-                    msg_len,
-                    MAX_MESSAGE_SIZE
-                ));
+                break;
             }
 
-            // Read message body
-            if msg_len > buffer.len() - 4 {
-                buffer.resize(msg_len + 4, 0);
-            }
-
-            // Read message body with timeout
-            match timeout(READ_TIMEOUT, stream.read_exact(&mut buffer[4..4 + msg_len])).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    error!(
-                        "[{}] Failed to read message body from client: {}",
-                        client_id, e
-                    );
-                    // Connection cleanup will happen at the end
-                    return Err(e.into());
+            // Read framed message with timeout
+            let message_data = match MessageCodec::read_framed(&mut reader, READ_TIMEOUT).await {
+                Ok(data) => data,
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    if error_msg.contains("Timeout") {
+                        debug!("Read timeout from client {} - continuing", client_id);
+                        continue; // Continue loop on timeout, don't close connection
+                    } else if error_msg.contains("early eof") || error_msg.contains("UnexpectedEof")
+                    {
+                        // Client disconnected gracefully - this is normal
+                        debug!("[{}] Client disconnected (early eof)", client_id);
+                        break;
+                    } else if error_msg.contains("Connection reset")
+                        || error_msg.contains("Broken pipe")
+                    {
+                        // Client disconnected abruptly - also normal
+                        debug!(
+                            "[{}] Client disconnected abruptly: {}",
+                            client_id, error_msg
+                        );
+                        break;
+                    } else {
+                        // Actual protocol or I/O error
+                        error!("[{}] Failed to read message: {}", client_id, e);
+                        break; // Close connection on actual errors
+                    }
                 }
-                Err(_) => {
-                    error!(
-                        "[{}] Timeout reading message body (size: {} bytes)",
-                        client_id, msg_len
-                    );
-                    // Connection cleanup will happen at the end
-                    return Err(anyhow!(
-                        "Read timeout after {} seconds",
-                        READ_TIMEOUT.as_secs()
-                    ));
-                }
-            }
+            };
 
             // Decode request
-            let request = match MessageCodec::decode_request(&buffer[..4 + msg_len]) {
+            let request = match serde_json::from_slice::<DaemonRequest>(&message_data) {
                 Ok(req) => req,
                 Err(e) => {
                     error!("[{}] Failed to decode request: {}", client_id, e);
-                    // Connection cleanup will happen at the end
-                    return Err(e);
+                    // Send error response for malformed requests
+                    let error_response = DaemonResponse::Error {
+                        request_id: Uuid::new_v4(),
+                        error: format!("Malformed request: {e}"),
+                    };
+
+                    if let Err(write_err) = self.send_response(&mut writer, &error_response).await {
+                        error!(
+                            "[{}] Failed to send error response: {}",
+                            client_id, write_err
+                        );
+                        break;
+                    }
+                    continue;
                 }
             };
 
             // Update activity timestamp
-            self.connections.insert(client_id, Instant::now());
+            last_activity = Instant::now();
+            self.connections.insert(client_id, last_activity);
 
             // Increment request count
             *self.request_count.write().await += 1;
 
-            // Handle request with timing
+            // Handle request with timeout
             let request_start = Instant::now();
-            let response = self.handle_request(request).await;
+            let response_result = timeout(REQ_TIMEOUT, self.handle_request(request)).await;
             let request_duration = request_start.elapsed();
+
+            let response = match response_result {
+                Ok(resp) => resp,
+                Err(_) => {
+                    warn!(
+                        "[{}] Request processing timed out after {}s",
+                        client_id,
+                        REQ_TIMEOUT.as_secs()
+                    );
+                    DaemonResponse::Error {
+                        request_id: Uuid::new_v4(),
+                        error: format!("Request timed out after {}s", REQ_TIMEOUT.as_secs()),
+                    }
+                }
+            };
 
             // Track request duration (keep only last 100)
             {
@@ -521,10 +527,11 @@ impl LspDaemon {
                 *self.error_count.write().await += 1;
             }
 
-            // Send response
-            let encoded = MessageCodec::encode_response(&response)?;
-            stream.write_all(&encoded).await?;
-            stream.flush().await?;
+            // Send response with timeout
+            if let Err(e) = self.send_response(&mut writer, &response).await {
+                error!("[{}] Failed to send response: {}", client_id, e);
+                break; // Close connection on write errors
+            }
 
             // Check if shutdown was requested
             if let DaemonResponse::Shutdown { .. } = response {
@@ -553,6 +560,16 @@ impl LspDaemon {
         );
 
         Ok(())
+    }
+
+    /// Helper method to send response with timeout
+    async fn send_response(
+        &self,
+        writer: &mut tokio::net::unix::OwnedWriteHalf,
+        response: &DaemonResponse,
+    ) -> Result<()> {
+        let json_data = serde_json::to_vec(response)?;
+        MessageCodec::write_framed(writer, &json_data, WRITE_TIMEOUT).await
     }
 
     // Clean up connections that have been idle for too long
@@ -910,8 +927,19 @@ impl LspDaemon {
 
             DaemonRequest::Ping { request_id } => DaemonResponse::Pong { request_id },
 
-            DaemonRequest::GetLogs { request_id, lines } => {
-                let entries = self.log_buffer.get_last(lines);
+            DaemonRequest::GetLogs {
+                request_id,
+                lines,
+                since_sequence,
+            } => {
+                let entries = if let Some(since) = since_sequence {
+                    // Get logs since sequence
+                    self.log_buffer.get_since_sequence(since, lines)
+                } else {
+                    // Backward compatibility: get last N logs
+                    self.log_buffer.get_last(lines)
+                };
+
                 DaemonResponse::Logs {
                     request_id,
                     entries,
@@ -1414,6 +1442,7 @@ impl LspDaemon {
             server_manager: self.server_manager.clone(),
             workspace_resolver: self.workspace_resolver.clone(),
             connections: self.connections.clone(),
+            connection_semaphore: self.connection_semaphore.clone(), // Share semaphore
             start_time: self.start_time,
             request_count: self.request_count.clone(),
             shutdown: self.shutdown.clone(),

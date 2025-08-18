@@ -154,6 +154,15 @@ mod unix_impl {
         pub fn peer_addr(&self) -> Result<String> {
             Ok("unix-peer".to_string()) // Unix sockets don't have traditional addresses
         }
+
+        pub fn into_split(
+            self,
+        ) -> (
+            tokio::net::unix::OwnedReadHalf,
+            tokio::net::unix::OwnedWriteHalf,
+        ) {
+            self.stream.into_split()
+        }
     }
 
     impl AsyncRead for IpcStream {

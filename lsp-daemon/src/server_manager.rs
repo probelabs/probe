@@ -25,6 +25,7 @@ pub struct ServerInstance {
     pub initialized: bool,
     pub last_used: Instant,
     pub start_time: Instant,
+    pub bootstrap_workspace: Option<PathBuf>,
 }
 
 impl ServerInstance {
@@ -36,6 +37,7 @@ impl ServerInstance {
             initialized: false,
             last_used: now,
             start_time: now,
+            bootstrap_workspace: None,
         }
     }
 
@@ -53,6 +55,11 @@ impl ServerInstance {
 
     pub fn remove_workspace(&mut self, workspace: &PathBuf) {
         self.registered_workspaces.remove(workspace);
+    }
+
+    #[inline]
+    pub fn reset_start_time(&mut self) {
+        self.start_time = Instant::now();
     }
 }
 
@@ -243,10 +250,13 @@ impl SingleServerManager {
             warn!("Restarting unhealthy server for {:?}", language);
 
             // Remove the server from our map
+            let mut bootstrap_ws: Option<PathBuf> = None;
             if let Some((_, server_instance)) = self.servers.remove(&language) {
-                // Try to shutdown gracefully
+                // Try to shutdown gracefully and capture bootstrap workspace
                 match tokio::time::timeout(Duration::from_secs(2), server_instance.lock()).await {
                     Ok(server) => {
+                        // Remember the workspace we bootstrapped with so we can respawn immediately.
+                        bootstrap_ws = server.bootstrap_workspace.clone();
                         if let Err(e) = server.server.shutdown().await {
                             warn!(
                                 "Error shutting down {:?} server during restart: {}",
@@ -263,12 +273,38 @@ impl SingleServerManager {
                         );
                     }
                 }
+            } else {
+                info!(
+                    "No existing {:?} server instance found in manager; proceeding with clean spawn if possible",
+                    language
+                );
             }
 
             // Reset health status
             self.health_monitor.reset_health_status(language).await;
 
-            info!("Server restart completed for {:?}", language);
+            // If we know a bootstrap workspace, spawn a fresh instance *now*.
+            if let Some(ws) = bootstrap_ws {
+                info!(
+                    "Spawning fresh {:?} server using bootstrap workspace {:?}",
+                    language, ws
+                );
+                // Note: ensure_workspace_registered bypasses the circuit breaker when
+                // there is no current instance, allowing resurrection even if CB is open.
+                if let Err(e) = self.ensure_workspace_registered(language, ws).await {
+                    warn!(
+                        "Failed to spawn fresh {:?} server after restart: {}",
+                        language, e
+                    );
+                }
+            } else {
+                info!(
+                    "No bootstrap workspace recorded for {:?}; will spawn on next client request",
+                    language
+                );
+            }
+
+            info!("Server restart sequence completed for {:?}", language);
         }
         Ok(())
     }
@@ -337,8 +373,12 @@ impl SingleServerManager {
             workspace_root, language
         );
 
-        // Check circuit breaker first
-        if self.health_monitor.should_reject_request(language).await {
+        // If there is NO running instance, allow creation even if the circuit breaker is open.
+        // This prevents a dead server from blocking its own resurrection.
+        let has_instance = self.servers.contains_key(&language);
+
+        // Check circuit breaker only when we already have a running instance.
+        if has_instance && self.health_monitor.should_reject_request(language).await {
             return Err(anyhow!(
                 "Circuit breaker is open for {:?} - server is unhealthy",
                 language
@@ -346,22 +386,97 @@ impl SingleServerManager {
         }
         // Check if server already exists
         if let Some(server_instance) = self.servers.get(&language) {
-            // Try to acquire lock with timeout to prevent hanging
-            let server_guard =
-                match tokio::time::timeout(Duration::from_secs(10), server_instance.lock()).await {
-                    Ok(guard) => guard,
-                    Err(_) => {
-                        warn!(
-                            "Failed to acquire lock for {:?} server within timeout",
-                            language
-                        );
-                        self.health_monitor.mark_unhealthy(language).await;
-                        return Err(anyhow!(
-                            "Server lock acquisition timeout for {:?}",
-                            language
-                        ));
+            // Try to acquire lock immediately for quick checks (non-blocking)
+            if let Ok(mut server) = server_instance.try_lock() {
+                // Fast path - got lock immediately, handle quickly
+                if server.is_workspace_registered(&workspace_root) {
+                    info!(
+                        "Workspace {:?} already registered with {:?} server",
+                        workspace_root, language
+                    );
+                    server.touch();
+                    return Ok(server_instance.clone());
+                }
+
+                // If server is already initialized, try to add workspace without long operations
+                if server.initialized {
+                    info!(
+                        "Adding new workspace {:?} to existing {:?} server",
+                        workspace_root, language
+                    );
+                    // Drop lock before potentially long workspace registration
+                    drop(server);
+
+                    // Reacquire lock for workspace registration with longer timeout
+                    let server_guard = match tokio::time::timeout(
+                        Duration::from_secs(30),
+                        server_instance.lock(),
+                    )
+                    .await
+                    {
+                        Ok(guard) => guard,
+                        Err(_) => {
+                            warn!("Failed to acquire lock for {:?} server workspace registration within 30s timeout", language);
+                            self.health_monitor.mark_unhealthy(language).await;
+                            return Err(anyhow!(
+                                "Server lock acquisition timeout for {:?}",
+                                language
+                            ));
+                        }
+                    };
+
+                    let mut server = server_guard;
+                    match self.register_workspace(&mut server, &workspace_root).await {
+                        Ok(_) => {
+                            self.health_monitor.mark_healthy(language).await;
+                            info!(
+                                "Successfully registered workspace {:?} with {:?} server",
+                                workspace_root, language
+                            );
+                            return Ok(server_instance.clone());
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to register workspace {:?} with {:?} server: {}",
+                                workspace_root, language, e
+                            );
+                            self.health_monitor.mark_unhealthy(language).await;
+                            // Remove the failed server so it gets recreated on next attempt
+                            drop(server);
+                            self.servers.remove(&language);
+                            return Err(anyhow!(
+                                "Failed to register workspace with existing server: {}. Server will be recreated on next attempt.",
+                                e
+                            ));
+                        }
                     }
-                };
+                }
+            }
+
+            // Slow path - need to wait for lock or initialize server
+            let server_guard = match tokio::time::timeout(
+                Duration::from_secs(30),
+                server_instance.lock(),
+            )
+            .await
+            {
+                Ok(guard) => guard,
+                Err(_) => {
+                    warn!(
+                        "Failed to acquire lock for {:?} server within 30s timeout - server may be stuck initializing",
+                        language
+                    );
+                    self.health_monitor.mark_unhealthy(language).await;
+
+                    // Remove the stuck server to allow recreation
+                    self.servers.remove(&language);
+
+                    return Err(anyhow!(
+                        "Server lock acquisition timeout for {:?} - removed stuck server, will recreate",
+                        language
+                    ));
+                }
+            };
 
             let mut server = server_guard;
 
@@ -398,6 +513,9 @@ impl SingleServerManager {
                 // Don't wait for indexing to complete to avoid blocking
                 server.initialized = true;
                 server.registered_workspaces.insert(workspace_root.clone());
+                // Remember the bootstrap workspace and reset uptime
+                server.bootstrap_workspace = Some(workspace_root.clone());
+                server.reset_start_time();
 
                 info!(
                     "Initialized {:?} server with workspace {:?}",
@@ -407,46 +525,50 @@ impl SingleServerManager {
                 return Ok(server_instance.clone());
             }
 
-            // Check if workspace is already registered
+            // Double-check if workspace is already registered (in slow path)
             if server.is_workspace_registered(&workspace_root) {
                 info!(
-                    "Workspace {:?} already registered with {:?} server",
+                    "Workspace {:?} already registered with {:?} server (slow path)",
                     workspace_root, language
                 );
                 server.touch();
                 return Ok(server_instance.clone());
             }
 
-            // Add workspace to the server
-            info!(
-                "Adding new workspace {:?} to existing {:?} server",
-                workspace_root, language
-            );
-            match self.register_workspace(&mut server, &workspace_root).await {
-                Ok(_) => {
-                    self.health_monitor.mark_healthy(language).await;
-                    info!(
-                        "Successfully registered workspace {:?} with {:?} server",
-                        workspace_root, language
-                    );
-                    return Ok(server_instance.clone());
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to register workspace {:?} with {:?} server: {}",
-                        workspace_root, language, e
-                    );
-                    self.health_monitor.mark_unhealthy(language).await;
+            // If we reach here in slow path, server exists but needs workspace registration
+            if server.initialized {
+                info!(
+                    "Adding new workspace {:?} to existing {:?} server (slow path)",
+                    workspace_root, language
+                );
+                match self.register_workspace(&mut server, &workspace_root).await {
+                    Ok(_) => {
+                        self.health_monitor.mark_healthy(language).await;
+                        info!(
+                            "Successfully registered workspace {:?} with {:?} server",
+                            workspace_root, language
+                        );
+                        return Ok(server_instance.clone());
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to register workspace {:?} with {:?} server: {}",
+                            workspace_root, language, e
+                        );
+                        self.health_monitor.mark_unhealthy(language).await;
 
-                    // Remove the failed server so it gets recreated on next attempt
-                    self.servers.remove(&language);
+                        // Remove the failed server so it gets recreated on next attempt
+                        drop(server);
+                        self.servers.remove(&language);
 
-                    return Err(anyhow!(
-                        "Failed to register workspace with existing server: {}. Server will be recreated on next attempt.",
-                        e
-                    ));
+                        return Err(anyhow!(
+                            "Failed to register workspace with existing server: {}. Server will be recreated on next attempt.",
+                            e
+                        ));
+                    }
                 }
             }
+            // If server is not initialized, continue to initialization below
         }
 
         // Create new server and initialize with this workspace
@@ -486,6 +608,9 @@ impl SingleServerManager {
         instance
             .registered_workspaces
             .insert(workspace_root.clone());
+        // Record bootstrap workspace and ensure uptime is fresh for this spawn.
+        instance.bootstrap_workspace = Some(workspace_root.clone());
+        instance.reset_start_time();
 
         let server_instance = Arc::new(Mutex::new(instance));
         self.servers.insert(language, server_instance.clone());

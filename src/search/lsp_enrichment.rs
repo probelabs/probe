@@ -1,40 +1,32 @@
 use anyhow::Result;
+use dashmap::DashMap;
 use probe_code::language::factory::get_language_impl;
 use probe_code::language::parser_pool::{get_pooled_parser, return_pooled_parser};
 use probe_code::lsp_integration::{LspClient, LspConfig};
 use probe_code::models::SearchResult;
-use rayon::prelude::*;
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use tokio::runtime::Runtime;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
+use tokio::task::JoinSet;
 
-// Type alias for the cache key
+// Type alias for the cache key: (file_path, symbol_name, line, column)
 type CacheKey = (String, String, u32, u32);
-// Type alias for the cache value
-type CacheValue = Arc<serde_json::Value>;
-// Type alias for the cache map
-type CacheMap = HashMap<CacheKey, CacheValue>;
 
-// Type alias for in-flight request tracking
-type InFlightValue = Arc<tokio::sync::Mutex<Option<serde_json::Value>>>;
-type InFlightMap = HashMap<CacheKey, InFlightValue>;
+// Single store for in-flight dedupe + successful cache.
+// Value: Some(v) => cached success; None => currently computing (not yet cached).
+static LSP_MEMO: OnceLock<DashMap<CacheKey, Arc<AsyncMutex<Option<serde_json::Value>>>>> =
+    OnceLock::new();
 
-// Global cache for LSP results to avoid redundant calls
-lazy_static::lazy_static! {
-    static ref LSP_CACHE: Arc<Mutex<CacheMap>> =
-        Arc::new(Mutex::new(HashMap::new()));
-
-    // Track in-flight requests to prevent duplicate concurrent requests
-    static ref IN_FLIGHT_REQUESTS: Arc<Mutex<InFlightMap>> =
-        Arc::new(Mutex::new(HashMap::new()));
+fn memo_map() -> &'static DashMap<CacheKey, Arc<AsyncMutex<Option<serde_json::Value>>>> {
+    LSP_MEMO.get_or_init(DashMap::new)
 }
 
 /// Enrich search results with LSP information
 /// This function processes search results in parallel and adds LSP information
 /// for functions, methods, and other symbols found in the code blocks.
-pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool) -> Result<()> {
+pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -> Result<()> {
     if debug_mode {
         println!(
             "[DEBUG] Starting LSP enrichment for {} results",
@@ -42,51 +34,139 @@ pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool
         );
     }
 
-    // Process results in parallel
-    results.par_iter_mut().for_each(|result| {
-        // Skip if we already have LSP info
-        if result.lsp_info.is_some() {
-            return;
-        }
+    const MAX_CONCURRENT_LSP_REQUESTS: usize = 3;
+    let lsp_range = results.len();
 
-        // Extract ALL symbols from (possibly merged) block
-        let symbols = extract_symbols_from_code_block_with_positions(result, debug_mode);
-        if symbols.is_empty() {
-            return;
-        }
+    if debug_mode {
+        println!("[DEBUG] Processing {lsp_range} results with LSP enrichment");
+    }
 
-        // Process symbols in PARALLEL for better performance
-        let file_path = result.file.clone();
-        let node_type = result.node_type.clone();
+    // Build or reuse a runtime ONCE for the whole enrichment pass.
+    // If we're already inside a Tokio runtime, reuse it safely.
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        // Already in a runtime: block the current thread without starving the scheduler.
+        tokio::task::block_in_place(|| {
+            handle.block_on(async {
+                let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_LSP_REQUESTS));
+                let mut set = JoinSet::new();
 
-        let collected: Vec<serde_json::Value> = if symbols.len() > 1 {
-            if debug_mode {
-                println!("[DEBUG] Processing {} symbols in parallel", symbols.len());
+                for (idx, result) in results[..lsp_range].iter().enumerate() {
+                    if result.lsp_info.is_some() {
+                        continue;
+                    }
+                    if !is_lsp_relevant_result(result, debug_mode) {
+                        continue;
+                    }
+                    let symbols =
+                        extract_symbols_from_code_block_with_positions(result, debug_mode);
+                    if symbols.is_empty() {
+                        continue;
+                    }
+
+                    let file_path = result.file.clone();
+                    let node_type = result.node_type.clone();
+                    let sem = semaphore.clone();
+                    let dbg = debug_mode;
+
+                    set.spawn(async move {
+                        let mut collected: Vec<serde_json::Value> = Vec::new();
+                        for symbol_info in symbols.into_iter().take(3) {
+                            if let Some(v) = process_single_symbol_async(
+                                file_path.clone(),
+                                node_type.clone(),
+                                symbol_info,
+                                dbg,
+                                sem.clone(),
+                            )
+                            .await
+                            {
+                                collected.push(v);
+                            }
+                        }
+                        let lsp_info = if collected.len() == 1 {
+                            Some(collected.into_iter().next().unwrap())
+                        } else if !collected.is_empty() {
+                            Some(json!({ "merged": true, "symbols": collected }))
+                        } else {
+                            None
+                        };
+                        (idx, lsp_info)
+                    });
+                }
+
+                while let Some(res) = set.join_next().await {
+                    match res {
+                        Ok((idx, lsp_info)) => {
+                            results[idx].lsp_info = lsp_info;
+                        }
+                        Err(e) => {
+                            if debug_mode {
+                                println!("[DEBUG] LSP task failed: {e}");
+                            }
+                        }
+                    }
+                }
+            })
+        });
+    } else {
+        // No runtime yet: create a lightweight single-threaded runtime once.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        rt.block_on(async {
+            let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_LSP_REQUESTS));
+            let mut set = JoinSet::new();
+
+            for (idx, result) in results[..lsp_range].iter().enumerate() {
+                if result.lsp_info.is_some() {
+                    continue;
+                }
+                if !is_lsp_relevant_result(result, debug_mode) {
+                    continue;
+                }
+                let symbols = extract_symbols_from_code_block_with_positions(result, debug_mode);
+                if symbols.is_empty() {
+                    continue;
+                }
+
+                let file_path = result.file.clone();
+                let node_type = result.node_type.clone();
+                let sem = semaphore.clone();
+                let dbg = debug_mode;
+
+                set.spawn(async move {
+                    let mut collected: Vec<serde_json::Value> = Vec::new();
+                    for symbol_info in symbols.into_iter().take(3) {
+                        if let Some(v) = process_single_symbol_async(
+                            file_path.clone(),
+                            node_type.clone(),
+                            symbol_info,
+                            dbg,
+                            sem.clone(),
+                        )
+                        .await
+                        {
+                            collected.push(v);
+                        }
+                    }
+                    let lsp_info = if collected.len() == 1 {
+                        Some(collected.into_iter().next().unwrap())
+                    } else if !collected.is_empty() {
+                        Some(json!({ "merged": true, "symbols": collected }))
+                    } else {
+                        None
+                    };
+                    (idx, lsp_info)
+                });
             }
-            // Use parallel processing for multiple symbols to reduce total time
-            symbols
-                .into_par_iter()
-                .filter_map(|symbol_info| {
-                    process_single_symbol(&file_path, &node_type, symbol_info, debug_mode)
-                })
-                .collect()
-        } else {
-            // For single symbol, use sequential processing
-            symbols
-                .into_iter()
-                .filter_map(|symbol_info| {
-                    process_single_symbol(&file_path, &node_type, symbol_info, debug_mode)
-                })
-                .collect()
-        };
 
-        // Single vs merged shape
-        result.lsp_info = if collected.len() == 1 {
-            Some(collected.into_iter().next().unwrap())
-        } else {
-            Some(json!({ "merged": true, "symbols": collected }))
-        };
-    });
+            while let Some(res) = set.join_next().await {
+                if let Ok((idx, lsp_info)) = res {
+                    results[idx].lsp_info = lsp_info;
+                }
+            }
+        });
+    }
 
     if debug_mode {
         let enriched_count = results.iter().filter(|r| r.lsp_info.is_some()).count();
@@ -96,13 +176,55 @@ pub fn enrich_results_with_lsp(results: &mut Vec<SearchResult>, debug_mode: bool
             results.len()
         );
 
-        // Print cache statistics
-        if let Ok(cache) = LSP_CACHE.lock() {
-            println!("[DEBUG] LSP cache size: {} entries", cache.len());
-        }
+        // Print cache statistics (successful entries only).
+        println!("[DEBUG] LSP cache size: {} entries", memo_map().len());
     }
 
     Ok(())
+}
+
+/// Check if a search result is likely to benefit from LSP enrichment
+fn is_lsp_relevant_result(result: &SearchResult, debug_mode: bool) -> bool {
+    // Only process function-like nodes and code blocks that likely contain functions
+    let is_function_node = matches!(
+        result.node_type.as_str(),
+        "function_item"
+            | "function_definition"
+            | "method_definition"
+            | "function_declaration"
+            | "method_declaration"
+            | "function"
+            | "method"
+            | "impl_item"
+            | "class_definition"
+    );
+
+    if is_function_node {
+        return true;
+    }
+
+    // For other node types, check if the code contains function definitions
+    let contains_function_code = result.code.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("pub fn ")
+            || trimmed.starts_with("fn ")
+            || trimmed.starts_with("async fn ")
+            || trimmed.starts_with("pub async fn ")
+            || trimmed.starts_with("def ")
+            || trimmed.starts_with("function ")
+            || trimmed.starts_with("func ")
+            || trimmed.starts_with("class ")
+            || trimmed.starts_with("impl ")
+    });
+
+    if debug_mode && !contains_function_code {
+        println!(
+            "[DEBUG] Skipping LSP enrichment for non-function result: {} (node_type: {})",
+            result.file, result.node_type
+        );
+    }
+
+    contains_function_code
 }
 
 /// Information about a symbol extracted from a code block
@@ -114,138 +236,66 @@ struct SymbolInfo {
 }
 
 /// Process a single symbol and get its LSP information
-fn process_single_symbol(
-    file_path: &str,
-    node_type: &str,
+async fn process_single_symbol_async(
+    file_path: String,
+    node_type: String,
     symbol_info: SymbolInfo,
     debug_mode: bool,
+    semaphore: Arc<Semaphore>,
 ) -> Option<serde_json::Value> {
-    // Check cache first
-    let cache_key = (
-        file_path.to_string(),
+    let cache_key: CacheKey = (
+        file_path.clone(),
         symbol_info.name.clone(),
         symbol_info.line,
         symbol_info.column,
     );
 
-    // Check completed cache
-    let cached_value = if let Ok(cache) = LSP_CACHE.lock() {
-        cache.get(&cache_key).cloned()
-    } else {
-        None
-    };
+    // Get or create per-key in-flight gate + success slot.
+    let cell = memo_map()
+        .entry(cache_key.clone())
+        .or_insert_with(|| Arc::new(AsyncMutex::new(None)))
+        .clone();
 
-    if let Some(cached) = cached_value {
+    let mut slot = cell.lock().await;
+
+    // Fast path: cached success
+    if let Some(ref cached) = *slot {
         if debug_mode {
             println!(
                 "[DEBUG] Using cached LSP info for {} at {}:{}:{}",
                 symbol_info.name, file_path, symbol_info.line, symbol_info.column
             );
         }
-        return Some((*cached).clone());
+        return Some(cached.clone());
     }
 
-    // Check for in-flight requests and either wait for existing or start new
-    let in_flight_mutex = {
-        let mut in_flight = IN_FLIGHT_REQUESTS.lock().ok()?;
-        if let Some(existing_mutex) = in_flight.get(&cache_key) {
-            if debug_mode {
-                println!(
-                    "[DEBUG] Waiting for in-flight LSP request for {} at {}:{}:{}",
-                    symbol_info.name, file_path, symbol_info.line, symbol_info.column
-                );
-            }
-            existing_mutex.clone()
-        } else {
-            // Start new request
-            let new_mutex = Arc::new(tokio::sync::Mutex::new(None));
-            in_flight.insert(cache_key.clone(), new_mutex.clone());
-            new_mutex
-        }
+    // Limit concurrent LSP daemon calls globally.
+    let _permit = match semaphore.acquire().await {
+        Ok(p) => p,
+        Err(_) => return None,
     };
 
-    // Handle both sync and async contexts properly
-    let info_opt = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        // We're already in a runtime, use it
-        tokio::task::block_in_place(|| {
-            handle.block_on(async {
-                let mut guard = in_flight_mutex.lock().await;
+    // Query the LSP (no extra threads, no nested runtimes).
+    let info_opt = get_lsp_info_async(
+        std::path::Path::new(&file_path),
+        &symbol_info.name,
+        symbol_info.line,
+        symbol_info.column,
+        debug_mode,
+    )
+    .await;
 
-                // Check if another thread already completed the request
-                if let Some(result) = guard.as_ref() {
-                    return Some(result.clone());
-                }
-
-                // We're the first thread to get here, make the actual LSP request
-                let result = get_lsp_info_for_result(
-                    file_path,
-                    &symbol_info.name,
-                    symbol_info.line,
-                    symbol_info.column,
-                    debug_mode,
-                );
-
-                // Store result in the in-flight guard
-                *guard = result.clone();
-
-                result
-            })
-        })
-    } else {
-        // No runtime exists, create one
-        let rt = tokio::runtime::Runtime::new().ok()?;
-        rt.block_on(async {
-            let mut guard = in_flight_mutex.lock().await;
-
-            // Check if another thread already completed the request
-            if let Some(result) = guard.as_ref() {
-                return Some(result.clone());
-            }
-
-            // We're the first thread to get here, make the actual LSP request
-            let result = get_lsp_info_for_result(
-                file_path,
-                &symbol_info.name,
-                symbol_info.line,
-                symbol_info.column,
-                debug_mode,
-            );
-
-            // Store result in the in-flight guard
-            *guard = result.clone();
-
-            result
-        })
-    };
-
-    // Clean up in-flight tracking and cache the result
-    if let Ok(mut in_flight) = IN_FLIGHT_REQUESTS.lock() {
-        in_flight.remove(&cache_key);
-    }
-
-    // Cache successful results
-    if let Some(ref info) = info_opt {
-        if let Ok(mut cache) = LSP_CACHE.lock() {
-            cache.insert(cache_key, Arc::new(info.clone()));
-        }
-    }
-
-    // Build the result JSON
-    if let Some(mut v) = info_opt {
+    // Build/augment the result JSON to match existing shape.
+    let result_json = if let Some(mut v) = info_opt {
         match v.as_object_mut() {
             Some(map) => {
                 map.entry("symbol".to_string())
                     .or_insert_with(|| json!(symbol_info.name.clone()));
-
-                // Add node_type and range for merged blocks
-                map.insert("node_type".to_string(), json!(node_type.to_string()));
+                map.insert("node_type".to_string(), json!(node_type.clone()));
                 map.insert(
                     "range".to_string(),
-                    json!({
-                        "lines": [symbol_info.line, symbol_info.line + 5] // Approximate range
-                    }),
+                    json!({ "lines": [symbol_info.line, symbol_info.line + 5] }),
                 );
-
                 Some(serde_json::Value::Object(map.clone()))
             }
             None => Some(json!({
@@ -254,12 +304,25 @@ fn process_single_symbol(
             })),
         }
     } else {
-        // LSP lookup failed; still record the symbol name
-        Some(json!({
-            "symbol": symbol_info.name,
-            "node_type": node_type.to_string()
-        }))
+        None
+    };
+
+    if let Some(ref info) = result_json {
+        // Cache successful results only (same semantics as before).
+        *slot = Some(info.clone());
+    } else {
+        // Do not cache failures; allow retry later.
+        drop(slot);
+        memo_map().remove(&cache_key);
     }
+
+    // Always return something (preserve previous behavior).
+    Some(result_json.unwrap_or_else(|| {
+        json!({
+            "symbol": symbol_info.name,
+            "node_type": node_type
+        })
+    }))
 }
 
 /// Extract ALL symbols from a (possibly merged) code block using tree-sitter.
@@ -860,40 +923,6 @@ fn extract_name_after_keyword(text: &str) -> Option<String> {
     None
 }
 
-/// Get LSP information for a search result
-fn get_lsp_info_for_result(
-    file_path: &str,
-    symbol_name: &str,
-    line: u32,
-    column: u32,
-    debug_mode: bool,
-) -> Option<serde_json::Value> {
-    // Clone the strings to avoid lifetime issues
-    let file_path_owned = file_path.to_string();
-    let symbol_name_owned = symbol_name.to_string();
-    let symbol_name_for_error = symbol_name.to_string();
-
-    // Use a separate thread with its own runtime to avoid blocking
-    match std::thread::spawn(move || {
-        let rt = Runtime::new().ok()?;
-        let path = Path::new(&file_path_owned);
-
-        rt.block_on(async {
-            get_lsp_info_async(path, &symbol_name_owned, line, column, debug_mode).await
-        })
-    })
-    .join()
-    {
-        Ok(result) => result,
-        Err(_) => {
-            if debug_mode {
-                println!("[DEBUG] LSP thread panicked for symbol: {symbol_name_for_error}");
-            }
-            None
-        }
-    }
-}
-
 /// Async function to get LSP information
 async fn get_lsp_info_async(
     file_path: &Path,
@@ -918,7 +947,7 @@ async fn get_lsp_info_async(
     let config = LspConfig {
         use_daemon: true,
         workspace_hint: workspace_hint.clone(),
-        timeout_ms: 30000, // 30 seconds timeout for search results
+        timeout_ms: 8000, // Reduced timeout for search results to prevent accumulation
     };
 
     // Try to create LSP client - this will start the server if needed
@@ -950,12 +979,12 @@ async fn get_lsp_info_async(
         }
     };
 
-    // Try to get symbol info with timeout suitable for CI environments
-    // Use shorter timeout when processing multiple symbols to avoid cumulative delays
+    // Try to get symbol info with short timeout to avoid delays in search
+    // Use aggressive timeout for search results to prevent command timeouts
     let timeout_secs = if std::env::var("CI").is_ok() {
-        5 // Shorter timeout in CI to avoid test timeouts when processing multiple symbols
+        3 // Very short timeout in CI
     } else {
-        10 // Normal timeout for local development
+        10 // Increased timeout for local development in search context (was 5)
     };
 
     match tokio::time::timeout(

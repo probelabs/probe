@@ -33,25 +33,23 @@ fn effective_socket_path() -> String {
 pub struct LspClient {
     stream: Option<IpcStream>,
     config: LspConfig,
+    daemon_started_by_us: bool,
 }
 
 impl Drop for LspClient {
     fn drop(&mut self) {
-        // Ensure the stream is properly closed when the client is dropped
-        if let Some(mut stream) = self.stream.take() {
-            // Try to flush and properly close the stream
-            // We use block_on here since Drop is not async
-            // Using std::thread::spawn to avoid runtime issues during drop
-            let _ = std::thread::spawn(move || {
-                futures::executor::block_on(async move {
-                    // Best effort - ignore errors since we're dropping anyway
-                    let _ = stream.flush().await;
-                    let _ = stream.shutdown().await;
-                });
-            })
-            .join();
-            debug!("LspClient dropped, connection closed");
+        // Clean up existing connection without creating new ones
+        if let Some(_stream) = self.stream.take() {
+            // Don't attempt to send shutdown requests in Drop
+            // The daemon will detect the connection close and clean up automatically
+            debug!("LspClient dropped, connection will be closed automatically");
         }
+
+        // Note: We don't attempt to shutdown the daemon in Drop because:
+        // 1. Drop must be synchronous and cannot perform async operations properly
+        // 2. Creating new connections in Drop causes "early eof" errors
+        // 3. The daemon can detect closed connections and manage its lifecycle
+        // 4. Explicit shutdown should be done via shutdown_daemon() method before Drop
     }
 }
 
@@ -62,6 +60,7 @@ impl LspClient {
         let mut client = Self {
             stream: None,
             config,
+            daemon_started_by_us: false,
         };
 
         if use_daemon {
@@ -78,6 +77,7 @@ impl LspClient {
         let mut client = Self {
             stream: None,
             config,
+            daemon_started_by_us: false,
         };
 
         if use_daemon {
@@ -150,46 +150,53 @@ impl LspClient {
 
         // Try to connect to existing daemon and check version compatibility
         match timeout(connection_timeout, IpcStream::connect(&socket_path)).await {
-            Ok(Ok(stream)) => {
-                // Check version compatibility first
-                if check_daemon_version_compatibility().await.unwrap_or(false) {
-                    info!("Connected to existing LSP daemon with compatible version");
-                    self.stream = Some(stream);
+            Ok(Ok(mut stream)) => {
+                // Check version compatibility using the same connection (avoid a second connect without a timeout)
+                match check_daemon_version_compatibility_with_stream(&mut stream).await {
+                    Ok(true) => {
+                        info!("Connected to existing LSP daemon with compatible version");
+                        self.stream = Some(stream);
 
-                    // Send connect message with timeout
-                    let request = DaemonRequest::Connect {
-                        client_id: Uuid::new_v4(),
-                    };
+                        // Send connect message with timeout
+                        let request = DaemonRequest::Connect {
+                            client_id: Uuid::new_v4(),
+                        };
 
-                    match timeout(connection_timeout, self.send_request_internal(request)).await {
-                        Ok(Ok(response)) => {
-                            if let DaemonResponse::Connected { daemon_version, .. } = response {
-                                debug!("Connected to daemon version: {}", daemon_version);
+                        match timeout(connection_timeout, self.send_request_internal(request)).await
+                        {
+                            Ok(Ok(response)) => {
+                                if let DaemonResponse::Connected { daemon_version, .. } = response {
+                                    debug!("Connected to daemon version: {}", daemon_version);
+                                }
+                                return Ok(());
                             }
-                            return Ok(());
-                        }
-                        Ok(Err(e)) => {
-                            warn!("Failed to send connect message: {}", e);
-                            self.stream = None;
-                        }
-                        Err(_) => {
-                            warn!("Connect message timed out");
-                            self.stream = None;
+                            Ok(Err(e)) => {
+                                warn!("Failed to send connect message: {}", e);
+                                self.stream = None;
+                            }
+                            Err(_) => {
+                                warn!("Connect message timed out");
+                                self.stream = None;
+                            }
                         }
                     }
-                } else {
-                    info!("Daemon version mismatch detected, will restart daemon...");
-                    eprintln!("\n🔄 LSP daemon version mismatch detected.");
-                    eprintln!("   Shutting down old daemon...");
+                    Ok(false) => {
+                        info!("Daemon version mismatch detected, will restart daemon...");
+                        eprintln!("\n🔄 LSP daemon version mismatch detected.");
+                        eprintln!("   Shutting down old daemon...");
 
-                    // Shutdown the existing daemon
-                    drop(stream); // Close our connection first
-                    if let Err(e) = shutdown_existing_daemon().await {
-                        warn!("Failed to shutdown existing daemon: {}", e);
+                        // Shutdown the existing daemon
+                        drop(stream); // Close our connection first
+                        if let Err(e) = shutdown_existing_daemon().await {
+                            warn!("Failed to shutdown existing daemon: {}", e);
+                        }
+                        // Fall through to the auto-start section below
                     }
-
-                    // Let the normal flow below handle starting the new daemon
-                    // by falling through to the auto-start section
+                    Err(e) => {
+                        warn!("Failed to check daemon version: {}", e);
+                        // Close this connection and fall through to the auto-start section
+                        drop(stream);
+                    }
                 }
             }
             Ok(Err(e)) => {
@@ -204,7 +211,8 @@ impl LspClient {
         info!("Starting embedded LSP daemon (this may take a few seconds on first run)...");
         match timeout(Duration::from_secs(10), start_embedded_daemon_background()).await {
             Ok(Ok(_)) => {
-                // Successfully started
+                // Successfully started - mark that we started this daemon
+                self.daemon_started_by_us = true;
                 info!("LSP daemon started successfully, waiting for it to be ready...");
             }
             Ok(Err(e)) => {
@@ -320,10 +328,29 @@ impl LspClient {
 
         debug!("Sending request: {:?}", request);
 
-        // Encode and send request
-        let encoded = MessageCodec::encode(&request)?;
-        stream.write_all(&encoded).await?;
-        stream.flush().await?;
+        // Encode request
+        let encoded = match MessageCodec::encode(&request) {
+            Ok(data) => data,
+            Err(e) => {
+                error!("Failed to encode request: {}", e);
+                self.stream = None; // Clean up broken socket
+                return Err(e);
+            }
+        };
+
+        // Send request
+        if let Err(e) = stream.write_all(&encoded).await {
+            error!("Failed to write request: {}", e);
+            self.stream = None; // Clean up broken socket
+            return Err(anyhow!("Failed to write request: {}", e));
+        }
+
+        // Flush request
+        if let Err(e) = stream.flush().await {
+            error!("Failed to flush request: {}", e);
+            self.stream = None; // Clean up broken socket
+            return Err(anyhow!("Failed to flush request: {}", e));
+        }
 
         // Read response with timeout using proper message framing
         let timeout_duration = Duration::from_millis(self.config.timeout_ms);
@@ -338,6 +365,7 @@ impl LspClient {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => {
                 error!("Failed to read message length: {}", e);
+                self.stream = None; // Clean up broken socket
                 return Err(anyhow!("Failed to read message length: {}", e));
             }
             Err(_) => {
@@ -345,6 +373,7 @@ impl LspClient {
                     "Timeout reading message length after {}ms",
                     self.config.timeout_ms
                 );
+                self.stream = None; // Clean up broken socket on timeout
                 let sp = effective_socket_path();
                 return Err(anyhow!(
                     "Timeout connecting to daemon after {}ms (socket: {})",
@@ -358,6 +387,8 @@ impl LspClient {
 
         // Ensure we don't try to read unreasonably large messages (10MB limit)
         if message_len > 10 * 1024 * 1024 {
+            error!("Message too large: {} bytes", message_len);
+            self.stream = None; // Clean up broken socket
             return Err(anyhow!("Message too large: {} bytes", message_len));
         }
 
@@ -370,6 +401,7 @@ impl LspClient {
                     "Failed to read message body of {} bytes: {}",
                     message_len, e
                 );
+                self.stream = None; // Clean up broken socket
                 return Err(anyhow!("Failed to read message body: {}", e));
             }
             Err(_) => {
@@ -377,6 +409,7 @@ impl LspClient {
                     "Timeout reading message body of {} bytes after {}ms",
                     message_len, self.config.timeout_ms
                 );
+                self.stream = None; // Clean up broken socket on timeout
                 let sp = effective_socket_path();
                 return Err(anyhow!(
                     "Timeout waiting for daemon response after {}ms (socket: {})",
@@ -392,7 +425,14 @@ impl LspClient {
         complete_message.extend_from_slice(&message_buf);
 
         // Decode response
-        let response = MessageCodec::decode_response(&complete_message)?;
+        let response = match MessageCodec::decode_response(&complete_message) {
+            Ok(resp) => resp,
+            Err(e) => {
+                error!("Failed to decode response: {}", e);
+                self.stream = None; // Clean up broken socket
+                return Err(e);
+            }
+        };
         debug!("Received response: {:?}", response);
 
         // Check for errors
@@ -524,6 +564,27 @@ impl LspClient {
         let request = DaemonRequest::GetLogs {
             request_id: Uuid::new_v4(),
             lines,
+            since_sequence: None,
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::Logs { entries, .. } => Ok(entries),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Get log entries since a specific sequence number
+    pub async fn get_logs_since(
+        &mut self,
+        since_sequence: u64,
+        lines: usize,
+    ) -> Result<Vec<LogEntry>> {
+        let request = DaemonRequest::GetLogs {
+            request_id: Uuid::new_v4(),
+            lines,
+            since_sequence: Some(since_sequence),
         };
 
         let response = self.send_request(request).await?;
@@ -685,77 +746,89 @@ async fn check_daemon_health() -> Result<DaemonHealth> {
     // Check if we got a pong response
     match response {
         DaemonResponse::Pong { .. } => {
-            // Daemon is responsive, now check version
-            if check_daemon_version_compatibility().await.unwrap_or(false) {
-                Ok(DaemonHealth::Healthy)
-            } else {
-                Ok(DaemonHealth::VersionMismatch)
+            // Daemon is responsive, now check version using the same connection
+            match check_daemon_version_compatibility_with_stream(&mut stream).await {
+                Ok(true) => Ok(DaemonHealth::Healthy),
+                Ok(false) => Ok(DaemonHealth::VersionMismatch),
+                Err(_) => Ok(DaemonHealth::Unhealthy),
             }
         }
         _ => Ok(DaemonHealth::Unhealthy),
     }
 }
 
-/// Check if daemon version matches probe binary version
+/// Check if daemon version matches probe binary version (creates new connection)
+#[allow(dead_code)]
 async fn check_daemon_version_compatibility() -> Result<bool> {
     let socket_path = effective_socket_path();
 
-    // Try to connect to existing daemon
-    match IpcStream::connect(&socket_path).await {
-        Ok(mut stream) => {
-            // Send status request to get daemon version
-            let request = DaemonRequest::Status {
-                request_id: Uuid::new_v4(),
-            };
-
-            let encoded = MessageCodec::encode(&request)?;
-            stream.write_all(&encoded).await?;
-
-            // Read response
-            let mut length_buf = [0u8; 4];
-            stream.read_exact(&mut length_buf).await?;
-            let length = u32::from_be_bytes(length_buf) as usize;
-
-            let mut response_buf = vec![0u8; length];
-            stream.read_exact(&mut response_buf).await?;
-
-            let response =
-                MessageCodec::decode_response(&[&length_buf[..], &response_buf[..]].concat())?;
-
-            if let DaemonResponse::Status { status, .. } = response {
-                let (probe_version, probe_git_hash, probe_build_date) = get_probe_version_info();
-
-                debug!(
-                    "Probe version: {}, git: {}, build: {}",
-                    probe_version, probe_git_hash, probe_build_date
-                );
-                debug!(
-                    "Daemon version: {}, git: {}, build: {}",
-                    status.version, status.git_hash, status.build_date
-                );
-
-                // Check if versions match
-                let version_matches = !status.version.is_empty()
-                    && !status.git_hash.is_empty()
-                    && status.git_hash == probe_git_hash;
-
-                if !version_matches {
-                    info!(
-                        "Version mismatch detected - Probe: {} ({}), Daemon: {} ({})",
-                        probe_version, probe_git_hash, status.version, status.git_hash
-                    );
-                }
-
-                Ok(version_matches)
-            } else {
-                // If we can't get status, assume incompatible
-                Ok(false)
-            }
-        }
-        Err(_) => {
+    // Try to connect to existing daemon with a short timeout
+    let connect_timeout = Duration::from_secs(2);
+    match timeout(connect_timeout, IpcStream::connect(&socket_path)).await {
+        Ok(Ok(mut stream)) => check_daemon_version_compatibility_with_stream(&mut stream).await,
+        Ok(Err(_)) => {
             // No daemon running, no version conflict
             Ok(true)
         }
+        Err(_) => Err(anyhow!("Timed out connecting to daemon for version check")),
+    }
+}
+
+/// Check if daemon version matches probe binary version (reuses existing connection)
+async fn check_daemon_version_compatibility_with_stream(stream: &mut IpcStream) -> Result<bool> {
+    // Send status request to get daemon version
+    let request = DaemonRequest::Status {
+        request_id: Uuid::new_v4(),
+    };
+
+    let encoded = MessageCodec::encode(&request)?;
+    stream.write_all(&encoded).await?;
+    stream.flush().await?;
+
+    // Read response with timeout to prevent hanging
+    let mut length_buf = [0u8; 4];
+    match timeout(Duration::from_secs(2), stream.read_exact(&mut length_buf)).await {
+        Ok(Ok(_)) => {}
+        _ => return Err(anyhow!("Failed to read status response length")),
+    }
+
+    let length = u32::from_be_bytes(length_buf) as usize;
+    let mut response_buf = vec![0u8; length];
+    match timeout(Duration::from_secs(2), stream.read_exact(&mut response_buf)).await {
+        Ok(Ok(_)) => {}
+        _ => return Err(anyhow!("Failed to read status response body")),
+    }
+
+    let response = MessageCodec::decode_response(&[&length_buf[..], &response_buf[..]].concat())?;
+
+    if let DaemonResponse::Status { status, .. } = response {
+        let (probe_version, probe_git_hash, probe_build_date) = get_probe_version_info();
+
+        debug!(
+            "Probe version: {}, git: {}, build: {}",
+            probe_version, probe_git_hash, probe_build_date
+        );
+        debug!(
+            "Daemon version: {}, git: {}, build: {}",
+            status.version, status.git_hash, status.build_date
+        );
+
+        // Check if versions match
+        let version_matches = !status.version.is_empty()
+            && !status.git_hash.is_empty()
+            && status.git_hash == probe_git_hash;
+
+        if !version_matches {
+            info!(
+                "Version mismatch detected - Probe: {} ({}), Daemon: {} ({})",
+                probe_version, probe_git_hash, status.version, status.git_hash
+            );
+        }
+
+        Ok(version_matches)
+    } else {
+        // If we can't get status, assume incompatible
+        Ok(false)
     }
 }
 
@@ -993,6 +1066,7 @@ mod tests {
         let client = LspClient {
             stream: None,
             config,
+            daemon_started_by_us: false,
         };
 
         // Test supported file types

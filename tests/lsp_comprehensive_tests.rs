@@ -27,7 +27,7 @@ use common::{
     cleanup_test_namespace, ensure_daemon_stopped_with_config,
     extract_with_call_hierarchy_retry_config, fixtures, init_lsp_workspace_with_config,
     init_test_namespace, performance, require_all_language_servers, run_probe_command_with_config,
-    start_daemon_and_wait_with_config, wait_for_lsp_servers_ready_with_config,
+    start_daemon_and_wait_with_config, wait_for_lsp_servers_ready_with_config, LspTestGuard,
 };
 use std::time::{Duration, Instant};
 
@@ -41,6 +41,8 @@ fn setup_comprehensive_tests() -> Result<()> {
 
 #[test]
 fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
+    let _guard = LspTestGuard::new("test_go_lsp_call_hierarchy_exact");
+
     setup_comprehensive_tests()?;
 
     // Initialize test namespace for isolation
@@ -117,6 +119,8 @@ fn test_go_lsp_call_hierarchy_exact() -> Result<()> {
 
 #[test]
 fn test_typescript_lsp_call_hierarchy_exact() -> Result<()> {
+    let _guard = LspTestGuard::new("test_typescript_lsp_call_hierarchy_exact");
+
     setup_comprehensive_tests()?;
 
     // Initialize test namespace for isolation
