@@ -1,3 +1,6 @@
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::needless_range_loop)]
+
 use probe_code::lsp_integration::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use probe_code::lsp_integration::types::{CallHierarchyInfo, NodeId, NodeKey};
 use std::path::PathBuf;
