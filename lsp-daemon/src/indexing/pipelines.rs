@@ -4,6 +4,8 @@
 //! Each pipeline can extract symbols, analyze structure, and prepare data for semantic search.
 //! Feature flags allow selective enabling/disabling of indexing capabilities.
 
+use crate::indexing::config::IndexingFeatures;
+use crate::indexing::language_strategies::{IndexingPriority, LanguageIndexingStrategy, LanguageStrategyFactory};
 use crate::language_detector::Language;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -11,99 +13,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
-/// Feature flags for indexing capabilities
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexingFeatures {
-    /// Extract function and method signatures
-    pub extract_functions: bool,
-
-    /// Extract type definitions (classes, structs, interfaces)
-    pub extract_types: bool,
-
-    /// Extract variable and constant declarations
-    pub extract_variables: bool,
-
-    /// Extract import/export statements
-    pub extract_imports: bool,
-
-    /// Extract documentation comments
-    pub extract_docs: bool,
-
-    /// Build call graph relationships
-    pub build_call_graph: bool,
-
-    /// Extract string literals and constants
-    pub extract_literals: bool,
-
-    /// Analyze complexity metrics
-    pub analyze_complexity: bool,
-
-    /// Extract test-related symbols
-    pub extract_tests: bool,
-
-    /// Language-specific feature extraction
-    pub language_specific: HashMap<String, bool>,
-}
-
-impl Default for IndexingFeatures {
-    fn default() -> Self {
-        Self {
-            extract_functions: true,
-            extract_types: true,
-            extract_variables: true,
-            extract_imports: true,
-            extract_docs: true,
-            build_call_graph: false,   // Expensive, off by default
-            extract_literals: false,   // Can be noisy, off by default
-            analyze_complexity: false, // CPU intensive, off by default
-            extract_tests: true,
-            language_specific: HashMap::new(),
-        }
-    }
-}
-
-impl IndexingFeatures {
-    /// Create a minimal feature set for basic indexing
-    pub fn minimal() -> Self {
-        Self {
-            extract_functions: true,
-            extract_types: true,
-            extract_variables: false,
-            extract_imports: false,
-            extract_docs: false,
-            build_call_graph: false,
-            extract_literals: false,
-            analyze_complexity: false,
-            extract_tests: false,
-            language_specific: HashMap::new(),
-        }
-    }
-
-    /// Create a comprehensive feature set for full indexing
-    pub fn comprehensive() -> Self {
-        Self {
-            build_call_graph: true,
-            extract_literals: true,
-            analyze_complexity: true,
-            ..Self::default()
-        }
-    }
-
-    /// Enable/disable a language-specific feature
-    pub fn set_language_feature(&mut self, feature_name: String, enabled: bool) {
-        self.language_specific.insert(feature_name, enabled);
-    }
-
-    /// Check if a language-specific feature is enabled
-    pub fn is_language_feature_enabled(&self, feature_name: &str) -> bool {
-        self.language_specific
-            .get(feature_name)
-            .copied()
-            .unwrap_or(false)
-    }
-}
 
 /// Configuration for a language-specific pipeline
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,6 +179,21 @@ impl PipelineConfig {
 
         text.contains(pattern)
     }
+
+    /// Create pipeline configuration from comprehensive IndexingConfig
+    pub fn from_indexing_config(indexing_config: &crate::indexing::IndexingConfig, language: Language) -> Self {
+        let effective_config = indexing_config.for_language(language);
+        
+        Self {
+            language,
+            features: effective_config.features,
+            max_file_size: effective_config.max_file_size_bytes,
+            timeout_ms: effective_config.timeout_ms,
+            file_extensions: effective_config.file_extensions,
+            exclude_patterns: effective_config.exclude_patterns,
+            parser_config: effective_config.parser_config,
+        }
+    }
 }
 
 /// Result of processing a file through a pipeline
@@ -331,6 +257,12 @@ pub struct SymbolInfo {
     /// Visibility (public, private, etc.)
     pub visibility: Option<String>,
 
+    /// Indexing priority calculated by language strategy
+    pub priority: Option<IndexingPriority>,
+
+    /// Whether this symbol is exported/public
+    pub is_exported: bool,
+
     /// Additional attributes
     pub attributes: HashMap<String, String>,
 }
@@ -341,6 +273,9 @@ pub struct LanguagePipeline {
     /// Configuration for this pipeline
     config: PipelineConfig,
 
+    /// Language-specific indexing strategy
+    strategy: LanguageIndexingStrategy,
+
     /// Performance metrics
     files_processed: u64,
     total_processing_time: u64,
@@ -350,8 +285,14 @@ pub struct LanguagePipeline {
 impl LanguagePipeline {
     /// Create a new language pipeline
     pub fn new(language: Language) -> Self {
+        let config = PipelineConfig::for_language(language);
+        let strategy = LanguageStrategyFactory::create_strategy(language);
+        
+        info!("Created language pipeline for {:?} with strategy", language);
+        
         Self {
-            config: PipelineConfig::for_language(language),
+            config,
+            strategy,
             files_processed: 0,
             total_processing_time: 0,
             last_error: None,
@@ -360,8 +301,11 @@ impl LanguagePipeline {
 
     /// Create a pipeline with custom configuration
     pub fn with_config(config: PipelineConfig) -> Self {
+        let strategy = LanguageStrategyFactory::create_strategy(config.language);
+        
         Self {
             config,
+            strategy,
             files_processed: 0,
             total_processing_time: 0,
             last_error: None,
@@ -419,6 +363,27 @@ impl LanguagePipeline {
         }
     }
 
+    /// Get the language-specific indexing strategy
+    pub fn get_strategy(&self) -> &LanguageIndexingStrategy {
+        &self.strategy
+    }
+    
+    /// Calculate the priority of a file for indexing
+    pub fn calculate_file_priority(&self, file_path: &Path) -> IndexingPriority {
+        self.strategy.calculate_file_priority(file_path)
+    }
+    
+    /// Check if the file should be processed based on language strategy
+    pub fn should_process_file_with_strategy(&self, file_path: &Path) -> bool {
+        self.strategy.should_process_file(file_path) && self.config.should_process_file(file_path)
+    }
+    
+    /// Calculate symbol priority using language strategy
+    pub fn calculate_symbol_priority(&self, symbol_type: &str, visibility: Option<&str>, 
+                                   has_documentation: bool, is_exported: bool) -> IndexingPriority {
+        self.strategy.calculate_symbol_priority(symbol_type, visibility, has_documentation, is_exported)
+    }
+
     /// Process file content and extract symbols
     async fn process_content(&self, file_path: &Path, content: &str) -> Result<PipelineResult> {
         let mut result = PipelineResult {
@@ -433,38 +398,43 @@ impl LanguagePipeline {
             metadata: HashMap::new(),
         };
 
-        // Extract symbols based on enabled features
+        // Extract symbols based on enabled features with priority calculation
         if self.config.features.extract_functions {
-            let functions = self.extract_functions(content).await?;
+            let mut functions = self.extract_functions(content).await?;
+            self.enhance_symbols_with_priority(&mut functions, "function");
             result.symbols_found += functions.len() as u64;
             result.symbols.insert("functions".to_string(), functions);
         }
 
         if self.config.features.extract_types {
-            let types = self.extract_types(content).await?;
+            let mut types = self.extract_types(content).await?;
+            self.enhance_symbols_with_priority(&mut types, "type");
             result.symbols_found += types.len() as u64;
             result.symbols.insert("types".to_string(), types);
         }
 
         if self.config.features.extract_variables {
-            let variables = self.extract_variables(content).await?;
+            let mut variables = self.extract_variables(content).await?;
+            self.enhance_symbols_with_priority(&mut variables, "variable");
             result.symbols_found += variables.len() as u64;
             result.symbols.insert("variables".to_string(), variables);
         }
 
         if self.config.features.extract_imports {
-            let imports = self.extract_imports(content).await?;
+            let mut imports = self.extract_imports(content).await?;
+            self.enhance_symbols_with_priority(&mut imports, "import");
             result.symbols_found += imports.len() as u64;
             result.symbols.insert("imports".to_string(), imports);
         }
 
-        if self.config.features.extract_tests {
-            let tests = self.extract_tests(content).await?;
+        if self.config.features.extract_tests && self.strategy.file_strategy.include_tests {
+            let mut tests = self.extract_tests(content).await?;
+            self.enhance_symbols_with_priority(&mut tests, "test");
             result.symbols_found += tests.len() as u64;
             result.symbols.insert("tests".to_string(), tests);
         }
 
-        // Language-specific extraction
+        // Language-specific extraction with strategy-based prioritization
         self.extract_language_specific(&mut result, content).await?;
 
         debug!(
@@ -504,7 +474,9 @@ impl LanguagePipeline {
                         end_column: None,
                         documentation: None,
                         signature: Some(line.trim().to_string()),
-                        visibility: None,
+                        visibility: self.detect_visibility(line),
+                        priority: None, // Will be calculated later
+                        is_exported: self.detect_export(line),
                         attributes: HashMap::new(),
                     });
                 }
@@ -547,7 +519,9 @@ impl LanguagePipeline {
                             end_column: None,
                             documentation: None,
                             signature: Some(line.trim().to_string()),
-                            visibility: None,
+                            visibility: self.detect_visibility(line),
+                            priority: None,
+                            is_exported: self.detect_export(line),
                             attributes: HashMap::new(),
                         });
                         break;
@@ -595,7 +569,9 @@ impl LanguagePipeline {
                                 end_column: None,
                                 documentation: None,
                                 signature: Some(line.trim().to_string()),
-                                visibility: None,
+                                visibility: self.detect_visibility(line),
+                                priority: None,
+                                is_exported: self.detect_export(line),
                                 attributes: HashMap::new(),
                             });
                         }
@@ -640,7 +616,9 @@ impl LanguagePipeline {
                             end_column: None,
                             documentation: None,
                             signature: Some(line.trim().to_string()),
-                            visibility: None,
+                            visibility: None, // Imports don't have visibility
+                            priority: None,
+                            is_exported: false, // Imports are not exported
                             attributes: HashMap::new(),
                         });
                         break;
@@ -689,7 +667,9 @@ impl LanguagePipeline {
                     end_column: None,
                     documentation: None,
                     signature: Some(line.trim().to_string()),
-                    visibility: None,
+                    visibility: None, // Tests don't typically have visibility
+                    priority: None,
+                    is_exported: false, // Tests are not exported
                     attributes: HashMap::new(),
                 });
             }
@@ -750,7 +730,9 @@ impl LanguagePipeline {
                         end_column: None,
                         documentation: None,
                         signature: Some(line.trim().to_string()),
-                        visibility: None,
+                        visibility: self.detect_visibility(line),
+                        priority: None,
+                        is_exported: self.detect_export(line),
                         attributes: HashMap::new(),
                     });
                 }
@@ -777,7 +759,9 @@ impl LanguagePipeline {
                         end_column: None,
                         documentation: None,
                         signature: Some(line.trim().to_string()),
-                        visibility: None,
+                        visibility: None, // Decorators don't have visibility
+                        priority: None,
+                        is_exported: false, // Decorators are not directly exported
                         attributes: HashMap::new(),
                     });
                 }
@@ -801,6 +785,109 @@ impl LanguagePipeline {
         self.files_processed = 0;
         self.total_processing_time = 0;
         self.last_error = None;
+    }
+    
+    /// Enhance symbols with priority information based on language strategy
+    fn enhance_symbols_with_priority(&self, symbols: &mut Vec<SymbolInfo>, default_kind: &str) {
+        for symbol in symbols {
+            let kind = if symbol.kind.is_empty() { default_kind } else { &symbol.kind };
+            let has_documentation = symbol.documentation.is_some() && !symbol.documentation.as_ref().unwrap().is_empty();
+            
+            symbol.priority = Some(self.strategy.calculate_symbol_priority(
+                kind,
+                symbol.visibility.as_deref(),
+                has_documentation,
+                symbol.is_exported,
+            ));
+        }
+    }
+    
+    /// Detect visibility from a line of code
+    fn detect_visibility(&self, line: &str) -> Option<String> {
+        let trimmed = line.trim();
+        
+        match self.config.language {
+            Language::Rust => {
+                if trimmed.starts_with("pub ") || trimmed.contains(" pub ") {
+                    Some("public".to_string())
+                } else {
+                    Some("private".to_string())
+                }
+            }
+            Language::Python => {
+                // Python doesn't have explicit visibility, use naming convention
+                if trimmed.contains("def _") || trimmed.contains("class _") {
+                    Some("private".to_string())
+                } else {
+                    Some("public".to_string())
+                }
+            }
+            Language::Go => {
+                // Go uses capitalization for visibility
+                if let Some(word) = trimmed.split_whitespace().find(|w| w.chars().next().unwrap_or('a').is_alphabetic()) {
+                    if word.chars().next().unwrap().is_uppercase() {
+                        Some("public".to_string())
+                    } else {
+                        Some("private".to_string())
+                    }
+                } else {
+                    None
+                }
+            }
+            Language::TypeScript | Language::JavaScript => {
+                if trimmed.contains("export ") {
+                    Some("export".to_string())
+                } else if trimmed.contains("private ") {
+                    Some("private".to_string())
+                } else if trimmed.contains("public ") {
+                    Some("public".to_string())
+                } else {
+                    None
+                }
+            }
+            Language::Java => {
+                if trimmed.contains("public ") {
+                    Some("public".to_string())
+                } else if trimmed.contains("private ") {
+                    Some("private".to_string())
+                } else if trimmed.contains("protected ") {
+                    Some("protected".to_string())
+                } else {
+                    Some("package".to_string())
+                }
+            }
+            _ => None,
+        }
+    }
+    
+    /// Detect if a symbol is exported/public
+    fn detect_export(&self, line: &str) -> bool {
+        let trimmed = line.trim();
+        
+        match self.config.language {
+            Language::Rust => {
+                trimmed.starts_with("pub ") || trimmed.contains(" pub ")
+            }
+            Language::Python => {
+                // Python doesn't have explicit exports, assume non-private is exported
+                !trimmed.contains("def _") && !trimmed.contains("class _")
+            }
+            Language::Go => {
+                // Go uses capitalization for exports
+                if let Some(word) = trimmed.split_whitespace().find(|w| w.chars().next().unwrap_or('a').is_alphabetic()) {
+                    word.chars().next().unwrap().is_uppercase()
+                } else {
+                    false
+                }
+            }
+            Language::TypeScript | Language::JavaScript => {
+                trimmed.contains("export ")
+            }
+            Language::Java => {
+                trimmed.contains("public ")
+            }
+            _ => false,
+        }
     }
 }
 

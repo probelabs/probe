@@ -17,6 +17,7 @@ use tracing::{debug, warn};
 /// Priority levels for indexing queue items
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Priority {
+    Critical = 3,
     High = 2,
     Medium = 1,
     Low = 0,
@@ -32,6 +33,7 @@ impl Priority {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
+            "critical" | "crit" | "c" | "3" => Some(Priority::Critical),
             "high" | "h" | "2" => Some(Priority::High),
             "medium" | "med" | "m" | "1" => Some(Priority::Medium),
             "low" | "l" | "0" => Some(Priority::Low),
@@ -42,6 +44,7 @@ impl Priority {
     /// Get human-readable name
     pub fn as_str(self) -> &'static str {
         match self {
+            Priority::Critical => "critical",
             Priority::High => "high",
             Priority::Medium => "medium",
             Priority::Low => "low",
@@ -91,6 +94,11 @@ impl QueueItem {
         }
     }
 
+    /// Create a new critical-priority item
+    pub fn critical_priority(file_path: PathBuf) -> Self {
+        Self::new(file_path, Priority::Critical)
+    }
+
     /// Create a new high-priority item
     pub fn high_priority(file_path: PathBuf) -> Self {
         Self::new(file_path, Priority::High)
@@ -136,8 +144,11 @@ impl QueueItem {
 }
 
 /// Thread-safe multi-level priority queue
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IndexingQueue {
+    /// Critical priority queue
+    critical_priority: Arc<RwLock<VecDeque<QueueItem>>>,
+
     /// High priority queue
     high_priority: Arc<RwLock<VecDeque<QueueItem>>>,
 
@@ -173,6 +184,7 @@ impl IndexingQueue {
     /// Create a new indexing queue with optional size limit
     pub fn new(max_size: usize) -> Self {
         Self {
+            critical_priority: Arc::new(RwLock::new(VecDeque::new())),
             high_priority: Arc::new(RwLock::new(VecDeque::new())),
             medium_priority: Arc::new(RwLock::new(VecDeque::new())),
             low_priority: Arc::new(RwLock::new(VecDeque::new())),
@@ -209,6 +221,7 @@ impl IndexingQueue {
         }
 
         let queue = match item.priority {
+            Priority::Critical => &self.critical_priority,
             Priority::High => &self.high_priority,
             Priority::Medium => &self.medium_priority,
             Priority::Low => &self.low_priority,
@@ -247,8 +260,9 @@ impl IndexingQueue {
             return None;
         }
 
-        // Try high priority first, then medium, then low
+        // Try critical priority first, then high, medium, then low
         for (priority, queue) in [
+            (Priority::Critical, &self.critical_priority),
             (Priority::High, &self.high_priority),
             (Priority::Medium, &self.medium_priority),
             (Priority::Low, &self.low_priority),
@@ -283,8 +297,9 @@ impl IndexingQueue {
 
     /// Peek at the next item that would be dequeued without removing it
     pub async fn peek(&self) -> Option<QueueItem> {
-        // Try high priority first, then medium, then low
+        // Try critical priority first, then high, medium, then low
         for queue in [
+            &self.critical_priority,
             &self.high_priority,
             &self.medium_priority,
             &self.low_priority,
@@ -311,6 +326,7 @@ impl IndexingQueue {
     /// Get length of a specific priority queue
     pub async fn len_for_priority(&self, priority: Priority) -> usize {
         let queue = match priority {
+            Priority::Critical => &self.critical_priority,
             Priority::High => &self.high_priority,
             Priority::Medium => &self.medium_priority,
             Priority::Low => &self.low_priority,
@@ -321,10 +337,12 @@ impl IndexingQueue {
 
     /// Clear all queues
     pub async fn clear(&self) {
+        let mut critical = self.critical_priority.write().await;
         let mut high = self.high_priority.write().await;
         let mut medium = self.medium_priority.write().await;
         let mut low = self.low_priority.write().await;
 
+        critical.clear();
         high.clear();
         medium.clear();
         low.clear();
@@ -338,6 +356,7 @@ impl IndexingQueue {
     /// Clear a specific priority queue
     pub async fn clear_priority(&self, priority: Priority) {
         let queue = match priority {
+            Priority::Critical => &self.critical_priority,
             Priority::High => &self.high_priority,
             Priority::Medium => &self.medium_priority,
             Priority::Low => &self.low_priority,
@@ -383,12 +402,14 @@ impl IndexingQueue {
 
     /// Get queue metrics
     pub async fn get_metrics(&self) -> QueueMetrics {
+        let critical_len = self.len_for_priority(Priority::Critical).await;
         let high_len = self.len_for_priority(Priority::High).await;
         let medium_len = self.len_for_priority(Priority::Medium).await;
         let low_len = self.len_for_priority(Priority::Low).await;
 
         QueueMetrics {
             total_items: self.len(),
+            critical_priority_items: critical_len,
             high_priority_items: high_len,
             medium_priority_items: medium_len,
             low_priority_items: low_len,
@@ -412,6 +433,7 @@ impl IndexingQueue {
 
         QueueSnapshot {
             total_items: metrics.total_items,
+            critical_priority_items: metrics.critical_priority_items,
             high_priority_items: metrics.high_priority_items,
             medium_priority_items: metrics.medium_priority_items,
             low_priority_items: metrics.low_priority_items,
@@ -443,6 +465,7 @@ impl IndexingQueue {
         let mut removed_count = 0;
 
         for queue in [
+            &self.critical_priority,
             &self.high_priority,
             &self.medium_priority,
             &self.low_priority,
@@ -481,6 +504,7 @@ impl IndexingQueue {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueMetrics {
     pub total_items: usize,
+    pub critical_priority_items: usize,
     pub high_priority_items: usize,
     pub medium_priority_items: usize,
     pub low_priority_items: usize,
@@ -497,6 +521,7 @@ pub struct QueueMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueSnapshot {
     pub total_items: usize,
+    pub critical_priority_items: usize,
     pub high_priority_items: usize,
     pub medium_priority_items: usize,
     pub low_priority_items: usize,
@@ -778,5 +803,289 @@ mod tests {
         let dequeued = dequeue_handle.await.unwrap();
         assert_eq!(dequeued, 100);
         assert!(queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_critical_priority_queue() {
+        let queue = IndexingQueue::unlimited();
+
+        // Enqueue items of all priority levels including critical
+        let critical_item = QueueItem::critical_priority(PathBuf::from("/critical.rs"));
+        let high_item = QueueItem::high_priority(PathBuf::from("/high.rs"));
+        let medium_item = QueueItem::medium_priority(PathBuf::from("/medium.rs"));
+        let low_item = QueueItem::low_priority(PathBuf::from("/low.rs"));
+
+        queue.enqueue(low_item).await.unwrap();
+        queue.enqueue(medium_item).await.unwrap();
+        queue.enqueue(high_item).await.unwrap();
+        queue.enqueue(critical_item).await.unwrap();
+
+        assert_eq!(queue.len(), 4);
+        assert_eq!(queue.len_for_priority(Priority::Critical).await, 1);
+
+        // Critical should be dequeued first
+        let first = queue.dequeue().await.unwrap();
+        assert_eq!(first.priority, Priority::Critical);
+        assert!(first.file_path.to_string_lossy().contains("critical"));
+    }
+
+    #[tokio::test]
+    async fn test_queue_item_age_calculation() {
+        let item = QueueItem::low_priority(PathBuf::from("/test.rs"));
+        
+        // Age should be very small immediately after creation
+        let age = item.age();
+        assert!(age.as_millis() < 100);
+
+        // Wait and check age increases
+        sleep(TokioDuration::from_millis(10)).await;
+        let later_age = item.age();
+        assert!(later_age > age);
+    }
+
+    #[tokio::test]
+    async fn test_queue_item_builder_pattern() {
+        let item = QueueItem::medium_priority(PathBuf::from("/test.rs"))
+            .with_language_hint("rust".to_string())
+            .with_estimated_size(2048)
+            .with_metadata(serde_json::json!({"project": "test", "version": "1.0"}));
+
+        assert_eq!(item.priority, Priority::Medium);
+        assert_eq!(item.language_hint, Some("rust".to_string()));
+        assert_eq!(item.estimated_size, Some(2048));
+        assert!(item.metadata.is_object());
+    }
+
+    #[tokio::test]
+    async fn test_priority_from_str() {
+        assert_eq!(Priority::from_str("critical"), Some(Priority::Critical));
+        assert_eq!(Priority::from_str("CRITICAL"), Some(Priority::Critical));
+        assert_eq!(Priority::from_str("crit"), Some(Priority::Critical));
+        assert_eq!(Priority::from_str("3"), Some(Priority::Critical));
+        
+        assert_eq!(Priority::from_str("high"), Some(Priority::High));
+        assert_eq!(Priority::from_str("h"), Some(Priority::High));
+        assert_eq!(Priority::from_str("2"), Some(Priority::High));
+        
+        assert_eq!(Priority::from_str("medium"), Some(Priority::Medium));
+        assert_eq!(Priority::from_str("med"), Some(Priority::Medium));
+        assert_eq!(Priority::from_str("1"), Some(Priority::Medium));
+        
+        assert_eq!(Priority::from_str("low"), Some(Priority::Low));
+        assert_eq!(Priority::from_str("0"), Some(Priority::Low));
+        
+        assert_eq!(Priority::from_str("invalid"), None);
+    }
+
+    #[tokio::test]
+    async fn test_memory_tracking() {
+        let queue = IndexingQueue::unlimited();
+
+        // Enqueue items with size estimates
+        let item1 = QueueItem::high_priority(PathBuf::from("/file1.rs"))
+            .with_estimated_size(1024);
+        let item2 = QueueItem::low_priority(PathBuf::from("/file2.rs"))
+            .with_estimated_size(2048);
+
+        queue.enqueue(item1).await.unwrap();
+        queue.enqueue(item2).await.unwrap();
+
+        let metrics = queue.get_metrics().await;
+        assert_eq!(metrics.estimated_total_bytes, 3072);
+
+        // Dequeue and verify memory tracking updates
+        queue.dequeue().await.unwrap(); // High priority first
+        let updated_metrics = queue.get_metrics().await;
+        assert_eq!(updated_metrics.estimated_total_bytes, 2048);
+
+        // Clear and verify memory is reset
+        queue.clear().await;
+        let final_metrics = queue.get_metrics().await;
+        assert_eq!(final_metrics.estimated_total_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn test_queue_clear_by_priority() {
+        let queue = IndexingQueue::unlimited();
+
+        // Enqueue items across priorities
+        queue.enqueue(QueueItem::critical_priority(PathBuf::from("/c.rs")))
+            .await.unwrap();
+        queue.enqueue(QueueItem::high_priority(PathBuf::from("/h.rs")))
+            .await.unwrap();
+        queue.enqueue(QueueItem::medium_priority(PathBuf::from("/m.rs")))
+            .await.unwrap();
+        queue.enqueue(QueueItem::low_priority(PathBuf::from("/l.rs")))
+            .await.unwrap();
+
+        assert_eq!(queue.len(), 4);
+
+        // Clear only high priority
+        queue.clear_priority(Priority::High).await;
+        assert_eq!(queue.len(), 3);
+        assert_eq!(queue.len_for_priority(Priority::High).await, 0);
+
+        // Other priorities should remain
+        assert_eq!(queue.len_for_priority(Priority::Critical).await, 1);
+        assert_eq!(queue.len_for_priority(Priority::Medium).await, 1);
+        assert_eq!(queue.len_for_priority(Priority::Low).await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_stress_high_volume_operations() {
+        let queue = IndexingQueue::unlimited();
+        const ITEM_COUNT: usize = 1000;
+
+        // Enqueue many items
+        let mut tasks = Vec::new();
+        for i in 0..ITEM_COUNT {
+            let queue_clone = Arc::new(queue.clone());
+            let task = tokio::spawn(async move {
+                let path = format!("/stress/file_{}.rs", i);
+                let priority = match i % 4 {
+                    0 => Priority::Critical,
+                    1 => Priority::High,
+                    2 => Priority::Medium,
+                    _ => Priority::Low,
+                };
+                let item = QueueItem::new(PathBuf::from(path), priority);
+                queue_clone.enqueue(item).await.unwrap();
+            });
+            tasks.push(task);
+        }
+
+        // Wait for all enqueues to complete
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        assert_eq!(queue.len(), ITEM_COUNT);
+
+        // Dequeue all items and verify priority ordering is maintained
+        let mut previous_priority = Priority::Critical;
+        let mut dequeued_count = 0;
+
+        while let Some(item) = queue.dequeue().await {
+            // Priority should be <= previous priority (same or lower priority value)
+            // Critical=3 should come first, then High=2, Medium=1, Low=0
+            assert!(item.priority.as_u8() <= previous_priority.as_u8());
+            previous_priority = item.priority;
+            dequeued_count += 1;
+        }
+
+        assert_eq!(dequeued_count, ITEM_COUNT);
+        assert!(queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_queue_snapshot_serialization() {
+        let queue = IndexingQueue::new(50);
+
+        // Add some items
+        queue.enqueue(QueueItem::high_priority(PathBuf::from("/h.rs"))).await.unwrap();
+        queue.enqueue(QueueItem::low_priority(PathBuf::from("/l.rs"))).await.unwrap();
+
+        let snapshot = queue.get_snapshot().await;
+        
+        // Test serialization
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let deserialized: QueueSnapshot = serde_json::from_str(&json).unwrap();
+        
+        assert_eq!(deserialized.total_items, 2);
+        assert_eq!(deserialized.high_priority_items, 1);
+        assert_eq!(deserialized.low_priority_items, 1);
+        assert!(!deserialized.is_paused);
+        assert!(deserialized.utilization_ratio > 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_edge_case_empty_operations() {
+        let queue = IndexingQueue::unlimited();
+
+        // Operations on empty queue
+        assert!(queue.dequeue().await.is_none());
+        assert!(queue.peek().await.is_none());
+        
+        // Clear empty queue should not panic
+        queue.clear().await;
+        queue.clear_priority(Priority::High).await;
+        
+        // Remove matching on empty queue
+        let removed = queue.remove_matching(|_| true).await;
+        assert_eq!(removed, 0);
+
+        let metrics = queue.get_metrics().await;
+        assert_eq!(metrics.total_items, 0);
+        assert_eq!(metrics.estimated_total_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn test_batch_enqueue_with_size_limit() {
+        let queue = IndexingQueue::new(3);
+
+        let items = vec![
+            QueueItem::high_priority(PathBuf::from("/1.rs")),
+            QueueItem::medium_priority(PathBuf::from("/2.rs")),
+            QueueItem::low_priority(PathBuf::from("/3.rs")),
+            QueueItem::high_priority(PathBuf::from("/4.rs")), // Should be rejected
+            QueueItem::low_priority(PathBuf::from("/5.rs")),  // Should be rejected
+        ];
+
+        let enqueued_count = queue.enqueue_batch(items).await.unwrap();
+        assert_eq!(enqueued_count, 3); // Only first 3 should be accepted
+        assert_eq!(queue.len(), 3);
+
+        let metrics = queue.get_metrics().await;
+        assert_eq!(metrics.utilization_ratio, 1.0); // 100% utilized
+    }
+
+    #[tokio::test]
+    async fn test_queue_item_unique_ids() {
+        let item1 = QueueItem::new(PathBuf::from("/test1.rs"), Priority::High);
+        let item2 = QueueItem::new(PathBuf::from("/test2.rs"), Priority::High);
+        
+        // IDs should be unique
+        assert_ne!(item1.id, item2.id);
+        
+        // IDs should be sequential
+        assert!(item2.id > item1.id);
+    }
+
+    #[tokio::test]
+    async fn test_pause_during_operations() {
+        let queue = Arc::new(IndexingQueue::unlimited());
+
+        // Start enqueueing items
+        let enqueue_handle = {
+            let queue = Arc::clone(&queue);
+            tokio::spawn(async move {
+                let mut enqueued = 0;
+                for i in 0..100 {
+                    let item = QueueItem::low_priority(PathBuf::from(format!("/file_{}.rs", i)));
+                    if queue.enqueue(item).await.unwrap() {
+                        enqueued += 1;
+                    }
+                    sleep(TokioDuration::from_millis(1)).await;
+                }
+                enqueued
+            })
+        };
+
+        // Pause after some items are enqueued
+        sleep(TokioDuration::from_millis(20)).await;
+        queue.pause();
+
+        let enqueued_count = enqueue_handle.await.unwrap();
+        
+        // Should have enqueued some items before pause
+        assert!(enqueued_count > 0);
+        assert!(enqueued_count < 100); // But not all due to pause
+        
+        // After pause, dequeue should return None
+        assert!(queue.dequeue().await.is_none());
+        
+        // Resume and verify we can dequeue
+        queue.resume();
+        assert!(queue.dequeue().await.is_some());
     }
 }

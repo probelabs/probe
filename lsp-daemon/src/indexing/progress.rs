@@ -350,6 +350,14 @@ pub struct ProgressSnapshot {
     pub elapsed_seconds: u64,
 }
 
+impl ProgressSnapshot {
+    /// Check if indexing is complete
+    pub fn is_complete(&self) -> bool {
+        let completed = self.processed_files + self.failed_files + self.skipped_files;
+        self.total_files > 0 && self.active_files == 0 && completed >= self.total_files
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

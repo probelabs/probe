@@ -1121,6 +1121,83 @@ fn convert_daemon_status(status: DaemonStatus) -> LspDaemonStatus {
     }
 }
 
+impl LspClient {
+    // Indexing management methods
+    pub async fn start_indexing(&mut self, workspace_root: PathBuf, config: lsp_daemon::protocol::IndexingConfig) -> Result<String> {
+        let request = DaemonRequest::StartIndexing {
+            request_id: Uuid::new_v4(),
+            workspace_root,
+            config,
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::IndexingStarted { session_id, .. } => Ok(session_id),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    pub async fn stop_indexing(&mut self, force: bool) -> Result<bool> {
+        let request = DaemonRequest::StopIndexing {
+            request_id: Uuid::new_v4(),
+            force,
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::IndexingStopped { was_running, .. } => Ok(was_running),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    pub async fn get_indexing_status(&mut self) -> Result<lsp_daemon::protocol::IndexingStatusInfo> {
+        let request = DaemonRequest::IndexingStatus {
+            request_id: Uuid::new_v4(),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::IndexingStatusResponse { status, .. } => Ok(status),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    pub async fn get_indexing_config(&mut self) -> Result<lsp_daemon::protocol::IndexingConfig> {
+        let request = DaemonRequest::IndexingConfig {
+            request_id: Uuid::new_v4(),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::IndexingConfigResponse { config, .. } => Ok(config),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    pub async fn set_indexing_config(&mut self, config: lsp_daemon::protocol::IndexingConfig) -> Result<()> {
+        let request = DaemonRequest::SetIndexingConfig {
+            request_id: Uuid::new_v4(),
+            config,
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::IndexingConfigSet { .. } => Ok(()),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -225,6 +225,20 @@ Planned enhancements:
 
 ## Learn More
 
+### Comprehensive Indexing Documentation
+
+For detailed information about Probe's LSP indexing system:
+
+- **[📖 Indexing Overview](./indexing-overview.md)** - What is indexing, benefits, and key concepts
+- **🏗️ [Architecture Guide](./indexing-architecture.md)** - Deep dive into system internals and data flow
+- **⚙️ [Configuration Reference](./indexing-configuration.md)** - Complete configuration options and environment variables
+- **💻 [CLI Reference](./indexing-cli-reference.md)** - Detailed command documentation
+- **🔧 [Language-Specific Guide](./indexing-languages.md)** - How each language is indexed and optimized
+- **⚡ [Performance Guide](./indexing-performance.md)** - Optimization strategies and benchmarks
+- **🔌 [API Reference](./indexing-api-reference.md)** - Integration guide for developers
+
+### Additional Resources
+
 - [Architecture Documentation](/docs/LSP_INTEGRATION.md)
 - [Quick Reference](/docs/LSP_QUICK_REFERENCE.md)
 - [Blog: LSP Integration Release](/blog/lsp-integration-release)

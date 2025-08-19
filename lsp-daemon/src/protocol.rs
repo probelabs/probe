@@ -109,6 +109,26 @@ pub enum DaemonRequest {
         #[serde(default)]
         since_sequence: Option<u64>, // New optional field for sequence-based retrieval
     },
+    // Indexing management requests
+    StartIndexing {
+        request_id: Uuid,
+        workspace_root: PathBuf,
+        config: IndexingConfig,
+    },
+    StopIndexing {
+        request_id: Uuid,
+        force: bool,
+    },
+    IndexingStatus {
+        request_id: Uuid,
+    },
+    IndexingConfig {
+        request_id: Uuid,
+    },
+    SetIndexingConfig {
+        request_id: Uuid,
+        config: IndexingConfig,
+    },
     // Cache management requests
     CacheStats {
         request_id: Uuid,
@@ -196,6 +216,28 @@ pub enum DaemonResponse {
     Logs {
         request_id: Uuid,
         entries: Vec<LogEntry>,
+    },
+    // Indexing management responses
+    IndexingStarted {
+        request_id: Uuid,
+        workspace_root: PathBuf,
+        session_id: String,
+    },
+    IndexingStopped {
+        request_id: Uuid,
+        was_running: bool,
+    },
+    IndexingStatusResponse {
+        request_id: Uuid,
+        status: IndexingStatusInfo,
+    },
+    IndexingConfigResponse {
+        request_id: Uuid,
+        config: IndexingConfig,
+    },
+    IndexingConfigSet {
+        request_id: Uuid,
+        config: IndexingConfig,
     },
     // Cache management responses
     CacheStats {
@@ -292,6 +334,98 @@ pub enum CompletionItemKind {
     Color = 16,
     File = 17,
     Reference = 18,
+}
+
+// Indexing configuration and status types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexingConfig {
+    #[serde(default)]
+    pub max_workers: Option<usize>,
+    #[serde(default)]
+    pub memory_budget_mb: Option<u64>,
+    #[serde(default)]
+    pub exclude_patterns: Vec<String>,
+    #[serde(default)]
+    pub include_patterns: Vec<String>,
+    #[serde(default)]
+    pub max_file_size_mb: Option<u64>,
+    #[serde(default)]
+    pub incremental: Option<bool>,
+    #[serde(default)]
+    pub languages: Vec<String>,
+    #[serde(default)]
+    pub recursive: bool,
+}
+
+impl Default for IndexingConfig {
+    fn default() -> Self {
+        Self {
+            max_workers: None,
+            memory_budget_mb: Some(512),
+            exclude_patterns: vec![
+                "*.git/*".to_string(),
+                "*/node_modules/*".to_string(),
+                "*/target/*".to_string(),
+                "*/build/*".to_string(),
+                "*/dist/*".to_string(),
+            ],
+            include_patterns: vec![],
+            max_file_size_mb: Some(10),
+            incremental: Some(true),
+            languages: vec![],
+            recursive: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexingStatusInfo {
+    pub manager_status: String, // "Idle", "Discovering", "Indexing", "Paused", "Shutdown", etc.
+    pub progress: IndexingProgressInfo,
+    pub queue: IndexingQueueInfo,
+    pub workers: Vec<IndexingWorkerInfo>,
+    pub session_id: Option<String>,
+    pub started_at: Option<u64>, // Unix timestamp
+    pub elapsed_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexingProgressInfo {
+    pub total_files: u64,
+    pub processed_files: u64,
+    pub failed_files: u64,
+    pub active_files: u64,
+    pub skipped_files: u64,
+    pub processed_bytes: u64,
+    pub symbols_extracted: u64,
+    pub memory_usage_bytes: u64,
+    pub peak_memory_bytes: u64,
+    pub progress_ratio: f64,
+    pub files_per_second: f64,
+    pub bytes_per_second: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexingQueueInfo {
+    pub total_items: usize,
+    pub pending_items: usize,
+    pub high_priority_items: usize,
+    pub medium_priority_items: usize,
+    pub low_priority_items: usize,
+    pub is_paused: bool,
+    pub memory_pressure: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexingWorkerInfo {
+    pub worker_id: usize,
+    pub is_active: bool,
+    pub current_file: Option<PathBuf>,
+    pub files_processed: u64,
+    pub bytes_processed: u64,
+    pub symbols_extracted: u64,
+    pub errors_encountered: u64,
+    pub last_activity: Option<u64>, // Unix timestamp
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

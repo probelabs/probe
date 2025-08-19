@@ -4,6 +4,7 @@ use crate::cache_types::{
 };
 use crate::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use crate::hash_utils::md5_hex_file;
+use crate::indexing::{IndexingConfig};
 use crate::ipc::{IpcListener, IpcStream};
 use crate::language_detector::{Language, LanguageDetector};
 use crate::logging::{LogBuffer, MemoryLogLayer};
@@ -86,6 +87,8 @@ pub struct LspDaemon {
     definition_cache: Arc<LspCache<DefinitionInfo>>,
     references_cache: Arc<LspCache<ReferencesInfo>>,
     hover_cache: Arc<LspCache<HoverInfo>>,
+    // Indexing configuration
+    indexing_config: Arc<RwLock<IndexingConfig>>,
 }
 
 impl LspDaemon {
@@ -178,6 +181,14 @@ impl LspDaemon {
                 .expect("Failed to create hover cache"),
         );
 
+        // Load indexing configuration
+        let indexing_config = Arc::new(RwLock::new(
+            IndexingConfig::load().unwrap_or_else(|e| {
+                warn!("Failed to load indexing configuration: {}. Using defaults.", e);
+                IndexingConfig::default()
+            })
+        ));
+
         Ok(Self {
             socket_path,
             registry,
@@ -211,6 +222,7 @@ impl LspDaemon {
             definition_cache,
             references_cache,
             hover_cache,
+            indexing_config,
         })
     }
 
@@ -1956,6 +1968,7 @@ impl LspDaemon {
             definition_cache: self.definition_cache.clone(),
             references_cache: self.references_cache.clone(),
             hover_cache: self.hover_cache.clone(),
+            indexing_config: self.indexing_config.clone(),
         }
     }
 
