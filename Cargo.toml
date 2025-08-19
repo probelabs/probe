@@ -95,10 +95,6 @@ path = "src/lib.rs"
 name = "probe"
 path = "src/main.rs"
 
-[[bin]]
-name = "test_cache_connection"
-path = "test_cache_connection.rs"
-
 [build-dependencies]
 chrono = "0.4"
 
