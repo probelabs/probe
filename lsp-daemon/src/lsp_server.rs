@@ -1388,6 +1388,105 @@ impl LspServer {
         false
     }
 
+    /// Get text document definition
+    pub async fn definition(&self, file_path: &Path, line: u32, column: u32) -> Result<Value> {
+        let canon = Self::canonicalize_for_uri(file_path);
+        let uri = Url::from_file_path(&canon)
+            .map_err(|_| anyhow!("Invalid file path: {:?}", file_path))?;
+
+        let request_id = self.next_request_id().await;
+        let params = json!({
+            "textDocument": {
+                "uri": uri.to_string()
+            },
+            "position": {
+                "line": line,
+                "character": column
+            }
+        });
+
+        self.send_request("textDocument/definition", params, request_id)
+            .await?;
+        let response = self
+            .wait_for_response(request_id, Duration::from_secs(30))
+            .await?;
+
+        if let Some(error) = response.get("error") {
+            return Err(anyhow!("Definition request failed: {:?}", error));
+        }
+
+        Ok(response["result"].clone())
+    }
+
+    /// Get text document references
+    pub async fn references(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+        include_declaration: bool,
+    ) -> Result<Value> {
+        let canon = Self::canonicalize_for_uri(file_path);
+        let uri = Url::from_file_path(&canon)
+            .map_err(|_| anyhow!("Invalid file path: {:?}", file_path))?;
+
+        let request_id = self.next_request_id().await;
+        let params = json!({
+            "textDocument": {
+                "uri": uri.to_string()
+            },
+            "position": {
+                "line": line,
+                "character": column
+            },
+            "context": {
+                "includeDeclaration": include_declaration
+            }
+        });
+
+        self.send_request("textDocument/references", params, request_id)
+            .await?;
+        let response = self
+            .wait_for_response(request_id, Duration::from_secs(30))
+            .await?;
+
+        if let Some(error) = response.get("error") {
+            return Err(anyhow!("References request failed: {:?}", error));
+        }
+
+        Ok(response["result"].clone())
+    }
+
+    /// Get hover information
+    pub async fn hover(&self, file_path: &Path, line: u32, column: u32) -> Result<Value> {
+        let canon = Self::canonicalize_for_uri(file_path);
+        let uri = Url::from_file_path(&canon)
+            .map_err(|_| anyhow!("Invalid file path: {:?}", file_path))?;
+
+        let request_id = self.next_request_id().await;
+        let params = json!({
+            "textDocument": {
+                "uri": uri.to_string()
+            },
+            "position": {
+                "line": line,
+                "character": column
+            }
+        });
+
+        self.send_request("textDocument/hover", params, request_id)
+            .await?;
+        let response = self
+            .wait_for_response(request_id, Duration::from_secs(30))
+            .await?;
+
+        if let Some(error) = response.get("error") {
+            return Err(anyhow!("Hover request failed: {:?}", error));
+        }
+
+        Ok(response["result"].clone())
+    }
+
     // The actual call hierarchy request logic (extracted for retry)
     async fn perform_call_hierarchy_request(
         &self,

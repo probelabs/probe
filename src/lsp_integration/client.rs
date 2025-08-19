@@ -151,6 +151,10 @@ impl LspClient {
         // Try to connect to existing daemon and check version compatibility
         match timeout(connection_timeout, IpcStream::connect(&socket_path)).await {
             Ok(Ok(mut stream)) => {
+                info!(
+                    "Successfully connected to daemon socket at: {}",
+                    socket_path
+                );
                 // Check version compatibility using the same connection (avoid a second connect without a timeout)
                 match check_daemon_version_compatibility_with_stream(&mut stream).await {
                     Ok(true) => {
@@ -231,7 +235,7 @@ impl LspClient {
 
             match timeout(connection_timeout, IpcStream::connect(&socket_path)).await {
                 Ok(Ok(stream)) => {
-                    info!("Connected to newly started LSP daemon");
+                    info!("Connected to newly started LSP daemon at: {}", socket_path);
                     self.stream = Some(stream);
 
                     // Send connect message with timeout
@@ -451,8 +455,16 @@ impl LspClient {
         line: u32,
         column: u32,
     ) -> Result<Option<EnhancedSymbolInfo>> {
-        if !self.config.use_daemon || self.stream.is_none() {
+        if !self.config.use_daemon {
             return Ok(None);
+        }
+
+        // Try to connect if not connected
+        if self.stream.is_none() {
+            if let Err(e) = self.connect().await {
+                warn!("Failed to connect to LSP daemon: {}", e);
+                return Ok(None);
+            }
         }
 
         // Get call hierarchy information
@@ -694,6 +706,60 @@ impl LspClient {
             language != Language::Unknown
         } else {
             false
+        }
+    }
+
+    /// Get cache statistics from the LSP daemon
+    pub async fn cache_stats(&mut self) -> Result<lsp_daemon::cache_types::AllCacheStats> {
+        let request = DaemonRequest::CacheStats {
+            request_id: Uuid::new_v4(),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::CacheStats { stats, .. } => Ok(stats),
+            _ => Err(anyhow!("Unexpected response type for cache stats")),
+        }
+    }
+
+    /// Clear cache entries
+    pub async fn cache_clear(
+        &mut self,
+        operation: Option<lsp_daemon::cache_types::LspOperation>,
+    ) -> Result<(Vec<lsp_daemon::cache_types::LspOperation>, usize)> {
+        let request = DaemonRequest::CacheClear {
+            request_id: Uuid::new_v4(),
+            operation,
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::CacheCleared {
+                operations_cleared,
+                entries_removed,
+                ..
+            } => Ok((operations_cleared, entries_removed)),
+            _ => Err(anyhow!("Unexpected response type for cache clear")),
+        }
+    }
+
+    /// Export cache contents to JSON
+    pub async fn cache_export(
+        &mut self,
+        operation: Option<lsp_daemon::cache_types::LspOperation>,
+    ) -> Result<String> {
+        let request = DaemonRequest::CacheExport {
+            request_id: Uuid::new_v4(),
+            operation,
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::CacheExport { export_data, .. } => Ok(export_data),
+            _ => Err(anyhow!("Unexpected response type for cache export")),
         }
     }
 }

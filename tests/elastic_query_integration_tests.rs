@@ -660,7 +660,9 @@ fn test_function() {
 
     // Should find the file with at least one of the terms: key, word, or score
     assert!(
-        file_names.iter().any(|&name| name.contains("underscore_test")),
+        file_names
+            .iter()
+            .any(|&name| name.contains("underscore_test")),
         "Should find underscore_test.rs which contains at least one of the terms: key, word, or score"
     );
 

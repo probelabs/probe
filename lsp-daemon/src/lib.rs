@@ -10,6 +10,17 @@ pub mod process_group;
 pub mod protocol;
 pub mod socket_path;
 
+// Cache modules
+pub mod cache_types;
+pub mod call_graph_cache;
+pub mod hash_utils;
+pub mod lsp_cache;
+
+// Handler modules
+pub mod definition_handler;
+pub mod hover_handler;
+pub mod references_handler;
+
 // Internal modules - exposed for direct client use
 pub mod lsp_registry;
 pub mod lsp_server;

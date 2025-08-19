@@ -101,6 +101,32 @@ pub enum LspSubcommands {
         #[clap(long = "watchdog")]
         watchdog: bool,
     },
+
+    /// Cache management subcommands
+    Cache {
+        #[clap(subcommand)]
+        cache_command: CacheSubcommands,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum CacheSubcommands {
+    /// Show cache statistics for all LSP operations
+    Stats,
+
+    /// Clear cache entries
+    Clear {
+        /// Specific operation to clear (Definition, References, Hover, CallHierarchy)
+        #[clap(short = 'o', long = "operation")]
+        operation: Option<String>,
+    },
+
+    /// Export cache contents to JSON for debugging
+    Export {
+        /// Specific operation to export (Definition, References, Hover, CallHierarchy)
+        #[clap(short = 'o', long = "operation")]
+        operation: Option<String>,
+    },
 }
 
 use anyhow::Result;
