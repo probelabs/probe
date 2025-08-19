@@ -804,9 +804,8 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
         return results;
     } else if !is_windows_path && cleaned_input.contains(':') {
         // Only try to split on ':' if it's not a Windows path
-        let (file_part, rest) = cleaned_input.split_once(':').unwrap();
-        // Extract the line specification from the rest (which might contain more colons)
-        let line_spec = rest.split(':').next().unwrap_or("");
+        // Use rsplit_once to split at the LAST colon to handle absolute paths correctly
+        let (file_part, line_spec) = cleaned_input.rsplit_once(':').unwrap();
 
         // Check if it's a range (contains a hyphen)
         if let Some((start_str, end_str)) = line_spec.split_once('-') {
