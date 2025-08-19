@@ -399,3 +399,62 @@ probe-chat --trace-file ./session-traces.jsonl
 # Start chat with full observability
 probe-chat --trace-file --trace-remote http://localhost:4318/v1/traces --allow-edit
 ```
+
+## LSP Integration Commands
+
+Probe provides advanced Language Server Protocol (LSP) integration for IDE-level code intelligence. The LSP system runs as a background daemon and provides enhanced code analysis.
+
+### LSP Extract Command
+
+Extract code with call hierarchy and semantic information:
+
+```bash
+# Extract function with LSP analysis
+probe extract src/main.rs#main --lsp
+
+# Extract with custom timeout
+probe extract src/auth.rs#authenticate --lsp --lsp-timeout 60000
+
+# Extract without caching (for debugging)
+probe extract src/lib.rs#process --lsp --lsp-no-cache
+```
+
+### LSP Daemon Management
+
+```bash
+# Check daemon status
+probe lsp status
+
+# Start daemon manually
+probe lsp start
+
+# Restart daemon
+probe lsp restart
+
+# Stop daemon
+probe lsp shutdown
+
+# View daemon logs
+probe lsp logs --follow
+
+# Initialize workspaces
+probe lsp init-workspaces . --recursive
+```
+
+### LSP Cache Management
+
+```bash
+# View cache statistics
+probe lsp cache stats
+
+# Clear specific cache
+probe lsp cache clear --operation CallHierarchy
+
+# Export cache for debugging
+probe lsp cache export --output cache-dump.json
+```
+
+For comprehensive LSP documentation, see:
+- **[LSP Features Overview](./lsp-features.md)** - Quick introduction to LSP capabilities
+- **[Indexing Overview](./indexing-overview.md)** - Complete LSP indexing system guide
+- **[LSP CLI Reference](./indexing-cli-reference.md)** - Detailed command documentation

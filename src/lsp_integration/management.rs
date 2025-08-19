@@ -7,7 +7,7 @@ use tokio::time::{self, MissedTickBehavior};
 
 use crate::lsp_integration::client::LspClient;
 use crate::lsp_integration::types::*;
-use crate::lsp_integration::{CacheSubcommands, LspSubcommands};
+use crate::lsp_integration::{CacheSubcommands, IndexConfigSubcommands, LspSubcommands};
 use lsp_daemon::{LogEntry, LogLevel, LspDaemon};
 
 // Follow-mode tuning: keep polling light to avoid hammering the daemon and the filesystem.
@@ -83,6 +83,41 @@ impl LspManager {
             }
             LspSubcommands::Cache { cache_command } => {
                 Self::handle_cache_command(cache_command, format).await
+            }
+            LspSubcommands::Index {
+                workspace,
+                languages,
+                recursive,
+                max_workers,
+                memory_budget,
+                format,
+                progress,
+                wait,
+            } => {
+                Self::handle_index_command(
+                    workspace.clone(),
+                    languages.clone(),
+                    *recursive,
+                    *max_workers,
+                    *memory_budget,
+                    format,
+                    *progress,
+                    *wait,
+                ).await
+            }
+            LspSubcommands::IndexStatus {
+                format,
+                detailed,
+                follow,
+                interval,
+            } => {
+                Self::handle_index_status_command(format, *detailed, *follow, *interval).await
+            }
+            LspSubcommands::IndexStop { force, format } => {
+                Self::handle_index_stop_command(*force, format).await
+            }
+            LspSubcommands::IndexConfig { config_command } => {
+                Self::handle_index_config_command(config_command, format).await
             }
         }
     }
@@ -173,7 +208,7 @@ impl LspManager {
                 if !status.build_date.is_empty() {
                     println!("  {} {}", "Build Date:".bold(), status.build_date.dimmed());
                 }
-                println!("  {} {}", "Uptime:".bold(), format_duration(status.uptime));
+                println!("  {} {}", "Uptime:".bold(), Self::format_duration(status.uptime));
                 println!(
                     "  {} {}",
                     "Total Requests:".bold(),
@@ -203,7 +238,7 @@ impl LspManager {
 
                         if pool.uptime_secs > 0 {
                             let uptime =
-                                format_duration(std::time::Duration::from_secs(pool.uptime_secs));
+                                Self::format_duration(std::time::Duration::from_secs(pool.uptime_secs));
                             println!("    {} {}", "Uptime:".bold(), uptime.cyan());
                         }
 
@@ -1143,6 +1178,473 @@ impl LspManager {
 
         Ok(())
     }
+
+    /// Handle index command - start indexing
+    async fn handle_index_command(
+        workspace: Option<String>,
+        languages: Option<String>,
+        recursive: bool,
+        max_workers: Option<usize>,
+        memory_budget: Option<u64>,
+        format: &str,
+        show_progress: bool,
+        wait: bool,
+    ) -> Result<()> {
+        let config = LspConfig::default();
+        let mut client = LspClient::new(config).await?;
+
+        // Resolve workspace path
+        let workspace_root = if let Some(ws) = workspace {
+            let path = std::path::PathBuf::from(ws);
+            if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir()?.join(&path).canonicalize()?
+            }
+        } else {
+            std::env::current_dir()?
+        };
+
+        // Parse languages if provided
+        let language_list = if let Some(langs) = languages {
+            langs.split(',').map(|s| s.trim().to_string()).collect()
+        } else {
+            vec![]
+        };
+
+        // Create indexing config
+        let indexing_config = lsp_daemon::protocol::IndexingConfig {
+            max_workers,
+            memory_budget_mb: memory_budget,
+            exclude_patterns: vec![
+                "*.git/*".to_string(),
+                "*/node_modules/*".to_string(),
+                "*/target/*".to_string(),
+                "*/build/*".to_string(),
+                "*/dist/*".to_string(),
+            ],
+            include_patterns: vec![],
+            max_file_size_mb: Some(10),
+            incremental: Some(true),
+            languages: language_list,
+            recursive,
+        };
+
+        match client.start_indexing(workspace_root.clone(), indexing_config).await {
+            Ok(session_id) => {
+                match format {
+                    "json" => {
+                        println!("{}", serde_json::to_string_pretty(&json!({
+                            "status": "started",
+                            "session_id": session_id,
+                            "workspace_root": workspace_root,
+                            "recursive": recursive
+                        }))?);
+                    }
+                    _ => {
+                        println!("{}", "Indexing Started".bold().green());
+                        println!("  {}: {}", "Session ID".bold(), session_id);
+                        println!("  {}: {:?}", "Workspace".bold(), workspace_root);
+                        println!("  {}: {}", "Recursive".bold(), recursive);
+                        
+                        if show_progress {
+                            println!("\nStarting progress monitoring...");
+                            if wait {
+                                Self::monitor_indexing_progress(&mut client, &session_id).await?;
+                            } else {
+                                println!("Use 'probe lsp index-status --follow' to monitor progress");
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => {
+                match format {
+                    "json" => {
+                        println!("{}", serde_json::to_string_pretty(&json!({
+                            "status": "error",
+                            "error": e.to_string()
+                        }))?);
+                    }
+                    _ => {
+                        eprintln!("{} {}", "Failed to start indexing:".red(), e);
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Handle index status command
+    async fn handle_index_status_command(
+        format: &str,
+        detailed: bool,
+        follow: bool,
+        interval: u64,
+    ) -> Result<()> {
+        let config = LspConfig::default();
+        let mut client = LspClient::new(config).await?;
+
+        if follow {
+            Self::follow_indexing_status(&mut client, format, detailed, interval).await
+        } else {
+            let status = client.get_indexing_status().await?;
+            Self::display_indexing_status(&status, format, detailed).await
+        }
+    }
+
+    /// Handle index stop command
+    async fn handle_index_stop_command(force: bool, format: &str) -> Result<()> {
+        let config = LspConfig::default();
+        let mut client = LspClient::new(config).await?;
+
+        match client.stop_indexing(force).await {
+            Ok(was_running) => {
+                match format {
+                    "json" => {
+                        println!("{}", serde_json::to_string_pretty(&json!({
+                            "status": "stopped",
+                            "was_running": was_running,
+                            "force": force
+                        }))?);
+                    }
+                    _ => {
+                        if was_running {
+                            println!("{}", "Indexing stopped successfully".green());
+                        } else {
+                            println!("{}", "No indexing was running".yellow());
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => {
+                match format {
+                    "json" => {
+                        println!("{}", serde_json::to_string_pretty(&json!({
+                            "status": "error",
+                            "error": e.to_string()
+                        }))?);
+                    }
+                    _ => {
+                        eprintln!("{} {}", "Failed to stop indexing:".red(), e);
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Handle index config command
+    async fn handle_index_config_command(
+        config_command: &IndexConfigSubcommands,
+        _format: &str,
+    ) -> Result<()> {
+        let config = LspConfig::default();
+        let mut client = LspClient::new(config).await?;
+
+        match config_command {
+            IndexConfigSubcommands::Show { format: output_format } => {
+                let config = client.get_indexing_config().await?;
+                Self::display_indexing_config(&config, output_format).await
+            }
+            IndexConfigSubcommands::Set {
+                max_workers,
+                memory_budget,
+                exclude_patterns,
+                include_patterns,
+                max_file_size,
+                incremental,
+                format,
+            } => {
+                let mut config = client.get_indexing_config().await?;
+                
+                // Update config fields if provided
+                if let Some(workers) = max_workers {
+                    config.max_workers = Some(*workers);
+                }
+                if let Some(memory) = memory_budget {
+                    config.memory_budget_mb = Some(*memory);
+                }
+                if let Some(exclude) = exclude_patterns {
+                    config.exclude_patterns = exclude.split(',').map(|s| s.trim().to_string()).collect();
+                }
+                if let Some(include) = include_patterns {
+                    config.include_patterns = include.split(',').map(|s| s.trim().to_string()).collect();
+                }
+                if let Some(file_size) = max_file_size {
+                    config.max_file_size_mb = Some(*file_size);
+                }
+                if let Some(inc) = incremental {
+                    config.incremental = Some(*inc);
+                }
+
+                client.set_indexing_config(config.clone()).await?;
+                Self::display_indexing_config(&config, format).await
+            }
+            IndexConfigSubcommands::Reset { format } => {
+                let default_config = lsp_daemon::protocol::IndexingConfig::default();
+                client.set_indexing_config(default_config.clone()).await?;
+                Self::display_indexing_config(&default_config, format).await
+            }
+        }
+    }
+
+    /// Display indexing status information
+    async fn display_indexing_status(
+        status: &lsp_daemon::protocol::IndexingStatusInfo,
+        format: &str,
+        detailed: bool,
+    ) -> Result<()> {
+        match format {
+            "json" => {
+                println!("{}", serde_json::to_string_pretty(status)?);
+            }
+            _ => {
+                println!("{}", "Indexing Status".bold().green());
+                println!("  {}: {}", "Status".bold(), status.manager_status);
+                
+                if let Some(session_id) = &status.session_id {
+                    println!("  {}: {}", "Session ID".bold(), session_id);
+                }
+                
+                if let Some(started_at) = status.started_at {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let elapsed_friendly = Self::format_duration(std::time::Duration::from_secs(now - started_at));
+                    println!("  {}: {} ago", "Started".bold(), elapsed_friendly);
+                }
+
+                println!("\n{}", "Progress".bold().cyan());
+                let progress = &status.progress;
+                println!("  {}: {}/{} ({:.1}%)", 
+                    "Files".bold(), 
+                    progress.processed_files + progress.failed_files + progress.skipped_files,
+                    progress.total_files,
+                    progress.progress_ratio * 100.0
+                );
+                
+                if progress.files_per_second > 0.0 {
+                    println!("  {}: {:.1} files/sec", "Rate".bold(), progress.files_per_second);
+                }
+                
+                println!("  {}: {}", "Processed".bold(), progress.processed_files);
+                println!("  {}: {}", "Failed".bold(), progress.failed_files);
+                println!("  {}: {}", "Skipped".bold(), progress.skipped_files);
+                println!("  {}: {}", "Active".bold(), progress.active_files);
+                println!("  {}: {} symbols", "Extracted".bold(), progress.symbols_extracted);
+                println!("  {}: {}", "Memory".bold(), format_bytes(progress.memory_usage_bytes as usize));
+                
+                if progress.peak_memory_bytes > progress.memory_usage_bytes {
+                    println!("  {}: {}", "Peak Memory".bold(), format_bytes(progress.peak_memory_bytes as usize));
+                }
+
+                println!("\n{}", "Queue".bold().cyan());
+                let queue = &status.queue;
+                println!("  {}: {}", "Total Items".bold(), queue.total_items);
+                println!("  {}: {}", "Pending".bold(), queue.pending_items);
+                println!("  {}: {} / {} / {}", 
+                    "Priority (H/M/L)".bold(), 
+                    queue.high_priority_items,
+                    queue.medium_priority_items,
+                    queue.low_priority_items
+                );
+                
+                if queue.is_paused {
+                    println!("  {}: {}", "Status".bold(), "⏸️  PAUSED".yellow());
+                }
+                if queue.memory_pressure {
+                    println!("  {}: {}", "Memory Pressure".bold(), "⚠️  HIGH".red());
+                }
+
+                if detailed && !status.workers.is_empty() {
+                    println!("\n{}", "Workers".bold().cyan());
+                    for worker in &status.workers {
+                        let status_icon = if worker.is_active { "🟢" } else { "⚪" };
+                        println!("  {} Worker {}: {} files, {} errors", 
+                            status_icon, worker.worker_id, worker.files_processed, worker.errors_encountered);
+                        
+                        if let Some(ref current_file) = worker.current_file {
+                            println!("    Currently: {:?}", current_file);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Display indexing configuration
+    async fn display_indexing_config(
+        config: &lsp_daemon::protocol::IndexingConfig,
+        format: &str,
+    ) -> Result<()> {
+        match format {
+            "json" => {
+                println!("{}", serde_json::to_string_pretty(config)?);
+            }
+            _ => {
+                println!("{}", "Indexing Configuration".bold().green());
+                println!("  {}: {}", "Max Workers".bold(), 
+                    config.max_workers.map(|n| n.to_string()).unwrap_or_else(|| "Auto".to_string()));
+                println!("  {}: {}MB", "Memory Budget".bold(), 
+                    config.memory_budget_mb.map(|n| n.to_string()).unwrap_or_else(|| "Unlimited".to_string()));
+                println!("  {}: {}MB", "Max File Size".bold(), 
+                    config.max_file_size_mb.map(|n| n.to_string()).unwrap_or_else(|| "Unlimited".to_string()));
+                println!("  {}: {}", "Incremental".bold(), 
+                    config.incremental.map(|b| b.to_string()).unwrap_or_else(|| "true".to_string()));
+                println!("  {}: {}", "Recursive".bold(), config.recursive);
+                
+                if !config.languages.is_empty() {
+                    println!("  {}: {}", "Languages".bold(), config.languages.join(", "));
+                } else {
+                    println!("  {}: All supported", "Languages".bold());
+                }
+                
+                if !config.exclude_patterns.is_empty() {
+                    println!("  {}: {}", "Exclude Patterns".bold(), config.exclude_patterns.join(", "));
+                }
+                
+                if !config.include_patterns.is_empty() {
+                    println!("  {}: {}", "Include Patterns".bold(), config.include_patterns.join(", "));
+                } else {
+                    println!("  {}: All files", "Include Patterns".bold());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Follow indexing status updates
+    async fn follow_indexing_status(
+        client: &mut LspClient,
+        format: &str,
+        detailed: bool,
+        interval: u64,
+    ) -> Result<()> {
+        let mut interval = tokio::time::interval(Duration::from_secs(interval));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        loop {
+            interval.tick().await;
+            
+            match client.get_indexing_status().await {
+                Ok(status) => {
+                    // Clear screen for terminal output
+                    if format != "json" {
+                        print!("\x1B[2J\x1B[1;1H"); // ANSI escape codes to clear screen and move cursor to top
+                    }
+                    
+                    Self::display_indexing_status(&status, format, detailed).await?;
+                    
+                    // Check if indexing is complete
+                    if status.manager_status == "Idle" || status.manager_status == "Shutdown" {
+                        if format != "json" {
+                            println!("\n{}", "Indexing completed".green());
+                        }
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if format == "json" {
+                        println!("{}", serde_json::to_string_pretty(&json!({
+                            "status": "error",
+                            "error": e.to_string()
+                        }))?);
+                    } else {
+                        eprintln!("Error getting status: {}", e);
+                    }
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Monitor indexing progress until completion
+    async fn monitor_indexing_progress(
+        client: &mut LspClient,
+        session_id: &str,
+    ) -> Result<()> {
+        let mut last_files_processed = 0u64;
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        
+        println!("Monitoring indexing progress (Ctrl+C to stop monitoring)...\n");
+
+        loop {
+            interval.tick().await;
+            
+            match client.get_indexing_status().await {
+                Ok(status) => {
+                    if let Some(ref current_session) = status.session_id {
+                        if current_session != session_id {
+                            println!("Session changed, stopping monitor");
+                            break;
+                        }
+                    }
+                    
+                    let progress = &status.progress;
+                    let completed = progress.processed_files + progress.failed_files + progress.skipped_files;
+                    
+                    // Show progress bar
+                    if progress.total_files > 0 {
+                        let percent = (completed as f64 / progress.total_files as f64) * 100.0;
+                        let bar_width = 50;
+                        let filled = (percent / 100.0 * bar_width as f64) as usize;
+                        let bar = "█".repeat(filled) + &"░".repeat(bar_width - filled);
+                        
+                        print!("\r[{}] {:.1}% ({}/{}) {} files/sec", 
+                            bar, percent, completed, progress.total_files, progress.files_per_second);
+                        
+                        if completed != last_files_processed {
+                            let memory_str = format_bytes(progress.memory_usage_bytes as usize);
+                            println!(" | {} | {} symbols", memory_str, progress.symbols_extracted);
+                            last_files_processed = completed;
+                        }
+                    } else {
+                        println!("Discovering files...");
+                    }
+                    
+                    // Check if indexing is complete
+                    if status.manager_status == "Idle" || status.manager_status == "Shutdown" {
+                        println!("\n\n{}", "✅ Indexing completed successfully!".green());
+                        println!("  {}: {} files processed", "Final Stats".bold(), progress.processed_files);
+                        println!("  {}: {} symbols extracted", "".repeat(11), progress.symbols_extracted);
+                        println!("  {}: {} failed", "".repeat(11), progress.failed_files);
+                        break;
+                    } else if status.manager_status.contains("Error") {
+                        println!("\n\n{}", "❌ Indexing failed".red());
+                        break;
+                    }
+                }
+                Err(e) => {
+                    println!("\nError monitoring progress: {}", e);
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Format duration in a human-readable way
+    fn format_duration(duration: Duration) -> String {
+        let total_seconds = duration.as_secs();
+
+        if total_seconds < 60 {
+            format!("{total_seconds}s")
+        } else if total_seconds < 3600 {
+            let minutes = total_seconds / 60;
+            let seconds = total_seconds % 60;
+            format!("{minutes}m {seconds}s")
+        } else {
+            let hours = total_seconds / 3600;
+            let minutes = (total_seconds % 3600) / 60;
+            format!("{hours}h {minutes}m")
+        }
+    }
 }
 
 /// Format bytes in a human-readable way
@@ -1163,32 +1665,16 @@ fn format_bytes(bytes: usize) -> String {
     }
 }
 
-/// Format duration in a human-readable way
-fn format_duration(duration: Duration) -> String {
-    let total_seconds = duration.as_secs();
-
-    if total_seconds < 60 {
-        format!("{total_seconds}s")
-    } else if total_seconds < 3600 {
-        let minutes = total_seconds / 60;
-        let seconds = total_seconds % 60;
-        format!("{minutes}m {seconds}s")
-    } else {
-        let hours = total_seconds / 3600;
-        let minutes = (total_seconds % 3600) / 60;
-        format!("{hours}h {minutes}m")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::search_runner::format_duration;
 
     #[test]
     fn test_format_duration() {
-        assert_eq!(format_duration(Duration::from_secs(30)), "30s");
-        assert_eq!(format_duration(Duration::from_secs(90)), "1m 30s");
-        assert_eq!(format_duration(Duration::from_secs(3661)), "1h 1m");
+        assert_eq!(format_duration(Duration::from_secs(30)), "30.00s");
+        assert_eq!(format_duration(Duration::from_secs(90)), "90.00s");
+        assert_eq!(format_duration(Duration::from_secs(3661)), "3661.00s");
     }
 
     #[test]

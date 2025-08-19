@@ -107,6 +107,125 @@ pub enum LspSubcommands {
         #[clap(subcommand)]
         cache_command: CacheSubcommands,
     },
+
+    /// Start indexing a workspace
+    Index {
+        /// Workspace path to index (defaults to current directory)
+        #[clap(short = 'w', long = "workspace")]
+        workspace: Option<String>,
+
+        /// Specific languages to index (comma-separated, e.g., "rust,typescript")
+        #[clap(short = 'l', long = "languages")]
+        languages: Option<String>,
+
+        /// Recursively index nested workspaces
+        #[clap(short = 'r', long = "recursive")]
+        recursive: bool,
+
+        /// Maximum number of worker threads (default: CPU count)
+        #[clap(long = "max-workers")]
+        max_workers: Option<usize>,
+
+        /// Memory budget in MB (default: 512MB)
+        #[clap(long = "memory-budget")]
+        memory_budget: Option<u64>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+
+        /// Show progress bar (disable for scripting)
+        #[clap(long = "progress", default_value = "true")]
+        progress: bool,
+
+        /// Wait for indexing to complete before returning
+        #[clap(long = "wait")]
+        wait: bool,
+    },
+
+    /// Show detailed indexing status
+    IndexStatus {
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+
+        /// Show per-file progress details
+        #[clap(long = "detailed")]
+        detailed: bool,
+
+        /// Follow indexing progress (like tail -f)
+        #[clap(short = 'f', long = "follow")]
+        follow: bool,
+
+        /// Update interval for follow mode (seconds)
+        #[clap(long = "interval", default_value = "1")]
+        interval: u64,
+    },
+
+    /// Stop ongoing indexing
+    IndexStop {
+        /// Force stop even if indexing is in progress
+        #[clap(short = 'f', long = "force")]
+        force: bool,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Configure indexing settings
+    IndexConfig {
+        #[clap(subcommand)]
+        config_command: IndexConfigSubcommands,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum IndexConfigSubcommands {
+    /// Show current indexing configuration
+    Show {
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Set indexing configuration
+    Set {
+        /// Maximum number of worker threads
+        #[clap(long = "max-workers")]
+        max_workers: Option<usize>,
+
+        /// Memory budget in MB
+        #[clap(long = "memory-budget")]
+        memory_budget: Option<u64>,
+
+        /// File patterns to exclude (comma-separated)
+        #[clap(long = "exclude")]
+        exclude_patterns: Option<String>,
+
+        /// File patterns to include (comma-separated, empty=all)
+        #[clap(long = "include")]
+        include_patterns: Option<String>,
+
+        /// Maximum file size to index (MB)
+        #[clap(long = "max-file-size")]
+        max_file_size: Option<u64>,
+
+        /// Enable incremental indexing mode
+        #[clap(long = "incremental")]
+        incremental: Option<bool>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Reset indexing configuration to defaults
+    Reset {
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
