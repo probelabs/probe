@@ -633,7 +633,7 @@ impl LspDaemon {
     /// Helper method to send response with timeout
     async fn send_response(
         &self,
-        writer: &mut tokio::net::unix::OwnedWriteHalf,
+        writer: &mut crate::ipc::OwnedWriteHalf,
         response: &DaemonResponse,
     ) -> Result<()> {
         let json_data = serde_json::to_vec(response)?;

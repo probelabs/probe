@@ -6,10 +6,10 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 // Re-export platform-specific types
 #[cfg(unix)]
-pub use unix_impl::{IpcListener, IpcStream};
+pub use unix_impl::{IpcListener, IpcStream, OwnedReadHalf, OwnedWriteHalf};
 
 #[cfg(windows)]
-pub use windows_impl::{IpcListener, IpcStream};
+pub use windows_impl::{IpcListener, IpcStream, OwnedReadHalf, OwnedWriteHalf};
 
 /// Trait for platform-agnostic IPC listener
 #[async_trait]
@@ -155,13 +155,51 @@ mod unix_impl {
             Ok("unix-peer".to_string()) // Unix sockets don't have traditional addresses
         }
 
-        pub fn into_split(
-            self,
-        ) -> (
-            tokio::net::unix::OwnedReadHalf,
-            tokio::net::unix::OwnedWriteHalf,
-        ) {
-            self.stream.into_split()
+        pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
+            let (reader, writer) = self.stream.into_split();
+            (
+                OwnedReadHalf { inner: reader },
+                OwnedWriteHalf { inner: writer },
+            )
+        }
+    }
+
+    pub struct OwnedReadHalf {
+        inner: tokio::net::unix::OwnedReadHalf,
+    }
+
+    pub struct OwnedWriteHalf {
+        inner: tokio::net::unix::OwnedWriteHalf,
+    }
+
+    impl AsyncRead for OwnedReadHalf {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.inner).poll_read(cx, buf)
+        }
+    }
+
+    impl AsyncWrite for OwnedWriteHalf {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Pin::new(&mut self.inner).poll_write(cx, buf)
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.inner).poll_shutdown(cx)
         }
     }
 
@@ -311,6 +349,80 @@ mod windows_impl {
 
         pub fn peer_addr(&self) -> Result<String> {
             Ok("windows-pipe-peer".to_string())
+        }
+
+        pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
+            let stream = Arc::new(Mutex::new(self));
+            (
+                OwnedReadHalf {
+                    stream: stream.clone(),
+                },
+                OwnedWriteHalf { stream },
+            )
+        }
+    }
+
+    pub struct OwnedReadHalf {
+        stream: Arc<Mutex<IpcStream>>,
+    }
+
+    pub struct OwnedWriteHalf {
+        stream: Arc<Mutex<IpcStream>>,
+    }
+
+    impl AsyncRead for OwnedReadHalf {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let mut stream = match self.stream.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+            };
+            Pin::new(&mut *stream).poll_read(cx, buf)
+        }
+    }
+
+    impl AsyncWrite for OwnedWriteHalf {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            let mut stream = match self.stream.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+            };
+            Pin::new(&mut *stream).poll_write(cx, buf)
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            let mut stream = match self.stream.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+            };
+            Pin::new(&mut *stream).poll_flush(cx)
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            let mut stream = match self.stream.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+            };
+            Pin::new(&mut *stream).poll_shutdown(cx)
         }
     }
 
