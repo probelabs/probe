@@ -1503,7 +1503,8 @@ impl Drop for LspTestGuard {
 fn count_lsp_processes() -> usize {
     let output = std::process::Command::new("sh")
         .arg("-c")
-        .arg("ps aux | grep -E 'probe.*lsp|lsp.*test|lsp.*daemon' | grep -v grep | wc -l")
+        // Count probe lsp commands and lsp-daemon, but exclude the test runner itself
+        .arg("ps aux | grep -E 'probe.*lsp|lsp-daemon' | grep -v grep | grep -v lsp_integration_tests | wc -l")
         .output();
 
     match output {
@@ -1525,9 +1526,10 @@ fn cleanup_leaked_lsp_processes() {
     // Give them time to exit gracefully
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // Kill any remaining LSP-related test processes
+    // Kill any remaining LSP daemon processes (but not the test runner itself!)
+    // Be more specific to avoid killing lsp_integration_tests
     let _ = std::process::Command::new("pkill")
-        .args(["-f", "lsp.*test"])
+        .args(["-f", "lsp-daemon"])
         .output();
 
     // Give processes time to exit
@@ -1538,13 +1540,14 @@ fn cleanup_leaked_lsp_processes() {
 fn force_kill_lsp_processes() {
     eprintln!("🔥 Force killing all LSP processes...");
 
-    // Use SIGKILL to force kill
+    // Use SIGKILL to force kill probe lsp commands
     let _ = std::process::Command::new("pkill")
         .args(["-9", "-f", "probe lsp"])
         .output();
 
+    // Force kill lsp-daemon specifically (not test runners!)
     let _ = std::process::Command::new("pkill")
-        .args(["-9", "-f", "lsp.*daemon"])
+        .args(["-9", "-f", "lsp-daemon"])
         .output();
 
     // Give the OS time to clean up
