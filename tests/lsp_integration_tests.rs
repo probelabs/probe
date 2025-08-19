@@ -216,6 +216,9 @@ fn test_extract_non_blocking_without_daemon() -> Result<()> {
         "Extract should not block (took {elapsed:?}, max: {max_duration}s)"
     );
 
+    // Clean up any daemon that may have been auto-started
+    ensure_daemon_stopped();
+
     Ok(())
 }
 
@@ -253,6 +256,9 @@ fn test_search_non_blocking_without_daemon() -> Result<()> {
         elapsed.as_secs() < max_duration,
         "Search should not block (took {elapsed:?}, max: {max_duration}s)"
     );
+
+    // Clean up any daemon that may have been auto-started
+    ensure_daemon_stopped();
 
     Ok(())
 }
@@ -371,7 +377,7 @@ fn test_daemon_auto_start() -> Result<()> {
     // Note: Status might fail if daemon was started in non-blocking mode
     // The important thing is that extract succeeded
 
-    // Cleanup
+    // Cleanup - ensure daemon is stopped
     ensure_daemon_stopped();
 
     Ok(())
