@@ -33,6 +33,12 @@ pub mod server_manager;
 pub mod watchdog;
 mod workspace_resolver;
 
+// Indexing subsystem
+pub mod indexing;
+
+// File watching subsystem
+pub mod file_watcher;
+
 // Re-export commonly used types
 pub use protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, DaemonRequest,
@@ -50,3 +56,18 @@ pub use daemon::{start_daemon_background, LspDaemon};
 pub use health_monitor::HealthMonitor;
 pub use lsp_registry::LspRegistry;
 pub use watchdog::{ProcessHealth, ProcessMonitor, ProcessStats, Watchdog};
+
+// Re-export indexing types for external use
+pub use indexing::{
+    IndexingFeatures, IndexingManager, IndexingPipeline, IndexingProgress, IndexingQueue,
+    LanguagePipeline, ManagerConfig, ManagerStatus, PipelineConfig, PipelineResult, Priority,
+    ProgressMetrics, ProgressSnapshot, QueueItem, QueueMetrics, QueueSnapshot, WorkerStats,
+};
+
+// Re-export file watcher types for external use
+pub use file_watcher::{
+    FileEvent, FileEventType, FileWatcher, FileWatcherConfig, FileWatcherStats,
+};
+
+// Re-export pipeline-specific types
+pub use indexing::pipelines::SymbolInfo;

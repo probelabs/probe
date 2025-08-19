@@ -54,8 +54,37 @@ impl Language {
             Language::Unknown => "unknown",
         }
     }
+
+    /// Parse a language from string
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "rust" => Some(Language::Rust),
+            "typescript" => Some(Language::TypeScript),
+            "javascript" => Some(Language::JavaScript),
+            "python" => Some(Language::Python),
+            "go" => Some(Language::Go),
+            "java" => Some(Language::Java),
+            "c" => Some(Language::C),
+            "cpp" | "c++" => Some(Language::Cpp),
+            "csharp" | "c#" => Some(Language::CSharp),
+            "ruby" => Some(Language::Ruby),
+            "php" => Some(Language::Php),
+            "swift" => Some(Language::Swift),
+            "kotlin" => Some(Language::Kotlin),
+            "scala" => Some(Language::Scala),
+            "haskell" => Some(Language::Haskell),
+            "elixir" => Some(Language::Elixir),
+            "clojure" => Some(Language::Clojure),
+            "lua" => Some(Language::Lua),
+            "zig" => Some(Language::Zig),
+            "unknown" => Some(Language::Unknown),
+            _ => None,
+        }
+    }
 }
 
+#[derive(Debug)]
 pub struct LanguageDetector {
     extension_map: HashMap<String, Language>,
     shebang_patterns: Vec<(Regex, Language)>,
