@@ -4,6 +4,30 @@ use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 
+/// Helper function to get the path to the probe binary
+/// This significantly improves test performance on Windows by avoiding repeated compilation checks
+fn probe_binary_path() -> PathBuf {
+    // First, check if cargo has set the binary path for us (cargo test does this)
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_probe") {
+        return PathBuf::from(path);
+    }
+
+    // Otherwise, construct the path to the debug binary
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("target");
+    path.push("debug");
+    path.push(if cfg!(windows) { "probe.exe" } else { "probe" });
+
+    // Verify the binary exists
+    if !path.exists() {
+        panic!(
+            "Probe binary not found at {path:?}. Please run 'cargo build' before running tests."
+        );
+    }
+
+    path
+}
+
 // Helper function to create test files
 fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
     let file_path = dir.path().join(filename);
@@ -45,10 +69,8 @@ fn test_cli_basic_search() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with basic search
-    let output = Command::new("cargo")
+    let output = Command::new(probe_binary_path())
         .args([
-            "run",
-            "--",
             "search",
             "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
@@ -85,10 +107,8 @@ fn test_cli_files_only() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with files-only option
-    let output = Command::new("cargo")
+    let output = Command::new(probe_binary_path())
         .args([
-            "run",
-            "--",
             "search",
             "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
@@ -175,10 +195,8 @@ fn test_cli_filename_matching() {
 
     // Second test: With exclude-filenames - filename matching should be disabled
     // Run the CLI with exclude-filenames option
-    let output2 = Command::new("cargo")
+    let output2 = Command::new(probe_binary_path())
         .args([
-            "run",
-            "--",
             "search",
             "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
