@@ -96,7 +96,7 @@ async fn test_cache_performance_demonstration() {
     let modified_key = NodeKey::new(symbol, file_path.clone(), "def456".to_string());
 
     let start = Instant::now();
-    let result3 = cache
+    let _result3 = cache
         .get_or_compute(modified_key, compute_expensive)
         .await
         .unwrap();

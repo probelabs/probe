@@ -816,28 +816,10 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
             }
         }
         return results;
-    } else if cleaned_input.contains(':') {
-        // Handle line ranges in both Windows and Unix paths
-        let (file_part, rest) = if is_windows_path {
-            // For Windows paths, we need to find the colon after the drive letter
-            // Format: C:\path\to\file.ext:5-10
-            if let Some(colon_pos) = cleaned_input[2..].find(':') {
-                let actual_pos = colon_pos + 2; // Adjust for the skipped first 2 characters
-                (
-                    &cleaned_input[..actual_pos],
-                    &cleaned_input[actual_pos + 1..],
-                )
-            } else {
-                // No line range found, treat as file-only path
-                (cleaned_input, "")
-            }
-        } else {
-            // For Unix paths, split on the first colon
-            cleaned_input.split_once(':').unwrap()
-        };
-
-        // Extract the line specification from the rest (which might contain more colons)
-        let line_spec = rest.split(':').next().unwrap_or("");
+    } else if !is_windows_path && cleaned_input.contains(':') {
+        // Only try to split on ':' if it's not a Windows path
+        // Use rsplit_once to split at the LAST colon to handle absolute paths correctly
+        let (file_part, line_spec) = cleaned_input.rsplit_once(':').unwrap();
 
         // If there's no line specification (empty rest), treat as file-only path
         if line_spec.is_empty() {

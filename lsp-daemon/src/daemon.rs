@@ -20,7 +20,7 @@ use crate::server_manager::SingleServerManager;
 use crate::socket_path::{get_default_socket_path, remove_socket_file};
 use crate::watchdog::{ProcessMonitor, Watchdog};
 use crate::workspace_resolver::WorkspaceResolver;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -74,6 +74,7 @@ pub struct LspDaemon {
     connection_durations: Arc<RwLock<Vec<Duration>>>, // Keep last 100 connection durations
     // Watchdog (disabled by default, enabled via --watchdog flag)
     watchdog: Arc<tokio::sync::Mutex<Option<Watchdog>>>,
+    background_tasks: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     watchdog_enabled: Arc<AtomicBool>,
     watchdog_task: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     process_monitor: Arc<ProcessMonitor>,
@@ -200,6 +201,7 @@ impl LspDaemon {
             connections_rejected_due_to_limit: Arc::new(RwLock::new(0)),
             connection_durations: Arc::new(RwLock::new(Vec::with_capacity(100))),
             watchdog: Arc::new(tokio::sync::Mutex::new(None)),
+            background_tasks: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             watchdog_enabled: Arc::new(AtomicBool::new(false)),
             watchdog_task: Arc::new(tokio::sync::Mutex::new(None)),
             process_monitor,
@@ -263,19 +265,21 @@ impl LspDaemon {
 
         // Start idle checker
         let daemon = self.clone_refs();
-        tokio::spawn(async move {
+        let idle_handle = tokio::spawn(async move {
             daemon.idle_checker().await;
         });
+        self.background_tasks.lock().await.push(idle_handle);
 
         // Start periodic cleanup task
         let daemon_for_cleanup = self.clone_refs();
-        tokio::spawn(async move {
+        let cleanup_shutdown = self.shutdown.clone();
+        let cleanup_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;
 
                 // Check if daemon is shutting down
-                if *daemon_for_cleanup.shutdown.read().await {
+                if *cleanup_shutdown.read().await {
                     debug!("Periodic cleanup task stopping due to shutdown");
                     break;
                 }
@@ -286,20 +290,30 @@ impl LspDaemon {
                 }
             }
         });
+        self.background_tasks.lock().await.push(cleanup_handle);
 
         // Start health monitoring
-        let _health_monitor_task = self.server_manager.start_health_monitoring();
+        let health_monitor_handle = self.server_manager.start_health_monitoring();
         info!("Started health monitoring for LSP servers");
+        self.background_tasks
+            .lock()
+            .await
+            .push(health_monitor_handle);
 
         // Start process monitoring task with grace period for indexing
         let process_monitor = self.process_monitor.clone();
         let child_processes_for_monitoring = self.child_processes.clone();
         let child_first_seen = self.child_first_seen.clone();
         let index_grace_secs = self.index_grace_secs;
-        tokio::spawn(async move {
+        let shutdown_flag = self.shutdown.clone();
+        let monitor_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30)); // Check every 30 seconds
             loop {
                 interval.tick().await;
+                if *shutdown_flag.read().await {
+                    debug!("Process monitoring task stopping due to shutdown");
+                    break;
+                }
 
                 let pids = {
                     let pids_guard = child_processes_for_monitoring.lock().await;
@@ -359,6 +373,11 @@ impl LspDaemon {
                                         warn!("Failed to send SIGTERM to process {}", pid);
                                     }
                                 }
+                                // Also drop from the tracked pid list so we don't keep monitoring it.
+                                {
+                                    let mut guard = child_processes_for_monitoring.lock().await;
+                                    guard.retain(|p| p != pid);
+                                }
                             }
                         }
                     }
@@ -372,6 +391,7 @@ impl LspDaemon {
                 }
             }
         });
+        self.background_tasks.lock().await.push(monitor_handle);
 
         loop {
             // Update watchdog heartbeat if enabled
@@ -1076,9 +1096,19 @@ impl LspDaemon {
         );
 
         // Convert relative path to absolute path
-        let absolute_file_path = file_path
-            .canonicalize()
-            .with_context(|| format!("Failed to resolve absolute path for {file_path:?}"))?;
+        // Be tolerant to transient canonicalize issues (e.g., symlinks/overlays in test fixtures).
+        let absolute_file_path = match file_path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => {
+                if file_path.is_absolute() {
+                    file_path.to_path_buf()
+                } else {
+                    std::env::current_dir()
+                        .unwrap_or_else(|_| PathBuf::from("/"))
+                        .join(file_path)
+                }
+            }
+        };
 
         // Compute MD5 hash for cache key
         let content_md5 = md5_hex_file(&absolute_file_path)?;
@@ -1126,19 +1156,14 @@ impl LspDaemon {
 
         // Adaptive timing for Go/TypeScript in CI environments
         let is_ci = std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok();
+        // New strategy: probe immediately, then back off. This removes unconditional sleeps
+        // and avoids blowing up test budgets, especially in "initialization timeout" paths.
         let (initial_wait, max_attempts, retry_delay) = match language {
             Language::Go | Language::TypeScript | Language::JavaScript if is_ci => {
-                // Go and TypeScript need more time in CI for indexing
-                (15, 5, 5) // 15s initial wait, 5 attempts, 5s between attempts
+                (5, 5, 3) // was (15,5,5): faster in CI; still allows warm-up
             }
-            Language::Go | Language::TypeScript | Language::JavaScript => {
-                // Local development - reduced wait times for better performance
-                (3, 3, 2) // 3s initial wait, 3 attempts, 2s between attempts
-            }
-            _ => {
-                // Rust and other languages - works well with shorter waits
-                (1, 3, 1) // 1s initial wait, 3 attempts, 1s between attempts
-            }
+            Language::Go | Language::TypeScript | Language::JavaScript => (0, 3, 2),
+            _ => (0, 3, 1),
         };
 
         debug!(
@@ -1157,9 +1182,10 @@ impl LspDaemon {
             // Lock is automatically released here when server goes out of scope
         }
 
-        // Give language server time to process and index OUTSIDE the lock
-        // This allows other requests to proceed while we wait
-        tokio::time::sleep(tokio::time::Duration::from_secs(initial_wait)).await;
+        // No unconditional sleep. We'll probe first, and only sleep between retries
+        if initial_wait > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_secs(initial_wait)).await;
+        }
 
         // Try call hierarchy with adaptive retry logic
         let mut attempt = 1;
@@ -1761,6 +1787,17 @@ impl LspDaemon {
     async fn cleanup(&mut self) -> Result<()> {
         info!("Cleaning up daemon resources");
 
+        // Abort/await background tasks to stop loops quickly.
+        {
+            let mut guard = self.background_tasks.lock().await;
+            // Abort all in reverse order to stop dependents first
+            while let Some(handle) = guard.pop() {
+                handle.abort();
+                // It's okay if awaiting returns an error due to abort
+                let _ = handle.await;
+            }
+        }
+
         // Stop the watchdog if it was enabled
         if self.watchdog_enabled.load(Ordering::Relaxed) {
             info!("Stopping watchdog");
@@ -1800,8 +1837,72 @@ impl LspDaemon {
         }
         drop(child_pids);
 
-        // Give processes time to terminate
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        // Wait for children to go away; escalate if needed.
+        #[cfg(unix)]
+        {
+            use std::time::Instant as StdInstant;
+            fn pid_still_exists(pid: u32) -> bool {
+                // kill(pid, 0) returns 0 if the process exists and we can send signals,
+                // -1 with ESRCH if it doesn't exist.
+                unsafe {
+                    let res = libc::kill(pid as i32, 0);
+                    if res == 0 {
+                        true
+                    } else {
+                        #[cfg(target_os = "linux")]
+                        let err = *libc::__errno_location();
+                        #[cfg(target_os = "macos")]
+                        let err = *libc::__error();
+                        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+                        let err = 0;
+                        err != libc::ESRCH
+                    }
+                }
+            }
+
+            let start = StdInstant::now();
+            let soft_deadline = Duration::from_secs(2);
+            let hard_deadline = Duration::from_secs(5);
+
+            // soft wait
+            loop {
+                let pids_snapshot: Vec<u32> = {
+                    let guard = self.child_processes.lock().await;
+                    guard.clone()
+                };
+                let alive: Vec<u32> = pids_snapshot
+                    .into_iter()
+                    .filter(|&p| pid_still_exists(p))
+                    .collect();
+                if alive.is_empty() || start.elapsed() >= soft_deadline {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            // escalate to SIGKILL if anything is still alive
+            let pids_snapshot: Vec<u32> = {
+                let guard = self.child_processes.lock().await;
+                guard.clone()
+            };
+            for pid in pids_snapshot.into_iter().filter(|&p| pid_still_exists(p)) {
+                unsafe {
+                    let _ = libc::kill(pid as i32, libc::SIGKILL);
+                    warn!("Escalated to SIGKILL for stubborn child process {}", pid);
+                }
+            }
+
+            // hard wait
+            let hard_start = StdInstant::now();
+            while hard_start.elapsed() < hard_deadline {
+                let guard = self.child_processes.lock().await;
+                if guard.iter().all(|&pid| !pid_still_exists(pid)) {
+                    break;
+                }
+                drop(guard);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
 
         // Force kill any remaining processes in our process group
         #[cfg(unix)]
@@ -1814,6 +1915,9 @@ impl LspDaemon {
 
         // Remove socket file (Unix only)
         remove_socket_file(&self.socket_path)?;
+
+        // Final cleanup of pid list
+        *self.child_processes.lock().await = Vec::new();
 
         Ok(())
     }
@@ -1842,6 +1946,7 @@ impl LspDaemon {
             connections_rejected_due_to_limit: self.connections_rejected_due_to_limit.clone(),
             connection_durations: self.connection_durations.clone(),
             watchdog: self.watchdog.clone(),
+            background_tasks: self.background_tasks.clone(),
             watchdog_enabled: self.watchdog_enabled.clone(),
             watchdog_task: self.watchdog_task.clone(),
             process_monitor: self.process_monitor.clone(),
