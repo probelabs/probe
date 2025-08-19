@@ -50,6 +50,42 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                 let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_LSP_REQUESTS));
                 let mut set = JoinSet::new();
 
+                // Create a shared LSP client for all symbols to use the daemon connection
+                let shared_client = {
+                    let config = LspConfig {
+                        use_daemon: true,
+                        workspace_hint: None,
+                        timeout_ms: 8000,
+                    };
+                    match LspClient::new(config).await {
+                        Ok(client) => {
+                            if debug_mode {
+                                println!("[DEBUG] Created shared LSP client for enrichment");
+                            }
+                            Some(Arc::new(AsyncMutex::new(client)))
+                        }
+                        Err(e) => {
+                            if debug_mode {
+                                println!("[DEBUG] Failed to create shared LSP client: {e}");
+                            }
+                            None
+                        }
+                    }
+                };
+
+                // Skip LSP processing if we couldn't create a client
+                let shared_client = match shared_client {
+                    Some(client) => client,
+                    None => {
+                        if debug_mode {
+                            println!(
+                                "[DEBUG] No shared LSP client available, skipping LSP enrichment"
+                            );
+                        }
+                        return;
+                    }
+                };
+
                 for (idx, result) in results[..lsp_range].iter().enumerate() {
                     if result.lsp_info.is_some() {
                         continue;
@@ -67,11 +103,13 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                     let node_type = result.node_type.clone();
                     let sem = semaphore.clone();
                     let dbg = debug_mode;
+                    let client = shared_client.clone();
 
                     set.spawn(async move {
                         let mut collected: Vec<serde_json::Value> = Vec::new();
                         for symbol_info in symbols.into_iter().take(3) {
-                            if let Some(v) = process_single_symbol_async(
+                            if let Some(v) = process_single_symbol_async_with_client(
+                                client.clone(),
                                 file_path.clone(),
                                 node_type.clone(),
                                 symbol_info,
@@ -117,6 +155,40 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
             let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_LSP_REQUESTS));
             let mut set = JoinSet::new();
 
+            // Create a shared LSP client for all symbols to use the daemon connection
+            let shared_client = {
+                let config = LspConfig {
+                    use_daemon: true,
+                    workspace_hint: None,
+                    timeout_ms: 8000,
+                };
+                match LspClient::new(config).await {
+                    Ok(client) => {
+                        if debug_mode {
+                            println!("[DEBUG] Created shared LSP client for enrichment");
+                        }
+                        Some(Arc::new(AsyncMutex::new(client)))
+                    }
+                    Err(e) => {
+                        if debug_mode {
+                            println!("[DEBUG] Failed to create shared LSP client: {e}");
+                        }
+                        None
+                    }
+                }
+            };
+
+            // Skip LSP processing if we couldn't create a client
+            let shared_client = match shared_client {
+                Some(client) => client,
+                None => {
+                    if debug_mode {
+                        println!("[DEBUG] No shared LSP client available, skipping LSP enrichment");
+                    }
+                    return;
+                }
+            };
+
             for (idx, result) in results[..lsp_range].iter().enumerate() {
                 if result.lsp_info.is_some() {
                     continue;
@@ -133,11 +205,13 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                 let node_type = result.node_type.clone();
                 let sem = semaphore.clone();
                 let dbg = debug_mode;
+                let client = shared_client.clone();
 
                 set.spawn(async move {
                     let mut collected: Vec<serde_json::Value> = Vec::new();
                     for symbol_info in symbols.into_iter().take(3) {
-                        if let Some(v) = process_single_symbol_async(
+                        if let Some(v) = process_single_symbol_async_with_client(
+                            client.clone(),
                             file_path.clone(),
                             node_type.clone(),
                             symbol_info,
@@ -235,8 +309,9 @@ struct SymbolInfo {
     column: u32,
 }
 
-/// Process a single symbol and get its LSP information
-async fn process_single_symbol_async(
+/// Process a single symbol and get its LSP information using shared client
+async fn process_single_symbol_async_with_client(
+    shared_client: Arc<AsyncMutex<LspClient>>,
     file_path: String,
     node_type: String,
     symbol_info: SymbolInfo,
@@ -275,15 +350,19 @@ async fn process_single_symbol_async(
         Err(_) => return None,
     };
 
-    // Query the LSP (no extra threads, no nested runtimes).
-    let info_opt = get_lsp_info_async(
-        std::path::Path::new(&file_path),
-        &symbol_info.name,
-        symbol_info.line,
-        symbol_info.column,
-        debug_mode,
-    )
-    .await;
+    // Query the LSP using shared client
+    let info_opt = {
+        let mut client = shared_client.lock().await;
+        get_lsp_info_async_with_client(
+            &mut client,
+            std::path::Path::new(&file_path),
+            &symbol_info.name,
+            symbol_info.line,
+            symbol_info.column,
+            debug_mode,
+        )
+        .await
+    };
 
     // Build/augment the result JSON to match existing shape.
     let result_json = if let Some(mut v) = info_opt {
@@ -923,8 +1002,9 @@ fn extract_name_after_keyword(text: &str) -> Option<String> {
     None
 }
 
-/// Async function to get LSP information
-async fn get_lsp_info_async(
+/// Async function to get LSP information using a shared client
+async fn get_lsp_info_async_with_client(
+    client: &mut LspClient,
     file_path: &Path,
     symbol_name: &str,
     line: u32,
@@ -941,43 +1021,7 @@ async fn get_lsp_info_async(
         );
     }
 
-    // Find workspace root
-    let workspace_hint = find_workspace_root(file_path).map(|p| p.to_string_lossy().to_string());
-
-    let config = LspConfig {
-        use_daemon: true,
-        workspace_hint: workspace_hint.clone(),
-        timeout_ms: 8000, // Reduced timeout for search results to prevent accumulation
-    };
-
-    // Try to create LSP client - this will start the server if needed
-    // Use regular new() instead of new_non_blocking() to ensure server starts
-    let mut client = match LspClient::new(config).await {
-        Ok(client) => {
-            if debug_mode {
-                println!("[DEBUG] LSP client connected successfully for {symbol_name}");
-            }
-            client
-        }
-        Err(e) => {
-            // Failed to create client or start server
-            if debug_mode {
-                println!("[DEBUG] Failed to create LSP client for symbol '{symbol_name}': {e}");
-            }
-            // Don't spam stderr for each symbol failure - just debug log
-            if std::env::var("LSP_LOG").unwrap_or_default() == "1" {
-                eprintln!(
-                    "LSP Warning: Failed to connect for symbol '{}' at {}:{}:{}: {}",
-                    symbol_name,
-                    file_path.display(),
-                    line,
-                    column,
-                    e
-                );
-            }
-            return None;
-        }
-    };
+    // Client is provided as a parameter, no need to create one
 
     // Try to get symbol info with short timeout to avoid delays in search
     // Use aggressive timeout for search results to prevent command timeouts
@@ -1046,6 +1090,7 @@ async fn get_lsp_info_async(
 }
 
 /// Find the workspace root by looking for project markers
+#[allow(dead_code)]
 fn find_workspace_root(file_path: &Path) -> Option<&Path> {
     let mut current = file_path.parent()?;
 

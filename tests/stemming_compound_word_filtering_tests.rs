@@ -149,7 +149,10 @@ fn test_stemming_with_and_query(temp_path: &Path) {
 
     // Test filtering
     let result = filter_code_block_with_ast(block_lines, &term_matches, &plan, true);
-    assert!(result, "Block with stemmed terms 'ip' and 'whitelist' should match the query 'ips AND whitelisting'");
+    assert!(
+        result,
+        "Block with stemmed terms 'ip' and 'whitelist' should match the query 'ips AND whitelisting'"
+    );
     println!("✓ Block with stemmed terms matches the AND query");
 }
 
@@ -259,7 +262,9 @@ fn test_stemming_with_or_query(temp_path: &Path) {
 
 /// Test stemming with complex query: "(ips OR ports) AND (whitelisting OR security) AND -blocking"
 fn test_stemming_with_complex_query(_temp_path: &Path) {
-    println!("\n=== Testing stemming with complex query: (ips OR ports) AND (whitelisting OR security) AND -blocking ===");
+    println!(
+        "\n=== Testing stemming with complex query: (ips OR ports) AND (whitelisting OR security) AND -blocking ==="
+    );
 
     // Create the query
     let query = "(ips OR ports) AND (whitelisting OR security) AND -blocking";

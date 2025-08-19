@@ -1,13 +1,20 @@
+use crate::cache_types::{
+    AllCacheStats, CallHierarchyInfo, CallInfo, DefinitionInfo, HoverInfo, LspCacheStats,
+    LspOperation, NodeId, NodeKey, ReferencesInfo,
+};
+use crate::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
+use crate::hash_utils::md5_hex_file;
 use crate::ipc::{IpcListener, IpcStream};
 use crate::language_detector::{Language, LanguageDetector};
 use crate::logging::{LogBuffer, MemoryLogLayer};
+use crate::lsp_cache::{LspCache, LspCacheConfig};
 use crate::lsp_registry::LspRegistry;
 use crate::pid_lock::PidLock;
 #[cfg(unix)]
 use crate::process_group::ProcessGroup;
 use crate::protocol::{
-    parse_call_hierarchy_from_lsp, CallHierarchyResult, DaemonRequest, DaemonResponse,
-    DaemonStatus, LanguageInfo, MessageCodec, PoolStatus,
+    parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, DaemonRequest,
+    DaemonResponse, DaemonStatus, LanguageInfo, MessageCodec, PoolStatus,
 };
 use crate::server_manager::SingleServerManager;
 use crate::socket_path::{get_default_socket_path, remove_socket_file};
@@ -72,6 +79,12 @@ pub struct LspDaemon {
     process_monitor: Arc<ProcessMonitor>,
     child_first_seen: Arc<DashMap<u32, Instant>>,
     index_grace_secs: u64,
+    // Call graph cache for LSP hierarchy results
+    call_graph_cache: Arc<CallGraphCache>,
+    // Individual LSP caches for each operation type
+    definition_cache: Arc<LspCache<DefinitionInfo>>,
+    references_cache: Arc<LspCache<ReferencesInfo>>,
+    hover_cache: Arc<LspCache<HoverInfo>>,
 }
 
 impl LspDaemon {
@@ -133,6 +146,37 @@ impl LspDaemon {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30); // Default 30 seconds for language server indexing
 
+        // Initialize call graph cache with configuration
+        let cache_config = CallGraphCacheConfig {
+            capacity: 1000,                                   // Cache up to 1000 nodes
+            ttl: Duration::from_secs(1800),                   // 30 minutes TTL
+            eviction_check_interval: Duration::from_secs(60), // Check every minute
+            invalidation_depth: 2, // Invalidate connected nodes up to depth 2
+        };
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+
+        // Initialize individual LSP caches for each operation type
+        let lsp_cache_config = LspCacheConfig {
+            capacity_per_operation: 500,    // 500 entries per operation
+            ttl: Duration::from_secs(1800), // 30 minutes TTL
+            eviction_check_interval: Duration::from_secs(60), // Check every minute
+            persistent: false,              // Disabled by default
+            cache_directory: None,
+        };
+
+        let definition_cache = Arc::new(
+            LspCache::new(LspOperation::Definition, lsp_cache_config.clone())
+                .expect("Failed to create definition cache"),
+        );
+        let references_cache = Arc::new(
+            LspCache::new(LspOperation::References, lsp_cache_config.clone())
+                .expect("Failed to create references cache"),
+        );
+        let hover_cache = Arc::new(
+            LspCache::new(LspOperation::Hover, lsp_cache_config)
+                .expect("Failed to create hover cache"),
+        );
+
         Ok(Self {
             socket_path,
             registry,
@@ -161,6 +205,10 @@ impl LspDaemon {
             process_monitor,
             child_first_seen: Arc::new(DashMap::new()),
             index_grace_secs,
+            call_graph_cache,
+            definition_cache,
+            references_cache,
+            hover_cache,
         })
     }
 
@@ -811,16 +859,22 @@ impl LspDaemon {
                 line,
                 column,
                 workspace_hint,
-            } => match self
-                .handle_call_hierarchy(&file_path, line, column, workspace_hint)
-                .await
-            {
-                Ok(result) => DaemonResponse::CallHierarchy { request_id, result },
-                Err(e) => DaemonResponse::Error {
-                    request_id,
-                    error: e.to_string(),
-                },
-            },
+            } => {
+                info!(
+                    "Received DaemonRequest::CallHierarchy for {:?} at {}:{} (request_id: {})",
+                    file_path, line, column, request_id
+                );
+                match self
+                    .handle_call_hierarchy(&file_path, line, column, workspace_hint)
+                    .await
+                {
+                    Ok(result) => DaemonResponse::CallHierarchy { request_id, result },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
 
             DaemonRequest::Status { request_id } => {
                 let server_stats = self.server_manager.get_stats().await;
@@ -946,6 +1000,44 @@ impl LspDaemon {
                 }
             }
 
+            DaemonRequest::CacheStats { request_id } => match self.handle_cache_stats().await {
+                Ok(stats) => DaemonResponse::CacheStats { request_id, stats },
+                Err(e) => DaemonResponse::Error {
+                    request_id,
+                    error: e.to_string(),
+                },
+            },
+
+            DaemonRequest::CacheClear {
+                request_id,
+                operation,
+            } => match self.handle_cache_clear(operation).await {
+                Ok((operations_cleared, entries_removed)) => DaemonResponse::CacheCleared {
+                    request_id,
+                    operations_cleared,
+                    entries_removed,
+                },
+                Err(e) => DaemonResponse::Error {
+                    request_id,
+                    error: e.to_string(),
+                },
+            },
+
+            DaemonRequest::CacheExport {
+                request_id,
+                operation,
+            } => match self.handle_cache_export(operation).await {
+                Ok(export_data) => DaemonResponse::CacheExport {
+                    request_id,
+                    export_data,
+                },
+                Err(e) => DaemonResponse::Error {
+                    request_id,
+                    error: e.to_string(),
+                },
+            },
+
+            // TODO: Add handlers for Definition, References, Hover operations
             _ => DaemonResponse::Error {
                 request_id: Uuid::new_v4(),
                 error: "Unsupported request type".to_string(),
@@ -983,6 +1075,33 @@ impl LspDaemon {
             file_path, line, column
         );
 
+        // Convert relative path to absolute path
+        let absolute_file_path = file_path
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve absolute path for {file_path:?}"))?;
+
+        // Compute MD5 hash for cache key
+        let content_md5 = md5_hex_file(&absolute_file_path)?;
+
+        // Fast path: position-indexed cache lookup before touching the language server
+        if let Some(hit) =
+            self.call_graph_cache
+                .get_by_position(&absolute_file_path, line, column, &content_md5)
+        {
+            info!(
+                "Call hierarchy cache HIT for {} at {}:{} (md5: {}): symbol={}",
+                absolute_file_path.display(),
+                line,
+                column,
+                content_md5,
+                hit.key.symbol
+            );
+            // Rebuild an LSP-like JSON response from cached info and parse it into our protocol
+            let response = self.cache_to_lsp_json(&absolute_file_path, &hit.key.symbol, &hit.info);
+            let protocol_result = parse_call_hierarchy_from_lsp(&response)?;
+            return Ok(protocol_result);
+        }
+
         // Detect language
         let language = self.detector.detect(file_path)?;
 
@@ -999,15 +1118,10 @@ impl LspDaemon {
         // Ensure workspace is registered with the server for this language
         let server_instance = self
             .server_manager
-            .ensure_workspace_registered(language, workspace_root)
+            .ensure_workspace_registered(language, workspace_root.clone())
             .await?;
 
-        // Convert relative path to absolute path for LSP server
-        let absolute_file_path = file_path
-            .canonicalize()
-            .with_context(|| format!("Failed to resolve absolute path for {file_path:?}"))?;
-
-        // Read file content - use the absolute path to ensure consistency
+        // Read file content
         let content = fs::read_to_string(&absolute_file_path)?;
 
         // Adaptive timing for Go/TypeScript in CI environments
@@ -1119,8 +1233,278 @@ impl LspDaemon {
             server.server.close_document(&absolute_file_path).await?;
         }
 
-        // Parse result
-        parse_call_hierarchy_from_lsp(&result)
+        // Convert the result to our protocol type and update cache edges
+        let protocol_result = parse_call_hierarchy_from_lsp(&result)?;
+
+        // Now that we have the result, extract the symbol name and cache it
+        if !protocol_result.item.name.is_empty() && protocol_result.item.name != "unknown" {
+            let symbol_name = protocol_result.item.name.clone();
+            let node_id = NodeId::new(&symbol_name, absolute_file_path.clone());
+
+            info!(
+                "Caching call hierarchy for {}:{} (md5: {})",
+                absolute_file_path.display(),
+                symbol_name,
+                content_md5
+            );
+
+            // Extract edges from the result
+            let incoming_ids: Vec<NodeId> = protocol_result
+                .incoming
+                .iter()
+                .map(|call| {
+                    let file_path = PathBuf::from(&call.from.uri.replace("file://", ""));
+                    NodeId::new(&call.from.name, file_path)
+                })
+                .collect();
+
+            let outgoing_ids: Vec<NodeId> = protocol_result
+                .outgoing
+                .iter()
+                .map(|call| {
+                    let file_path = PathBuf::from(&call.from.uri.replace("file://", ""));
+                    NodeId::new(&call.from.name, file_path)
+                })
+                .collect();
+
+            // Update the cache edges for graph-based invalidation
+            self.call_graph_cache
+                .update_edges(&node_id, incoming_ids, outgoing_ids);
+
+            // Create cache key and store the result
+            let cache_key = NodeKey::new(
+                &symbol_name,
+                absolute_file_path.clone(),
+                content_md5.clone(),
+            );
+            let cache_info = self.convert_to_cache_info(&protocol_result);
+
+            // Capture request position for index
+            let pos_file_for_index = absolute_file_path.clone();
+            let pos_md5_for_index = content_md5.clone();
+            let pos_line_for_index = line;
+            let pos_col_for_index = column;
+
+            // Store in cache for future use
+            let cache_clone = self.call_graph_cache.clone();
+            let cached_future = async move {
+                match cache_clone
+                    .get_or_compute(cache_key.clone(), || async { Ok(cache_info) })
+                    .await
+                {
+                    Ok(_) => {
+                        // Also index the position that produced this result
+                        cache_clone.index_position(
+                            &pos_file_for_index,
+                            pos_line_for_index,
+                            pos_col_for_index,
+                            &pos_md5_for_index,
+                            &cache_key,
+                        );
+                        debug!(
+                            "Successfully cached result for {} at {}:{}",
+                            cache_key.symbol, pos_line_for_index, pos_col_for_index
+                        );
+                    }
+                    Err(e) => warn!("Failed to cache result: {}", e),
+                }
+            };
+            tokio::spawn(cached_future);
+        }
+
+        Ok(protocol_result)
+    }
+
+    /// Convert protocol CallHierarchyResult to cache CallHierarchyInfo
+    fn convert_to_cache_info(&self, result: &CallHierarchyResult) -> CallHierarchyInfo {
+        let incoming_calls = result
+            .incoming
+            .iter()
+            .map(|call| CallInfo {
+                name: call.from.name.clone(),
+                file_path: call.from.uri.replace("file://", ""),
+                line: call.from.range.start.line,
+                column: call.from.range.start.character,
+                symbol_kind: call.from.kind.clone(),
+            })
+            .collect();
+
+        let outgoing_calls = result
+            .outgoing
+            .iter()
+            .map(|call| CallInfo {
+                name: call.from.name.clone(),
+                file_path: call.from.uri.replace("file://", ""),
+                line: call.from.range.start.line,
+                column: call.from.range.start.character,
+                symbol_kind: call.from.kind.clone(),
+            })
+            .collect();
+
+        CallHierarchyInfo {
+            incoming_calls,
+            outgoing_calls,
+        }
+    }
+
+    /// Convert cache CallHierarchyInfo to protocol CallHierarchyResult
+    #[allow(dead_code)]
+    fn convert_from_cache_info(
+        &self,
+        info: &CallHierarchyInfo,
+        item: CallHierarchyItem,
+    ) -> CallHierarchyResult {
+        use crate::protocol::{CallHierarchyCall, Position, Range};
+
+        let incoming = info
+            .incoming_calls
+            .iter()
+            .map(|call| CallHierarchyCall {
+                from: CallHierarchyItem {
+                    name: call.name.clone(),
+                    kind: call.symbol_kind.clone(),
+                    uri: format!("file://{}", call.file_path),
+                    range: Range {
+                        start: Position {
+                            line: call.line,
+                            character: call.column,
+                        },
+                        end: Position {
+                            line: call.line,
+                            character: call.column,
+                        },
+                    },
+                    selection_range: Range {
+                        start: Position {
+                            line: call.line,
+                            character: call.column,
+                        },
+                        end: Position {
+                            line: call.line,
+                            character: call.column,
+                        },
+                    },
+                },
+                from_ranges: vec![],
+            })
+            .collect();
+
+        let outgoing = info
+            .outgoing_calls
+            .iter()
+            .map(|call| CallHierarchyCall {
+                from: CallHierarchyItem {
+                    name: call.name.clone(),
+                    kind: call.symbol_kind.clone(),
+                    uri: format!("file://{}", call.file_path),
+                    range: Range {
+                        start: Position {
+                            line: call.line,
+                            character: call.column,
+                        },
+                        end: Position {
+                            line: call.line,
+                            character: call.column,
+                        },
+                    },
+                    selection_range: Range {
+                        start: Position {
+                            line: call.line,
+                            character: call.column,
+                        },
+                        end: Position {
+                            line: call.line,
+                            character: call.column,
+                        },
+                    },
+                },
+                from_ranges: vec![],
+            })
+            .collect();
+
+        CallHierarchyResult {
+            item,
+            incoming,
+            outgoing,
+        }
+    }
+
+    /// Convert cached CallHierarchyInfo back into an LSP-like JSON envelope
+    /// so we can reuse `parse_call_hierarchy_from_lsp(...)` and return the same protocol type.
+    fn cache_to_lsp_json(
+        &self,
+        file: &Path,
+        symbol: &str,
+        cached: &CallHierarchyInfo,
+    ) -> serde_json::Value {
+        use serde_json::json;
+
+        // The parser expects: { item: { name, uri }, incoming: [...], outgoing: [...] }
+        let file_uri = format!("file://{}", file.display());
+
+        let incoming = cached
+            .incoming_calls
+            .iter()
+            .map(|c| {
+                json!({
+                    "from": {
+                        "name": c.name,
+                        "uri": format!("file://{}", c.file_path),
+                        "kind": c.symbol_kind,
+                        "range": {
+                            "start": {"line": c.line, "character": c.column},
+                            "end": {"line": c.line, "character": c.column}
+                        },
+                        "selectionRange": {
+                            "start": {"line": c.line, "character": c.column},
+                            "end": {"line": c.line, "character": c.column}
+                        }
+                    },
+                    "fromRanges": []
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let outgoing = cached
+            .outgoing_calls
+            .iter()
+            .map(|c| {
+                json!({
+                    "from": {
+                        "name": c.name,
+                        "uri": format!("file://{}", c.file_path),
+                        "kind": c.symbol_kind,
+                        "range": {
+                            "start": {"line": c.line, "character": c.column},
+                            "end": {"line": c.line, "character": c.column}
+                        },
+                        "selectionRange": {
+                            "start": {"line": c.line, "character": c.column},
+                            "end": {"line": c.line, "character": c.column}
+                        }
+                    },
+                    "fromRanges": []
+                })
+            })
+            .collect::<Vec<_>>();
+
+        json!({
+            "item": {
+                "name": symbol,
+                "uri": file_uri,
+                "kind": "12", // Function kind
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 0}
+                },
+                "selectionRange": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 0}
+                }
+            },
+            "incoming": incoming,
+            "outgoing": outgoing
+        })
     }
 
     async fn handle_initialize_workspace(
@@ -1463,6 +1847,188 @@ impl LspDaemon {
             process_monitor: self.process_monitor.clone(),
             child_first_seen: self.child_first_seen.clone(),
             index_grace_secs: self.index_grace_secs,
+            call_graph_cache: self.call_graph_cache.clone(),
+            definition_cache: self.definition_cache.clone(),
+            references_cache: self.references_cache.clone(),
+            hover_cache: self.hover_cache.clone(),
+        }
+    }
+
+    /// Handle cache statistics request
+    async fn handle_cache_stats(&self) -> Result<AllCacheStats> {
+        let mut per_operation = Vec::new();
+        let mut total_memory = 0;
+
+        // Get call graph cache stats
+        let call_graph_stats = self.call_graph_cache.stats();
+        let call_graph_cache_stats = LspCacheStats {
+            operation: LspOperation::CallHierarchy,
+            total_entries: call_graph_stats.total_nodes,
+            hit_count: 0, // CallGraphCache doesn't track hits/misses separately
+            miss_count: 0,
+            eviction_count: 0,
+            inflight_count: call_graph_stats.inflight_computations,
+            memory_usage_estimate: call_graph_stats.total_nodes
+                * std::mem::size_of::<crate::cache_types::CachedNode>(),
+        };
+        per_operation.push(call_graph_cache_stats.clone());
+        total_memory += call_graph_cache_stats.memory_usage_estimate;
+
+        // Get definition cache stats
+        let def_stats = self.definition_cache.stats().await;
+        per_operation.push(def_stats.clone());
+        total_memory += def_stats.memory_usage_estimate;
+
+        // Get references cache stats
+        let ref_stats = self.references_cache.stats().await;
+        per_operation.push(ref_stats.clone());
+        total_memory += ref_stats.memory_usage_estimate;
+
+        // Get hover cache stats
+        let hover_stats = self.hover_cache.stats().await;
+        per_operation.push(hover_stats.clone());
+        total_memory += hover_stats.memory_usage_estimate;
+
+        Ok(AllCacheStats {
+            per_operation,
+            total_memory_usage: total_memory,
+            cache_directory: None, // TODO: Add cache directory support
+            persistent_cache_enabled: false, // TODO: Add persistent cache support
+        })
+    }
+
+    /// Handle cache clear request
+    async fn handle_cache_clear(
+        &self,
+        operation: Option<LspOperation>,
+    ) -> Result<(Vec<LspOperation>, usize)> {
+        let mut operations_cleared = Vec::new();
+        let mut total_entries_removed = 0;
+
+        match operation {
+            Some(op) => {
+                // Clear specific cache
+                match op {
+                    LspOperation::CallHierarchy => {
+                        let stats_before = self.call_graph_cache.stats();
+                        self.call_graph_cache.clear();
+                        total_entries_removed += stats_before.total_nodes;
+                        operations_cleared.push(LspOperation::CallHierarchy);
+                    }
+                    LspOperation::Definition => {
+                        let stats_before = self.definition_cache.stats().await;
+                        self.definition_cache.clear().await;
+                        total_entries_removed += stats_before.total_entries;
+                        operations_cleared.push(LspOperation::Definition);
+                    }
+                    LspOperation::References => {
+                        let stats_before = self.references_cache.stats().await;
+                        self.references_cache.clear().await;
+                        total_entries_removed += stats_before.total_entries;
+                        operations_cleared.push(LspOperation::References);
+                    }
+                    LspOperation::Hover => {
+                        let stats_before = self.hover_cache.stats().await;
+                        self.hover_cache.clear().await;
+                        total_entries_removed += stats_before.total_entries;
+                        operations_cleared.push(LspOperation::Hover);
+                    }
+                    LspOperation::DocumentSymbols => {
+                        // Not implemented yet
+                        return Err(anyhow!("DocumentSymbols cache not implemented"));
+                    }
+                }
+            }
+            None => {
+                // Clear all caches
+                let call_graph_stats_before = self.call_graph_cache.stats();
+                let def_stats_before = self.definition_cache.stats().await;
+                let ref_stats_before = self.references_cache.stats().await;
+                let hover_stats_before = self.hover_cache.stats().await;
+
+                self.call_graph_cache.clear();
+                self.definition_cache.clear().await;
+                self.references_cache.clear().await;
+                self.hover_cache.clear().await;
+
+                total_entries_removed = call_graph_stats_before.total_nodes
+                    + def_stats_before.total_entries
+                    + ref_stats_before.total_entries
+                    + hover_stats_before.total_entries;
+
+                operations_cleared = vec![
+                    LspOperation::CallHierarchy,
+                    LspOperation::Definition,
+                    LspOperation::References,
+                    LspOperation::Hover,
+                ];
+            }
+        }
+
+        info!(
+            "Cleared {} cache entries for operations: {:?}",
+            total_entries_removed, operations_cleared
+        );
+        Ok((operations_cleared, total_entries_removed))
+    }
+
+    /// Handle cache export request
+    async fn handle_cache_export(&self, operation: Option<LspOperation>) -> Result<String> {
+        match operation {
+            Some(op) => {
+                // Export specific cache
+                match op {
+                    LspOperation::CallHierarchy => {
+                        // Call graph cache doesn't have export_to_json, so create basic export
+                        let stats = self.call_graph_cache.stats();
+                        let export_data = serde_json::json!({
+                            "operation": "CallHierarchy",
+                            "total_nodes": stats.total_nodes,
+                            "total_ids": stats.total_ids,
+                            "total_files": stats.total_files,
+                            "total_edges": stats.total_edges,
+                            "inflight_computations": stats.inflight_computations
+                        });
+                        Ok(serde_json::to_string_pretty(&export_data)?)
+                    }
+                    LspOperation::Definition => self.definition_cache.export_to_json().await,
+                    LspOperation::References => self.references_cache.export_to_json().await,
+                    LspOperation::Hover => self.hover_cache.export_to_json().await,
+                    LspOperation::DocumentSymbols => {
+                        Err(anyhow!("DocumentSymbols cache not implemented"))
+                    }
+                }
+            }
+            None => {
+                // Export all caches
+                let mut all_exports = serde_json::Map::new();
+
+                // Call graph cache
+                let call_graph_stats = self.call_graph_cache.stats();
+                let call_graph_export = serde_json::json!({
+                    "operation": "CallHierarchy",
+                    "total_nodes": call_graph_stats.total_nodes,
+                    "total_ids": call_graph_stats.total_ids,
+                    "total_files": call_graph_stats.total_files,
+                    "total_edges": call_graph_stats.total_edges,
+                    "inflight_computations": call_graph_stats.inflight_computations
+                });
+                all_exports.insert("CallHierarchy".to_string(), call_graph_export);
+
+                // Definition cache
+                let def_export = self.definition_cache.export_to_json().await?;
+                all_exports.insert("Definition".to_string(), serde_json::from_str(&def_export)?);
+
+                // References cache
+                let ref_export = self.references_cache.export_to_json().await?;
+                all_exports.insert("References".to_string(), serde_json::from_str(&ref_export)?);
+
+                // Hover cache
+                let hover_export = self.hover_cache.export_to_json().await?;
+                all_exports.insert("Hover".to_string(), serde_json::from_str(&hover_export)?);
+
+                Ok(serde_json::to_string_pretty(&all_exports)?)
+            }
         }
     }
 }

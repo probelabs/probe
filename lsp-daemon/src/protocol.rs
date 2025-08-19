@@ -109,6 +109,18 @@ pub enum DaemonRequest {
         #[serde(default)]
         since_sequence: Option<u64>, // New optional field for sequence-based retrieval
     },
+    // Cache management requests
+    CacheStats {
+        request_id: Uuid,
+    },
+    CacheClear {
+        request_id: Uuid,
+        operation: Option<crate::cache_types::LspOperation>, // If None, clear all caches
+    },
+    CacheExport {
+        request_id: Uuid,
+        operation: Option<crate::cache_types::LspOperation>, // If None, export all caches
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +196,20 @@ pub enum DaemonResponse {
     Logs {
         request_id: Uuid,
         entries: Vec<LogEntry>,
+    },
+    // Cache management responses
+    CacheStats {
+        request_id: Uuid,
+        stats: crate::cache_types::AllCacheStats,
+    },
+    CacheCleared {
+        request_id: Uuid,
+        operations_cleared: Vec<crate::cache_types::LspOperation>,
+        entries_removed: usize,
+    },
+    CacheExport {
+        request_id: Uuid,
+        export_data: String, // JSON string
     },
     Error {
         request_id: Uuid,
