@@ -1,0 +1,1012 @@
+//! Indexing manager orchestrates all indexing operations
+//!
+//! This module provides the main IndexingManager that coordinates:
+//! - Worker pool management with configurable concurrency
+//! - File discovery and enumeration  
+//! - Priority assignment and queue management
+//! - Memory budget tracking and backpressure handling
+//! - Language-specific pipeline execution
+//! - Progress reporting and status monitoring
+
+use crate::indexing::{IndexingPipeline, IndexingProgress, IndexingQueue, Priority, QueueItem};
+use crate::language_detector::{Language, LanguageDetector};
+use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::{RwLock, Semaphore};
+use tokio::time::{interval, sleep, timeout};
+use tracing::{debug, error, info, warn};
+
+/// Configuration for the indexing manager
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManagerConfig {
+    /// Maximum number of worker threads
+    pub max_workers: usize,
+
+    /// Memory budget in bytes (0 = unlimited)
+    pub memory_budget_bytes: u64,
+
+    /// Memory usage threshold to trigger backpressure (0.0-1.0)
+    pub memory_pressure_threshold: f64,
+
+    /// Maximum queue size (0 = unlimited)
+    pub max_queue_size: usize,
+
+    /// File patterns to exclude from indexing
+    pub exclude_patterns: Vec<String>,
+
+    /// File patterns to include (empty = include all)
+    pub include_patterns: Vec<String>,
+
+    /// Maximum file size to index (bytes)
+    pub max_file_size_bytes: u64,
+
+    /// Languages to enable for indexing (empty = all supported)
+    pub enabled_languages: Vec<String>,
+
+    /// Whether to use file modification time for incremental indexing
+    pub incremental_mode: bool,
+
+    /// Batch size for file discovery
+    pub discovery_batch_size: usize,
+
+    /// Interval between status updates (seconds)
+    pub status_update_interval_secs: u64,
+}
+
+impl Default for ManagerConfig {
+    fn default() -> Self {
+        Self {
+            max_workers: num_cpus::get().max(2),    // At least 2 workers
+            memory_budget_bytes: 512 * 1024 * 1024, // 512MB default
+            memory_pressure_threshold: 0.8,         // 80% threshold
+            max_queue_size: 10000,                  // 10k files max
+            exclude_patterns: vec![
+                "*.git/*".to_string(),
+                "*/node_modules/*".to_string(),
+                "*/target/*".to_string(),
+                "*/build/*".to_string(),
+                "*/dist/*".to_string(),
+                "*.tmp".to_string(),
+                "*.log".to_string(),
+                "*.lock".to_string(),
+            ],
+            include_patterns: vec![],              // Empty = include all
+            max_file_size_bytes: 10 * 1024 * 1024, // 10MB max per file
+            enabled_languages: vec![],             // Empty = all languages
+            incremental_mode: true,
+            discovery_batch_size: 100,
+            status_update_interval_secs: 5,
+        }
+    }
+}
+
+/// Current status of the indexing manager
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ManagerStatus {
+    /// Manager is idle, not currently indexing
+    Idle,
+
+    /// Discovering files to index
+    Discovering,
+
+    /// Actively indexing files with worker pool
+    Indexing,
+
+    /// Indexing paused due to memory pressure or other constraints
+    Paused,
+
+    /// Shutting down, stopping workers
+    ShuttingDown,
+
+    /// Manager has shut down
+    Shutdown,
+
+    /// Error state - indexing failed
+    Error(String),
+}
+
+/// Statistics for worker performance
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerStats {
+    pub worker_id: usize,
+    pub files_processed: u64,
+    pub bytes_processed: u64,
+    pub symbols_extracted: u64,
+    pub errors_encountered: u64,
+    pub current_file: Option<PathBuf>,
+    pub is_active: bool,
+    pub last_activity: Option<u64>, // Unix timestamp
+}
+
+/// Main indexing manager that orchestrates all indexing operations
+#[derive(Debug)]
+pub struct IndexingManager {
+    /// Configuration
+    config: ManagerConfig,
+
+    /// Current manager status
+    status: Arc<RwLock<ManagerStatus>>,
+
+    /// File discovery and processing queue
+    queue: Arc<IndexingQueue>,
+
+    /// Progress tracker
+    progress: Arc<IndexingProgress>,
+
+    /// Language detection
+    language_detector: Arc<LanguageDetector>,
+
+    /// Processing pipelines for each language
+    pipelines: Arc<RwLock<HashMap<Language, IndexingPipeline>>>,
+
+    /// Worker pool semaphore
+    worker_semaphore: Arc<Semaphore>,
+
+    /// Shutdown signal
+    shutdown_signal: Arc<AtomicBool>,
+
+    /// Active worker handles
+    worker_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
+
+    /// Worker statistics
+    worker_stats: Arc<RwLock<HashMap<usize, WorkerStats>>>,
+
+    /// Next worker ID for assignment
+    next_worker_id: Arc<AtomicUsize>,
+
+    /// Background task handles
+    background_tasks: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
+
+    /// Files already indexed (for incremental mode)
+    indexed_files: Arc<RwLock<HashMap<PathBuf, u64>>>, // path -> modification timestamp
+
+    /// Current memory usage tracking
+    current_memory_usage: Arc<AtomicU64>,
+
+    /// Start time for performance calculations
+    #[allow(dead_code)]
+    start_time: Instant,
+}
+
+impl IndexingManager {
+    /// Create a new indexing manager with the specified configuration
+    pub fn new(config: ManagerConfig, language_detector: Arc<LanguageDetector>) -> Self {
+        let queue = Arc::new(IndexingQueue::new(config.max_queue_size));
+        let progress = Arc::new(IndexingProgress::new());
+        let worker_semaphore = Arc::new(Semaphore::new(config.max_workers));
+
+        Self {
+            config,
+            status: Arc::new(RwLock::new(ManagerStatus::Idle)),
+            queue,
+            progress,
+            language_detector,
+            pipelines: Arc::new(RwLock::new(HashMap::new())),
+            worker_semaphore,
+            shutdown_signal: Arc::new(AtomicBool::new(false)),
+            worker_handles: Arc::new(RwLock::new(Vec::new())),
+            worker_stats: Arc::new(RwLock::new(HashMap::new())),
+            next_worker_id: Arc::new(AtomicUsize::new(1)),
+            background_tasks: Arc::new(RwLock::new(Vec::new())),
+            indexed_files: Arc::new(RwLock::new(HashMap::new())),
+            current_memory_usage: Arc::new(AtomicU64::new(0)),
+            start_time: Instant::now(),
+        }
+    }
+
+    /// Start indexing the specified directory
+    pub async fn start_indexing(&self, root_path: PathBuf) -> Result<()> {
+        // Check if already running
+        let current_status = self.status.read().await;
+        match *current_status {
+            ManagerStatus::Indexing | ManagerStatus::Discovering => {
+                return Err(anyhow!("Indexing is already in progress"));
+            }
+            ManagerStatus::ShuttingDown | ManagerStatus::Shutdown => {
+                return Err(anyhow!("Manager is shutting down"));
+            }
+            _ => {}
+        }
+        drop(current_status);
+
+        info!("Starting indexing for directory: {:?}", root_path);
+
+        // Reset state
+        self.reset_state().await;
+
+        // Update status
+        *self.status.write().await = ManagerStatus::Discovering;
+
+        // Start background tasks
+        self.start_background_tasks().await?;
+
+        // Start file discovery
+        self.start_file_discovery(root_path).await?;
+
+        // Update status
+        *self.status.write().await = ManagerStatus::Indexing;
+
+        // Start worker pool
+        self.start_worker_pool().await?;
+
+        info!("Indexing started successfully");
+        Ok(())
+    }
+
+    /// Stop indexing and shutdown all workers
+    pub async fn stop_indexing(&self) -> Result<()> {
+        info!("Stopping indexing...");
+
+        // Set shutdown signal
+        self.shutdown_signal.store(true, Ordering::Relaxed);
+
+        // Update status
+        *self.status.write().await = ManagerStatus::ShuttingDown;
+
+        // Pause the queue to prevent new work
+        self.queue.pause();
+
+        // Wait for workers to finish with timeout
+        self.shutdown_workers().await?;
+
+        // Stop background tasks
+        self.shutdown_background_tasks().await;
+
+        // Update status
+        *self.status.write().await = ManagerStatus::Shutdown;
+
+        info!("Indexing stopped successfully");
+        Ok(())
+    }
+
+    /// Pause indexing (can be resumed later)
+    pub async fn pause_indexing(&self) -> Result<()> {
+        let mut status = self.status.write().await;
+        match *status {
+            ManagerStatus::Indexing => {
+                *status = ManagerStatus::Paused;
+                self.queue.pause();
+                info!("Indexing paused");
+                Ok(())
+            }
+            _ => Err(anyhow!("Can only pause when indexing is active")),
+        }
+    }
+
+    /// Resume paused indexing
+    pub async fn resume_indexing(&self) -> Result<()> {
+        let mut status = self.status.write().await;
+        match *status {
+            ManagerStatus::Paused => {
+                *status = ManagerStatus::Indexing;
+                self.queue.resume();
+                info!("Indexing resumed");
+                Ok(())
+            }
+            _ => Err(anyhow!("Can only resume when indexing is paused")),
+        }
+    }
+
+    /// Get current indexing status
+    pub async fn get_status(&self) -> ManagerStatus {
+        self.status.read().await.clone()
+    }
+
+    /// Get progress information
+    pub async fn get_progress(&self) -> crate::indexing::ProgressSnapshot {
+        self.progress.get_snapshot()
+    }
+
+    /// Get queue information
+    pub async fn get_queue_snapshot(&self) -> crate::indexing::QueueSnapshot {
+        self.queue.get_snapshot().await
+    }
+
+    /// Get worker statistics
+    pub async fn get_worker_stats(&self) -> Vec<WorkerStats> {
+        self.worker_stats.read().await.values().cloned().collect()
+    }
+
+    /// Check if memory pressure requires throttling
+    pub fn is_memory_pressure(&self) -> bool {
+        if self.config.memory_budget_bytes == 0 {
+            return false; // No limit
+        }
+
+        let current = self.current_memory_usage.load(Ordering::Relaxed);
+        let threshold =
+            (self.config.memory_budget_bytes as f64 * self.config.memory_pressure_threshold) as u64;
+
+        current > threshold
+    }
+
+    /// Reset internal state for new indexing session
+    async fn reset_state(&self) {
+        self.progress.reset();
+        self.queue.clear().await;
+        self.shutdown_signal.store(false, Ordering::Relaxed);
+        self.current_memory_usage.store(0, Ordering::Relaxed);
+        self.worker_stats.write().await.clear();
+
+        // Clear indexed files if not in incremental mode
+        if !self.config.incremental_mode {
+            self.indexed_files.write().await.clear();
+        }
+    }
+
+    /// Start background monitoring and maintenance tasks
+    async fn start_background_tasks(&self) -> Result<()> {
+        let mut tasks = self.background_tasks.write().await;
+
+        // Start status reporting task
+        {
+            let progress = Arc::clone(&self.progress);
+            let queue = Arc::clone(&self.queue);
+            let interval_secs = self.config.status_update_interval_secs;
+            let shutdown = Arc::clone(&self.shutdown_signal);
+
+            let status_task = tokio::spawn(async move {
+                let mut interval = interval(Duration::from_secs(interval_secs));
+
+                while !shutdown.load(Ordering::Relaxed) {
+                    interval.tick().await;
+
+                    let progress_snapshot = progress.get_snapshot();
+                    let queue_snapshot = queue.get_snapshot().await;
+
+                    debug!("Indexing status - Progress: {}/{} files ({:.1}%), Queue: {} items, Workers: {}",
+                        progress_snapshot.processed_files + progress_snapshot.failed_files + progress_snapshot.skipped_files,
+                        progress_snapshot.total_files,
+                        if progress_snapshot.total_files > 0 {
+                            ((progress_snapshot.processed_files + progress_snapshot.failed_files + progress_snapshot.skipped_files) as f64 / progress_snapshot.total_files as f64) * 100.0
+                        } else { 0.0 },
+                        queue_snapshot.total_items,
+                        progress_snapshot.active_workers
+                    );
+                }
+
+                debug!("Status reporting task shut down");
+            });
+
+            tasks.push(status_task);
+        }
+
+        // Start memory monitoring task
+        {
+            let memory_usage = Arc::clone(&self.current_memory_usage);
+            let progress = Arc::clone(&self.progress);
+            let shutdown = Arc::clone(&self.shutdown_signal);
+
+            let memory_task = tokio::spawn(async move {
+                let mut interval = interval(Duration::from_secs(10)); // Check every 10 seconds
+
+                while !shutdown.load(Ordering::Relaxed) {
+                    interval.tick().await;
+
+                    let current = memory_usage.load(Ordering::Relaxed);
+                    progress.update_memory_usage(current);
+
+                    // Could add memory cleanup logic here if needed
+                }
+
+                debug!("Memory monitoring task shut down");
+            });
+
+            tasks.push(memory_task);
+        }
+
+        info!("Started {} background tasks", tasks.len());
+        Ok(())
+    }
+
+    /// Shutdown all background tasks
+    async fn shutdown_background_tasks(&self) {
+        let mut tasks = self.background_tasks.write().await;
+
+        for task in tasks.drain(..) {
+            task.abort();
+            let _ = task.await; // Ignore errors from aborted tasks
+        }
+
+        debug!("Shut down all background tasks");
+    }
+
+    /// Start file discovery in the specified directory
+    async fn start_file_discovery(&self, root_path: PathBuf) -> Result<()> {
+        let queue = Arc::clone(&self.queue);
+        let progress = Arc::clone(&self.progress);
+        let config = self.config.clone();
+        let language_detector = Arc::clone(&self.language_detector);
+        let indexed_files = Arc::clone(&self.indexed_files);
+        let shutdown = Arc::clone(&self.shutdown_signal);
+
+        // Spawn file discovery task
+        let discovery_task = tokio::spawn(async move {
+            match Self::discover_files_recursive(
+                root_path,
+                queue,
+                progress,
+                config,
+                language_detector,
+                indexed_files,
+                shutdown,
+            )
+            .await
+            {
+                Ok(discovered) => {
+                    info!("File discovery completed - {} files discovered", discovered);
+                }
+                Err(e) => {
+                    error!("File discovery failed: {}", e);
+                }
+            }
+        });
+
+        // Store the task handle
+        self.background_tasks.write().await.push(discovery_task);
+
+        Ok(())
+    }
+
+    /// Recursive file discovery implementation
+    async fn discover_files_recursive(
+        root_path: PathBuf,
+        queue: Arc<IndexingQueue>,
+        progress: Arc<IndexingProgress>,
+        config: ManagerConfig,
+        language_detector: Arc<LanguageDetector>,
+        indexed_files: Arc<RwLock<HashMap<PathBuf, u64>>>,
+        shutdown: Arc<AtomicBool>,
+    ) -> Result<u64> {
+        let mut discovered_count = 0u64;
+        let mut batch = Vec::new();
+
+        // Use walkdir for recursive directory traversal
+        use walkdir::WalkDir;
+
+        for entry in WalkDir::new(&root_path).follow_links(false).into_iter() {
+            if shutdown.load(Ordering::Relaxed) {
+                debug!("File discovery interrupted by shutdown signal");
+                break;
+            }
+
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    warn!("Error accessing directory entry: {}", e);
+                    continue;
+                }
+            };
+
+            // Skip directories
+            if entry.file_type().is_dir() {
+                continue;
+            }
+
+            let file_path = entry.path().to_path_buf();
+
+            // Apply exclusion patterns
+            if Self::should_exclude_file(&file_path, &config.exclude_patterns) {
+                continue;
+            }
+
+            // Apply inclusion patterns if specified
+            if !config.include_patterns.is_empty()
+                && !Self::should_include_file(&file_path, &config.include_patterns)
+            {
+                continue;
+            }
+
+            // Check file size
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.len() > config.max_file_size_bytes {
+                    debug!(
+                        "Skipping large file: {:?} ({} bytes)",
+                        file_path,
+                        metadata.len()
+                    );
+                    continue;
+                }
+
+                // Check if already indexed (incremental mode)
+                if config.incremental_mode {
+                    let modified_time = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+
+                    let indexed = indexed_files.read().await;
+                    if let Some(&last_indexed) = indexed.get(&file_path) {
+                        if modified_time <= last_indexed {
+                            continue; // File hasn't changed since last index
+                        }
+                    }
+                }
+            }
+
+            // Detect language
+            let language = language_detector
+                .detect(&file_path)
+                .unwrap_or(Language::Unknown);
+
+            // Filter by enabled languages if specified
+            if !config.enabled_languages.is_empty() {
+                let language_str = language.as_str();
+                if !config.enabled_languages.contains(&language_str.to_string()) {
+                    continue;
+                }
+            }
+
+            // Determine priority based on language and file characteristics
+            let priority = Self::determine_priority(&file_path, language);
+
+            // Create queue item
+            let item = QueueItem::new(file_path, priority)
+                .with_language_hint(language.as_str().to_string())
+                .with_estimated_size(entry.metadata().ok().map(|m| m.len()).unwrap_or(1024));
+
+            batch.push(item);
+            discovered_count += 1;
+
+            // Process batch when it reaches the configured size
+            if batch.len() >= config.discovery_batch_size {
+                let batch_size = batch.len();
+                if let Err(e) = queue.enqueue_batch(batch).await {
+                    error!("Failed to enqueue batch: {}", e);
+                }
+                progress.add_total_files(batch_size as u64);
+                batch = Vec::new();
+
+                // Small yield to allow other tasks to run
+                tokio::task::yield_now().await;
+            }
+        }
+
+        // Process remaining batch
+        if !batch.is_empty() {
+            let batch_size = batch.len();
+            if let Err(e) = queue.enqueue_batch(batch).await {
+                error!("Failed to enqueue final batch: {}", e);
+            }
+            progress.add_total_files(batch_size as u64);
+        }
+
+        Ok(discovered_count)
+    }
+
+    /// Check if file should be excluded based on patterns
+    fn should_exclude_file(file_path: &Path, patterns: &[String]) -> bool {
+        let path_str = file_path.to_string_lossy();
+
+        for pattern in patterns {
+            if Self::matches_pattern(&path_str, pattern) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Check if file should be included based on patterns
+    fn should_include_file(file_path: &Path, patterns: &[String]) -> bool {
+        let path_str = file_path.to_string_lossy();
+
+        for pattern in patterns {
+            if Self::matches_pattern(&path_str, pattern) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Simple pattern matching (supports * wildcards)
+    fn matches_pattern(text: &str, pattern: &str) -> bool {
+        // Simple glob-like pattern matching
+        if pattern.contains('*') {
+            let parts: Vec<&str> = pattern.split('*').collect();
+            if parts.len() == 2 {
+                let (prefix, suffix) = (parts[0], parts[1]);
+                return text.starts_with(prefix) && text.ends_with(suffix);
+            } else if parts.len() > 2 {
+                // Multiple wildcards - check if text contains all the parts in order
+                let mut search_start = 0;
+                for (i, part) in parts.iter().enumerate() {
+                    if part.is_empty() {
+                        continue; // Skip empty parts from consecutive '*'
+                    }
+
+                    if i == 0 {
+                        // First part should be at the beginning
+                        if !text.starts_with(part) {
+                            return false;
+                        }
+                        search_start = part.len();
+                    } else if i == parts.len() - 1 {
+                        // Last part should be at the end
+                        return text.ends_with(part);
+                    } else {
+                        // Middle parts should be found in order
+                        if let Some(pos) = text[search_start..].find(part) {
+                            search_start += pos + part.len();
+                        } else {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+
+        text.contains(pattern)
+    }
+
+    /// Determine indexing priority for a file
+    fn determine_priority(_file_path: &Path, language: Language) -> Priority {
+        // High priority for commonly edited source files
+        match language {
+            Language::Rust | Language::Go | Language::TypeScript | Language::Python => {
+                Priority::High
+            }
+            Language::JavaScript | Language::Java | Language::C | Language::Cpp => Priority::Medium,
+            _ => Priority::Low,
+        }
+    }
+
+    /// Start the worker pool to process queued files
+    async fn start_worker_pool(&self) -> Result<()> {
+        let mut handles = self.worker_handles.write().await;
+
+        for _ in 0..self.config.max_workers {
+            let worker_id = self.next_worker_id.fetch_add(1, Ordering::Relaxed);
+            let handle = self.spawn_worker(worker_id).await?;
+            handles.push(handle);
+        }
+
+        info!("Started worker pool with {} workers", handles.len());
+        Ok(())
+    }
+
+    /// Spawn a single worker task
+    async fn spawn_worker(&self, worker_id: usize) -> Result<tokio::task::JoinHandle<()>> {
+        // Initialize worker stats
+        {
+            let mut stats = self.worker_stats.write().await;
+            stats.insert(
+                worker_id,
+                WorkerStats {
+                    worker_id,
+                    files_processed: 0,
+                    bytes_processed: 0,
+                    symbols_extracted: 0,
+                    errors_encountered: 0,
+                    current_file: None,
+                    is_active: false,
+                    last_activity: None,
+                },
+            );
+        }
+
+        let queue = Arc::clone(&self.queue);
+        let progress = Arc::clone(&self.progress);
+        let pipelines = Arc::clone(&self.pipelines);
+        let worker_stats = Arc::clone(&self.worker_stats);
+        let language_detector = Arc::clone(&self.language_detector);
+        let semaphore = Arc::clone(&self.worker_semaphore);
+        let shutdown = Arc::clone(&self.shutdown_signal);
+        let current_memory = Arc::clone(&self.current_memory_usage);
+        let config = self.config.clone();
+
+        let handle = tokio::spawn(async move {
+            debug!("Worker {} starting", worker_id);
+            progress.add_worker();
+
+            while !shutdown.load(Ordering::Relaxed) {
+                // Acquire semaphore permit
+                let _permit = match timeout(Duration::from_millis(100), semaphore.acquire()).await {
+                    Ok(Ok(permit)) => permit,
+                    Ok(Err(_)) => {
+                        // Semaphore closed, shutdown
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout, check shutdown signal and continue
+                        continue;
+                    }
+                };
+
+                // Check memory pressure
+                let memory_usage = current_memory.load(Ordering::Relaxed);
+                if config.memory_budget_bytes > 0 && memory_usage > config.memory_budget_bytes {
+                    debug!("Worker {} waiting due to memory pressure", worker_id);
+                    sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+
+                // Get next item from queue
+                let item = match queue.dequeue().await {
+                    Some(item) => item,
+                    None => {
+                        // No work available, short sleep
+                        sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                };
+
+                // Update worker stats
+                {
+                    let mut stats = worker_stats.write().await;
+                    if let Some(worker_stat) = stats.get_mut(&worker_id) {
+                        worker_stat.current_file = Some(item.file_path.clone());
+                        worker_stat.is_active = true;
+                        worker_stat.last_activity = Some(
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                        );
+                    }
+                }
+
+                // Process the file
+                progress.start_file();
+
+                let result = Self::process_file_item(
+                    worker_id,
+                    item,
+                    &pipelines,
+                    &language_detector,
+                    &current_memory,
+                )
+                .await;
+
+                // Update stats based on result
+                {
+                    let mut stats = worker_stats.write().await;
+                    if let Some(worker_stat) = stats.get_mut(&worker_id) {
+                        worker_stat.current_file = None;
+                        worker_stat.is_active = false;
+
+                        match result {
+                            Ok((bytes, symbols)) => {
+                                worker_stat.files_processed += 1;
+                                worker_stat.bytes_processed += bytes;
+                                worker_stat.symbols_extracted += symbols;
+                                progress.complete_file(bytes, symbols);
+                            }
+                            Err(e) => {
+                                worker_stat.errors_encountered += 1;
+                                progress.fail_file(&format!("Worker {worker_id}: {e}"));
+                            }
+                        }
+                    }
+                }
+
+                // Small yield to allow other tasks to run
+                tokio::task::yield_now().await;
+            }
+
+            progress.remove_worker();
+            debug!("Worker {} shut down", worker_id);
+        });
+
+        Ok(handle)
+    }
+
+    /// Process a single file item with the appropriate pipeline
+    async fn process_file_item(
+        worker_id: usize,
+        item: QueueItem,
+        pipelines: &Arc<RwLock<HashMap<Language, IndexingPipeline>>>,
+        language_detector: &Arc<LanguageDetector>,
+        current_memory: &Arc<AtomicU64>,
+    ) -> Result<(u64, u64)> {
+        let file_path = &item.file_path;
+
+        // Detect language if not provided
+        let language = if let Some(hint) = &item.language_hint {
+            Language::from_str(hint).unwrap_or_else(|| {
+                language_detector
+                    .detect(file_path)
+                    .unwrap_or(Language::Unknown)
+            })
+        } else {
+            language_detector
+                .detect(file_path)
+                .unwrap_or(Language::Unknown)
+        };
+
+        debug!(
+            "Worker {} processing {:?} as {:?}",
+            worker_id, file_path, language
+        );
+
+        // Estimate memory usage for this file
+        let file_size = item.estimated_size.unwrap_or(1024);
+        let estimated_memory = file_size * 2; // Rough estimate: 2x file size for processing
+
+        current_memory.fetch_add(estimated_memory, Ordering::Relaxed);
+
+        // Process the file with pipeline
+        let result = {
+            let mut pipelines_write = pipelines.write().await;
+            let pipeline = pipelines_write.entry(language).or_insert_with(|| {
+                IndexingPipeline::new(language).unwrap_or_else(|_| {
+                    // Fallback to minimal pipeline if creation fails
+                    IndexingPipeline::new(Language::Unknown)
+                        .expect("Failed to create fallback pipeline")
+                })
+            });
+
+            pipeline.process_file(file_path).await
+        };
+
+        // Release memory estimate
+        current_memory.fetch_sub(estimated_memory, Ordering::Relaxed);
+
+        match result {
+            Ok(pipeline_result) => Ok((
+                pipeline_result.bytes_processed,
+                pipeline_result.symbols_found,
+            )),
+            Err(e) => Err(anyhow!("Failed to process {:?}: {}", file_path, e)),
+        }
+    }
+
+    /// Shutdown all workers gracefully
+    async fn shutdown_workers(&self) -> Result<()> {
+        let mut handles = self.worker_handles.write().await;
+
+        if handles.is_empty() {
+            return Ok(());
+        }
+
+        debug!("Shutting down {} workers...", handles.len());
+
+        // Wait for workers to finish with timeout
+        let shutdown_timeout = Duration::from_secs(10);
+        let mut shutdown_futures = Vec::new();
+
+        for handle in handles.drain(..) {
+            shutdown_futures.push(handle);
+        }
+
+        // Wait for all workers with timeout
+        match timeout(
+            shutdown_timeout,
+            futures::future::join_all(shutdown_futures),
+        )
+        .await
+        {
+            Ok(_) => {
+                debug!("All workers shut down gracefully");
+            }
+            Err(_) => {
+                warn!("Worker shutdown timed out after {:?}", shutdown_timeout);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for IndexingManager {
+    fn drop(&mut self) {
+        // Signal shutdown
+        self.shutdown_signal.store(true, Ordering::Relaxed);
+        debug!("IndexingManager dropped - shutdown signal sent");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_manager_lifecycle() {
+        let config = ManagerConfig {
+            max_workers: 2,
+            memory_budget_bytes: 1024 * 1024, // 1MB
+            ..ManagerConfig::default()
+        };
+
+        let language_detector = Arc::new(LanguageDetector::new());
+        let manager = IndexingManager::new(config, language_detector);
+
+        // Test initial state
+        assert!(matches!(manager.get_status().await, ManagerStatus::Idle));
+
+        // Create test directory with some files
+        let temp_dir = tempdir().unwrap();
+        let test_file = temp_dir.path().join("test.rs");
+        fs::write(&test_file, "fn main() {}\n").unwrap();
+
+        // Start indexing
+        manager
+            .start_indexing(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
+
+        // Give it time to start
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let status = manager.get_status().await;
+        assert!(matches!(
+            status,
+            ManagerStatus::Indexing | ManagerStatus::Discovering
+        ));
+
+        // Stop indexing
+        manager.stop_indexing().await.unwrap();
+        assert!(matches!(
+            manager.get_status().await,
+            ManagerStatus::Shutdown
+        ));
+    }
+
+    #[test]
+    fn test_pattern_matching() {
+        // Test exclusion patterns
+        assert!(IndexingManager::matches_pattern(
+            "/path/node_modules/file.js",
+            "*node_modules*"
+        ));
+        assert!(IndexingManager::matches_pattern("test.tmp", "*.tmp"));
+        assert!(!IndexingManager::matches_pattern("test.rs", "*.tmp"));
+
+        // Test exact matches
+        assert!(IndexingManager::matches_pattern("exact_match", "exact"));
+        assert!(!IndexingManager::matches_pattern("no_match", "different"));
+    }
+
+    #[test]
+    fn test_priority_determination() {
+        use std::path::Path;
+
+        // Test high priority languages
+        let rust_priority =
+            IndexingManager::determine_priority(Path::new("main.rs"), Language::Rust);
+        assert_eq!(rust_priority, Priority::High);
+
+        // Test medium priority
+        let js_priority =
+            IndexingManager::determine_priority(Path::new("script.js"), Language::JavaScript);
+        assert_eq!(js_priority, Priority::Medium);
+
+        // Test low priority
+        let unknown_priority =
+            IndexingManager::determine_priority(Path::new("data.txt"), Language::Unknown);
+        assert_eq!(unknown_priority, Priority::Low);
+    }
+
+    #[tokio::test]
+    async fn test_memory_pressure_detection() {
+        let config = ManagerConfig {
+            memory_budget_bytes: 1000,
+            memory_pressure_threshold: 0.8,
+            ..ManagerConfig::default()
+        };
+
+        let language_detector = Arc::new(LanguageDetector::new());
+        let manager = IndexingManager::new(config, language_detector);
+
+        // Initially no pressure
+        assert!(!manager.is_memory_pressure());
+
+        // Simulate memory usage above threshold
+        manager.current_memory_usage.store(850, Ordering::Relaxed); // 85% of 1000
+        assert!(manager.is_memory_pressure());
+
+        // Back below threshold
+        manager.current_memory_usage.store(700, Ordering::Relaxed); // 70% of 1000
+        assert!(!manager.is_memory_pressure());
+    }
+}

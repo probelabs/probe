@@ -18,6 +18,27 @@ struct PosKey {
     content_md5: String,
 }
 
+/// Access metadata for tracking LRU without modifying CachedNode
+#[derive(Debug, Clone)]
+struct AccessMeta {
+    last_accessed: Instant,
+    access_count: usize,
+}
+
+impl AccessMeta {
+    fn new() -> Self {
+        Self {
+            last_accessed: Instant::now(),
+            access_count: 1,
+        }
+    }
+
+    fn touch(&mut self) {
+        self.last_accessed = Instant::now();
+        self.access_count += 1;
+    }
+}
+
 /// Configuration for the call graph cache
 #[derive(Debug, Clone)]
 pub struct CallGraphCacheConfig {
@@ -63,6 +84,9 @@ pub struct CallGraphCache {
     /// Reverse index: NodeKey -> all position keys that should be removed with it
     key_to_positions: DashMap<NodeKey, HashSet<PosKey>>,
 
+    /// Access metadata for true LRU tracking (separate from immutable CachedNode)
+    access_meta: DashMap<NodeKey, AccessMeta>,
+
     /// In-flight deduplication
     inflight: DashMap<NodeKey, Arc<AsyncMutex<()>>>,
 
@@ -83,6 +107,7 @@ impl CallGraphCache {
             file_index: DashMap::new(),
             pos_index: DashMap::new(),
             key_to_positions: DashMap::new(),
+            access_meta: DashMap::new(),
             inflight: DashMap::new(),
             config,
             last_eviction: Arc::new(AsyncMutex::new(Instant::now())),
@@ -141,8 +166,10 @@ impl CallGraphCache {
     /// Get a cached node if present
     pub fn get(&self, key: &NodeKey) -> Option<Arc<CachedNode>> {
         self.nodes.get(key).map(|entry| {
-            // Note: We can't update access time here without interior mutability
-            // The cache eviction will use creation time for LRU
+            // Touch access metadata separately for true LRU tracking
+            if let Some(mut meta) = self.access_meta.get_mut(key) {
+                meta.touch();
+            }
             entry.clone()
         })
     }
@@ -194,6 +221,9 @@ impl CallGraphCache {
 
         // Add to main cache
         self.nodes.insert(key.clone(), node);
+
+        // Initialize access metadata for LRU tracking
+        self.access_meta.insert(key.clone(), AccessMeta::new());
 
         // Update ID index
         self.id_to_keys.entry(id.clone()).or_default().insert(key);
@@ -312,6 +342,7 @@ impl CallGraphCache {
         self.id_to_keys.clear();
         self.pos_index.clear();
         self.key_to_positions.clear();
+        self.access_meta.clear();
         self.outgoing.clear();
         self.incoming.clear();
         self.file_index.clear();
@@ -330,17 +361,36 @@ impl CallGraphCache {
         *last_check = Instant::now();
         drop(last_check); // Release lock early
 
+        self.do_evict().await;
+    }
+
+    /// Force eviction check (for testing)
+    #[cfg(test)]
+    async fn force_evict(&self) {
+        self.do_evict().await;
+    }
+
+    /// Internal eviction logic
+    async fn do_evict(&self) {
         let now = Instant::now();
         let mut expired_keys = Vec::new();
         let mut lru_candidates = Vec::new();
 
         // Find expired entries and collect LRU candidates
         for entry in self.nodes.iter() {
+            let key = entry.key();
             let node = entry.value();
+
             if now.duration_since(node.created_at) > self.config.ttl {
-                expired_keys.push(entry.key().clone());
+                expired_keys.push(key.clone());
             } else {
-                lru_candidates.push((entry.key().clone(), node.last_accessed, node.access_count));
+                // Get access metadata for true LRU ranking
+                if let Some(meta) = self.access_meta.get(key) {
+                    lru_candidates.push((key.clone(), meta.last_accessed, meta.access_count));
+                } else {
+                    // Fallback to node creation time if metadata is missing
+                    lru_candidates.push((key.clone(), node.created_at, 1));
+                }
             }
         }
 
@@ -371,6 +421,9 @@ impl CallGraphCache {
     fn remove_by_key(&self, key: &NodeKey) {
         if let Some((_, _node)) = self.nodes.remove(key) {
             let id = key.to_node_id();
+
+            // Remove access metadata
+            self.access_meta.remove(key);
 
             // Remove any position mappings referencing this key
             if let Some(pos_set) = self.key_to_positions.remove(key) {
@@ -488,7 +541,7 @@ mod tests {
         let cache = CallGraphCache::new(CallGraphCacheConfig::default());
         let file = Path::new("/test/file.rs");
         let md5 = "abc123";
-        let key = NodeKey::new("func", file.to_string_lossy(), md5);
+        let key = NodeKey::new("func", file, md5);
 
         // Insert and cache a dummy node
         cache
@@ -512,5 +565,82 @@ mod tests {
         // Invalidate file should remove both node and position mapping
         cache.invalidate_file(file);
         assert!(cache.get_by_position(file, 10, 5, md5).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_lru_eviction_with_access_metadata() {
+        // Create cache with small capacity for testing
+        let mut config = CallGraphCacheConfig::default();
+        config.capacity = 3;
+        config.ttl = Duration::from_secs(3600); // Long TTL to avoid time-based eviction
+        let cache = CallGraphCache::new(config);
+
+        // Insert 3 nodes to fill cache
+        let key1 = NodeKey::new("func1", "/test/file1.rs", "hash1");
+        let key2 = NodeKey::new("func2", "/test/file2.rs", "hash2");
+        let key3 = NodeKey::new("func3", "/test/file3.rs", "hash3");
+
+        for key in [&key1, &key2, &key3] {
+            cache
+                .get_or_compute(key.clone(), || async {
+                    Ok(CallHierarchyInfo {
+                        incoming_calls: vec![],
+                        outgoing_calls: vec![],
+                    })
+                })
+                .await
+                .unwrap();
+        }
+
+        // All 3 should be cached
+        assert!(cache.get(&key1).is_some());
+        assert!(cache.get(&key2).is_some());
+        assert!(cache.get(&key3).is_some());
+        assert_eq!(cache.nodes.len(), 3);
+
+        // Access key1 and key3 to make them more recently used than key2
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let _ = cache.get(&key1);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let _ = cache.get(&key3);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Insert a 4th node, which should trigger eviction of key2 (least recently used)
+        let key4 = NodeKey::new("func4", "/test/file4.rs", "hash4");
+        cache
+            .get_or_compute(key4.clone(), || async {
+                Ok(CallHierarchyInfo {
+                    incoming_calls: vec![],
+                    outgoing_calls: vec![],
+                })
+            })
+            .await
+            .unwrap();
+
+        // At this point we have 4 nodes but capacity is 3, so eviction should happen
+        assert_eq!(cache.nodes.len(), 4, "Should have 4 nodes before eviction");
+
+        // Force eviction check
+        cache.force_evict().await;
+
+        // key2 should have been evicted (it was least recently accessed)
+        // key1, key3, and key4 should remain
+        assert!(
+            cache.get(&key1).is_some(),
+            "key1 should remain (recently accessed)"
+        );
+        assert!(
+            cache.get(&key2).is_none(),
+            "key2 should be evicted (least recently used)"
+        );
+        assert!(
+            cache.get(&key3).is_some(),
+            "key3 should remain (recently accessed)"
+        );
+        assert!(
+            cache.get(&key4).is_some(),
+            "key4 should remain (just inserted)"
+        );
+        assert_eq!(cache.nodes.len(), 3, "Cache should maintain capacity limit");
     }
 }
