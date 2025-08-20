@@ -16,7 +16,8 @@ use tokio::time::{sleep, timeout};
 
 /// Helper struct for managing test workspaces
 struct TestWorkspace {
-    temp_dir: TempDir,
+    #[allow(dead_code)]
+    temp_dir: TempDir, // Keeps the temp directory alive for the lifetime of the struct
     root_path: PathBuf,
 }
 
@@ -560,15 +561,16 @@ async fn test_file_watcher_concurrent_operations() -> Result<()> {
     for i in 0..10 {
         let workspace_path = workspace.path().to_path_buf();
         let handle = tokio::spawn(async move {
-            let temp_workspace = TestWorkspace {
-                temp_dir: unsafe { std::mem::zeroed() }, // We won't drop this
-                root_path: workspace_path,
-            };
-
             let file_name = format!("concurrent_{i}.rs");
             let content = format!("// Concurrent file {i}");
+            let file_path = workspace_path.join(file_name);
 
-            temp_workspace.create_file(&file_name, &content).await
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent).await?;
+            }
+            fs::write(&file_path, content).await?;
+
+            Ok::<PathBuf, anyhow::Error>(file_path)
         });
         handles.push(handle);
     }
