@@ -954,7 +954,13 @@ fn get_client_lock_path() -> String {
 }
 
 /// Start embedded LSP daemon in the background using probe binary
-async fn start_embedded_daemon_background() -> Result<()> {
+pub(crate) async fn start_embedded_daemon_background() -> Result<()> {
+    // Check global autostart guard - prevents unwanted daemon spawning
+    if std::env::var("PROBE_LSP_DISABLE_AUTOSTART").is_ok() {
+        debug!("LSP daemon autostart disabled by PROBE_LSP_DISABLE_AUTOSTART environment variable");
+        return Err(anyhow!("LSP daemon autostart disabled"));
+    }
+
     let socket_path = effective_socket_path();
 
     // Use file-based locking for cross-process coordination
