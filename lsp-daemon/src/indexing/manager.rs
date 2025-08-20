@@ -9,7 +9,8 @@
 //! - Progress reporting and status monitoring
 
 use crate::indexing::{
-    IndexingConfig, IndexingPipeline, IndexingProgress, IndexingQueue, LanguageStrategyFactory, Priority, QueueItem,
+    IndexingConfig, IndexingPipeline, IndexingProgress, IndexingQueue, LanguageStrategyFactory,
+    Priority, QueueItem,
 };
 use crate::language_detector::{Language, LanguageDetector};
 use anyhow::{anyhow, Result};
@@ -202,7 +203,10 @@ impl IndexingManager {
     }
 
     /// Create a new indexing manager from the comprehensive IndexingConfig
-    pub fn from_indexing_config(config: &IndexingConfig, language_detector: Arc<LanguageDetector>) -> Self {
+    pub fn from_indexing_config(
+        config: &IndexingConfig,
+        language_detector: Arc<LanguageDetector>,
+    ) -> Self {
         // Convert comprehensive config to legacy ManagerConfig for compatibility
         let manager_config = ManagerConfig {
             max_workers: config.max_workers,
@@ -212,7 +216,11 @@ impl IndexingManager {
             exclude_patterns: config.global_exclude_patterns.clone(),
             include_patterns: config.global_include_patterns.clone(),
             max_file_size_bytes: config.max_file_size_bytes,
-            enabled_languages: config.priority_languages.iter().map(|l| format!("{:?}", l)).collect(),
+            enabled_languages: config
+                .priority_languages
+                .iter()
+                .map(|l| format!("{:?}", l))
+                .collect(),
             incremental_mode: config.incremental_mode,
             discovery_batch_size: config.discovery_batch_size,
             status_update_interval_secs: config.status_update_interval_secs,
@@ -539,7 +547,7 @@ impl IndexingManager {
                 if let Ok(language) = language_detector.detect(&file_path) {
                     if language != Language::Unknown {
                         let strategy = LanguageStrategyFactory::create_strategy(language);
-                        
+
                         // Check if the language strategy says this file should be processed
                         if !strategy.should_process_file(&file_path) {
                             debug!(
@@ -548,16 +556,18 @@ impl IndexingManager {
                             );
                             continue;
                         }
-                        
+
                         // Check if it's a test file and tests are excluded by the strategy
-                        if strategy.is_test_file(&file_path) && !strategy.file_strategy.include_tests {
+                        if strategy.is_test_file(&file_path)
+                            && !strategy.file_strategy.include_tests
+                        {
                             debug!(
                                 "Skipping test file: {:?} (language: {:?})",
                                 file_path, language
                             );
                             continue;
                         }
-                        
+
                         // Check file size against strategy limits
                         if metadata.len() > strategy.file_strategy.max_file_size {
                             debug!(
@@ -708,7 +718,7 @@ impl IndexingManager {
     fn determine_priority(file_path: &Path, language: Language) -> Priority {
         let strategy = LanguageStrategyFactory::create_strategy(language);
         let language_priority = strategy.calculate_file_priority(file_path);
-        
+
         // Convert language-specific priority to queue priority
         match language_priority {
             crate::indexing::IndexingPriority::Critical => Priority::Critical,
@@ -1093,13 +1103,28 @@ mod tests {
         ];
 
         // Test exclusions
-        assert!(IndexingManager::should_exclude_file(&root.join("target/debug/app"), &patterns));
-        assert!(IndexingManager::should_exclude_file(&root.join("node_modules/package.json"), &patterns));
-        assert!(IndexingManager::should_exclude_file(&root.join("temp.tmp"), &patterns));
-        assert!(IndexingManager::should_exclude_file(&root.join("debug.log"), &patterns));
+        assert!(IndexingManager::should_exclude_file(
+            &root.join("target/debug/app"),
+            &patterns
+        ));
+        assert!(IndexingManager::should_exclude_file(
+            &root.join("node_modules/package.json"),
+            &patterns
+        ));
+        assert!(IndexingManager::should_exclude_file(
+            &root.join("temp.tmp"),
+            &patterns
+        ));
+        assert!(IndexingManager::should_exclude_file(
+            &root.join("debug.log"),
+            &patterns
+        ));
 
         // Test inclusions
-        assert!(!IndexingManager::should_exclude_file(&root.join("src/main.rs"), &patterns));
+        assert!(!IndexingManager::should_exclude_file(
+            &root.join("src/main.rs"),
+            &patterns
+        ));
     }
 
     #[tokio::test]
@@ -1110,10 +1135,22 @@ mod tests {
             "*/src/*".to_string(),
         ];
 
-        assert!(IndexingManager::should_include_file(Path::new("main.rs"), &patterns));
-        assert!(IndexingManager::should_include_file(Path::new("script.ts"), &patterns));
-        assert!(IndexingManager::should_include_file(Path::new("project/src/lib.rs"), &patterns));
-        assert!(!IndexingManager::should_include_file(Path::new("data.txt"), &patterns));
+        assert!(IndexingManager::should_include_file(
+            Path::new("main.rs"),
+            &patterns
+        ));
+        assert!(IndexingManager::should_include_file(
+            Path::new("script.ts"),
+            &patterns
+        ));
+        assert!(IndexingManager::should_include_file(
+            Path::new("project/src/lib.rs"),
+            &patterns
+        ));
+        assert!(!IndexingManager::should_include_file(
+            Path::new("data.txt"),
+            &patterns
+        ));
     }
 
     #[tokio::test]
@@ -1135,8 +1172,11 @@ mod tests {
         fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
 
         // Start indexing to create workers
-        manager.start_indexing(temp_dir.path().to_path_buf()).await.unwrap();
-        
+        manager
+            .start_indexing(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
+
         // Give workers time to start
         tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -1168,13 +1208,16 @@ mod tests {
         fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
 
         // Start indexing
-        manager.start_indexing(temp_dir.path().to_path_buf()).await.unwrap();
+        manager
+            .start_indexing(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Test pause
         let pause_result = manager.pause_indexing().await;
         assert!(pause_result.is_ok());
-        
+
         let status = manager.get_status().await;
         assert!(matches!(status, ManagerStatus::Paused));
 
@@ -1205,12 +1248,19 @@ mod tests {
 
         let temp_dir = tempdir().unwrap();
         for i in 0..5 {
-            fs::write(temp_dir.path().join(format!("lib_{}.rs", i)), "fn main() {}").unwrap();
+            fs::write(
+                temp_dir.path().join(format!("lib_{}.rs", i)),
+                "fn main() {}",
+            )
+            .unwrap();
         }
 
         // Start indexing
-        manager.start_indexing(temp_dir.path().to_path_buf()).await.unwrap();
-        
+        manager
+            .start_indexing(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
+
         // Wait for files to be discovered and processed
         let mut found_items = false;
         for _ in 0..20 {
@@ -1247,33 +1297,40 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         for i in 0..3 {
             fs::write(
-                temp_dir.path().join(format!("file_{}.rs", i)), 
-                format!("fn func_{}() {{}}", i)
-            ).unwrap();
+                temp_dir.path().join(format!("file_{}.rs", i)),
+                format!("fn func_{}() {{}}", i),
+            )
+            .unwrap();
         }
 
         // Start indexing
-        manager.start_indexing(temp_dir.path().to_path_buf()).await.unwrap();
+        manager
+            .start_indexing(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
 
         // Monitor progress
         let mut progress_updates = 0;
         let start_time = Instant::now();
-        
+
         while start_time.elapsed() < Duration::from_secs(5) {
             let progress = manager.get_progress().await;
-            
+
             if progress.total_files > 0 {
                 progress_updates += 1;
-                
+
                 // Basic progress invariants
-                assert!(progress.processed_files + progress.failed_files + progress.skipped_files <= progress.total_files);
+                assert!(
+                    progress.processed_files + progress.failed_files + progress.skipped_files
+                        <= progress.total_files
+                );
                 assert!(progress.active_workers >= 0);
-                
+
                 if progress.is_complete() {
                     break;
                 }
             }
-            
+
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
@@ -1300,21 +1357,27 @@ mod tests {
 
         let language_detector = Arc::new(LanguageDetector::new());
         let manager1 = IndexingManager::new(config.clone(), language_detector.clone());
-        
-        manager1.start_indexing(temp_dir.path().to_path_buf()).await.unwrap();
-        
+
+        manager1
+            .start_indexing(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
+
         // Wait for completion
         tokio::time::sleep(Duration::from_millis(500)).await;
-        
+
         let progress1 = manager1.get_progress().await;
         manager1.stop_indexing().await.unwrap();
 
         // Second run - incremental (should detect no changes if file hasn't changed)
         let manager2 = IndexingManager::new(config, language_detector);
-        manager2.start_indexing(temp_dir.path().to_path_buf()).await.unwrap();
-        
+        manager2
+            .start_indexing(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
+
         tokio::time::sleep(Duration::from_millis(500)).await;
-        
+
         let progress2 = manager2.get_progress().await;
         manager2.stop_indexing().await.unwrap();
 
@@ -1331,7 +1394,10 @@ mod tests {
         assert!(!IndexingManager::matches_pattern("hello.rs", "*.txt"));
 
         // Multiple wildcards
-        assert!(IndexingManager::matches_pattern("path/to/file.txt", "*/*/file.txt"));
+        assert!(IndexingManager::matches_pattern(
+            "path/to/file.txt",
+            "*/*/file.txt"
+        ));
         assert!(IndexingManager::matches_pattern("a_b_c", "*_*_*"));
         assert!(!IndexingManager::matches_pattern("a_b", "*_*_*"));
 
@@ -1349,12 +1415,16 @@ mod tests {
     #[tokio::test]
     async fn test_error_handling_during_indexing() {
         let temp_dir = tempdir().unwrap();
-        
+
         // Create a valid file
         fs::write(temp_dir.path().join("valid.rs"), "fn main() {}").unwrap();
-        
+
         // Create a file that will cause issues (binary content)
-        fs::write(temp_dir.path().join("binary.rs"), b"\x00\x01\x02\x03\xff\xfe").unwrap();
+        fs::write(
+            temp_dir.path().join("binary.rs"),
+            b"\x00\x01\x02\x03\xff\xfe",
+        )
+        .unwrap();
 
         let config = ManagerConfig {
             max_workers: 1,
@@ -1364,11 +1434,14 @@ mod tests {
         let language_detector = Arc::new(LanguageDetector::new());
         let manager = IndexingManager::new(config, language_detector);
 
-        manager.start_indexing(temp_dir.path().to_path_buf()).await.unwrap();
-        
+        manager
+            .start_indexing(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
+
         // Wait for processing
         tokio::time::sleep(Duration::from_millis(1000)).await;
-        
+
         let progress = manager.get_progress().await;
         manager.stop_indexing().await.unwrap();
 
@@ -1380,7 +1453,7 @@ mod tests {
     #[tokio::test]
     async fn test_language_filtering() {
         let temp_dir = tempdir().unwrap();
-        
+
         // Create files in different languages
         fs::write(temp_dir.path().join("main.rs"), "fn main() {}").unwrap();
         fs::write(temp_dir.path().join("script.js"), "console.log('hello');").unwrap();
@@ -1395,10 +1468,13 @@ mod tests {
         let language_detector = Arc::new(LanguageDetector::new());
         let manager = IndexingManager::new(config, language_detector);
 
-        manager.start_indexing(temp_dir.path().to_path_buf()).await.unwrap();
-        
+        manager
+            .start_indexing(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
+
         tokio::time::sleep(Duration::from_millis(500)).await;
-        
+
         let progress = manager.get_progress().await;
         manager.stop_indexing().await.unwrap();
 
@@ -1450,7 +1526,7 @@ mod tests {
 
         // Stop and verify
         manager.stop_indexing().await.unwrap();
-        
+
         let status = manager.get_status().await;
         assert!(matches!(status, ManagerStatus::Shutdown));
     }

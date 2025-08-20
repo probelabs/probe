@@ -1,16 +1,15 @@
 //! Integration tests for the indexing system
-//! 
+//!
 //! This module contains comprehensive integration tests for the entire indexing
 //! workflow including file discovery, queue management, worker processing,
 //! and multi-language pipeline integration.
 
 use anyhow::Result;
 use lsp_daemon::indexing::{
-    IndexingConfig, IndexingFeatures, IndexingManager, LanguageIndexConfig,
-    ManagerConfig, ManagerStatus, Priority, ProgressSnapshot, QueueSnapshot,
+    IndexingManager, ManagerConfig,
+    ManagerStatus,
 };
-use lsp_daemon::{Language, LanguageDetector};
-use std::collections::HashMap;
+use lsp_daemon::LanguageDetector;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -34,16 +33,21 @@ impl TestProject {
         fs::create_dir_all(root_path.join("src")).await?;
         fs::create_dir_all(root_path.join("tests")).await?;
         fs::create_dir_all(root_path.join("examples")).await?;
-        fs::create_dir_all(root_path.join("target")).await?;  // Should be excluded
+        fs::create_dir_all(root_path.join("target")).await?; // Should be excluded
         fs::create_dir_all(root_path.join("node_modules")).await?; // Should be excluded
 
-        Ok(Self { temp_dir, root_path })
+        Ok(Self {
+            temp_dir,
+            root_path,
+        })
     }
 
     /// Create sample Rust files
     async fn create_rust_files(&self) -> Result<()> {
         let rust_files = [
-            ("src/main.rs", r#"
+            (
+                "src/main.rs",
+                r#"
 fn main() {
     println!("Hello, world!");
     let calculator = Calculator::new();
@@ -65,8 +69,11 @@ impl Calculator {
         a * b
     }
 }
-"#),
-            ("src/lib.rs", r#"
+"#,
+            ),
+            (
+                "src/lib.rs",
+                r#"
 //! A sample library for testing indexing functionality
 //!
 //! This module contains various structures and functions to test
@@ -113,8 +120,11 @@ impl Testable for Library {
         self.internal_function()
     }
 }
-"#),
-            ("src/utils.rs", r#"
+"#,
+            ),
+            (
+                "src/utils.rs",
+                r#"
 //! Utility functions for the library
 
 use std::collections::HashMap;
@@ -145,8 +155,11 @@ pub const DEFAULT_NAME: &str = "default";
 
 /// Type alias for testing
 pub type ResultMap = HashMap<String, Result<i32, String>>;
-"#),
-            ("src/error.rs", r#"
+"#,
+            ),
+            (
+                "src/error.rs",
+                r#"
 //! Error handling module
 
 use std::fmt;
@@ -173,8 +186,11 @@ impl std::error::Error for LibraryError {}
 
 /// Result type alias
 pub type LibraryResult<T> = Result<T, LibraryError>;
-"#),
-            ("tests/integration_tests.rs", r#"
+"#,
+            ),
+            (
+                "tests/integration_tests.rs",
+                r#"
 use super::*;
 
 #[tokio::test]
@@ -196,7 +212,8 @@ async fn test_utils() {
     ]);
     assert_eq!(map.len(), 2);
 }
-"#),
+"#,
+            ),
         ];
 
         for (path, content) in rust_files {
@@ -211,7 +228,9 @@ async fn test_utils() {
         fs::create_dir_all(self.root_path.join("ts")).await?;
 
         let ts_files = [
-            ("ts/calculator.ts", r#"
+            (
+                "ts/calculator.ts",
+                r#"
 /**
  * Calculator class for basic arithmetic operations
  */
@@ -266,8 +285,11 @@ export type OperationResult = {
     operation: string;
     timestamp: Date;
 };
-"#),
-            ("ts/utils.ts", r#"
+"#,
+            ),
+            (
+                "ts/utils.ts",
+                r#"
 import { Calculator, MathOperation } from './calculator';
 
 /**
@@ -306,7 +328,8 @@ export enum OperationType {
     SUBTRACT = 'subtract',
     DIVIDE = 'divide',
 }
-"#),
+"#,
+            ),
         ];
 
         for (path, content) in ts_files {
@@ -321,7 +344,9 @@ export enum OperationType {
         fs::create_dir_all(self.root_path.join("py")).await?;
 
         let py_files = [
-            ("py/calculator.py", r#"
+            (
+                "py/calculator.py",
+                r#"
 """
 Calculator module for basic arithmetic operations.
 """
@@ -403,8 +428,11 @@ def factorial(n: int) -> int:
 # Constants
 MAX_VALUE = 1000000
 PI = 3.14159265359
-"#),
-            ("py/utils.py", r#"
+"#,
+            ),
+            (
+                "py/utils.py",
+                r#"
 """
 Utility functions and classes.
 """
@@ -476,7 +504,8 @@ def configure_processor(**kwargs) -> Dict[str, Any]:
     global global_config
     global_config.update(kwargs)
     return global_config
-"#),
+"#,
+            ),
         ];
 
         for (path, content) in py_files {
@@ -490,17 +519,15 @@ def configure_processor(**kwargs) -> Dict[str, Any]:
     async fn create_excluded_files(&self) -> Result<()> {
         // Files in target/ directory (should be excluded)
         fs::create_dir_all(self.root_path.join("target/debug")).await?;
-        fs::write(
-            self.root_path.join("target/debug/app"),
-            "binary content"
-        ).await?;
+        fs::write(self.root_path.join("target/debug/app"), "binary content").await?;
 
         // Files in node_modules/ (should be excluded)
         fs::create_dir_all(self.root_path.join("node_modules/package")).await?;
         fs::write(
             self.root_path.join("node_modules/package/index.js"),
-            "module.exports = {};"
-        ).await?;
+            "module.exports = {};",
+        )
+        .await?;
 
         // Log files (should be excluded)
         fs::write(self.root_path.join("debug.log"), "log content").await?;
@@ -521,19 +548,19 @@ def configure_processor(**kwargs) -> Dict[str, Any]:
 /// Create a comprehensive test project with multiple languages
 async fn create_comprehensive_test_project() -> Result<TestProject> {
     let project = TestProject::new().await?;
-    
+
     project.create_rust_files().await?;
     project.create_typescript_files().await?;
     project.create_python_files().await?;
     project.create_excluded_files().await?;
-    
+
     Ok(project)
 }
 
 /// Create a minimal indexing configuration for testing
 fn create_test_config() -> ManagerConfig {
     ManagerConfig {
-        max_workers: 2, // Keep it small for tests
+        max_workers: 2,                        // Keep it small for tests
         memory_budget_bytes: 64 * 1024 * 1024, // 64MB
         memory_pressure_threshold: 0.8,
         max_queue_size: 100,
@@ -545,8 +572,8 @@ fn create_test_config() -> ManagerConfig {
         ],
         include_patterns: vec![],
         max_file_size_bytes: 1024 * 1024, // 1MB
-        enabled_languages: vec![], // All languages
-        incremental_mode: false,   // Start fresh for tests
+        enabled_languages: vec![],        // All languages
+        incremental_mode: false,          // Start fresh for tests
         discovery_batch_size: 10,
         status_update_interval_secs: 1,
     }
@@ -556,7 +583,7 @@ fn create_test_config() -> ManagerConfig {
 async fn test_end_to_end_indexing_workflow() -> Result<()> {
     // Create test project
     let project = create_comprehensive_test_project().await?;
-    
+
     // Setup language detector and manager
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config();
@@ -587,8 +614,9 @@ async fn test_end_to_end_indexing_workflow() -> Result<()> {
                 let status = manager.get_status().await;
                 let progress = manager.get_progress().await;
 
-                println!("Status: {:?}, Progress: {}/{} files", 
-                    status, 
+                println!(
+                    "Status: {:?}, Progress: {}/{} files",
+                    status,
                     progress.processed_files + progress.failed_files + progress.skipped_files,
                     progress.total_files
                 );
@@ -619,12 +647,10 @@ async fn test_end_to_end_indexing_workflow() -> Result<()> {
     };
 
     // Run both tasks concurrently with timeout
-    let result = timeout(
-        Duration::from_secs(60),
-        async move {
-            tokio::try_join!(indexing_task, monitoring_task)
-        }
-    ).await;
+    let result = timeout(Duration::from_secs(60), async move {
+        tokio::try_join!(indexing_task, monitoring_task)
+    })
+    .await;
 
     // Stop indexing to cleanup
     let _ = manager.stop_indexing().await;
@@ -638,17 +664,26 @@ async fn test_end_to_end_indexing_workflow() -> Result<()> {
 
     // Verify final state
     let final_progress = manager.get_progress().await;
-    assert!(final_progress.processed_files > 0, "Should have processed some files");
-    
-    // Should have found files in multiple languages
-    assert!(final_progress.total_files >= 6, "Should have found at least 6 source files");
-    
-    // Should have extracted symbols
-    assert!(final_progress.symbols_extracted > 0, "Should have extracted symbols");
+    assert!(
+        final_progress.processed_files > 0,
+        "Should have processed some files"
+    );
 
-    println!("Final stats: {} files processed, {} symbols extracted", 
-        final_progress.processed_files, 
-        final_progress.symbols_extracted
+    // Should have found files in multiple languages
+    assert!(
+        final_progress.total_files >= 6,
+        "Should have found at least 6 source files"
+    );
+
+    // Should have extracted symbols
+    assert!(
+        final_progress.symbols_extracted > 0,
+        "Should have extracted symbols"
+    );
+
+    println!(
+        "Final stats: {} files processed, {} symbols extracted",
+        final_progress.processed_files, final_progress.symbols_extracted
     );
 
     Ok(())
@@ -657,16 +692,18 @@ async fn test_end_to_end_indexing_workflow() -> Result<()> {
 #[tokio::test]
 async fn test_incremental_indexing() -> Result<()> {
     let project = create_comprehensive_test_project().await?;
-    
+
     let language_detector = Arc::new(LanguageDetector::new());
     let mut config = create_test_config();
     config.incremental_mode = true;
-    
+
     let manager = IndexingManager::new(config.clone(), language_detector);
 
     // First indexing run
-    manager.start_indexing(project.root_path().to_path_buf()).await?;
-    
+    manager
+        .start_indexing(project.root_path().to_path_buf())
+        .await?;
+
     // Wait for completion
     let mut attempts = 0;
     while attempts < 50 {
@@ -698,14 +735,17 @@ impl Calculator {
     pub fn add(&self, a: i32, b: i32) -> i32 { a + b }
     pub fn subtract(&self, a: i32, b: i32) -> i32 { a - b }
 }
-"#
-    ).await?;
+"#,
+    )
+    .await?;
 
     // Second indexing run (incremental)
     sleep(Duration::from_millis(100)).await; // Ensure file timestamp is different
-    
+
     let manager2 = IndexingManager::new(config.clone(), Arc::new(LanguageDetector::new()));
-    manager2.start_indexing(project.root_path().to_path_buf()).await?;
+    manager2
+        .start_indexing(project.root_path().to_path_buf())
+        .await?;
 
     // Wait for completion
     attempts = 0;
@@ -723,13 +763,15 @@ impl Calculator {
 
     // In incremental mode, second run should process fewer files
     // (only changed files and new files)
-    println!("First run: {} files, Second run: {} files",
-        first_run_progress.processed_files,
-        second_run_progress.processed_files
+    println!(
+        "First run: {} files, Second run: {} files",
+        first_run_progress.processed_files, second_run_progress.processed_files
     );
 
-    assert!(second_run_progress.processed_files <= first_run_progress.processed_files,
-        "Incremental indexing should process fewer or equal files");
+    assert!(
+        second_run_progress.processed_files <= first_run_progress.processed_files,
+        "Incremental indexing should process fewer or equal files"
+    );
 
     Ok(())
 }
@@ -737,25 +779,31 @@ impl Calculator {
 #[tokio::test]
 async fn test_memory_pressure_handling() -> Result<()> {
     let project = create_comprehensive_test_project().await?;
-    
+
     let language_detector = Arc::new(LanguageDetector::new());
     let mut config = create_test_config();
     config.memory_budget_bytes = 1024; // Extremely small: 1KB
     config.memory_pressure_threshold = 0.01; // Extremely low threshold (0.01 * 1024 = ~10 bytes)
-    
+
     let manager = IndexingManager::new(config, language_detector);
 
     // Start indexing
-    manager.start_indexing(project.root_path().to_path_buf()).await?;
+    manager
+        .start_indexing(project.root_path().to_path_buf())
+        .await?;
 
     // Monitor for memory pressure
     let mut found_memory_pressure = false;
     let start = Instant::now();
-    
+
     while start.elapsed() < Duration::from_secs(10) {
         let is_pressure = manager.is_memory_pressure();
         if start.elapsed().as_millis() % 1000 == 0 {
-            println!("Checking memory pressure at {}s: {}", start.elapsed().as_secs(), is_pressure);
+            println!(
+                "Checking memory pressure at {}s: {}",
+                start.elapsed().as_secs(),
+                is_pressure
+            );
         }
         if is_pressure {
             found_memory_pressure = true;
@@ -781,28 +829,30 @@ async fn test_memory_pressure_handling() -> Result<()> {
 #[tokio::test]
 async fn test_pause_and_resume_functionality() -> Result<()> {
     let project = create_comprehensive_test_project().await?;
-    
+
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config();
     let manager = IndexingManager::new(config, language_detector);
 
     // Start indexing
-    manager.start_indexing(project.root_path().to_path_buf()).await?;
-    
+    manager
+        .start_indexing(project.root_path().to_path_buf())
+        .await?;
+
     // Wait a bit for indexing to start
     sleep(Duration::from_millis(200)).await;
 
     // Pause indexing
     let pause_result = manager.pause_indexing().await;
     assert!(pause_result.is_ok(), "Should be able to pause indexing");
-    
+
     let status_after_pause = manager.get_status().await;
     assert!(matches!(status_after_pause, ManagerStatus::Paused));
 
     // Resume indexing
     let resume_result = manager.resume_indexing().await;
     assert!(resume_result.is_ok(), "Should be able to resume indexing");
-    
+
     let status_after_resume = manager.get_status().await;
     assert!(matches!(status_after_resume, ManagerStatus::Indexing));
 
@@ -820,7 +870,10 @@ async fn test_pause_and_resume_functionality() -> Result<()> {
     manager.stop_indexing().await?;
 
     let final_progress = manager.get_progress().await;
-    assert!(final_progress.processed_files > 0, "Should have processed files despite pause/resume");
+    assert!(
+        final_progress.processed_files > 0,
+        "Should have processed files despite pause/resume"
+    );
 
     Ok(())
 }
@@ -828,13 +881,15 @@ async fn test_pause_and_resume_functionality() -> Result<()> {
 #[tokio::test]
 async fn test_worker_statistics_tracking() -> Result<()> {
     let project = create_comprehensive_test_project().await?;
-    
+
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config();
     let manager = IndexingManager::new(config, language_detector);
 
     // Start indexing
-    manager.start_indexing(project.root_path().to_path_buf()).await?;
+    manager
+        .start_indexing(project.root_path().to_path_buf())
+        .await?;
 
     // Monitor worker statistics
     sleep(Duration::from_millis(500)).await; // Let workers start
@@ -851,11 +906,18 @@ async fn test_worker_statistics_tracking() -> Result<()> {
 
     manager.stop_indexing().await?;
 
-    println!("Worker statistics: {} files, {} bytes processed across {} workers",
-        total_processed, total_bytes, updated_stats.len());
+    println!(
+        "Worker statistics: {} files, {} bytes processed across {} workers",
+        total_processed,
+        total_bytes,
+        updated_stats.len()
+    );
 
     // Verify statistics are reasonable
-    assert!(total_processed > 0 || total_bytes > 0, "Workers should have processed something");
+    assert!(
+        total_processed > 0 || total_bytes > 0,
+        "Workers should have processed something"
+    );
 
     Ok(())
 }
@@ -863,15 +925,17 @@ async fn test_worker_statistics_tracking() -> Result<()> {
 #[tokio::test]
 async fn test_language_specific_processing() -> Result<()> {
     let project = create_comprehensive_test_project().await?;
-    
+
     let language_detector = Arc::new(LanguageDetector::new());
     let mut config = create_test_config();
     config.enabled_languages = vec!["rust".to_string()]; // Only process Rust files
-    
+
     let manager = IndexingManager::new(config, language_detector);
 
-    // Start indexing  
-    manager.start_indexing(project.root_path().to_path_buf()).await?;
+    // Start indexing
+    manager
+        .start_indexing(project.root_path().to_path_buf())
+        .await?;
 
     // Wait for completion
     let mut attempts = 0;
@@ -887,12 +951,21 @@ async fn test_language_specific_processing() -> Result<()> {
     manager.stop_indexing().await?;
 
     let final_progress = manager.get_progress().await;
-    
-    // Should have processed only Rust files (fewer than the comprehensive test)
-    assert!(final_progress.processed_files > 0, "Should have processed Rust files");
-    assert!(final_progress.processed_files < 8, "Should have processed fewer files than all languages");
 
-    println!("Rust-only indexing: {} files processed", final_progress.processed_files);
+    // Should have processed only Rust files (fewer than the comprehensive test)
+    assert!(
+        final_progress.processed_files > 0,
+        "Should have processed Rust files"
+    );
+    assert!(
+        final_progress.processed_files < 8,
+        "Should have processed fewer files than all languages"
+    );
+
+    println!(
+        "Rust-only indexing: {} files processed",
+        final_progress.processed_files
+    );
 
     Ok(())
 }
@@ -900,13 +973,15 @@ async fn test_language_specific_processing() -> Result<()> {
 #[tokio::test]
 async fn test_file_exclusion_patterns() -> Result<()> {
     let project = create_comprehensive_test_project().await?;
-    
+
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config(); // Already has exclusion patterns
     let manager = IndexingManager::new(config, language_detector);
 
     // Start indexing
-    manager.start_indexing(project.root_path().to_path_buf()).await?;
+    manager
+        .start_indexing(project.root_path().to_path_buf())
+        .await?;
 
     // Wait for completion
     let mut attempts = 0;
@@ -922,13 +997,19 @@ async fn test_file_exclusion_patterns() -> Result<()> {
     manager.stop_indexing().await?;
 
     let final_progress = manager.get_progress().await;
-    
+
     // Should have processed files but excluded target/, node_modules/, *.log, *.tmp
-    assert!(final_progress.processed_files > 0, "Should have processed some files");
-    
+    assert!(
+        final_progress.processed_files > 0,
+        "Should have processed some files"
+    );
+
     // The exact number depends on what files were discovered vs excluded
     // Main thing is that it completed without error and processed something
-    println!("Files processed with exclusions: {}", final_progress.processed_files);
+    println!(
+        "Files processed with exclusions: {}",
+        final_progress.processed_files
+    );
 
     Ok(())
 }
@@ -936,13 +1017,15 @@ async fn test_file_exclusion_patterns() -> Result<()> {
 #[tokio::test]
 async fn test_queue_operations() -> Result<()> {
     let project = create_comprehensive_test_project().await?;
-    
+
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config();
     let manager = IndexingManager::new(config, language_detector);
 
     // Start indexing
-    manager.start_indexing(project.root_path().to_path_buf()).await?;
+    manager
+        .start_indexing(project.root_path().to_path_buf())
+        .await?;
 
     // Monitor queue operations
     sleep(Duration::from_millis(200)).await; // Let file discovery populate queue
@@ -957,7 +1040,7 @@ async fn test_queue_operations() -> Result<()> {
     for _ in 0..20 {
         sleep(Duration::from_millis(200)).await;
         let current_snapshot = manager.get_queue_snapshot().await;
-        
+
         if current_snapshot.total_items < previous_queue_size {
             queue_is_draining = true;
             break;
@@ -967,10 +1050,15 @@ async fn test_queue_operations() -> Result<()> {
 
     manager.stop_indexing().await?;
 
-    assert!(queue_is_draining, "Queue should drain as files are processed");
+    assert!(
+        queue_is_draining,
+        "Queue should drain as files are processed"
+    );
 
-    println!("Queue operations verified - initial: {}, final: {}", 
-        queue_snapshot.total_items, previous_queue_size);
+    println!(
+        "Queue operations verified - initial: {}, final: {}",
+        queue_snapshot.total_items, previous_queue_size
+    );
 
     Ok(())
 }
@@ -978,19 +1066,22 @@ async fn test_queue_operations() -> Result<()> {
 #[tokio::test]
 async fn test_error_recovery() -> Result<()> {
     let project = create_comprehensive_test_project().await?;
-    
+
     // Create a file that will cause processing errors
     fs::write(
         project.root_path().join("src/bad_file.rs"),
-        "This is not valid Rust syntax @@@ $$$ invalid content"
-    ).await?;
-    
+        "This is not valid Rust syntax @@@ $$$ invalid content",
+    )
+    .await?;
+
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config();
     let manager = IndexingManager::new(config, language_detector);
 
     // Start indexing
-    manager.start_indexing(project.root_path().to_path_buf()).await?;
+    manager
+        .start_indexing(project.root_path().to_path_buf())
+        .await?;
 
     // Wait for completion
     let mut attempts = 0;
@@ -1006,23 +1097,37 @@ async fn test_error_recovery() -> Result<()> {
     manager.stop_indexing().await?;
 
     let final_progress = manager.get_progress().await;
-    
-    println!("Error recovery stats: {} processed, {} failed, {} skipped, {} total", 
-        final_progress.processed_files, final_progress.failed_files, final_progress.skipped_files, final_progress.total_files);
-    
+
+    println!(
+        "Error recovery stats: {} processed, {} failed, {} skipped, {} total",
+        final_progress.processed_files,
+        final_progress.failed_files,
+        final_progress.skipped_files,
+        final_progress.total_files
+    );
+
     // Should have completed despite errors
-    assert!(final_progress.processed_files > 0, "Should have processed good files");
-    
+    assert!(
+        final_progress.processed_files > 0,
+        "Should have processed good files"
+    );
+
     // The bad file might be processed successfully (parsing errors don't always cause indexing failure)
     // or might be skipped rather than marked as failed. Let's be more lenient.
     if final_progress.failed_files == 0 && final_progress.skipped_files == 0 {
         println!("Warning: Expected some failures or skipped files, but none were recorded");
         // Don't fail the test - the indexing system may be designed to handle bad syntax gracefully
     } else {
-        println!("Got expected failures/skips: {} failed, {} skipped", final_progress.failed_files, final_progress.skipped_files);
+        println!(
+            "Got expected failures/skips: {} failed, {} skipped",
+            final_progress.failed_files, final_progress.skipped_files
+        );
     }
-    
-    assert!(final_progress.is_complete(), "Should be complete despite errors");
+
+    assert!(
+        final_progress.is_complete(),
+        "Should be complete despite errors"
+    );
 
     Ok(())
 }

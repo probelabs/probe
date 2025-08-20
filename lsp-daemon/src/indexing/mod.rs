@@ -26,8 +26,6 @@ pub use language_strategies::{
     LspOperationStrategy, SymbolPriorityStrategy,
 };
 pub use manager::{IndexingManager, ManagerConfig, ManagerStatus, WorkerStats};
-pub use pipelines::{
-    IndexingPipeline, LanguagePipeline, PipelineConfig, PipelineResult,
-};
+pub use pipelines::{IndexingPipeline, LanguagePipeline, PipelineConfig, PipelineResult};
 pub use progress::{IndexingProgress, ProgressMetrics, ProgressSnapshot};
 pub use queue::{IndexingQueue, Priority, QueueItem, QueueMetrics, QueueSnapshot};

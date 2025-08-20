@@ -1,5 +1,5 @@
 //! Performance benchmarks for the indexing system
-//! 
+//!
 //! These benchmarks measure the performance characteristics of the indexing
 //! system including queue operations, file processing throughput, memory usage,
 //! and concurrent access patterns.
@@ -129,11 +129,68 @@ mod tests {{
     }}
 }}
 "#,
-            i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i,
-            i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i,
-            i, i, i, i
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i,
+            i
         );
-        
+
         fs::write(&file_path, content).await.unwrap();
         files.push(file_path);
     }
@@ -146,7 +203,7 @@ fn bench_queue_operations(c: &mut Criterion) {
     let rt = create_runtime();
 
     let mut group = c.benchmark_group("queue_operations");
-    
+
     // Benchmark enqueue operations
     for item_count in [100, 1000, 10000].iter() {
         group.throughput(Throughput::Elements(*item_count as u64));
@@ -156,7 +213,7 @@ fn bench_queue_operations(c: &mut Criterion) {
             |b, &size| {
                 b.to_async(&rt).iter(|| async {
                     let queue = IndexingQueue::unlimited();
-                    
+
                     for i in 0..size {
                         let priority = match i % 4 {
                             0 => Priority::Critical,
@@ -164,8 +221,9 @@ fn bench_queue_operations(c: &mut Criterion) {
                             2 => Priority::Medium,
                             _ => Priority::Low,
                         };
-                        let item = QueueItem::new(PathBuf::from(format!("/test/{}.rs", i)), priority)
-                            .with_estimated_size(1024);
+                        let item =
+                            QueueItem::new(PathBuf::from(format!("/test/{}.rs", i)), priority)
+                                .with_estimated_size(1024);
                         queue.enqueue(item).await.unwrap();
                     }
                 });
@@ -233,19 +291,20 @@ fn bench_priority_ordering(c: &mut Criterion) {
             |b, &size| {
                 b.to_async(&rt).iter(|| async {
                     let queue = IndexingQueue::unlimited();
-                    
+
                     // Enqueue items with mixed priorities
                     for i in 0..size {
                         let priority = match i % 4 {
                             0 => Priority::Critical,
-                            1 => Priority::High, 
+                            1 => Priority::High,
                             2 => Priority::Medium,
                             _ => Priority::Low,
                         };
-                        let item = QueueItem::new(PathBuf::from(format!("/test/{}.rs", i)), priority);
+                        let item =
+                            QueueItem::new(PathBuf::from(format!("/test/{}.rs", i)), priority);
                         queue.enqueue(item).await.unwrap();
                     }
-                    
+
                     // Dequeue and verify ordering
                     let mut previous_priority = Priority::Critical;
                     while let Some(item) = queue.dequeue().await {
@@ -276,17 +335,18 @@ fn bench_memory_tracking(c: &mut Criterion) {
             |b, &size| {
                 b.to_async(&rt).iter(|| async {
                     let queue = IndexingQueue::unlimited();
-                    
+
                     let mut expected_bytes = 0u64;
                     for i in 0..size {
                         let file_size = (i * 1024) as u64; // Varying file sizes
                         expected_bytes += file_size;
-                        
-                        let item = QueueItem::low_priority(PathBuf::from(format!("/test/{}.rs", i)))
-                            .with_estimated_size(file_size);
+
+                        let item =
+                            QueueItem::low_priority(PathBuf::from(format!("/test/{}.rs", i)))
+                                .with_estimated_size(file_size);
                         queue.enqueue(item).await.unwrap();
                     }
-                    
+
                     let metrics = queue.get_metrics().await;
                     assert_eq!(metrics.estimated_total_bytes, expected_bytes);
                 });
@@ -312,9 +372,9 @@ fn bench_concurrent_access(c: &mut Criterion) {
                 b.to_async(&rt).iter(|| async {
                     let queue = Arc::new(IndexingQueue::unlimited());
                     let items_per_worker = 1000 / workers;
-                    
+
                     let mut enqueue_handles = Vec::new();
-                    
+
                     // Spawn producer tasks
                     for worker_id in 0..workers {
                         let queue_clone = Arc::clone(&queue);
@@ -327,13 +387,13 @@ fn bench_concurrent_access(c: &mut Criterion) {
                         });
                         enqueue_handles.push(handle);
                     }
-                    
+
                     // Spawn consumer task
                     let consumer_queue = Arc::clone(&queue);
                     let consumer_handle = tokio::spawn(async move {
                         let mut consumed = 0;
                         let total_expected = workers * items_per_worker;
-                        
+
                         while consumed < total_expected {
                             if let Some(_item) = consumer_queue.dequeue().await {
                                 consumed += 1;
@@ -343,12 +403,12 @@ fn bench_concurrent_access(c: &mut Criterion) {
                         }
                         consumed
                     });
-                    
+
                     // Wait for all producers
                     for handle in enqueue_handles {
                         handle.await.unwrap();
                     }
-                    
+
                     // Wait for consumer
                     let consumed = consumer_handle.await.unwrap();
                     assert_eq!(consumed, workers * items_per_worker);
@@ -397,12 +457,15 @@ fn bench_file_discovery(c: &mut Criterion) {
                             discovery_batch_size: 50,
                             status_update_interval_secs: 1,
                         };
-                        
+
                         let manager = IndexingManager::new(config, language_detector);
                         let start = Instant::now();
-                        
-                        manager.start_indexing(temp_dir.path().to_path_buf()).await.unwrap();
-                        
+
+                        manager
+                            .start_indexing(temp_dir.path().to_path_buf())
+                            .await
+                            .unwrap();
+
                         // Wait for file discovery to complete
                         loop {
                             let progress = manager.get_progress().await;
@@ -411,10 +474,10 @@ fn bench_file_discovery(c: &mut Criterion) {
                             }
                             tokio::time::sleep(Duration::from_millis(10)).await;
                         }
-                        
+
                         let discovery_time = start.elapsed();
                         manager.stop_indexing().await.unwrap();
-                        
+
                         discovery_time
                     },
                     criterion::BatchSize::SmallInput,
@@ -453,7 +516,7 @@ fn bench_indexing_throughput(c: &mut Criterion) {
                     |temp_dir| async move {
                         let language_detector = Arc::new(LanguageDetector::new());
                         let config = ManagerConfig {
-                            max_workers: 4, // Multi-threaded for realistic performance
+                            max_workers: 4,                         // Multi-threaded for realistic performance
                             memory_budget_bytes: 256 * 1024 * 1024, // 256MB
                             memory_pressure_threshold: 0.8,
                             max_queue_size: size * 2,
@@ -465,12 +528,15 @@ fn bench_indexing_throughput(c: &mut Criterion) {
                             discovery_batch_size: 20,
                             status_update_interval_secs: 1,
                         };
-                        
+
                         let manager = IndexingManager::new(config, language_detector);
                         let start = Instant::now();
-                        
-                        manager.start_indexing(temp_dir.path().to_path_buf()).await.unwrap();
-                        
+
+                        manager
+                            .start_indexing(temp_dir.path().to_path_buf())
+                            .await
+                            .unwrap();
+
                         // Wait for indexing to complete
                         loop {
                             let progress = manager.get_progress().await;
@@ -479,13 +545,17 @@ fn bench_indexing_throughput(c: &mut Criterion) {
                             }
                             tokio::time::sleep(Duration::from_millis(100)).await;
                         }
-                        
+
                         let total_time = start.elapsed();
                         let final_progress = manager.get_progress().await;
-                        
+
                         manager.stop_indexing().await.unwrap();
-                        
-                        (total_time, final_progress.processed_files, final_progress.symbols_extracted)
+
+                        (
+                            total_time,
+                            final_progress.processed_files,
+                            final_progress.symbols_extracted,
+                        )
                     },
                     criterion::BatchSize::SmallInput,
                 );
@@ -510,7 +580,7 @@ fn bench_batch_operations(c: &mut Criterion) {
             |b, &size| {
                 b.to_async(&rt).iter(|| async {
                     let queue = IndexingQueue::unlimited();
-                    
+
                     // Create batch of items
                     let items: Vec<_> = (0..size)
                         .map(|i| {
@@ -524,7 +594,7 @@ fn bench_batch_operations(c: &mut Criterion) {
                                 .with_estimated_size(1024)
                         })
                         .collect();
-                    
+
                     // Benchmark batch enqueue
                     let enqueued = queue.enqueue_batch(items).await.unwrap();
                     assert_eq!(enqueued, size);
@@ -550,29 +620,30 @@ fn bench_memory_overhead(c: &mut Criterion) {
             |b, &size| {
                 b.to_async(&rt).iter(|| async {
                     let queue = IndexingQueue::unlimited();
-                    
+
                     // Fill queue and measure operations under memory pressure
                     for i in 0..size {
-                        let item = QueueItem::low_priority(PathBuf::from(format!("/memory/{}.rs", i)))
-                            .with_estimated_size(4096) // 4KB per item
-                            .with_metadata(serde_json::json!({
-                                "index": i,
-                                "large_field": "x".repeat(100), // Add some memory overhead
-                                "array": vec![i; 10]
-                            }));
+                        let item =
+                            QueueItem::low_priority(PathBuf::from(format!("/memory/{}.rs", i)))
+                                .with_estimated_size(4096) // 4KB per item
+                                .with_metadata(serde_json::json!({
+                                    "index": i,
+                                    "large_field": "x".repeat(100), // Add some memory overhead
+                                    "array": vec![i; 10]
+                                }));
                         queue.enqueue(item).await.unwrap();
                     }
-                    
+
                     // Verify memory tracking
                     let metrics = queue.get_metrics().await;
                     assert_eq!(metrics.total_items, size);
                     assert!(metrics.estimated_total_bytes > 0);
-                    
+
                     // Dequeue half the items
                     for _ in 0..(size / 2) {
                         queue.dequeue().await.unwrap();
                     }
-                    
+
                     let updated_metrics = queue.get_metrics().await;
                     assert_eq!(updated_metrics.total_items, size - (size / 2));
                 });

@@ -4,7 +4,7 @@ use crate::cache_types::{
 };
 use crate::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use crate::hash_utils::md5_hex_file;
-use crate::indexing::{IndexingConfig};
+use crate::indexing::{IndexingConfig, IndexingManager};
 use crate::ipc::{IpcListener, IpcStream};
 use crate::language_detector::{Language, LanguageDetector};
 use crate::logging::{LogBuffer, MemoryLogLayer};
@@ -87,8 +87,9 @@ pub struct LspDaemon {
     definition_cache: Arc<LspCache<DefinitionInfo>>,
     references_cache: Arc<LspCache<ReferencesInfo>>,
     hover_cache: Arc<LspCache<HoverInfo>>,
-    // Indexing configuration
+    // Indexing configuration and manager
     indexing_config: Arc<RwLock<IndexingConfig>>,
+    indexing_manager: Arc<tokio::sync::Mutex<Option<IndexingManager>>>,
 }
 
 impl LspDaemon {
@@ -182,12 +183,13 @@ impl LspDaemon {
         );
 
         // Load indexing configuration
-        let indexing_config = Arc::new(RwLock::new(
-            IndexingConfig::load().unwrap_or_else(|e| {
-                warn!("Failed to load indexing configuration: {}. Using defaults.", e);
-                IndexingConfig::default()
-            })
-        ));
+        let indexing_config = Arc::new(RwLock::new(IndexingConfig::load().unwrap_or_else(|e| {
+            warn!(
+                "Failed to load indexing configuration: {}. Using defaults.",
+                e
+            );
+            IndexingConfig::default()
+        })));
 
         Ok(Self {
             socket_path,
@@ -223,6 +225,7 @@ impl LspDaemon {
             references_cache,
             hover_cache,
             indexing_config,
+            indexing_manager: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -1068,6 +1071,68 @@ impl LspDaemon {
                     error: e.to_string(),
                 },
             },
+
+            // Indexing management requests
+            DaemonRequest::StartIndexing {
+                request_id,
+                workspace_root,
+                config,
+            } => match self
+                .handle_start_indexing(workspace_root.clone(), config)
+                .await
+            {
+                Ok(session_id) => DaemonResponse::IndexingStarted {
+                    request_id,
+                    workspace_root,
+                    session_id,
+                },
+                Err(e) => DaemonResponse::Error {
+                    request_id,
+                    error: e.to_string(),
+                },
+            },
+
+            DaemonRequest::StopIndexing { request_id, force } => {
+                match self.handle_stop_indexing(force).await {
+                    Ok(was_running) => DaemonResponse::IndexingStopped {
+                        request_id,
+                        was_running,
+                    },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::IndexingStatus { request_id } => {
+                match self.handle_indexing_status().await {
+                    Ok(status) => DaemonResponse::IndexingStatusResponse { request_id, status },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::IndexingConfig { request_id } => {
+                let config = self.indexing_config.read().await;
+                let protocol_config = self.convert_internal_to_protocol_config(&config);
+                DaemonResponse::IndexingConfigResponse {
+                    request_id,
+                    config: protocol_config,
+                }
+            }
+
+            DaemonRequest::SetIndexingConfig { request_id, config } => {
+                match self.handle_set_indexing_config(config.clone()).await {
+                    Ok(()) => DaemonResponse::IndexingConfigSet { request_id, config },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
 
             // TODO: Add handlers for Definition, References, Hover operations
             _ => DaemonResponse::Error {
@@ -1969,6 +2034,7 @@ impl LspDaemon {
             references_cache: self.references_cache.clone(),
             hover_cache: self.hover_cache.clone(),
             indexing_config: self.indexing_config.clone(),
+            indexing_manager: self.indexing_manager.clone(),
         }
     }
 
@@ -2147,6 +2213,215 @@ impl LspDaemon {
 
                 Ok(serde_json::to_string_pretty(&all_exports)?)
             }
+        }
+    }
+
+    // Indexing management methods
+    async fn handle_start_indexing(
+        &self,
+        workspace_root: PathBuf,
+        config: crate::protocol::IndexingConfig,
+    ) -> Result<String> {
+        use crate::indexing::manager::{IndexingManager, ManagerConfig};
+        use uuid::Uuid;
+
+        // Convert protocol config to internal manager config
+        let manager_config = ManagerConfig {
+            max_workers: config.max_workers.unwrap_or_else(|| num_cpus::get().max(2)),
+            memory_budget_bytes: config
+                .memory_budget_mb
+                .map(|mb| mb * 1024 * 1024)
+                .unwrap_or(512 * 1024 * 1024),
+            memory_pressure_threshold: 0.8,
+            max_queue_size: 10000,
+            exclude_patterns: config.exclude_patterns,
+            include_patterns: config.include_patterns,
+            max_file_size_bytes: config
+                .max_file_size_mb
+                .map(|mb| mb * 1024 * 1024)
+                .unwrap_or(10 * 1024 * 1024),
+            enabled_languages: config.languages,
+            incremental_mode: config.incremental.unwrap_or(true),
+            discovery_batch_size: 100,
+            status_update_interval_secs: 5,
+        };
+
+        // Create and start indexing manager
+        let manager = IndexingManager::new(manager_config, self.detector.clone());
+        let session_id = Uuid::new_v4().to_string();
+
+        // Start indexing
+        manager.start_indexing(workspace_root.clone()).await?;
+
+        // Store manager for future operations
+        *self.indexing_manager.lock().await = Some(manager);
+
+        info!("Started indexing for workspace: {:?}", workspace_root);
+        Ok(session_id)
+    }
+
+    async fn handle_stop_indexing(&self, force: bool) -> Result<bool> {
+        let mut manager_guard = self.indexing_manager.lock().await;
+        if let Some(manager) = manager_guard.as_ref() {
+            manager.stop_indexing().await?;
+            if force {
+                *manager_guard = None;
+            }
+            info!("Stopped indexing (force: {})", force);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn handle_indexing_status(&self) -> Result<crate::protocol::IndexingStatusInfo> {
+        use crate::protocol::{IndexingProgressInfo, IndexingQueueInfo};
+
+        let manager_guard = self.indexing_manager.lock().await;
+        if let Some(manager) = manager_guard.as_ref() {
+            let status = manager.get_status().await;
+            let progress = manager.get_progress().await;
+
+            let status_info = crate::protocol::IndexingStatusInfo {
+                manager_status: format!("{:?}", status),
+                progress: IndexingProgressInfo {
+                    total_files: progress.total_files,
+                    processed_files: progress.processed_files,
+                    failed_files: progress.failed_files,
+                    active_files: progress.active_files,
+                    skipped_files: progress.skipped_files,
+                    processed_bytes: progress.processed_bytes,
+                    symbols_extracted: progress.symbols_extracted,
+                    memory_usage_bytes: progress.memory_usage_bytes,
+                    peak_memory_bytes: progress.peak_memory_bytes,
+                    progress_ratio: if progress.total_files > 0 {
+                        (progress.processed_files + progress.failed_files + progress.skipped_files)
+                            as f64
+                            / progress.total_files as f64
+                    } else {
+                        0.0
+                    },
+                    files_per_second: if progress.elapsed_seconds > 0 {
+                        progress.processed_files as f64 / progress.elapsed_seconds as f64
+                    } else {
+                        0.0
+                    },
+                    bytes_per_second: if progress.elapsed_seconds > 0 {
+                        progress.processed_bytes as f64 / progress.elapsed_seconds as f64
+                    } else {
+                        0.0
+                    },
+                },
+                queue: IndexingQueueInfo {
+                    total_items: 0,   // TODO: Get from queue
+                    pending_items: 0, // TODO: Get from queue
+                    high_priority_items: 0,
+                    medium_priority_items: 0,
+                    low_priority_items: 0,
+                    is_paused: false,
+                    memory_pressure: false,
+                },
+                workers: vec![], // TODO: Get worker info
+                session_id: Some("current".to_string()),
+                started_at: Some(progress.elapsed_seconds),
+                elapsed_seconds: progress.elapsed_seconds,
+            };
+
+            Ok(status_info)
+        } else {
+            // No indexing manager active
+            let status_info = crate::protocol::IndexingStatusInfo {
+                manager_status: "Idle".to_string(),
+                progress: IndexingProgressInfo {
+                    total_files: 0,
+                    processed_files: 0,
+                    failed_files: 0,
+                    active_files: 0,
+                    skipped_files: 0,
+                    processed_bytes: 0,
+                    symbols_extracted: 0,
+                    memory_usage_bytes: 0,
+                    peak_memory_bytes: 0,
+                    progress_ratio: 0.0,
+                    files_per_second: 0.0,
+                    bytes_per_second: 0.0,
+                },
+                queue: IndexingQueueInfo {
+                    total_items: 0,
+                    pending_items: 0,
+                    high_priority_items: 0,
+                    medium_priority_items: 0,
+                    low_priority_items: 0,
+                    is_paused: false,
+                    memory_pressure: false,
+                },
+                workers: vec![],
+                session_id: None,
+                started_at: None,
+                elapsed_seconds: 0,
+            };
+
+            Ok(status_info)
+        }
+    }
+
+    async fn handle_set_indexing_config(
+        &self,
+        config: crate::protocol::IndexingConfig,
+    ) -> Result<()> {
+        // Convert protocol config to internal config
+        let internal_config = crate::indexing::IndexingConfig {
+            enabled: true,
+            auto_index: false,
+            watch_files: false,
+            default_depth: 3,
+            max_workers: config.max_workers.unwrap_or_else(|| num_cpus::get().max(2)),
+            memory_budget_mb: config.memory_budget_mb.unwrap_or(512),
+            memory_pressure_threshold: 0.8,
+            max_queue_size: 10000,
+            global_exclude_patterns: config.exclude_patterns,
+            global_include_patterns: config.include_patterns,
+            max_file_size_bytes: config
+                .max_file_size_mb
+                .map(|mb| mb * 1024 * 1024)
+                .unwrap_or(10 * 1024 * 1024),
+            incremental_mode: config.incremental.unwrap_or(true),
+            discovery_batch_size: 100,
+            status_update_interval_secs: 5,
+            file_processing_timeout_ms: 30000,
+            parallel_file_processing: true,
+            persist_cache: false,
+            cache_directory: None,
+            features: crate::indexing::IndexingFeatures::default(),
+            language_configs: std::collections::HashMap::new(),
+            priority_languages: vec![
+                crate::language_detector::Language::Rust,
+                crate::language_detector::Language::TypeScript,
+                crate::language_detector::Language::Python,
+            ],
+            disabled_languages: vec![],
+        };
+
+        // Update stored config
+        *self.indexing_config.write().await = internal_config;
+
+        info!("Updated indexing configuration");
+        Ok(())
+    }
+
+    fn convert_internal_to_protocol_config(
+        &self,
+        config: &crate::indexing::IndexingConfig,
+    ) -> crate::protocol::IndexingConfig {
+        crate::protocol::IndexingConfig {
+            max_workers: Some(config.max_workers),
+            memory_budget_mb: Some(config.memory_budget_mb),
+            exclude_patterns: config.global_exclude_patterns.clone(),
+            include_patterns: config.global_include_patterns.clone(),
+            max_file_size_mb: Some(config.max_file_size_bytes / (1024 * 1024)),
+            incremental: Some(config.incremental_mode),
+            languages: vec![], // TODO: Convert language configs
+            recursive: true,   // Default value
         }
     }
 }
