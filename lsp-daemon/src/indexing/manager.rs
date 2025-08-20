@@ -1185,10 +1185,8 @@ mod tests {
 
         for stat in &stats {
             assert!(stat.worker_id >= 1);
-            assert!(stat.files_processed >= 0);
-            assert!(stat.bytes_processed >= 0);
-            assert!(stat.symbols_extracted >= 0);
-            assert!(stat.errors_encountered >= 0);
+            // These are u64, no need to check >= 0
+            // Just verify they exist (implicit by the struct)
         }
 
         manager.stop_indexing().await.unwrap();
@@ -1324,7 +1322,7 @@ mod tests {
                     progress.processed_files + progress.failed_files + progress.skipped_files
                         <= progress.total_files
                 );
-                assert!(progress.active_workers >= 0);
+                // active_workers is usize, no need to check >= 0
 
                 if progress.is_complete() {
                     break;

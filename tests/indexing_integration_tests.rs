@@ -16,6 +16,7 @@ use tokio::time::{sleep, timeout};
 
 /// Test helper for creating temporary test projects with various file types
 struct TestProject {
+    #[allow(dead_code)]
     temp_dir: TempDir,
     root_path: PathBuf,
 }

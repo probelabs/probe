@@ -1311,6 +1311,7 @@ impl LspManager {
     }
 
     /// Handle index command - start indexing
+    #[allow(clippy::too_many_arguments)]
     async fn handle_index_command(
         workspace: Option<String>,
         languages: Option<String>,

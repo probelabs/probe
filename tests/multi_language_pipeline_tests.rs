@@ -16,6 +16,7 @@ use tokio::time::sleep;
 
 /// Test workspace for multi-language projects
 struct MultiLanguageWorkspace {
+    #[allow(dead_code)]
     temp_dir: TempDir,
     root_path: PathBuf,
 }

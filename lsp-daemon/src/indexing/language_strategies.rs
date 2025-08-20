@@ -483,49 +483,66 @@ impl LanguageStrategyFactory {
 
     /// Create Python-specific indexing strategy  
     fn create_python_strategy() -> LanguageIndexingStrategy {
-        let mut file_strategy = FileImportanceStrategy::default();
-        file_strategy.high_priority_patterns = vec![
-            "*__init__.py".to_string(),
-            "*setup.py".to_string(),
-            "*pyproject.toml".to_string(),
-            "*main.py".to_string(),
-            "*app.py".to_string(),
-            "*manage.py".to_string(),
-        ];
-        file_strategy.low_priority_patterns = vec![
-            "*/test_*".to_string(),
-            "*_test.py".to_string(),
-            "*/tests/*".to_string(),
-            "*/__pycache__/*".to_string(),
-            "*/venv/*".to_string(),
-            "*/env/*".to_string(),
-        ];
-        file_strategy.target_extensions = vec![".py".to_string(), ".pyi".to_string()];
+        let file_strategy = FileImportanceStrategy {
+            high_priority_patterns: vec![
+                "*__init__.py".to_string(),
+                "*setup.py".to_string(),
+                "*pyproject.toml".to_string(),
+                "*main.py".to_string(),
+                "*app.py".to_string(),
+                "*manage.py".to_string(),
+            ],
+            low_priority_patterns: vec![
+                "*/test_*".to_string(),
+                "*_test.py".to_string(),
+                "*/tests/*".to_string(),
+                "*/__pycache__/*".to_string(),
+                "*/venv/*".to_string(),
+                "*/env/*".to_string(),
+            ],
+            target_extensions: vec![".py".to_string(), ".pyi".to_string()],
+            ..Default::default()
+        };
 
-        let mut symbol_strategy = SymbolPriorityStrategy::default();
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("class".to_string(), IndexingPriority::Critical);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("decorator".to_string(), IndexingPriority::High);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("property".to_string(), IndexingPriority::Medium);
-        symbol_strategy.important_symbol_patterns = vec![
-            "__init__".to_string(),
-            "__new__".to_string(),
-            "__call__".to_string(),
-            "main".to_string(),
-        ];
+        let mut symbol_type_priorities = HashMap::new();
+        symbol_type_priorities.insert("function".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("class".to_string(), IndexingPriority::Critical);
+        symbol_type_priorities.insert("interface".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("type".to_string(), IndexingPriority::Medium);
+        symbol_type_priorities.insert("variable".to_string(), IndexingPriority::Low);
+        symbol_type_priorities.insert("decorator".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("property".to_string(), IndexingPriority::Medium);
 
-        let mut lsp_strategy = LspOperationStrategy::default();
-        lsp_strategy
-            .call_hierarchy_types
-            .extend(["class".to_string(), "decorator".to_string()]);
-        lsp_strategy
-            .reference_types
-            .extend(["import".to_string(), "decorator".to_string()]);
+        let symbol_strategy = SymbolPriorityStrategy {
+            symbol_type_priorities,
+            important_symbol_patterns: vec![
+                "__init__".to_string(),
+                "__new__".to_string(),
+                "__call__".to_string(),
+                "main".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let lsp_strategy = LspOperationStrategy {
+            call_hierarchy_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "constructor".to_string(),
+                "class".to_string(),
+                "decorator".to_string(),
+            ],
+            reference_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "class".to_string(),
+                "interface".to_string(),
+                "type".to_string(),
+                "import".to_string(),
+                "decorator".to_string(),
+            ],
+            ..Default::default()
+        };
 
         let mut metadata = HashMap::new();
         metadata.insert("ecosystem".to_string(), serde_json::json!("pip"));
@@ -549,54 +566,66 @@ impl LanguageStrategyFactory {
 
     /// Create Go-specific indexing strategy
     fn create_go_strategy() -> LanguageIndexingStrategy {
-        let mut file_strategy = FileImportanceStrategy::default();
-        file_strategy.high_priority_patterns = vec![
-            "*main.go".to_string(),
-            "*go.mod".to_string(),
-            "*go.sum".to_string(),
-            "*/cmd/*".to_string(),
-            "*/internal/*".to_string(),
-            "*/pkg/*".to_string(),
-        ];
-        file_strategy.low_priority_patterns = vec![
-            "*_test.go".to_string(),
-            "*/vendor/*".to_string(),
-            "*/testdata/*".to_string(),
-        ];
-        file_strategy.target_extensions = vec![".go".to_string()];
+        let file_strategy = FileImportanceStrategy {
+            high_priority_patterns: vec![
+                "*main.go".to_string(),
+                "*go.mod".to_string(),
+                "*go.sum".to_string(),
+                "*/cmd/*".to_string(),
+                "*/internal/*".to_string(),
+                "*/pkg/*".to_string(),
+            ],
+            low_priority_patterns: vec![
+                "*_test.go".to_string(),
+                "*/vendor/*".to_string(),
+                "*/testdata/*".to_string(),
+            ],
+            target_extensions: vec![".go".to_string()],
+            ..Default::default()
+        };
 
-        let mut symbol_strategy = SymbolPriorityStrategy::default();
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("interface".to_string(), IndexingPriority::Critical);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("package".to_string(), IndexingPriority::Critical);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("struct".to_string(), IndexingPriority::High);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("receiver".to_string(), IndexingPriority::High);
-        symbol_strategy.important_symbol_patterns = vec![
-            "main".to_string(),
-            "New".to_string(),
-            "init".to_string(),
-            "String".to_string(),
-            "Error".to_string(),
-        ];
+        let mut symbol_type_priorities = HashMap::new();
+        symbol_type_priorities.insert("function".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("class".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("interface".to_string(), IndexingPriority::Critical);
+        symbol_type_priorities.insert("type".to_string(), IndexingPriority::Medium);
+        symbol_type_priorities.insert("variable".to_string(), IndexingPriority::Low);
+        symbol_type_priorities.insert("package".to_string(), IndexingPriority::Critical);
+        symbol_type_priorities.insert("struct".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("receiver".to_string(), IndexingPriority::High);
 
-        let mut lsp_strategy = LspOperationStrategy::default();
-        lsp_strategy.call_hierarchy_types.extend([
-            "interface".to_string(),
-            "struct".to_string(),
-            "receiver".to_string(),
-        ]);
-        lsp_strategy.reference_types.extend([
-            "interface".to_string(),
-            "package".to_string(),
-            "import".to_string(),
-        ]);
+        let symbol_strategy = SymbolPriorityStrategy {
+            symbol_type_priorities,
+            important_symbol_patterns: vec![
+                "main".to_string(),
+                "New".to_string(),
+                "init".to_string(),
+                "String".to_string(),
+                "Error".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let lsp_strategy = LspOperationStrategy {
+            call_hierarchy_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "constructor".to_string(),
+                "interface".to_string(),
+                "struct".to_string(),
+                "receiver".to_string(),
+            ],
+            reference_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "class".to_string(),
+                "interface".to_string(),
+                "type".to_string(),
+                "package".to_string(),
+                "import".to_string(),
+            ],
+            ..Default::default()
+        };
 
         let mut metadata = HashMap::new();
         metadata.insert("ecosystem".to_string(), serde_json::json!("go"));
@@ -614,66 +643,74 @@ impl LanguageStrategyFactory {
 
     /// Create TypeScript-specific indexing strategy
     fn create_typescript_strategy() -> LanguageIndexingStrategy {
-        let mut file_strategy = FileImportanceStrategy::default();
-        file_strategy.high_priority_patterns = vec![
-            "*index.ts".to_string(),
-            "*index.tsx".to_string(),
-            "*main.ts".to_string(),
-            "*app.ts".to_string(),
-            "*app.tsx".to_string(),
-            "*package.json".to_string(),
-            "*tsconfig.json".to_string(),
-            "*/src/*".to_string(),
-            "*/types/*".to_string(),
-        ];
-        file_strategy.low_priority_patterns = vec![
-            "*.test.ts".to_string(),
-            "*.test.tsx".to_string(),
-            "*.spec.ts".to_string(),
-            "*.spec.tsx".to_string(),
-            "*/tests/*".to_string(),
-            "*/node_modules/*".to_string(),
-            "*/dist/*".to_string(),
-            "*/build/*".to_string(),
-        ];
-        file_strategy.target_extensions = vec![".ts".to_string(), ".tsx".to_string()];
+        let file_strategy = FileImportanceStrategy {
+            high_priority_patterns: vec![
+                "*index.ts".to_string(),
+                "*index.tsx".to_string(),
+                "*main.ts".to_string(),
+                "*app.ts".to_string(),
+                "*app.tsx".to_string(),
+                "*package.json".to_string(),
+                "*tsconfig.json".to_string(),
+                "*/src/*".to_string(),
+                "*/types/*".to_string(),
+            ],
+            low_priority_patterns: vec![
+                "*.test.ts".to_string(),
+                "*.test.tsx".to_string(),
+                "*.spec.ts".to_string(),
+                "*.spec.tsx".to_string(),
+                "*/tests/*".to_string(),
+                "*/node_modules/*".to_string(),
+                "*/dist/*".to_string(),
+                "*/build/*".to_string(),
+            ],
+            target_extensions: vec![".ts".to_string(), ".tsx".to_string()],
+            ..Default::default()
+        };
 
-        let mut symbol_strategy = SymbolPriorityStrategy::default();
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("interface".to_string(), IndexingPriority::Critical);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("type".to_string(), IndexingPriority::Critical);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("export".to_string(), IndexingPriority::High);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("decorator".to_string(), IndexingPriority::High);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("component".to_string(), IndexingPriority::High);
-        symbol_strategy.important_symbol_patterns = vec![
-            "default".to_string(),
-            "main".to_string(),
-            "App".to_string(),
-            "Component".to_string(),
-        ];
+        let mut symbol_type_priorities = HashMap::new();
+        symbol_type_priorities.insert("function".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("class".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("interface".to_string(), IndexingPriority::Critical);
+        symbol_type_priorities.insert("type".to_string(), IndexingPriority::Critical);
+        symbol_type_priorities.insert("variable".to_string(), IndexingPriority::Low);
+        symbol_type_priorities.insert("export".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("decorator".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("component".to_string(), IndexingPriority::High);
 
-        let mut lsp_strategy = LspOperationStrategy::default();
-        lsp_strategy.call_hierarchy_types.extend([
-            "interface".to_string(),
-            "type".to_string(),
-            "component".to_string(),
-            "decorator".to_string(),
-        ]);
-        lsp_strategy.reference_types.extend([
-            "interface".to_string(),
-            "type".to_string(),
-            "export".to_string(),
-            "import".to_string(),
-        ]);
+        let symbol_strategy = SymbolPriorityStrategy {
+            symbol_type_priorities,
+            important_symbol_patterns: vec![
+                "default".to_string(),
+                "main".to_string(),
+                "App".to_string(),
+                "Component".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let lsp_strategy = LspOperationStrategy {
+            call_hierarchy_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "constructor".to_string(),
+                "interface".to_string(),
+                "type".to_string(),
+                "component".to_string(),
+                "decorator".to_string(),
+            ],
+            reference_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "class".to_string(),
+                "interface".to_string(),
+                "type".to_string(),
+                "export".to_string(),
+                "import".to_string(),
+            ],
+            ..Default::default()
+        };
 
         let mut metadata = HashMap::new();
         metadata.insert("ecosystem".to_string(), serde_json::json!("npm"));
@@ -694,56 +731,72 @@ impl LanguageStrategyFactory {
 
     /// Create JavaScript-specific indexing strategy
     fn create_javascript_strategy() -> LanguageIndexingStrategy {
-        let mut file_strategy = FileImportanceStrategy::default();
-        file_strategy.high_priority_patterns = vec![
-            "*index.js".to_string(),
-            "*index.jsx".to_string(),
-            "*main.js".to_string(),
-            "*app.js".to_string(),
-            "*app.jsx".to_string(),
-            "*package.json".to_string(),
-            "*/src/*".to_string(),
-        ];
-        file_strategy.low_priority_patterns = vec![
-            "*.test.js".to_string(),
-            "*.test.jsx".to_string(),
-            "*.spec.js".to_string(),
-            "*.spec.jsx".to_string(),
-            "*/tests/*".to_string(),
-            "*/node_modules/*".to_string(),
-            "*/dist/*".to_string(),
-            "*/build/*".to_string(),
-        ];
-        file_strategy.target_extensions =
-            vec![".js".to_string(), ".jsx".to_string(), ".mjs".to_string()];
+        let file_strategy = FileImportanceStrategy {
+            high_priority_patterns: vec![
+                "*index.js".to_string(),
+                "*index.jsx".to_string(),
+                "*main.js".to_string(),
+                "*app.js".to_string(),
+                "*app.jsx".to_string(),
+                "*package.json".to_string(),
+                "*/src/*".to_string(),
+            ],
+            low_priority_patterns: vec![
+                "*.test.js".to_string(),
+                "*.test.jsx".to_string(),
+                "*.spec.js".to_string(),
+                "*.spec.jsx".to_string(),
+                "*/tests/*".to_string(),
+                "*/node_modules/*".to_string(),
+                "*/dist/*".to_string(),
+                "*/build/*".to_string(),
+            ],
+            target_extensions: vec![".js".to_string(), ".jsx".to_string(), ".mjs".to_string()],
+            ..Default::default()
+        };
 
-        let mut symbol_strategy = SymbolPriorityStrategy::default();
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("export".to_string(), IndexingPriority::High);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("prototype".to_string(), IndexingPriority::Medium);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("component".to_string(), IndexingPriority::High);
-        symbol_strategy.important_symbol_patterns = vec![
-            "default".to_string(),
-            "main".to_string(),
-            "App".to_string(),
-            "Component".to_string(),
-            "module".to_string(),
-        ];
+        let mut symbol_type_priorities = HashMap::new();
+        symbol_type_priorities.insert("function".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("class".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("interface".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("type".to_string(), IndexingPriority::Medium);
+        symbol_type_priorities.insert("variable".to_string(), IndexingPriority::Low);
+        symbol_type_priorities.insert("export".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("prototype".to_string(), IndexingPriority::Medium);
+        symbol_type_priorities.insert("component".to_string(), IndexingPriority::High);
 
-        let mut lsp_strategy = LspOperationStrategy::default();
-        lsp_strategy
-            .call_hierarchy_types
-            .extend(["prototype".to_string(), "component".to_string()]);
-        lsp_strategy.reference_types.extend([
-            "export".to_string(),
-            "import".to_string(),
-            "require".to_string(),
-        ]);
+        let symbol_strategy = SymbolPriorityStrategy {
+            symbol_type_priorities,
+            important_symbol_patterns: vec![
+                "default".to_string(),
+                "main".to_string(),
+                "App".to_string(),
+                "Component".to_string(),
+                "module".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let lsp_strategy = LspOperationStrategy {
+            call_hierarchy_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "constructor".to_string(),
+                "prototype".to_string(),
+                "component".to_string(),
+            ],
+            reference_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "class".to_string(),
+                "interface".to_string(),
+                "type".to_string(),
+                "export".to_string(),
+                "import".to_string(),
+                "require".to_string(),
+            ],
+            ..Default::default()
+        };
 
         let mut metadata = HashMap::new();
         metadata.insert("ecosystem".to_string(), serde_json::json!("npm"));
@@ -764,57 +817,69 @@ impl LanguageStrategyFactory {
 
     /// Create Java-specific indexing strategy
     fn create_java_strategy() -> LanguageIndexingStrategy {
-        let mut file_strategy = FileImportanceStrategy::default();
-        file_strategy.high_priority_patterns = vec![
-            "*Application.java".to_string(),
-            "*Main.java".to_string(),
-            "*src/main*".to_string(), // Fixed pattern
-            "*pom.xml".to_string(),
-            "*build.gradle".to_string(),
-        ];
-        file_strategy.low_priority_patterns = vec![
-            "*src/test*".to_string(), // Fixed pattern
-            "*Test.java".to_string(),
-            "*Tests.java".to_string(),
-            "*target*".to_string(), // Fixed pattern
-            "*build*".to_string(),  // Fixed pattern
-        ];
-        file_strategy.target_extensions = vec![".java".to_string()];
+        let file_strategy = FileImportanceStrategy {
+            high_priority_patterns: vec![
+                "*Application.java".to_string(),
+                "*Main.java".to_string(),
+                "*src/main*".to_string(), // Fixed pattern
+                "*pom.xml".to_string(),
+                "*build.gradle".to_string(),
+            ],
+            low_priority_patterns: vec![
+                "*src/test*".to_string(), // Fixed pattern
+                "*Test.java".to_string(),
+                "*Tests.java".to_string(),
+                "*target*".to_string(), // Fixed pattern
+                "*build*".to_string(),  // Fixed pattern
+            ],
+            target_extensions: vec![".java".to_string()],
+            ..Default::default()
+        };
 
-        let mut symbol_strategy = SymbolPriorityStrategy::default();
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("interface".to_string(), IndexingPriority::Critical);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("annotation".to_string(), IndexingPriority::High);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("abstract".to_string(), IndexingPriority::High);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("enum".to_string(), IndexingPriority::Medium);
-        symbol_strategy.important_symbol_patterns = vec![
-            "main".to_string(),
-            "Application".to_string(),
-            "Service".to_string(),
-            "Controller".to_string(),
-            "Repository".to_string(),
-        ];
+        let mut symbol_type_priorities = HashMap::new();
+        symbol_type_priorities.insert("function".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("class".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("interface".to_string(), IndexingPriority::Critical);
+        symbol_type_priorities.insert("type".to_string(), IndexingPriority::Medium);
+        symbol_type_priorities.insert("variable".to_string(), IndexingPriority::Low);
+        symbol_type_priorities.insert("annotation".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("abstract".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("enum".to_string(), IndexingPriority::Medium);
 
-        let mut lsp_strategy = LspOperationStrategy::default();
-        lsp_strategy.call_hierarchy_types.extend([
-            "interface".to_string(),
-            "annotation".to_string(),
-            "abstract".to_string(),
-        ]);
-        lsp_strategy.reference_types.extend([
-            "interface".to_string(),
-            "annotation".to_string(),
-            "import".to_string(),
-            "extends".to_string(),
-            "implements".to_string(),
-        ]);
+        let symbol_strategy = SymbolPriorityStrategy {
+            symbol_type_priorities,
+            important_symbol_patterns: vec![
+                "main".to_string(),
+                "Application".to_string(),
+                "Service".to_string(),
+                "Controller".to_string(),
+                "Repository".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let lsp_strategy = LspOperationStrategy {
+            call_hierarchy_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "constructor".to_string(),
+                "interface".to_string(),
+                "annotation".to_string(),
+                "abstract".to_string(),
+            ],
+            reference_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "class".to_string(),
+                "interface".to_string(),
+                "type".to_string(),
+                "annotation".to_string(),
+                "import".to_string(),
+                "extends".to_string(),
+                "implements".to_string(),
+            ],
+            ..Default::default()
+        };
 
         let mut metadata = HashMap::new();
         metadata.insert("ecosystem".to_string(), serde_json::json!("maven"));
@@ -838,44 +903,54 @@ impl LanguageStrategyFactory {
 
     /// Create C-specific indexing strategy
     fn create_c_strategy() -> LanguageIndexingStrategy {
-        let mut file_strategy = FileImportanceStrategy::default();
-        file_strategy.high_priority_patterns = vec![
-            "*main.c".to_string(),
-            "*.h".to_string(),
-            "*Makefile".to_string(),
-            "*CMakeLists.txt".to_string(),
-            "*/include/*".to_string(),
-        ];
-        file_strategy.low_priority_patterns = vec![
-            "*/test/*".to_string(),
-            "*test.c".to_string(),
-            "*/build/*".to_string(),
-        ];
-        file_strategy.target_extensions = vec![".c".to_string(), ".h".to_string()];
+        let file_strategy = FileImportanceStrategy {
+            high_priority_patterns: vec![
+                "*main.c".to_string(),
+                "*.h".to_string(),
+                "*Makefile".to_string(),
+                "*CMakeLists.txt".to_string(),
+                "*/include/*".to_string(),
+            ],
+            low_priority_patterns: vec![
+                "*/test/*".to_string(),
+                "*test.c".to_string(),
+                "*/build/*".to_string(),
+            ],
+            target_extensions: vec![".c".to_string(), ".h".to_string()],
+            ..Default::default()
+        };
 
-        let mut symbol_strategy = SymbolPriorityStrategy::default();
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("preprocessor".to_string(), IndexingPriority::High);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("struct".to_string(), IndexingPriority::High);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("union".to_string(), IndexingPriority::Medium);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("typedef".to_string(), IndexingPriority::High);
-        symbol_strategy.important_symbol_patterns = vec![
-            "main".to_string(),
-            "init".to_string(),
-            "cleanup".to_string(),
-        ];
+        let mut symbol_type_priorities = HashMap::new();
+        symbol_type_priorities.insert("function".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("class".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("interface".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("type".to_string(), IndexingPriority::Medium);
+        symbol_type_priorities.insert("variable".to_string(), IndexingPriority::Low);
+        symbol_type_priorities.insert("preprocessor".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("struct".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("union".to_string(), IndexingPriority::Medium);
+        symbol_type_priorities.insert("typedef".to_string(), IndexingPriority::High);
 
-        let mut lsp_strategy = LspOperationStrategy::default();
-        lsp_strategy
-            .call_hierarchy_types
-            .extend(["struct".to_string(), "typedef".to_string()]);
+        let symbol_strategy = SymbolPriorityStrategy {
+            symbol_type_priorities,
+            important_symbol_patterns: vec![
+                "main".to_string(),
+                "init".to_string(),
+                "cleanup".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let lsp_strategy = LspOperationStrategy {
+            call_hierarchy_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "constructor".to_string(),
+                "struct".to_string(),
+                "typedef".to_string(),
+            ],
+            ..Default::default()
+        };
 
         let mut metadata = HashMap::new();
         metadata.insert("ecosystem".to_string(), serde_json::json!("system"));
@@ -895,58 +970,72 @@ impl LanguageStrategyFactory {
 
     /// Create C++-specific indexing strategy
     fn create_cpp_strategy() -> LanguageIndexingStrategy {
-        let mut file_strategy = FileImportanceStrategy::default();
-        file_strategy.high_priority_patterns = vec![
-            "*main.cpp".to_string(),
-            "*.hpp".to_string(),
-            "*.h".to_string(),
-            "*CMakeLists.txt".to_string(),
-            "*/include/*".to_string(),
-        ];
-        file_strategy.low_priority_patterns = vec![
-            "*/test/*".to_string(),
-            "*test.cpp".to_string(),
-            "*/build/*".to_string(),
-        ];
-        file_strategy.target_extensions = vec![
-            ".cpp".to_string(),
-            ".cc".to_string(),
-            ".cxx".to_string(),
-            ".hpp".to_string(),
-            ".hxx".to_string(),
-            ".h".to_string(),
-        ];
+        let file_strategy = FileImportanceStrategy {
+            high_priority_patterns: vec![
+                "*main.cpp".to_string(),
+                "*.hpp".to_string(),
+                "*.h".to_string(),
+                "*CMakeLists.txt".to_string(),
+                "*/include/*".to_string(),
+            ],
+            low_priority_patterns: vec![
+                "*/test/*".to_string(),
+                "*test.cpp".to_string(),
+                "*/build/*".to_string(),
+            ],
+            target_extensions: vec![
+                ".cpp".to_string(),
+                ".cc".to_string(),
+                ".cxx".to_string(),
+                ".hpp".to_string(),
+                ".hxx".to_string(),
+                ".h".to_string(),
+            ],
+            ..Default::default()
+        };
 
-        let mut symbol_strategy = SymbolPriorityStrategy::default();
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("template".to_string(), IndexingPriority::Critical);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("namespace".to_string(), IndexingPriority::High);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("struct".to_string(), IndexingPriority::High);
-        symbol_strategy
-            .symbol_type_priorities
-            .insert("union".to_string(), IndexingPriority::Medium);
-        symbol_strategy.important_symbol_patterns = vec![
-            "main".to_string(),
-            "std".to_string(),
-            "template".to_string(),
-        ];
+        let mut symbol_type_priorities = HashMap::new();
+        symbol_type_priorities.insert("function".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("class".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("interface".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("type".to_string(), IndexingPriority::Medium);
+        symbol_type_priorities.insert("variable".to_string(), IndexingPriority::Low);
+        symbol_type_priorities.insert("template".to_string(), IndexingPriority::Critical);
+        symbol_type_priorities.insert("namespace".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("struct".to_string(), IndexingPriority::High);
+        symbol_type_priorities.insert("union".to_string(), IndexingPriority::Medium);
 
-        let mut lsp_strategy = LspOperationStrategy::default();
-        lsp_strategy.call_hierarchy_types.extend([
-            "template".to_string(),
-            "namespace".to_string(),
-            "struct".to_string(),
-        ]);
-        lsp_strategy.reference_types.extend([
-            "template".to_string(),
-            "namespace".to_string(),
-            "using".to_string(),
-        ]);
+        let symbol_strategy = SymbolPriorityStrategy {
+            symbol_type_priorities,
+            important_symbol_patterns: vec![
+                "main".to_string(),
+                "std".to_string(),
+                "template".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let lsp_strategy = LspOperationStrategy {
+            call_hierarchy_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "constructor".to_string(),
+                "template".to_string(),
+                "namespace".to_string(),
+                "struct".to_string(),
+            ],
+            reference_types: vec![
+                "function".to_string(),
+                "method".to_string(),
+                "class".to_string(),
+                "interface".to_string(),
+                "type".to_string(),
+                "template".to_string(),
+                "namespace".to_string(),
+                "using".to_string(),
+            ],
+            ..Default::default()
+        };
 
         let mut metadata = HashMap::new();
         metadata.insert("ecosystem".to_string(), serde_json::json!("system"));
@@ -972,8 +1061,10 @@ impl LanguageStrategyFactory {
         );
 
         // For unknown languages, use low priority since we don't know how to process them well
-        let mut file_strategy = FileImportanceStrategy::default();
-        file_strategy.base_priority = IndexingPriority::Low;
+        let file_strategy = FileImportanceStrategy {
+            base_priority: IndexingPriority::Low,
+            ..Default::default()
+        };
 
         LanguageIndexingStrategy {
             language,

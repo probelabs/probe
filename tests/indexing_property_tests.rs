@@ -93,7 +93,7 @@ proptest! {
     #[test]
     fn prop_queue_priority_ordering(items in queue_items_strategy()) {
         let rt = runtime();
-        rt.block_on(async {
+        let _ = rt.block_on(async {
             let queue = IndexingQueue::unlimited();
 
             // Enqueue all items
@@ -122,7 +122,7 @@ proptest! {
     #[test]
     fn prop_queue_metrics_consistency(items in queue_items_strategy()) {
         let rt = runtime();
-        rt.block_on(async {
+        let _ = rt.block_on(async {
             let max_size = if items.is_empty() { 0 } else { items.len() + 10 };
             let queue = IndexingQueue::new(max_size);
 
@@ -172,7 +172,7 @@ proptest! {
         )
     ) {
         let rt = runtime();
-        rt.block_on(async {
+        let _ = rt.block_on(async {
             let queue = IndexingQueue::unlimited();
             let mut expected_bytes = 0u64;
 
@@ -210,7 +210,7 @@ proptest! {
         items in queue_items_strategy()
     ) {
         let rt = runtime();
-        rt.block_on(async {
+        let _ = rt.block_on(async {
             let queue = IndexingQueue::new(max_size);
 
             let mut enqueued_count = 0;
@@ -238,7 +238,7 @@ proptest! {
     #[test]
     fn prop_paused_queue_behavior(items in proptest::collection::vec(queue_item_strategy(), 1..20)) {
         let rt = runtime();
-        rt.block_on(async {
+        let _ = rt.block_on(async {
             let queue = IndexingQueue::unlimited();
 
             // Pause queue
@@ -261,7 +261,7 @@ proptest! {
     #[test]
     fn prop_batch_vs_individual_enqueue(items in queue_items_strategy()) {
         let rt = runtime();
-        rt.block_on(async {
+        let _ = rt.block_on(async {
             let queue1 = IndexingQueue::unlimited();
             let queue2 = IndexingQueue::unlimited();
 
@@ -294,7 +294,7 @@ proptest! {
         clear_priority in priority_strategy()
     ) {
         let rt = runtime();
-        rt.block_on(async {
+        let _ = rt.block_on(async {
             let queue = IndexingQueue::unlimited();
 
             // Enqueue all items
@@ -383,7 +383,7 @@ proptest! {
         remove_pattern in r"[a-z]{1,10}"
     ) {
         let rt = runtime();
-        rt.block_on(async {
+        let _ = rt.block_on(async {
             let queue = IndexingQueue::unlimited();
 
             // Enqueue all items
@@ -438,7 +438,7 @@ proptest! {
         items2 in proptest::collection::vec(queue_item_strategy(), 10..50)
     ) {
         let rt = runtime();
-        rt.block_on(async {
+        let _ = rt.block_on(async {
             let queue = Arc::new(IndexingQueue::unlimited());
             let total_items = items1.len() + items2.len();
 
@@ -497,7 +497,7 @@ proptest! {
         extensions in proptest::collection::vec(r"[a-z]{2,4}", 1..5)
     ) {
         let rt = runtime();
-        rt.block_on(async {
+        let _ = rt.block_on(async {
             // Create temporary directory structure
             let temp_dir = tempfile::tempdir().unwrap();
             let root = temp_dir.path();

@@ -21,7 +21,8 @@ use tokio::time::sleep;
 
 /// Helper for creating concurrent test workspaces
 struct ConcurrentTestWorkspace {
-    temp_dir: TempDir,
+    #[allow(dead_code)]
+    temp_dir: TempDir, // Keeps the temp directory alive
     root_path: PathBuf,
 }
 
