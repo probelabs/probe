@@ -832,7 +832,7 @@ mod tests {
     #[tokio::test]
     async fn test_queue_item_age_calculation() {
         let item = QueueItem::low_priority(PathBuf::from("/test.rs"));
-        
+
         // Age should be very small immediately after creation
         let age = item.age();
         assert!(age.as_millis() < 100);
@@ -862,18 +862,18 @@ mod tests {
         assert_eq!(Priority::from_str("CRITICAL"), Some(Priority::Critical));
         assert_eq!(Priority::from_str("crit"), Some(Priority::Critical));
         assert_eq!(Priority::from_str("3"), Some(Priority::Critical));
-        
+
         assert_eq!(Priority::from_str("high"), Some(Priority::High));
         assert_eq!(Priority::from_str("h"), Some(Priority::High));
         assert_eq!(Priority::from_str("2"), Some(Priority::High));
-        
+
         assert_eq!(Priority::from_str("medium"), Some(Priority::Medium));
         assert_eq!(Priority::from_str("med"), Some(Priority::Medium));
         assert_eq!(Priority::from_str("1"), Some(Priority::Medium));
-        
+
         assert_eq!(Priority::from_str("low"), Some(Priority::Low));
         assert_eq!(Priority::from_str("0"), Some(Priority::Low));
-        
+
         assert_eq!(Priority::from_str("invalid"), None);
     }
 
@@ -882,10 +882,8 @@ mod tests {
         let queue = IndexingQueue::unlimited();
 
         // Enqueue items with size estimates
-        let item1 = QueueItem::high_priority(PathBuf::from("/file1.rs"))
-            .with_estimated_size(1024);
-        let item2 = QueueItem::low_priority(PathBuf::from("/file2.rs"))
-            .with_estimated_size(2048);
+        let item1 = QueueItem::high_priority(PathBuf::from("/file1.rs")).with_estimated_size(1024);
+        let item2 = QueueItem::low_priority(PathBuf::from("/file2.rs")).with_estimated_size(2048);
 
         queue.enqueue(item1).await.unwrap();
         queue.enqueue(item2).await.unwrap();
@@ -909,14 +907,22 @@ mod tests {
         let queue = IndexingQueue::unlimited();
 
         // Enqueue items across priorities
-        queue.enqueue(QueueItem::critical_priority(PathBuf::from("/c.rs")))
-            .await.unwrap();
-        queue.enqueue(QueueItem::high_priority(PathBuf::from("/h.rs")))
-            .await.unwrap();
-        queue.enqueue(QueueItem::medium_priority(PathBuf::from("/m.rs")))
-            .await.unwrap();
-        queue.enqueue(QueueItem::low_priority(PathBuf::from("/l.rs")))
-            .await.unwrap();
+        queue
+            .enqueue(QueueItem::critical_priority(PathBuf::from("/c.rs")))
+            .await
+            .unwrap();
+        queue
+            .enqueue(QueueItem::high_priority(PathBuf::from("/h.rs")))
+            .await
+            .unwrap();
+        queue
+            .enqueue(QueueItem::medium_priority(PathBuf::from("/m.rs")))
+            .await
+            .unwrap();
+        queue
+            .enqueue(QueueItem::low_priority(PathBuf::from("/l.rs")))
+            .await
+            .unwrap();
 
         assert_eq!(queue.len(), 4);
 
@@ -982,15 +988,21 @@ mod tests {
         let queue = IndexingQueue::new(50);
 
         // Add some items
-        queue.enqueue(QueueItem::high_priority(PathBuf::from("/h.rs"))).await.unwrap();
-        queue.enqueue(QueueItem::low_priority(PathBuf::from("/l.rs"))).await.unwrap();
+        queue
+            .enqueue(QueueItem::high_priority(PathBuf::from("/h.rs")))
+            .await
+            .unwrap();
+        queue
+            .enqueue(QueueItem::low_priority(PathBuf::from("/l.rs")))
+            .await
+            .unwrap();
 
         let snapshot = queue.get_snapshot().await;
-        
+
         // Test serialization
         let json = serde_json::to_string(&snapshot).unwrap();
         let deserialized: QueueSnapshot = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.total_items, 2);
         assert_eq!(deserialized.high_priority_items, 1);
         assert_eq!(deserialized.low_priority_items, 1);
@@ -1005,11 +1017,11 @@ mod tests {
         // Operations on empty queue
         assert!(queue.dequeue().await.is_none());
         assert!(queue.peek().await.is_none());
-        
+
         // Clear empty queue should not panic
         queue.clear().await;
         queue.clear_priority(Priority::High).await;
-        
+
         // Remove matching on empty queue
         let removed = queue.remove_matching(|_| true).await;
         assert_eq!(removed, 0);
@@ -1043,10 +1055,10 @@ mod tests {
     async fn test_queue_item_unique_ids() {
         let item1 = QueueItem::new(PathBuf::from("/test1.rs"), Priority::High);
         let item2 = QueueItem::new(PathBuf::from("/test2.rs"), Priority::High);
-        
+
         // IDs should be unique
         assert_ne!(item1.id, item2.id);
-        
+
         // IDs should be sequential
         assert!(item2.id > item1.id);
     }
@@ -1076,14 +1088,14 @@ mod tests {
         queue.pause();
 
         let enqueued_count = enqueue_handle.await.unwrap();
-        
+
         // Should have enqueued some items before pause
         assert!(enqueued_count > 0);
         assert!(enqueued_count < 100); // But not all due to pause
-        
+
         // After pause, dequeue should return None
         assert!(queue.dequeue().await.is_none());
-        
+
         // Resume and verify we can dequeue
         queue.resume();
         assert!(queue.dequeue().await.is_some());

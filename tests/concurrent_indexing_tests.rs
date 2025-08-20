@@ -10,7 +10,7 @@ use lsp_daemon::indexing::{
 use lsp_daemon::LanguageDetector;
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::{Duration, Instant};
@@ -30,7 +30,10 @@ impl ConcurrentTestWorkspace {
         let temp_dir = tempfile::tempdir()?;
         let root_path = temp_dir.path().to_path_buf();
         fs::create_dir_all(root_path.join("src")).await?;
-        Ok(Self { temp_dir, root_path })
+        Ok(Self {
+            temp_dir,
+            root_path,
+        })
     }
 
     fn path(&self) -> &std::path::Path {
@@ -41,20 +44,20 @@ impl ConcurrentTestWorkspace {
         for i in 0..count {
             let content = format!(
                 r#"
-// File {} for concurrent testing
-pub fn function_{}() -> i32 {{
-    let value_{} = {};
-    println!("Processing item {{}}", value_{});
-    value_{}
+// File {i} for concurrent testing
+pub fn function_{i}() -> i32 {{
+    let value_{i} = {i};
+    println!("Processing item {{}}", value_{i});
+    value_{i}
 }}
 
-pub struct Struct{} {{
+pub struct Struct{i} {{
     field: i32,
 }}
 
-impl Struct{} {{
+impl Struct{i} {{
     pub fn new() -> Self {{
-        Self {{ field: {} }}
+        Self {{ field: {i} }}
     }}
     
     pub fn get_field(&self) -> i32 {{
@@ -71,23 +74,22 @@ mod tests {{
     use super::*;
 
     #[test]
-    fn test_function_{}() {{
-        assert_eq!(function_{}(), {});
+    fn test_function_{i}() {{
+        assert_eq!(function_{i}(), {i});
     }}
     
     #[test]
-    fn test_struct_{}() {{
-        let mut s = Struct{}::new();
-        assert_eq!(s.get_field(), {});
+    fn test_struct_{i}() {{
+        let mut s = Struct{i}::new();
+        assert_eq!(s.get_field(), {i});
         s.set_field(42);
         assert_eq!(s.get_field(), 42);
     }}
 }}
-"#,
-                i, i, i, i, i, i, i, i, i, i, i, i, i, i, i
+"#
             );
 
-            let file_path = self.root_path.join(format!("src/file_{:04}.rs", i));
+            let file_path = self.root_path.join(format!("src/file_{i:04}.rs"));
             fs::write(file_path, content).await?;
         }
         Ok(())
@@ -118,7 +120,7 @@ async fn test_queue_concurrent_enqueue_dequeue() -> Result<()> {
             barrier_clone.wait().await;
 
             for item_id in 0..ITEMS_PER_PRODUCER {
-                let path = format!("/concurrent/producer_{}/item_{}.rs", producer_id, item_id);
+                let path = format!("/concurrent/producer_{producer_id}/item_{item_id}.rs");
                 let priority = match item_id % 4 {
                     0 => Priority::Critical,
                     1 => Priority::High,
@@ -169,16 +171,18 @@ async fn test_queue_concurrent_enqueue_dequeue() -> Result<()> {
                     None => {
                         // No more items, yield and check if we're done
                         tokio::task::yield_now().await;
-                        
+
                         // Stop if we've dequeued all expected items
-                        if dequeued_count_clone.load(Ordering::Relaxed) >= NUM_PRODUCERS * ITEMS_PER_PRODUCER {
+                        if dequeued_count_clone.load(Ordering::Relaxed)
+                            >= NUM_PRODUCERS * ITEMS_PER_PRODUCER
+                        {
                             break;
                         }
                     }
                 }
             }
 
-            println!("Consumer {} dequeued {} items", consumer_id, local_dequeued);
+            println!("Consumer {consumer_id} dequeued {local_dequeued} items");
         });
 
         handles.push(handle);
@@ -201,8 +205,9 @@ async fn test_queue_concurrent_enqueue_dequeue() -> Result<()> {
     assert_eq!(final_metrics.total_enqueued as usize, final_enqueued);
     assert_eq!(final_metrics.total_dequeued as usize, final_dequeued);
 
-    println!("Concurrent queue test: {} enqueued, {} dequeued",
-        final_enqueued, final_dequeued);
+    println!(
+        "Concurrent queue test: {final_enqueued} enqueued, {final_dequeued} dequeued"
+    );
 
     Ok(())
 }
@@ -238,7 +243,8 @@ async fn test_progress_concurrent_updates() -> Result<()> {
                     }
                     1 => {
                         progress_clone.start_file();
-                        progress_clone.fail_file(&format!("Worker {} error {}", worker_id, update_id));
+                        progress_clone
+                            .fail_file(&format!("Worker {worker_id} error {update_id}"));
                     }
                     2 => {
                         progress_clone.skip_file("Already processed");
@@ -276,10 +282,9 @@ async fn test_progress_concurrent_updates() -> Result<()> {
     );
     assert!(final_snapshot.is_complete());
 
-    println!("Concurrent progress test - Processed: {}, Failed: {}, Skipped: {}",
-        final_snapshot.processed_files,
-        final_snapshot.failed_files,
-        final_snapshot.skipped_files
+    println!(
+        "Concurrent progress test - Processed: {}, Failed: {}, Skipped: {}",
+        final_snapshot.processed_files, final_snapshot.failed_files, final_snapshot.skipped_files
     );
 
     Ok(())
@@ -291,7 +296,7 @@ async fn test_manager_concurrent_start_stop() -> Result<()> {
     workspace.create_files(20).await?;
 
     const NUM_OPERATIONS: usize = 10;
-    
+
     let language_detector = Arc::new(LanguageDetector::new());
     let config = ManagerConfig {
         max_workers: 2,
@@ -329,13 +334,13 @@ async fn test_manager_concurrent_start_stop() -> Result<()> {
                 match manager_clone.start_indexing(workspace_path).await {
                     Ok(_) => {
                         successful_starts_clone.fetch_add(1, Ordering::Relaxed);
-                        println!("Operation {}: Started indexing", operation_id);
-                        
+                        println!("Operation {operation_id}: Started indexing");
+
                         // Let it run for a bit
                         sleep(Duration::from_millis(200)).await;
                     }
                     Err(e) => {
-                        println!("Operation {}: Failed to start: {}", operation_id, e);
+                        println!("Operation {operation_id}: Failed to start: {e}");
                     }
                 }
             } else {
@@ -343,10 +348,10 @@ async fn test_manager_concurrent_start_stop() -> Result<()> {
                 match manager_clone.stop_indexing().await {
                     Ok(_) => {
                         successful_stops_clone.fetch_add(1, Ordering::Relaxed);
-                        println!("Operation {}: Stopped indexing", operation_id);
+                        println!("Operation {operation_id}: Stopped indexing");
                     }
                     Err(e) => {
-                        println!("Operation {}: Failed to stop: {}", operation_id, e);
+                        println!("Operation {operation_id}: Failed to stop: {e}");
                     }
                 }
             }
@@ -366,7 +371,9 @@ async fn test_manager_concurrent_start_stop() -> Result<()> {
     let starts = successful_starts.load(Ordering::Relaxed);
     let stops = successful_stops.load(Ordering::Relaxed);
 
-    println!("Concurrent start/stop test: {} successful starts, {} successful stops", starts, stops);
+    println!(
+        "Concurrent start/stop test: {starts} successful starts, {stops} successful stops"
+    );
 
     // Should have at least one successful start
     assert!(starts > 0, "Expected at least one successful start");
@@ -394,7 +401,7 @@ async fn test_queue_stress_with_size_limits() -> Result<()> {
 
         let handle = tokio::spawn(async move {
             for item_id in 0..ITEMS_PER_PRODUCER {
-                let path = format!("/stress/producer_{}/item_{}.rs", producer_id, item_id);
+                let path = format!("/stress/producer_{producer_id}/item_{item_id}.rs");
                 let item = QueueItem::high_priority(PathBuf::from(path));
 
                 match queue_clone.enqueue(item).await {
@@ -446,11 +453,19 @@ async fn test_queue_stress_with_size_limits() -> Result<()> {
     // Verify queue size constraints were respected
     assert!(queue.len() <= MAX_QUEUE_SIZE);
 
-    println!("Queue stress test: {} accepted, {} rejected, {} consumed, final queue size: {}",
-        final_accepted, final_rejected, consumed, queue.len());
+    println!(
+        "Queue stress test: {} accepted, {} rejected, {} consumed, final queue size: {}",
+        final_accepted,
+        final_rejected,
+        consumed,
+        queue.len()
+    );
 
     // Total attempted should equal accepted + rejected
-    assert_eq!(final_accepted + final_rejected, NUM_PRODUCERS * ITEMS_PER_PRODUCER);
+    assert_eq!(
+        final_accepted + final_rejected,
+        NUM_PRODUCERS * ITEMS_PER_PRODUCER
+    );
 
     Ok(())
 }
@@ -480,7 +495,9 @@ async fn test_concurrent_queue_operations_mixed() -> Result<()> {
                 match op_id % 5 {
                     0 => {
                         // Enqueue
-                        let item = QueueItem::medium_priority(PathBuf::from(format!("/mixed/task_{}/op_{}.rs", task_id, op_id)));
+                        let item = QueueItem::medium_priority(PathBuf::from(format!(
+                            "/mixed/task_{task_id}/op_{op_id}.rs"
+                        )));
                         if queue_clone.enqueue(item).await.unwrap_or(false) {
                             operation_counts_clone[0].fetch_add(1, Ordering::Relaxed);
                         }
@@ -533,8 +550,9 @@ async fn test_concurrent_queue_operations_mixed() -> Result<()> {
     let clears = operation_counts[3].load(Ordering::Relaxed);
     let metrics_calls = operation_counts[4].load(Ordering::Relaxed);
 
-    println!("Mixed operations test: {} enqueues, {} dequeues, {} peeks, {} clears, {} metrics",
-        enqueues, dequeues, peeks, clears, metrics_calls);
+    println!(
+        "Mixed operations test: {enqueues} enqueues, {dequeues} dequeues, {peeks} peeks, {clears} clears, {metrics_calls} metrics"
+    );
 
     // Verify queue is in consistent state
     let final_metrics = queue.get_metrics().await;
@@ -564,7 +582,9 @@ async fn test_manager_worker_statistics_thread_safety() -> Result<()> {
     };
 
     let manager = Arc::new(IndexingManager::new(config, language_detector));
-    manager.start_indexing(workspace.path().to_path_buf()).await?;
+    manager
+        .start_indexing(workspace.path().to_path_buf())
+        .await?;
 
     // Concurrently access worker statistics while indexing is running
     let stat_access_count = Arc::new(AtomicUsize::new(0));
@@ -615,7 +635,8 @@ async fn test_manager_worker_statistics_thread_safety() -> Result<()> {
 
     manager.stop_indexing().await?;
 
-    println!("Concurrent statistics access: {} progress calls, final: {} files processed",
+    println!(
+        "Concurrent statistics access: {} progress calls, final: {} files processed",
         stat_access_count.load(Ordering::Relaxed),
         final_progress.processed_files
     );
@@ -623,7 +644,7 @@ async fn test_manager_worker_statistics_thread_safety() -> Result<()> {
     // Verify statistics are consistent
     assert_eq!(final_worker_stats.len(), 4); // Should have 4 workers
     let total_worker_files: u64 = final_worker_stats.iter().map(|s| s.files_processed).sum();
-    
+
     // Worker stats might not exactly match progress due to timing, but should be reasonably close
     if final_progress.processed_files > 0 {
         assert!(total_worker_files > 0);
@@ -651,7 +672,7 @@ async fn test_memory_tracking_thread_safety() -> Result<()> {
 
             for update_id in 0..UPDATES_PER_UPDATER {
                 let memory_change = ((updater_id * 1000) + update_id) as u64;
-                
+
                 // Update memory usage
                 progress_clone.update_memory_usage(memory_change);
                 local_total = memory_change; // Last value will be the final memory
@@ -674,12 +695,13 @@ async fn test_memory_tracking_thread_safety() -> Result<()> {
     }
 
     let final_snapshot = progress.get_snapshot();
-    
+
     // Memory tracking should be consistent (exact value depends on timing)
     assert!(final_snapshot.memory_usage_bytes > 0);
     assert!(final_snapshot.peak_memory_bytes >= final_snapshot.memory_usage_bytes);
 
-    println!("Memory tracking test - Current: {} MB, Peak: {} MB",
+    println!(
+        "Memory tracking test - Current: {} MB, Peak: {} MB",
         final_snapshot.memory_usage_bytes / (1024 * 1024),
         final_snapshot.peak_memory_bytes / (1024 * 1024)
     );
@@ -711,27 +733,39 @@ async fn test_indexing_with_simulated_contention() -> Result<()> {
     let contention_operations = Arc::new(AtomicUsize::new(0));
 
     // Start indexing
-    manager.start_indexing(workspace.path().to_path_buf()).await?;
+    manager
+        .start_indexing(workspace.path().to_path_buf())
+        .await?;
 
     // Spawn tasks that create contention by rapidly accessing manager state
     let mut contention_handles = Vec::new();
-    
+
     for task_id in 0..10 {
         let manager_clone = Arc::clone(&manager);
         let contention_operations_clone = Arc::clone(&contention_operations);
 
         let handle = tokio::spawn(async move {
             let mut operations = 0;
-            
+
             while operations < 200 {
                 // Rapidly access different manager operations
                 match operations % 6 {
-                    0 => { let _ = manager_clone.get_progress().await; }
-                    1 => { let _ = manager_clone.get_queue_snapshot().await; }
-                    2 => { let _ = manager_clone.get_worker_stats().await; }
-                    3 => { let _ = manager_clone.get_status().await; }
-                    4 => { let _ = manager_clone.is_memory_pressure(); }
-                    5 => { 
+                    0 => {
+                        let _ = manager_clone.get_progress().await;
+                    }
+                    1 => {
+                        let _ = manager_clone.get_queue_snapshot().await;
+                    }
+                    2 => {
+                        let _ = manager_clone.get_worker_stats().await;
+                    }
+                    3 => {
+                        let _ = manager_clone.get_status().await;
+                    }
+                    4 => {
+                        let _ = manager_clone.is_memory_pressure();
+                    }
+                    5 => {
                         // Occasionally try pause/resume to create state contention
                         if operations == 100 && task_id == 0 {
                             let _ = manager_clone.pause_indexing().await;
@@ -775,9 +809,9 @@ async fn test_indexing_with_simulated_contention() -> Result<()> {
 
     let total_contention_ops = contention_operations.load(Ordering::Relaxed);
 
-    println!("Contention test: {} files processed, {} contention operations",
-        final_progress.processed_files,
-        total_contention_ops
+    println!(
+        "Contention test: {} files processed, {} contention operations",
+        final_progress.processed_files, total_contention_ops
     );
 
     // Should complete successfully despite heavy contention
@@ -799,9 +833,9 @@ async fn test_queue_remove_matching_thread_safety() -> Result<()> {
     for task_id in 0..NUM_TASKS {
         for item_id in 0..ITEMS_PER_TASK {
             let path = if item_id % 3 == 0 {
-                format!("/remove/task_{}/special_{}.rs", task_id, item_id)
+                format!("/remove/task_{task_id}/special_{item_id}.rs")
             } else {
-                format!("/keep/task_{}/normal_{}.rs", task_id, item_id)
+                format!("/keep/task_{task_id}/normal_{item_id}.rs")
             };
 
             let item = QueueItem::medium_priority(PathBuf::from(path));
@@ -810,7 +844,7 @@ async fn test_queue_remove_matching_thread_safety() -> Result<()> {
     }
 
     let initial_count = queue.len();
-    println!("Initial queue size: {}", initial_count);
+    println!("Initial queue size: {initial_count}");
 
     let mut handles = Vec::new();
 
@@ -822,17 +856,19 @@ async fn test_queue_remove_matching_thread_safety() -> Result<()> {
         let handle = tokio::spawn(async move {
             // Different removal patterns for different tasks
             let pattern = match task_id % 3 {
-                0 => "special",   // Remove items with "special" in name
-                1 => "/remove/",  // Remove items in "remove" directory
+                0 => "special",     // Remove items with "special" in name
+                1 => "/remove/",    // Remove items in "remove" directory
                 _ => "nonexistent", // Pattern that matches nothing
             };
 
-            let removed = queue_clone.remove_matching(|item| {
-                item.file_path.to_string_lossy().contains(pattern)
-            }).await;
+            let removed = queue_clone
+                .remove_matching(|item| item.file_path.to_string_lossy().contains(pattern))
+                .await;
 
             removed_count_clone.fetch_add(removed, Ordering::Relaxed);
-            println!("Task {} removed {} items matching '{}'", task_id, removed, pattern);
+            println!(
+                "Task {task_id} removed {removed} items matching '{pattern}'"
+            );
         });
 
         handles.push(handle);
@@ -846,7 +882,9 @@ async fn test_queue_remove_matching_thread_safety() -> Result<()> {
     let final_count = queue.len();
     let total_removed = removed_count.load(Ordering::Relaxed);
 
-    println!("Final queue size: {}, total removed: {}", final_count, total_removed);
+    println!(
+        "Final queue size: {final_count}, total removed: {total_removed}"
+    );
 
     // Verify consistency
     assert_eq!(initial_count, final_count + total_removed);

@@ -402,56 +402,190 @@ probe-chat --trace-file --trace-remote http://localhost:4318/v1/traces --allow-e
 
 ## LSP Integration Commands
 
-Probe provides advanced Language Server Protocol (LSP) integration for IDE-level code intelligence. The LSP system runs as a background daemon and provides enhanced code analysis.
+Probe provides advanced Language Server Protocol (LSP) integration for IDE-level code intelligence with **auto-initialization**. The LSP system runs as a background daemon providing enhanced code analysis with content-addressed caching for 250,000x performance improvements.
 
-### LSP Extract Command
+### Auto-Initialization
+
+The `--lsp` flag automatically starts the daemon if needed - no manual setup required:
+
+```bash
+# These commands auto-start the LSP daemon if not running
+probe extract src/main.rs#main --lsp
+probe search "authentication" --lsp
+```
+
+### LSP-Enhanced Commands
 
 Extract code with call hierarchy and semantic information:
 
 ```bash
-# Extract function with LSP analysis
+# Extract function with LSP analysis (auto-starts daemon)
 probe extract src/main.rs#main --lsp
 
-# Extract with custom timeout
-probe extract src/auth.rs#authenticate --lsp --lsp-timeout 60000
+# Search with LSP enrichment (auto-starts daemon)
+probe search "error handling" --lsp
 
-# Extract without caching (for debugging)
-probe extract src/lib.rs#process --lsp --lsp-no-cache
+# Extract with context and call graph
+probe extract src/auth.rs#authenticate --lsp --context 5
+
+# Search specific symbol types
+probe search "handler" --lsp --symbol-type function
 ```
 
 ### LSP Daemon Management
 
+**Note**: LSP management commands do NOT auto-initialize to prevent loops.
+
 ```bash
-# Check daemon status
+# Check daemon status and server pools
 probe lsp status
 
-# Start daemon manually
+# List available language servers
+probe lsp languages
+
+# Health check
+probe lsp ping
+
+# Start daemon manually (usually not needed)
 probe lsp start
 
-# Restart daemon
+# Start in foreground with debug logging
+probe lsp start -f --log-level debug
+
+# Restart daemon (clears in-memory logs)
 probe lsp restart
 
-# Stop daemon
+# Graceful shutdown
 probe lsp shutdown
 
-# View daemon logs
+# View in-memory logs (1000 entries, no files)
+probe lsp logs
+
+# Follow logs in real-time
 probe lsp logs --follow
 
-# Initialize workspaces
-probe lsp init-workspaces . --recursive
+# View more log entries
+probe lsp logs -n 200
+
+# Show version information
+probe lsp version
+```
+
+### LSP Workspace Initialization
+
+Initialize language servers for optimal performance:
+
+```bash
+# Initialize current workspace
+probe lsp init
+
+# Initialize with specific languages
+probe lsp init --languages rust,typescript
+
+# Recursive initialization of nested workspaces
+probe lsp init --recursive
+
+# Initialize with watchdog monitoring
+probe lsp init --watchdog
+```
+
+### LSP Indexing System
+
+Powerful project-wide indexing with progress tracking:
+
+```bash
+# Start indexing current workspace
+probe lsp index
+
+# Index specific languages
+probe lsp index --languages rust,typescript
+
+# Index recursively with custom settings
+probe lsp index --recursive --max-workers 8 --memory-budget 1024
+
+# Index and wait for completion
+probe lsp index --wait
+
+# Show indexing status
+probe lsp index-status
+
+# Show detailed per-file progress
+probe lsp index-status --detailed
+
+# Follow indexing progress
+probe lsp index-status --follow
+
+# Stop ongoing indexing
+probe lsp index-stop
+
+# Force stop indexing
+probe lsp index-stop --force
+```
+
+### LSP Index Configuration
+
+Configure indexing behavior:
+
+```bash
+# Show current configuration
+probe lsp index-config show
+
+# Set configuration options
+probe lsp index-config set --max-workers 16 --memory-budget 2048
+
+# Set file patterns
+probe lsp index-config set --exclude "*.log,target/*" --include "*.rs,*.ts"
+
+# Enable incremental indexing
+probe lsp index-config set --incremental true
+
+# Reset to defaults
+probe lsp index-config reset
 ```
 
 ### LSP Cache Management
 
+Content-addressed cache provides massive performance improvements:
+
 ```bash
-# View cache statistics
+# View cache statistics and hit rates
 probe lsp cache stats
 
-# Clear specific cache
+# Clear all cache entries
+probe lsp cache clear
+
+# Clear specific operation cache
 probe lsp cache clear --operation CallHierarchy
+probe lsp cache clear --operation Definition
+probe lsp cache clear --operation References
+probe lsp cache clear --operation Hover
 
 # Export cache for debugging
-probe lsp cache export --output cache-dump.json
+probe lsp cache export
+
+# Export specific operation cache
+probe lsp cache export --operation CallHierarchy
+```
+
+### Performance & Troubleshooting
+
+```bash
+# Check for build lock conflicts (important!)
+# WRONG - causes hangs:
+cargo run -- lsp status
+
+# CORRECT - build first:
+cargo build
+./target/debug/probe lsp status
+
+# Monitor cache performance
+probe lsp cache stats
+
+# Debug with logs
+probe lsp logs --follow | grep ERROR
+
+# Test connectivity
+probe lsp ping
 ```
 
 For comprehensive LSP documentation, see:

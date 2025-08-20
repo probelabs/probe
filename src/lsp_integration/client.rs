@@ -1123,7 +1123,11 @@ fn convert_daemon_status(status: DaemonStatus) -> LspDaemonStatus {
 
 impl LspClient {
     // Indexing management methods
-    pub async fn start_indexing(&mut self, workspace_root: PathBuf, config: lsp_daemon::protocol::IndexingConfig) -> Result<String> {
+    pub async fn start_indexing(
+        &mut self,
+        workspace_root: PathBuf,
+        config: lsp_daemon::protocol::IndexingConfig,
+    ) -> Result<String> {
         let request = DaemonRequest::StartIndexing {
             request_id: Uuid::new_v4(),
             workspace_root,
@@ -1154,7 +1158,9 @@ impl LspClient {
         }
     }
 
-    pub async fn get_indexing_status(&mut self) -> Result<lsp_daemon::protocol::IndexingStatusInfo> {
+    pub async fn get_indexing_status(
+        &mut self,
+    ) -> Result<lsp_daemon::protocol::IndexingStatusInfo> {
         let request = DaemonRequest::IndexingStatus {
             request_id: Uuid::new_v4(),
         };
@@ -1182,7 +1188,10 @@ impl LspClient {
         }
     }
 
-    pub async fn set_indexing_config(&mut self, config: lsp_daemon::protocol::IndexingConfig) -> Result<()> {
+    pub async fn set_indexing_config(
+        &mut self,
+        config: lsp_daemon::protocol::IndexingConfig,
+    ) -> Result<()> {
         let request = DaemonRequest::SetIndexingConfig {
             request_id: Uuid::new_v4(),
             config,

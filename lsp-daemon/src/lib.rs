@@ -59,9 +59,9 @@ pub use watchdog::{ProcessHealth, ProcessMonitor, ProcessStats, Watchdog};
 
 // Re-export indexing types for external use
 pub use indexing::{
-    CacheStrategy, EffectiveConfig, IndexingConfig, IndexingFeatures, IndexingManager, 
-    IndexingPipeline, IndexingProgress, IndexingQueue, LanguageIndexConfig, LanguagePipeline, 
-    ManagerConfig, ManagerStatus, PipelineConfig, PipelineResult, Priority, ProgressMetrics, 
+    CacheStrategy, EffectiveConfig, IndexingConfig, IndexingFeatures, IndexingManager,
+    IndexingPipeline, IndexingProgress, IndexingQueue, LanguageIndexConfig, LanguagePipeline,
+    ManagerConfig, ManagerStatus, PipelineConfig, PipelineResult, Priority, ProgressMetrics,
     ProgressSnapshot, QueueItem, QueueMetrics, QueueSnapshot, WorkerStats,
 };
 

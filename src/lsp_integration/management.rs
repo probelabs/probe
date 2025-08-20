@@ -18,6 +18,133 @@ const LOG_RPC_TIMEOUT_MS: u64 = 2000;
 pub struct LspManager;
 
 impl LspManager {
+    /// Ensure LSP daemon is ready and workspace is initialized
+    /// This is the main bootstrap function that ensures the LSP system is ready for operations
+    pub async fn ensure_ready() -> Result<()> {
+        // Check if we can connect to daemon
+        let config = LspConfig::default();
+        let mut client = match LspClient::new(config).await {
+            Ok(client) => client,
+            Err(_) => {
+                // Daemon not running, auto-start it
+                Self::auto_start_daemon().await?;
+
+                // Wait a moment for daemon to fully start
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
+                // Connect to newly started daemon
+                LspClient::new(LspConfig::default()).await?
+            }
+        };
+
+        // Quick health check
+        if let Err(_) = client.ping().await {
+            // If ping fails, restart daemon
+            let _ = client.shutdown_daemon().await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            Self::auto_start_daemon().await?;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        // Auto-initialize current workspace if it looks like a code project
+        let current_dir = std::env::current_dir()?;
+        if Self::is_code_workspace(&current_dir)? {
+            if let Err(_) = client
+                .init_workspaces(
+                    current_dir,
+                    None,  // Auto-detect languages
+                    false, // Not recursive by default
+                    false, // No watchdog by default
+                )
+                .await
+            {
+                // Init failure is not critical for basic operations
+                // The workspace will be initialized on-demand during operations
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Auto-start the LSP daemon in background mode
+    async fn auto_start_daemon() -> Result<()> {
+        use std::process::{Command, Stdio};
+
+        let exe_path = std::env::current_exe()?;
+        let socket_path = lsp_daemon::get_default_socket_path();
+
+        // Clean up any stale socket
+        if std::path::Path::new(&socket_path).exists() {
+            let _ = std::fs::remove_file(&socket_path);
+        }
+
+        // Start daemon in background
+        // The PID lock in the daemon will prevent multiple instances
+        let _child = Command::new(&exe_path)
+            .args([
+                "lsp",
+                "start",
+                "-f",
+                "--socket",
+                &socket_path,
+                "--log-level",
+                "info",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+
+        // Wait for daemon to be ready (up to 10 seconds)
+        for _ in 0..20 {
+            if lsp_daemon::ipc::IpcStream::connect(&socket_path)
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        Err(anyhow!("Failed to auto-start LSP daemon"))
+    }
+
+    /// Check if a directory looks like a code workspace
+    fn is_code_workspace(path: &Path) -> Result<bool> {
+        // Check for common project indicators
+        let indicators = [
+            "Cargo.toml",
+            "package.json",
+            "go.mod",
+            "pyproject.toml",
+            "requirements.txt",
+            "pom.xml",
+            "build.gradle",
+            ".git",
+            "tsconfig.json",
+            "composer.json",
+            "Makefile",
+        ];
+
+        for indicator in &indicators {
+            if path.join(indicator).exists() {
+                return Ok(true);
+            }
+        }
+
+        // Also check if there are source files in common locations
+        let source_dirs = ["src", "lib", "app", "internal"];
+        for dir in &source_dirs {
+            let source_path = path.join(dir);
+            if source_path.exists() && source_path.is_dir() {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
     /// Ensure project is built to avoid cargo build lock conflicts
     #[allow(dead_code)]
     fn ensure_project_built() -> Result<()> {
@@ -103,16 +230,15 @@ impl LspManager {
                     format,
                     *progress,
                     *wait,
-                ).await
+                )
+                .await
             }
             LspSubcommands::IndexStatus {
                 format,
                 detailed,
                 follow,
                 interval,
-            } => {
-                Self::handle_index_status_command(format, *detailed, *follow, *interval).await
-            }
+            } => Self::handle_index_status_command(format, *detailed, *follow, *interval).await,
             LspSubcommands::IndexStop { force, format } => {
                 Self::handle_index_stop_command(*force, format).await
             }
@@ -208,7 +334,11 @@ impl LspManager {
                 if !status.build_date.is_empty() {
                     println!("  {} {}", "Build Date:".bold(), status.build_date.dimmed());
                 }
-                println!("  {} {}", "Uptime:".bold(), Self::format_duration(status.uptime));
+                println!(
+                    "  {} {}",
+                    "Uptime:".bold(),
+                    Self::format_duration(status.uptime)
+                );
                 println!(
                     "  {} {}",
                     "Total Requests:".bold(),
@@ -237,8 +367,9 @@ impl LspManager {
                         );
 
                         if pool.uptime_secs > 0 {
-                            let uptime =
-                                Self::format_duration(std::time::Duration::from_secs(pool.uptime_secs));
+                            let uptime = Self::format_duration(std::time::Duration::from_secs(
+                                pool.uptime_secs,
+                            ));
                             println!("    {} {}", "Uptime:".bold(), uptime.cyan());
                         }
 
@@ -1230,29 +1361,37 @@ impl LspManager {
             recursive,
         };
 
-        match client.start_indexing(workspace_root.clone(), indexing_config).await {
+        match client
+            .start_indexing(workspace_root.clone(), indexing_config)
+            .await
+        {
             Ok(session_id) => {
                 match format {
                     "json" => {
-                        println!("{}", serde_json::to_string_pretty(&json!({
-                            "status": "started",
-                            "session_id": session_id,
-                            "workspace_root": workspace_root,
-                            "recursive": recursive
-                        }))?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "status": "started",
+                                "session_id": session_id,
+                                "workspace_root": workspace_root,
+                                "recursive": recursive
+                            }))?
+                        );
                     }
                     _ => {
                         println!("{}", "Indexing Started".bold().green());
                         println!("  {}: {}", "Session ID".bold(), session_id);
                         println!("  {}: {:?}", "Workspace".bold(), workspace_root);
                         println!("  {}: {}", "Recursive".bold(), recursive);
-                        
+
                         if show_progress {
                             println!("\nStarting progress monitoring...");
                             if wait {
                                 Self::monitor_indexing_progress(&mut client, &session_id).await?;
                             } else {
-                                println!("Use 'probe lsp index-status --follow' to monitor progress");
+                                println!(
+                                    "Use 'probe lsp index-status --follow' to monitor progress"
+                                );
                             }
                         }
                     }
@@ -1262,10 +1401,13 @@ impl LspManager {
             Err(e) => {
                 match format {
                     "json" => {
-                        println!("{}", serde_json::to_string_pretty(&json!({
-                            "status": "error",
-                            "error": e.to_string()
-                        }))?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "status": "error",
+                                "error": e.to_string()
+                            }))?
+                        );
                     }
                     _ => {
                         eprintln!("{} {}", "Failed to start indexing:".red(), e);
@@ -1303,11 +1445,14 @@ impl LspManager {
             Ok(was_running) => {
                 match format {
                     "json" => {
-                        println!("{}", serde_json::to_string_pretty(&json!({
-                            "status": "stopped",
-                            "was_running": was_running,
-                            "force": force
-                        }))?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "status": "stopped",
+                                "was_running": was_running,
+                                "force": force
+                            }))?
+                        );
                     }
                     _ => {
                         if was_running {
@@ -1322,10 +1467,13 @@ impl LspManager {
             Err(e) => {
                 match format {
                     "json" => {
-                        println!("{}", serde_json::to_string_pretty(&json!({
-                            "status": "error",
-                            "error": e.to_string()
-                        }))?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "status": "error",
+                                "error": e.to_string()
+                            }))?
+                        );
                     }
                     _ => {
                         eprintln!("{} {}", "Failed to stop indexing:".red(), e);
@@ -1345,7 +1493,9 @@ impl LspManager {
         let mut client = LspClient::new(config).await?;
 
         match config_command {
-            IndexConfigSubcommands::Show { format: output_format } => {
+            IndexConfigSubcommands::Show {
+                format: output_format,
+            } => {
                 let config = client.get_indexing_config().await?;
                 Self::display_indexing_config(&config, output_format).await
             }
@@ -1359,7 +1509,7 @@ impl LspManager {
                 format,
             } => {
                 let mut config = client.get_indexing_config().await?;
-                
+
                 // Update config fields if provided
                 if let Some(workers) = max_workers {
                     config.max_workers = Some(*workers);
@@ -1368,10 +1518,12 @@ impl LspManager {
                     config.memory_budget_mb = Some(*memory);
                 }
                 if let Some(exclude) = exclude_patterns {
-                    config.exclude_patterns = exclude.split(',').map(|s| s.trim().to_string()).collect();
+                    config.exclude_patterns =
+                        exclude.split(',').map(|s| s.trim().to_string()).collect();
                 }
                 if let Some(include) = include_patterns {
-                    config.include_patterns = include.split(',').map(|s| s.trim().to_string()).collect();
+                    config.include_patterns =
+                        include.split(',').map(|s| s.trim().to_string()).collect();
                 }
                 if let Some(file_size) = max_file_size {
                     config.max_file_size_mb = Some(*file_size);
@@ -1404,55 +1556,74 @@ impl LspManager {
             _ => {
                 println!("{}", "Indexing Status".bold().green());
                 println!("  {}: {}", "Status".bold(), status.manager_status);
-                
+
                 if let Some(session_id) = &status.session_id {
                     println!("  {}: {}", "Session ID".bold(), session_id);
                 }
-                
+
                 if let Some(started_at) = status.started_at {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
-                    let elapsed_friendly = Self::format_duration(std::time::Duration::from_secs(now - started_at));
+                    let elapsed_friendly =
+                        Self::format_duration(std::time::Duration::from_secs(now - started_at));
                     println!("  {}: {} ago", "Started".bold(), elapsed_friendly);
                 }
 
                 println!("\n{}", "Progress".bold().cyan());
                 let progress = &status.progress;
-                println!("  {}: {}/{} ({:.1}%)", 
-                    "Files".bold(), 
+                println!(
+                    "  {}: {}/{} ({:.1}%)",
+                    "Files".bold(),
                     progress.processed_files + progress.failed_files + progress.skipped_files,
                     progress.total_files,
                     progress.progress_ratio * 100.0
                 );
-                
+
                 if progress.files_per_second > 0.0 {
-                    println!("  {}: {:.1} files/sec", "Rate".bold(), progress.files_per_second);
+                    println!(
+                        "  {}: {:.1} files/sec",
+                        "Rate".bold(),
+                        progress.files_per_second
+                    );
                 }
-                
+
                 println!("  {}: {}", "Processed".bold(), progress.processed_files);
                 println!("  {}: {}", "Failed".bold(), progress.failed_files);
                 println!("  {}: {}", "Skipped".bold(), progress.skipped_files);
                 println!("  {}: {}", "Active".bold(), progress.active_files);
-                println!("  {}: {} symbols", "Extracted".bold(), progress.symbols_extracted);
-                println!("  {}: {}", "Memory".bold(), format_bytes(progress.memory_usage_bytes as usize));
-                
+                println!(
+                    "  {}: {} symbols",
+                    "Extracted".bold(),
+                    progress.symbols_extracted
+                );
+                println!(
+                    "  {}: {}",
+                    "Memory".bold(),
+                    format_bytes(progress.memory_usage_bytes as usize)
+                );
+
                 if progress.peak_memory_bytes > progress.memory_usage_bytes {
-                    println!("  {}: {}", "Peak Memory".bold(), format_bytes(progress.peak_memory_bytes as usize));
+                    println!(
+                        "  {}: {}",
+                        "Peak Memory".bold(),
+                        format_bytes(progress.peak_memory_bytes as usize)
+                    );
                 }
 
                 println!("\n{}", "Queue".bold().cyan());
                 let queue = &status.queue;
                 println!("  {}: {}", "Total Items".bold(), queue.total_items);
                 println!("  {}: {}", "Pending".bold(), queue.pending_items);
-                println!("  {}: {} / {} / {}", 
-                    "Priority (H/M/L)".bold(), 
+                println!(
+                    "  {}: {} / {} / {}",
+                    "Priority (H/M/L)".bold(),
                     queue.high_priority_items,
                     queue.medium_priority_items,
                     queue.low_priority_items
                 );
-                
+
                 if queue.is_paused {
                     println!("  {}: {}", "Status".bold(), "⏸️  PAUSED".yellow());
                 }
@@ -1464,11 +1635,16 @@ impl LspManager {
                     println!("\n{}", "Workers".bold().cyan());
                     for worker in &status.workers {
                         let status_icon = if worker.is_active { "🟢" } else { "⚪" };
-                        println!("  {} Worker {}: {} files, {} errors", 
-                            status_icon, worker.worker_id, worker.files_processed, worker.errors_encountered);
-                        
+                        println!(
+                            "  {} Worker {}: {} files, {} errors",
+                            status_icon,
+                            worker.worker_id,
+                            worker.files_processed,
+                            worker.errors_encountered
+                        );
+
                         if let Some(ref current_file) = worker.current_file {
-                            println!("    Currently: {:?}", current_file);
+                            println!("    Currently: {current_file:?}");
                         }
                     }
                 }
@@ -1488,28 +1664,60 @@ impl LspManager {
             }
             _ => {
                 println!("{}", "Indexing Configuration".bold().green());
-                println!("  {}: {}", "Max Workers".bold(), 
-                    config.max_workers.map(|n| n.to_string()).unwrap_or_else(|| "Auto".to_string()));
-                println!("  {}: {}MB", "Memory Budget".bold(), 
-                    config.memory_budget_mb.map(|n| n.to_string()).unwrap_or_else(|| "Unlimited".to_string()));
-                println!("  {}: {}MB", "Max File Size".bold(), 
-                    config.max_file_size_mb.map(|n| n.to_string()).unwrap_or_else(|| "Unlimited".to_string()));
-                println!("  {}: {}", "Incremental".bold(), 
-                    config.incremental.map(|b| b.to_string()).unwrap_or_else(|| "true".to_string()));
+                println!(
+                    "  {}: {}",
+                    "Max Workers".bold(),
+                    config
+                        .max_workers
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "Auto".to_string())
+                );
+                println!(
+                    "  {}: {}MB",
+                    "Memory Budget".bold(),
+                    config
+                        .memory_budget_mb
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "Unlimited".to_string())
+                );
+                println!(
+                    "  {}: {}MB",
+                    "Max File Size".bold(),
+                    config
+                        .max_file_size_mb
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "Unlimited".to_string())
+                );
+                println!(
+                    "  {}: {}",
+                    "Incremental".bold(),
+                    config
+                        .incremental
+                        .map(|b| b.to_string())
+                        .unwrap_or_else(|| "true".to_string())
+                );
                 println!("  {}: {}", "Recursive".bold(), config.recursive);
-                
+
                 if !config.languages.is_empty() {
                     println!("  {}: {}", "Languages".bold(), config.languages.join(", "));
                 } else {
                     println!("  {}: All supported", "Languages".bold());
                 }
-                
+
                 if !config.exclude_patterns.is_empty() {
-                    println!("  {}: {}", "Exclude Patterns".bold(), config.exclude_patterns.join(", "));
+                    println!(
+                        "  {}: {}",
+                        "Exclude Patterns".bold(),
+                        config.exclude_patterns.join(", ")
+                    );
                 }
-                
+
                 if !config.include_patterns.is_empty() {
-                    println!("  {}: {}", "Include Patterns".bold(), config.include_patterns.join(", "));
+                    println!(
+                        "  {}: {}",
+                        "Include Patterns".bold(),
+                        config.include_patterns.join(", ")
+                    );
                 } else {
                     println!("  {}: All files", "Include Patterns".bold());
                 }
@@ -1530,16 +1738,16 @@ impl LspManager {
 
         loop {
             interval.tick().await;
-            
+
             match client.get_indexing_status().await {
                 Ok(status) => {
                     // Clear screen for terminal output
                     if format != "json" {
                         print!("\x1B[2J\x1B[1;1H"); // ANSI escape codes to clear screen and move cursor to top
                     }
-                    
+
                     Self::display_indexing_status(&status, format, detailed).await?;
-                    
+
                     // Check if indexing is complete
                     if status.manager_status == "Idle" || status.manager_status == "Shutdown" {
                         if format != "json" {
@@ -1550,12 +1758,15 @@ impl LspManager {
                 }
                 Err(e) => {
                     if format == "json" {
-                        println!("{}", serde_json::to_string_pretty(&json!({
-                            "status": "error",
-                            "error": e.to_string()
-                        }))?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "status": "error",
+                                "error": e.to_string()
+                            }))?
+                        );
                     } else {
-                        eprintln!("Error getting status: {}", e);
+                        eprintln!("Error getting status: {e}");
                     }
                     break;
                 }
@@ -1565,18 +1776,15 @@ impl LspManager {
     }
 
     /// Monitor indexing progress until completion
-    async fn monitor_indexing_progress(
-        client: &mut LspClient,
-        session_id: &str,
-    ) -> Result<()> {
+    async fn monitor_indexing_progress(client: &mut LspClient, session_id: &str) -> Result<()> {
         let mut last_files_processed = 0u64;
         let mut interval = tokio::time::interval(Duration::from_secs(2));
-        
+
         println!("Monitoring indexing progress (Ctrl+C to stop monitoring)...\n");
 
         loop {
             interval.tick().await;
-            
+
             match client.get_indexing_status().await {
                 Ok(status) => {
                     if let Some(ref current_session) = status.session_id {
@@ -1585,20 +1793,27 @@ impl LspManager {
                             break;
                         }
                     }
-                    
+
                     let progress = &status.progress;
-                    let completed = progress.processed_files + progress.failed_files + progress.skipped_files;
-                    
+                    let completed =
+                        progress.processed_files + progress.failed_files + progress.skipped_files;
+
                     // Show progress bar
                     if progress.total_files > 0 {
                         let percent = (completed as f64 / progress.total_files as f64) * 100.0;
                         let bar_width = 50;
                         let filled = (percent / 100.0 * bar_width as f64) as usize;
                         let bar = "█".repeat(filled) + &"░".repeat(bar_width - filled);
-                        
-                        print!("\r[{}] {:.1}% ({}/{}) {} files/sec", 
-                            bar, percent, completed, progress.total_files, progress.files_per_second);
-                        
+
+                        print!(
+                            "\r[{}] {:.1}% ({}/{}) {} files/sec",
+                            bar,
+                            percent,
+                            completed,
+                            progress.total_files,
+                            progress.files_per_second
+                        );
+
                         if completed != last_files_processed {
                             let memory_str = format_bytes(progress.memory_usage_bytes as usize);
                             println!(" | {} | {} symbols", memory_str, progress.symbols_extracted);
@@ -1607,12 +1822,20 @@ impl LspManager {
                     } else {
                         println!("Discovering files...");
                     }
-                    
+
                     // Check if indexing is complete
                     if status.manager_status == "Idle" || status.manager_status == "Shutdown" {
                         println!("\n\n{}", "✅ Indexing completed successfully!".green());
-                        println!("  {}: {} files processed", "Final Stats".bold(), progress.processed_files);
-                        println!("  {}: {} symbols extracted", "".repeat(11), progress.symbols_extracted);
+                        println!(
+                            "  {}: {} files processed",
+                            "Final Stats".bold(),
+                            progress.processed_files
+                        );
+                        println!(
+                            "  {}: {} symbols extracted",
+                            "".repeat(11),
+                            progress.symbols_extracted
+                        );
                         println!("  {}: {} failed", "".repeat(11), progress.failed_files);
                         break;
                     } else if status.manager_status.contains("Error") {
@@ -1621,7 +1844,7 @@ impl LspManager {
                     }
                 }
                 Err(e) => {
-                    println!("\nError monitoring progress: {}", e);
+                    println!("\nError monitoring progress: {e}");
                     break;
                 }
             }

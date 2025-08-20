@@ -354,6 +354,28 @@ fn handle_benchmark(params: BenchmarkParams) -> Result<()> {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Auto-initialize LSP when explicitly requested via --lsp flag
+    // IMPORTANT: Never auto-initialize for LSP management commands to prevent infinite loops!
+    let needs_lsp = match &args.command {
+        // LSP subcommands handle their own initialization - NEVER auto-init for them
+        Some(Commands::Lsp { .. }) => false,
+        Some(Commands::Search { lsp, .. }) if *lsp => true,
+        Some(Commands::Extract { lsp, .. }) if *lsp => true,
+        None if args.lsp => true, // Default mode with --lsp flag
+        _ => false,
+    };
+
+    if needs_lsp {
+        if std::env::var("PROBE_QUIET").is_err() {
+            eprintln!("Initializing LSP features...");
+        }
+
+        if let Err(e) = LspManager::ensure_ready().await {
+            eprintln!("Warning: LSP initialization failed: {}", e);
+            eprintln!("Continuing without LSP features...");
+        }
+    }
+
     match args.command {
         // When no subcommand provided and no pattern, show help
         None if args.pattern.is_none() || args.pattern.as_ref().unwrap().is_empty() => {

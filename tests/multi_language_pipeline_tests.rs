@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use lsp_daemon::indexing::{
-    IndexingManager, ManagerConfig, IndexingPipeline, LanguagePipeline, PipelineConfig,
+    IndexingManager, IndexingPipeline, LanguagePipeline, ManagerConfig, PipelineConfig,
     PipelineResult,
 };
 use lsp_daemon::SymbolInfo;
@@ -40,7 +40,10 @@ impl MultiLanguageWorkspace {
         fs::create_dir_all(root_path.join("tests")).await?;
         fs::create_dir_all(root_path.join("examples")).await?;
 
-        Ok(Self { temp_dir, root_path })
+        Ok(Self {
+            temp_dir,
+            root_path,
+        })
     }
 
     fn path(&self) -> &Path {
@@ -49,7 +52,9 @@ impl MultiLanguageWorkspace {
 
     async fn create_rust_files(&self) -> Result<()> {
         // Main Rust application
-        fs::write(self.root_path.join("rust/main.rs"), r#"
+        fs::write(
+            self.root_path.join("rust/main.rs"),
+            r#"
 use std::collections::HashMap;
 use std::error::Error;
 
@@ -148,10 +153,14 @@ mod tests {
         assert!(result.is_ok());
     }
 }
-"#).await?;
+"#,
+        )
+        .await?;
 
         // Rust library
-        fs::write(self.root_path.join("rust/lib.rs"), r#"
+        fs::write(
+            self.root_path.join("rust/lib.rs"),
+            r#"
 //! Utility library for common operations
 //!
 //! This library provides common functionality used across the application.
@@ -199,14 +208,18 @@ impl Library {
         self
     }
 }
-"#).await?;
+"#,
+        )
+        .await?;
 
         Ok(())
     }
 
     async fn create_typescript_files(&self) -> Result<()> {
         // TypeScript application
-        fs::write(self.root_path.join("typescript/app.ts"), r#"
+        fs::write(
+            self.root_path.join("typescript/app.ts"),
+            r#"
 /**
  * TypeScript application with various language features
  */
@@ -390,14 +403,18 @@ export function processEntity<T extends { id: number }>(entity: T): T {
     console.log(`Processing entity with ID: ${entity.id}`);
     return entity;
 }
-"#).await?;
+"#,
+        )
+        .await?;
 
         Ok(())
     }
 
     async fn create_python_files(&self) -> Result<()> {
         // Python application
-        fs::write(self.root_path.join("python/app.py"), r#"
+        fs::write(
+            self.root_path.join("python/app.py"),
+            r#"
 """
 Python application with comprehensive language features
 """
@@ -682,14 +699,18 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-"#).await?;
+"#,
+        )
+        .await?;
 
         Ok(())
     }
 
     async fn create_problematic_files(&self) -> Result<()> {
         // Invalid Rust file
-        fs::write(self.root_path.join("rust/invalid.rs"), r#"
+        fs::write(
+            self.root_path.join("rust/invalid.rs"),
+            r#"
 // This file has syntax errors and invalid content
 fn invalid_function( {
     let x = ;  // Invalid syntax
@@ -717,7 +738,9 @@ impl MissingFields {
     fn incomplete_method(
         // Missing closing parenthesis and body
 }
-"#).await?;
+"#,
+        )
+        .await?;
 
         // Binary file disguised as source code
         fs::write(
@@ -725,27 +748,33 @@ impl MissingFields {
             b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F\
               \x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F\
               This looks like Python but contains binary data\
-              \xFF\xFE\xFD\xFC\xFB\xFA\xF9\xF8\xF7\xF6\xF5\xF4\xF3\xF2\xF1\xF0"
-        ).await?;
+              \xFF\xFE\xFD\xFC\xFB\xFA\xF9\xF8\xF7\xF6\xF5\xF4\xF3\xF2\xF1\xF0",
+        )
+        .await?;
 
         // Extremely large file
         let large_content = "# ".repeat(50000); // Create a large comment
         fs::write(
             self.root_path.join("typescript/large_file.ts"),
-            format!("{}
+            format!(
+                "{}
 // This file is very large and might cause memory issues
 export class LargeClass {{
     method() {{
         return 'large';
     }}
-}}", large_content)
-        ).await?;
+}}",
+                large_content
+            ),
+        )
+        .await?;
 
         // File with unusual encoding
         fs::write(
             self.root_path.join("python/encoding_issues.py"),
-            "# -*- coding: utf-8 -*-\n# This file has encoding issues: café naïve résumé 中文 🚀\n"
-        ).await?;
+            "# -*- coding: utf-8 -*-\n# This file has encoding issues: café naïve résumé 中文 🚀\n",
+        )
+        .await?;
 
         // Empty file
         fs::write(self.root_path.join("java/Empty.java"), "").await?;
@@ -753,8 +782,9 @@ export class LargeClass {{
         // File with only whitespace
         fs::write(
             self.root_path.join("cpp/whitespace_only.cpp"),
-            "   \n\t\n    \n\t\t\n   "
-        ).await?;
+            "   \n\t\n    \n\t\t\n   ",
+        )
+        .await?;
 
         Ok(())
     }
@@ -909,11 +939,27 @@ func main() {
 
     async fn create_mixed_directory(&self) -> Result<()> {
         // Mixed language files in src/
-        fs::write(self.root_path.join("src/utils.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }").await?;
-        fs::write(self.root_path.join("src/helper.py"), "def multiply(a, b):\n    return a * b").await?;
-        fs::write(self.root_path.join("src/types.ts"), "export type ID = number;").await?;
-        fs::write(self.root_path.join("src/config.json"), r#"{"debug": true, "port": 3000}"#).await?;
-        
+        fs::write(
+            self.root_path.join("src/utils.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }",
+        )
+        .await?;
+        fs::write(
+            self.root_path.join("src/helper.py"),
+            "def multiply(a, b):\n    return a * b",
+        )
+        .await?;
+        fs::write(
+            self.root_path.join("src/types.ts"),
+            "export type ID = number;",
+        )
+        .await?;
+        fs::write(
+            self.root_path.join("src/config.json"),
+            r#"{"debug": true, "port": 3000}"#,
+        )
+        .await?;
+
         Ok(())
     }
 }
@@ -921,7 +967,7 @@ func main() {
 #[tokio::test]
 async fn test_multi_language_file_detection() -> Result<()> {
     let workspace = MultiLanguageWorkspace::new().await?;
-    
+
     // Create files in different languages
     workspace.create_rust_files().await?;
     workspace.create_typescript_files().await?;
@@ -945,10 +991,12 @@ async fn test_multi_language_file_detection() -> Result<()> {
     };
 
     let manager = IndexingManager::new(config, language_detector);
-    
+
     // Start indexing
-    manager.start_indexing(workspace.path().to_path_buf()).await?;
-    
+    manager
+        .start_indexing(workspace.path().to_path_buf())
+        .await?;
+
     // Wait for completion
     let start_time = Instant::now();
     while start_time.elapsed() < Duration::from_secs(15) {
@@ -963,16 +1011,22 @@ async fn test_multi_language_file_detection() -> Result<()> {
     manager.stop_indexing().await?;
 
     // Should have processed multiple files from different languages
-    assert!(final_progress.processed_files >= 6, 
-        "Expected at least 6 files, got {}", final_progress.processed_files);
-    
-    // Should have extracted symbols from the code
-    assert!(final_progress.symbols_extracted > 0,
-        "Expected symbols to be extracted, got {}", final_progress.symbols_extracted);
+    assert!(
+        final_progress.processed_files >= 6,
+        "Expected at least 6 files, got {}",
+        final_progress.processed_files
+    );
 
-    println!("Multi-language processing: {} files, {} symbols",
-        final_progress.processed_files,
+    // Should have extracted symbols from the code
+    assert!(
+        final_progress.symbols_extracted > 0,
+        "Expected symbols to be extracted, got {}",
         final_progress.symbols_extracted
+    );
+
+    println!(
+        "Multi-language processing: {} files, {} symbols",
+        final_progress.processed_files, final_progress.symbols_extracted
     );
 
     Ok(())
@@ -981,7 +1035,7 @@ async fn test_multi_language_file_detection() -> Result<()> {
 #[tokio::test]
 async fn test_language_specific_filtering() -> Result<()> {
     let workspace = MultiLanguageWorkspace::new().await?;
-    
+
     workspace.create_rust_files().await?;
     workspace.create_typescript_files().await?;
     workspace.create_python_files().await?;
@@ -1004,7 +1058,9 @@ async fn test_language_specific_filtering() -> Result<()> {
     };
 
     let manager = IndexingManager::new(config, language_detector);
-    manager.start_indexing(workspace.path().to_path_buf()).await?;
+    manager
+        .start_indexing(workspace.path().to_path_buf())
+        .await?;
 
     // Wait for completion
     let start_time = Instant::now();
@@ -1021,8 +1077,11 @@ async fn test_language_specific_filtering() -> Result<()> {
 
     // Should have processed only Rust files (fewer than all languages)
     assert!(rust_only_progress.processed_files > 0);
-    
-    println!("Rust-only processing: {} files", rust_only_progress.processed_files);
+
+    println!(
+        "Rust-only processing: {} files",
+        rust_only_progress.processed_files
+    );
 
     Ok(())
 }
@@ -1030,11 +1089,11 @@ async fn test_language_specific_filtering() -> Result<()> {
 #[tokio::test]
 async fn test_error_handling_with_problematic_files() -> Result<()> {
     let workspace = MultiLanguageWorkspace::new().await?;
-    
+
     // Create good files
     workspace.create_rust_files().await?;
     workspace.create_python_files().await?;
-    
+
     // Create problematic files
     workspace.create_problematic_files().await?;
 
@@ -1054,7 +1113,9 @@ async fn test_error_handling_with_problematic_files() -> Result<()> {
     };
 
     let manager = IndexingManager::new(config, language_detector);
-    manager.start_indexing(workspace.path().to_path_buf()).await?;
+    manager
+        .start_indexing(workspace.path().to_path_buf())
+        .await?;
 
     // Wait for completion - allow longer time for error handling
     let start_time = Instant::now();
@@ -1070,20 +1131,26 @@ async fn test_error_handling_with_problematic_files() -> Result<()> {
     manager.stop_indexing().await?;
 
     // Should have processed some files successfully
-    assert!(final_progress.processed_files > 0,
-        "Expected some files to be processed successfully");
-    
-    // Should have some failures due to problematic files
-    assert!(final_progress.failed_files > 0,
-        "Expected some files to fail processing");
-    
-    // Should still complete overall
-    assert!(final_progress.is_complete(),
-        "Indexing should complete despite errors");
+    assert!(
+        final_progress.processed_files > 0,
+        "Expected some files to be processed successfully"
+    );
 
-    println!("Error handling test: {} processed, {} failed",
-        final_progress.processed_files,
-        final_progress.failed_files
+    // Should have some failures due to problematic files
+    assert!(
+        final_progress.failed_files > 0,
+        "Expected some files to fail processing"
+    );
+
+    // Should still complete overall
+    assert!(
+        final_progress.is_complete(),
+        "Indexing should complete despite errors"
+    );
+
+    println!(
+        "Error handling test: {} processed, {} failed",
+        final_progress.processed_files, final_progress.failed_files
     );
 
     Ok(())
@@ -1093,21 +1160,26 @@ async fn test_error_handling_with_problematic_files() -> Result<()> {
 async fn test_individual_pipeline_processing() -> Result<()> {
     let workspace = MultiLanguageWorkspace::new().await?;
     workspace.create_rust_files().await?;
-    
+
     // Test individual pipeline processing
     let mut rust_pipeline = IndexingPipeline::new(Language::Rust)?;
-    
+
     let rust_file = workspace.path().join("rust/lib.rs");
     let result = rust_pipeline.process_file(&rust_file).await?;
-    
-    assert!(result.symbols_found > 0, "Should extract symbols from Rust file");
-    assert!(result.bytes_processed > 0, "Should process bytes");
-    assert!(result.processing_time_ms > 0, "Should track processing time");
 
-    println!("Rust pipeline result: {} symbols, {} bytes, {}ms",
-        result.symbols_found,
-        result.bytes_processed,
-        result.processing_time_ms
+    assert!(
+        result.symbols_found > 0,
+        "Should extract symbols from Rust file"
+    );
+    assert!(result.bytes_processed > 0, "Should process bytes");
+    assert!(
+        result.processing_time_ms > 0,
+        "Should track processing time"
+    );
+
+    println!(
+        "Rust pipeline result: {} symbols, {} bytes, {}ms",
+        result.symbols_found, result.bytes_processed, result.processing_time_ms
     );
 
     Ok(())
@@ -1116,11 +1188,16 @@ async fn test_individual_pipeline_processing() -> Result<()> {
 #[tokio::test]
 async fn test_pipeline_configuration() -> Result<()> {
     // Test various pipeline configurations
-    let languages = [Language::Rust, Language::TypeScript, Language::Python, Language::Go];
-    
+    let languages = [
+        Language::Rust,
+        Language::TypeScript,
+        Language::Python,
+        Language::Go,
+    ];
+
     for language in languages {
         let pipeline = IndexingPipeline::new(language);
-        
+
         match pipeline {
             Ok(p) => {
                 assert_eq!(p.language(), language);
@@ -1139,7 +1216,7 @@ async fn test_pipeline_configuration() -> Result<()> {
 #[tokio::test]
 async fn test_concurrent_multi_language_processing() -> Result<()> {
     let workspace = MultiLanguageWorkspace::new().await?;
-    
+
     // Create files for different languages
     workspace.create_rust_files().await?;
     workspace.create_typescript_files().await?;
@@ -1162,18 +1239,20 @@ async fn test_concurrent_multi_language_processing() -> Result<()> {
     };
 
     let manager = IndexingManager::new(config, language_detector);
-    manager.start_indexing(workspace.path().to_path_buf()).await?;
+    manager
+        .start_indexing(workspace.path().to_path_buf())
+        .await?;
 
     // Monitor worker activity during processing
     let mut max_active_workers = 0;
     let start_time = Instant::now();
-    
+
     while start_time.elapsed() < Duration::from_secs(15) {
         let progress = manager.get_progress().await;
         if progress.active_workers > max_active_workers {
             max_active_workers = progress.active_workers;
         }
-        
+
         if progress.is_complete() {
             break;
         }
@@ -1184,15 +1263,18 @@ async fn test_concurrent_multi_language_processing() -> Result<()> {
     manager.stop_indexing().await?;
 
     // Should have used multiple workers concurrently
-    assert!(max_active_workers >= 2,
-        "Expected concurrent workers, max seen: {}", max_active_workers);
-    
+    assert!(
+        max_active_workers >= 2,
+        "Expected concurrent workers, max seen: {}",
+        max_active_workers
+    );
+
     // Should have processed files from multiple languages
     assert!(final_progress.processed_files >= 4);
 
-    println!("Concurrent processing: {} files, max {} workers active",
-        final_progress.processed_files,
-        max_active_workers
+    println!(
+        "Concurrent processing: {} files, max {} workers active",
+        final_progress.processed_files, max_active_workers
     );
 
     Ok(())
@@ -1201,7 +1283,7 @@ async fn test_concurrent_multi_language_processing() -> Result<()> {
 #[tokio::test]
 async fn test_memory_pressure_with_large_files() -> Result<()> {
     let workspace = MultiLanguageWorkspace::new().await?;
-    
+
     // Create normal files
     workspace.create_rust_files().await?;
     workspace.create_problematic_files().await?; // Includes large file
@@ -1222,17 +1304,19 @@ async fn test_memory_pressure_with_large_files() -> Result<()> {
     };
 
     let manager = IndexingManager::new(config, language_detector);
-    manager.start_indexing(workspace.path().to_path_buf()).await?;
+    manager
+        .start_indexing(workspace.path().to_path_buf())
+        .await?;
 
     // Monitor for memory pressure
     let mut detected_memory_pressure = false;
     let start_time = Instant::now();
-    
+
     while start_time.elapsed() < Duration::from_secs(15) {
         if manager.is_memory_pressure() {
             detected_memory_pressure = true;
         }
-        
+
         let progress = manager.get_progress().await;
         if progress.is_complete() {
             break;
@@ -1244,9 +1328,9 @@ async fn test_memory_pressure_with_large_files() -> Result<()> {
     manager.stop_indexing().await?;
 
     // With such a small memory budget, should detect pressure
-    println!("Memory pressure detected: {}, processed: {} files",
-        detected_memory_pressure,
-        final_progress.processed_files
+    println!(
+        "Memory pressure detected: {}, processed: {} files",
+        detected_memory_pressure, final_progress.processed_files
     );
 
     // Should still complete processing despite memory pressure
@@ -1258,12 +1342,12 @@ async fn test_memory_pressure_with_large_files() -> Result<()> {
 #[tokio::test]
 async fn test_language_priority_processing() -> Result<()> {
     let workspace = MultiLanguageWorkspace::new().await?;
-    
+
     // Create files for different languages with different priorities
-    workspace.create_rust_files().await?;      // Should be high priority
+    workspace.create_rust_files().await?; // Should be high priority
     workspace.create_typescript_files().await?; // Should be high priority
-    workspace.create_python_files().await?;    // Should be medium priority
-    workspace.create_go_files().await?;        // Should be medium priority
+    workspace.create_python_files().await?; // Should be medium priority
+    workspace.create_go_files().await?; // Should be medium priority
     workspace.create_mixed_directory().await?; // Mixed priorities
 
     let language_detector = Arc::new(LanguageDetector::new());
@@ -1282,18 +1366,20 @@ async fn test_language_priority_processing() -> Result<()> {
     };
 
     let manager = IndexingManager::new(config, language_detector);
-    manager.start_indexing(workspace.path().to_path_buf()).await?;
+    manager
+        .start_indexing(workspace.path().to_path_buf())
+        .await?;
 
     // Monitor queue to see priority processing
     let mut queue_snapshots = Vec::new();
     let start_time = Instant::now();
-    
+
     while start_time.elapsed() < Duration::from_secs(10) {
         let queue_snapshot = manager.get_queue_snapshot().await;
         if queue_snapshot.total_items > 0 {
             queue_snapshots.push(queue_snapshot);
         }
-        
+
         let progress = manager.get_progress().await;
         if progress.is_complete() {
             break;
@@ -1306,9 +1392,10 @@ async fn test_language_priority_processing() -> Result<()> {
 
     // Should have processed files
     assert!(final_progress.processed_files > 0);
-    
+
     // Should have seen queue activity if timing was right
-    println!("Priority processing test: {} files processed, {} queue snapshots",
+    println!(
+        "Priority processing test: {} files processed, {} queue snapshots",
         final_progress.processed_files,
         queue_snapshots.len()
     );

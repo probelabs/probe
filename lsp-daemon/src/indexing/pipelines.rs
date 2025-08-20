@@ -5,7 +5,9 @@
 //! Feature flags allow selective enabling/disabling of indexing capabilities.
 
 use crate::indexing::config::IndexingFeatures;
-use crate::indexing::language_strategies::{IndexingPriority, LanguageIndexingStrategy, LanguageStrategyFactory};
+use crate::indexing::language_strategies::{
+    IndexingPriority, LanguageIndexingStrategy, LanguageStrategyFactory,
+};
 use crate::language_detector::Language;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -14,7 +16,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tracing::{debug, error, info};
-
 
 /// Configuration for a language-specific pipeline
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,9 +182,12 @@ impl PipelineConfig {
     }
 
     /// Create pipeline configuration from comprehensive IndexingConfig
-    pub fn from_indexing_config(indexing_config: &crate::indexing::IndexingConfig, language: Language) -> Self {
+    pub fn from_indexing_config(
+        indexing_config: &crate::indexing::IndexingConfig,
+        language: Language,
+    ) -> Self {
         let effective_config = indexing_config.for_language(language);
-        
+
         Self {
             language,
             features: effective_config.features,
@@ -287,9 +291,9 @@ impl LanguagePipeline {
     pub fn new(language: Language) -> Self {
         let config = PipelineConfig::for_language(language);
         let strategy = LanguageStrategyFactory::create_strategy(language);
-        
+
         info!("Created language pipeline for {:?} with strategy", language);
-        
+
         Self {
             config,
             strategy,
@@ -302,7 +306,7 @@ impl LanguagePipeline {
     /// Create a pipeline with custom configuration
     pub fn with_config(config: PipelineConfig) -> Self {
         let strategy = LanguageStrategyFactory::create_strategy(config.language);
-        
+
         Self {
             config,
             strategy,
@@ -367,21 +371,31 @@ impl LanguagePipeline {
     pub fn get_strategy(&self) -> &LanguageIndexingStrategy {
         &self.strategy
     }
-    
+
     /// Calculate the priority of a file for indexing
     pub fn calculate_file_priority(&self, file_path: &Path) -> IndexingPriority {
         self.strategy.calculate_file_priority(file_path)
     }
-    
+
     /// Check if the file should be processed based on language strategy
     pub fn should_process_file_with_strategy(&self, file_path: &Path) -> bool {
         self.strategy.should_process_file(file_path) && self.config.should_process_file(file_path)
     }
-    
+
     /// Calculate symbol priority using language strategy
-    pub fn calculate_symbol_priority(&self, symbol_type: &str, visibility: Option<&str>, 
-                                   has_documentation: bool, is_exported: bool) -> IndexingPriority {
-        self.strategy.calculate_symbol_priority(symbol_type, visibility, has_documentation, is_exported)
+    pub fn calculate_symbol_priority(
+        &self,
+        symbol_type: &str,
+        visibility: Option<&str>,
+        has_documentation: bool,
+        is_exported: bool,
+    ) -> IndexingPriority {
+        self.strategy.calculate_symbol_priority(
+            symbol_type,
+            visibility,
+            has_documentation,
+            is_exported,
+        )
     }
 
     /// Process file content and extract symbols
@@ -786,13 +800,18 @@ impl LanguagePipeline {
         self.total_processing_time = 0;
         self.last_error = None;
     }
-    
+
     /// Enhance symbols with priority information based on language strategy
     fn enhance_symbols_with_priority(&self, symbols: &mut Vec<SymbolInfo>, default_kind: &str) {
         for symbol in symbols {
-            let kind = if symbol.kind.is_empty() { default_kind } else { &symbol.kind };
-            let has_documentation = symbol.documentation.is_some() && !symbol.documentation.as_ref().unwrap().is_empty();
-            
+            let kind = if symbol.kind.is_empty() {
+                default_kind
+            } else {
+                &symbol.kind
+            };
+            let has_documentation = symbol.documentation.is_some()
+                && !symbol.documentation.as_ref().unwrap().is_empty();
+
             symbol.priority = Some(self.strategy.calculate_symbol_priority(
                 kind,
                 symbol.visibility.as_deref(),
@@ -801,11 +820,11 @@ impl LanguagePipeline {
             ));
         }
     }
-    
+
     /// Detect visibility from a line of code
     fn detect_visibility(&self, line: &str) -> Option<String> {
         let trimmed = line.trim();
-        
+
         match self.config.language {
             Language::Rust => {
                 if trimmed.starts_with("pub ") || trimmed.contains(" pub ") {
@@ -824,7 +843,10 @@ impl LanguagePipeline {
             }
             Language::Go => {
                 // Go uses capitalization for visibility
-                if let Some(word) = trimmed.split_whitespace().find(|w| w.chars().next().unwrap_or('a').is_alphabetic()) {
+                if let Some(word) = trimmed
+                    .split_whitespace()
+                    .find(|w| w.chars().next().unwrap_or('a').is_alphabetic())
+                {
                     if word.chars().next().unwrap().is_uppercase() {
                         Some("public".to_string())
                     } else {
@@ -859,33 +881,30 @@ impl LanguagePipeline {
             _ => None,
         }
     }
-    
+
     /// Detect if a symbol is exported/public
     fn detect_export(&self, line: &str) -> bool {
         let trimmed = line.trim();
-        
+
         match self.config.language {
-            Language::Rust => {
-                trimmed.starts_with("pub ") || trimmed.contains(" pub ")
-            }
+            Language::Rust => trimmed.starts_with("pub ") || trimmed.contains(" pub "),
             Language::Python => {
                 // Python doesn't have explicit exports, assume non-private is exported
                 !trimmed.contains("def _") && !trimmed.contains("class _")
             }
             Language::Go => {
                 // Go uses capitalization for exports
-                if let Some(word) = trimmed.split_whitespace().find(|w| w.chars().next().unwrap_or('a').is_alphabetic()) {
+                if let Some(word) = trimmed
+                    .split_whitespace()
+                    .find(|w| w.chars().next().unwrap_or('a').is_alphabetic())
+                {
                     word.chars().next().unwrap().is_uppercase()
                 } else {
                     false
                 }
             }
-            Language::TypeScript | Language::JavaScript => {
-                trimmed.contains("export ")
-            }
-            Language::Java => {
-                trimmed.contains("public ")
-            }
+            Language::TypeScript | Language::JavaScript => trimmed.contains("export "),
+            Language::Java => trimmed.contains("public "),
             _ => false,
         }
     }

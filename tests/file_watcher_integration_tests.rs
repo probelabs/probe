@@ -4,7 +4,7 @@
 //! and triggers appropriate indexing updates in the background.
 
 use anyhow::Result;
-use lsp_daemon::file_watcher::{FileEvent, FileEventType, FileWatcher, FileWatcherConfig};
+use lsp_daemon::file_watcher::{FileEventType, FileWatcher, FileWatcherConfig};
 use lsp_daemon::indexing::{IndexingManager, ManagerConfig};
 use lsp_daemon::LanguageDetector;
 use std::path::{Path, PathBuf};
@@ -29,7 +29,10 @@ impl TestWorkspace {
         fs::create_dir_all(root_path.join("src")).await?;
         fs::create_dir_all(root_path.join("tests")).await?;
 
-        Ok(Self { temp_dir, root_path })
+        Ok(Self {
+            temp_dir,
+            root_path,
+        })
     }
 
     fn path(&self) -> &Path {
@@ -38,12 +41,12 @@ impl TestWorkspace {
 
     async fn create_file(&self, relative_path: &str, content: &str) -> Result<PathBuf> {
         let file_path = self.root_path.join(relative_path);
-        
+
         // Ensure parent directory exists
         if let Some(parent) = file_path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        
+
         fs::write(&file_path, content).await?;
         Ok(file_path)
     }
@@ -66,9 +69,9 @@ impl TestWorkspace {
 /// Create a test file watcher configuration
 fn create_test_watcher_config() -> FileWatcherConfig {
     FileWatcherConfig {
-        poll_interval_secs: 1,       // Fast polling for tests
-        event_batch_size: 1,         // Send events immediately
-        debounce_interval_ms: 100,   // Short debounce for tests
+        poll_interval_secs: 1,     // Fast polling for tests
+        event_batch_size: 1,       // Send events immediately
+        debounce_interval_ms: 100, // Short debounce for tests
         debug_logging: true,
         max_files_per_workspace: 1000,
         exclude_patterns: vec![
@@ -108,7 +111,9 @@ async fn test_file_watcher_basic_functionality() -> Result<()> {
     assert!(events[0].file_path.to_string_lossy().contains("main.rs"));
 
     // Modify the file
-    workspace.modify_file("src/main.rs", "fn main() { println!(\"hello\"); }").await?;
+    workspace
+        .modify_file("src/main.rs", "fn main() { println!(\"hello\"); }")
+        .await?;
 
     // Wait for modify event
     let events = timeout(Duration::from_secs(5), receiver.recv())
@@ -152,7 +157,9 @@ async fn test_file_watcher_exclusion_patterns() -> Result<()> {
     workspace.create_file(".git/config", "git config").await?;
 
     // Create file that should be included
-    workspace.create_file("src/lib.rs", "pub fn hello() {}").await?;
+    workspace
+        .create_file("src/lib.rs", "pub fn hello() {}")
+        .await?;
 
     // Wait for events - should only get the lib.rs file
     let events = timeout(Duration::from_secs(3), receiver.recv())
@@ -205,13 +212,13 @@ async fn test_file_watcher_batch_events() -> Result<()> {
 async fn test_file_watcher_multiple_workspaces() -> Result<()> {
     let workspace1 = TestWorkspace::new().await?;
     let workspace2 = TestWorkspace::new().await?;
-    
+
     let config = create_test_watcher_config();
     let mut watcher = FileWatcher::new(config);
 
     watcher.add_workspace(workspace1.path())?;
     watcher.add_workspace(workspace2.path())?;
-    
+
     let mut receiver = watcher.take_receiver().unwrap();
     watcher.start()?;
 
@@ -234,10 +241,14 @@ async fn test_file_watcher_multiple_workspaces() -> Result<()> {
     assert_eq!(events2.len(), 1);
 
     // Verify events are from correct workspaces
-    assert!(events1[0].workspace_root == workspace1.path() || 
-           events1[0].workspace_root == workspace2.path());
-    assert!(events2[0].workspace_root == workspace1.path() || 
-           events2[0].workspace_root == workspace2.path());
+    assert!(
+        events1[0].workspace_root == workspace1.path()
+            || events1[0].workspace_root == workspace2.path()
+    );
+    assert!(
+        events2[0].workspace_root == workspace1.path()
+            || events2[0].workspace_root == workspace2.path()
+    );
 
     // Should be from different workspaces
     assert_ne!(events1[0].workspace_root, events2[0].workspace_root);
@@ -281,9 +292,12 @@ async fn test_file_watcher_large_file_exclusion() -> Result<()> {
 #[tokio::test]
 async fn test_incremental_indexing_with_file_watcher() -> Result<()> {
     let workspace = TestWorkspace::new().await?;
-    
+
     // Create initial files
-    workspace.create_file("src/main.rs", r#"
+    workspace
+        .create_file(
+            "src/main.rs",
+            r#"
 fn main() {
     println!("Hello, world!");
 }
@@ -291,15 +305,22 @@ fn main() {
 pub fn add(a: i32, b: i32) -> i32 {
     a + b
 }
-"#).await?;
+"#,
+        )
+        .await?;
 
-    workspace.create_file("src/lib.rs", r#"
+    workspace
+        .create_file(
+            "src/lib.rs",
+            r#"
 pub mod utils;
 
 pub fn multiply(a: i32, b: i32) -> i32 {
     a * b
 }
-"#).await?;
+"#,
+        )
+        .await?;
 
     // Setup indexing manager with incremental mode
     let manager_config = ManagerConfig {
@@ -320,8 +341,10 @@ pub fn multiply(a: i32, b: i32) -> i32 {
     let manager = IndexingManager::new(manager_config.clone(), language_detector);
 
     // First indexing run
-    manager.start_indexing(workspace.path().to_path_buf()).await?;
-    
+    manager
+        .start_indexing(workspace.path().to_path_buf())
+        .await?;
+
     // Wait for initial indexing to complete
     let start_time = Instant::now();
     while start_time.elapsed() < Duration::from_secs(10) {
@@ -346,7 +369,10 @@ pub fn multiply(a: i32, b: i32) -> i32 {
     watcher.start()?;
 
     // Modify existing file
-    workspace.modify_file("src/main.rs", r#"
+    workspace
+        .modify_file(
+            "src/main.rs",
+            r#"
 fn main() {
     println!("Hello, modified world!");
 }
@@ -358,7 +384,9 @@ pub fn add(a: i32, b: i32) -> i32 {
 pub fn subtract(a: i32, b: i32) -> i32 {
     a - b
 }
-"#).await?;
+"#,
+        )
+        .await?;
 
     // Wait for file change event
     let events = timeout(Duration::from_secs(5), receiver.recv())
@@ -371,7 +399,10 @@ pub fn subtract(a: i32, b: i32) -> i32 {
     assert!(events[0].file_path.to_string_lossy().contains("main.rs"));
 
     // Create new file
-    workspace.create_file("src/utils.rs", r#"
+    workspace
+        .create_file(
+            "src/utils.rs",
+            r#"
 pub fn is_even(n: i32) -> bool {
     n % 2 == 0
 }
@@ -382,7 +413,9 @@ pub fn factorial(n: u32) -> u32 {
         _ => n * factorial(n - 1),
     }
 }
-"#).await?;
+"#,
+        )
+        .await?;
 
     // Wait for file creation event
     let events = timeout(Duration::from_secs(5), receiver.recv())
@@ -398,7 +431,9 @@ pub fn factorial(n: u32) -> u32 {
 
     // Second indexing run (incremental) - should only process changed files
     let manager2 = IndexingManager::new(manager_config.clone(), Arc::new(LanguageDetector::new()));
-    manager2.start_indexing(workspace.path().to_path_buf()).await?;
+    manager2
+        .start_indexing(workspace.path().to_path_buf())
+        .await?;
 
     // Wait for incremental indexing
     let start_time = Instant::now();
@@ -418,9 +453,9 @@ pub fn factorial(n: u32) -> u32 {
     assert!(incremental_progress.processed_files > 0);
     assert!(incremental_progress.is_complete());
 
-    println!("Initial indexing: {} files, Incremental: {} files",
-        initial_progress.processed_files,
-        incremental_progress.processed_files
+    println!(
+        "Initial indexing: {} files, Incremental: {} files",
+        initial_progress.processed_files, incremental_progress.processed_files
     );
 
     Ok(())
@@ -430,7 +465,7 @@ pub fn factorial(n: u32) -> u32 {
 async fn test_file_watcher_statistics() -> Result<()> {
     let workspace1 = TestWorkspace::new().await?;
     let workspace2 = TestWorkspace::new().await?;
-    
+
     let config = create_test_watcher_config();
     let mut watcher = FileWatcher::new(config);
 
@@ -461,11 +496,11 @@ async fn test_file_watcher_statistics() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn test_file_watcher_workspace_management() -> Result<()> {
     let workspace1 = TestWorkspace::new().await?;
     let workspace2 = TestWorkspace::new().await?;
-    
+
     let config = create_test_watcher_config();
     let mut watcher = FileWatcher::new(config);
 
@@ -521,18 +556,18 @@ async fn test_file_watcher_concurrent_operations() -> Result<()> {
 
     // Create multiple files concurrently
     let mut handles = Vec::new();
-    
+
     for i in 0..10 {
         let workspace_path = workspace.path().to_path_buf();
         let handle = tokio::spawn(async move {
-            let temp_workspace = TestWorkspace { 
+            let temp_workspace = TestWorkspace {
                 temp_dir: unsafe { std::mem::zeroed() }, // We won't drop this
-                root_path: workspace_path 
+                root_path: workspace_path,
             };
-            
-            let file_name = format!("concurrent_{}.rs", i);
-            let content = format!("// Concurrent file {}", i);
-            
+
+            let file_name = format!("concurrent_{i}.rs");
+            let content = format!("// Concurrent file {i}");
+
             temp_workspace.create_file(&file_name, &content).await
         });
         handles.push(handle);
@@ -546,7 +581,7 @@ async fn test_file_watcher_concurrent_operations() -> Result<()> {
     // Collect events - should get all 10 files
     let mut total_events = 0;
     let start_time = Instant::now();
-    
+
     while start_time.elapsed() < Duration::from_secs(10) && total_events < 10 {
         match timeout(Duration::from_secs(2), receiver.recv()).await {
             Ok(Some(events)) => {
@@ -562,7 +597,7 @@ async fn test_file_watcher_concurrent_operations() -> Result<()> {
     }
 
     assert_eq!(total_events, 10);
-    
+
     watcher.stop().await?;
     Ok(())
 }
@@ -572,27 +607,29 @@ async fn test_file_watcher_rapid_changes() -> Result<()> {
     let workspace = TestWorkspace::new().await?;
     let mut config = create_test_watcher_config();
     config.debounce_interval_ms = 200; // Debounce rapid changes
-    
+
     let mut watcher = FileWatcher::new(config);
     watcher.add_workspace(workspace.path())?;
     let mut receiver = watcher.take_receiver().unwrap();
     watcher.start()?;
 
     let test_file = "rapid_changes.rs";
-    
+
     // Create initial file
     workspace.create_file(test_file, "// Initial").await?;
-    
+
     // Make rapid modifications
     for i in 1..=5 {
         sleep(Duration::from_millis(50)).await;
-        workspace.modify_file(test_file, &format!("// Modification {}", i)).await?;
+        workspace
+            .modify_file(test_file, &format!("// Modification {i}"))
+            .await?;
     }
 
     // Wait for events - debouncing should reduce the number of events
     let mut all_events = Vec::new();
     let start_time = Instant::now();
-    
+
     while start_time.elapsed() < Duration::from_secs(5) {
         match timeout(Duration::from_millis(500), receiver.recv()).await {
             Ok(Some(mut events)) => {
@@ -605,12 +642,18 @@ async fn test_file_watcher_rapid_changes() -> Result<()> {
 
     // Should have at least create event and some modify events
     // (exact count depends on debouncing implementation)
-    assert!(all_events.len() >= 1);
+    assert!(!all_events.is_empty());
     assert!(all_events.len() <= 6); // Should be less than total operations due to debouncing
-    
-    let create_events = all_events.iter().filter(|e| e.event_type == FileEventType::Created).count();
-    let modify_events = all_events.iter().filter(|e| e.event_type == FileEventType::Modified).count();
-    
+
+    let create_events = all_events
+        .iter()
+        .filter(|e| e.event_type == FileEventType::Created)
+        .count();
+    let modify_events = all_events
+        .iter()
+        .filter(|e| e.event_type == FileEventType::Modified)
+        .count();
+
     assert_eq!(create_events, 1);
     assert!(modify_events >= 1);
 
