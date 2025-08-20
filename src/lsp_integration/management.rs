@@ -1544,8 +1544,10 @@ impl LspManager {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
+                    // Use saturating_sub to avoid underflow
+                    let elapsed_secs = now.saturating_sub(started_at);
                     let elapsed_friendly =
-                        Self::format_duration(std::time::Duration::from_secs(now - started_at));
+                        Self::format_duration(std::time::Duration::from_secs(elapsed_secs));
                     println!("  {}: {} ago", "Started".bold(), elapsed_friendly);
                 }
 
