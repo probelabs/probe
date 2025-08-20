@@ -2283,7 +2283,7 @@ impl LspDaemon {
             let progress = manager.get_progress().await;
 
             let status_info = crate::protocol::IndexingStatusInfo {
-                manager_status: format!("{:?}", status),
+                manager_status: format!("{status:?}"),
                 progress: IndexingProgressInfo {
                     total_files: progress.total_files,
                     processed_files: progress.processed_files,

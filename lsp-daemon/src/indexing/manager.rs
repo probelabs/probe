@@ -219,7 +219,7 @@ impl IndexingManager {
             enabled_languages: config
                 .priority_languages
                 .iter()
-                .map(|l| format!("{:?}", l))
+                .map(|l| format!("{l:?}"))
                 .collect(),
             incremental_mode: config.incremental_mode,
             discovery_batch_size: config.discovery_batch_size,

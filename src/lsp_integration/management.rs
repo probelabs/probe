@@ -38,7 +38,7 @@ impl LspManager {
         };
 
         // Quick health check
-        if let Err(_) = client.ping().await {
+        if client.ping().await.is_err() {
             // If ping fails, restart daemon
             let _ = client.shutdown_daemon().await;
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -49,8 +49,8 @@ impl LspManager {
 
         // Auto-initialize current workspace if it looks like a code project
         let current_dir = std::env::current_dir()?;
-        if Self::is_code_workspace(&current_dir)? {
-            if let Err(_) = client
+        if Self::is_code_workspace(&current_dir)?
+            && client
                 .init_workspaces(
                     current_dir,
                     None,  // Auto-detect languages
@@ -58,10 +58,10 @@ impl LspManager {
                     false, // No watchdog by default
                 )
                 .await
-            {
-                // Init failure is not critical for basic operations
-                // The workspace will be initialized on-demand during operations
-            }
+                .is_err()
+        {
+            // Init failure is not critical for basic operations
+            // The workspace will be initialized on-demand during operations
         }
 
         Ok(())

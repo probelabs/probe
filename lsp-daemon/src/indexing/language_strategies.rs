@@ -11,24 +11,19 @@ use std::path::Path;
 use tracing::{debug, info};
 
 /// Priority levels for indexing operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub enum IndexingPriority {
     /// Critical symbols that are essential for understanding the codebase
     Critical = 4,
     /// High priority symbols that are frequently referenced
     High = 3,
     /// Medium priority symbols with moderate importance
+    #[default]
     Medium = 2,
     /// Low priority symbols that are less frequently needed
     Low = 1,
     /// Minimal priority for rarely accessed symbols
     Minimal = 0,
-}
-
-impl Default for IndexingPriority {
-    fn default() -> Self {
-        IndexingPriority::Medium
-    }
 }
 
 /// Strategy for determining file importance in a workspace
@@ -268,7 +263,7 @@ impl LanguageIndexingStrategy {
                 || self
                     .file_strategy
                     .target_extensions
-                    .contains(&format!(".{}", ext))
+                    .contains(&format!(".{ext}"))
         } else {
             false
         }
@@ -416,22 +411,24 @@ impl LanguageStrategyFactory {
 
     /// Create Rust-specific indexing strategy
     fn create_rust_strategy() -> LanguageIndexingStrategy {
-        let mut file_strategy = FileImportanceStrategy::default();
-        file_strategy.high_priority_patterns = vec![
-            "*lib.rs".to_string(),
-            "*main.rs".to_string(),
-            "*mod.rs".to_string(),
-            "*/src/*".to_string(),
-            "*cargo.toml".to_string(),
-        ];
-        file_strategy.low_priority_patterns = vec![
-            "*/tests/*".to_string(),
-            "*_test.rs".to_string(),
-            "*/target/*".to_string(),
-            "*/examples/*".to_string(),
-        ];
-        file_strategy.target_extensions = vec![".rs".to_string()];
-        file_strategy.include_tests = false;
+        let file_strategy = FileImportanceStrategy {
+            high_priority_patterns: vec![
+                "*lib.rs".to_string(),
+                "*main.rs".to_string(),
+                "*mod.rs".to_string(),
+                "*/src/*".to_string(),
+                "*cargo.toml".to_string(),
+            ],
+            low_priority_patterns: vec![
+                "*/tests/*".to_string(),
+                "*_test.rs".to_string(),
+                "*/target/*".to_string(),
+                "*/examples/*".to_string(),
+            ],
+            target_extensions: vec![".rs".to_string()],
+            include_tests: false,
+            ..Default::default()
+        };
 
         let mut symbol_strategy = SymbolPriorityStrategy::default();
         symbol_strategy
