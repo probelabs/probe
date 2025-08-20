@@ -440,7 +440,7 @@ impl IndexingConfig {
             let threshold: f64 = value
                 .parse()
                 .context("Invalid value for PROBE_INDEX_MEMORY_THRESHOLD")?;
-            if threshold >= 0.0 && threshold <= 1.0 {
+            if (0.0..=1.0).contains(&threshold) {
                 config.memory_pressure_threshold = threshold;
             } else {
                 return Err(anyhow!(
@@ -570,7 +570,7 @@ impl IndexingConfig {
             if config_path.exists() {
                 info!("Loading indexing configuration from {:?}", config_path);
                 config = Self::from_file(&config_path)
-                    .with_context(|| format!("Failed to load config from {:?}", config_path))?;
+                    .with_context(|| format!("Failed to load config from {config_path:?}"))?;
                 break;
             }
         }
@@ -673,7 +673,7 @@ impl IndexingConfig {
         if let Some(ref cache_dir) = self.cache_directory {
             if self.persist_cache && !cache_dir.exists() {
                 std::fs::create_dir_all(cache_dir)
-                    .context(format!("Failed to create cache directory: {:?}", cache_dir))?;
+                    .context(format!("Failed to create cache directory: {cache_dir:?}"))?;
             }
         }
 
@@ -728,7 +728,7 @@ impl IndexingConfig {
                 .unwrap_or_else(|| self.features.clone()),
             parser_config: language_config
                 .map(|c| c.parser_config.clone())
-                .unwrap_or_else(HashMap::new),
+                .unwrap_or_default(),
             priority: language_config.map(|c| c.priority).unwrap_or_else(|| {
                 if self.priority_languages.contains(&language) {
                     100
@@ -761,7 +761,7 @@ impl IndexingConfig {
             languages: self
                 .priority_languages
                 .iter()
-                .map(|l| format!("{:?}", l))
+                .map(|l| format!("{l:?}"))
                 .collect(),
             recursive: true, // Always true in new config system
         }
@@ -992,52 +992,50 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
         Language::C,
         Language::Cpp,
     ] {
-        let lang_str = format!("{:?}", language).to_uppercase();
+        let lang_str = format!("{language:?}").to_uppercase();
         let mut config = LanguageIndexConfig::default();
         let mut has_config = false;
 
         // Check for language-specific environment variables
-        if let Ok(value) = std::env::var(&format!("PROBE_INDEX_{}_ENABLED", lang_str)) {
+        if let Ok(value) = std::env::var(format!("PROBE_INDEX_{lang_str}_ENABLED")) {
             config.enabled = Some(parse_bool_env(
                 &value,
-                &format!("PROBE_INDEX_{}_ENABLED", lang_str),
+                &format!("PROBE_INDEX_{lang_str}_ENABLED"),
             )?);
             has_config = true;
         }
 
-        if let Ok(value) = std::env::var(&format!("PROBE_INDEX_{}_WORKERS", lang_str)) {
-            config.max_workers = Some(value.parse().context(format!(
-                "Invalid value for PROBE_INDEX_{}_WORKERS",
-                lang_str
-            ))?);
+        if let Ok(value) = std::env::var(format!("PROBE_INDEX_{lang_str}_WORKERS")) {
+            config.max_workers = Some(
+                value
+                    .parse()
+                    .context(format!("Invalid value for PROBE_INDEX_{lang_str}_WORKERS"))?,
+            );
             has_config = true;
         }
 
-        if let Ok(value) = std::env::var(&format!("PROBE_INDEX_{}_MEMORY_MB", lang_str)) {
+        if let Ok(value) = std::env::var(format!("PROBE_INDEX_{lang_str}_MEMORY_MB")) {
             config.memory_budget_mb = Some(value.parse().context(format!(
-                "Invalid value for PROBE_INDEX_{}_MEMORY_MB",
-                lang_str
+                "Invalid value for PROBE_INDEX_{lang_str}_MEMORY_MB"
             ))?);
             has_config = true;
         }
 
-        if let Ok(value) = std::env::var(&format!("PROBE_INDEX_{}_TIMEOUT_MS", lang_str)) {
+        if let Ok(value) = std::env::var(format!("PROBE_INDEX_{lang_str}_TIMEOUT_MS")) {
             config.timeout_ms = Some(value.parse().context(format!(
-                "Invalid value for PROBE_INDEX_{}_TIMEOUT_MS",
-                lang_str
+                "Invalid value for PROBE_INDEX_{lang_str}_TIMEOUT_MS"
             ))?);
             has_config = true;
         }
 
-        if let Ok(value) = std::env::var(&format!("PROBE_INDEX_{}_PRIORITY", lang_str)) {
-            config.priority = value.parse().context(format!(
-                "Invalid value for PROBE_INDEX_{}_PRIORITY",
-                lang_str
-            ))?;
+        if let Ok(value) = std::env::var(format!("PROBE_INDEX_{lang_str}_PRIORITY")) {
+            config.priority = value
+                .parse()
+                .context(format!("Invalid value for PROBE_INDEX_{lang_str}_PRIORITY"))?;
             has_config = true;
         }
 
-        if let Ok(value) = std::env::var(&format!("PROBE_INDEX_{}_EXTENSIONS", lang_str)) {
+        if let Ok(value) = std::env::var(format!("PROBE_INDEX_{lang_str}_EXTENSIONS")) {
             config.file_extensions = value
                 .split(',')
                 .map(|s| s.trim().to_string())
@@ -1046,7 +1044,7 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
             has_config = true;
         }
 
-        if let Ok(value) = std::env::var(&format!("PROBE_INDEX_{}_EXCLUDE", lang_str)) {
+        if let Ok(value) = std::env::var(format!("PROBE_INDEX_{lang_str}_EXCLUDE")) {
             config.exclude_patterns = value
                 .split(',')
                 .map(|s| s.trim().to_string())
@@ -1055,10 +1053,10 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
             has_config = true;
         }
 
-        if let Ok(value) = std::env::var(&format!("PROBE_INDEX_{}_PIPELINE", lang_str)) {
+        if let Ok(value) = std::env::var(format!("PROBE_INDEX_{lang_str}_PIPELINE")) {
             // Enable language-specific pipeline features
             let pipeline_enabled =
-                parse_bool_env(&value, &format!("PROBE_INDEX_{}_PIPELINE", lang_str))?;
+                parse_bool_env(&value, &format!("PROBE_INDEX_{lang_str}_PIPELINE"))?;
             if pipeline_enabled {
                 let mut features = IndexingFeatures::default();
 

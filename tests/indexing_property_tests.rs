@@ -507,8 +507,8 @@ proptest! {
             // Create files with various extensions
             for i in 0..file_count {
                 let ext = &extensions[i % extensions.len()];
-                let file_path = root.join(format!("file_{}.{}", i, ext));
-                let content = format!("// File {} content", i);
+                let file_path = root.join(format!("file_{i}.{ext}"));
+                let content = format!("// File {i} content");
                 fs::write(&file_path, content).await.unwrap();
 
                 // Count expected files (assuming all extensions are valid)

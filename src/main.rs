@@ -371,7 +371,7 @@ async fn main() -> Result<()> {
         }
 
         if let Err(e) = LspManager::ensure_ready().await {
-            eprintln!("Warning: LSP initialization failed: {}", e);
+            eprintln!("Warning: LSP initialization failed: {e}");
             eprintln!("Continuing without LSP features...");
         }
     }

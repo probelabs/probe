@@ -5,13 +5,8 @@
 //! and gracefully handles various error conditions.
 
 use anyhow::Result;
-use lsp_daemon::indexing::{
-    IndexingManager, IndexingPipeline, LanguagePipeline, ManagerConfig, PipelineConfig,
-    PipelineResult,
-};
-use lsp_daemon::SymbolInfo;
+use lsp_daemon::indexing::{IndexingManager, IndexingPipeline, ManagerConfig};
 use lsp_daemon::{Language, LanguageDetector};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -757,14 +752,13 @@ impl MissingFields {
         fs::write(
             self.root_path.join("typescript/large_file.ts"),
             format!(
-                "{}
+                "{large_content}
 // This file is very large and might cause memory issues
 export class LargeClass {{
     method() {{
         return 'large';
     }}
-}}",
-                large_content
+}}"
             ),
         )
         .await?;
@@ -1201,10 +1195,10 @@ async fn test_pipeline_configuration() -> Result<()> {
         match pipeline {
             Ok(p) => {
                 assert_eq!(p.language(), language);
-                println!("Successfully created pipeline for {:?}", language);
+                println!("Successfully created pipeline for {language:?}");
             }
             Err(e) => {
-                println!("Failed to create pipeline for {:?}: {}", language, e);
+                println!("Failed to create pipeline for {language:?}: {e}");
                 // Some languages might not be supported - that's OK for this test
             }
         }
@@ -1265,8 +1259,7 @@ async fn test_concurrent_multi_language_processing() -> Result<()> {
     // Should have used multiple workers concurrently
     assert!(
         max_active_workers >= 2,
-        "Expected concurrent workers, max seen: {}",
-        max_active_workers
+        "Expected concurrent workers, max seen: {max_active_workers}"
     );
 
     // Should have processed files from multiple languages
