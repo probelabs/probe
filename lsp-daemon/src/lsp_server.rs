@@ -442,6 +442,39 @@ impl LspServer {
         let workspace_uri = Url::from_directory_path(&project_root)
             .map_err(|_| anyhow!("Failed to convert path"))?;
 
+        // For rust-analyzer, we need to add linkedProjects to the initialization options
+        let mut initialization_options = config.initialization_options.clone();
+        if config.language == crate::language_detector::Language::Rust {
+            // Find Cargo.toml files in the workspace
+            let cargo_toml_path = project_root.join("Cargo.toml");
+            if cargo_toml_path.exists() {
+                debug!(
+                    "Found Cargo.toml at {:?}, adding to linkedProjects",
+                    cargo_toml_path
+                );
+
+                // Merge linkedProjects into existing initialization options
+                if let Some(ref mut options) = initialization_options {
+                    if let Some(obj) = options.as_object_mut() {
+                        obj.insert(
+                            "linkedProjects".to_string(),
+                            json!([cargo_toml_path.to_string_lossy().to_string()]),
+                        );
+                    }
+                } else {
+                    initialization_options = Some(json!({
+                        "linkedProjects": [cargo_toml_path.to_string_lossy().to_string()]
+                    }));
+                }
+                info!(
+                    "Added linkedProjects for rust-analyzer: {:?}",
+                    cargo_toml_path
+                );
+            } else {
+                warn!("No Cargo.toml found in {:?}, rust-analyzer may not recognize files as part of a crate", project_root);
+            }
+        }
+
         let init_params = json!({
             "processId": std::process::id(),
             "rootUri": workspace_uri.to_string(),
@@ -485,7 +518,7 @@ impl LspServer {
                     "statusNotification": true
                 }
             },
-            "initializationOptions": config.initialization_options
+            "initializationOptions": initialization_options
         });
 
         self.send_request("initialize", init_params, request_id)
@@ -1055,6 +1088,11 @@ impl LspServer {
         self.server_name == "gopls" || self.server_name.ends_with("/gopls")
     }
 
+    // Helper method to check if this is rust-analyzer
+    fn is_rust_analyzer(&self) -> bool {
+        self.server_name == "rust-analyzer" || self.server_name.ends_with("/rust-analyzer")
+    }
+
     // Execute workspace command (needed for gopls.tidy and other commands)
     pub async fn execute_command(&self, command: &str, arguments: Vec<Value>) -> Result<Value> {
         let request_id = self.next_request_id().await;
@@ -1261,8 +1299,24 @@ impl LspServer {
             self.ensure_document_ready(file_path).await?;
         }
 
-        // Try call hierarchy with retry logic for gopls
-        let max_attempts = if self.is_gopls() { 3 } else { 1 };
+        // For rust-analyzer, ensure document is open and wait for indexing
+        if self.is_rust_analyzer() {
+            // Open the document if not already open
+            if !self.is_document_open(file_path).await {
+                self.open_file_safely(file_path).await?;
+                // rust-analyzer needs significant time to index after opening a file
+                // especially when the project hasn't been fully indexed yet
+                info!("Waiting 10 seconds for rust-analyzer to index the document and build call hierarchy...");
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        }
+
+        // Try call hierarchy with retry logic for gopls and rust-analyzer
+        let max_attempts = if self.is_gopls() || self.is_rust_analyzer() {
+            3
+        } else {
+            1
+        };
         let mut last_error = None;
 
         for attempt in 0..max_attempts {
@@ -1278,6 +1332,12 @@ impl LspServer {
                 // For gopls, ensure document is really open
                 if self.is_gopls() {
                     self.ensure_document_ready(file_path).await?;
+                }
+
+                // For rust-analyzer, re-open document on retry
+                if self.is_rust_analyzer() {
+                    self.open_file_safely(file_path).await?;
+                    tokio::time::sleep(Duration::from_secs(2)).await;
                 }
             }
 

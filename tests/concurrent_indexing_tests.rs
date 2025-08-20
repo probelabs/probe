@@ -4,8 +4,8 @@
 //! concurrent access correctly without data races, deadlocks, or corruption.
 
 use anyhow::Result;
-use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use lsp_daemon::cache_types::LspOperation;
+use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use lsp_daemon::indexing::{
     IndexingManager, IndexingProgress, IndexingQueue, ManagerConfig, Priority, QueueItem,
 };
@@ -322,7 +322,7 @@ async fn test_manager_concurrent_start_stop() -> Result<()> {
         registry,
         child_processes,
     ));
-    
+
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
@@ -330,7 +330,7 @@ async fn test_manager_concurrent_start_stop() -> Result<()> {
         invalidation_depth: 1,
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
-    
+
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
         ttl: Duration::from_secs(300),
@@ -622,7 +622,7 @@ async fn test_manager_worker_statistics_thread_safety() -> Result<()> {
         registry,
         child_processes,
     ));
-    
+
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
@@ -630,7 +630,7 @@ async fn test_manager_worker_statistics_thread_safety() -> Result<()> {
         invalidation_depth: 1,
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
-    
+
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
         ttl: Duration::from_secs(300),
@@ -803,7 +803,7 @@ async fn test_indexing_with_simulated_contention() -> Result<()> {
         registry,
         child_processes,
     ));
-    
+
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
@@ -811,7 +811,7 @@ async fn test_indexing_with_simulated_contention() -> Result<()> {
         invalidation_depth: 1,
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
-    
+
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
         ttl: Duration::from_secs(300),
