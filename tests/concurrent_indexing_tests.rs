@@ -205,9 +205,7 @@ async fn test_queue_concurrent_enqueue_dequeue() -> Result<()> {
     assert_eq!(final_metrics.total_enqueued as usize, final_enqueued);
     assert_eq!(final_metrics.total_dequeued as usize, final_dequeued);
 
-    println!(
-        "Concurrent queue test: {final_enqueued} enqueued, {final_dequeued} dequeued"
-    );
+    println!("Concurrent queue test: {final_enqueued} enqueued, {final_dequeued} dequeued");
 
     Ok(())
 }
@@ -243,8 +241,7 @@ async fn test_progress_concurrent_updates() -> Result<()> {
                     }
                     1 => {
                         progress_clone.start_file();
-                        progress_clone
-                            .fail_file(&format!("Worker {worker_id} error {update_id}"));
+                        progress_clone.fail_file(&format!("Worker {worker_id} error {update_id}"));
                     }
                     2 => {
                         progress_clone.skip_file("Already processed");
@@ -371,9 +368,7 @@ async fn test_manager_concurrent_start_stop() -> Result<()> {
     let starts = successful_starts.load(Ordering::Relaxed);
     let stops = successful_stops.load(Ordering::Relaxed);
 
-    println!(
-        "Concurrent start/stop test: {starts} successful starts, {stops} successful stops"
-    );
+    println!("Concurrent start/stop test: {starts} successful starts, {stops} successful stops");
 
     // Should have at least one successful start
     assert!(starts > 0, "Expected at least one successful start");
@@ -866,9 +861,7 @@ async fn test_queue_remove_matching_thread_safety() -> Result<()> {
                 .await;
 
             removed_count_clone.fetch_add(removed, Ordering::Relaxed);
-            println!(
-                "Task {task_id} removed {removed} items matching '{pattern}'"
-            );
+            println!("Task {task_id} removed {removed} items matching '{pattern}'");
         });
 
         handles.push(handle);
@@ -882,9 +875,7 @@ async fn test_queue_remove_matching_thread_safety() -> Result<()> {
     let final_count = queue.len();
     let total_removed = removed_count.load(Ordering::Relaxed);
 
-    println!(
-        "Final queue size: {final_count}, total removed: {total_removed}"
-    );
+    println!("Final queue size: {final_count}, total removed: {total_removed}");
 
     // Verify consistency
     assert_eq!(initial_count, final_count + total_removed);

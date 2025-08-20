@@ -5,10 +5,7 @@
 //! and multi-language pipeline integration.
 
 use anyhow::Result;
-use lsp_daemon::indexing::{
-    IndexingManager, ManagerConfig,
-    ManagerStatus,
-};
+use lsp_daemon::indexing::{IndexingManager, ManagerConfig, ManagerStatus};
 use lsp_daemon::LanguageDetector;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
