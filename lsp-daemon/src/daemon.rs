@@ -2246,8 +2246,14 @@ impl LspDaemon {
             status_update_interval_secs: 5,
         };
 
-        // Create and start indexing manager
-        let manager = IndexingManager::new(manager_config, self.detector.clone());
+        // Create and start indexing manager with LSP dependencies
+        let manager = IndexingManager::new(
+            manager_config,
+            self.detector.clone(),
+            self.server_manager.clone(),
+            self.call_graph_cache.clone(),
+            self.definition_cache.clone(),
+        );
         let session_id = Uuid::new_v4().to_string();
 
         // Start indexing
