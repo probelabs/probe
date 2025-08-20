@@ -1248,18 +1248,29 @@ impl LspDaemon {
             language, initial_wait, max_attempts, retry_delay, is_ci
         );
 
-        // Open document and give language server time to process
+        // Ensure document is opened and ready before querying call hierarchy
+        // This is critical for rust-analyzer which returns null if the document isn't properly opened
         {
-            // Lock the server instance only for document opening
             let server = server_instance.lock().await;
+            
+            debug!("Opening document for LSP analysis: {:?}", absolute_file_path);
+            
+            // Always re-open the document to ensure rust-analyzer has the latest content
+            // rust-analyzer needs the file to be properly opened and processed before call hierarchy works
             server
                 .server
                 .open_document(&absolute_file_path, &content)
                 .await?;
-            // Lock is automatically released here when server goes out of scope
+                
+            // For rust-analyzer, give it time to process the file and establish context
+            if language == Language::Rust {
+                debug!("Allowing rust-analyzer time to process and index document: {:?}", absolute_file_path);
+                // Wait for rust-analyzer to index the file content and establish symbol context
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            }
         }
 
-        // No unconditional sleep. We'll probe first, and only sleep between retries
+        // Additional initial wait for complex language servers in CI environments
         if initial_wait > 0 {
             tokio::time::sleep(tokio::time::Duration::from_secs(initial_wait)).await;
         }
@@ -1283,33 +1294,58 @@ impl LspDaemon {
             match call_result {
                 Ok(response) => {
                     // Check the response from call_hierarchy method (which has already processed the LSP response)
-                    // The response contains incoming/outgoing arrays or an item with name/uri info
-                    if let Some(item) = response.get("item") {
+                    debug!("Call hierarchy response received for attempt {}: {:?}", attempt, response);
+                    
+                    // Check if we have a valid item
+                    let has_valid_item = if let Some(item) = response.get("item") {
                         if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
                             if name != "unknown" && !name.is_empty() {
-                                result = Some(response);
-                                break;
+                                debug!("Found valid symbol '{}' in call hierarchy response", name);
+                                true
+                            } else {
+                                debug!("Item has invalid name: '{}'", name);
+                                false
                             }
+                        } else {
+                            debug!("Item missing name field");
+                            false
                         }
-                    }
+                    } else {
+                        debug!("Response missing item field - this indicates rust-analyzer returned null");
+                        false
+                    };
 
-                    // Also check for any incoming/outgoing calls
-                    if response
+                    // Check for any incoming/outgoing calls
+                    let has_call_data = response
                         .get("incoming")
                         .and_then(|v| v.as_array())
                         .is_some_and(|arr| !arr.is_empty())
                         || response
                             .get("outgoing")
                             .and_then(|v| v.as_array())
-                            .is_some_and(|arr| !arr.is_empty())
-                    {
+                            .is_some_and(|arr| !arr.is_empty());
+
+                    if has_call_data {
+                        debug!("Found call hierarchy data (incoming/outgoing calls)");
+                    }
+
+                    // Accept the result if we have either a valid item or call data
+                    if has_valid_item || has_call_data {
                         result = Some(response);
                         break;
+                    }
+
+                    // For rust-analyzer, if we get a null response (no item), retry
+                    if language == Language::Rust && !has_valid_item && attempt < max_attempts {
+                        debug!("rust-analyzer returned null response - document may not be fully indexed yet, retrying...");
+                        // Give rust-analyzer more time to process
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                     }
 
                     result = Some(response); // Keep the last response even if empty
                 }
                 Err(e) => {
+                    warn!("Call hierarchy request failed on attempt {}: {}", attempt, e);
                     if attempt == max_attempts {
                         return Err(e);
                     }

@@ -3,7 +3,12 @@
 //! These tests use proptest to generate random inputs and verify that
 //! the indexing system maintains its invariants under all conditions.
 
+use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
+use lsp_daemon::cache_types::LspOperation;
 use lsp_daemon::indexing::{IndexingManager, IndexingQueue, ManagerConfig, Priority, QueueItem};
+use lsp_daemon::lsp_cache::{LspCache, LspCacheConfig};
+use lsp_daemon::lsp_registry::LspRegistry;
+use lsp_daemon::server_manager::SingleServerManager;
 use lsp_daemon::LanguageDetector;
 use proptest::prelude::*;
 use proptest::test_runner::Config;
@@ -531,7 +536,40 @@ proptest! {
                 status_update_interval_secs: 1,
             };
 
-            let manager = IndexingManager::new(config, language_detector);
+            // Create mock LSP dependencies for testing
+            let registry = Arc::new(LspRegistry::new().expect("Failed to create registry"));
+            let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+            let server_manager = Arc::new(SingleServerManager::new_with_tracker(
+                registry,
+                child_processes,
+            ));
+            
+            let cache_config = CallGraphCacheConfig {
+                capacity: 100,
+                ttl: Duration::from_secs(300),
+                eviction_check_interval: Duration::from_secs(30),
+                invalidation_depth: 1,
+            };
+            let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+            
+            let lsp_cache_config = LspCacheConfig {
+                capacity_per_operation: 100,
+                ttl: Duration::from_secs(300),
+                eviction_check_interval: Duration::from_secs(30),
+                persistent: false,
+                cache_directory: None,
+            };
+            let definition_cache = Arc::new(
+                LspCache::new(LspOperation::Definition, lsp_cache_config)
+                    .expect("Failed to create definition cache"),
+            );
+            let manager = IndexingManager::new(
+                config,
+                language_detector,
+                server_manager,
+                call_graph_cache,
+                definition_cache,
+            );
 
             // Start indexing with timeout
             let result = timeout(
