@@ -366,12 +366,27 @@ async fn main() -> Result<()> {
     };
 
     // Set/clear global autostart guard to prevent unwanted LSP daemon spawning
-    if needs_lsp {
-        // Clear the autostart disable flag when LSP is explicitly requested
-        std::env::remove_var("PROBE_LSP_DISABLE_AUTOSTART");
-    } else {
+    // Only disable autostart for specific LSP subcommands that could cause recursion
+    let should_disable_autostart = match &args.command {
+        Some(Commands::Lsp { subcommand }) => {
+            use probe_code::lsp_integration::LspSubcommands;
+            // Only these specific commands should disable autostart to prevent recursion
+            matches!(
+                subcommand,
+                LspSubcommands::Start { .. }
+                    | LspSubcommands::Shutdown
+                    | LspSubcommands::Restart { .. }
+            )
+        }
+        _ => needs_lsp, // For non-LSP commands, disable if needs_lsp (to avoid double init)
+    };
+
+    if should_disable_autostart {
         // Set the autostart disable flag to prevent implicit LSP daemon spawning
         std::env::set_var("PROBE_LSP_DISABLE_AUTOSTART", "1");
+    } else {
+        // Clear the autostart disable flag when autostart is allowed
+        std::env::remove_var("PROBE_LSP_DISABLE_AUTOSTART");
     }
 
     if needs_lsp {
