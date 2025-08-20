@@ -8,11 +8,15 @@
 //! - Language-specific pipeline execution
 //! - Progress reporting and status monitoring
 
+use crate::cache_types::DefinitionInfo;
+use crate::call_graph_cache::CallGraphCache;
 use crate::indexing::{
-    IndexingConfig, IndexingPipeline, IndexingProgress, IndexingQueue, LanguageStrategyFactory,
-    Priority, QueueItem,
+    pipelines::SymbolInfo, IndexingConfig, IndexingPipeline, IndexingProgress, IndexingQueue,
+    LanguageStrategyFactory, Priority, QueueItem,
 };
 use crate::language_detector::{Language, LanguageDetector};
+use crate::lsp_cache::LspCache;
+use crate::server_manager::SingleServerManager;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -127,7 +131,6 @@ pub struct WorkerStats {
 }
 
 /// Main indexing manager that orchestrates all indexing operations
-#[derive(Debug)]
 pub struct IndexingManager {
     /// Configuration
     config: ManagerConfig,
@@ -171,14 +174,29 @@ pub struct IndexingManager {
     /// Current memory usage tracking
     current_memory_usage: Arc<AtomicU64>,
 
+    /// LSP server manager for language server pool management
+    server_manager: Arc<SingleServerManager>,
+
+    /// Call graph cache for caching LSP call hierarchy data
+    call_graph_cache: Arc<CallGraphCache>,
+
+    /// Definition cache for caching symbol definitions
+    definition_cache: Arc<LspCache<DefinitionInfo>>,
+
     /// Start time for performance calculations
     #[allow(dead_code)]
     start_time: Instant,
 }
 
 impl IndexingManager {
-    /// Create a new indexing manager with the specified configuration
-    pub fn new(config: ManagerConfig, language_detector: Arc<LanguageDetector>) -> Self {
+    /// Create a new indexing manager with the specified configuration and LSP dependencies
+    pub fn new(
+        config: ManagerConfig,
+        language_detector: Arc<LanguageDetector>,
+        server_manager: Arc<SingleServerManager>,
+        call_graph_cache: Arc<CallGraphCache>,
+        definition_cache: Arc<LspCache<DefinitionInfo>>,
+    ) -> Self {
         let queue = Arc::new(IndexingQueue::new(config.max_queue_size));
         let progress = Arc::new(IndexingProgress::new());
         let worker_semaphore = Arc::new(Semaphore::new(config.max_workers));
@@ -198,6 +216,9 @@ impl IndexingManager {
             background_tasks: Arc::new(RwLock::new(Vec::new())),
             indexed_files: Arc::new(RwLock::new(HashMap::new())),
             current_memory_usage: Arc::new(AtomicU64::new(0)),
+            server_manager,
+            call_graph_cache,
+            definition_cache,
             start_time: Instant::now(),
         }
     }
@@ -206,6 +227,9 @@ impl IndexingManager {
     pub fn from_indexing_config(
         config: &IndexingConfig,
         language_detector: Arc<LanguageDetector>,
+        server_manager: Arc<SingleServerManager>,
+        call_graph_cache: Arc<CallGraphCache>,
+        definition_cache: Arc<LspCache<DefinitionInfo>>,
     ) -> Self {
         // Convert comprehensive config to legacy ManagerConfig for compatibility
         let manager_config = ManagerConfig {
@@ -226,7 +250,13 @@ impl IndexingManager {
             status_update_interval_secs: config.status_update_interval_secs,
         };
 
-        Self::new(manager_config, language_detector)
+        Self::new(
+            manager_config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        )
     }
 
     /// Start indexing the specified directory
@@ -771,6 +801,9 @@ impl IndexingManager {
         let semaphore = Arc::clone(&self.worker_semaphore);
         let shutdown = Arc::clone(&self.shutdown_signal);
         let current_memory = Arc::clone(&self.current_memory_usage);
+        let server_manager = Arc::clone(&self.server_manager);
+        let call_graph_cache = Arc::clone(&self.call_graph_cache);
+        let definition_cache = Arc::clone(&self.definition_cache);
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
@@ -833,6 +866,9 @@ impl IndexingManager {
                     &pipelines,
                     &language_detector,
                     &current_memory,
+                    &server_manager,
+                    &call_graph_cache,
+                    &definition_cache,
                 )
                 .await;
 
@@ -869,13 +905,17 @@ impl IndexingManager {
         Ok(handle)
     }
 
-    /// Process a single file item with the appropriate pipeline
+    /// Process a single file item with the appropriate pipeline and LSP server
+    #[allow(clippy::too_many_arguments)]
     async fn process_file_item(
         worker_id: usize,
         item: QueueItem,
         pipelines: &Arc<RwLock<HashMap<Language, IndexingPipeline>>>,
         language_detector: &Arc<LanguageDetector>,
         current_memory: &Arc<AtomicU64>,
+        server_manager: &Arc<SingleServerManager>,
+        call_graph_cache: &Arc<CallGraphCache>,
+        definition_cache: &Arc<LspCache<DefinitionInfo>>,
     ) -> Result<(u64, u64)> {
         let file_path = &item.file_path;
 
@@ -903,8 +943,8 @@ impl IndexingManager {
 
         current_memory.fetch_add(estimated_memory, Ordering::Relaxed);
 
-        // Process the file with pipeline
-        let result = {
+        // First, use the existing pipeline to extract symbols from the file
+        let symbols_result = {
             let mut pipelines_write = pipelines.write().await;
             let pipeline = pipelines_write.entry(language).or_insert_with(|| {
                 IndexingPipeline::new(language).unwrap_or_else(|_| {
@@ -917,16 +957,178 @@ impl IndexingManager {
             pipeline.process_file(file_path).await
         };
 
+        // Process LSP indexing if pipeline succeeded
+        let result = match symbols_result {
+            Ok(pipeline_result) => {
+                // Now, for each symbol found, query the LSP server for call hierarchy
+                // This is the core of what makes indexing actually useful
+                let mut total_lsp_calls = 0u64;
+
+                // Only process LSP if we have a supported language and server
+                if language != Language::Unknown {
+                    // Collect all symbols from the different categories
+                    let mut all_symbols = Vec::new();
+                    for symbols in pipeline_result.symbols.values() {
+                        all_symbols.extend(symbols.iter().cloned());
+                    }
+
+                    // Process symbols with LSP to pre-warm the cache
+                    total_lsp_calls = Self::index_symbols_with_lsp(
+                        worker_id,
+                        file_path,
+                        &all_symbols,
+                        language,
+                        server_manager,
+                        call_graph_cache,
+                        definition_cache,
+                    )
+                    .await
+                    .unwrap_or(0);
+                }
+
+                Ok((
+                    pipeline_result.bytes_processed,
+                    pipeline_result.symbols_found + total_lsp_calls,
+                ))
+            }
+            Err(e) => Err(anyhow!("Failed to process {:?}: {}", file_path, e)),
+        };
+
         // Release memory estimate
         current_memory.fetch_sub(estimated_memory, Ordering::Relaxed);
 
-        match result {
-            Ok(pipeline_result) => Ok((
-                pipeline_result.bytes_processed,
-                pipeline_result.symbols_found,
-            )),
-            Err(e) => Err(anyhow!("Failed to process {:?}: {}", file_path, e)),
+        result
+    }
+
+    /// Index symbols by calling LSP servers to pre-warm the cache
+    async fn index_symbols_with_lsp(
+        worker_id: usize,
+        file_path: &Path,
+        symbols: &[SymbolInfo],
+        language: Language,
+        server_manager: &Arc<SingleServerManager>,
+        _call_graph_cache: &Arc<CallGraphCache>,
+        _definition_cache: &Arc<LspCache<DefinitionInfo>>,
+    ) -> Result<u64> {
+        use std::time::Duration;
+        use tokio::time::timeout;
+
+        let mut indexed_count = 0u64;
+
+        // Get the LSP server for this language
+        let server_instance =
+            match timeout(Duration::from_secs(30), server_manager.get_server(language)).await {
+                Ok(Ok(server)) => server,
+                Ok(Err(e)) => {
+                    debug!(
+                        "Worker {}: Failed to get LSP server for {:?}: {}",
+                        worker_id, language, e
+                    );
+                    return Ok(0);
+                }
+                Err(_) => {
+                    debug!(
+                        "Worker {}: Timeout getting LSP server for {:?}",
+                        worker_id, language
+                    );
+                    return Ok(0);
+                }
+            };
+
+        // Lock the server instance to access the LspServer
+        let server_guard = match timeout(Duration::from_secs(5), server_instance.lock()).await {
+            Ok(guard) => guard,
+            Err(_) => {
+                debug!(
+                    "Worker {}: Timeout acquiring server lock for {:?}",
+                    worker_id, language
+                );
+                return Ok(0);
+            }
+        };
+
+        // Wait for server to be ready (especially important for rust-analyzer)
+        let max_retries = 5;
+        let retry_delay = Duration::from_secs(3);
+
+        for symbol in symbols {
+            // Skip non-function symbols for now (can expand later)
+            let kind_lower = symbol.kind.to_lowercase();
+            if !kind_lower.contains("function") && !kind_lower.contains("method") {
+                continue;
+            }
+
+            // Use 1-based indexing (LSP uses 0-based, but our call_hierarchy method handles the conversion)
+            let line = symbol.line;
+            let column = symbol.column;
+
+            // Try to get call hierarchy with retries
+            let mut retry_count = 0;
+            let mut call_hierarchy_result = None;
+
+            while retry_count < max_retries {
+                match timeout(
+                    Duration::from_secs(10),
+                    server_guard.server.call_hierarchy(file_path, line, column),
+                )
+                .await
+                {
+                    Ok(Ok(result)) => {
+                        // Check if we got meaningful data
+                        if let Some(obj) = result.as_object() {
+                            // Check if the result contains actual call hierarchy data
+                            if obj.contains_key("incoming") || obj.contains_key("outgoing") {
+                                call_hierarchy_result = Some(result);
+                                break;
+                            }
+                        }
+                        // Empty or incomplete response - server might still be indexing
+                        debug!(
+                            "Worker {}: Empty/incomplete call hierarchy for {} at {}:{}, retry {}/{}",
+                            worker_id, symbol.name, line, column, retry_count + 1, max_retries
+                        );
+                    }
+                    Ok(Err(e)) => {
+                        debug!(
+                            "Worker {}: LSP error for {} at {}:{}: {}",
+                            worker_id, symbol.name, line, column, e
+                        );
+                    }
+                    Err(_) => {
+                        debug!(
+                            "Worker {}: Timeout getting call hierarchy for {} at {}:{}",
+                            worker_id, symbol.name, line, column
+                        );
+                    }
+                }
+
+                retry_count += 1;
+                if retry_count < max_retries {
+                    tokio::time::sleep(retry_delay).await;
+                }
+            }
+
+            // If we got call hierarchy data, it's now cached
+            if let Some(_result) = call_hierarchy_result {
+                indexed_count += 1;
+
+                // The call hierarchy is already cached by the LspServer's call_hierarchy method
+                // We can optionally store it in our call_graph_cache as well
+                // For now, just count it as indexed since the LspServer handles caching
+
+                debug!(
+                    "Worker {}: Successfully indexed call hierarchy for {} at {}:{}",
+                    worker_id, symbol.name, line, column
+                );
+            }
         }
+
+        debug!(
+            "Worker {}: Indexed {} LSP call hierarchies for {:?}",
+            worker_id, indexed_count, file_path
+        );
+
+        Ok(indexed_count)
     }
 
     /// Shutdown all workers gracefully
@@ -989,7 +1191,17 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let manager = IndexingManager::new(config, language_detector);
+        // Create mock LSP dependencies for testing
+        let server_manager = Arc::new(SingleServerManager::new());
+        let call_graph_cache = Arc::new(CallGraphCache::new());
+        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        );
 
         // Test initial state
         assert!(matches!(manager.get_status().await, ManagerStatus::Idle));
@@ -1065,7 +1277,16 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let manager = IndexingManager::new(config, language_detector);
+        let server_manager = Arc::new(SingleServerManager::new());
+        let call_graph_cache = Arc::new(CallGraphCache::new());
+        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        );
 
         // Initially no pressure
         assert!(!manager.is_memory_pressure());
@@ -1161,7 +1382,16 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let manager = IndexingManager::new(config, language_detector);
+        let server_manager = Arc::new(SingleServerManager::new());
+        let call_graph_cache = Arc::new(CallGraphCache::new());
+        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        );
 
         // Initially no workers
         let stats = manager.get_worker_stats().await;
@@ -1200,7 +1430,16 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let manager = IndexingManager::new(config, language_detector);
+        let server_manager = Arc::new(SingleServerManager::new());
+        let call_graph_cache = Arc::new(CallGraphCache::new());
+        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        );
 
         let temp_dir = tempdir().unwrap();
         fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
@@ -1238,7 +1477,16 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let manager = IndexingManager::new(config, language_detector);
+        let server_manager = Arc::new(SingleServerManager::new());
+        let call_graph_cache = Arc::new(CallGraphCache::new());
+        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        );
 
         // Initially empty queue
         let snapshot = manager.get_queue_snapshot().await;
@@ -1290,7 +1538,16 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let manager = IndexingManager::new(config, language_detector);
+        let server_manager = Arc::new(SingleServerManager::new());
+        let call_graph_cache = Arc::new(CallGraphCache::new());
+        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        );
 
         let temp_dir = tempdir().unwrap();
         for i in 0..3 {
@@ -1354,7 +1611,16 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let manager1 = IndexingManager::new(config.clone(), language_detector.clone());
+        let server_manager = Arc::new(SingleServerManager::new());
+        let call_graph_cache = Arc::new(CallGraphCache::new());
+        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let manager1 = IndexingManager::new(
+            config.clone(),
+            language_detector.clone(),
+            server_manager.clone(),
+            call_graph_cache.clone(),
+            definition_cache.clone(),
+        );
 
         manager1
             .start_indexing(temp_dir.path().to_path_buf())
@@ -1368,7 +1634,13 @@ mod tests {
         manager1.stop_indexing().await.unwrap();
 
         // Second run - incremental (should detect no changes if file hasn't changed)
-        let manager2 = IndexingManager::new(config, language_detector);
+        let manager2 = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        );
         manager2
             .start_indexing(temp_dir.path().to_path_buf())
             .await
@@ -1430,7 +1702,16 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let manager = IndexingManager::new(config, language_detector);
+        let server_manager = Arc::new(SingleServerManager::new());
+        let call_graph_cache = Arc::new(CallGraphCache::new());
+        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        );
 
         manager
             .start_indexing(temp_dir.path().to_path_buf())
@@ -1464,7 +1745,16 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let manager = IndexingManager::new(config, language_detector);
+        let server_manager = Arc::new(SingleServerManager::new());
+        let call_graph_cache = Arc::new(CallGraphCache::new());
+        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        );
 
         manager
             .start_indexing(temp_dir.path().to_path_buf())
@@ -1490,7 +1780,16 @@ mod tests {
         indexing_config.max_queue_size = 500;
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let manager = IndexingManager::from_indexing_config(&indexing_config, language_detector);
+        let server_manager = Arc::new(SingleServerManager::new());
+        let call_graph_cache = Arc::new(CallGraphCache::new());
+        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let manager = IndexingManager::from_indexing_config(
+            &indexing_config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        );
 
         // Verify configuration was properly converted
         assert_eq!(manager.config.max_workers, 3);
@@ -1506,7 +1805,16 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let manager = Arc::new(IndexingManager::new(config, language_detector));
+        let server_manager = Arc::new(SingleServerManager::new());
+        let call_graph_cache = Arc::new(CallGraphCache::new());
+        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let manager = Arc::new(IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            call_graph_cache,
+            definition_cache,
+        ));
 
         let temp_dir = tempdir().unwrap();
         fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();

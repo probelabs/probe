@@ -4,8 +4,12 @@
 //! and triggers appropriate indexing updates in the background.
 
 use anyhow::Result;
+use lsp_daemon::call_graph_cache::CallGraphCache;
+use lsp_daemon::cache_types::DefinitionInfo;
 use lsp_daemon::file_watcher::{FileEventType, FileWatcher, FileWatcherConfig};
 use lsp_daemon::indexing::{IndexingManager, ManagerConfig};
+use lsp_daemon::lsp_cache::LspCache;
+use lsp_daemon::server_manager::SingleServerManager;
 use lsp_daemon::LanguageDetector;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -339,7 +343,17 @@ pub fn multiply(a: i32, b: i32) -> i32 {
     };
 
     let language_detector = Arc::new(LanguageDetector::new());
-    let manager = IndexingManager::new(manager_config.clone(), language_detector);
+    // Create mock LSP dependencies for testing
+    let server_manager = Arc::new(SingleServerManager::new());
+    let call_graph_cache = Arc::new(CallGraphCache::new());
+    let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+    let manager = IndexingManager::new(
+        manager_config.clone(),
+        language_detector,
+        server_manager,
+        call_graph_cache,
+        definition_cache,
+    );
 
     // First indexing run
     manager
@@ -431,7 +445,16 @@ pub fn factorial(n: u32) -> u32 {
     watcher.stop().await?;
 
     // Second indexing run (incremental) - should only process changed files
-    let manager2 = IndexingManager::new(manager_config.clone(), Arc::new(LanguageDetector::new()));
+    let server_manager2 = Arc::new(SingleServerManager::new());
+    let call_graph_cache2 = Arc::new(CallGraphCache::new());
+    let definition_cache2 = Arc::new(LspCache::<DefinitionInfo>::new());
+    let manager2 = IndexingManager::new(
+        manager_config.clone(),
+        Arc::new(LanguageDetector::new()),
+        server_manager2,
+        call_graph_cache2,
+        definition_cache2,
+    );
     manager2
         .start_indexing(workspace.path().to_path_buf())
         .await?;
