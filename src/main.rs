@@ -365,6 +365,15 @@ async fn main() -> Result<()> {
         _ => false,
     };
 
+    // Set/clear global autostart guard to prevent unwanted LSP daemon spawning
+    if needs_lsp {
+        // Clear the autostart disable flag when LSP is explicitly requested
+        std::env::remove_var("PROBE_LSP_DISABLE_AUTOSTART");
+    } else {
+        // Set the autostart disable flag to prevent implicit LSP daemon spawning
+        std::env::set_var("PROBE_LSP_DISABLE_AUTOSTART", "1");
+    }
+
     if needs_lsp {
         if std::env::var("PROBE_QUIET").is_err() {
             eprintln!("Initializing LSP features...");

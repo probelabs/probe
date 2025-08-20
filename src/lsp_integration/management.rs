@@ -69,34 +69,11 @@ impl LspManager {
 
     /// Auto-start the LSP daemon in background mode
     async fn auto_start_daemon() -> Result<()> {
-        use std::process::{Command, Stdio};
-
-        let exe_path = std::env::current_exe()?;
-        let socket_path = lsp_daemon::get_default_socket_path();
-
-        // Clean up any stale socket
-        if std::path::Path::new(&socket_path).exists() {
-            let _ = std::fs::remove_file(&socket_path);
-        }
-
-        // Start daemon in background
-        // The PID lock in the daemon will prevent multiple instances
-        let _child = Command::new(&exe_path)
-            .args([
-                "lsp",
-                "start",
-                "-f",
-                "--socket",
-                &socket_path,
-                "--log-level",
-                "info",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+        // Delegate to the single, lock-protected spawn path in client.rs
+        crate::lsp_integration::client::start_embedded_daemon_background().await?;
 
         // Wait for daemon to be ready (up to 10 seconds)
+        let socket_path = lsp_daemon::get_default_socket_path();
         for _ in 0..20 {
             if lsp_daemon::ipc::IpcStream::connect(&socket_path)
                 .await
