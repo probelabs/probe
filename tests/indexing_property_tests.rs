@@ -3,8 +3,8 @@
 //! These tests use proptest to generate random inputs and verify that
 //! the indexing system maintains its invariants under all conditions.
 
-use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use lsp_daemon::cache_types::LspOperation;
+use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use lsp_daemon::indexing::{IndexingManager, IndexingQueue, ManagerConfig, Priority, QueueItem};
 use lsp_daemon::lsp_cache::{LspCache, LspCacheConfig};
 use lsp_daemon::lsp_registry::LspRegistry;
@@ -543,7 +543,7 @@ proptest! {
                 registry,
                 child_processes,
             ));
-            
+
             let cache_config = CallGraphCacheConfig {
                 capacity: 100,
                 ttl: Duration::from_secs(300),
@@ -551,7 +551,7 @@ proptest! {
                 invalidation_depth: 1,
             };
             let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
-            
+
             let lsp_cache_config = LspCacheConfig {
                 capacity_per_operation: 100,
                 ttl: Duration::from_secs(300),

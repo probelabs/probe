@@ -1252,19 +1252,25 @@ impl LspDaemon {
         // This is critical for rust-analyzer which returns null if the document isn't properly opened
         {
             let server = server_instance.lock().await;
-            
-            debug!("Opening document for LSP analysis: {:?}", absolute_file_path);
-            
+
+            debug!(
+                "Opening document for LSP analysis: {:?}",
+                absolute_file_path
+            );
+
             // Always re-open the document to ensure rust-analyzer has the latest content
             // rust-analyzer needs the file to be properly opened and processed before call hierarchy works
             server
                 .server
                 .open_document(&absolute_file_path, &content)
                 .await?;
-                
+
             // For rust-analyzer, give it time to process the file and establish context
             if language == Language::Rust {
-                debug!("Allowing rust-analyzer time to process and index document: {:?}", absolute_file_path);
+                debug!(
+                    "Allowing rust-analyzer time to process and index document: {:?}",
+                    absolute_file_path
+                );
                 // Wait for rust-analyzer to index the file content and establish symbol context
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
             }
@@ -1294,8 +1300,11 @@ impl LspDaemon {
             match call_result {
                 Ok(response) => {
                     // Check the response from call_hierarchy method (which has already processed the LSP response)
-                    debug!("Call hierarchy response received for attempt {}: {:?}", attempt, response);
-                    
+                    debug!(
+                        "Call hierarchy response received for attempt {}: {:?}",
+                        attempt, response
+                    );
+
                     // Check if we have a valid item
                     let has_valid_item = if let Some(item) = response.get("item") {
                         if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
@@ -1345,7 +1354,10 @@ impl LspDaemon {
                     result = Some(response); // Keep the last response even if empty
                 }
                 Err(e) => {
-                    warn!("Call hierarchy request failed on attempt {}: {}", attempt, e);
+                    warn!(
+                        "Call hierarchy request failed on attempt {}: {}",
+                        attempt, e
+                    );
                     if attempt == max_attempts {
                         return Err(e);
                     }

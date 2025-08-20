@@ -5,8 +5,8 @@
 //! and gracefully handles various error conditions.
 
 use anyhow::Result;
-use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use lsp_daemon::cache_types::LspOperation;
+use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use lsp_daemon::indexing::{IndexingManager, IndexingPipeline, ManagerConfig};
 use lsp_daemon::lsp_cache::{LspCache, LspCacheConfig};
 use lsp_daemon::lsp_registry::LspRegistry;
@@ -997,7 +997,7 @@ async fn test_multi_language_file_detection() -> Result<()> {
         registry,
         child_processes,
     ));
-    
+
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
@@ -1005,7 +1005,7 @@ async fn test_multi_language_file_detection() -> Result<()> {
         invalidation_depth: 1,
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
-    
+
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
         ttl: Duration::from_secs(300),
@@ -1097,7 +1097,7 @@ async fn test_language_specific_filtering() -> Result<()> {
         registry,
         child_processes,
     ));
-    
+
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
@@ -1105,7 +1105,7 @@ async fn test_language_specific_filtering() -> Result<()> {
         invalidation_depth: 1,
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
-    
+
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
         ttl: Duration::from_secs(300),
@@ -1185,7 +1185,7 @@ async fn test_error_handling_with_problematic_files() -> Result<()> {
         registry,
         child_processes,
     ));
-    
+
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
@@ -1193,7 +1193,7 @@ async fn test_error_handling_with_problematic_files() -> Result<()> {
         invalidation_depth: 1,
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
-    
+
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
         ttl: Duration::from_secs(300),
@@ -1344,7 +1344,7 @@ async fn test_concurrent_multi_language_processing() -> Result<()> {
         registry,
         child_processes,
     ));
-    
+
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
@@ -1352,7 +1352,7 @@ async fn test_concurrent_multi_language_processing() -> Result<()> {
         invalidation_depth: 1,
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
-    
+
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
         ttl: Duration::from_secs(300),
@@ -1441,7 +1441,7 @@ async fn test_memory_pressure_with_large_files() -> Result<()> {
         registry,
         child_processes,
     ));
-    
+
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
@@ -1449,7 +1449,7 @@ async fn test_memory_pressure_with_large_files() -> Result<()> {
         invalidation_depth: 1,
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
-    
+
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
         ttl: Duration::from_secs(300),
@@ -1536,7 +1536,7 @@ async fn test_language_priority_processing() -> Result<()> {
         registry,
         child_processes,
     ));
-    
+
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
@@ -1544,7 +1544,7 @@ async fn test_language_priority_processing() -> Result<()> {
         invalidation_depth: 1,
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
-    
+
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
         ttl: Duration::from_secs(300),

@@ -4,8 +4,8 @@
 //! and triggers appropriate indexing updates in the background.
 
 use anyhow::Result;
-use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use lsp_daemon::cache_types::LspOperation;
+use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use lsp_daemon::file_watcher::{FileEventType, FileWatcher, FileWatcherConfig};
 use lsp_daemon::indexing::{IndexingManager, ManagerConfig};
 use lsp_daemon::lsp_cache::{LspCache, LspCacheConfig};
@@ -351,7 +351,7 @@ pub fn multiply(a: i32, b: i32) -> i32 {
         registry,
         child_processes,
     ));
-    
+
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
@@ -359,7 +359,7 @@ pub fn multiply(a: i32, b: i32) -> i32 {
         invalidation_depth: 1,
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
-    
+
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
         ttl: Duration::from_secs(300),
@@ -475,7 +475,7 @@ pub fn factorial(n: u32) -> u32 {
         registry2,
         child_processes2,
     ));
-    
+
     let cache_config2 = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
@@ -483,7 +483,7 @@ pub fn factorial(n: u32) -> u32 {
         invalidation_depth: 1,
     };
     let call_graph_cache2 = Arc::new(CallGraphCache::new(cache_config2));
-    
+
     let lsp_cache_config2 = LspCacheConfig {
         capacity_per_operation: 100,
         ttl: Duration::from_secs(300),
