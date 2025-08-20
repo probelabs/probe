@@ -5,7 +5,12 @@
 //! and multi-language pipeline integration.
 
 use anyhow::Result;
+use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
+use lsp_daemon::cache_types::LspOperation;
 use lsp_daemon::indexing::{IndexingManager, ManagerConfig, ManagerStatus};
+use lsp_daemon::lsp_cache::{LspCache, LspCacheConfig};
+use lsp_daemon::lsp_registry::LspRegistry;
+use lsp_daemon::server_manager::SingleServerManager;
 use lsp_daemon::LanguageDetector;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -585,7 +590,40 @@ async fn test_end_to_end_indexing_workflow() -> Result<()> {
     // Setup language detector and manager
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config();
-    let manager = IndexingManager::new(config, language_detector);
+    // Create mock LSP dependencies for testing
+    let registry = Arc::new(LspRegistry::new().expect("Failed to create registry"));
+    let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let server_manager = Arc::new(SingleServerManager::new_with_tracker(
+        registry,
+        child_processes,
+    ));
+    
+    let cache_config = CallGraphCacheConfig {
+        capacity: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        invalidation_depth: 1,
+    };
+    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    
+    let lsp_cache_config = LspCacheConfig {
+        capacity_per_operation: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        persistent: false,
+        cache_directory: None,
+    };
+    let definition_cache = Arc::new(
+        LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .expect("Failed to create definition cache"),
+    );
+    let manager = IndexingManager::new(
+        config,
+        language_detector,
+        server_manager,
+        call_graph_cache,
+        definition_cache,
+    );
 
     // Start indexing
     let indexing_task = {
@@ -695,7 +733,40 @@ async fn test_incremental_indexing() -> Result<()> {
     let mut config = create_test_config();
     config.incremental_mode = true;
 
-    let manager = IndexingManager::new(config.clone(), language_detector);
+    // Create mock LSP dependencies for testing
+    let registry = Arc::new(LspRegistry::new().expect("Failed to create registry"));
+    let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let server_manager = Arc::new(SingleServerManager::new_with_tracker(
+        registry,
+        child_processes,
+    ));
+    
+    let cache_config = CallGraphCacheConfig {
+        capacity: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        invalidation_depth: 1,
+    };
+    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    
+    let lsp_cache_config = LspCacheConfig {
+        capacity_per_operation: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        persistent: false,
+        cache_directory: None,
+    };
+    let definition_cache = Arc::new(
+        LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .expect("Failed to create definition cache"),
+    );
+    let manager = IndexingManager::new(
+        config.clone(),
+        language_detector,
+        server_manager,
+        call_graph_cache,
+        definition_cache,
+    );
 
     // First indexing run
     manager
@@ -740,7 +811,40 @@ impl Calculator {
     // Second indexing run (incremental)
     sleep(Duration::from_millis(100)).await; // Ensure file timestamp is different
 
-    let manager2 = IndexingManager::new(config.clone(), Arc::new(LanguageDetector::new()));
+    // Create mock LSP dependencies for second manager
+    let registry2 = Arc::new(LspRegistry::new().expect("Failed to create registry"));
+    let child_processes2 = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let server_manager2 = Arc::new(SingleServerManager::new_with_tracker(
+        registry2,
+        child_processes2,
+    ));
+    
+    let cache_config2 = CallGraphCacheConfig {
+        capacity: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        invalidation_depth: 1,
+    };
+    let call_graph_cache2 = Arc::new(CallGraphCache::new(cache_config2));
+    
+    let lsp_cache_config2 = LspCacheConfig {
+        capacity_per_operation: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        persistent: false,
+        cache_directory: None,
+    };
+    let definition_cache2 = Arc::new(
+        LspCache::new(LspOperation::Definition, lsp_cache_config2)
+            .expect("Failed to create definition cache"),
+    );
+    let manager2 = IndexingManager::new(
+        config.clone(),
+        Arc::new(LanguageDetector::new()),
+        server_manager2,
+        call_graph_cache2,
+        definition_cache2,
+    );
     manager2
         .start_indexing(project.root_path().to_path_buf())
         .await?;
@@ -783,7 +887,40 @@ async fn test_memory_pressure_handling() -> Result<()> {
     config.memory_budget_bytes = 1024; // Extremely small: 1KB
     config.memory_pressure_threshold = 0.01; // Extremely low threshold (0.01 * 1024 = ~10 bytes)
 
-    let manager = IndexingManager::new(config, language_detector);
+    // Create mock LSP dependencies for testing
+    let registry = Arc::new(LspRegistry::new().expect("Failed to create registry"));
+    let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let server_manager = Arc::new(SingleServerManager::new_with_tracker(
+        registry,
+        child_processes,
+    ));
+    
+    let cache_config = CallGraphCacheConfig {
+        capacity: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        invalidation_depth: 1,
+    };
+    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    
+    let lsp_cache_config = LspCacheConfig {
+        capacity_per_operation: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        persistent: false,
+        cache_directory: None,
+    };
+    let definition_cache = Arc::new(
+        LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .expect("Failed to create definition cache"),
+    );
+    let manager = IndexingManager::new(
+        config,
+        language_detector,
+        server_manager,
+        call_graph_cache,
+        definition_cache,
+    );
 
     // Start indexing
     manager
@@ -830,7 +967,40 @@ async fn test_pause_and_resume_functionality() -> Result<()> {
 
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config();
-    let manager = IndexingManager::new(config, language_detector);
+    // Create mock LSP dependencies for testing
+    let registry = Arc::new(LspRegistry::new().expect("Failed to create registry"));
+    let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let server_manager = Arc::new(SingleServerManager::new_with_tracker(
+        registry,
+        child_processes,
+    ));
+    
+    let cache_config = CallGraphCacheConfig {
+        capacity: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        invalidation_depth: 1,
+    };
+    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    
+    let lsp_cache_config = LspCacheConfig {
+        capacity_per_operation: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        persistent: false,
+        cache_directory: None,
+    };
+    let definition_cache = Arc::new(
+        LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .expect("Failed to create definition cache"),
+    );
+    let manager = IndexingManager::new(
+        config,
+        language_detector,
+        server_manager,
+        call_graph_cache,
+        definition_cache,
+    );
 
     // Start indexing
     manager
@@ -882,7 +1052,40 @@ async fn test_worker_statistics_tracking() -> Result<()> {
 
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config();
-    let manager = IndexingManager::new(config, language_detector);
+    // Create mock LSP dependencies for testing
+    let registry = Arc::new(LspRegistry::new().expect("Failed to create registry"));
+    let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let server_manager = Arc::new(SingleServerManager::new_with_tracker(
+        registry,
+        child_processes,
+    ));
+    
+    let cache_config = CallGraphCacheConfig {
+        capacity: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        invalidation_depth: 1,
+    };
+    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    
+    let lsp_cache_config = LspCacheConfig {
+        capacity_per_operation: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        persistent: false,
+        cache_directory: None,
+    };
+    let definition_cache = Arc::new(
+        LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .expect("Failed to create definition cache"),
+    );
+    let manager = IndexingManager::new(
+        config,
+        language_detector,
+        server_manager,
+        call_graph_cache,
+        definition_cache,
+    );
 
     // Start indexing
     manager
@@ -928,7 +1131,40 @@ async fn test_language_specific_processing() -> Result<()> {
     let mut config = create_test_config();
     config.enabled_languages = vec!["rust".to_string()]; // Only process Rust files
 
-    let manager = IndexingManager::new(config, language_detector);
+    // Create mock LSP dependencies for testing
+    let registry = Arc::new(LspRegistry::new().expect("Failed to create registry"));
+    let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let server_manager = Arc::new(SingleServerManager::new_with_tracker(
+        registry,
+        child_processes,
+    ));
+    
+    let cache_config = CallGraphCacheConfig {
+        capacity: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        invalidation_depth: 1,
+    };
+    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    
+    let lsp_cache_config = LspCacheConfig {
+        capacity_per_operation: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        persistent: false,
+        cache_directory: None,
+    };
+    let definition_cache = Arc::new(
+        LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .expect("Failed to create definition cache"),
+    );
+    let manager = IndexingManager::new(
+        config,
+        language_detector,
+        server_manager,
+        call_graph_cache,
+        definition_cache,
+    );
 
     // Start indexing
     manager
@@ -974,7 +1210,40 @@ async fn test_file_exclusion_patterns() -> Result<()> {
 
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config(); // Already has exclusion patterns
-    let manager = IndexingManager::new(config, language_detector);
+    // Create mock LSP dependencies for testing
+    let registry = Arc::new(LspRegistry::new().expect("Failed to create registry"));
+    let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let server_manager = Arc::new(SingleServerManager::new_with_tracker(
+        registry,
+        child_processes,
+    ));
+    
+    let cache_config = CallGraphCacheConfig {
+        capacity: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        invalidation_depth: 1,
+    };
+    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    
+    let lsp_cache_config = LspCacheConfig {
+        capacity_per_operation: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        persistent: false,
+        cache_directory: None,
+    };
+    let definition_cache = Arc::new(
+        LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .expect("Failed to create definition cache"),
+    );
+    let manager = IndexingManager::new(
+        config,
+        language_detector,
+        server_manager,
+        call_graph_cache,
+        definition_cache,
+    );
 
     // Start indexing
     manager
@@ -1018,7 +1287,40 @@ async fn test_queue_operations() -> Result<()> {
 
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config();
-    let manager = IndexingManager::new(config, language_detector);
+    // Create mock LSP dependencies for testing
+    let registry = Arc::new(LspRegistry::new().expect("Failed to create registry"));
+    let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let server_manager = Arc::new(SingleServerManager::new_with_tracker(
+        registry,
+        child_processes,
+    ));
+    
+    let cache_config = CallGraphCacheConfig {
+        capacity: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        invalidation_depth: 1,
+    };
+    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    
+    let lsp_cache_config = LspCacheConfig {
+        capacity_per_operation: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        persistent: false,
+        cache_directory: None,
+    };
+    let definition_cache = Arc::new(
+        LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .expect("Failed to create definition cache"),
+    );
+    let manager = IndexingManager::new(
+        config,
+        language_detector,
+        server_manager,
+        call_graph_cache,
+        definition_cache,
+    );
 
     // Start indexing
     manager
@@ -1074,7 +1376,40 @@ async fn test_error_recovery() -> Result<()> {
 
     let language_detector = Arc::new(LanguageDetector::new());
     let config = create_test_config();
-    let manager = IndexingManager::new(config, language_detector);
+    // Create mock LSP dependencies for testing
+    let registry = Arc::new(LspRegistry::new().expect("Failed to create registry"));
+    let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let server_manager = Arc::new(SingleServerManager::new_with_tracker(
+        registry,
+        child_processes,
+    ));
+    
+    let cache_config = CallGraphCacheConfig {
+        capacity: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        invalidation_depth: 1,
+    };
+    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    
+    let lsp_cache_config = LspCacheConfig {
+        capacity_per_operation: 100,
+        ttl: Duration::from_secs(300),
+        eviction_check_interval: Duration::from_secs(30),
+        persistent: false,
+        cache_directory: None,
+    };
+    let definition_cache = Arc::new(
+        LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .expect("Failed to create definition cache"),
+    );
+    let manager = IndexingManager::new(
+        config,
+        language_detector,
+        server_manager,
+        call_graph_cache,
+        definition_cache,
+    );
 
     // Start indexing
     manager
