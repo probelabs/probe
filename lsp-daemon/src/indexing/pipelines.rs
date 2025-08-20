@@ -111,7 +111,8 @@ impl PipelineConfig {
             max_file_size: 10 * 1024 * 1024, // 10MB
             timeout_ms: 30000,               // 30 seconds
             file_extensions: extensions,
-            exclude_patterns: vec!["*test*".to_string(), "*spec*".to_string()],
+            // Don't exclude test files - they're valid source code that should be indexed
+            exclude_patterns: vec![],
             parser_config: HashMap::new(),
         }
     }

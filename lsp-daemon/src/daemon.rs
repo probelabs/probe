@@ -2323,7 +2323,13 @@ impl LspDaemon {
                 },
                 workers: vec![], // TODO: Get worker info
                 session_id: Some("current".to_string()),
-                started_at: Some(progress.elapsed_seconds),
+                started_at: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                        .saturating_sub(progress.elapsed_seconds),
+                ),
                 elapsed_seconds: progress.elapsed_seconds,
             };
 
