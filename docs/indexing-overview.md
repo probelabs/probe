@@ -51,7 +51,7 @@ graph TB
     E --> C
     H --> C
     
-    I[File Change] --> J[Git-Aware Invalidation]
+    I[File Change] --> J[MD5-Based Invalidation]
     J --> K[Content-Hash Comparison]
     K --> L[Smart Cache Cleanup]
     
@@ -67,8 +67,9 @@ graph TB
 
 #### Advanced Features
 - **Content-Addressed Caching**: Only re-indexes when files actually change
-- **Git-Aware Invalidation**: Branch and commit tracking for precise cache management
+- **MD5-Based Invalidation**: Perfect cache accuracy through content hashing
 - **Persistent Storage**: Cache survives daemon restarts and system reboots
+- **Universal Compatibility**: Works in CI, Docker, and non-git environments
 - **Team Collaboration**: Import/export cache for instant project onboarding
 - **Automatic Cleanup**: Configurable TTL and size-based eviction
 
@@ -134,9 +135,10 @@ CacheKey {
 ```
 
 Benefits:
-- **Version Control Friendly**: Cache survives git operations
+- **Universal Compatibility**: Works in any environment (CI, Docker, non-git directories)
 - **Build System Safe**: Works with generated files and build artifacts  
 - **Collaborative**: Team members share cache hits on identical code
+- **Perfect Accuracy**: MD5 hashing ensures cache is always up-to-date
 - **Efficient**: Only re-analyzes when code actually changes
 
 ## Architecture Overview
@@ -208,7 +210,7 @@ graph LR
   - **L3 Language Servers**: Computation layer with automatic caching
 - **Storage Layer**:
   - **File Index**: Maps files to cache entries for invalidation
-  - **Git Integration**: Tracks branches and commits for intelligent cache management
+  - **Content Tracking**: MD5-based invalidation for perfect cache accuracy
   - **Metadata**: Performance stats, cleanup schedules, and cache health
 
 ## Getting Started
@@ -248,10 +250,7 @@ probe lsp init-workspaces ./my-project
 export PROBE_LSP_PERSISTENCE_ENABLED=true
 export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/call_graph.db
 
-# Configure git integration
-export PROBE_GIT_TRACK_COMMITS=true
-
-# Configure cache settings
+# Configure cache settings - works everywhere, no git dependency
 export PROBE_LSP_CACHE_SIZE_MB=512
 export PROBE_LSP_CACHE_TTL_DAYS=30
 

@@ -57,12 +57,6 @@ probe extract src/main.rs#main --lsp
 | `PROBE_LSP_CACHE_TTL_DAYS` | Integer | `30` | Auto-cleanup threshold in days |
 | `PROBE_LSP_CACHE_COMPRESS` | Boolean | `true` | Enable compression for persistent storage |
 
-#### Git Integration
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `PROBE_GIT_TRACK_COMMITS` | Boolean | `true` | Track git commits for cache invalidation |
-| `PROBE_GIT_PRESERVE_ACROSS_BRANCHES` | Boolean | `true` | Preserve cache across branch switches |
 
 #### Performance Tuning
 
@@ -80,9 +74,8 @@ export PROBE_LSP_PERSISTENCE_SIZE_MB=4096
 export PROBE_LSP_CACHE_TTL_DAYS=60
 export PROBE_LSP_CACHE_COMPRESS=true
 
-# Git integration
-export PROBE_GIT_TRACK_COMMITS=true
-export PROBE_GIT_PRESERVE_ACROSS_BRANCHES=true
+# MD5-based cache invalidation - works in all environments
+# No git dependencies required
 
 # Performance tuning
 export PROBE_LSP_PERSISTENCE_BATCH_SIZE=100
@@ -550,7 +543,7 @@ export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe-dev/call_graph.db
 export PROBE_LSP_CACHE_SIZE_MB=128
 export PROBE_LSP_PERSISTENCE_SIZE_MB=512
 export PROBE_LSP_CACHE_TTL_DAYS=7
-export PROBE_GIT_TRACK_COMMITS=true
+# MD5-based invalidation works automatically - no git setup required
 
 # Start daemon in foreground with debug logging
 probe lsp start -f --log-level debug
@@ -569,9 +562,8 @@ export PROBE_LSP_CACHE_COMPRESS=true
 export PROBE_LSP_MAX_CONNECTIONS=500
 export PROBE_LSP_LOG_LEVEL=warn
 
-# Git integration for team collaboration
-export PROBE_GIT_TRACK_COMMITS=true
-export PROBE_GIT_PRESERVE_ACROSS_BRANCHES=true
+# MD5-based cache invalidation - works everywhere
+# No git dependencies required
 
 # Performance optimization
 export PROBE_LSP_PERSISTENCE_BATCH_SIZE=100
@@ -594,6 +586,7 @@ export PROBE_LSP_TIMEOUT=60000
 export PROBE_LSP_LOG_LEVEL=error
 export PROBE_LSP_AUTO_START=true
 
+# Perfect for CI - no git dependencies, works in Docker/containers
 # Import team cache for fast startup
 probe lsp cache import /shared/cache/team-cache.gz
 

@@ -1179,7 +1179,12 @@ impl Drop for IndexingManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache_types::LspOperation;
+    use crate::call_graph_cache::CallGraphCacheConfig;
+    use crate::lsp_cache::LspCacheConfig;
+    use crate::lsp_registry::LspRegistry;
     use std::fs;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -1192,9 +1197,15 @@ mod tests {
 
         let language_detector = Arc::new(LanguageDetector::new());
         // Create mock LSP dependencies for testing
-        let server_manager = Arc::new(SingleServerManager::new());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let cache_config = CallGraphCacheConfig::default();
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .expect("Failed to create LspCache"),
+        );
         let manager = IndexingManager::new(
             config,
             language_detector,
@@ -1277,9 +1288,15 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let server_manager = Arc::new(SingleServerManager::new());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let cache_config = CallGraphCacheConfig::default();
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .expect("Failed to create LspCache"),
+        );
         let manager = IndexingManager::new(
             config,
             language_detector,
@@ -1382,9 +1399,15 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let server_manager = Arc::new(SingleServerManager::new());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let cache_config = CallGraphCacheConfig::default();
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .expect("Failed to create LspCache"),
+        );
         let manager = IndexingManager::new(
             config,
             language_detector,
@@ -1430,9 +1453,15 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let server_manager = Arc::new(SingleServerManager::new());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let cache_config = CallGraphCacheConfig::default();
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .expect("Failed to create LspCache"),
+        );
         let manager = IndexingManager::new(
             config,
             language_detector,
@@ -1477,9 +1506,15 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let server_manager = Arc::new(SingleServerManager::new());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let cache_config = CallGraphCacheConfig::default();
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .expect("Failed to create LspCache"),
+        );
         let manager = IndexingManager::new(
             config,
             language_detector,
@@ -1538,9 +1573,15 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let server_manager = Arc::new(SingleServerManager::new());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let cache_config = CallGraphCacheConfig::default();
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .expect("Failed to create LspCache"),
+        );
         let manager = IndexingManager::new(
             config,
             language_detector,
@@ -1611,9 +1652,15 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let server_manager = Arc::new(SingleServerManager::new());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let cache_config = CallGraphCacheConfig::default();
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .expect("Failed to create LspCache"),
+        );
         let manager1 = IndexingManager::new(
             config.clone(),
             language_detector.clone(),
@@ -1702,9 +1749,15 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let server_manager = Arc::new(SingleServerManager::new());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let cache_config = CallGraphCacheConfig::default();
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .expect("Failed to create LspCache"),
+        );
         let manager = IndexingManager::new(
             config,
             language_detector,
@@ -1745,9 +1798,15 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let server_manager = Arc::new(SingleServerManager::new());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let cache_config = CallGraphCacheConfig::default();
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .expect("Failed to create LspCache"),
+        );
         let manager = IndexingManager::new(
             config,
             language_detector,
@@ -1780,9 +1839,15 @@ mod tests {
         indexing_config.max_queue_size = 500;
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let server_manager = Arc::new(SingleServerManager::new());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let cache_config = CallGraphCacheConfig::default();
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .expect("Failed to create LspCache"),
+        );
         let manager = IndexingManager::from_indexing_config(
             &indexing_config,
             language_detector,
@@ -1805,9 +1870,15 @@ mod tests {
         };
 
         let language_detector = Arc::new(LanguageDetector::new());
-        let server_manager = Arc::new(SingleServerManager::new());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::<DefinitionInfo>::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let cache_config = CallGraphCacheConfig::default();
+        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .expect("Failed to create LspCache"),
+        );
         let manager = Arc::new(IndexingManager::new(
             config,
             language_detector,

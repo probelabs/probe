@@ -4,7 +4,6 @@ use crate::cache_types::{
     ReferencesInfo,
 };
 use crate::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
-use crate::git_utils::{GitConfig, GitContext};
 use crate::hash_utils::md5_hex_file;
 use crate::indexing::{IndexingConfig, IndexingManager};
 use crate::ipc::{IpcListener, IpcStream};
@@ -161,8 +160,6 @@ impl LspDaemon {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(5000),
             ),
-            // Git-aware features configuration
-            git_config: GitConfig::from_env(),
         };
 
         Self::new_with_config_and_cache_async(socket_path, allowed_roots, cache_config).await
@@ -242,7 +239,6 @@ impl LspDaemon {
         // Initialize persistent cache store
         let persistent_cache_config = PersistentCacheConfig {
             cache_directory: cache_config.persistence_path.clone(),
-            git_integration: cache_config.git_config.track_commits,
             max_size_bytes: 1_000_000_000, // 1GB
             ttl_days: 30,
             compress: true,
@@ -266,28 +262,6 @@ impl LspDaemon {
             }
             Err(e) => {
                 warn!("Failed to warm cache from persistence: {}", e);
-            }
-        }
-
-        // Initialize git context for the workspace if git tracking is enabled
-        if cache_config.git_config.track_commits {
-            // Try to capture git context from the current working directory
-            // In a real deployment, this would be from the workspace root
-            let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-            match GitContext::capture(&current_dir) {
-                Ok(Some(git_context)) => {
-                    info!("Git context captured: {}", git_context.short_id());
-                    if let Err(e) = call_graph_cache.set_git_context(git_context).await {
-                        warn!("Failed to set initial git context: {}", e);
-                    }
-                }
-                Ok(None) => {
-                    debug!("No git repository found in current directory");
-                }
-                Err(e) => {
-                    warn!("Failed to capture git context: {}", e);
-                }
             }
         }
 
@@ -1370,31 +1344,6 @@ impl LspDaemon {
                 Ok(history) => DaemonResponse::CacheHistory {
                     request_id,
                     history,
-                },
-                Err(e) => DaemonResponse::Error {
-                    request_id,
-                    error: e.to_string(),
-                },
-            },
-
-            DaemonRequest::GetGitContext {
-                request_id,
-                workspace_hint: _,
-            } => {
-                let context = self.call_graph_cache.get_git_context().await;
-                DaemonResponse::GitContext {
-                    request_id,
-                    context,
-                }
-            }
-
-            DaemonRequest::SetGitContext {
-                request_id,
-                context,
-            } => match self.call_graph_cache.set_git_context(context).await {
-                Ok(previous_context) => DaemonResponse::GitContextSet {
-                    request_id,
-                    previous_context,
                 },
                 Err(e) => DaemonResponse::Error {
                     request_id,
@@ -2766,69 +2715,34 @@ impl LspDaemon {
         }
     }
 
-    // Git-aware request handlers
-
-    /// Handle call hierarchy request for a specific commit
+    /// Handle call hierarchy at commit request (stub - git functionality removed)
     async fn handle_call_hierarchy_at_commit(
         &self,
         file_path: &Path,
-        symbol: &str,
-        _line: u32,
-        _column: u32,
-        commit_hash: &str,
-        _workspace_hint: Option<PathBuf>,
-    ) -> Result<(crate::protocol::CallHierarchyResult, GitContext)> {
-        // Create a node key for the requested symbol at the commit
-        let content_md5 = md5_hex_file(file_path)?;
-        let node_key = NodeKey::new(symbol, file_path, &content_md5);
+        _symbol: &str,
+        line: u32,
+        column: u32,
+        _commit_hash: &str,
+        workspace_hint: Option<PathBuf>,
+    ) -> Result<(
+        crate::protocol::CallHierarchyResult,
+        crate::protocol::GitContext,
+    )> {
+        // Git functionality has been removed - fall back to current call hierarchy
+        let result = self
+            .handle_call_hierarchy(file_path, line, column, workspace_hint)
+            .await?;
 
-        // Try to get cached result for this specific commit
-        if let Some(cached_node) = self
-            .call_graph_cache
-            .get_for_commit(&node_key, commit_hash)
-            .await
-        {
-            info!(
-                "Found cached call hierarchy for {}:{} at commit {}",
-                file_path.display(),
-                symbol,
-                &commit_hash[..8]
-            );
+        // Return a stub git context
+        let git_context = crate::protocol::GitContext {
+            commit_hash: "unknown".to_string(),
+            branch: "unknown".to_string(),
+            is_dirty: false,
+            remote_url: None,
+            repo_root: std::env::current_dir().unwrap_or_default(),
+        };
 
-            // Convert to protocol result
-            let response = self.cache_to_lsp_json(file_path, symbol, &cached_node.info);
-            let protocol_result = parse_call_hierarchy_from_lsp(&response)?;
-
-            // Get the git context for this commit
-            let git_context =
-                if let Some(current_ctx) = self.call_graph_cache.get_git_context().await {
-                    if current_ctx.commit_hash == commit_hash {
-                        current_ctx
-                    } else {
-                        // Create a minimal context for the requested commit
-                        GitContext {
-                            commit_hash: commit_hash.to_string(),
-                            branch: "unknown".to_string(),
-                            is_dirty: false,
-                            remote_url: None,
-                            repo_root: current_ctx.repo_root,
-                        }
-                    }
-                } else {
-                    return Err(anyhow::anyhow!("No git context available"));
-                };
-
-            return Ok((protocol_result, git_context));
-        }
-
-        // If not cached, we'd need to check out the commit and compute
-        // For now, return an error suggesting the commit isn't cached
-        Err(anyhow::anyhow!(
-            "Call hierarchy for {}:{} at commit {} not found in cache. Consider running analysis on that commit first.",
-            file_path.display(),
-            symbol,
-            &commit_hash[..8]
-        ))
+        Ok((result, git_context))
     }
 
     /// Handle get cache history request

@@ -1,4 +1,3 @@
-use crate::git_utils::GitContext;
 use crate::language_detector::Language;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -177,15 +176,6 @@ pub enum DaemonRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         workspace_hint: Option<PathBuf>,
     },
-    GetGitContext {
-        request_id: Uuid,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        workspace_hint: Option<PathBuf>,
-    },
-    SetGitContext {
-        request_id: Uuid,
-        context: GitContext,
-    },
     GetCacheAtCommit {
         request_id: Uuid,
         commit_hash: String,
@@ -321,23 +311,9 @@ pub enum DaemonResponse {
         result: CompactResult,
     },
     // Git-aware responses
-    CallHierarchyAtCommit {
-        request_id: Uuid,
-        result: CallHierarchyResult,
-        commit_hash: String,
-        git_context: Option<GitContext>,
-    },
     CacheHistory {
         request_id: Uuid,
         history: Vec<CacheHistoryEntry>,
-    },
-    GitContext {
-        request_id: Uuid,
-        context: Option<GitContext>,
-    },
-    GitContextSet {
-        request_id: Uuid,
-        previous_context: Option<GitContext>,
     },
     CacheAtCommit {
         request_id: Uuid,
@@ -349,6 +325,12 @@ pub enum DaemonResponse {
         from_commit: String,
         to_commit: String,
         diff: CacheDiff,
+    },
+    CallHierarchyAtCommit {
+        request_id: Uuid,
+        result: CallHierarchyResult,
+        commit_hash: String,
+        git_context: Option<GitContext>,
     },
     Error {
         request_id: Uuid,
@@ -992,7 +974,6 @@ pub struct CacheHistoryEntry {
     pub branch: String,
     pub timestamp: u64, // Unix timestamp
     pub cache_entry: CachedCallHierarchy,
-    pub git_context: GitContext,
 }
 
 /// Cached call hierarchy information with git metadata
@@ -1012,7 +993,6 @@ pub struct CacheSnapshot {
     pub commit_hash: String,
     pub timestamp: u64,
     pub entries: Vec<CachedCallHierarchy>,
-    pub git_context: GitContext,
     pub total_entries: usize,
 }
 
@@ -1059,8 +1039,6 @@ pub struct GitCacheStats {
     pub commit_stats: std::collections::HashMap<String, CommitCacheStats>,
     /// Hot spots across commits (most frequently accessed symbols)
     pub hot_spots: Vec<HotSpot>,
-    /// Current git context
-    pub current_context: Option<GitContext>,
 }
 
 /// Cache statistics for a specific branch
@@ -1115,9 +1093,6 @@ pub struct CacheStatistics {
     pub miss_rate: f64,
     /// Age distribution of entries
     pub age_distribution: AgeDistribution,
-    /// Git-aware stats (entries per branch/commit)
-    pub entries_per_branch: std::collections::HashMap<String, u64>,
-    pub entries_per_commit: std::collections::HashMap<String, u64>,
     /// Hot spots (most accessed entries)
     pub most_accessed: Vec<HotSpot>,
     /// Memory usage breakdown
@@ -1206,6 +1181,16 @@ pub struct ExportOptions {
 pub struct CompactOptions {
     pub clean_expired: bool,
     pub target_size_mb: Option<usize>,
+}
+
+/// Git context information (stub - git functionality removed)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitContext {
+    pub commit_hash: String,
+    pub branch: String,
+    pub is_dirty: bool,
+    pub remote_url: Option<String>,
+    pub repo_root: PathBuf,
 }
 
 #[cfg(test)]

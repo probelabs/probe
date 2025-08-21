@@ -65,7 +65,7 @@ We've implemented a sophisticated daemon architecture that delivers **250,000x p
 
 #### Advanced Features
 - **Content-addressed caching** with MD5-based cache invalidation  
-- **Git-aware cache management** with automatic branch and commit tracking
+- **Universal compatibility** works in CI, Docker, and non-git environments
 - **Maintains server pools** for each language
 - **Reuses warm servers** for instant responses
 - **Handles concurrent requests** efficiently
@@ -73,7 +73,7 @@ We've implemented a sophisticated daemon architecture that delivers **250,000x p
 - **Persistent storage** survives daemon restarts and system reboots
 - **Cache sharing** enables team collaboration through import/export
 
-The daemon runs in the background and manages all language servers, with intelligent caching that survives code changes by using content hashing and optional git integration.
+The daemon runs in the background and manages all language servers, with intelligent caching that survives code changes by using MD5 content hashing for perfect accuracy.
 
 ### 📊 In-Memory Logging System
 
@@ -125,7 +125,7 @@ We've implemented several optimizations for production use:
 
 - **Persistent cache system**: Three-layer cache architecture with disk persistence
 - **Content-addressed caching**: MD5-based keys with automatic invalidation
-- **Git integration**: Branch and commit-aware cache invalidation
+- **Universal compatibility**: Works in any environment without git dependencies
 - **Server pooling**: Reuse warm servers instead of spawning new ones  
 - **Workspace caching**: Maintain indexed state across requests
 - **Lazy initialization**: Servers start only when needed
@@ -133,6 +133,7 @@ We've implemented several optimizations for production use:
 - **Concurrent deduplication**: Multiple requests for same symbol trigger only one LSP call
 - **Cache warming**: Pre-populate cache on daemon startup from persistent storage
 - **Batch operations**: Efficient bulk cache management with configurable batch sizes
+- **CI/CD friendly**: Perfect for containers, CI pipelines, and non-git environments
 
 ### Cache Performance Demonstration
 
@@ -178,9 +179,8 @@ export PROBE_LSP_PERSISTENCE_ENABLED=true
 # Cache directory (default: ~/.cache/probe/lsp/call_graph.db)
 export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/call_graph.db
 
-# Git integration (default: true when persistence enabled)
-export PROBE_GIT_TRACK_COMMITS=true
-export PROBE_GIT_PRESERVE_ACROSS_BRANCHES=true
+# MD5-based invalidation works automatically
+# No git dependencies - works in CI, Docker, anywhere
 
 # Performance tuning
 export PROBE_LSP_PERSISTENCE_BATCH_SIZE=50    # Batch writes for performance
@@ -208,24 +208,24 @@ probe lsp cache import team-cache.gz
 # No waiting for language server indexing
 ```
 
-### Git-Aware Features
+### MD5-Based Cache Invalidation
 
-The persistent cache integrates with git for intelligent cache management:
+The persistent cache uses MD5 content hashing for perfect accuracy:
 
-- **Branch tracking**: Cache entries tagged with git branch
-- **Commit awareness**: Cache invalidation based on file content changes
-- **Cross-branch sharing**: Optional cache preservation across branch switches
-- **Merge conflict handling**: Automatic cache cleanup during git operations
+- **Content-based invalidation**: Cache updates automatically when files change
+- **Universal compatibility**: Works in any environment (CI, Docker, non-git directories)
+- **Perfect accuracy**: MD5 hashing ensures cache is never stale
+- **Simple and reliable**: No subprocess calls or git dependencies
 
 ```bash
-# View git-aware cache statistics
-probe lsp cache stats --git-info
+# View cache statistics
+probe lsp cache stats
 
-# Clear cache for specific git branches
-probe lsp cache clear --branch feature/new-api
+# Clear cache for specific files
+probe lsp cache clear --file src/main.rs
 
-# Export cache with git metadata
-probe lsp cache export --include-git-metadata project-cache.gz
+# Export cache for sharing
+probe lsp cache export project-cache.gz
 ```
 
 ## Getting Started

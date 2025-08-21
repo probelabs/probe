@@ -9,14 +9,13 @@
 //! - `nodes`: Main cache storage (NodeKey -> PersistedNode)
 //! - `metadata`: Cache statistics and housekeeping
 //! - `file_index`: File -> cache keys mapping for invalidation
-//! - `git_index`: Git hash -> cache keys mapping for git-aware invalidation
 //!
 //! ## Data Flow
 //!
 //! ```text
 //! Cache Request -> Check Memory -> Check Persistent -> Store/Retrieve
 //!                      ↓              ↓               ↓
-//!                 In-memory cache  sled database   Git integration
+//!                 In-memory cache  sled database   Content hashing
 //! ```
 
 use crate::cache_types::{CallHierarchyInfo, NodeKey};
@@ -26,7 +25,6 @@ use bincode;
 use serde::{Deserialize, Serialize};
 use sled::Db;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
@@ -41,10 +39,6 @@ pub struct PersistedNode {
     pub info: CallHierarchyInfo,
     /// When this node was first cached
     pub created_at: SystemTime,
-    /// Git hash at time of caching (if available)
-    pub git_hash: Option<String>,
-    /// Git branch at time of caching (if available)
-    pub branch: Option<String>,
     /// Language of the source file
     pub language: Language,
 }
@@ -82,8 +76,6 @@ pub struct PersistentCacheStats {
     pub total_size_bytes: u64,
     /// Number of files indexed
     pub total_files: usize,
-    /// Number of git references
-    pub total_git_refs: usize,
     /// Database size on disk (bytes)
     pub disk_size_bytes: u64,
 }
@@ -97,8 +89,6 @@ pub struct PersistentCacheConfig {
     pub max_size_bytes: u64,
     /// Time-to-live for cache entries in days
     pub ttl_days: u64,
-    /// Whether to enable git integration
-    pub git_integration: bool,
     /// Whether to compress stored data
     pub compress: bool,
 }
@@ -109,7 +99,6 @@ impl Default for PersistentCacheConfig {
             cache_directory: None,
             max_size_bytes: 0, // Unlimited by default
             ttl_days: 30,      // 30 days default TTL
-            git_integration: true,
             compress: true,
         }
     }
@@ -128,8 +117,6 @@ pub struct PersistentCallGraphCache {
     metadata_tree: sled::Tree,
     /// Tree for file -> keys index
     file_index_tree: sled::Tree,
-    /// Tree for git hash -> keys index  
-    git_index_tree: sled::Tree,
     /// Configuration
     config: PersistentCacheConfig,
     /// In-memory metadata cache
@@ -175,10 +162,6 @@ impl PersistentCallGraphCache {
             .open_tree("file_index")
             .context("Failed to open file_index tree")?;
 
-        let git_index_tree = db
-            .open_tree("git_index")
-            .context("Failed to open git_index tree")?;
-
         // Load or initialize metadata and handle version compatibility
         let mut metadata = Self::load_metadata(&metadata_tree).await?;
 
@@ -204,11 +187,9 @@ impl PersistentCallGraphCache {
                     // Clear all trees on migration failure
                     let nodes_tree = db.open_tree("nodes")?;
                     let file_index_tree = db.open_tree("file_index")?;
-                    let git_index_tree = db.open_tree("git_index")?;
 
                     nodes_tree.clear()?;
                     file_index_tree.clear()?;
-                    git_index_tree.clear()?;
 
                     // Reset metadata
                     metadata = CacheMetadata::default();
@@ -224,7 +205,6 @@ impl PersistentCallGraphCache {
             nodes_tree,
             metadata_tree,
             file_index_tree,
-            git_index_tree,
             config,
             metadata,
         };
@@ -333,18 +313,10 @@ impl PersistentCallGraphCache {
         info: CallHierarchyInfo,
         language: Language,
     ) -> Result<()> {
-        let git_info = if self.config.git_integration {
-            (Self::get_current_git_hash(), Self::get_current_branch())
-        } else {
-            (None, None)
-        };
-
         let node = PersistedNode {
             key: key.clone(),
             info,
             created_at: SystemTime::now(),
-            git_hash: git_info.0,
-            branch: git_info.1,
             language,
         };
 
@@ -381,24 +353,6 @@ impl PersistentCallGraphCache {
                 .context("Failed to update file index")?;
         }
 
-        // Update git index if available
-        if let Some(ref git_hash) = node.git_hash {
-            let git_key = git_hash.as_bytes();
-            let mut git_keys: Vec<Vec<u8>> = match self.git_index_tree.get(git_key)? {
-                Some(data) => bincode::deserialize(&data).unwrap_or_default(),
-                None => Vec::new(),
-            };
-
-            if !git_keys.contains(&key_bytes) {
-                git_keys.push(key_bytes);
-                let git_keys_data =
-                    bincode::serialize(&git_keys).context("Failed to serialize git keys")?;
-                self.git_index_tree
-                    .insert(git_key, git_keys_data)
-                    .context("Failed to update git index")?;
-            }
-        }
-
         // Update metadata
         {
             let mut metadata = self.metadata.write().await;
@@ -413,12 +367,7 @@ impl PersistentCallGraphCache {
             }
         }
 
-        debug!(
-            "Cached node: {}:{} (git: {:?})",
-            key.file.display(),
-            key.symbol,
-            node.git_hash.as_deref().unwrap_or("none")
-        );
+        debug!("Cached node: {}:{}", key.file.display(), key.symbol);
 
         Ok(())
     }
@@ -495,15 +444,13 @@ impl PersistentCallGraphCache {
         // Get database size on disk
         let disk_size = self.db.size_on_disk().unwrap_or(0);
 
-        // Count files and git refs
+        // Count files
         let total_files = self.file_index_tree.len();
-        let total_git_refs = self.git_index_tree.len();
 
         Ok(PersistentCacheStats {
             total_nodes: metadata.total_nodes,
             total_size_bytes: metadata.total_size_bytes,
             total_files,
-            total_git_refs,
             disk_size_bytes: disk_size,
         })
     }
@@ -515,7 +462,6 @@ impl PersistentCallGraphCache {
         // Clear all trees
         self.nodes_tree.clear()?;
         self.file_index_tree.clear()?;
-        self.git_index_tree.clear()?;
 
         // Reset metadata
         {
@@ -542,71 +488,6 @@ impl PersistentCallGraphCache {
 
         info!("Database compaction completed");
         Ok(())
-    }
-
-    /// Get current git hash if available
-    fn get_current_git_hash() -> Option<String> {
-        let output = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .ok()?;
-
-        if output.status.success() {
-            String::from_utf8(output.stdout)
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        } else {
-            None
-        }
-    }
-
-    /// Get current git branch if available
-    fn get_current_branch() -> Option<String> {
-        let output = Command::new("git")
-            .args(["branch", "--show-current"])
-            .output()
-            .ok()?;
-
-        if output.status.success() {
-            String::from_utf8(output.stdout)
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        } else {
-            None
-        }
-    }
-
-    /// Capture current git metadata (hash and branch)
-    pub fn capture_git_metadata() -> (Option<String>, Option<String>) {
-        (Self::get_current_git_hash(), Self::get_current_branch())
-    }
-
-    /// Get all nodes for a specific git hash
-    pub async fn get_by_git_hash(&self, git_hash: &str) -> Result<Vec<PersistedNode>> {
-        let git_key = git_hash.as_bytes();
-        let key_list: Vec<Vec<u8>> = match self.git_index_tree.get(git_key)? {
-            Some(data) => bincode::deserialize(&data).unwrap_or_default(),
-            None => return Ok(Vec::new()),
-        };
-
-        let mut nodes = Vec::new();
-        for key_bytes in key_list {
-            if let Some(node_data) = self.nodes_tree.get(&key_bytes)? {
-                match bincode::deserialize::<PersistedNode>(&node_data) {
-                    Ok(node) => nodes.push(node),
-                    Err(e) => {
-                        warn!("Failed to deserialize node in git index: {}", e);
-                        // Clean up corrupted entry
-                        self.nodes_tree.remove(&key_bytes)?;
-                    }
-                }
-            }
-        }
-
-        debug!("Retrieved {} nodes for git hash: {}", nodes.len(), git_hash);
-        Ok(nodes)
     }
 
     /// Clean up expired cache entries based on age
@@ -688,37 +569,6 @@ impl PersistentCallGraphCache {
             total_scanned, removed_count
         );
 
-        Ok(removed_count)
-    }
-
-    /// Invalidate cache entries by git hash (for git-aware invalidation)
-    pub async fn invalidate_by_git_hash(&self, git_hash: &str) -> Result<usize> {
-        let git_key = git_hash.as_bytes();
-        let key_list: Vec<Vec<u8>> = match self.git_index_tree.get(git_key)? {
-            Some(data) => bincode::deserialize(&data).unwrap_or_default(),
-            None => return Ok(0),
-        };
-
-        let mut removed_count = 0;
-        for key_bytes in &key_list {
-            if self.nodes_tree.remove(key_bytes)?.is_some() {
-                removed_count += 1;
-            }
-        }
-
-        // Remove git index entry
-        self.git_index_tree.remove(git_key)?;
-
-        // Update metadata
-        {
-            let mut metadata = self.metadata.write().await;
-            metadata.total_nodes = metadata.total_nodes.saturating_sub(removed_count as u64);
-        }
-
-        info!(
-            "Invalidated {} nodes for git hash: {}",
-            removed_count, git_hash
-        );
         Ok(removed_count)
     }
 
@@ -810,7 +660,6 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let config = PersistentCacheConfig {
             cache_directory: Some(temp_dir.path().to_path_buf()),
-            git_integration: false, // Disable for tests
             ..Default::default()
         };
 
@@ -899,7 +748,6 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let config = PersistentCacheConfig {
             cache_directory: Some(temp_dir.path().to_path_buf()),
-            git_integration: false,
             ..Default::default()
         };
 
@@ -1021,7 +869,6 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let config = PersistentCacheConfig {
             cache_directory: Some(temp_dir.path().to_path_buf()),
-            git_integration: false,
             ..Default::default()
         };
 
@@ -1052,57 +899,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_by_git_hash() {
-        let temp_dir = tempdir().unwrap();
-        let config = PersistentCacheConfig {
-            cache_directory: Some(temp_dir.path().to_path_buf()),
-            git_integration: true,
-            ..Default::default()
-        };
-
-        let cache = PersistentCallGraphCache::new(config).await.unwrap();
-
-        // Insert a node with a mock git hash
-        let key = create_test_node_key();
-        let info = create_test_call_hierarchy();
-
-        // We need to create a node with git metadata manually for testing
-        let node = PersistedNode {
-            key: key.clone(),
-            info: info.clone(),
-            created_at: SystemTime::now(),
-            git_hash: Some("abc123def456".to_string()),
-            branch: Some("test-branch".to_string()),
-            language: Language::Rust,
-        };
-
-        // Insert the node manually to control git metadata
-        let key_bytes = bincode::serialize(&key).unwrap();
-        let node_bytes = bincode::serialize(&node).unwrap();
-        cache.nodes_tree.insert(&key_bytes, node_bytes).unwrap();
-
-        // Update git index
-        let git_key = "abc123def456".as_bytes();
-        let git_keys_data = bincode::serialize(&vec![key_bytes]).unwrap();
-        cache.git_index_tree.insert(git_key, git_keys_data).unwrap();
-
-        // Test retrieval by git hash
-        let nodes = cache.get_by_git_hash("abc123def456").await.unwrap();
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].key.symbol, "test_function");
-        assert_eq!(nodes[0].git_hash, Some("abc123def456".to_string()));
-
-        // Test with non-existent git hash
-        let nodes = cache.get_by_git_hash("nonexistent").await.unwrap();
-        assert_eq!(nodes.len(), 0);
-    }
-
-    #[tokio::test]
     async fn test_cleanup_expired() {
         let temp_dir = tempdir().unwrap();
         let config = PersistentCacheConfig {
             cache_directory: Some(temp_dir.path().to_path_buf()),
-            git_integration: false,
             ttl_days: 0, // Immediate expiry for testing
             ..Default::default()
         };
@@ -1131,18 +931,5 @@ mod tests {
         // Verify empty
         let stats = cache.get_stats().await.unwrap();
         assert_eq!(stats.total_nodes, 0);
-    }
-
-    #[test]
-    fn test_capture_git_metadata() {
-        // This test may fail in environments without git
-        // We just test that the function doesn't panic
-        let (hash, branch) = PersistentCallGraphCache::capture_git_metadata();
-
-        // In CI environments, these might be None, which is fine
-        println!("Git metadata - hash: {:?}, branch: {:?}", hash, branch);
-
-        // The function should not panic and should return valid options
-        // We don't assert specific values since git may not be available
     }
 }

@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🚀 Major Features
 
+#### Simplified MD5-Only Cache System
+- **Removed git dependency**: Cache now uses pure MD5 content hashing for perfect invalidation
+- **Universal compatibility**: Works in CI, Docker containers, and non-git environments
+- **Eliminated CI hanging issues**: No more subprocess git calls that could cause build lock conflicts
+- **Simplified architecture**: Cleaner, more reliable caching without version control dependencies
+- **Perfect accuracy**: MD5-based invalidation ensures cache is never stale
+- **CI/CD friendly**: Ideal for containerized environments and automated pipelines
+
 #### Language Server Protocol (LSP) Integration with Persistent Cache
 - **Full LSP support**: Advanced code intelligence through Language Server Protocol
 - **Revolutionary persistent cache system**: Three-layer cache architecture (L1 Memory, L2 Persistent, L3 LSP)
