@@ -50,7 +50,7 @@ The LSP daemon provides a revolutionary three-layer cache system:
 #### L2: Persistent Cache (Survives Restarts)
 - **1-5ms access time** from disk-based sled database
 - **Survives daemon restarts** and system reboots
-- **Git-aware invalidation** with branch and commit tracking
+- **MD5-based invalidation** ensures perfect cache accuracy
 - **Compression support** to minimize disk usage
 - **Content-addressed storage** with MD5-based cache keys
 
@@ -176,44 +176,39 @@ This only happens once - subsequent requests are instant thanks to caching.
 
 #### Content-Addressed Storage
 Probe uses MD5 content hashing for intelligent cache invalidation:
-- **Automatic invalidation** - Cache updates when files change
+- **Perfect invalidation** - MD5 content hashing detects any file changes
 - **Content-based keys** - Same symbol in different file versions cached separately
 - **Dependency tracking** - Related symbols invalidated together
+- **Universal compatibility** - Works in CI, Docker, and non-git environments
 - **Massive speedups** - 250,000x faster for repeated queries
 
 #### Persistent Storage with sled
 - **High-performance embedded database** for cache persistence
 - **ACID transactions** ensure cache consistency
 - **Compression** reduces disk usage by up to 70%
-- **Multiple trees** for efficient indexing (nodes, files, git refs)
+- **Multiple trees** for efficient indexing (nodes, files)
 - **Automatic recovery** from corruption or version mismatches
 
-#### Git Integration
-- **Branch-aware caching** with optional cross-branch sharing
-- **Commit tracking** for precise invalidation
-- **Git metadata** stored with each cache entry
-- **Automatic cleanup** on branch switches and merges
 
 ```bash
 # Configure persistent cache
 export PROBE_LSP_PERSISTENCE_ENABLED=true
 export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/call_graph.db
-export PROBE_GIT_TRACK_COMMITS=true
 
-# Git-aware cache management
-probe lsp cache stats --git-info              # Show git-related stats
-probe lsp cache clear --branch feature/new    # Clear specific branch cache
-probe lsp cache export --include-git-metadata cache-with-git.gz
+# MD5-based cache management - works everywhere
+probe lsp cache stats                         # Show cache statistics
+probe lsp cache clear --file src/main.rs    # Clear specific file cache
+probe lsp cache export project-cache.gz     # Export cache for sharing
 ```
 
 ```bash
 # Comprehensive cache management
 probe lsp cache stats                           # View cache performance and hit rates
-probe lsp cache stats --detailed               # Include git and persistence info
+probe lsp cache stats --detailed               # Include detailed cache information
 probe lsp cache clear                          # Clear all caches (memory + persistent)
 probe lsp cache clear --operation CallHierarchy # Clear specific operation type
 probe lsp cache clear --file src/main.rs      # Clear cache for specific file
-probe lsp cache clear --branch main           # Clear cache for specific git branch
+probe lsp cache clear --older-than 7          # Clear entries older than 7 days
 
 # Cache import/export for team collaboration
 probe lsp cache export project-cache.gz       # Export compressed cache
@@ -340,9 +335,8 @@ export PROBE_LSP_PERSISTENCE_ENABLED=true
 # Cache storage location
 export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/call_graph.db
 
-# Git integration settings
-export PROBE_GIT_TRACK_COMMITS=true           # Track git commits
-export PROBE_GIT_PRESERVE_ACROSS_BRANCHES=true # Keep cache across branches
+# Cache behavior is now based on file content MD5 hashing
+# No git dependency - works in all environments (CI, Docker, non-git dirs)
 
 # Performance tuning
 export PROBE_LSP_PERSISTENCE_BATCH_SIZE=50     # Batch write operations

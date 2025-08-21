@@ -1,18 +1,13 @@
 use crate::cache_types::{CacheStats, CachedNode, CallHierarchyInfo, NodeId, NodeKey};
-use crate::git_utils::{GitConfig, GitContext};
 use crate::language_detector::Language;
 use crate::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
-use crate::protocol::{
-    BranchCacheStats, CacheDiff, CacheHistoryEntry, CacheSnapshot, CachedCallHierarchy,
-    CommitCacheStats, GitCacheStats, HotSpot,
-};
 use anyhow::Result;
 use dashmap::DashMap;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use tracing::{debug, info, warn};
 
@@ -82,8 +77,6 @@ pub struct CallGraphCacheConfig {
     pub persistence_write_batch_size: usize,
     /// Interval between background write flushes
     pub persistence_write_interval: Duration,
-    /// Git-aware features configuration
-    pub git_config: GitConfig,
 }
 
 impl Default for CallGraphCacheConfig {
@@ -97,7 +90,6 @@ impl Default for CallGraphCacheConfig {
             persistence_path: None,
             persistence_write_batch_size: 10,
             persistence_write_interval: Duration::from_secs(5),
-            git_config: GitConfig::default(),
         }
     }
 }
@@ -140,23 +132,20 @@ pub struct CallGraphCache {
 
     /// Channel for background persistence writes
     write_channel: Option<mpsc::UnboundedSender<PersistenceMessage>>,
-
-    /// Git-aware tracking data
-    /// Current git context for the workspace
-    current_git_context: Arc<AsyncMutex<Option<GitContext>>>,
-    /// Git context history (limited by config)
-    git_history: Arc<AsyncMutex<VecDeque<GitContext>>>,
-    /// Mapping from commit hash to cache keys for git-aware queries
-    commit_index: DashMap<String, HashSet<NodeKey>>,
-    /// Branch statistics for monitoring
-    branch_stats: DashMap<String, BranchCacheStats>,
-    /// Commit statistics for recent commits
-    commit_stats: DashMap<String, CommitCacheStats>,
-    /// Hot spot tracking across commits
-    hot_spots: Arc<AsyncMutex<HashMap<(PathBuf, String), HotSpot>>>,
 }
 
 impl CallGraphCache {
+    /// CI guard: disable persistence regardless of daemon config
+    #[inline]
+    fn persistence_disabled_in_env() -> bool {
+        // Common CI indicators + explicit override
+        std::env::var("PROBE_DISABLE_PERSISTENCE").is_ok()
+            || std::env::var("PROBE_CI").is_ok()
+            || std::env::var("CI").is_ok()
+            || std::env::var("GITHUB_ACTIONS").is_ok()
+            || std::env::var("TF_BUILD").is_ok()
+    }
+
     /// Create a new cache instance without persistence
     pub fn new(config: CallGraphCacheConfig) -> Self {
         Self {
@@ -173,24 +162,20 @@ impl CallGraphCache {
             last_eviction: Arc::new(AsyncMutex::new(Instant::now())),
             persistent_store: None,
             write_channel: None,
-            current_git_context: Arc::new(AsyncMutex::new(None)),
-            git_history: Arc::new(AsyncMutex::new(VecDeque::new())),
-            commit_index: DashMap::new(),
-            branch_stats: DashMap::new(),
-            commit_stats: DashMap::new(),
-            hot_spots: Arc::new(AsyncMutex::new(HashMap::new())),
         }
     }
 
     /// Create a new cache instance with optional persistence
     pub async fn new_with_persistence(config: CallGraphCacheConfig) -> Result<Self> {
-        let (persistent_store, write_channel) = if config.persistence_enabled {
+        let persistence_allowed =
+            config.persistence_enabled && !Self::persistence_disabled_in_env();
+        let (persistent_store, write_channel) = if persistence_allowed {
             // Create persistence config from cache config
             let persistence_config = PersistentCacheConfig {
                 cache_directory: config.persistence_path.clone(),
                 max_size_bytes: 0, // Unlimited by default
                 ttl_days: 30,      // 30 days default
-                git_integration: true,
+                // Git integration removed - using MD5-only approach
                 compress: true,
             };
 
@@ -232,12 +217,6 @@ impl CallGraphCache {
             last_eviction: Arc::new(AsyncMutex::new(Instant::now())),
             persistent_store,
             write_channel,
-            current_git_context: Arc::new(AsyncMutex::new(None)),
-            git_history: Arc::new(AsyncMutex::new(VecDeque::new())),
-            commit_index: DashMap::new(),
-            branch_stats: DashMap::new(),
-            commit_stats: DashMap::new(),
-            hot_spots: Arc::new(AsyncMutex::new(HashMap::new())),
         })
     }
 
@@ -620,24 +599,6 @@ impl CallGraphCache {
             .entry(id.file.clone())
             .or_default()
             .insert(id);
-
-        // Update git-aware commit index if git tracking is enabled
-        if self.config.git_config.track_commits {
-            // We'll need to get current git context to associate with this cache entry
-            // For now, we'll spawn a task to handle this asynchronously
-            let key_clone = key.clone();
-            let commit_index_clone = self.commit_index.clone();
-            let current_git_context = self.current_git_context.clone();
-
-            tokio::spawn(async move {
-                if let Some(git_context) = current_git_context.lock().await.as_ref() {
-                    commit_index_clone
-                        .entry(git_context.commit_hash.clone())
-                        .or_default()
-                        .insert(key_clone);
-                }
-            });
-        }
     }
 
     /// Update graph edges for a node
@@ -895,472 +856,28 @@ impl CallGraphCache {
         }
     }
 
-    /// Git-aware methods for commit and branch tracking
-    /// Set the current git context for the cache
-    pub async fn set_git_context(&self, context: GitContext) -> Result<Option<GitContext>> {
-        let mut current_context = self.current_git_context.lock().await;
-        let previous = current_context.clone();
-
-        // Detect changes and handle accordingly
-        if let Some(ref prev_ctx) = previous {
-            if prev_ctx.has_changed(&context) {
-                info!(
-                    "Git context changed from {} to {}",
-                    prev_ctx.short_id(),
-                    context.short_id()
-                );
-
-                // Handle branch switches
-                if prev_ctx.has_branch_changed(&context) {
-                    self.handle_branch_switch(prev_ctx, &context).await?;
-                }
-
-                // Handle new commits
-                if prev_ctx.has_new_commits(&context) {
-                    self.handle_new_commits(prev_ctx, &context).await?;
-                }
-
-                // Update git history
-                let mut history = self.git_history.lock().await;
-                history.push_back(prev_ctx.clone());
-
-                // Limit history size
-                while history.len() > self.config.git_config.max_history_depth {
-                    history.pop_front();
-                }
-            }
-        } else {
-            info!("Initial git context set: {}", context.short_id());
-        }
-
-        *current_context = Some(context);
-        Ok(previous)
+    /// Get cache history for a node (stub - git functionality removed)
+    pub async fn get_history(
+        &self,
+        _node_id: &NodeId,
+    ) -> Result<Vec<crate::protocol::CacheHistoryEntry>> {
+        // Git functionality has been removed - this is now a stub
+        Ok(Vec::new())
     }
 
-    /// Get the current git context
-    pub async fn get_git_context(&self) -> Option<GitContext> {
-        self.current_git_context.lock().await.clone()
+    /// Get cache snapshot at a specific commit (stub - git functionality removed)
+    pub async fn snapshot_at_commit(
+        &self,
+        _commit_hash: &str,
+    ) -> Result<crate::protocol::CacheSnapshot> {
+        // Git functionality has been removed - this is now a stub
+        Err(anyhow::anyhow!("Git functionality has been removed"))
     }
 
-    /// Get cached node for a specific commit
-    pub async fn get_for_commit(&self, key: &NodeKey, commit: &str) -> Option<Arc<CachedNode>> {
-        // Check if the key exists for this commit
-        if let Some(commit_keys) = self.commit_index.get(commit) {
-            if commit_keys.contains(key) {
-                return self.get(key);
-            }
-        }
-        None
-    }
-
-    /// Get all cache history for a node across commits
-    pub async fn get_history(&self, node_id: &NodeId) -> Result<Vec<CacheHistoryEntry>> {
-        let mut history = Vec::new();
-
-        // Get all versions of this node
-        if let Some(keys) = self.id_to_keys.get(node_id) {
-            for key in keys.iter() {
-                if let Some(_node) = self.get(key) {
-                    // Find which commits this key belongs to
-                    for commit_entry in self.commit_index.iter() {
-                        if commit_entry.value().contains(key) {
-                            // Try to get git context for this commit from history
-                            let git_history = self.git_history.lock().await;
-
-                            if let Some(git_context) = git_history
-                                .iter()
-                                .find(|ctx| ctx.commit_hash == *commit_entry.key())
-                            {
-                                let cache_entry = CachedCallHierarchy {
-                                    file_path: node_id.file.clone(),
-                                    symbol: node_id.symbol.clone(),
-                                    line: 0, // We don't store line/column in NodeId
-                                    column: 0,
-                                    result: crate::protocol::CallHierarchyResult {
-                                        item: crate::protocol::CallHierarchyItem {
-                                            name: node_id.symbol.clone(),
-                                            kind: "function".to_string(),
-                                            uri: format!("file://{}", node_id.file.display()),
-                                            range: crate::protocol::Range {
-                                                start: crate::protocol::Position {
-                                                    line: 0,
-                                                    character: 0,
-                                                },
-                                                end: crate::protocol::Position {
-                                                    line: 0,
-                                                    character: 0,
-                                                },
-                                            },
-                                            selection_range: crate::protocol::Range {
-                                                start: crate::protocol::Position {
-                                                    line: 0,
-                                                    character: 0,
-                                                },
-                                                end: crate::protocol::Position {
-                                                    line: 0,
-                                                    character: 0,
-                                                },
-                                            },
-                                        },
-                                        incoming: vec![],
-                                        outgoing: vec![],
-                                    },
-                                    cached_at: SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs(),
-                                };
-
-                                history.push(CacheHistoryEntry {
-                                    commit_hash: commit_entry.key().clone(),
-                                    branch: git_context.branch.clone(),
-                                    timestamp: git_context.commit_hash.len() as u64, // Placeholder
-                                    cache_entry,
-                                    git_context: git_context.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Sort by timestamp (most recent first)
-        history.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        Ok(history)
-    }
-
-    /// Get cache snapshot at a specific commit
-    pub async fn snapshot_at_commit(&self, commit: &str) -> Result<CacheSnapshot> {
-        let commit_keys = self
-            .commit_index
-            .get(commit)
-            .ok_or_else(|| anyhow::anyhow!("No cache data for commit {}", commit))?;
-
-        let mut entries = Vec::new();
-        for key in commit_keys.iter() {
-            if let Some(_node) = self.get(key) {
-                let entry = CachedCallHierarchy {
-                    file_path: key.file.clone(),
-                    symbol: key.symbol.clone(),
-                    line: 0,
-                    column: 0,
-                    result: crate::protocol::CallHierarchyResult {
-                        item: crate::protocol::CallHierarchyItem {
-                            name: key.symbol.clone(),
-                            kind: "function".to_string(),
-                            uri: format!("file://{}", key.file.display()),
-                            range: crate::protocol::Range {
-                                start: crate::protocol::Position {
-                                    line: 0,
-                                    character: 0,
-                                },
-                                end: crate::protocol::Position {
-                                    line: 0,
-                                    character: 0,
-                                },
-                            },
-                            selection_range: crate::protocol::Range {
-                                start: crate::protocol::Position {
-                                    line: 0,
-                                    character: 0,
-                                },
-                                end: crate::protocol::Position {
-                                    line: 0,
-                                    character: 0,
-                                },
-                            },
-                        },
-                        incoming: vec![],
-                        outgoing: vec![],
-                    },
-                    cached_at: SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                };
-                entries.push(entry);
-            }
-        }
-
-        // Try to get git context from history
-        let git_history = self.git_history.lock().await;
-        let git_context = git_history
-            .iter()
-            .find(|ctx| ctx.commit_hash == commit)
-            .cloned()
-            .unwrap_or_else(|| GitContext {
-                commit_hash: commit.to_string(),
-                branch: "unknown".to_string(),
-                is_dirty: false,
-                remote_url: None,
-                repo_root: PathBuf::from("/unknown"),
-            });
-
-        Ok(CacheSnapshot {
-            commit_hash: commit.to_string(),
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            entries,
-            git_context,
-            total_entries: commit_keys.len(),
-        })
-    }
-
-    /// Compare cache between two commits
-    pub async fn diff_commits(&self, from: &str, to: &str) -> Result<CacheDiff> {
-        let from_keys = self
-            .commit_index
-            .get(from)
-            .map(|r| r.value().clone())
-            .unwrap_or_default();
-        let to_keys = self
-            .commit_index
-            .get(to)
-            .map(|r| r.value().clone())
-            .unwrap_or_default();
-
-        let added_keys: HashSet<_> = to_keys.difference(&from_keys).collect();
-        let removed_keys: HashSet<_> = from_keys.difference(&to_keys).collect();
-        let common_keys: HashSet<_> = from_keys.intersection(&to_keys).collect();
-
-        let mut added_entries = Vec::new();
-        let mut removed_entries = Vec::new();
-        let modified_entries = Vec::new();
-
-        // Process added entries
-        for key in added_keys {
-            if let Some(_node) = self.get(key) {
-                added_entries.push(CachedCallHierarchy {
-                    file_path: key.file.clone(),
-                    symbol: key.symbol.clone(),
-                    line: 0,
-                    column: 0,
-                    result: crate::protocol::CallHierarchyResult {
-                        item: crate::protocol::CallHierarchyItem {
-                            name: key.symbol.clone(),
-                            kind: "function".to_string(),
-                            uri: format!("file://{}", key.file.display()),
-                            range: crate::protocol::Range {
-                                start: crate::protocol::Position {
-                                    line: 0,
-                                    character: 0,
-                                },
-                                end: crate::protocol::Position {
-                                    line: 0,
-                                    character: 0,
-                                },
-                            },
-                            selection_range: crate::protocol::Range {
-                                start: crate::protocol::Position {
-                                    line: 0,
-                                    character: 0,
-                                },
-                                end: crate::protocol::Position {
-                                    line: 0,
-                                    character: 0,
-                                },
-                            },
-                        },
-                        incoming: vec![],
-                        outgoing: vec![],
-                    },
-                    cached_at: SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                });
-            }
-        }
-
-        // Process removed entries (would need to get from persistent store)
-        for key in removed_keys {
-            removed_entries.push(CachedCallHierarchy {
-                file_path: key.file.clone(),
-                symbol: key.symbol.clone(),
-                line: 0,
-                column: 0,
-                result: crate::protocol::CallHierarchyResult {
-                    item: crate::protocol::CallHierarchyItem {
-                        name: key.symbol.clone(),
-                        kind: "function".to_string(),
-                        uri: format!("file://{}", key.file.display()),
-                        range: crate::protocol::Range {
-                            start: crate::protocol::Position {
-                                line: 0,
-                                character: 0,
-                            },
-                            end: crate::protocol::Position {
-                                line: 0,
-                                character: 0,
-                            },
-                        },
-                        selection_range: crate::protocol::Range {
-                            start: crate::protocol::Position {
-                                line: 0,
-                                character: 0,
-                            },
-                            end: crate::protocol::Position {
-                                line: 0,
-                                character: 0,
-                            },
-                        },
-                    },
-                    incoming: vec![],
-                    outgoing: vec![],
-                },
-                cached_at: 0,
-            });
-        }
-
-        Ok(CacheDiff {
-            from_commit: from.to_string(),
-            to_commit: to.to_string(),
-            added_entries,
-            removed_entries,
-            modified_entries,
-            unchanged_entries: common_keys.len(),
-        })
-    }
-
-    /// Handle branch switch event
-    async fn handle_branch_switch(&self, from: &GitContext, to: &GitContext) -> Result<()> {
-        info!(
-            "Handling branch switch from {} to {}",
-            from.branch, to.branch
-        );
-
-        if self.config.git_config.preserve_across_branches {
-            debug!("Preserving cache across branch switch");
-        } else {
-            info!("Clearing cache due to branch switch");
-
-            if self.config.git_config.namespace_by_branch {
-                // TODO: Implement branch-namespaced cache clearing
-                self.clear();
-            } else {
-                self.clear();
-            }
-        }
-
-        // Update branch statistics
-        let _ = self.update_branch_stats(&to.branch).await;
-
-        Ok(())
-    }
-
-    /// Handle new commits event
-    async fn handle_new_commits(&self, from: &GitContext, to: &GitContext) -> Result<()> {
-        info!(
-            "Handling new commits from {} to {}",
-            from.commit_hash[..8].to_string(),
-            to.commit_hash[..8].to_string()
-        );
-
-        if self.config.git_config.auto_detect_changes {
-            // Get changed files between commits
-            match GitContext::get_changed_files_between_commits(
-                &to.repo_root,
-                &from.commit_hash,
-                &to.commit_hash,
-            ) {
-                Ok(changed_files) => {
-                    info!(
-                        "Detected {} changed files, invalidating related cache entries",
-                        changed_files.len()
-                    );
-
-                    for file_path in changed_files {
-                        self.invalidate_file(&file_path);
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to get changed files, clearing entire cache: {}", e);
-                    self.clear();
-                }
-            }
-        }
-
-        // Update commit statistics
-        let _ = self.update_commit_stats(&to.commit_hash, &to.branch).await;
-
-        Ok(())
-    }
-
-    /// Update branch statistics
-    async fn update_branch_stats(&self, branch: &str) -> Result<()> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        if let Some(mut stats) = self.branch_stats.get_mut(branch) {
-            stats.last_active = now;
-            stats.total_entries = self.nodes.len();
-        } else {
-            let stats = BranchCacheStats {
-                branch_name: branch.to_string(),
-                total_entries: self.nodes.len(),
-                hit_rate: 0.0, // Will be calculated separately
-                last_active: now,
-                commits_tracked: 1,
-            };
-            self.branch_stats.insert(branch.to_string(), stats);
-        }
-
-        Ok(())
-    }
-
-    /// Update commit statistics
-    async fn update_commit_stats(&self, commit: &str, branch: &str) -> Result<()> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let stats = CommitCacheStats {
-            commit_hash: commit.to_string(),
-            branch: branch.to_string(),
-            cache_size: self.nodes.len(),
-            hit_rate: 0.0, // Will be calculated separately
-            created_at: now,
-            last_accessed: now,
-        };
-
-        self.commit_stats.insert(commit.to_string(), stats);
-
-        Ok(())
-    }
-
-    /// Get git-aware cache statistics
-    pub async fn get_git_stats(&self) -> Result<GitCacheStats> {
-        let branch_stats: HashMap<String, BranchCacheStats> = self
-            .branch_stats
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect();
-
-        let commit_stats: HashMap<String, CommitCacheStats> = self
-            .commit_stats
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect();
-
-        let hot_spots = {
-            let hot_spots_guard = self.hot_spots.lock().await;
-            hot_spots_guard.values().cloned().collect()
-        };
-
-        let current_context = self.get_git_context().await;
-
-        Ok(GitCacheStats {
-            branch_stats,
-            commit_stats,
-            hot_spots,
-            current_context,
-        })
+    /// Compare cache between two commits (stub - git functionality removed)
+    pub async fn diff_commits(&self, _from: &str, _to: &str) -> Result<crate::protocol::CacheDiff> {
+        // Git functionality has been removed - this is now a stub
+        Err(anyhow::anyhow!("Git functionality has been removed"))
     }
 
     /// Get cache statistics including persistence information
@@ -1677,282 +1194,6 @@ mod tests {
             assert!(stats.persistence_enabled);
             assert!(stats.persistent_nodes.unwrap_or(0) > 0);
         }
-    }
-
-    #[tokio::test]
-    async fn test_git_aware_cache_operations() {
-        use tempfile::tempdir;
-
-        let temp_dir = tempdir().unwrap();
-        let mut config = CallGraphCacheConfig::default();
-        config.git_config.track_commits = true;
-        config.git_config.preserve_across_branches = false;
-
-        let cache = CallGraphCache::new(config);
-
-        // Set up initial git context
-        let git_context1 = GitContext {
-            commit_hash: "abcd1234".to_string(),
-            branch: "main".to_string(),
-            is_dirty: false,
-            remote_url: Some("git@github.com:test/repo.git".to_string()),
-            repo_root: temp_dir.path().to_path_buf(),
-        };
-
-        cache.set_git_context(git_context1.clone()).await.unwrap();
-
-        // Add some cache entries
-        let key1 = NodeKey::new("function1", "/test/file1.rs", "hash1");
-        let key2 = NodeKey::new("function2", "/test/file2.rs", "hash2");
-
-        cache
-            .get_or_compute(key1.clone(), || async {
-                Ok(CallHierarchyInfo {
-                    incoming_calls: vec![],
-                    outgoing_calls: vec![],
-                })
-            })
-            .await
-            .unwrap();
-
-        cache
-            .get_or_compute(key2.clone(), || async {
-                Ok(CallHierarchyInfo {
-                    incoming_calls: vec![],
-                    outgoing_calls: vec![],
-                })
-            })
-            .await
-            .unwrap();
-
-        // Verify entries are associated with the commit
-        assert!(cache.get_for_commit(&key1, "abcd1234").await.is_some());
-        assert!(cache.get_for_commit(&key2, "abcd1234").await.is_some());
-        assert!(cache
-            .get_for_commit(&key1, "different_commit")
-            .await
-            .is_none());
-
-        // Test branch switch
-        let git_context2 = GitContext {
-            commit_hash: "abcd1234".to_string(), // Same commit
-            branch: "feature".to_string(),       // Different branch
-            is_dirty: false,
-            remote_url: Some("git@github.com:test/repo.git".to_string()),
-            repo_root: temp_dir.path().to_path_buf(),
-        };
-
-        cache.set_git_context(git_context2).await.unwrap();
-
-        // Since preserve_across_branches is false, cache should be cleared
-        assert!(cache.get(&key1).is_none());
-        assert!(cache.get(&key2).is_none());
-    }
-
-    #[tokio::test]
-    async fn test_git_context_history_tracking() {
-        let mut config = CallGraphCacheConfig::default();
-        config.git_config.max_history_depth = 3;
-
-        let cache = CallGraphCache::new(config);
-
-        // Add multiple git contexts to test history
-        let contexts = vec![
-            GitContext {
-                commit_hash: "commit1".to_string(),
-                branch: "main".to_string(),
-                is_dirty: false,
-                remote_url: None,
-                repo_root: PathBuf::from("/test"),
-            },
-            GitContext {
-                commit_hash: "commit2".to_string(),
-                branch: "main".to_string(),
-                is_dirty: false,
-                remote_url: None,
-                repo_root: PathBuf::from("/test"),
-            },
-            GitContext {
-                commit_hash: "commit3".to_string(),
-                branch: "main".to_string(),
-                is_dirty: false,
-                remote_url: None,
-                repo_root: PathBuf::from("/test"),
-            },
-            GitContext {
-                commit_hash: "commit4".to_string(),
-                branch: "main".to_string(),
-                is_dirty: false,
-                remote_url: None,
-                repo_root: PathBuf::from("/test"),
-            },
-        ];
-
-        // Set contexts sequentially
-        for context in contexts {
-            cache.set_git_context(context).await.unwrap();
-        }
-
-        // Verify history is limited to max_history_depth
-        let history = cache.git_history.lock().await;
-        assert_eq!(history.len(), 3); // Should only keep last 3 previous contexts
-
-        // Verify current context is the latest
-        let current = cache.get_git_context().await.unwrap();
-        assert_eq!(current.commit_hash, "commit4");
-    }
-
-    #[tokio::test]
-    async fn test_cache_snapshot_at_commit() {
-        let cache = CallGraphCache::new(CallGraphCacheConfig::default());
-
-        // Set git context
-        let git_context = GitContext {
-            commit_hash: "test_commit".to_string(),
-            branch: "main".to_string(),
-            is_dirty: false,
-            remote_url: None,
-            repo_root: PathBuf::from("/test"),
-        };
-
-        cache.set_git_context(git_context.clone()).await.unwrap();
-
-        // Add cache entries
-        let key1 = NodeKey::new("func1", "/test/file.rs", "hash1");
-        let key2 = NodeKey::new("func2", "/test/file.rs", "hash2");
-
-        cache
-            .get_or_compute(key1.clone(), || async {
-                Ok(CallHierarchyInfo {
-                    incoming_calls: vec![],
-                    outgoing_calls: vec![],
-                })
-            })
-            .await
-            .unwrap();
-
-        cache
-            .get_or_compute(key2.clone(), || async {
-                Ok(CallHierarchyInfo {
-                    incoming_calls: vec![],
-                    outgoing_calls: vec![],
-                })
-            })
-            .await
-            .unwrap();
-
-        // Wait for async commit index update
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // Get snapshot
-        let snapshot = cache.snapshot_at_commit("test_commit").await.unwrap();
-
-        assert_eq!(snapshot.commit_hash, "test_commit");
-        assert_eq!(snapshot.git_context.commit_hash, "test_commit");
-        assert_eq!(snapshot.git_context.branch, "main");
-        assert!(snapshot.entries.len() >= 2);
-    }
-
-    #[tokio::test]
-    async fn test_commit_diff() {
-        let cache = CallGraphCache::new(CallGraphCacheConfig::default());
-
-        // Set up first commit with some entries
-        let git_context1 = GitContext {
-            commit_hash: "commit1".to_string(),
-            branch: "main".to_string(),
-            is_dirty: false,
-            remote_url: None,
-            repo_root: PathBuf::from("/test"),
-        };
-
-        cache.set_git_context(git_context1).await.unwrap();
-
-        let key1 = NodeKey::new("func1", "/test/file.rs", "hash1");
-        cache
-            .get_or_compute(key1.clone(), || async {
-                Ok(CallHierarchyInfo {
-                    incoming_calls: vec![],
-                    outgoing_calls: vec![],
-                })
-            })
-            .await
-            .unwrap();
-
-        // Set up second commit with different entries
-        let git_context2 = GitContext {
-            commit_hash: "commit2".to_string(),
-            branch: "main".to_string(),
-            is_dirty: false,
-            remote_url: None,
-            repo_root: PathBuf::from("/test"),
-        };
-
-        cache.set_git_context(git_context2).await.unwrap();
-
-        let key2 = NodeKey::new("func2", "/test/file.rs", "hash2");
-        cache
-            .get_or_compute(key2.clone(), || async {
-                Ok(CallHierarchyInfo {
-                    incoming_calls: vec![],
-                    outgoing_calls: vec![],
-                })
-            })
-            .await
-            .unwrap();
-
-        // Wait for async updates
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // Get diff
-        let diff = cache.diff_commits("commit1", "commit2").await.unwrap();
-
-        assert_eq!(diff.from_commit, "commit1");
-        assert_eq!(diff.to_commit, "commit2");
-        // Note: The actual entries may vary based on commit index implementation
-    }
-
-    #[tokio::test]
-    async fn test_git_statistics() {
-        let mut config = CallGraphCacheConfig::default();
-        config.git_config.track_commits = true;
-
-        let cache = CallGraphCache::new(config);
-
-        // Set git context
-        let git_context = GitContext {
-            commit_hash: "test_commit".to_string(),
-            branch: "main".to_string(),
-            is_dirty: false,
-            remote_url: None,
-            repo_root: PathBuf::from("/test"),
-        };
-
-        cache.set_git_context(git_context).await.unwrap();
-
-        // Add some cache entries to generate stats
-        let key = NodeKey::new("test_func", "/test/file.rs", "hash");
-        cache
-            .get_or_compute(key, || async {
-                Ok(CallHierarchyInfo {
-                    incoming_calls: vec![],
-                    outgoing_calls: vec![],
-                })
-            })
-            .await
-            .unwrap();
-
-        // Get git stats
-        let stats = cache.get_git_stats().await.unwrap();
-
-        assert!(stats.current_context.is_some());
-        assert_eq!(stats.current_context.unwrap().commit_hash, "test_commit");
-
-        // Branch stats should be populated
-        assert!(stats.branch_stats.contains_key("main"));
-
-        // Commit stats should be populated
-        assert!(stats.commit_stats.contains_key("test_commit"));
     }
 
     #[tokio::test]

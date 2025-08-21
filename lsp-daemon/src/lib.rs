@@ -18,9 +18,6 @@ pub mod hash_utils;
 pub mod lsp_cache;
 pub mod persistent_cache;
 
-// Git integration
-pub mod git_utils;
-
 // Handler modules
 pub mod definition_handler;
 pub mod hover_handler;

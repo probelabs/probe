@@ -17,7 +17,7 @@ graph TB
         A[L1: Memory Cache <1ms]
         B[L2: Persistent Cache 1-5ms]
         C[L3: Language Server 100ms-10s]
-        D[Git-Aware Invalidation]
+        D[MD5-Based Invalidation]
         E[Content-Addressed Storage]
     end
     
@@ -54,7 +54,7 @@ Probe's persistent cache system provides extraordinary performance improvements 
 - **MD5 Content Hashing**: Cache keys include file content hash for perfect invalidation
 - **Three-Layer Architecture**: Memory → Persistent → Language Server with automatic fallback
 - **Persistent Storage**: Cache survives daemon restarts and system reboots
-- **Git Integration**: Branch and commit-aware cache management
+- **Universal Compatibility**: Works in CI, Docker, and non-git environments
 - **Dependency Tracking**: Related symbols invalidated together when files change
 - **Concurrent Deduplication**: Multiple requests for same symbol only trigger one LSP call
 - **LRU Eviction**: Intelligent memory management with configurable limits
@@ -767,9 +767,8 @@ export PROBE_LSP_PERSISTENCE_SIZE_MB=8192
 export PROBE_LSP_CACHE_TTL_DAYS=60
 export PROBE_LSP_CACHE_COMPRESS=true
 
-# Git integration for team collaboration
-export PROBE_GIT_TRACK_COMMITS=true
-export PROBE_GIT_PRESERVE_ACROSS_BRANCHES=true
+# MD5-based cache invalidation - works everywhere
+# No git dependency required
 
 # Performance tuning
 export PROBE_LSP_PERSISTENCE_BATCH_SIZE=100
@@ -792,6 +791,7 @@ export PROBE_LSP_PERSISTENCE_SIZE_MB=1024
 export PROBE_LSP_CACHE_TTL_DAYS=7
 export PROBE_LSP_TIMEOUT=120000
 
+# Works perfectly in CI without git dependencies
 # Import shared team cache for instant performance
 probe lsp cache import /shared/cache/team-cache.gz
 

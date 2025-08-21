@@ -38,9 +38,6 @@ pub struct CacheExport {
 pub struct ExportMetadata {
     /// Export timestamp
     pub export_date: SystemTime,
-    /// Git context at export time
-    pub git_branch: Option<String>,
-    pub git_commit: Option<String>,
     /// Export statistics
     pub total_entries: u64,
     pub total_size_bytes: u64,
@@ -60,8 +57,6 @@ pub struct ExportEntry {
     /// Cache metadata
     pub created_at: SystemTime,
     pub language: Language,
-    pub git_hash: Option<String>,
-    pub branch: Option<String>,
     /// Call hierarchy data
     pub call_hierarchy: crate::cache_types::CallHierarchyInfo,
 }
@@ -177,12 +172,14 @@ impl CacheManager {
             HashMap::new()
         };
 
-        // Build git statistics
-        let (entries_per_branch, entries_per_commit) = if git_stats {
-            self.build_git_statistics().await?
-        } else {
-            (HashMap::new(), HashMap::new())
-        };
+        // Git statistics are no longer available
+        if git_stats {
+            warn!("Git statistics requested but git integration was removed");
+        }
+        let (_entries_per_branch, _entries_per_commit): (
+            HashMap<String, u64>,
+            HashMap<String, u64>,
+        ) = (HashMap::new(), HashMap::new());
 
         // Build age distribution
         let age_distribution = self.build_age_distribution().await?;
@@ -214,8 +211,6 @@ impl CacheManager {
             hit_rate,
             miss_rate: 1.0 - hit_rate,
             age_distribution,
-            entries_per_branch,
-            entries_per_commit,
             most_accessed,
             memory_usage,
         };
@@ -241,7 +236,7 @@ impl CacheManager {
         let mut entries_removed = 0u64;
         let mut files_affected = 0u64;
         let branches_affected = 0u64;
-        let mut commits_affected = 0u64;
+        let commits_affected = 0u64;
         let mut bytes_reclaimed = 0u64;
 
         // Clear all if requested
@@ -291,13 +286,10 @@ impl CacheManager {
             }
 
             if let Some(ref commit_hash) = filter.commit_hash {
-                info!("Clearing entries for commit: {}", commit_hash);
-                let removed = self
-                    .persistent_store
-                    .invalidate_by_git_hash(commit_hash)
-                    .await?;
-                entries_removed += removed as u64;
-                commits_affected = 1;
+                warn!(
+                    "Clearing by commit hash ignored - git integration removed: {}",
+                    commit_hash
+                );
             }
         }
 
@@ -329,10 +321,6 @@ impl CacheManager {
 
         info!("Exporting cache to: {:?} (options: {:?})", path, options);
 
-        // Get current git context
-        let (git_commit, git_branch) =
-            crate::persistent_cache::PersistentCallGraphCache::capture_git_metadata();
-
         // Get all cached nodes from persistent storage
         let all_nodes = self
             .persistent_store
@@ -340,20 +328,11 @@ impl CacheManager {
             .await
             .context("Failed to iterate cache nodes")?;
 
-        // Filter nodes if current_branch_only is requested
-        let filtered_nodes: Vec<_> = if options.current_branch_only {
-            if let Some(ref current_branch) = git_branch {
-                all_nodes
-                    .into_iter()
-                    .filter(|(_, node)| node.branch.as_ref() == Some(current_branch))
-                    .collect()
-            } else {
-                warn!("Current branch only requested but no git branch detected");
-                all_nodes
-            }
-        } else {
-            all_nodes
-        };
+        // Note: current_branch_only option is ignored since git integration was removed
+        if options.current_branch_only {
+            warn!("current_branch_only option ignored - git integration removed");
+        }
+        let filtered_nodes = all_nodes;
 
         // Convert to export format
         let export_entries: Vec<ExportEntry> = filtered_nodes
@@ -366,8 +345,6 @@ impl CacheManager {
                 content_hash: key.content_md5,
                 created_at: node.created_at,
                 language: node.language,
-                git_hash: node.git_hash,
-                branch: node.branch,
                 call_hierarchy: node.info,
             })
             .collect();
@@ -386,8 +363,6 @@ impl CacheManager {
         let export_data = CacheExport {
             metadata: ExportMetadata {
                 export_date: SystemTime::now(),
-                git_branch,
-                git_commit,
                 total_entries,
                 total_size_bytes,
                 format_version: 1,
@@ -657,24 +632,6 @@ impl CacheManager {
         Ok(map)
     }
 
-    async fn build_git_statistics(&self) -> Result<(HashMap<String, u64>, HashMap<String, u64>)> {
-        let mut branches = HashMap::new();
-        let mut commits = HashMap::new();
-
-        let nodes = self.persistent_store.iter_nodes().await?;
-
-        for (_, node) in nodes {
-            if let Some(ref branch) = node.branch {
-                *branches.entry(branch.clone()).or_insert(0) += 1;
-            }
-            if let Some(ref commit) = node.git_hash {
-                *commits.entry(commit.clone()).or_insert(0) += 1;
-            }
-        }
-
-        Ok((branches, commits))
-    }
-
     async fn build_age_distribution(&self) -> Result<AgeDistribution> {
         let now = SystemTime::now();
         let mut distribution = AgeDistribution {
@@ -741,23 +698,41 @@ impl CacheManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache_types::{CallGraphCache, LspCache};
+    use crate::cache_types::LspOperation;
+    use crate::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
+    use crate::lsp_cache::{LspCache, LspCacheConfig};
     use crate::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
+    use std::time::Duration;
     use tempfile::tempdir;
 
     async fn create_test_manager() -> CacheManager {
         let temp_dir = tempdir().unwrap();
         let config = PersistentCacheConfig {
             cache_directory: Some(temp_dir.path().to_path_buf()),
-            git_integration: false,
             ..Default::default()
         };
 
         let persistent_store = Arc::new(PersistentCallGraphCache::new(config).await.unwrap());
-        let call_graph_cache = Arc::new(CallGraphCache::new());
-        let definition_cache = Arc::new(LspCache::new());
-        let references_cache = Arc::new(LspCache::new());
-        let hover_cache = Arc::new(LspCache::new());
+
+        let call_graph_config = CallGraphCacheConfig {
+            persistence_enabled: false,
+            ..Default::default()
+        };
+        let call_graph_cache = Arc::new(CallGraphCache::new(call_graph_config));
+
+        let lsp_config = LspCacheConfig {
+            capacity_per_operation: 100,
+            ttl: Duration::from_secs(3600),
+            eviction_check_interval: Duration::from_secs(300),
+            persistent: false,
+            cache_directory: None,
+        };
+
+        let definition_cache =
+            Arc::new(LspCache::new(LspOperation::Definition, lsp_config.clone()).unwrap());
+        let references_cache =
+            Arc::new(LspCache::new(LspOperation::References, lsp_config.clone()).unwrap());
+        let hover_cache = Arc::new(LspCache::new(LspOperation::Hover, lsp_config).unwrap());
 
         CacheManager::new(
             call_graph_cache,
