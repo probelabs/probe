@@ -46,20 +46,47 @@ probe extract src/main.rs#main --lsp
 
 ### Cache Configuration
 
+#### Persistent Cache Settings
+
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `PROBE_LSP_CACHE_SIZE` | Integer | `500` | Entries per cache operation type |
-| `PROBE_LSP_CACHE_TTL` | Integer | `1800` | Cache TTL in seconds (30 minutes) |
-| `PROBE_LSP_CACHE_DIR` | String | System temp | Directory for persistent cache |
-| `PROBE_LSP_CACHE_PERSISTENT` | Boolean | `false` | Enable persistent disk caching |
-| `PROBE_LSP_CACHE_EVICTION_INTERVAL` | Integer | `60` | Cache cleanup interval in seconds |
+| `PROBE_LSP_PERSISTENCE_ENABLED` | Boolean | `false` | Enable persistent cache (survives restarts) |
+| `PROBE_LSP_PERSISTENCE_PATH` | String | `~/.cache/probe/lsp/call_graph.db` | Persistent cache database path |
+| `PROBE_LSP_CACHE_SIZE_MB` | Integer | `512` | Memory cache size limit in MB |
+| `PROBE_LSP_PERSISTENCE_SIZE_MB` | Integer | `2048` | Persistent cache size limit in MB |
+| `PROBE_LSP_CACHE_TTL_DAYS` | Integer | `30` | Auto-cleanup threshold in days |
+| `PROBE_LSP_CACHE_COMPRESS` | Boolean | `true` | Enable compression for persistent storage |
+
+#### Git Integration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `PROBE_GIT_TRACK_COMMITS` | Boolean | `true` | Track git commits for cache invalidation |
+| `PROBE_GIT_PRESERVE_ACROSS_BRANCHES` | Boolean | `true` | Preserve cache across branch switches |
+
+#### Performance Tuning
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `PROBE_LSP_PERSISTENCE_BATCH_SIZE` | Integer | `50` | Batch size for bulk operations |
+| `PROBE_LSP_PERSISTENCE_INTERVAL_MS` | Integer | `1000` | Write frequency in milliseconds |
 
 ```bash
-# High-performance configuration
-export PROBE_LSP_CACHE_SIZE=2000
-export PROBE_LSP_CACHE_TTL=7200        # 2 hours
-export PROBE_LSP_CACHE_PERSISTENT=true
-export PROBE_LSP_CACHE_DIR=/var/cache/probe-lsp
+# High-performance persistent cache configuration
+export PROBE_LSP_PERSISTENCE_ENABLED=true
+export PROBE_LSP_PERSISTENCE_PATH=/fast/ssd/probe-lsp/call_graph.db
+export PROBE_LSP_CACHE_SIZE_MB=1024
+export PROBE_LSP_PERSISTENCE_SIZE_MB=4096
+export PROBE_LSP_CACHE_TTL_DAYS=60
+export PROBE_LSP_CACHE_COMPRESS=true
+
+# Git integration
+export PROBE_GIT_TRACK_COMMITS=true
+export PROBE_GIT_PRESERVE_ACROSS_BRANCHES=true
+
+# Performance tuning
+export PROBE_LSP_PERSISTENCE_BATCH_SIZE=100
+export PROBE_LSP_PERSISTENCE_INTERVAL_MS=500
 ```
 
 ### Memory Management
@@ -516,49 +543,65 @@ probe lsp check-env
 ### Development Environment
 
 ```bash
-# .env file for development
+# .env file for development with persistent cache
 export PROBE_LSP_LOG_LEVEL=debug
-export PROBE_LSP_CACHE_SIZE=100
-export PROBE_LSP_CACHE_TTL=300
-export PROBE_LSP_DEBUG=true
-export PROBE_LSP_STATS_INTERVAL=10
+export PROBE_LSP_PERSISTENCE_ENABLED=true
+export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe-dev/call_graph.db
+export PROBE_LSP_CACHE_SIZE_MB=128
+export PROBE_LSP_PERSISTENCE_SIZE_MB=512
+export PROBE_LSP_CACHE_TTL_DAYS=7
+export PROBE_GIT_TRACK_COMMITS=true
 
 # Start daemon in foreground with debug logging
-probe lsp start -f --log-level debug --cache-size 100
+probe lsp start -f --log-level debug
 ```
 
 ### Production Environment
 
 ```bash
-# Production environment variables
-export PROBE_LSP_CACHE_SIZE=2000
-export PROBE_LSP_CACHE_TTL=7200
-export PROBE_LSP_CACHE_PERSISTENT=true
-export PROBE_LSP_CACHE_DIR=/var/cache/probe-lsp
-export PROBE_LSP_MEMORY_LIMIT_MB=2048
+# Production environment with high-performance persistent cache
+export PROBE_LSP_PERSISTENCE_ENABLED=true
+export PROBE_LSP_PERSISTENCE_PATH=/fast/ssd/probe-lsp/call_graph.db
+export PROBE_LSP_CACHE_SIZE_MB=2048
+export PROBE_LSP_PERSISTENCE_SIZE_MB=8192
+export PROBE_LSP_CACHE_TTL_DAYS=60
+export PROBE_LSP_CACHE_COMPRESS=true
 export PROBE_LSP_MAX_CONNECTIONS=500
 export PROBE_LSP_LOG_LEVEL=warn
 
+# Git integration for team collaboration
+export PROBE_GIT_TRACK_COMMITS=true
+export PROBE_GIT_PRESERVE_ACROSS_BRANCHES=true
+
+# Performance optimization
+export PROBE_LSP_PERSISTENCE_BATCH_SIZE=100
+export PROBE_LSP_PERSISTENCE_INTERVAL_MS=500
+
 # Start daemon with production settings
-probe lsp start \
-  --cache-size 2000 \
-  --cache-ttl 7200 \
-  --memory-limit 2048 \
-  --max-connections 500
+probe lsp start --max-connections 500
 ```
 
 ### CI/CD Environment
 
 ```bash
-# CI-friendly configuration
-export PROBE_LSP_CACHE_PERSISTENT=false
-export PROBE_LSP_MEMORY_LIMIT_MB=512
+# CI-friendly configuration with cache sharing
+export PROBE_LSP_PERSISTENCE_ENABLED=true
+export PROBE_LSP_PERSISTENCE_PATH=/tmp/ci-cache/probe-lsp/call_graph.db
+export PROBE_LSP_CACHE_SIZE_MB=256
+export PROBE_LSP_PERSISTENCE_SIZE_MB=1024
+export PROBE_LSP_CACHE_TTL_DAYS=7
 export PROBE_LSP_TIMEOUT=60000
 export PROBE_LSP_LOG_LEVEL=error
 export PROBE_LSP_AUTO_START=true
 
-# Use with limited resources
+# Import team cache for fast startup
+probe lsp cache import /shared/cache/team-cache.gz
+
+# Use with pre-warmed cache
 probe extract src/main.rs#main --lsp --lsp-timeout 120000
+
+# Export cache for next CI run
+probe lsp cache export /shared/cache/ci-cache.gz
 ```
 
 ### Team Development

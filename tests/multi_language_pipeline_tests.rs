@@ -1003,6 +1003,7 @@ async fn test_multi_language_file_detection() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -1103,6 +1104,7 @@ async fn test_language_specific_filtering() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -1191,6 +1193,7 @@ async fn test_error_handling_with_problematic_files() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -1350,6 +1353,7 @@ async fn test_concurrent_multi_language_processing() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -1447,6 +1451,7 @@ async fn test_memory_pressure_with_large_files() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -1542,6 +1547,7 @@ async fn test_language_priority_processing() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 

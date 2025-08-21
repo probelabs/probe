@@ -357,6 +357,7 @@ pub fn multiply(a: i32, b: i32) -> i32 {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -481,6 +482,7 @@ pub fn factorial(n: u32) -> u32 {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache2 = Arc::new(CallGraphCache::new(cache_config2));
 

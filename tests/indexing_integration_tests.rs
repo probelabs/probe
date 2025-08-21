@@ -603,6 +603,7 @@ async fn test_end_to_end_indexing_workflow() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -746,6 +747,7 @@ async fn test_incremental_indexing() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -824,6 +826,7 @@ impl Calculator {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache2 = Arc::new(CallGraphCache::new(cache_config2));
 
@@ -900,6 +903,7 @@ async fn test_memory_pressure_handling() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -980,6 +984,7 @@ async fn test_pause_and_resume_functionality() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -1065,6 +1070,7 @@ async fn test_worker_statistics_tracking() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -1144,6 +1150,7 @@ async fn test_language_specific_processing() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -1223,6 +1230,7 @@ async fn test_file_exclusion_patterns() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -1300,6 +1308,7 @@ async fn test_queue_operations() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
@@ -1389,6 +1398,7 @@ async fn test_error_recovery() -> Result<()> {
         ttl: Duration::from_secs(300),
         eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
+        ..Default::default()
     };
     let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 

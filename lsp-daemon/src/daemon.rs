@@ -1,8 +1,10 @@
+use crate::cache_management::CacheManager;
 use crate::cache_types::{
-    AllCacheStats, CallHierarchyInfo, CallInfo, DefinitionInfo, HoverInfo, LspCacheStats,
-    LspOperation, NodeId, NodeKey, ReferencesInfo,
+    CallHierarchyInfo, CallInfo, DefinitionInfo, HoverInfo, LspOperation, NodeId, NodeKey,
+    ReferencesInfo,
 };
 use crate::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
+use crate::git_utils::{GitConfig, GitContext};
 use crate::hash_utils::md5_hex_file;
 use crate::indexing::{IndexingConfig, IndexingManager};
 use crate::ipc::{IpcListener, IpcStream};
@@ -10,17 +12,20 @@ use crate::language_detector::{Language, LanguageDetector};
 use crate::logging::{LogBuffer, MemoryLogLayer};
 use crate::lsp_cache::{LspCache, LspCacheConfig};
 use crate::lsp_registry::LspRegistry;
+use crate::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
 use crate::pid_lock::PidLock;
 #[cfg(unix)]
 use crate::process_group::ProcessGroup;
 use crate::protocol::{
-    parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, DaemonRequest,
-    DaemonResponse, DaemonStatus, LanguageInfo, MessageCodec, PoolStatus,
+    parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, ClearFilter,
+    CompactOptions, DaemonRequest, DaemonResponse, DaemonStatus, ExportOptions, LanguageInfo,
+    MessageCodec, PoolStatus,
 };
 use crate::server_manager::SingleServerManager;
 use crate::socket_path::{get_default_socket_path, remove_socket_file};
 use crate::watchdog::{ProcessMonitor, Watchdog};
 use crate::workspace_resolver::WorkspaceResolver;
+use anyhow::Context;
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use std::fs;
@@ -83,6 +88,10 @@ pub struct LspDaemon {
     index_grace_secs: u64,
     // Call graph cache for LSP hierarchy results
     call_graph_cache: Arc<CallGraphCache>,
+    // Persistent call graph cache
+    persistent_store: Arc<PersistentCallGraphCache>,
+    // Cache manager for unified cache operations
+    cache_manager: Arc<CacheManager>,
     // Individual LSP caches for each operation type
     definition_cache: Arc<LspCache<DefinitionInfo>>,
     references_cache: Arc<LspCache<ReferencesInfo>>,
@@ -97,9 +106,65 @@ impl LspDaemon {
         Self::new_with_config(socket_path, None)
     }
 
+    /// Create a new LSP daemon with async initialization for persistence
+    pub async fn new_async(socket_path: String) -> Result<Self> {
+        Self::new_with_config_async(socket_path, None).await
+    }
+
     pub fn new_with_config(
         socket_path: String,
         allowed_roots: Option<Vec<PathBuf>>,
+    ) -> Result<Self> {
+        // Use the runtime to call the async version with persistence disabled
+        let runtime = tokio::runtime::Handle::current();
+        runtime.block_on(async {
+            let config = CallGraphCacheConfig {
+                persistence_enabled: false, // Explicitly disable for sync constructor
+                ..Default::default()
+            };
+            Self::new_with_config_and_cache_async(socket_path, allowed_roots, config).await
+        })
+    }
+
+    /// Create a new LSP daemon with async initialization and custom cache config
+    pub async fn new_with_config_async(
+        socket_path: String,
+        allowed_roots: Option<Vec<PathBuf>>,
+    ) -> Result<Self> {
+        // Create default cache config with persistence and git settings from environment
+        let cache_config = CallGraphCacheConfig {
+            capacity: 1000,                                   // Cache up to 1000 nodes
+            ttl: Duration::from_secs(1800),                   // 30 minutes TTL
+            eviction_check_interval: Duration::from_secs(60), // Check every minute
+            invalidation_depth: 2, // Invalidate connected nodes up to depth 2
+            // Persistence settings (can be overridden by environment variables)
+            persistence_enabled: std::env::var("PROBE_LSP_PERSISTENCE_ENABLED")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
+            persistence_path: std::env::var("PROBE_LSP_PERSISTENCE_PATH")
+                .ok()
+                .map(PathBuf::from),
+            persistence_write_batch_size: std::env::var("PROBE_LSP_PERSISTENCE_BATCH_SIZE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+            persistence_write_interval: Duration::from_millis(
+                std::env::var("PROBE_LSP_PERSISTENCE_INTERVAL_MS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(5000),
+            ),
+            // Git-aware features configuration
+            git_config: GitConfig::from_env(),
+        };
+
+        Self::new_with_config_and_cache_async(socket_path, allowed_roots, cache_config).await
+    }
+
+    async fn new_with_config_and_cache_async(
+        socket_path: String,
+        allowed_roots: Option<Vec<PathBuf>>,
+        cache_config: CallGraphCacheConfig,
     ) -> Result<Self> {
         let registry = Arc::new(LspRegistry::new()?);
         let detector = Arc::new(LanguageDetector::new());
@@ -151,14 +216,64 @@ impl LspDaemon {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30); // Default 30 seconds for language server indexing
 
-        // Initialize call graph cache with configuration
-        let cache_config = CallGraphCacheConfig {
-            capacity: 1000,                                   // Cache up to 1000 nodes
-            ttl: Duration::from_secs(1800),                   // 30 minutes TTL
-            eviction_check_interval: Duration::from_secs(60), // Check every minute
-            invalidation_depth: 2, // Invalidate connected nodes up to depth 2
+        // Initialize call graph cache with async persistence support
+        let call_graph_cache = Arc::new(
+            CallGraphCache::new_with_persistence(cache_config.clone())
+                .await
+                .context("Failed to initialize call graph cache with persistence")?,
+        );
+
+        // Initialize persistent cache store
+        let persistent_cache_config = PersistentCacheConfig {
+            cache_directory: cache_config.persistence_path.clone(),
+            git_integration: cache_config.git_config.track_commits,
+            max_size_bytes: 1_000_000_000, // 1GB
+            ttl_days: 30,
+            compress: true,
         };
-        let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+
+        let persistent_store = Arc::new(
+            PersistentCallGraphCache::new(persistent_cache_config)
+                .await
+                .context("Failed to initialize persistent cache store")?,
+        );
+
+        // Warm cache from persistence if enabled
+        match call_graph_cache.warm_from_persistence().await {
+            Ok(loaded) => {
+                if loaded > 0 {
+                    info!(
+                        "Warmed cache with {} entries from persistent storage",
+                        loaded
+                    );
+                }
+            }
+            Err(e) => {
+                warn!("Failed to warm cache from persistence: {}", e);
+            }
+        }
+
+        // Initialize git context for the workspace if git tracking is enabled
+        if cache_config.git_config.track_commits {
+            // Try to capture git context from the current working directory
+            // In a real deployment, this would be from the workspace root
+            let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+            match GitContext::capture(&current_dir) {
+                Ok(Some(git_context)) => {
+                    info!("Git context captured: {}", git_context.short_id());
+                    if let Err(e) = call_graph_cache.set_git_context(git_context).await {
+                        warn!("Failed to set initial git context: {}", e);
+                    }
+                }
+                Ok(None) => {
+                    debug!("No git repository found in current directory");
+                }
+                Err(e) => {
+                    warn!("Failed to capture git context: {}", e);
+                }
+            }
+        }
 
         // Initialize individual LSP caches for each operation type
         let lsp_cache_config = LspCacheConfig {
@@ -181,6 +296,15 @@ impl LspDaemon {
             LspCache::new(LspOperation::Hover, lsp_cache_config)
                 .expect("Failed to create hover cache"),
         );
+
+        // Initialize cache manager with all caches
+        let cache_manager = Arc::new(CacheManager::new(
+            call_graph_cache.clone(),
+            persistent_store.clone(),
+            definition_cache.clone(),
+            references_cache.clone(),
+            hover_cache.clone(),
+        ));
 
         // Load indexing configuration
         let indexing_config = Arc::new(RwLock::new(IndexingConfig::load().unwrap_or_else(|e| {
@@ -221,6 +345,8 @@ impl LspDaemon {
             child_first_seen: Arc::new(DashMap::new()),
             index_grace_secs,
             call_graph_cache,
+            persistent_store,
+            cache_manager,
             definition_cache,
             references_cache,
             hover_cache,
@@ -1035,7 +1161,11 @@ impl LspDaemon {
                 }
             }
 
-            DaemonRequest::CacheStats { request_id } => match self.handle_cache_stats().await {
+            DaemonRequest::CacheStats {
+                request_id,
+                detailed,
+                git,
+            } => match self.cache_manager.get_stats(detailed, git).await {
                 Ok(stats) => DaemonResponse::CacheStats { request_id, stats },
                 Err(e) => DaemonResponse::Error {
                     request_id,
@@ -1045,32 +1175,79 @@ impl LspDaemon {
 
             DaemonRequest::CacheClear {
                 request_id,
-                operation,
-            } => match self.handle_cache_clear(operation).await {
-                Ok((operations_cleared, entries_removed)) => DaemonResponse::CacheCleared {
-                    request_id,
-                    operations_cleared,
-                    entries_removed,
-                },
+                older_than_days,
+                file_path,
+                commit_hash,
+                all,
+            } => {
+                let filter = ClearFilter {
+                    older_than_days,
+                    file_path,
+                    commit_hash,
+                    all,
+                };
+                match self.cache_manager.clear(filter).await {
+                    Ok(result) => DaemonResponse::CacheCleared { request_id, result },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::CacheExport {
+                request_id,
+                output_path,
+                current_branch_only,
+                compress,
+            } => {
+                let options = ExportOptions {
+                    current_branch_only,
+                    compress,
+                };
+                match self.cache_manager.export(&output_path, options).await {
+                    Ok((entries_exported, compressed)) => DaemonResponse::CacheExported {
+                        request_id,
+                        output_path,
+                        entries_exported,
+                        compressed,
+                    },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::CacheImport {
+                request_id,
+                input_path,
+                merge,
+            } => match self.cache_manager.import(&input_path, merge).await {
+                Ok(result) => DaemonResponse::CacheImported { request_id, result },
                 Err(e) => DaemonResponse::Error {
                     request_id,
                     error: e.to_string(),
                 },
             },
 
-            DaemonRequest::CacheExport {
+            DaemonRequest::CacheCompact {
                 request_id,
-                operation,
-            } => match self.handle_cache_export(operation).await {
-                Ok(export_data) => DaemonResponse::CacheExport {
-                    request_id,
-                    export_data,
-                },
-                Err(e) => DaemonResponse::Error {
-                    request_id,
-                    error: e.to_string(),
-                },
-            },
+                clean_expired,
+                target_size_mb,
+            } => {
+                let options = CompactOptions {
+                    clean_expired,
+                    target_size_mb,
+                };
+                match self.cache_manager.compact(options).await {
+                    Ok(result) => DaemonResponse::CacheCompacted { request_id, result },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
 
             // Indexing management requests
             DaemonRequest::StartIndexing {
@@ -1127,6 +1304,121 @@ impl LspDaemon {
             DaemonRequest::SetIndexingConfig { request_id, config } => {
                 match self.handle_set_indexing_config(config.clone()).await {
                     Ok(()) => DaemonResponse::IndexingConfigSet { request_id, config },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            // Git-aware requests
+            DaemonRequest::GetCallHierarchyAtCommit {
+                request_id,
+                file_path,
+                symbol,
+                line,
+                column,
+                commit_hash,
+                workspace_hint,
+            } => {
+                match self
+                    .handle_call_hierarchy_at_commit(
+                        &file_path,
+                        &symbol,
+                        line,
+                        column,
+                        &commit_hash,
+                        workspace_hint,
+                    )
+                    .await
+                {
+                    Ok((result, git_context)) => DaemonResponse::CallHierarchyAtCommit {
+                        request_id,
+                        result,
+                        commit_hash,
+                        git_context: Some(git_context),
+                    },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::GetCacheHistory {
+                request_id,
+                file_path,
+                symbol,
+                workspace_hint: _,
+            } => match self.handle_get_cache_history(&file_path, &symbol).await {
+                Ok(history) => DaemonResponse::CacheHistory {
+                    request_id,
+                    history,
+                },
+                Err(e) => DaemonResponse::Error {
+                    request_id,
+                    error: e.to_string(),
+                },
+            },
+
+            DaemonRequest::GetGitContext {
+                request_id,
+                workspace_hint: _,
+            } => {
+                let context = self.call_graph_cache.get_git_context().await;
+                DaemonResponse::GitContext {
+                    request_id,
+                    context,
+                }
+            }
+
+            DaemonRequest::SetGitContext {
+                request_id,
+                context,
+            } => match self.call_graph_cache.set_git_context(context).await {
+                Ok(previous_context) => DaemonResponse::GitContextSet {
+                    request_id,
+                    previous_context,
+                },
+                Err(e) => DaemonResponse::Error {
+                    request_id,
+                    error: e.to_string(),
+                },
+            },
+
+            DaemonRequest::GetCacheAtCommit {
+                request_id,
+                commit_hash,
+                workspace_hint: _,
+            } => match self.call_graph_cache.snapshot_at_commit(&commit_hash).await {
+                Ok(snapshot) => DaemonResponse::CacheAtCommit {
+                    request_id,
+                    commit_hash,
+                    snapshot,
+                },
+                Err(e) => DaemonResponse::Error {
+                    request_id,
+                    error: e.to_string(),
+                },
+            },
+
+            DaemonRequest::DiffCacheCommits {
+                request_id,
+                from_commit,
+                to_commit,
+                workspace_hint: _,
+            } => {
+                match self
+                    .call_graph_cache
+                    .diff_commits(&from_commit, &to_commit)
+                    .await
+                {
+                    Ok(diff) => DaemonResponse::CacheCommitDiff {
+                        request_id,
+                        from_commit,
+                        to_commit,
+                        diff,
+                    },
                     Err(e) => DaemonResponse::Error {
                         request_id,
                         error: e.to_string(),
@@ -2078,6 +2370,8 @@ impl LspDaemon {
             child_first_seen: self.child_first_seen.clone(),
             index_grace_secs: self.index_grace_secs,
             call_graph_cache: self.call_graph_cache.clone(),
+            persistent_store: self.persistent_store.clone(),
+            cache_manager: self.cache_manager.clone(),
             definition_cache: self.definition_cache.clone(),
             references_cache: self.references_cache.clone(),
             hover_cache: self.hover_cache.clone(),
@@ -2086,50 +2380,10 @@ impl LspDaemon {
         }
     }
 
-    /// Handle cache statistics request
-    async fn handle_cache_stats(&self) -> Result<AllCacheStats> {
-        let mut per_operation = Vec::new();
-        let mut total_memory = 0;
-
-        // Get call graph cache stats
-        let call_graph_stats = self.call_graph_cache.stats();
-        let call_graph_cache_stats = LspCacheStats {
-            operation: LspOperation::CallHierarchy,
-            total_entries: call_graph_stats.total_nodes,
-            hit_count: 0, // CallGraphCache doesn't track hits/misses separately
-            miss_count: 0,
-            eviction_count: 0,
-            inflight_count: call_graph_stats.inflight_computations,
-            memory_usage_estimate: call_graph_stats.total_nodes
-                * std::mem::size_of::<crate::cache_types::CachedNode>(),
-        };
-        per_operation.push(call_graph_cache_stats.clone());
-        total_memory += call_graph_cache_stats.memory_usage_estimate;
-
-        // Get definition cache stats
-        let def_stats = self.definition_cache.stats().await;
-        per_operation.push(def_stats.clone());
-        total_memory += def_stats.memory_usage_estimate;
-
-        // Get references cache stats
-        let ref_stats = self.references_cache.stats().await;
-        per_operation.push(ref_stats.clone());
-        total_memory += ref_stats.memory_usage_estimate;
-
-        // Get hover cache stats
-        let hover_stats = self.hover_cache.stats().await;
-        per_operation.push(hover_stats.clone());
-        total_memory += hover_stats.memory_usage_estimate;
-
-        Ok(AllCacheStats {
-            per_operation,
-            total_memory_usage: total_memory,
-            cache_directory: None, // TODO: Add cache directory support
-            persistent_cache_enabled: false, // TODO: Add persistent cache support
-        })
-    }
+    // Note: Cache management is now handled by CacheManager
 
     /// Handle cache clear request
+    #[allow(dead_code)]
     async fn handle_cache_clear(
         &self,
         operation: Option<LspOperation>,
@@ -2142,7 +2396,7 @@ impl LspDaemon {
                 // Clear specific cache
                 match op {
                     LspOperation::CallHierarchy => {
-                        let stats_before = self.call_graph_cache.stats();
+                        let stats_before = self.call_graph_cache.stats().await;
                         self.call_graph_cache.clear();
                         total_entries_removed += stats_before.total_nodes;
                         operations_cleared.push(LspOperation::CallHierarchy);
@@ -2173,7 +2427,7 @@ impl LspDaemon {
             }
             None => {
                 // Clear all caches
-                let call_graph_stats_before = self.call_graph_cache.stats();
+                let call_graph_stats_before = self.call_graph_cache.stats().await;
                 let def_stats_before = self.definition_cache.stats().await;
                 let ref_stats_before = self.references_cache.stats().await;
                 let hover_stats_before = self.hover_cache.stats().await;
@@ -2205,6 +2459,7 @@ impl LspDaemon {
     }
 
     /// Handle cache export request
+    #[allow(dead_code)]
     async fn handle_cache_export(&self, operation: Option<LspOperation>) -> Result<String> {
         match operation {
             Some(op) => {
@@ -2212,7 +2467,7 @@ impl LspDaemon {
                 match op {
                     LspOperation::CallHierarchy => {
                         // Call graph cache doesn't have export_to_json, so create basic export
-                        let stats = self.call_graph_cache.stats();
+                        let stats = self.call_graph_cache.stats().await;
                         let export_data = serde_json::json!({
                             "operation": "CallHierarchy",
                             "total_nodes": stats.total_nodes,
@@ -2236,7 +2491,7 @@ impl LspDaemon {
                 let mut all_exports = serde_json::Map::new();
 
                 // Call graph cache
-                let call_graph_stats = self.call_graph_cache.stats();
+                let call_graph_stats = self.call_graph_cache.stats().await;
                 let call_graph_export = serde_json::json!({
                     "operation": "CallHierarchy",
                     "total_nodes": call_graph_stats.total_nodes,
@@ -2483,6 +2738,81 @@ impl LspDaemon {
             languages: vec![], // TODO: Convert language configs
             recursive: true,   // Default value
         }
+    }
+
+    // Git-aware request handlers
+
+    /// Handle call hierarchy request for a specific commit
+    async fn handle_call_hierarchy_at_commit(
+        &self,
+        file_path: &Path,
+        symbol: &str,
+        _line: u32,
+        _column: u32,
+        commit_hash: &str,
+        _workspace_hint: Option<PathBuf>,
+    ) -> Result<(crate::protocol::CallHierarchyResult, GitContext)> {
+        // Create a node key for the requested symbol at the commit
+        let content_md5 = md5_hex_file(file_path)?;
+        let node_key = NodeKey::new(symbol, file_path, &content_md5);
+
+        // Try to get cached result for this specific commit
+        if let Some(cached_node) = self
+            .call_graph_cache
+            .get_for_commit(&node_key, commit_hash)
+            .await
+        {
+            info!(
+                "Found cached call hierarchy for {}:{} at commit {}",
+                file_path.display(),
+                symbol,
+                &commit_hash[..8]
+            );
+
+            // Convert to protocol result
+            let response = self.cache_to_lsp_json(file_path, symbol, &cached_node.info);
+            let protocol_result = parse_call_hierarchy_from_lsp(&response)?;
+
+            // Get the git context for this commit
+            let git_context =
+                if let Some(current_ctx) = self.call_graph_cache.get_git_context().await {
+                    if current_ctx.commit_hash == commit_hash {
+                        current_ctx
+                    } else {
+                        // Create a minimal context for the requested commit
+                        GitContext {
+                            commit_hash: commit_hash.to_string(),
+                            branch: "unknown".to_string(),
+                            is_dirty: false,
+                            remote_url: None,
+                            repo_root: current_ctx.repo_root,
+                        }
+                    }
+                } else {
+                    return Err(anyhow::anyhow!("No git context available"));
+                };
+
+            return Ok((protocol_result, git_context));
+        }
+
+        // If not cached, we'd need to check out the commit and compute
+        // For now, return an error suggesting the commit isn't cached
+        Err(anyhow::anyhow!(
+            "Call hierarchy for {}:{} at commit {} not found in cache. Consider running analysis on that commit first.",
+            file_path.display(),
+            symbol,
+            &commit_hash[..8]
+        ))
+    }
+
+    /// Handle get cache history request
+    async fn handle_get_cache_history(
+        &self,
+        file_path: &Path,
+        symbol: &str,
+    ) -> Result<Vec<crate::protocol::CacheHistoryEntry>> {
+        let node_id = crate::cache_types::NodeId::new(symbol, file_path);
+        self.call_graph_cache.get_history(&node_id).await
     }
 }
 

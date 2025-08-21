@@ -38,15 +38,33 @@ Probe automatically detects and uses appropriate language servers:
 - **Java** - Eclipse JDT Language Server
 - **C/C++** - clangd
 
-### High-Performance Architecture
+### High-Performance Persistent Cache Architecture
 
-The LSP daemon provides:
-- **Content-addressed caching** - 250,000x performance improvement for repeated queries
-- **Background server management** - Persistent language server pools
-- **Connection pooling** - Instant responses after warm-up
+The LSP daemon provides a revolutionary three-layer cache system:
+
+#### L1: Memory Cache (Ultra-Fast)
+- **<1ms access time** for hot data in memory
+- **LRU eviction** with configurable size limits
+- **Concurrent access** with lock-free data structures
+
+#### L2: Persistent Cache (Survives Restarts)
+- **1-5ms access time** from disk-based sled database
+- **Survives daemon restarts** and system reboots
+- **Git-aware invalidation** with branch and commit tracking
+- **Compression support** to minimize disk usage
+- **Content-addressed storage** with MD5-based cache keys
+
+#### L3: LSP Servers (Computation Layer)
+- **100ms-10s computation time** only on cache miss
+- **Background server management** with persistent pools
+- **Connection pooling** for instant responses
+- **Auto-invalidation** when files change
+
+#### Additional Features
 - **In-memory logging** - 1000 entries, no disk I/O overhead
 - **Concurrent request handling** - Multiple requests processed simultaneously
-- **Auto-invalidation** - Cache automatically updates when files change
+- **Cache import/export** - Team collaboration and sharing
+- **Automatic cleanup** - Configurable TTL and size limits
 
 ## Getting Started
 
@@ -154,23 +172,57 @@ This only happens once - subsequent requests are instant thanks to caching.
 
 ## Advanced Features
 
-### Content-Addressed Cache
+### Persistent Cache System
 
+#### Content-Addressed Storage
 Probe uses MD5 content hashing for intelligent cache invalidation:
 - **Automatic invalidation** - Cache updates when files change
 - **Content-based keys** - Same symbol in different file versions cached separately
 - **Dependency tracking** - Related symbols invalidated together
 - **Massive speedups** - 250,000x faster for repeated queries
 
+#### Persistent Storage with sled
+- **High-performance embedded database** for cache persistence
+- **ACID transactions** ensure cache consistency
+- **Compression** reduces disk usage by up to 70%
+- **Multiple trees** for efficient indexing (nodes, files, git refs)
+- **Automatic recovery** from corruption or version mismatches
+
+#### Git Integration
+- **Branch-aware caching** with optional cross-branch sharing
+- **Commit tracking** for precise invalidation
+- **Git metadata** stored with each cache entry
+- **Automatic cleanup** on branch switches and merges
+
 ```bash
-# View cache statistics
-probe lsp cache stats
+# Configure persistent cache
+export PROBE_LSP_PERSISTENCE_ENABLED=true
+export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/call_graph.db
+export PROBE_GIT_TRACK_COMMITS=true
 
-# Clear specific cache types
-probe lsp cache clear --operation CallHierarchy
+# Git-aware cache management
+probe lsp cache stats --git-info              # Show git-related stats
+probe lsp cache clear --branch feature/new    # Clear specific branch cache
+probe lsp cache export --include-git-metadata cache-with-git.gz
+```
 
-# Export cache for debugging
-probe lsp cache export --operation Definition
+```bash
+# Comprehensive cache management
+probe lsp cache stats                           # View cache performance and hit rates
+probe lsp cache stats --detailed               # Include git and persistence info
+probe lsp cache clear                          # Clear all caches (memory + persistent)
+probe lsp cache clear --operation CallHierarchy # Clear specific operation type
+probe lsp cache clear --file src/main.rs      # Clear cache for specific file
+probe lsp cache clear --branch main           # Clear cache for specific git branch
+
+# Cache import/export for team collaboration
+probe lsp cache export project-cache.gz       # Export compressed cache
+probe lsp cache export --operation CallHierarchy hierarchy-cache.gz
+probe lsp cache import team-cache.gz          # Import shared cache
+
+# Database maintenance
+probe lsp cache compact                        # Optimize persistent storage
+probe lsp cache cleanup                        # Remove expired entries
 ```
 
 ### Workspace Detection
@@ -271,12 +323,36 @@ Logs are stored in memory (last 1000 entries):
 
 ### Environment Variables
 
+#### Basic Configuration
 ```bash
 # Custom timeout (milliseconds)
 PROBE_LSP_TIMEOUT=300000 probe extract file.rs#fn --lsp
 
 # Custom socket path
 PROBE_LSP_SOCKET=/custom/socket probe lsp start
+```
+
+#### Persistent Cache Configuration
+```bash
+# Enable persistent cache (default: disabled for compatibility)
+export PROBE_LSP_PERSISTENCE_ENABLED=true
+
+# Cache storage location
+export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/call_graph.db
+
+# Git integration settings
+export PROBE_GIT_TRACK_COMMITS=true           # Track git commits
+export PROBE_GIT_PRESERVE_ACROSS_BRANCHES=true # Keep cache across branches
+
+# Performance tuning
+export PROBE_LSP_PERSISTENCE_BATCH_SIZE=50     # Batch write operations
+export PROBE_LSP_PERSISTENCE_INTERVAL_MS=1000  # Write frequency
+export PROBE_LSP_CACHE_TTL_DAYS=30            # Auto-cleanup threshold
+export PROBE_LSP_CACHE_COMPRESS=true          # Enable compression
+
+# Memory and storage limits
+export PROBE_LSP_CACHE_SIZE_MB=512            # Memory cache limit
+export PROBE_LSP_PERSISTENCE_SIZE_MB=2048     # Persistent storage limit
 ```
 
 ### Debug Mode
