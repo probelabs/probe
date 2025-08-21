@@ -710,9 +710,11 @@ impl LspClient {
     }
 
     /// Get cache statistics from the LSP daemon
-    pub async fn cache_stats(&mut self) -> Result<lsp_daemon::cache_types::AllCacheStats> {
+    pub async fn cache_stats(&mut self) -> Result<lsp_daemon::protocol::CacheStatistics> {
         let request = DaemonRequest::CacheStats {
             request_id: Uuid::new_v4(),
+            detailed: false,
+            git: false,
         };
 
         let response = self.send_request(request).await?;
@@ -726,21 +728,23 @@ impl LspClient {
     /// Clear cache entries
     pub async fn cache_clear(
         &mut self,
-        operation: Option<lsp_daemon::cache_types::LspOperation>,
-    ) -> Result<(Vec<lsp_daemon::cache_types::LspOperation>, usize)> {
+        older_than_days: Option<u64>,
+        file_path: Option<PathBuf>,
+        commit_hash: Option<String>,
+        all: bool,
+    ) -> Result<lsp_daemon::protocol::ClearResult> {
         let request = DaemonRequest::CacheClear {
             request_id: Uuid::new_v4(),
-            operation,
+            older_than_days,
+            file_path,
+            commit_hash,
+            all,
         };
 
         let response = self.send_request(request).await?;
 
         match response {
-            DaemonResponse::CacheCleared {
-                operations_cleared,
-                entries_removed,
-                ..
-            } => Ok((operations_cleared, entries_removed)),
+            DaemonResponse::CacheCleared { result, .. } => Ok(result),
             _ => Err(anyhow!("Unexpected response type for cache clear")),
         }
     }
@@ -748,17 +752,21 @@ impl LspClient {
     /// Export cache contents to JSON
     pub async fn cache_export(
         &mut self,
-        operation: Option<lsp_daemon::cache_types::LspOperation>,
-    ) -> Result<String> {
+        output_path: PathBuf,
+        current_branch_only: bool,
+        compress: bool,
+    ) -> Result<()> {
         let request = DaemonRequest::CacheExport {
             request_id: Uuid::new_v4(),
-            operation,
+            output_path,
+            current_branch_only,
+            compress,
         };
 
         let response = self.send_request(request).await?;
 
         match response {
-            DaemonResponse::CacheExport { export_data, .. } => Ok(export_data),
+            DaemonResponse::CacheExported { .. } => Ok(()),
             _ => Err(anyhow!("Unexpected response type for cache export")),
         }
     }

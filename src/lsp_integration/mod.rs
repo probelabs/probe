@@ -230,21 +230,71 @@ pub enum IndexConfigSubcommands {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum CacheSubcommands {
-    /// Show cache statistics for all LSP operations
-    Stats,
+    /// Show cache statistics
+    Stats {
+        /// Show detailed statistics
+        #[clap(long)]
+        detailed: bool,
 
-    /// Clear cache entries
-    Clear {
-        /// Specific operation to clear (Definition, References, Hover, CallHierarchy)
-        #[clap(short = 'o', long = "operation")]
-        operation: Option<String>,
+        /// Show git-aware statistics
+        #[clap(long)]
+        git: bool,
     },
 
-    /// Export cache contents to JSON for debugging
+    /// Clear cache
+    Clear {
+        /// Clear only entries older than N days
+        #[clap(long)]
+        older_than: Option<u64>,
+
+        /// Clear only entries for specific file
+        #[clap(long)]
+        file: Option<std::path::PathBuf>,
+
+        /// Clear only entries for specific git commit
+        #[clap(long)]
+        commit: Option<String>,
+
+        /// Clear everything (requires confirmation)
+        #[clap(long)]
+        all: bool,
+    },
+
+    /// Export cache to file
     Export {
-        /// Specific operation to export (Definition, References, Hover, CallHierarchy)
-        #[clap(short = 'o', long = "operation")]
-        operation: Option<String>,
+        /// Output file path
+        #[clap(required = true)]
+        output: std::path::PathBuf,
+
+        /// Include only entries from current branch
+        #[clap(long)]
+        current_branch: bool,
+
+        /// Compress the export
+        #[clap(long)]
+        compress: bool,
+    },
+
+    /// Import cache from file
+    Import {
+        /// Input file path
+        #[clap(required = true)]
+        input: std::path::PathBuf,
+
+        /// Merge with existing cache (default: replace)
+        #[clap(long)]
+        merge: bool,
+    },
+
+    /// Compact the cache database
+    Compact {
+        /// Remove expired entries
+        #[clap(long)]
+        clean_expired: bool,
+
+        /// Target size in MB (removes oldest entries)
+        #[clap(long)]
+        target_size_mb: Option<usize>,
     },
 }
 

@@ -549,6 +549,7 @@ proptest! {
                 ttl: Duration::from_secs(300),
                 eviction_check_interval: Duration::from_secs(30),
                 invalidation_depth: 1,
+                ..Default::default()
             };
             let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 

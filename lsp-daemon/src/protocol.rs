@@ -1,3 +1,4 @@
+use crate::git_utils::GitContext;
 use crate::language_detector::Language;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -132,14 +133,71 @@ pub enum DaemonRequest {
     // Cache management requests
     CacheStats {
         request_id: Uuid,
+        detailed: bool,
+        git: bool,
     },
     CacheClear {
         request_id: Uuid,
-        operation: Option<crate::cache_types::LspOperation>, // If None, clear all caches
+        older_than_days: Option<u64>,
+        file_path: Option<PathBuf>,
+        commit_hash: Option<String>,
+        all: bool,
     },
     CacheExport {
         request_id: Uuid,
-        operation: Option<crate::cache_types::LspOperation>, // If None, export all caches
+        output_path: PathBuf,
+        current_branch_only: bool,
+        compress: bool,
+    },
+    CacheImport {
+        request_id: Uuid,
+        input_path: PathBuf,
+        merge: bool,
+    },
+    CacheCompact {
+        request_id: Uuid,
+        clean_expired: bool,
+        target_size_mb: Option<usize>,
+    },
+    // Git-aware requests
+    GetCallHierarchyAtCommit {
+        request_id: Uuid,
+        file_path: PathBuf,
+        symbol: String,
+        line: u32,
+        column: u32,
+        commit_hash: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
+    },
+    GetCacheHistory {
+        request_id: Uuid,
+        file_path: PathBuf,
+        symbol: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
+    },
+    GetGitContext {
+        request_id: Uuid,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
+    },
+    SetGitContext {
+        request_id: Uuid,
+        context: GitContext,
+    },
+    GetCacheAtCommit {
+        request_id: Uuid,
+        commit_hash: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
+    },
+    DiffCacheCommits {
+        request_id: Uuid,
+        from_commit: String,
+        to_commit: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
     },
 }
 
@@ -242,16 +300,55 @@ pub enum DaemonResponse {
     // Cache management responses
     CacheStats {
         request_id: Uuid,
-        stats: crate::cache_types::AllCacheStats,
+        stats: CacheStatistics,
     },
     CacheCleared {
         request_id: Uuid,
-        operations_cleared: Vec<crate::cache_types::LspOperation>,
-        entries_removed: usize,
+        result: ClearResult,
     },
-    CacheExport {
+    CacheExported {
         request_id: Uuid,
-        export_data: String, // JSON string
+        output_path: PathBuf,
+        entries_exported: usize,
+        compressed: bool,
+    },
+    CacheImported {
+        request_id: Uuid,
+        result: ImportResult,
+    },
+    CacheCompacted {
+        request_id: Uuid,
+        result: CompactResult,
+    },
+    // Git-aware responses
+    CallHierarchyAtCommit {
+        request_id: Uuid,
+        result: CallHierarchyResult,
+        commit_hash: String,
+        git_context: Option<GitContext>,
+    },
+    CacheHistory {
+        request_id: Uuid,
+        history: Vec<CacheHistoryEntry>,
+    },
+    GitContext {
+        request_id: Uuid,
+        context: Option<GitContext>,
+    },
+    GitContextSet {
+        request_id: Uuid,
+        previous_context: Option<GitContext>,
+    },
+    CacheAtCommit {
+        request_id: Uuid,
+        commit_hash: String,
+        snapshot: CacheSnapshot,
+    },
+    CacheCommitDiff {
+        request_id: Uuid,
+        from_commit: String,
+        to_commit: String,
+        diff: CacheDiff,
     },
     Error {
         request_id: Uuid,
@@ -888,7 +985,228 @@ fn parse_range(value: &Value) -> Result<Range> {
     })
 }
 
+/// Git-aware cache history entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheHistoryEntry {
+    pub commit_hash: String,
+    pub branch: String,
+    pub timestamp: u64, // Unix timestamp
+    pub cache_entry: CachedCallHierarchy,
+    pub git_context: GitContext,
+}
+
+/// Cached call hierarchy information with git metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedCallHierarchy {
+    pub file_path: PathBuf,
+    pub symbol: String,
+    pub line: u32,
+    pub column: u32,
+    pub result: CallHierarchyResult,
+    pub cached_at: u64, // Unix timestamp
+}
+
+/// Complete cache snapshot at a specific commit
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheSnapshot {
+    pub commit_hash: String,
+    pub timestamp: u64,
+    pub entries: Vec<CachedCallHierarchy>,
+    pub git_context: GitContext,
+    pub total_entries: usize,
+}
+
+/// Difference between cache states at two commits
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheDiff {
+    pub from_commit: String,
+    pub to_commit: String,
+    pub added_entries: Vec<CachedCallHierarchy>,
+    pub removed_entries: Vec<CachedCallHierarchy>,
+    pub modified_entries: Vec<CacheModification>,
+    pub unchanged_entries: usize,
+}
+
+/// Represents a modification to a cache entry between commits
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheModification {
+    pub file_path: PathBuf,
+    pub symbol: String,
+    pub old_entry: CachedCallHierarchy,
+    pub new_entry: CachedCallHierarchy,
+    pub change_type: CacheChangeType,
+}
+
+/// Type of change detected in cache entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CacheChangeType {
+    /// Call hierarchy structure changed
+    StructureChanged,
+    /// File content changed (different MD5)
+    ContentChanged,
+    /// Symbol position moved
+    PositionChanged,
+    /// Context updated but structure preserved
+    ContextUpdated,
+}
+
+/// Git-aware cache statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitCacheStats {
+    /// Statistics per branch
+    pub branch_stats: std::collections::HashMap<String, BranchCacheStats>,
+    /// Statistics per commit (recent commits only)
+    pub commit_stats: std::collections::HashMap<String, CommitCacheStats>,
+    /// Hot spots across commits (most frequently accessed symbols)
+    pub hot_spots: Vec<HotSpot>,
+    /// Current git context
+    pub current_context: Option<GitContext>,
+}
+
+/// Cache statistics for a specific branch
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchCacheStats {
+    pub branch_name: String,
+    pub total_entries: usize,
+    pub hit_rate: f64,
+    pub last_active: u64, // Unix timestamp
+    pub commits_tracked: usize,
+}
+
+/// Cache statistics for a specific commit
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitCacheStats {
+    pub commit_hash: String,
+    pub branch: String,
+    pub cache_size: usize,
+    pub hit_rate: f64,
+    pub created_at: u64,    // Unix timestamp
+    pub last_accessed: u64, // Unix timestamp
+}
+
+/// Hot spot analysis across git history
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotSpot {
+    pub file_path: PathBuf,
+    pub symbol: String,
+    pub access_count: usize,
+    pub hit_rate: f64,
+    pub branches_seen: Vec<String>,
+    pub commits_seen: usize,
+    pub first_seen: u64,    // Unix timestamp
+    pub last_accessed: u64, // Unix timestamp
+}
+
 use serde_json::json;
+
+// Cache management data structures
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheStatistics {
+    /// Total cache size (memory and disk)
+    pub total_size_bytes: u64,
+    /// Disk size in bytes
+    pub disk_size_bytes: u64,
+    /// Number of entries (total, per file, per language)
+    pub total_entries: u64,
+    pub entries_per_file: std::collections::HashMap<PathBuf, u64>,
+    pub entries_per_language: std::collections::HashMap<String, u64>,
+    /// Hit/miss rates
+    pub hit_rate: f64,
+    pub miss_rate: f64,
+    /// Age distribution of entries
+    pub age_distribution: AgeDistribution,
+    /// Git-aware stats (entries per branch/commit)
+    pub entries_per_branch: std::collections::HashMap<String, u64>,
+    pub entries_per_commit: std::collections::HashMap<String, u64>,
+    /// Hot spots (most accessed entries)
+    pub most_accessed: Vec<HotSpot>,
+    /// Memory usage breakdown
+    pub memory_usage: MemoryUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgeDistribution {
+    pub entries_last_hour: u64,
+    pub entries_last_day: u64,
+    pub entries_last_week: u64,
+    pub entries_last_month: u64,
+    pub entries_older: u64,
+}
+
+// Note: HotSpot is defined above with the proper fields
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryUsage {
+    pub in_memory_cache_bytes: u64,
+    pub persistent_cache_bytes: u64,
+    pub metadata_bytes: u64,
+    pub index_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClearResult {
+    /// Total entries removed
+    pub entries_removed: u64,
+    /// Breakdown by type
+    pub files_affected: u64,
+    pub branches_affected: u64,
+    pub commits_affected: u64,
+    /// Size reclaimed
+    pub bytes_reclaimed: u64,
+    /// Time taken
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportResult {
+    /// Total entries imported
+    pub entries_imported: u64,
+    /// Entries that conflicted with existing ones
+    pub entries_merged: u64,
+    pub entries_replaced: u64,
+    /// Validation results
+    pub validation_errors: Vec<String>,
+    /// Size information
+    pub bytes_imported: u64,
+    /// Time taken
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactResult {
+    /// Entries removed during compaction
+    pub expired_entries_removed: u64,
+    pub size_based_entries_removed: u64,
+    /// Size before/after
+    pub size_before_bytes: u64,
+    pub size_after_bytes: u64,
+    /// Space reclaimed
+    pub bytes_reclaimed: u64,
+    /// Database optimization results
+    pub fragmentation_reduced: f64,
+    /// Time taken
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClearFilter {
+    pub older_than_days: Option<u64>,
+    pub file_path: Option<PathBuf>,
+    pub commit_hash: Option<String>,
+    pub all: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportOptions {
+    pub current_branch_only: bool,
+    pub compress: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactOptions {
+    pub clean_expired: bool,
+    pub target_size_mb: Option<usize>,
+}
 
 #[cfg(test)]
 mod tests {

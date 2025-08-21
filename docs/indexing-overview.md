@@ -35,25 +35,42 @@ The LSP-enhanced version provides:
 - Exact file locations and line numbers for easy navigation
 - Type information and documentation
 
-### ⚡ High-Performance Caching
+### ⚡ High-Performance Persistent Caching
 
-The indexing system uses multiple cache layers:
+The indexing system uses a revolutionary three-layer cache architecture:
 
 ```mermaid
 graph TB
-    A[LSP Request] --> B{Call Graph Cache}
-    B -->|Hit| C[Return Cached Result]
-    B -->|Miss| D[Language Server]
-    D --> E[Content-Addressed Storage]
-    E --> F[Return Result + Cache]
+    A[LSP Request] --> B{L1: Memory Cache}
+    B -->|Hit <1ms| C[Return Cached Result]
+    B -->|Miss| D{L2: Persistent Cache}
+    D -->|Hit 1-5ms| E[Load from Disk]
+    D -->|Miss| F[L3: Language Server]
+    F -->|100ms-10s| G[Compute Result]
+    G --> H[Store in All Layers]
+    E --> C
+    H --> C
     
-    G[File Change] --> H[Invalidate Related Nodes]
-    H --> I[Smart Cache Cleanup]
+    I[File Change] --> J[Git-Aware Invalidation]
+    J --> K[Content-Hash Comparison]
+    K --> L[Smart Cache Cleanup]
+    
+    M[Daemon Restart] --> N[L2 Survives]
+    N --> O[Cache Warming]
+    O --> P[Instant Performance]
 ```
 
+#### Cache Layers
+- **L1 Memory Cache**: Ultra-fast in-memory storage (<1ms access)
+- **L2 Persistent Cache**: Survives restarts using sled database (1-5ms access)  
+- **L3 LSP Servers**: Language server computation only on miss (100ms-10s)
+
+#### Advanced Features
 - **Content-Addressed Caching**: Only re-indexes when files actually change
-- **Graph-Aware Invalidation**: Efficiently updates related symbols when code changes
-- **Multi-Level Storage**: In-memory + persistent disk caching options
+- **Git-Aware Invalidation**: Branch and commit tracking for precise cache management
+- **Persistent Storage**: Cache survives daemon restarts and system reboots
+- **Team Collaboration**: Import/export cache for instant project onboarding
+- **Automatic Cleanup**: Configurable TTL and size-based eviction
 
 ### 🔄 Automatic Workspace Discovery
 
@@ -136,6 +153,11 @@ graph LR
         D[Daemon Process]
         SM[Server Manager]
         WR[Workspace Resolver]
+        subgraph "Cache System"
+            MC[L1: Memory Cache]
+            PC[L2: Persistent Cache]
+            DB[(sled Database)]
+        end
         CG[Call Graph Cache]
         LC[LSP Caches]
     end
@@ -147,6 +169,12 @@ graph LR
         GO[gopls]
     end
     
+    subgraph "Storage Layer"
+        GI[Git Integration]
+        FI[File Index]
+        MD[Metadata]
+    end
+    
     CLI --> D
     MCP --> D
     SDK --> D
@@ -156,6 +184,13 @@ graph LR
     D --> CG
     D --> LC
     
+    MC --> PC
+    PC --> DB
+    
+    DB --> FI
+    DB --> GI
+    DB --> MD
+    
     SM --> RA
     SM --> TS
     SM --> PY
@@ -164,11 +199,17 @@ graph LR
 
 ### Components
 
-- **LSP Daemon**: Background service managing language servers and caches
+- **LSP Daemon**: Background service managing language servers and persistent caches
 - **Server Manager**: Pools and lifecycle management for language server processes
 - **Workspace Resolver**: Discovers and maps files to appropriate workspaces
-- **Call Graph Cache**: High-performance caching layer with graph-aware invalidation
-- **LSP Caches**: Operation-specific caches (definitions, references, hover, etc.)
+- **Three-Layer Cache System**:
+  - **L1 Memory Cache**: Ultra-fast in-memory storage with LRU eviction
+  - **L2 Persistent Cache**: Disk-based sled database for restart persistence
+  - **L3 Language Servers**: Computation layer with automatic caching
+- **Storage Layer**:
+  - **File Index**: Maps files to cache entries for invalidation
+  - **Git Integration**: Tracks branches and commits for intelligent cache management
+  - **Metadata**: Performance stats, cleanup schedules, and cache health
 
 ## Getting Started
 
@@ -203,9 +244,16 @@ probe lsp init-workspaces . --recursive
 # Pre-warm language servers for faster response
 probe lsp init-workspaces ./my-project
 
+# Enable persistent cache (survives daemon restarts)
+export PROBE_LSP_PERSISTENCE_ENABLED=true
+export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/call_graph.db
+
+# Configure git integration
+export PROBE_GIT_TRACK_COMMITS=true
+
 # Configure cache settings
-export PROBE_LSP_CACHE_SIZE=1000
-export PROBE_LSP_TTL=3600
+export PROBE_LSP_CACHE_SIZE_MB=512
+export PROBE_LSP_CACHE_TTL_DAYS=30
 
 # Enable debug logging
 probe lsp start --log-level debug

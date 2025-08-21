@@ -37,8 +37,8 @@ async fn main() -> Result<()> {
 
     info!("Starting LSP daemon v{}", env!("CARGO_PKG_VERSION"));
 
-    // Create daemon
-    let daemon = LspDaemon::new(args.socket)?;
+    // Create daemon with async initialization for persistence support
+    let daemon = LspDaemon::new_async(args.socket).await?;
 
     // Run daemon
     if let Err(e) = daemon.run().await {

@@ -304,6 +304,324 @@ probe lsp shutdown --force --cleanup
 probe lsp shutdown --timeout 5
 ```
 
+## Cache Management
+
+The LSP daemon provides comprehensive cache management commands for the persistent cache system.
+
+### `probe lsp cache stats`
+
+Display detailed cache performance statistics and information.
+
+```bash
+probe lsp cache stats [OPTIONS]
+```
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--detailed` | Flag | `false` | Show detailed statistics including file breakdown |
+| `--git-info` | Flag | `false` | Include git-related cache information |
+| `--json` | Flag | `false` | Output in JSON format |
+| `--operation <TYPE>` | String | All | Show stats for specific operation type |
+
+#### Examples
+
+```bash
+# Basic cache statistics
+probe lsp cache stats
+
+# Detailed view with git information
+probe lsp cache stats --detailed --git-info
+
+# JSON output for programmatic use
+probe lsp cache stats --json
+
+# Statistics for specific operation
+probe lsp cache stats --operation CallHierarchy
+```
+
+#### Sample Output
+
+```bash
+$ probe lsp cache stats --detailed
+
+=== LSP Cache Statistics ===
+
+Performance Overview:
+  Cache Hit Rate: 89.3% (4,127 hits / 4,622 requests)
+  Average Response Time: 2.1ms
+  Total Cache Size: 1,847 entries
+  Memory Usage: 127 MB
+
+Layer Performance:
+  L1 (Memory):     78% hit rate, <1ms avg
+  L2 (Persistent): 11% hit rate, 3ms avg  
+  L3 (LSP Server): 11% miss rate, 487ms avg
+
+Persistent Cache:
+  Database Size: 245 MB
+  Total Files Tracked: 1,203
+  Git Commits Tracked: 47
+  Oldest Entry: 12 days ago
+  Cleanup Due: In 18 days
+
+Operation Breakdown:
+  CallHierarchy: 2,341 entries (87% hit rate)
+  Definition:    1,204 entries (92% hit rate)
+  References:      892 entries (85% hit rate)
+  Hover:           410 entries (94% hit rate)
+
+Recent Performance (last hour):
+  Requests: 234
+  Cache Hits: 198 (84.6%)
+  Average Response: 1.8ms
+  Peak Memory: 142 MB
+```
+
+### `probe lsp cache clear`
+
+Clear cache data with fine-grained control options.
+
+```bash
+probe lsp cache clear [OPTIONS]
+```
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--operation <TYPE>` | String | All | Clear specific operation type |
+| `--file <PATH>` | String | All | Clear cache for specific file |
+| `--branch <BRANCH>` | String | All | Clear cache for specific git branch |
+| `--older-than <DAYS>` | Integer | All | Clear entries older than N days |
+| `--memory-only` | Flag | `false` | Clear only in-memory cache |
+| `--persistent-only` | Flag | `false` | Clear only persistent cache |
+| `--dry-run` | Flag | `false` | Show what would be cleared |
+| `--force` | Flag | `false` | Skip confirmation prompts |
+
+#### Operation Types
+
+- `CallHierarchy` - Call hierarchy information
+- `Definition` - Go-to-definition data  
+- `References` - Find references data
+- `Hover` - Hover information
+- `WorkspaceSymbols` - Workspace symbol data
+
+#### Examples
+
+```bash
+# Clear all cache data
+probe lsp cache clear
+
+# Clear specific operation type
+probe lsp cache clear --operation CallHierarchy
+
+# Clear cache for specific file
+probe lsp cache clear --file src/main.rs
+
+# Clear old entries (older than 30 days)
+probe lsp cache clear --older-than 30
+
+# Clear git branch-specific cache
+probe lsp cache clear --branch feature/new-api
+
+# Clear only memory cache (keep persistent)
+probe lsp cache clear --memory-only
+
+# Dry run to see what would be cleared
+probe lsp cache clear --older-than 7 --dry-run
+
+# Force clear without confirmation
+probe lsp cache clear --force
+```
+
+### `probe lsp cache export`
+
+Export cache data for sharing or backup purposes.
+
+```bash
+probe lsp cache export <OUTPUT_FILE> [OPTIONS]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<OUTPUT_FILE>` | Yes | Output file path (will be compressed) |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--operation <TYPE>` | String | All | Export specific operation type |
+| `--include-git-metadata` | Flag | `false` | Include git branch/commit info |
+| `--compression-level <N>` | Integer | `6` | Gzip compression level (0-9) |
+| `--format <FORMAT>` | String | `binary` | Export format: `binary`, `json` |
+| `--filter-branch <BRANCH>` | String | All | Export only specific branch |
+| `--newer-than <DAYS>` | Integer | All | Export entries newer than N days |
+
+#### Examples
+
+```bash
+# Export entire cache
+probe lsp cache export team-cache.gz
+
+# Export with git metadata
+probe lsp cache export full-cache.gz --include-git-metadata
+
+# Export specific operation type
+probe lsp cache export call-hierarchy.gz --operation CallHierarchy
+
+# Export in JSON format
+probe lsp cache export cache-backup.json.gz --format json
+
+# Export recent entries only
+probe lsp cache export recent-cache.gz --newer-than 7
+
+# Export specific branch cache
+probe lsp cache export feature-cache.gz --filter-branch feature/new-api
+```
+
+### `probe lsp cache import`
+
+Import previously exported cache data.
+
+```bash
+probe lsp cache import <INPUT_FILE> [OPTIONS]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<INPUT_FILE>` | Yes | Input cache file path |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--merge` | Flag | `true` | Merge with existing cache |
+| `--replace` | Flag | `false` | Replace existing cache |
+| `--filter-operation <TYPE>` | String | All | Import only specific operation type |
+| `--validate` | Flag | `true` | Validate cache integrity |
+| `--dry-run` | Flag | `false` | Show what would be imported |
+| `--skip-git-check` | Flag | `false` | Skip git compatibility checks |
+
+#### Examples
+
+```bash
+# Import shared team cache
+probe lsp cache import team-cache.gz
+
+# Replace existing cache completely
+probe lsp cache import backup.gz --replace
+
+# Import only call hierarchy data
+probe lsp cache import cache.gz --filter-operation CallHierarchy
+
+# Dry run to validate import
+probe lsp cache import cache.gz --dry-run
+
+# Import without git validation
+probe lsp cache import external-cache.gz --skip-git-check
+```
+
+### `probe lsp cache compact`
+
+Optimize persistent cache database storage.
+
+```bash
+probe lsp cache compact [OPTIONS]
+```
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--aggressive` | Flag | `false` | Perform aggressive compaction |
+| `--vacuum` | Flag | `true` | Reclaim unused space |
+| `--defragment` | Flag | `false` | Defragment database files |
+| `--backup` | Flag | `true` | Create backup before compaction |
+
+#### Examples
+
+```bash
+# Standard compaction
+probe lsp cache compact
+
+# Aggressive compaction with defragmentation
+probe lsp cache compact --aggressive --defragment
+
+# Compact without backup (faster)
+probe lsp cache compact --no-backup
+```
+
+#### Sample Output
+
+```bash
+$ probe lsp cache compact --aggressive
+
+=== Cache Compaction ===
+
+Pre-compaction Analysis:
+  Database Size: 245 MB
+  Unused Space: 67 MB (27.3%)
+  Fragmentation: 18.2%
+  
+Performing compaction...
+  ✓ Creating backup: cache.backup.db
+  ✓ Compacting nodes tree (89% complete)
+  ✓ Compacting file index (94% complete)  
+  ✓ Compacting git index (100% complete)
+  ✓ Reclaiming space (100% complete)
+
+Post-compaction Results:
+  Database Size: 178 MB (27% reduction)
+  Unused Space: 8 MB (4.5%)
+  Fragmentation: 2.1%
+  Space Reclaimed: 67 MB
+  
+Compaction completed in 3.2 seconds
+```
+
+### `probe lsp cache cleanup`
+
+Remove expired and unused cache entries.
+
+```bash
+probe lsp cache cleanup [OPTIONS]
+```
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--max-age <DAYS>` | Integer | `30` | Remove entries older than N days |
+| `--max-size <MB>` | Integer | None | Trim cache to maximum size |
+| `--remove-orphaned` | Flag | `true` | Remove entries for deleted files |
+| `--dry-run` | Flag | `false` | Show what would be cleaned |
+| `--force` | Flag | `false` | Skip confirmation prompts |
+
+#### Examples
+
+```bash
+# Standard cleanup (30 days)
+probe lsp cache cleanup
+
+# Aggressive cleanup (7 days)
+probe lsp cache cleanup --max-age 7
+
+# Size-based cleanup
+probe lsp cache cleanup --max-size 100
+
+# Cleanup orphaned entries only
+probe lsp cache cleanup --remove-orphaned --max-age 0
+
+# Dry run to see cleanup impact
+probe lsp cache cleanup --max-age 14 --dry-run
+```
+
 ## Workspace Management
 
 ### `probe lsp init-workspaces`

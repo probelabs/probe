@@ -339,7 +339,8 @@ mod tests {
 
             // Parser should be checked out (not available in pool)
             // Both behaviors (Some(&0) and None) indicate the parser is checked out
-            let checked_out = stats.get(test_lang).is_none_or(|&count| count == 0);
+            #[allow(clippy::unnecessary_map_or)]
+            let checked_out = stats.get(test_lang).map_or(true, |&count| count == 0);
             assert!(
                 checked_out,
                 "Parser should be checked out (expected pool size 0 or entry removed, got {:?})",

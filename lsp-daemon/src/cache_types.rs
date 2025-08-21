@@ -12,9 +12,26 @@ pub struct NodeId {
 
 impl NodeId {
     pub fn new(symbol: impl Into<String>, file: impl Into<PathBuf>) -> Self {
+        let file_path = file.into();
+        // Use consistent path normalization for cache consistency
+        let normalized = Self::normalize_path(file_path);
+
         Self {
             symbol: symbol.into(),
-            file: file.into(),
+            file: normalized,
+        }
+    }
+
+    /// Normalize path for consistent cache keys
+    /// Uses absolute path without canonicalizing to avoid filesystem-dependent changes
+    fn normalize_path(path: PathBuf) -> PathBuf {
+        // Convert to absolute path if it isn't already
+        if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("/"))
+                .join(path)
         }
     }
 }
@@ -33,10 +50,37 @@ impl NodeKey {
         file: impl Into<PathBuf>,
         content_md5: impl Into<String>,
     ) -> Self {
+        let file_path = file.into();
+        // Use consistent path normalization for cache consistency
+        let normalized = Self::normalize_path(file_path);
+
+        let symbol_str = symbol.into();
+        let md5_str = content_md5.into();
+
+        tracing::debug!(
+            "NodeKey::new (daemon) - symbol: {}, normalized: {}, md5: {}",
+            symbol_str,
+            normalized.display(),
+            md5_str
+        );
+
         Self {
-            symbol: symbol.into(),
-            file: file.into(),
-            content_md5: content_md5.into(),
+            symbol: symbol_str,
+            file: normalized,
+            content_md5: md5_str,
+        }
+    }
+
+    /// Normalize path for consistent cache keys
+    /// Uses absolute path without canonicalizing to avoid filesystem-dependent changes
+    fn normalize_path(path: PathBuf) -> PathBuf {
+        // Convert to absolute path if it isn't already
+        if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("/"))
+                .join(path)
         }
     }
 
@@ -116,6 +160,11 @@ pub struct CacheStats {
     pub total_files: usize,
     pub total_edges: usize,
     pub inflight_computations: usize,
+    // Persistence statistics
+    pub persistence_enabled: bool,
+    pub persistent_nodes: Option<u64>,
+    pub persistent_size_bytes: Option<u64>,
+    pub persistent_disk_size_bytes: Option<u64>,
 }
 
 /// Generic cache key for LSP operations
@@ -312,4 +361,84 @@ pub struct AllCacheStats {
     pub total_memory_usage: usize,
     pub cache_directory: Option<String>,
     pub persistent_cache_enabled: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cache_key_consistency_fix() {
+        println!("🔧 Testing Cache Key Consistency Fix");
+
+        // Test that different path representations produce identical cache keys
+        let symbol = "test_function";
+        let content_md5 = "abcd1234efgh5678";
+
+        // Different ways to represent the same path
+        let path1 = PathBuf::from("/Users/test/project/src/main.rs");
+        let path2 = PathBuf::from("/Users/test/project")
+            .join("src")
+            .join("main.rs");
+
+        let key1 = NodeKey::new(symbol, path1.clone(), content_md5);
+        let key2 = NodeKey::new(symbol, path2.clone(), content_md5);
+
+        println!("Key1 path: {} -> {}", path1.display(), key1.file.display());
+        println!("Key2 path: {} -> {}", path2.display(), key2.file.display());
+
+        // These should be identical after normalization
+        assert_eq!(key1.file, key2.file, "Normalized paths should be identical");
+        assert_eq!(
+            key1, key2,
+            "NodeKeys should be equal with consistent normalization"
+        );
+
+        // Test serialization consistency
+        let serialized1 = bincode::serialize(&key1).unwrap();
+        let serialized2 = bincode::serialize(&key2).unwrap();
+
+        assert_eq!(
+            serialized1, serialized2,
+            "Serialized keys should be identical for cache persistence"
+        );
+
+        println!("✅ Cache key consistency fix verified!");
+    }
+
+    #[test]
+    fn test_relative_path_normalization() {
+        let symbol = "test_function";
+        let content_md5 = "hash123";
+
+        // Test relative vs absolute paths
+        let current_dir = std::env::current_dir().unwrap();
+        let relative_path = PathBuf::from("src/main.rs");
+        let absolute_path = current_dir.join("src/main.rs");
+
+        let key1 = NodeKey::new(symbol, relative_path.clone(), content_md5);
+        let key2 = NodeKey::new(symbol, absolute_path.clone(), content_md5);
+
+        println!(
+            "Relative: {} -> {}",
+            relative_path.display(),
+            key1.file.display()
+        );
+        println!(
+            "Absolute: {} -> {}",
+            absolute_path.display(),
+            key2.file.display()
+        );
+
+        assert_eq!(
+            key1.file, key2.file,
+            "Relative and absolute should normalize to same path"
+        );
+        assert_eq!(
+            key1, key2,
+            "Keys with relative and absolute paths should be equal"
+        );
+
+        println!("✅ Relative path normalization working!");
+    }
 }

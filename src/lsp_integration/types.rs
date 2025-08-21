@@ -110,23 +110,64 @@ pub struct NodeKey {
 }
 
 impl NodeId {
-    /// Create a NodeId with canonicalized path (best-effort).
+    /// Create a NodeId with normalized path for consistent identity
     pub fn new<S: Into<String>>(symbol: S, file: PathBuf) -> Self {
-        let canonical = file.canonicalize().unwrap_or(file);
+        // Use the same normalization as NodeKey for consistency
+        let normalized = Self::normalize_path(file);
+
         Self {
             symbol: symbol.into(),
-            file: canonical,
+            file: normalized,
+        }
+    }
+
+    /// Normalize path for consistent cache keys
+    /// Uses absolute path without canonicalizing to avoid filesystem-dependent changes
+    fn normalize_path(path: PathBuf) -> PathBuf {
+        // Convert to absolute path if it isn't already
+        if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("/"))
+                .join(path)
         }
     }
 }
 
 impl NodeKey {
     pub fn new<S: Into<String>>(symbol: S, file: PathBuf, content_md5: String) -> Self {
-        let canonical = file.canonicalize().unwrap_or(file);
+        // Use consistent path normalization instead of canonicalize()
+        // to avoid cache key mismatches due to filesystem changes
+        let original_path = file.clone();
+        let normalized = Self::normalize_path(file);
+        let symbol_str = symbol.into();
+
+        tracing::debug!(
+            "NodeKey::new - symbol: {}, original: {}, normalized: {}, md5: {}",
+            symbol_str,
+            original_path.display(),
+            normalized.display(),
+            content_md5
+        );
+
         Self {
-            symbol: symbol.into(),
-            file: canonical,
+            symbol: symbol_str,
+            file: normalized,
             content_md5,
+        }
+    }
+
+    /// Normalize path for consistent cache keys
+    /// Uses absolute path without canonicalizing to avoid filesystem-dependent changes
+    fn normalize_path(path: PathBuf) -> PathBuf {
+        // Convert to absolute path if it isn't already
+        if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("/"))
+                .join(path)
         }
     }
 

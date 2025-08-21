@@ -794,8 +794,8 @@ impl LspManager {
             println!("   Mode: Background");
         }
 
-        // Create and start daemon
-        let daemon = LspDaemon::new(socket_path.clone())?;
+        // Create and start daemon using async constructor
+        let daemon = LspDaemon::new_async(socket_path.clone()).await?;
 
         if foreground {
             println!("✓ LSP daemon started in foreground mode");
@@ -1133,7 +1133,10 @@ impl LspManager {
         let mut client = LspClient::new(config).await?;
 
         match cache_command {
-            CacheSubcommands::Stats => {
+            CacheSubcommands::Stats {
+                detailed: _,
+                git: _,
+            } => {
                 let stats = client.cache_stats().await?;
 
                 match format {
@@ -1142,144 +1145,142 @@ impl LspManager {
                     }
                     _ => {
                         println!("{}", "LSP Cache Statistics".bold().green());
+                        println!("  {} {}", "Total Entries:".bold(), stats.total_entries);
                         println!(
                             "  {} {}",
-                            "Total Memory Usage:".bold(),
-                            format_bytes(stats.total_memory_usage)
+                            "Total Size:".bold(),
+                            format_bytes(stats.total_size_bytes as usize)
                         );
+                        println!(
+                            "  {} {}",
+                            "Disk Size:".bold(),
+                            format_bytes(stats.disk_size_bytes as usize)
+                        );
+                        println!("  {} {:.2}%", "Hit Rate:".bold(), stats.hit_rate * 100.0);
+                        println!("  {} {:.2}%", "Miss Rate:".bold(), stats.miss_rate * 100.0);
 
-                        if let Some(ref cache_dir) = stats.cache_directory {
-                            println!("  {} {}", "Cache Directory:".bold(), cache_dir.cyan());
-                        }
-
+                        // Memory usage breakdown
+                        println!(
+                            "  {} {}",
+                            "In-Memory Cache:".bold(),
+                            format_bytes(stats.memory_usage.in_memory_cache_bytes as usize)
+                        );
                         println!(
                             "  {} {}",
                             "Persistent Cache:".bold(),
-                            if stats.persistent_cache_enabled {
-                                "Enabled".green()
-                            } else {
-                                "Disabled".dimmed()
-                            }
+                            format_bytes(stats.memory_usage.persistent_cache_bytes as usize)
                         );
 
-                        if !stats.per_operation.is_empty() {
-                            println!("\n{}", "Per-Operation Statistics:".bold());
-                            for op_stats in &stats.per_operation {
-                                let hit_rate = if op_stats.hit_count + op_stats.miss_count > 0 {
-                                    (op_stats.hit_count as f64
-                                        / (op_stats.hit_count + op_stats.miss_count) as f64)
-                                        * 100.0
-                                } else {
-                                    0.0
-                                };
-
-                                println!("  {} {:?}:", "•".cyan(), op_stats.operation);
+                        // Show some top files and languages if available
+                        if !stats.entries_per_file.is_empty() {
+                            println!("\n{}", "Top Files by Entry Count:".bold());
+                            let mut file_entries: Vec<_> = stats.entries_per_file.iter().collect();
+                            file_entries.sort_by(|a, b| b.1.cmp(a.1));
+                            for (file_path, count) in file_entries.iter().take(5) {
                                 println!(
-                                    "    {} {}",
-                                    "Entries:".bold(),
-                                    op_stats.total_entries.to_string().cyan()
-                                );
-                                println!(
-                                    "    {} {} / {} ({:.1}% hit rate)",
-                                    "Cache Hits/Misses:".bold(),
-                                    op_stats.hit_count.to_string().green(),
-                                    op_stats.miss_count.to_string().yellow(),
-                                    hit_rate
-                                );
-                                println!(
-                                    "    {} {}",
-                                    "Evictions:".bold(),
-                                    op_stats.eviction_count.to_string().dimmed()
-                                );
-                                println!(
-                                    "    {} {}",
-                                    "In-flight:".bold(),
-                                    op_stats.inflight_count.to_string().cyan()
-                                );
-                                println!(
-                                    "    {} {}",
-                                    "Memory:".bold(),
-                                    format_bytes(op_stats.memory_usage_estimate)
+                                    "  {} {}: {}",
+                                    "•".cyan(),
+                                    file_path.file_name().unwrap_or_default().to_string_lossy(),
+                                    count.to_string().green()
                                 );
                             }
-                        } else {
-                            println!("\n{}", "No cache statistics available".yellow());
+                        }
+
+                        if !stats.entries_per_language.is_empty() {
+                            println!("\n{}", "Entries by Language:".bold());
+                            for (language, count) in &stats.entries_per_language {
+                                println!(
+                                    "  {} {}: {}",
+                                    "•".cyan(),
+                                    language,
+                                    count.to_string().green()
+                                );
+                            }
                         }
                     }
                 }
             }
-            CacheSubcommands::Clear { operation } => {
-                let (cleared_operations, total_cleared) = if let Some(op_name) = operation {
-                    // Parse the operation name
-                    let lsp_operation = match op_name.to_lowercase().as_str() {
-                        "definition" => Some(lsp_daemon::cache_types::LspOperation::Definition),
-                        "references" => Some(lsp_daemon::cache_types::LspOperation::References),
-                        "hover" => Some(lsp_daemon::cache_types::LspOperation::Hover),
-                        "callhierarchy" => Some(lsp_daemon::cache_types::LspOperation::CallHierarchy),
-                        "documentsymbols" => Some(lsp_daemon::cache_types::LspOperation::DocumentSymbols),
-                        _ => return Err(anyhow!("Invalid operation '{}'. Valid operations: Definition, References, Hover, CallHierarchy, DocumentSymbols", op_name)),
-                    };
-                    client.cache_clear(lsp_operation).await?
-                } else {
-                    client.cache_clear(None).await?
-                };
+            CacheSubcommands::Clear {
+                older_than,
+                file,
+                commit,
+                all,
+            } => {
+                let result = client
+                    .cache_clear(*older_than, file.clone(), commit.clone(), *all)
+                    .await?;
 
                 match format {
                     "json" => {
                         let json_output = json!({
-                            "cleared_operations": cleared_operations,
-                            "total_entries_cleared": total_cleared
+                            "entries_removed": result.entries_removed,
+                            "duration_ms": result.duration_ms
                         });
                         println!("{}", serde_json::to_string_pretty(&json_output)?);
                     }
                     _ => {
-                        if cleared_operations.is_empty() {
+                        if result.entries_removed == 0 {
                             println!("{}", "No cache entries to clear".yellow());
                         } else {
                             println!(
-                                "{} {} from {} operations:",
+                                "{} {} in {} ms",
                                 "Cleared".bold().green(),
-                                format!("{total_cleared} entries").cyan(),
-                                format!("{}", cleared_operations.len()).cyan()
+                                format!("{} entries", result.entries_removed).cyan(),
+                                result.duration_ms
                             );
-                            for op in &cleared_operations {
-                                println!("  {} {:?}", "•".green(), op);
-                            }
                         }
                     }
                 }
             }
-            CacheSubcommands::Export { operation } => {
-                let export_data = if let Some(op_name) = operation {
-                    // Parse the operation name
-                    let lsp_operation = match op_name.to_lowercase().as_str() {
-                        "definition" => Some(lsp_daemon::cache_types::LspOperation::Definition),
-                        "references" => Some(lsp_daemon::cache_types::LspOperation::References),
-                        "hover" => Some(lsp_daemon::cache_types::LspOperation::Hover),
-                        "callhierarchy" => Some(lsp_daemon::cache_types::LspOperation::CallHierarchy),
-                        "documentsymbols" => Some(lsp_daemon::cache_types::LspOperation::DocumentSymbols),
-                        _ => return Err(anyhow!("Invalid operation '{}'. Valid operations: Definition, References, Hover, CallHierarchy, DocumentSymbols", op_name)),
-                    };
-                    client.cache_export(lsp_operation).await?
-                } else {
-                    client.cache_export(None).await?
-                };
+            CacheSubcommands::Export {
+                output,
+                current_branch,
+                compress,
+            } => {
+                client
+                    .cache_export(output.clone(), *current_branch, *compress)
+                    .await?;
 
                 match format {
                     "json" => {
-                        // Export data is already JSON, so we can print it directly
-                        println!("{export_data}");
+                        let json_output = json!({
+                            "output_path": output,
+                            "current_branch_only": current_branch,
+                            "compressed": compress,
+                            "success": true
+                        });
+                        println!("{}", serde_json::to_string_pretty(&json_output)?);
                     }
                     _ => {
-                        println!("{}", "Cache Export Data:".bold().green());
-                        // Pretty print the JSON for human consumption
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&export_data)
-                        {
-                            println!("{}", serde_json::to_string_pretty(&parsed)?);
-                        } else {
-                            println!("{export_data}");
+                        println!(
+                            "{} exported to {}",
+                            "Cache".bold().green(),
+                            output.display().to_string().cyan()
+                        );
+                        if *current_branch {
+                            println!("  {} Current branch entries only", "•".green());
+                        }
+                        if *compress {
+                            println!("  {} Compressed format", "•".green());
                         }
                     }
+                }
+            }
+            CacheSubcommands::Import { input, merge } => {
+                // TODO: Implement cache import
+                println!("Cache import not yet implemented");
+                println!("Input file: {}", input.display());
+                println!("Merge mode: {merge}");
+            }
+            CacheSubcommands::Compact {
+                clean_expired,
+                target_size_mb,
+            } => {
+                // TODO: Implement cache compaction
+                println!("Cache compact not yet implemented");
+                println!("Clean expired: {clean_expired}");
+                if let Some(size) = target_size_mb {
+                    println!("Target size: {size} MB");
                 }
             }
         }

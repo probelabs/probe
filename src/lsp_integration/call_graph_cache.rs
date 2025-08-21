@@ -213,8 +213,16 @@ impl CallGraphCache {
 
     /// Invalidate a whole file (all NodeIds in it) and optionally propagate to neighbors.
     pub fn invalidate_file(&self, file: &Path) {
-        let canonical = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
-        if let Some(ids_ref) = self.file_index.get(&canonical) {
+        // Use consistent path normalization instead of canonicalize()
+        let normalized = if file.is_absolute() {
+            file.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("/"))
+                .join(file)
+        };
+
+        if let Some(ids_ref) = self.file_index.get(&normalized) {
             let ids: Vec<NodeId> = ids_ref.iter().cloned().collect();
             drop(ids_ref);
             for id in ids {
