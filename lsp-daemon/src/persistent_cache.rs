@@ -131,23 +131,48 @@ impl PersistentCallGraphCache {
             .clone()
             .unwrap_or_else(Self::default_cache_directory);
 
-        // Ensure cache directory exists
-        std::fs::create_dir_all(&cache_dir)
-            .context(format!("Failed to create cache directory: {cache_dir:?}"))?;
+        let persistence_disabled = std::env::var("PROBE_DISABLE_PERSISTENCE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        // Ensure cache directory exists (unless persistence is disabled)
+        if !persistence_disabled {
+            std::fs::create_dir_all(&cache_dir)
+                .context(format!("Failed to create cache directory: {cache_dir:?}"))?;
+        }
+
+        if persistence_disabled {
+            info!("PROBE_DISABLE_PERSISTENCE=1 — using temporary in-memory sled store (no disk writes)");
+        }
 
         let db_path = cache_dir.join("call_graph.db");
 
-        info!("Opening persistent call graph cache at: {:?}", db_path);
+        if persistence_disabled {
+            info!("Opening temporary call graph cache (persistence disabled)");
+        } else {
+            info!("Opening persistent call graph cache at: {:?}", db_path);
+        }
 
         // Configure sled database
-        let db = sled::Config::default()
-            .path(&db_path)
-            .cache_capacity(64 * 1024 * 1024) // 64MB cache
-            .flush_every_ms(Some(1000)) // Flush every second
-            .compression_factor(if config.compress { 5 } else { 1 })
-            .use_compression(config.compress)
-            .open()
-            .context(format!("Failed to open sled database at: {db_path:?}"))?;
+        let db = if persistence_disabled {
+            sled::Config::default()
+                .temporary(true)
+                .cache_capacity(64 * 1024 * 1024) // 64MB cache
+                .flush_every_ms(None) // Do not flush to disk when disabled
+                .compression_factor(1)
+                .use_compression(false)
+                .open()
+                .context("Failed to open temporary sled database")?
+        } else {
+            sled::Config::default()
+                .path(&db_path)
+                .cache_capacity(64 * 1024 * 1024) // 64MB cache
+                .flush_every_ms(Some(1000)) // Flush every second
+                .compression_factor(if config.compress { 5 } else { 1 })
+                .use_compression(config.compress)
+                .open()
+                .context(format!("Failed to open sled database at: {db_path:?}"))?
+        };
 
         let db = Arc::new(db);
 

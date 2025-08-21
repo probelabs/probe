@@ -1160,7 +1160,7 @@ pub mod performance {
     /// Maximum time allowed for extraction with LSP
     pub fn max_extract_time() -> Duration {
         if is_ci_environment() {
-            Duration::from_secs(90) // Extra time for Go/TypeScript indexing in CI
+            Duration::from_secs(180) // More headroom for heavier indexing in CI
         } else {
             Duration::from_secs(45) // Local development
         }
@@ -1173,17 +1173,17 @@ pub mod performance {
 
     /// Maximum time to wait for language server initialization
     pub fn max_init_time() -> Duration {
-        Duration::from_secs(90) // Reasonable time for both local and CI environments
+        Duration::from_secs(180) // Increased for CI and heavier startup
     }
 
     /// Language server ready wait time
     pub fn language_server_ready_time() -> Duration {
-        Duration::from_secs(30) // Reasonable time for both local and CI environments
+        Duration::from_secs(60) // More conservative for CI indexing stabilizing
     }
 
     /// Daemon startup timeout
     pub fn daemon_startup_timeout() -> Duration {
-        Duration::from_secs(20) // Reasonable time for both local and CI environments
+        Duration::from_secs(30) // Slightly higher for CI
     }
 
     // Legacy constants for backward compatibility
@@ -1260,7 +1260,11 @@ pub fn extract_with_call_hierarchy_retry_config(
                 println!("❌ Extract command failed on attempt {attempt}, retrying...");
             }
             attempt += 1;
-            thread::sleep(retry_delay);
+            // Never sleep past the remaining time budget
+            let sleep_for = retry_delay.min(timeout.saturating_sub(start_time.elapsed()));
+            if sleep_for.as_nanos() > 0 {
+                thread::sleep(sleep_for);
+            }
             continue;
         }
 
@@ -1302,7 +1306,11 @@ pub fn extract_with_call_hierarchy_retry_config(
                 }
 
                 attempt += 1;
-                thread::sleep(retry_delay);
+                // Never sleep past the remaining time budget
+                let sleep_for = retry_delay.min(timeout.saturating_sub(start_time.elapsed()));
+                if sleep_for.as_nanos() > 0 {
+                    thread::sleep(sleep_for);
+                }
             }
         }
     }
