@@ -139,6 +139,9 @@ impl SingleServerManager {
         let unhealthy_pids = self.process_monitor.monitor_children(pids.clone()).await;
         // Track which unhealthy PIDs we are actually allowed to kill (outside warm-up grace)
         let mut kill_list: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        // Collect languages to mark unhealthy outside of DashMap iteration to avoid holding shard locks across await
+        let mut languages_to_mark_unhealthy: std::collections::HashSet<Language> =
+            std::collections::HashSet::new();
 
         if !unhealthy_pids.is_empty() {
             warn!(
@@ -175,8 +178,8 @@ impl SingleServerManager {
                                         unhealthy_pid, language
                                     );
 
-                                    // Mark server as unhealthy to trigger restart
-                                    self.health_monitor.mark_unhealthy(language).await;
+                                    // Collect language to mark unhealthy later (after releasing DashMap guards)
+                                    languages_to_mark_unhealthy.insert(language);
                                     // This PID is past grace; it is safe to terminate.
                                     kill_list.insert(unhealthy_pid);
                                     break;
@@ -212,6 +215,11 @@ impl SingleServerManager {
                     kill_list.len(),
                     pids_guard.len()
                 );
+            }
+
+            // Now that we have released all DashMap guards, perform awaits safely
+            for lang in languages_to_mark_unhealthy {
+                self.health_monitor.mark_unhealthy(lang).await;
             }
         } else {
             debug!("All {} child processes are healthy", pids.len());
@@ -320,23 +328,26 @@ impl SingleServerManager {
         }
 
         // Check if server already exists
-        if let Some(server_instance) = self.servers.get(&language) {
+        if let Some(entry) = self.servers.get(&language) {
+            // IMPORTANT: clone Arc and drop DashMap guard before any .await or long operations
+            let server_instance = entry.clone();
+            drop(entry);
+
             // Verify the server is still healthy by trying to acquire lock briefly
-            match server_instance.try_lock() {
-                Ok(_) => {
-                    // Server is responsive
-                    return Ok(server_instance.clone());
-                }
-                Err(_) => {
-                    // Server may be busy (e.g., indexing). Don't thrash by removing/recreating immediately.
-                    warn!(
-                        "Server {:?} lock busy; marking unhealthy but not recreating immediately",
-                        language
-                    );
-                    self.health_monitor.mark_unhealthy(language).await;
-                    // Return the existing instance and allow the health monitor to decide on restart later.
-                    return Ok(server_instance.clone());
-                }
+            let is_responsive = server_instance.try_lock().is_ok();
+
+            if is_responsive {
+                // Server is responsive
+                return Ok(server_instance);
+            } else {
+                // Server may be busy (e.g., indexing). Don't thrash by removing/recreating immediately.
+                warn!(
+                    "Server {:?} lock busy; marking unhealthy but not recreating immediately",
+                    language
+                );
+                self.health_monitor.mark_unhealthy(language).await;
+                // Return the existing instance and allow the health monitor to decide on restart later.
+                return Ok(server_instance);
             }
         }
 
@@ -385,7 +396,11 @@ impl SingleServerManager {
             ));
         }
         // Check if server already exists
-        if let Some(server_instance) = self.servers.get(&language) {
+        if let Some(entry) = self.servers.get(&language) {
+            // IMPORTANT: clone Arc and drop DashMap guard before any .await or long operations
+            let server_instance = entry.clone();
+            drop(entry);
+
             // Try to acquire lock immediately for quick checks (non-blocking)
             if let Ok(mut server) = server_instance.try_lock() {
                 // Fast path - got lock immediately, handle quickly
