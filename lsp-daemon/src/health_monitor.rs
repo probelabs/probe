@@ -110,6 +110,7 @@ impl HealthMonitor {
         let health_status = self.health_status.clone();
         let check_interval = self.check_interval;
         let health_check_timeout = self.health_check_timeout;
+        let failure_threshold = self.failure_threshold;
 
         tokio::spawn(async move {
             let mut interval_timer = interval(check_interval);
@@ -158,11 +159,15 @@ impl HealthMonitor {
                         }
                     }
 
-                    // Check if server needs restart
-                    if server_health.consecutive_failures >= 3 {
+                    // Decide if restart is needed without holding the health map lock
+                    let needs_restart = server_health.consecutive_failures >= failure_threshold;
+                    let failure_count = server_health.consecutive_failures;
+                    drop(health_map);
+
+                    if needs_restart {
                         error!(
                             "Server {:?} has {} consecutive failures, restart needed",
-                            stat.language, server_health.consecutive_failures
+                            stat.language, failure_count
                         );
 
                         // Actively restart the unhealthy server. This removes the dead instance and
