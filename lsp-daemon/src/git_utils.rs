@@ -28,6 +28,12 @@ pub struct GitContext {
 impl GitContext {
     /// Capture current git context for the given repository path
     pub fn capture(repo_path: &Path) -> Result<Option<Self>> {
+        // Skip git operations entirely in CI to prevent hanging
+        if std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
+            debug!("CI environment detected - skipping git operations to prevent hanging");
+            return Ok(None);
+        }
+
         // First check if this is a git repository
         if !Self::is_git_repo(repo_path)? {
             debug!("Path is not a git repository: {}", repo_path.display());
