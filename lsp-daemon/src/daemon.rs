@@ -138,9 +138,16 @@ impl LspDaemon {
             eviction_check_interval: Duration::from_secs(60), // Check every minute
             invalidation_depth: 2, // Invalidate connected nodes up to depth 2
             // Persistence settings (can be overridden by environment variables)
-            persistence_enabled: std::env::var("PROBE_LSP_PERSISTENCE_ENABLED")
-                .map(|v| v.to_lowercase() == "true")
-                .unwrap_or(false),
+            // IMPORTANT: Always disable persistence in CI to prevent hanging
+            persistence_enabled: if std::env::var("CI").is_ok()
+                || std::env::var("GITHUB_ACTIONS").is_ok()
+            {
+                false // Force disable in CI
+            } else {
+                std::env::var("PROBE_LSP_PERSISTENCE_ENABLED")
+                    .map(|v| v.to_lowercase() == "true")
+                    .unwrap_or(false)
+            },
             persistence_path: std::env::var("PROBE_LSP_PERSISTENCE_PATH")
                 .ok()
                 .map(PathBuf::from),
@@ -166,6 +173,15 @@ impl LspDaemon {
         allowed_roots: Option<Vec<PathBuf>>,
         cache_config: CallGraphCacheConfig,
     ) -> Result<Self> {
+        // Log CI environment detection and persistence status
+        if std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
+            info!("CI environment detected - persistence disabled to prevent hanging");
+        }
+        info!(
+            "LSP daemon starting with persistence_enabled: {}",
+            cache_config.persistence_enabled
+        );
+
         let registry = Arc::new(LspRegistry::new()?);
         let detector = Arc::new(LanguageDetector::new());
         let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
