@@ -763,34 +763,33 @@ pub fn wait_for_lsp_servers_ready_with_config(
     let mut poll_interval = Duration::from_millis(500); // Start with 500ms
     let max_poll_interval = Duration::from_secs(2); // Cap at 2 seconds
 
-    // For CI timing experiment: remove timeout limit, allow unlimited wait time
-    let unlimited_wait = performance::is_ci_environment();
-    let effective_timeout = if unlimited_wait {
-        Duration::from_secs(600) // 10 minutes max to prevent infinite hangs
+    // Always respect the caller-provided timeout — never override it in CI.
+    // Give CI a sane floor to account for slower machines.
+    let is_ci = performance::is_ci_environment();
+    let min_ci_timeout = Duration::from_secs(120);
+    let effective_timeout = if is_ci && max_timeout < min_ci_timeout {
+        min_ci_timeout
     } else {
         max_timeout
     };
 
-    if unlimited_wait {
-        println!(
-            "CI TIMING EXPERIMENT: Waiting unlimited time for {} languages: {} (max 10min safety limit)",
-            expected_languages.len(),
-            expected_languages.join(", ")
-        );
-    } else {
-        println!(
-            "Polling LSP status for {} languages: {} (timeout: {:?})",
-            expected_languages.len(),
-            expected_languages.join(", "),
-            max_timeout
-        );
-    }
+    println!(
+        "Polling LSP status for {} languages: {} (timeout: {:?})",
+        expected_languages.len(),
+        expected_languages.join(", "),
+        effective_timeout
+    );
+
+    // If status queries keep failing (e.g., daemon not responding), bail out early
+    // instead of spinning for the full timeout.
+    let mut consecutive_failures: u32 = 0;
+    let max_status_failures: u32 = if is_ci { 30 } else { 10 };
 
     loop {
         let elapsed = start_time.elapsed();
         if elapsed >= effective_timeout {
             return Err(anyhow::anyhow!(
-                "Safety timeout reached after {:?}. Expected languages: {}",
+                "Timeout waiting for LSP servers after {:?}. Expected languages: {}",
                 elapsed,
                 expected_languages.join(", ")
             ));
@@ -799,51 +798,41 @@ pub fn wait_for_lsp_servers_ready_with_config(
         // Check LSP status
         match check_lsp_servers_ready_with_config(expected_languages, socket_path) {
             Ok(true) => {
-                if unlimited_wait {
+                println!(
+                    "All {} LSP servers are ready after {:?}",
+                    expected_languages.len(),
+                    elapsed
+                );
+                return Ok(());
+            }
+            Ok(false) => {
+                consecutive_failures = 0; // successful check, just not ready yet
+                                          // Log every ~5 seconds
+                if elapsed.as_secs() % 5 == 0
+                    && elapsed.as_millis() % 1000 < poll_interval.as_millis()
+                {
                     println!(
-                        "🎯 CI TIMING RESULT: All {} LSP servers ready after {:?} - languages: {}",
+                        "Still waiting for {} LSP servers after {:?}: {}",
                         expected_languages.len(),
                         elapsed,
                         expected_languages.join(", ")
                     );
-                } else {
-                    println!(
-                        "All {} LSP servers are ready after {:?}",
-                        expected_languages.len(),
-                        elapsed
-                    );
-                }
-                return Ok(());
-            }
-            Ok(false) => {
-                // Enhanced logging for timing experiment
-                if unlimited_wait {
-                    // Log every 10 seconds in CI for detailed timing data
-                    if elapsed.as_secs() % 10 == 0
-                        && elapsed.as_millis() % 1000 < poll_interval.as_millis()
-                    {
-                        println!(
-                            "⏱️  CI TIMING: Still waiting for {} languages after {:?} - target: {}",
-                            expected_languages.len(),
-                            elapsed,
-                            expected_languages.join(", ")
-                        );
-                    }
-                } else {
-                    // Original 5-second logging for local
-                    if elapsed.as_secs() % 5 == 0
-                        && elapsed.as_millis() % 1000 < poll_interval.as_millis()
-                    {
-                        println!("Still waiting for LSP servers... ({elapsed:?} elapsed)");
-                    }
                 }
             }
             Err(e) => {
                 // Status check failed, but don't fail immediately in case it's transient
+                consecutive_failures += 1;
                 if elapsed.as_secs() % 10 == 0
                     && elapsed.as_millis() % 1000 < poll_interval.as_millis()
                 {
-                    println!("LSP status check failed (will retry): {e}");
+                    println!("LSP status check failed (will retry): {e} (#{consecutive_failures})");
+                }
+                if consecutive_failures >= max_status_failures {
+                    return Err(anyhow::anyhow!(
+                        "LSP status check failed {} times in {:?}. Aborting.",
+                        consecutive_failures,
+                        elapsed
+                    ));
                 }
             }
         }

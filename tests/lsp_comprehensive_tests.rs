@@ -34,6 +34,13 @@ use std::time::{Duration, Instant};
 /// Setup function that validates all required language servers are available
 /// This function FAILS the test if any language server is missing
 fn setup_comprehensive_tests() -> Result<()> {
+    // Keep CI runs deterministic and avoid heavy disk I/O / external network bootstrap.
+    // These env vars disable sled persistence and LSP bootstrap in CI environments.
+    std::env::set_var("PROBE_DISABLE_PERSISTENCE", "1");
+    std::env::set_var("PROBE_SKIP_LSP_BOOTSTRAP", "1");
+    // Optional: increase logging when debugging CI flakiness
+    // std::env::set_var("RUST_LOG", "info");
+
     require_all_language_servers()?;
     common::ensure_daemon_stopped();
     Ok(())
