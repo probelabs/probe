@@ -1442,11 +1442,21 @@ impl LspDaemon {
                 }
             }
 
-            // TODO: Add handlers for Definition, References, Hover operations
-            _ => DaemonResponse::Error {
-                request_id: Uuid::new_v4(),
-                error: "Unsupported request type".to_string(),
-            },
+            // Explicit "not implemented" responses for analysis requests we have not wired yet.
+            // CRITICAL: We must return the same request_id to avoid client hanging forever waiting
+            // for a response with the correct ID. This was the root cause of CI test hangs.
+            DaemonRequest::Definition { request_id, .. }
+            | DaemonRequest::References { request_id, .. }
+            | DaemonRequest::Hover { request_id, .. }
+            | DaemonRequest::Completion { request_id, .. }
+            | DaemonRequest::DocumentSymbols { request_id, .. }
+            | DaemonRequest::WorkspaceSymbols { request_id, .. } => {
+                warn!("Received unimplemented LSP request type, returning error with original request_id");
+                DaemonResponse::Error {
+                    request_id,
+                    error: "Request type not implemented".to_string(),
+                }
+            }
         }
     }
 
