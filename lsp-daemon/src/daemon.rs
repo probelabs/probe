@@ -23,6 +23,7 @@ use crate::protocol::{
 use crate::server_manager::SingleServerManager;
 use crate::socket_path::{get_default_socket_path, remove_socket_file};
 use crate::watchdog::{ProcessMonitor, Watchdog};
+use crate::workspace_cache_router::WorkspaceCacheRouter;
 use crate::workspace_resolver::WorkspaceResolver;
 use anyhow::Context;
 use anyhow::{anyhow, Result};
@@ -91,6 +92,8 @@ pub struct LspDaemon {
     persistent_store: Arc<PersistentCallGraphCache>,
     // Cache manager for unified cache operations
     cache_manager: Arc<CacheManager>,
+    // Workspace-aware cache router for multi-workspace environments
+    workspace_cache_router: Arc<WorkspaceCacheRouter>,
     // Individual LSP caches for each operation type
     definition_cache: Arc<LspCache<DefinitionInfo>>,
     references_cache: Arc<LspCache<ReferencesInfo>>,
@@ -229,14 +232,7 @@ impl LspDaemon {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30); // Default 30 seconds for language server indexing
 
-        // Initialize call graph cache with async persistence support
-        let call_graph_cache = Arc::new(
-            CallGraphCache::new_with_persistence(cache_config.clone())
-                .await
-                .context("Failed to initialize call graph cache with persistence")?,
-        );
-
-        // Initialize persistent cache store
+        // Initialize persistent cache store configuration first
         let persistent_cache_config = PersistentCacheConfig {
             cache_directory: cache_config.persistence_path.clone(),
             max_size_bytes: 1_000_000_000, // 1GB
@@ -245,9 +241,36 @@ impl LspDaemon {
         };
 
         let persistent_store = Arc::new(
-            PersistentCallGraphCache::new(persistent_cache_config)
+            PersistentCallGraphCache::new(persistent_cache_config.clone())
                 .await
                 .context("Failed to initialize persistent cache store")?,
+        );
+
+        // Initialize workspace cache router before call graph cache
+        let workspace_cache_router_config =
+            crate::workspace_cache_router::WorkspaceCacheRouterConfig {
+                max_open_caches: std::env::var("PROBE_MAX_WORKSPACE_CACHES")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(8),
+                max_parent_lookup_depth: 3,
+                cache_config_template: persistent_cache_config.clone(),
+                ..Default::default()
+            };
+
+        let workspace_cache_router = Arc::new(WorkspaceCacheRouter::new(
+            workspace_cache_router_config,
+            server_manager.clone(),
+        ));
+
+        // Initialize call graph cache with workspace router support
+        let call_graph_cache = Arc::new(
+            CallGraphCache::new_with_workspace_router(
+                cache_config.clone(),
+                workspace_cache_router.clone(),
+            )
+            .await
+            .context("Failed to initialize call graph cache with workspace router")?,
         );
 
         // Warm cache from persistence if enabled
@@ -337,6 +360,7 @@ impl LspDaemon {
             call_graph_cache,
             persistent_store,
             cache_manager,
+            workspace_cache_router,
             definition_cache,
             references_cache,
             hover_cache,
@@ -1391,6 +1415,110 @@ impl LspDaemon {
                 }
             }
 
+            // Workspace cache management requests
+            DaemonRequest::WorkspaceCacheList { request_id } => {
+                match self
+                    .workspace_cache_router
+                    .list_all_workspace_caches()
+                    .await
+                {
+                    Ok(workspaces) => DaemonResponse::WorkspaceCacheList {
+                        request_id,
+                        workspaces,
+                    },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::WorkspaceCacheInfo {
+                request_id,
+                workspace_path,
+            } => {
+                match self
+                    .workspace_cache_router
+                    .get_workspace_cache_info(workspace_path.clone())
+                    .await
+                {
+                    Ok(info_list) => {
+                        if workspace_path.is_some() && !info_list.is_empty() {
+                            // Return single workspace info
+                            DaemonResponse::WorkspaceCacheInfo {
+                                request_id,
+                                workspace_info: Some(Box::new(
+                                    info_list.into_iter().next().unwrap(),
+                                )),
+                                all_workspaces_info: None,
+                            }
+                        } else if workspace_path.is_none() && !info_list.is_empty() {
+                            // Return all workspaces info
+                            DaemonResponse::WorkspaceCacheInfo {
+                                request_id,
+                                workspace_info: None,
+                                all_workspaces_info: Some(info_list),
+                            }
+                        } else {
+                            // No info found
+                            DaemonResponse::WorkspaceCacheInfo {
+                                request_id,
+                                workspace_info: None,
+                                all_workspaces_info: None,
+                            }
+                        }
+                    }
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::WorkspaceCacheClear {
+                request_id,
+                workspace_path,
+            } => {
+                info!(
+                    "Workspace cache clear requested for: {:?}",
+                    workspace_path
+                        .as_deref()
+                        .unwrap_or("all workspaces".as_ref())
+                );
+
+                match self
+                    .workspace_cache_router
+                    .clear_workspace_cache(workspace_path)
+                    .await
+                {
+                    Ok(result) => {
+                        info!(
+                            "Workspace cache clear completed: {} workspaces cleared, {} bytes freed, {} files removed",
+                            result.cleared_workspaces.len(),
+                            result.total_size_freed_bytes,
+                            result.total_files_removed
+                        );
+
+                        if !result.errors.is_empty() {
+                            warn!(
+                                "Workspace cache clear had {} errors: {:?}",
+                                result.errors.len(),
+                                result.errors
+                            );
+                        }
+
+                        DaemonResponse::WorkspaceCacheCleared { request_id, result }
+                    }
+                    Err(e) => {
+                        error!("Workspace cache clear failed: {}", e);
+                        DaemonResponse::Error {
+                            request_id,
+                            error: e.to_string(),
+                        }
+                    }
+                }
+            }
+
             // Explicit "not implemented" responses for analysis requests we have not wired yet.
             // CRITICAL: We must return the same request_id to avoid client hanging forever waiting
             // for a response with the correct ID. This was the root cause of CI test hangs.
@@ -1482,6 +1610,9 @@ impl LspDaemon {
         if language == Language::Unknown {
             return Err(anyhow!("Unknown language for file: {:?}", file_path));
         }
+
+        // Clone workspace_hint before it's moved to the resolver
+        let workspace_hint_for_cache = workspace_hint.clone();
 
         // Resolve workspace root
         let workspace_root = {
@@ -1705,9 +1836,14 @@ impl LspDaemon {
 
             // Store in cache for future use
             let cache_clone = self.call_graph_cache.clone();
+            let workspace_hint_for_cache_closure = workspace_hint_for_cache.clone();
             let cached_future = async move {
                 match cache_clone
-                    .get_or_compute(cache_key.clone(), || async { Ok(cache_info) })
+                    .get_or_compute_with_workspace_hint(
+                        cache_key.clone(),
+                        workspace_hint_for_cache_closure,
+                        || async { Ok(cache_info) },
+                    )
                     .await
                 {
                     Ok(_) => {
@@ -2347,6 +2483,7 @@ impl LspDaemon {
             call_graph_cache: self.call_graph_cache.clone(),
             persistent_store: self.persistent_store.clone(),
             cache_manager: self.cache_manager.clone(),
+            workspace_cache_router: self.workspace_cache_router.clone(),
             definition_cache: self.definition_cache.clone(),
             references_cache: self.references_cache.clone(),
             hover_cache: self.hover_cache.clone(),

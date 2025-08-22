@@ -565,6 +565,13 @@ probe lsp cache export
 
 # Export specific operation cache
 probe lsp cache export --operation CallHierarchy
+
+# Workspace cache management
+probe lsp cache list                           # List all workspace caches
+probe lsp cache list --detailed               # Include statistics
+probe lsp cache info /path/to/workspace       # Show workspace cache info
+probe lsp cache clear-workspace               # Clear all workspace caches
+probe lsp cache clear-workspace /path/to/workspace  # Clear specific workspace
 ```
 
 ### Performance & Troubleshooting
@@ -586,6 +593,73 @@ probe lsp logs --follow | grep ERROR
 
 # Test connectivity
 probe lsp ping
+
+# Workspace cache troubleshooting
+# Check which workspace a file belongs to
+probe lsp debug workspace /path/to/file.rs
+
+# Check workspace cache permissions
+ls -la ~/Library/Caches/probe/lsp/workspaces/
+
+# Monitor cache evictions (if performance issues)
+probe lsp logs -n 100 | grep "evicted\|LRU"
+
+# Increase workspace cache limits for large monorepos
+export PROBE_LSP_WORKSPACE_CACHE_MAX=16
+export PROBE_LSP_WORKSPACE_CACHE_SIZE_MB=200
+```
+
+### Workspace Cache Troubleshooting
+
+**Common Issues and Solutions:**
+
+**1. File not found in expected workspace cache:**
+```bash
+# Debug which workspace the file maps to
+probe lsp debug workspace /path/to/problematic/file.rs
+
+# Check workspace detection markers
+ls /path/to/project/   # Look for Cargo.toml, package.json, etc.
+
+# Verify cache directory structure
+probe lsp cache list --detailed
+```
+
+**2. Cache performance degradation in monorepos:**
+```bash
+# Check if too many workspace caches are competing for memory
+probe lsp cache stats --detailed
+
+# Increase limits for large monorepos
+export PROBE_LSP_WORKSPACE_CACHE_MAX=16
+export PROBE_LSP_WORKSPACE_CACHE_SIZE_MB=200
+
+# Restart daemon to apply new settings
+probe lsp restart
+```
+
+**3. Cache directory permission issues:**
+```bash
+# Check cache directory permissions
+ls -ld ~/Library/Caches/probe/lsp/workspaces/
+
+# Fix permissions if needed (should be 700)
+chmod 700 ~/Library/Caches/probe/lsp/workspaces/
+chmod -R 600 ~/Library/Caches/probe/lsp/workspaces/*/
+```
+
+**4. Disk space issues with workspace caches:**
+```bash
+# Check cache sizes and clean up old entries
+probe lsp cache list --detailed
+probe lsp cache compact --clean-expired
+
+# Clear unused workspace caches
+probe lsp cache clear-workspace --force
+
+# Reduce per-workspace cache size limits
+export PROBE_LSP_WORKSPACE_CACHE_SIZE_MB=50
+export PROBE_LSP_WORKSPACE_CACHE_TTL_DAYS=14
 ```
 
 For comprehensive LSP documentation, see:

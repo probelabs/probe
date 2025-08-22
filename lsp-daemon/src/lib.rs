@@ -33,6 +33,7 @@ pub mod health_monitor;
 mod pool; // Keep for now but mark as deprecated
 pub mod server_manager;
 pub mod watchdog;
+pub mod workspace_cache_router;
 mod workspace_resolver;
 
 // Indexing subsystem
@@ -90,6 +91,11 @@ pub use indexing::{
 // Re-export file watcher types for external use
 pub use file_watcher::{
     FileEvent, FileEventType, FileWatcher, FileWatcherConfig, FileWatcherStats,
+};
+
+// Re-export workspace cache router types for external use
+pub use workspace_cache_router::{
+    WorkspaceCacheRouter, WorkspaceCacheRouterConfig, WorkspaceCacheRouterStats, WorkspaceStats,
 };
 
 // Re-export pipeline-specific types

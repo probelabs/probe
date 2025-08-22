@@ -1219,6 +1219,73 @@ impl LspClient {
             _ => Err(anyhow!("Unexpected response type")),
         }
     }
+
+    // Workspace cache management methods
+
+    /// List all workspace caches
+    pub async fn list_workspace_caches(
+        &mut self,
+    ) -> Result<Vec<lsp_daemon::protocol::WorkspaceCacheEntry>> {
+        let request = DaemonRequest::WorkspaceCacheList {
+            request_id: Uuid::new_v4(),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::WorkspaceCacheList { workspaces, .. } => Ok(workspaces),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Get detailed information about workspace caches
+    pub async fn get_workspace_cache_info(
+        &mut self,
+        workspace_path: Option<std::path::PathBuf>,
+    ) -> Result<Option<Vec<lsp_daemon::protocol::WorkspaceCacheInfo>>> {
+        let request = DaemonRequest::WorkspaceCacheInfo {
+            request_id: Uuid::new_v4(),
+            workspace_path,
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::WorkspaceCacheInfo {
+                workspace_info,
+                all_workspaces_info,
+                ..
+            } => {
+                if let Some(single_info) = workspace_info {
+                    Ok(Some(vec![*single_info]))
+                } else {
+                    Ok(all_workspaces_info)
+                }
+            }
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Clear workspace cache(s)
+    pub async fn clear_workspace_cache(
+        &mut self,
+        workspace_path: Option<std::path::PathBuf>,
+    ) -> Result<lsp_daemon::protocol::WorkspaceClearResult> {
+        let request = DaemonRequest::WorkspaceCacheClear {
+            request_id: Uuid::new_v4(),
+            workspace_path,
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::WorkspaceCacheCleared { result, .. } => Ok(result),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
 }
 
 #[cfg(test)]

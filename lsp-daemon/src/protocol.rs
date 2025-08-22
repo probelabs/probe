@@ -158,6 +158,20 @@ pub enum DaemonRequest {
         clean_expired: bool,
         target_size_mb: Option<usize>,
     },
+
+    // Workspace cache management requests
+    WorkspaceCacheList {
+        request_id: Uuid,
+    },
+    WorkspaceCacheInfo {
+        request_id: Uuid,
+        workspace_path: Option<PathBuf>,
+    },
+    WorkspaceCacheClear {
+        request_id: Uuid,
+        workspace_path: Option<PathBuf>,
+    },
+
     // Git-aware requests
     GetCallHierarchyAtCommit {
         request_id: Uuid,
@@ -310,6 +324,22 @@ pub enum DaemonResponse {
         request_id: Uuid,
         result: CompactResult,
     },
+
+    // Workspace cache management responses
+    WorkspaceCacheList {
+        request_id: Uuid,
+        workspaces: Vec<WorkspaceCacheEntry>,
+    },
+    WorkspaceCacheInfo {
+        request_id: Uuid,
+        workspace_info: Option<Box<WorkspaceCacheInfo>>,
+        all_workspaces_info: Option<Vec<WorkspaceCacheInfo>>,
+    },
+    WorkspaceCacheCleared {
+        request_id: Uuid,
+        result: WorkspaceClearResult,
+    },
+
     // Git-aware responses
     CacheHistory {
         request_id: Uuid,
@@ -613,6 +643,112 @@ impl std::fmt::Display for LogLevel {
             LogLevel::Error => write!(f, "ERROR"),
         }
     }
+}
+
+// Workspace cache management types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceCacheEntry {
+    pub workspace_id: String,
+    pub workspace_root: PathBuf,
+    pub cache_path: PathBuf,
+    pub size_bytes: u64,
+    pub file_count: usize,
+    pub last_accessed: String, // ISO 8601 timestamp
+    pub created_at: String,    // ISO 8601 timestamp
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceCacheInfo {
+    pub workspace_id: String,
+    pub workspace_root: PathBuf,
+    pub cache_path: PathBuf,
+    pub size_bytes: u64,
+    pub file_count: usize,
+    pub last_accessed: String,
+    pub created_at: String,
+    // Additional fields for compatibility with management.rs
+    pub disk_size_bytes: u64,
+    pub files_indexed: u64,
+    pub languages: Vec<String>,
+    // Router statistics
+    pub router_stats: Option<WorkspaceCacheRouterStats>,
+    // Cache statistics from the persistent cache
+    pub cache_stats: Option<CacheStatistics>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceCacheRouterStats {
+    pub max_open_caches: usize,
+    pub current_open_caches: usize,
+    pub total_workspaces_seen: usize,
+    pub access_count: u64,
+    pub hit_rate: f64,
+    pub miss_rate: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceClearResult {
+    pub cleared_workspaces: Vec<WorkspaceClearEntry>,
+    pub total_size_freed_bytes: u64,
+    pub total_files_removed: usize,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceClearEntry {
+    pub workspace_id: String,
+    pub workspace_root: PathBuf,
+    pub success: bool,
+    pub size_freed_bytes: u64,
+    pub files_removed: usize,
+    pub error: Option<String>,
+}
+
+// Cache statistics for workspace caches
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheStatistics {
+    pub total_size_bytes: u64,
+    pub disk_size_bytes: u64,
+    pub total_entries: u64,
+    pub entries_per_file: std::collections::HashMap<PathBuf, u64>,
+    pub entries_per_language: std::collections::HashMap<String, u64>,
+    pub hit_rate: f64,
+    pub miss_rate: f64,
+    pub age_distribution: AgeDistribution,
+    pub most_accessed: Vec<HotSpot>,
+    pub memory_usage: MemoryUsage,
+}
+
+// Generic cache operation results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClearResult {
+    pub entries_removed: u64,
+    pub files_affected: u64,
+    pub branches_affected: u64,
+    pub commits_affected: u64,
+    pub bytes_reclaimed: u64,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportResult {
+    pub entries_imported: u64,
+    pub entries_merged: u64,
+    pub entries_replaced: u64,
+    pub validation_errors: Vec<String>,
+    pub bytes_imported: u64,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactResult {
+    pub expired_entries_removed: u64,
+    pub size_based_entries_removed: u64,
+    pub size_before_bytes: u64,
+    pub size_after_bytes: u64,
+    pub bytes_reclaimed: u64,
+    pub fragmentation_reduced: f64,
+    pub duration_ms: u64,
 }
 
 pub struct MessageCodec;
@@ -1077,92 +1213,7 @@ pub struct HotSpot {
 
 use serde_json::json;
 
-// Cache management data structures
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheStatistics {
-    /// Total cache size (memory and disk)
-    pub total_size_bytes: u64,
-    /// Disk size in bytes
-    pub disk_size_bytes: u64,
-    /// Number of entries (total, per file, per language)
-    pub total_entries: u64,
-    pub entries_per_file: std::collections::HashMap<PathBuf, u64>,
-    pub entries_per_language: std::collections::HashMap<String, u64>,
-    /// Hit/miss rates
-    pub hit_rate: f64,
-    pub miss_rate: f64,
-    /// Age distribution of entries
-    pub age_distribution: AgeDistribution,
-    /// Hot spots (most accessed entries)
-    pub most_accessed: Vec<HotSpot>,
-    /// Memory usage breakdown
-    pub memory_usage: MemoryUsage,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgeDistribution {
-    pub entries_last_hour: u64,
-    pub entries_last_day: u64,
-    pub entries_last_week: u64,
-    pub entries_last_month: u64,
-    pub entries_older: u64,
-}
-
-// Note: HotSpot is defined above with the proper fields
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryUsage {
-    pub in_memory_cache_bytes: u64,
-    pub persistent_cache_bytes: u64,
-    pub metadata_bytes: u64,
-    pub index_bytes: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClearResult {
-    /// Total entries removed
-    pub entries_removed: u64,
-    /// Breakdown by type
-    pub files_affected: u64,
-    pub branches_affected: u64,
-    pub commits_affected: u64,
-    /// Size reclaimed
-    pub bytes_reclaimed: u64,
-    /// Time taken
-    pub duration_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImportResult {
-    /// Total entries imported
-    pub entries_imported: u64,
-    /// Entries that conflicted with existing ones
-    pub entries_merged: u64,
-    pub entries_replaced: u64,
-    /// Validation results
-    pub validation_errors: Vec<String>,
-    /// Size information
-    pub bytes_imported: u64,
-    /// Time taken
-    pub duration_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompactResult {
-    /// Entries removed during compaction
-    pub expired_entries_removed: u64,
-    pub size_based_entries_removed: u64,
-    /// Size before/after
-    pub size_before_bytes: u64,
-    pub size_after_bytes: u64,
-    /// Space reclaimed
-    pub bytes_reclaimed: u64,
-    /// Database optimization results
-    pub fragmentation_reduced: f64,
-    /// Time taken
-    pub duration_ms: u64,
-}
-
+// Additional cache management types needed by cache_management.rs
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClearFilter {
     pub older_than_days: Option<u64>,
@@ -1183,7 +1234,23 @@ pub struct CompactOptions {
     pub target_size_mb: Option<usize>,
 }
 
-/// Git context information (stub - git functionality removed)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgeDistribution {
+    pub entries_last_hour: u64,
+    pub entries_last_day: u64,
+    pub entries_last_week: u64,
+    pub entries_last_month: u64,
+    pub entries_older: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryUsage {
+    pub in_memory_cache_bytes: u64,
+    pub persistent_cache_bytes: u64,
+    pub metadata_bytes: u64,
+    pub index_bytes: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitContext {
     pub commit_hash: String,

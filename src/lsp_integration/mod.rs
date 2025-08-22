@@ -296,6 +296,41 @@ pub enum CacheSubcommands {
         #[clap(long)]
         target_size_mb: Option<usize>,
     },
+
+    /// List all workspace caches
+    List {
+        /// Show detailed information for each workspace cache
+        #[clap(long)]
+        detailed: bool,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Show detailed information about workspace caches
+    Info {
+        /// Workspace path to get info for (optional, shows all if not specified)
+        workspace: Option<std::path::PathBuf>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Clear workspace caches
+    ClearWorkspace {
+        /// Workspace path to clear (optional, clears all if not specified)
+        workspace: Option<std::path::PathBuf>,
+
+        /// Force clear without confirmation
+        #[clap(short = 'f', long = "force")]
+        force: bool,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
 }
 
 use anyhow::Result;

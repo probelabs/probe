@@ -132,6 +132,9 @@ pub struct CallGraphCache {
 
     /// Channel for background persistence writes
     write_channel: Option<mpsc::UnboundedSender<PersistenceMessage>>,
+
+    /// Workspace-aware cache router for L2 cache operations
+    workspace_cache_router: Option<Arc<crate::workspace_cache_router::WorkspaceCacheRouter>>,
 }
 
 impl CallGraphCache {
@@ -162,6 +165,7 @@ impl CallGraphCache {
             last_eviction: Arc::new(AsyncMutex::new(Instant::now())),
             persistent_store: None,
             write_channel: None,
+            workspace_cache_router: None,
         }
     }
 
@@ -217,14 +221,94 @@ impl CallGraphCache {
             last_eviction: Arc::new(AsyncMutex::new(Instant::now())),
             persistent_store,
             write_channel,
+            workspace_cache_router: None,
+        })
+    }
+
+    /// Create a new cache instance with workspace-aware routing
+    pub async fn new_with_workspace_router(
+        config: CallGraphCacheConfig,
+        workspace_cache_router: Arc<crate::workspace_cache_router::WorkspaceCacheRouter>,
+    ) -> Result<Self> {
+        let persistence_allowed =
+            config.persistence_enabled && !Self::persistence_disabled_in_env();
+        let (persistent_store, write_channel) = if persistence_allowed {
+            // Create persistence config from cache config
+            let persistence_config = crate::persistent_cache::PersistentCacheConfig {
+                cache_directory: config.persistence_path.clone(),
+                max_size_bytes: 0, // Unlimited by default
+                ttl_days: 30,      // 30 days default
+                compress: true,
+            };
+
+            // Create persistent store
+            let store = Arc::new(
+                crate::persistent_cache::PersistentCallGraphCache::new(persistence_config).await?,
+            );
+
+            // Create write channel for background persistence
+            let (write_tx, write_rx) = mpsc::unbounded_channel();
+
+            // Spawn background writer task
+            let store_clone = Arc::clone(&store);
+            let batch_size = config.persistence_write_batch_size;
+            let write_interval = config.persistence_write_interval;
+
+            tokio::spawn(Self::background_writer(
+                write_rx,
+                store_clone,
+                batch_size,
+                write_interval,
+            ));
+
+            info!("Persistent cache enabled with background writer and workspace router");
+            (Some(store), Some(write_tx))
+        } else {
+            info!("Workspace router enabled without persistence");
+            (None, None)
+        };
+
+        Ok(Self {
+            nodes: DashMap::new(),
+            id_to_keys: DashMap::new(),
+            outgoing: DashMap::new(),
+            incoming: DashMap::new(),
+            file_index: DashMap::new(),
+            pos_index: DashMap::new(),
+            key_to_positions: DashMap::new(),
+            access_meta: DashMap::new(),
+            inflight: DashMap::new(),
+            config,
+            last_eviction: Arc::new(AsyncMutex::new(Instant::now())),
+            persistent_store,
+            write_channel,
+            workspace_cache_router: Some(workspace_cache_router),
         })
     }
 
     /// Get a cached node or compute it if not present using layered caching:
     /// L1: In-memory cache (fastest, <1ms)
-    /// L2: Persistent storage (~1-5ms)
+    /// L2: Workspace-aware persistent storage (~1-5ms)
     /// L3: LSP server computation (100ms-10s)
     pub async fn get_or_compute<F, Fut>(&self, key: NodeKey, compute: F) -> Result<Arc<CachedNode>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<CallHierarchyInfo>>,
+    {
+        self.get_or_compute_with_workspace_hint(key, None, compute)
+            .await
+    }
+
+    /// Get a cached node or compute it if not present using layered caching with workspace hint:
+    /// L1: In-memory cache (fastest, <1ms)
+    /// L2: Workspace-aware persistent storage (~1-5ms)
+    /// L3: LSP server computation (100ms-10s)
+    pub async fn get_or_compute_with_workspace_hint<F, Fut>(
+        &self,
+        key: NodeKey,
+        workspace_hint: Option<std::path::PathBuf>,
+        compute: F,
+    ) -> Result<Arc<CachedNode>>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<CallHierarchyInfo>>,
@@ -250,11 +334,159 @@ impl CallGraphCache {
             return Ok(node);
         }
 
-        // L2: Check persistent storage if available
+        // L2: Check workspace-aware persistent storage if available
+        // Use workspace router for workspace-specific caching if available
+        if let Some(ref workspace_router) = self.workspace_cache_router {
+            if let Some(workspace_hint) = workspace_hint.as_ref() {
+                debug!(
+                    "Using workspace router for L2 cache lookup with workspace hint: {}",
+                    workspace_hint.display()
+                );
+
+                // Use workspace router to get priority-ordered read caches
+                match workspace_router.pick_read_path(workspace_hint).await {
+                    Ok(read_caches) => {
+                        // Try each cache in priority order
+                        for (cache_idx, cache) in read_caches.iter().enumerate() {
+                            match cache.get(&key).await {
+                                Ok(Some(persisted_node)) => {
+                                    debug!(
+                                        "L2 workspace cache hit for {}:{} (cache {} of {})",
+                                        key.file.display(),
+                                        key.symbol,
+                                        cache_idx + 1,
+                                        read_caches.len()
+                                    );
+
+                                    // Create CachedNode from persisted data
+                                    let node =
+                                        Arc::new(CachedNode::new(key.clone(), persisted_node.info));
+
+                                    // Insert into L1 cache for future access
+                                    self.insert_node(node.clone());
+
+                                    // Clean up in-flight tracker
+                                    self.inflight.remove(&key);
+
+                                    return Ok(node);
+                                }
+                                Ok(None) => {
+                                    debug!(
+                                        "L2 workspace cache miss for {}:{} (cache {} of {})",
+                                        key.file.display(),
+                                        key.symbol,
+                                        cache_idx + 1,
+                                        read_caches.len()
+                                    );
+                                    // Continue to next cache
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "L2 workspace cache error for {}:{} (cache {} of {}): {}",
+                                        key.file.display(),
+                                        key.symbol,
+                                        cache_idx + 1,
+                                        read_caches.len(),
+                                        e
+                                    );
+                                    // Continue to next cache
+                                }
+                            }
+                        }
+                        debug!(
+                            "L2 cache miss for {}:{} (all {} workspace caches checked)",
+                            key.file.display(),
+                            key.symbol,
+                            read_caches.len()
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to get workspace read path for {}:{}: {}",
+                            key.file.display(),
+                            key.symbol,
+                            e
+                        );
+                        // Fall back to direct persistent store if available
+                    }
+                }
+            } else {
+                debug!(
+                    "No workspace hint provided, using workspace router with file path: {}",
+                    key.file.display()
+                );
+
+                // Use file path from key as workspace hint
+                match workspace_router.pick_read_path(&key.file).await {
+                    Ok(read_caches) => {
+                        // Try each cache in priority order
+                        for (cache_idx, cache) in read_caches.iter().enumerate() {
+                            match cache.get(&key).await {
+                                Ok(Some(persisted_node)) => {
+                                    debug!(
+                                        "L2 workspace cache hit for {}:{} (inferred workspace, cache {} of {})", 
+                                        key.file.display(),
+                                        key.symbol,
+                                        cache_idx + 1,
+                                        read_caches.len()
+                                    );
+
+                                    // Create CachedNode from persisted data
+                                    let node =
+                                        Arc::new(CachedNode::new(key.clone(), persisted_node.info));
+
+                                    // Insert into L1 cache for future access
+                                    self.insert_node(node.clone());
+
+                                    // Clean up in-flight tracker
+                                    self.inflight.remove(&key);
+
+                                    return Ok(node);
+                                }
+                                Ok(None) => {
+                                    // Continue to next cache
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "L2 workspace cache error for {}:{} (inferred workspace, cache {} of {}): {}",
+                                        key.file.display(),
+                                        key.symbol,
+                                        cache_idx + 1,
+                                        read_caches.len(),
+                                        e
+                                    );
+                                    // Continue to next cache
+                                }
+                            }
+                        }
+                        debug!(
+                            "L2 cache miss for {}:{} (inferred workspace, all {} caches checked)",
+                            key.file.display(),
+                            key.symbol,
+                            read_caches.len()
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to get workspace read path for file {}: {}",
+                            key.file.display(),
+                            e
+                        );
+                        // Fall back to direct persistent store if available
+                    }
+                }
+            }
+        }
+
+        // Fallback: Check direct persistent storage if workspace router is not available
         if let Some(ref persistent_store) = self.persistent_store {
             match persistent_store.get(&key).await {
                 Ok(Some(persisted_node)) => {
-                    debug!("L2 cache hit for {}:{}", key.file.display(), key.symbol);
+                    debug!(
+                        "L2 cache hit for {}:{} (direct fallback)",
+                        key.file.display(),
+                        key.symbol
+                    );
 
                     // Create CachedNode from persisted data
                     let node = Arc::new(CachedNode::new(key.clone(), persisted_node.info));
@@ -268,7 +500,11 @@ impl CallGraphCache {
                     return Ok(node);
                 }
                 Ok(None) => {
-                    debug!("L2 cache miss for {}:{}", key.file.display(), key.symbol);
+                    debug!(
+                        "L2 cache miss for {}:{} (direct fallback)",
+                        key.file.display(),
+                        key.symbol
+                    );
                 }
                 Err(e) => {
                     warn!(
@@ -297,6 +533,57 @@ impl CallGraphCache {
         self.insert_node(node.clone());
 
         // Write-through to L2 cache if available
+        // Use workspace router for writes if available, otherwise fall back to direct persistence
+        if let Some(ref workspace_router) = self.workspace_cache_router {
+            // Determine workspace for write
+            let write_workspace_hint = workspace_hint.as_ref().unwrap_or(&key.file);
+
+            // Use workspace router to pick the write target cache
+            match workspace_router
+                .pick_write_target(write_workspace_hint)
+                .await
+            {
+                Ok(write_cache) => {
+                    // Try to detect language from file extension (fallback to Unknown)
+                    let language = key
+                        .file
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .and_then(Language::from_str)
+                        .unwrap_or(Language::Unknown);
+
+                    // Write directly to the workspace-specific cache
+                    if let Err(e) = write_cache
+                        .insert(key.clone(), info.clone(), language)
+                        .await
+                    {
+                        warn!(
+                            "Failed to write to workspace cache for {}:{}: {}",
+                            key.file.display(),
+                            key.symbol,
+                            e
+                        );
+                    } else {
+                        debug!(
+                            "L2 workspace cache write successful for {}:{}",
+                            key.file.display(),
+                            key.symbol
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to pick write target for {}:{}: {}",
+                        key.file.display(),
+                        key.symbol,
+                        e
+                    );
+                    // Fall back to background writer if available
+                }
+            }
+        }
+
+        // Fallback: Use background writer for direct persistence if workspace router is not available
         if let Some(ref write_channel) = self.write_channel {
             // Try to detect language from file extension (fallback to Unknown)
             let language = key

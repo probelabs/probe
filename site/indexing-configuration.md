@@ -82,6 +82,55 @@ export PROBE_LSP_PERSISTENCE_BATCH_SIZE=100
 export PROBE_LSP_PERSISTENCE_INTERVAL_MS=500
 ```
 
+### Per-Workspace Cache Configuration
+
+#### Workspace Cache Settings
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `PROBE_LSP_WORKSPACE_CACHE_MAX` | Integer | `8` | Maximum number of concurrent open workspace caches |
+| `PROBE_LSP_WORKSPACE_CACHE_SIZE_MB` | Integer | `100` | Size limit per workspace cache in MB |
+| `PROBE_LSP_WORKSPACE_LOOKUP_DEPTH` | Integer | `3` | Maximum parent directories to search for workspace markers |
+| `PROBE_LSP_WORKSPACE_CACHE_DIR` | String | `~/Library/Caches/probe/lsp/workspaces` | Base directory for all workspace caches |
+| `PROBE_LSP_WORKSPACE_CACHE_TTL_DAYS` | Integer | `30` | Auto-cleanup threshold for workspace caches |
+| `PROBE_LSP_WORKSPACE_CACHE_COMPRESS` | Boolean | `true` | Enable compression for workspace cache storage |
+
+```bash
+# Per-workspace cache configuration for monorepos
+export PROBE_LSP_WORKSPACE_CACHE_MAX=16          # More concurrent caches for large monorepos
+export PROBE_LSP_WORKSPACE_CACHE_SIZE_MB=200     # Larger cache per workspace
+export PROBE_LSP_WORKSPACE_LOOKUP_DEPTH=5        # Deeper workspace discovery
+export PROBE_LSP_WORKSPACE_CACHE_TTL_DAYS=60     # Keep caches longer
+
+# Custom cache directory (e.g., on faster SSD)
+export PROBE_LSP_WORKSPACE_CACHE_DIR=/fast/ssd/probe/workspaces
+
+# Development environment with frequent cache clearing
+export PROBE_LSP_WORKSPACE_CACHE_SIZE_MB=50      # Smaller caches for development
+export PROBE_LSP_WORKSPACE_CACHE_TTL_DAYS=7      # Clean up more frequently
+```
+
+#### Workspace Cache Behavior
+
+**Cache Isolation**: Each workspace gets its own cache directory with format:
+```
+{base_dir}/{workspace_hash}_{workspace_name}/
+├── call_graph.db        # sled database with call hierarchy data
+├── metadata.json        # cache statistics and metadata
+└── ...                  # other operation-specific caches
+```
+
+**LRU Management**: When the maximum number of open caches is exceeded:
+1. Least recently used workspace caches are evicted from memory
+2. Cache data remains on disk for future use
+3. Cache statistics are preserved across evictions
+
+**Workspace Detection Priority** (nearest workspace wins):
+1. **Language-specific markers**: `Cargo.toml`, `package.json`, `go.mod`, etc.
+2. **Build system markers**: `CMakeLists.txt`, `Makefile`, `pom.xml`
+3. **Version control markers**: `.git`, `.svn`, `.hg`
+4. **Generic project markers**: `README.md`, `LICENSE`
+
 ### Memory Management
 
 | Variable | Type | Default | Description |
