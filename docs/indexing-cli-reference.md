@@ -1042,8 +1042,13 @@ probe lsp cache <SUBCOMMAND> [OPTIONS]
 | `stats` | Show comprehensive cache statistics |
 | `clear` | Clear cache entries with optional filtering |
 | `export` | Export cache contents to JSON |
+| `list` | List all workspace caches |
+| `info` | Show detailed workspace cache information |
+| `clear-workspace` | Clear workspace-specific caches |
 
 **Note**: Cache uses content-addressed storage with MD5 hashing for automatic invalidation when files change. Cache provides 250,000x+ performance improvements for repeated queries.
+
+**Per-Workspace Caching**: Probe automatically creates separate cache instances for each workspace, providing cache isolation and better performance for monorepos. Each workspace cache is stored in `~/Library/Caches/probe/lsp/workspaces/{hash}_{name}/`.
 
 #### `probe lsp cache stats`
 
@@ -1108,6 +1113,108 @@ probe lsp cache export --operation CallHierarchy
 
 # Monitor cache performance in real-time
 watch -n 1 'probe lsp cache stats'
+```
+
+### Workspace Cache Commands
+
+#### `probe lsp cache list`
+
+List all workspace caches with their status and basic statistics.
+
+```bash
+probe lsp cache list [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--detailed` | Flag | `false` | Include cache statistics for each workspace |
+| `--format <FORMAT>` | String | `terminal` | Output format: `terminal`, `json` |
+
+#### `probe lsp cache info`
+
+Show detailed information about workspace caches.
+
+```bash
+probe lsp cache info [WORKSPACE_PATH] [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `WORKSPACE_PATH` | String | All | Optional workspace path to get info for |
+| `--format <FORMAT>` | String | `terminal` | Output format: `terminal`, `json` |
+
+#### `probe lsp cache clear-workspace`
+
+Clear caches for specific workspaces.
+
+```bash
+probe lsp cache clear-workspace [WORKSPACE_PATH] [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `WORKSPACE_PATH` | String | All | Optional workspace path to clear (clears all if not specified) |
+| `--force` | Flag | `false` | Skip confirmation prompt |
+| `--format <FORMAT>` | String | `terminal` | Output format: `terminal`, `json` |
+
+#### Workspace Cache Examples
+
+```bash
+# List all workspace caches
+probe lsp cache list
+
+# List with detailed statistics
+probe lsp cache list --detailed
+
+# Get JSON output for scripting
+probe lsp cache list --format json
+
+# Show info for all workspaces
+probe lsp cache info
+
+# Show info for specific workspace
+probe lsp cache info /path/to/my-project
+
+# Clear all workspace caches (with confirmation)
+probe lsp cache clear-workspace
+
+# Clear specific workspace cache
+probe lsp cache clear-workspace /path/to/my-project
+
+# Force clear without confirmation
+probe lsp cache clear-workspace --force
+
+# Clear specific workspace without confirmation
+probe lsp cache clear-workspace /path/to/my-project --force
+```
+
+**Example Output:**
+```
+$ probe lsp cache list --detailed
+
+Workspace Caches (3 active, 5 total):
+
+✓ abc123_my-rust-project
+  Path: /Users/dev/projects/my-rust-project
+  Size: 45.2 MB (3,421 entries)
+  Hit Rate: 94.5%
+  Last Used: 2 minutes ago
+  
+✓ def456_backend-api
+  Path: /Users/dev/monorepo/backend
+  Size: 23.1 MB (1,897 entries)
+  Hit Rate: 91.2%
+  Last Used: 5 minutes ago
+
+○ ghi789_frontend-app
+  Path: /Users/dev/monorepo/frontend
+  Size: 12.4 MB (892 entries)
+  Hit Rate: 88.7%
+  Last Used: 2 hours ago (evicted from memory)
+
+Memory Usage: 68.3 MB / 800 MB (8.5%)
+Active Caches: 3 / 8 max
+LRU Evictions: 2 total
 ```
 
 ## Configuration Management

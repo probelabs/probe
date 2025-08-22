@@ -119,6 +119,31 @@ The daemon automatically:
 3. **Manages** server lifecycle and connection pooling
 4. **Maintains** separate caches for each language/workspace combination
 
+### Per-Workspace Cache System
+
+Probe implements sophisticated per-workspace caching with intelligent cache routing:
+
+**Workspace Cache Isolation:**
+```
+~/Library/Caches/probe/lsp/workspaces/
+├── abc123_backend-api/          # Backend service cache
+│   ├── call_graph.db
+│   └── metadata.json
+├── def456_frontend-app/         # Frontend app cache
+│   ├── call_graph.db
+│   └── metadata.json  
+└── ghi789_shared-lib/          # Shared library cache
+    ├── call_graph.db
+    └── metadata.json
+```
+
+**Key Benefits:**
+- **Cache Isolation**: Each project has its own cache, preventing cross-project pollution
+- **Monorepo Support**: Nested workspaces (e.g., backend/, frontend/) get separate caches
+- **Intelligent Routing**: Files automatically cache in their nearest workspace
+- **LRU Management**: Least-used workspace caches evicted when memory limits reached
+- **Team Collaboration**: Workspace-specific caches can be shared and backed up
+
 ### Content-Addressed Caching
 
 Cache keys are based on file content, not timestamps:

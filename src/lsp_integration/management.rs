@@ -1283,6 +1283,20 @@ impl LspManager {
                     println!("Target size: {size} MB");
                 }
             }
+            CacheSubcommands::List { detailed, format } => {
+                Self::handle_workspace_cache_list(&mut client, *detailed, format).await?
+            }
+            CacheSubcommands::Info { workspace, format } => {
+                Self::handle_workspace_cache_info(&mut client, workspace.as_ref(), format).await?
+            }
+            CacheSubcommands::ClearWorkspace {
+                workspace,
+                force,
+                format,
+            } => {
+                Self::handle_workspace_cache_clear(&mut client, workspace.as_ref(), *force, format)
+                    .await?
+            }
         }
 
         Ok(())
@@ -1848,6 +1862,331 @@ impl LspManager {
             let minutes = (total_seconds % 3600) / 60;
             format!("{hours}h {minutes}m")
         }
+    }
+
+    /// Handle workspace cache list command
+    async fn handle_workspace_cache_list(
+        client: &mut LspClient,
+        detailed: bool,
+        format: &str,
+    ) -> Result<()> {
+        let workspaces = client.list_workspace_caches().await?;
+
+        match format {
+            "json" => {
+                println!("{}", serde_json::to_string_pretty(&workspaces)?);
+            }
+            _ => {
+                if workspaces.is_empty() {
+                    println!("{}", "No workspace caches found".yellow());
+                    return Ok(());
+                }
+
+                println!("{}", "Workspace Caches".bold().green());
+                println!();
+
+                for workspace in &workspaces {
+                    println!(
+                        "{}",
+                        format!("Workspace: {}", workspace.workspace_id).bold()
+                    );
+                    println!(
+                        "  {} {}",
+                        "Path:".bold(),
+                        workspace.workspace_root.display()
+                    );
+                    println!(
+                        "  {} {}",
+                        "Cache Dir:".bold(),
+                        workspace.cache_path.display()
+                    );
+                    println!(
+                        "  {} {}",
+                        "Size:".bold(),
+                        format_bytes(workspace.size_bytes as usize)
+                    );
+                    println!("  {} {}", "Files:".bold(), workspace.file_count);
+                    println!("  {} {}", "Last Accessed:".bold(), workspace.last_accessed);
+
+                    if detailed {
+                        println!("  {} {}", "Created:".bold(), workspace.created_at);
+                        println!(
+                            "  {} {}",
+                            "Cache Directory:".bold(),
+                            workspace.cache_path.display()
+                        );
+                    }
+
+                    println!();
+                }
+
+                // Summary
+                let total_size: u64 = workspaces.iter().map(|w| w.size_bytes).sum();
+                let total_entries: u64 = workspaces.iter().map(|w| w.file_count as u64).sum();
+                let open_count = workspaces.len(); // All listed workspaces are accessible
+
+                println!("{}", "Summary".bold().cyan());
+                println!("  {} {}", "Total Workspaces:".bold(), workspaces.len());
+                println!("  {} {}", "Open in Memory:".bold(), open_count);
+                println!(
+                    "  {} {}",
+                    "Total Size:".bold(),
+                    format_bytes(total_size as usize)
+                );
+                println!("  {} {}", "Total Entries:".bold(), total_entries);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle workspace cache info command
+    async fn handle_workspace_cache_info(
+        client: &mut LspClient,
+        workspace_path: Option<&std::path::PathBuf>,
+        format: &str,
+    ) -> Result<()> {
+        let info = client
+            .get_workspace_cache_info(workspace_path.cloned())
+            .await?;
+
+        match format {
+            "json" => {
+                println!("{}", serde_json::to_string_pretty(&info)?);
+            }
+            _ => {
+                match info {
+                    Some(workspaces_info) => {
+                        if workspaces_info.is_empty() {
+                            println!("{}", "No workspace cache information available".yellow());
+                            return Ok(());
+                        }
+
+                        for workspace_info in &workspaces_info {
+                            println!(
+                                "{}",
+                                format!(
+                                    "Workspace Cache Information: {}",
+                                    workspace_info.workspace_id
+                                )
+                                .bold()
+                                .green()
+                            );
+                            println!();
+
+                            // Basic information
+                            println!("{}", "Basic Information".bold().cyan());
+                            println!(
+                                "  {} {}",
+                                "Workspace ID:".bold(),
+                                workspace_info.workspace_id
+                            );
+                            println!(
+                                "  {} {}",
+                                "Workspace Root:".bold(),
+                                workspace_info.workspace_root.display()
+                            );
+                            println!(
+                                "  {} {}",
+                                "Cache Directory:".bold(),
+                                workspace_info.cache_path.display()
+                            );
+                            println!();
+
+                            // Access statistics
+                            println!("{}", "Access Statistics".bold().cyan());
+                            println!(
+                                "  {} {}",
+                                "Last Accessed:".bold(),
+                                workspace_info.last_accessed
+                            );
+                            println!("  {} {}", "Created At:".bold(), workspace_info.created_at);
+                            println!();
+
+                            // Cache content statistics
+                            println!("{}", "Cache Content".bold().cyan());
+                            println!("  {} {}", "Entry Count:".bold(), workspace_info.file_count);
+                            println!(
+                                "  {} {}",
+                                "Size in Memory:".bold(),
+                                format_bytes(workspace_info.size_bytes as usize)
+                            );
+                            println!(
+                                "  {} {}",
+                                "Size on Disk:".bold(),
+                                format_bytes(workspace_info.disk_size_bytes as usize)
+                            );
+                            println!(
+                                "  {} {}",
+                                "Files Indexed:".bold(),
+                                workspace_info.files_indexed
+                            );
+
+                            if !workspace_info.languages.is_empty() {
+                                println!(
+                                    "  {} {}",
+                                    "Languages:".bold(),
+                                    workspace_info.languages.join(", ")
+                                );
+                            }
+                            println!();
+
+                            // Performance statistics
+                            if let Some(ref cache_stats) = workspace_info.cache_stats {
+                                println!("{}", "Performance".bold().cyan());
+                                println!(
+                                    "  {} {:.1}%",
+                                    "Hit Rate:".bold(),
+                                    cache_stats.hit_rate * 100.0
+                                );
+                                println!(
+                                    "  {} {:.1}%",
+                                    "Miss Rate:".bold(),
+                                    cache_stats.miss_rate * 100.0
+                                );
+                                println!();
+                            }
+
+                            // Router statistics
+                            if let Some(ref router_stats) = workspace_info.router_stats {
+                                println!("{}", "Router Stats".bold().cyan());
+                                println!(
+                                    "  {} {}",
+                                    "Access Count:".bold(),
+                                    router_stats.access_count
+                                );
+                                println!(
+                                    "  {} {} / {}",
+                                    "Open Caches:".bold(),
+                                    router_stats.current_open_caches,
+                                    router_stats.max_open_caches
+                                );
+                            }
+
+                            if workspaces_info.len() > 1 {
+                                println!();
+                                println!("{}", "─".repeat(60).dimmed());
+                                println!();
+                            }
+                        }
+                    }
+                    None => {
+                        if workspace_path.is_some() {
+                            println!(
+                                "{}",
+                                "No cache information found for the specified workspace".yellow()
+                            );
+                        } else {
+                            println!("{}", "No workspace cache information available".yellow());
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle workspace cache clear command
+    async fn handle_workspace_cache_clear(
+        client: &mut LspClient,
+        workspace_path: Option<&std::path::PathBuf>,
+        force: bool,
+        format: &str,
+    ) -> Result<()> {
+        // Confirmation prompt for destructive operations
+        if !force && std::env::var("PROBE_BATCH").unwrap_or_default() != "1" {
+            use std::io::{self, Write};
+
+            if workspace_path.is_some() {
+                print!("Are you sure you want to clear the workspace cache? [y/N]: ");
+            } else {
+                print!("Are you sure you want to clear ALL workspace caches? [y/N]: ");
+            }
+            io::stdout().flush()?;
+
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+
+            if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
+                println!("{}", "Operation cancelled".yellow());
+                return Ok(());
+            }
+        }
+
+        let result = client
+            .clear_workspace_cache(workspace_path.cloned())
+            .await?;
+
+        match format {
+            "json" => {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            _ => {
+                if result.cleared_workspaces.is_empty() {
+                    println!("{}", "No workspace caches to clear".yellow());
+                    return Ok(());
+                }
+
+                println!("{}", "Cache Clear Results".bold().green());
+                println!();
+
+                for workspace_result in &result.cleared_workspaces {
+                    if workspace_result.success {
+                        println!("{} {}", "✓".green(), workspace_result.workspace_id.bold());
+                        println!(
+                            "  {} {}",
+                            "Path:".bold(),
+                            workspace_result.workspace_root.display()
+                        );
+                        println!(
+                            "  {} {}",
+                            "Files Removed:".bold(),
+                            workspace_result.files_removed
+                        );
+                        println!(
+                            "  {} {}",
+                            "Space Reclaimed:".bold(),
+                            format_bytes(workspace_result.size_freed_bytes as usize)
+                        );
+                    } else {
+                        println!("{} {}", "✗".red(), workspace_result.workspace_id.bold());
+                        println!(
+                            "  {} {}",
+                            "Path:".bold(),
+                            workspace_result.workspace_root.display()
+                        );
+                        if let Some(ref error) = workspace_result.error {
+                            println!("  {} {}", "Error:".bold().red(), error);
+                        }
+                    }
+                    println!();
+                }
+
+                // Summary
+                println!("{}", "Summary".bold().cyan());
+                println!(
+                    "  {} {}",
+                    "Workspaces Cleared:".bold(),
+                    result.cleared_workspaces.len()
+                );
+                println!(
+                    "  {} {}",
+                    "Total Files Removed:".bold(),
+                    result.total_files_removed
+                );
+                println!(
+                    "  {} {}",
+                    "Total Space Reclaimed:".bold(),
+                    format_bytes(result.total_size_freed_bytes as usize)
+                );
+                if !result.errors.is_empty() {
+                    println!("  {} {}", "Errors:".bold().red(), result.errors.len());
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
