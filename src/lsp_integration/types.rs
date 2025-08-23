@@ -40,6 +40,87 @@ pub struct CallHierarchyInfo {
     pub outgoing_calls: Vec<CallInfo>,
 }
 
+impl CallHierarchyInfo {
+    /// Remove entries that belong to language standard libraries (Rust std, Go std, Python stdlib, etc.).
+    /// Filtering is intentionally conservative to avoid hiding user or third‑party code.
+    pub fn filter_stdlib_in_place(&mut self) {
+        use crate::lsp_integration::stdlib_filter::is_stdlib_path_cached;
+
+        self.incoming_calls
+            .retain(|call| !is_stdlib_path_cached(&call.file_path));
+        self.outgoing_calls
+            .retain(|call| !is_stdlib_path_cached(&call.file_path));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_filter_stdlib_in_place() {
+        let mut call_hierarchy = CallHierarchyInfo {
+            incoming_calls: vec![
+                CallInfo {
+                    name: "user_function".to_string(),
+                    file_path: "/Users/test/project/src/main.rs".to_string(),
+                    line: 10,
+                    column: 5,
+                    symbol_kind: "function".to_string(),
+                },
+                CallInfo {
+                    name: "println".to_string(),
+                    file_path: "/.rustup/toolchains/stable/lib/rustlib/src/rust/library/std/src/io/stdio.rs".to_string(),
+                    line: 20,
+                    column: 8,
+                    symbol_kind: "function".to_string(),
+                },
+            ],
+            outgoing_calls: vec![
+                CallInfo {
+                    name: "another_user_function".to_string(),
+                    file_path: "/Users/test/project/src/utils.rs".to_string(),
+                    line: 15,
+                    column: 10,
+                    symbol_kind: "function".to_string(),
+                },
+                CallInfo {
+                    name: "Vec::new".to_string(),
+                    file_path: "/.rustup/toolchains/stable/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs".to_string(),
+                    line: 388,
+                    column: 14,
+                    symbol_kind: "function".to_string(),
+                },
+            ],
+        };
+
+        // Before filtering
+        assert_eq!(call_hierarchy.incoming_calls.len(), 2);
+        assert_eq!(call_hierarchy.outgoing_calls.len(), 2);
+
+        // Apply stdlib filtering
+        call_hierarchy.filter_stdlib_in_place();
+
+        // After filtering - stdlib entries should be removed
+        assert_eq!(call_hierarchy.incoming_calls.len(), 1);
+        assert_eq!(call_hierarchy.outgoing_calls.len(), 1);
+        assert_eq!(call_hierarchy.incoming_calls[0].name, "user_function");
+        assert_eq!(
+            call_hierarchy.outgoing_calls[0].name,
+            "another_user_function"
+        );
+    }
+
+    #[test]
+    fn test_lsp_config_default() {
+        let config = LspConfig::default();
+        assert!(config.use_daemon);
+        assert!(config.workspace_hint.is_none());
+        assert_eq!(config.timeout_ms, 30000);
+        assert!(!config.include_stdlib); // Should default to filtering out stdlib
+    }
+}
+
 /// Information about a function call
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallInfo {
@@ -79,6 +160,8 @@ pub struct LspConfig {
     pub use_daemon: bool,
     pub workspace_hint: Option<String>,
     pub timeout_ms: u64,
+    /// If true, do NOT filter out standard library entries in call hierarchy results.
+    pub include_stdlib: bool,
 }
 
 impl Default for LspConfig {
@@ -87,6 +170,7 @@ impl Default for LspConfig {
             use_daemon: true,
             workspace_hint: None,
             timeout_ms: 30000,
+            include_stdlib: false, // Default to filtering out stdlib
         }
     }
 }

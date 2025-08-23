@@ -256,6 +256,7 @@ impl LspManager {
             use_daemon,
             workspace_hint,
             timeout_ms: 10000, // 10 seconds for status command
+            include_stdlib: false,
         };
 
         // On first run, daemon needs to start which can take up to 10s
@@ -438,6 +439,7 @@ impl LspManager {
             use_daemon,
             workspace_hint,
             timeout_ms: 5000, // 5 seconds for ping
+            include_stdlib: false,
         };
 
         let start_time = std::time::Instant::now();
@@ -510,6 +512,7 @@ impl LspManager {
             use_daemon: true,
             workspace_hint: workspace_hint.clone(),
             timeout_ms: 30000, // Increased for rust-analyzer
+            include_stdlib: false,
         };
 
         let mut client = LspClient::new(config).await;
@@ -527,6 +530,7 @@ impl LspManager {
             use_daemon: true,
             workspace_hint,
             timeout_ms: 240000, // Increased to 4 minutes for full rust-analyzer indexing (90s) + call hierarchy (60s)
+            include_stdlib: false,
         };
 
         let mut client = LspClient::new(config).await?;
@@ -602,6 +606,7 @@ impl LspManager {
             use_daemon: true,
             workspace_hint: None,
             timeout_ms: 10000, // Short timeout for logs
+            include_stdlib: false,
         };
         let mut client = match LspClient::new(config).await {
             Ok(client) => client,
@@ -1012,6 +1017,7 @@ impl LspManager {
             use_daemon,
             workspace_hint: Some(workspace_root.to_string_lossy().to_string()),
             timeout_ms: 60000, // 60 seconds for initialization
+            include_stdlib: false,
         };
 
         let mut client = LspClient::new(config).await?;

@@ -576,7 +576,14 @@ impl LspClient {
             .get_call_hierarchy_with_fallback(file_path, symbol_name, line, column)
             .await
         {
-            Ok(hierarchy) => Some(hierarchy),
+            Ok(mut hierarchy) => {
+                // Optionally filter out standard library frames to reduce noise.
+                if !self.config.include_stdlib {
+                    // This is a client-side preference; the daemon still computes full results.
+                    hierarchy.filter_stdlib_in_place();
+                }
+                Some(hierarchy)
+            }
             Err(e) => {
                 warn!("Failed to get call hierarchy: {}", e);
                 None

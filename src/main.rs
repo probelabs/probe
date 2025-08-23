@@ -642,6 +642,7 @@ async fn main() -> Result<()> {
             instructions,
             no_gitignore,
             lsp,
+            include_stdlib,
         }) => handle_extract(ExtractOptions {
             files,
             custom_ignores: ignore,
@@ -664,6 +665,7 @@ async fn main() -> Result<()> {
             no_gitignore: no_gitignore
                 || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
             lsp,
+            include_stdlib,
         })?,
         Some(Commands::Query {
             pattern,
