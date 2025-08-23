@@ -2968,8 +2968,8 @@ mod tests {
         // (e.g., UNC paths, different drive letter casing, etc.)
         // So we check that both paths canonicalize to the same result
         let expected_canonical = test_subdir.canonicalize().unwrap();
-        let actual_canonical = workspace_root.canonicalize().unwrap();
-        assert_eq!(actual_canonical, expected_canonical);
+        // workspace_root is already canonicalized from line 2949
+        assert_eq!(workspace_root, expected_canonical);
     }
 
     #[test]
