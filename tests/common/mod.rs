@@ -1168,7 +1168,11 @@ pub mod performance {
 
     /// Maximum time allowed for search with LSP
     pub fn max_search_time() -> Duration {
-        Duration::from_secs(15) // Reasonable time for both local and CI environments
+        if is_ci_environment() {
+            Duration::from_secs(30) // More time for CI environments with slower I/O
+        } else {
+            Duration::from_secs(15) // Reasonable time for local development
+        }
     }
 
     /// Maximum time to wait for language server initialization
