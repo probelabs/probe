@@ -89,7 +89,7 @@ name = "probe"
 path = "src/main.rs"
 
 [features]
-default = ["bert-reranker"]
+default = []
 bert-reranker = [
     "candle-core",
     "candle-nn", 
