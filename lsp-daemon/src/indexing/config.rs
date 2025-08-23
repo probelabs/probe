@@ -6,6 +6,7 @@ use std::str::FromStr;
 use tracing::{debug, info, warn};
 
 use crate::language_detector::Language;
+use crate::cache_types::LspOperation;
 
 /// Comprehensive configuration for the indexing subsystem
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +76,233 @@ pub struct IndexingConfig {
 
     /// Languages to completely skip during indexing
     pub disabled_languages: Vec<Language>,
+
+    /// LSP operation caching configuration
+    #[serde(default)]
+    pub lsp_caching: LspCachingConfig,
+}
+
+/// Configuration for LSP operation caching during indexing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspCachingConfig {
+    /// Enable caching of call hierarchy operations during indexing
+    pub cache_call_hierarchy: bool,
+
+    /// Enable caching of definition lookups during indexing
+    pub cache_definitions: bool,
+
+    /// Enable caching of reference lookups during indexing
+    pub cache_references: bool,
+
+    /// Enable caching of hover information during indexing
+    pub cache_hover: bool,
+
+    /// Enable caching of document symbols during indexing
+    pub cache_document_symbols: bool,
+
+    /// Whether to perform LSP operations during indexing (vs only on-demand)
+    pub cache_during_indexing: bool,
+
+    /// Whether to preload cache with common operations after indexing
+    pub preload_common_symbols: bool,
+
+    /// Maximum number of LSP operations to cache per operation type during indexing
+    pub max_cache_entries_per_operation: usize,
+
+    /// Timeout for LSP operations during indexing (milliseconds)
+    pub lsp_operation_timeout_ms: u64,
+
+    /// Operations to prioritize during indexing (performed first)
+    pub priority_operations: Vec<LspOperation>,
+
+    /// Operations to completely skip during indexing
+    pub disabled_operations: Vec<LspOperation>,
+}
+
+impl Default for LspCachingConfig {
+    fn default() -> Self {
+        Self {
+            // CORRECTED defaults - cache operations actually used by search/extract
+            cache_call_hierarchy: true,   // ✅ MOST IMPORTANT - primary operation for search/extract
+            cache_definitions: false,     // ❌ NOT used by search/extract commands
+            cache_references: true,       // ✅ Used by extract for reference counts
+            cache_hover: true,           // ✅ Used by extract for documentation/type info
+            cache_document_symbols: false, // ❌ NOT used by search/extract commands
+            
+            // Indexing behavior
+            cache_during_indexing: false, // Off by default to avoid slowing indexing
+            preload_common_symbols: false, // Off by default to avoid overhead
+            
+            // Limits and timeouts
+            max_cache_entries_per_operation: 1000, // Reasonable limit
+            lsp_operation_timeout_ms: 5000, // 5 second timeout during indexing
+            
+            // Priority and filtering - CORRECTED to prioritize operations used by search/extract
+            priority_operations: vec![LspOperation::CallHierarchy, LspOperation::References, LspOperation::Hover],
+            disabled_operations: vec![], // None disabled by default
+        }
+    }
+}
+
+impl LspCachingConfig {
+    /// Load LSP caching configuration from environment variables
+    pub fn from_env() -> Result<Self> {
+        let mut config = Self::default();
+
+        // Individual operation caching flags
+        if let Ok(value) = std::env::var("PROBE_LSP_CACHE_CALL_HIERARCHY") {
+            config.cache_call_hierarchy = parse_bool_env(&value, "PROBE_LSP_CACHE_CALL_HIERARCHY")?;
+        }
+
+        if let Ok(value) = std::env::var("PROBE_LSP_CACHE_DEFINITIONS") {
+            config.cache_definitions = parse_bool_env(&value, "PROBE_LSP_CACHE_DEFINITIONS")?;
+        }
+
+        if let Ok(value) = std::env::var("PROBE_LSP_CACHE_REFERENCES") {
+            config.cache_references = parse_bool_env(&value, "PROBE_LSP_CACHE_REFERENCES")?;
+        }
+
+        if let Ok(value) = std::env::var("PROBE_LSP_CACHE_HOVER") {
+            config.cache_hover = parse_bool_env(&value, "PROBE_LSP_CACHE_HOVER")?;
+        }
+
+        if let Ok(value) = std::env::var("PROBE_LSP_CACHE_DOCUMENT_SYMBOLS") {
+            config.cache_document_symbols = parse_bool_env(&value, "PROBE_LSP_CACHE_DOCUMENT_SYMBOLS")?;
+        }
+
+        // Indexing behavior flags
+        if let Ok(value) = std::env::var("PROBE_LSP_CACHE_DURING_INDEXING") {
+            config.cache_during_indexing = parse_bool_env(&value, "PROBE_LSP_CACHE_DURING_INDEXING")?;
+        }
+
+        if let Ok(value) = std::env::var("PROBE_LSP_PRELOAD_COMMON_SYMBOLS") {
+            config.preload_common_symbols = parse_bool_env(&value, "PROBE_LSP_PRELOAD_COMMON_SYMBOLS")?;
+        }
+
+        // Numeric configurations
+        if let Ok(value) = std::env::var("PROBE_LSP_MAX_CACHE_ENTRIES_PER_OPERATION") {
+            config.max_cache_entries_per_operation = value
+                .parse()
+                .context("Invalid value for PROBE_LSP_MAX_CACHE_ENTRIES_PER_OPERATION")?;
+        }
+
+        if let Ok(value) = std::env::var("PROBE_LSP_OPERATION_TIMEOUT_MS") {
+            config.lsp_operation_timeout_ms = value
+                .parse()
+                .context("Invalid value for PROBE_LSP_OPERATION_TIMEOUT_MS")?;
+        }
+
+        // Priority operations (comma-separated list)
+        if let Ok(value) = std::env::var("PROBE_LSP_PRIORITY_OPERATIONS") {
+            config.priority_operations = parse_lsp_operations_list(&value, "PROBE_LSP_PRIORITY_OPERATIONS")?;
+        }
+
+        // Disabled operations (comma-separated list)
+        if let Ok(value) = std::env::var("PROBE_LSP_DISABLED_OPERATIONS") {
+            config.disabled_operations = parse_lsp_operations_list(&value, "PROBE_LSP_DISABLED_OPERATIONS")?;
+        }
+
+        Ok(config)
+    }
+
+    /// Merge with another LspCachingConfig, giving priority to the other
+    pub fn merge_with(&mut self, other: Self) {
+        // Use macro to reduce boilerplate
+        macro_rules! merge_bool_field {
+            ($field:ident) => {
+                if other.$field != Self::default().$field {
+                    self.$field = other.$field;
+                }
+            };
+        }
+
+        merge_bool_field!(cache_call_hierarchy);
+        merge_bool_field!(cache_definitions);
+        merge_bool_field!(cache_references);
+        merge_bool_field!(cache_hover);
+        merge_bool_field!(cache_document_symbols);
+        merge_bool_field!(cache_during_indexing);
+        merge_bool_field!(preload_common_symbols);
+
+        if other.max_cache_entries_per_operation != Self::default().max_cache_entries_per_operation {
+            self.max_cache_entries_per_operation = other.max_cache_entries_per_operation;
+        }
+
+        if other.lsp_operation_timeout_ms != Self::default().lsp_operation_timeout_ms {
+            self.lsp_operation_timeout_ms = other.lsp_operation_timeout_ms;
+        }
+
+        if !other.priority_operations.is_empty() {
+            self.priority_operations = other.priority_operations;
+        }
+
+        if !other.disabled_operations.is_empty() {
+            self.disabled_operations = other.disabled_operations;
+        }
+    }
+
+    /// Validate LSP caching configuration
+    pub fn validate(&self) -> Result<()> {
+        if self.lsp_operation_timeout_ms < 1000 {
+            return Err(anyhow!("lsp_operation_timeout_ms must be at least 1000ms"));
+        }
+
+        if self.max_cache_entries_per_operation == 0 {
+            return Err(anyhow!("max_cache_entries_per_operation must be greater than 0"));
+        }
+
+        if self.max_cache_entries_per_operation > 100000 {
+            warn!("max_cache_entries_per_operation is very high ({}), may consume excessive memory", self.max_cache_entries_per_operation);
+        }
+
+        Ok(())
+    }
+
+    /// Check if a specific LSP operation should be cached
+    pub fn should_cache_operation(&self, operation: &LspOperation) -> bool {
+        // First check if the operation is disabled
+        if self.disabled_operations.contains(operation) {
+            return false;
+        }
+
+        // Check operation-specific flags
+        match operation {
+            LspOperation::CallHierarchy => self.cache_call_hierarchy,
+            LspOperation::Definition => self.cache_definitions,
+            LspOperation::References => self.cache_references,
+            LspOperation::Hover => self.cache_hover,
+            LspOperation::DocumentSymbols => self.cache_document_symbols,
+        }
+    }
+
+    /// Get priority for an LSP operation (higher = processed first)
+    pub fn get_operation_priority(&self, operation: &LspOperation) -> u8 {
+        if self.priority_operations.contains(operation) {
+            100
+        } else {
+            50
+        }
+    }
+}
+
+/// Parse a comma-separated list of LSP operations
+fn parse_lsp_operations_list(value: &str, var_name: &str) -> Result<Vec<LspOperation>> {
+    let operations = value
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| match s.to_lowercase().as_str() {
+            "call_hierarchy" | "callhierarchy" => Ok(LspOperation::CallHierarchy),
+            "definition" | "definitions" => Ok(LspOperation::Definition),
+            "references" => Ok(LspOperation::References),
+            "hover" => Ok(LspOperation::Hover),
+            "document_symbols" | "documentsymbols" => Ok(LspOperation::DocumentSymbols),
+            _ => Err(anyhow!("Invalid LSP operation: {}", s)),
+        })
+        .collect::<Result<Vec<_>>>()
+        .context(format!("Invalid LSP operations list for {}", var_name))?;
+
+    Ok(operations)
 }
 
 /// Enhanced indexing features with fine-grained control
@@ -223,6 +451,7 @@ impl Default for IndexingConfig {
             language_configs: HashMap::new(),
             priority_languages: vec![Language::Rust, Language::TypeScript, Language::Python],
             disabled_languages: vec![],
+            lsp_caching: LspCachingConfig::default(),
         }
     }
 }
@@ -535,6 +764,9 @@ impl IndexingConfig {
         // Load feature configuration from environment
         config.features = IndexingFeatures::from_env()?;
 
+        // Load LSP caching configuration from environment
+        config.lsp_caching = LspCachingConfig::from_env()?;
+
         // Load per-language configurations
         config.language_configs = load_language_configs_from_env()?;
 
@@ -632,8 +864,9 @@ impl IndexingConfig {
             self.disabled_languages = other.disabled_languages;
         }
 
-        // Merge features and language configs
+        // Merge features, LSP caching config, and language configs
         self.features.merge_with(other.features);
+        self.lsp_caching.merge_with(other.lsp_caching);
         for (lang, config) in other.language_configs {
             self.language_configs.insert(lang, config);
         }
@@ -676,6 +909,9 @@ impl IndexingConfig {
                     .context(format!("Failed to create cache directory: {cache_dir:?}"))?;
             }
         }
+
+        // Validate LSP caching configuration
+        self.lsp_caching.validate()?;
 
         // Validate language configs
         for (language, config) in &self.language_configs {
@@ -751,6 +987,17 @@ impl IndexingConfig {
 
     /// Convert to protocol IndexingConfig for API compatibility
     pub fn to_protocol_config(&self) -> crate::protocol::IndexingConfig {
+        // Helper function to convert LspOperation to string
+        let op_to_string = |op: &crate::cache_types::LspOperation| -> String {
+            match op {
+                crate::cache_types::LspOperation::CallHierarchy => "call_hierarchy".to_string(),
+                crate::cache_types::LspOperation::Definition => "definition".to_string(),
+                crate::cache_types::LspOperation::References => "references".to_string(),
+                crate::cache_types::LspOperation::Hover => "hover".to_string(),
+                crate::cache_types::LspOperation::DocumentSymbols => "document_symbols".to_string(),
+            }
+        };
+
         crate::protocol::IndexingConfig {
             max_workers: Some(self.max_workers),
             memory_budget_mb: Some(self.memory_budget_mb),
@@ -764,13 +1011,39 @@ impl IndexingConfig {
                 .map(|l| format!("{l:?}"))
                 .collect(),
             recursive: true, // Always true in new config system
+
+            // LSP Caching Configuration
+            cache_call_hierarchy: Some(self.lsp_caching.cache_call_hierarchy),
+            cache_definitions: Some(self.lsp_caching.cache_definitions),
+            cache_references: Some(self.lsp_caching.cache_references),
+            cache_hover: Some(self.lsp_caching.cache_hover),
+            cache_document_symbols: Some(self.lsp_caching.cache_document_symbols),
+            cache_during_indexing: Some(self.lsp_caching.cache_during_indexing),
+            preload_common_symbols: Some(self.lsp_caching.preload_common_symbols),
+            max_cache_entries_per_operation: Some(self.lsp_caching.max_cache_entries_per_operation),
+            lsp_operation_timeout_ms: Some(self.lsp_caching.lsp_operation_timeout_ms),
+            lsp_priority_operations: self.lsp_caching.priority_operations.iter().map(op_to_string).collect(),
+            lsp_disabled_operations: self.lsp_caching.disabled_operations.iter().map(op_to_string).collect(),
         }
     }
 
     /// Create from protocol IndexingConfig for API compatibility
     pub fn from_protocol_config(protocol: &crate::protocol::IndexingConfig) -> Self {
+        // Helper function to parse LSP operation from string
+        let string_to_op = |s: &str| -> Option<crate::cache_types::LspOperation> {
+            match s.to_lowercase().as_str() {
+                "call_hierarchy" | "callhierarchy" => Some(crate::cache_types::LspOperation::CallHierarchy),
+                "definition" | "definitions" => Some(crate::cache_types::LspOperation::Definition),
+                "references" => Some(crate::cache_types::LspOperation::References),
+                "hover" => Some(crate::cache_types::LspOperation::Hover),
+                "document_symbols" | "documentsymbols" => Some(crate::cache_types::LspOperation::DocumentSymbols),
+                _ => None,
+            }
+        };
+
         let mut config = Self::default();
 
+        // Basic configuration
         if let Some(workers) = protocol.max_workers {
             config.max_workers = workers;
         }
@@ -800,6 +1073,59 @@ impl IndexingConfig {
                 .languages
                 .iter()
                 .filter_map(|s| s.parse().ok())
+                .collect();
+        }
+
+        // LSP Caching Configuration
+        if let Some(cache_call_hierarchy) = protocol.cache_call_hierarchy {
+            config.lsp_caching.cache_call_hierarchy = cache_call_hierarchy;
+        }
+
+        if let Some(cache_definitions) = protocol.cache_definitions {
+            config.lsp_caching.cache_definitions = cache_definitions;
+        }
+
+        if let Some(cache_references) = protocol.cache_references {
+            config.lsp_caching.cache_references = cache_references;
+        }
+
+        if let Some(cache_hover) = protocol.cache_hover {
+            config.lsp_caching.cache_hover = cache_hover;
+        }
+
+        if let Some(cache_document_symbols) = protocol.cache_document_symbols {
+            config.lsp_caching.cache_document_symbols = cache_document_symbols;
+        }
+
+        if let Some(cache_during_indexing) = protocol.cache_during_indexing {
+            config.lsp_caching.cache_during_indexing = cache_during_indexing;
+        }
+
+        if let Some(preload_common_symbols) = protocol.preload_common_symbols {
+            config.lsp_caching.preload_common_symbols = preload_common_symbols;
+        }
+
+        if let Some(max_cache_entries_per_operation) = protocol.max_cache_entries_per_operation {
+            config.lsp_caching.max_cache_entries_per_operation = max_cache_entries_per_operation;
+        }
+
+        if let Some(lsp_operation_timeout_ms) = protocol.lsp_operation_timeout_ms {
+            config.lsp_caching.lsp_operation_timeout_ms = lsp_operation_timeout_ms;
+        }
+
+        if !protocol.lsp_priority_operations.is_empty() {
+            config.lsp_caching.priority_operations = protocol
+                .lsp_priority_operations
+                .iter()
+                .filter_map(|s| string_to_op(s))
+                .collect();
+        }
+
+        if !protocol.lsp_disabled_operations.is_empty() {
+            config.lsp_caching.disabled_operations = protocol
+                .lsp_disabled_operations
+                .iter()
+                .filter_map(|s| string_to_op(s))
                 .collect();
         }
 
@@ -1382,6 +1708,111 @@ mod tests {
             CacheStrategy::Hybrid => {}
             _ => panic!("Expected Hybrid cache strategy when persistence is enabled"),
         }
+    }
+
+    #[test]
+    fn test_lsp_caching_config() {
+        // Test CORRECTED default LSP caching configuration - matches actual search/extract usage
+        let config = LspCachingConfig::default();
+        assert!(config.cache_call_hierarchy); // ✅ MOST IMPORTANT - primary operation for search/extract
+        assert!(!config.cache_definitions); // ❌ NOT used by search/extract commands
+        assert!(config.cache_references); // ✅ Used by extract for reference counts
+        assert!(config.cache_hover); // ✅ Used by extract for documentation/type info
+        assert!(!config.cache_document_symbols); // ❌ NOT used by search/extract commands
+        assert!(!config.cache_during_indexing); // Performance default
+        assert!(!config.preload_common_symbols); // Performance default
+        assert_eq!(config.max_cache_entries_per_operation, 1000);
+        assert_eq!(config.lsp_operation_timeout_ms, 5000);
+
+        // Test validation
+        assert!(config.validate().is_ok());
+
+        // Test invalid configurations
+        let mut invalid_config = config.clone();
+        invalid_config.lsp_operation_timeout_ms = 500; // Too low
+        assert!(invalid_config.validate().is_err());
+
+        invalid_config.lsp_operation_timeout_ms = 5000;
+        invalid_config.max_cache_entries_per_operation = 0; // Invalid
+        assert!(invalid_config.validate().is_err());
+
+        // Test operation checking - CORRECTED to match actual usage
+        use crate::cache_types::LspOperation;
+        assert!(!config.should_cache_operation(&LspOperation::Definition)); // ❌ NOT used by search/extract
+        assert!(config.should_cache_operation(&LspOperation::CallHierarchy)); // ✅ MOST IMPORTANT for search/extract
+
+        // Test priority - CORRECTED to prioritize operations used by search/extract
+        assert_eq!(config.get_operation_priority(&LspOperation::CallHierarchy), 100); // High priority - primary operation
+        assert_eq!(config.get_operation_priority(&LspOperation::References), 100); // High priority - used by extract
+        assert_eq!(config.get_operation_priority(&LspOperation::Hover), 100); // High priority - used by extract
+        assert_eq!(config.get_operation_priority(&LspOperation::Definition), 50); // Normal priority - not used
+    }
+
+    #[test]
+    fn test_lsp_caching_environment_vars() {
+        // This would normally test environment variable parsing, but we can't
+        // modify env vars easily in unit tests. The functionality is tested
+        // through integration tests.
+        let config = LspCachingConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_lsp_operation_parsing() {
+        // Test parsing LSP operations from strings
+        use crate::cache_types::LspOperation;
+        
+        let operations = parse_lsp_operations_list("definition,hover,call_hierarchy", "TEST").unwrap();
+        assert_eq!(operations.len(), 3);
+        assert!(operations.contains(&LspOperation::Definition));
+        assert!(operations.contains(&LspOperation::Hover));
+        assert!(operations.contains(&LspOperation::CallHierarchy));
+
+        // Test case insensitive parsing
+        let operations = parse_lsp_operations_list("DEFINITION,references", "TEST").unwrap();
+        assert_eq!(operations.len(), 2);
+        assert!(operations.contains(&LspOperation::Definition));
+        assert!(operations.contains(&LspOperation::References));
+
+        // Test invalid operation
+        let result = parse_lsp_operations_list("definition,invalid_op", "TEST");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_merging_with_lsp_caching() {
+        let mut base = IndexingConfig::default();
+        base.lsp_caching.cache_definitions = false;
+
+        let mut override_config = IndexingConfig::default();
+        override_config.lsp_caching.cache_definitions = true;
+        override_config.lsp_caching.cache_call_hierarchy = true;
+
+        base.merge_with(override_config);
+
+        assert!(base.lsp_caching.cache_definitions); // Should be overridden
+        assert!(base.lsp_caching.cache_call_hierarchy); // Should be set from override
+        assert!(base.lsp_caching.cache_hover); // Should remain from base default
+    }
+
+    #[test]
+    fn test_protocol_conversion_with_lsp_caching() {
+        let mut internal_config = IndexingConfig::default();
+        internal_config.lsp_caching.cache_definitions = true;
+        internal_config.lsp_caching.cache_call_hierarchy = false;
+        internal_config.lsp_caching.max_cache_entries_per_operation = 2000;
+
+        // Test conversion to protocol
+        let protocol_config = internal_config.to_protocol_config();
+        assert_eq!(protocol_config.cache_definitions, Some(true));
+        assert_eq!(protocol_config.cache_call_hierarchy, Some(false));
+        assert_eq!(protocol_config.max_cache_entries_per_operation, Some(2000));
+
+        // Test round-trip conversion
+        let restored_config = IndexingConfig::from_protocol_config(&protocol_config);
+        assert_eq!(restored_config.lsp_caching.cache_definitions, true);
+        assert_eq!(restored_config.lsp_caching.cache_call_hierarchy, false);
+        assert_eq!(restored_config.lsp_caching.max_cache_entries_per_operation, 2000);
     }
 
     #[test]

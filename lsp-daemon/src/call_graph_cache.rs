@@ -1,6 +1,10 @@
-use crate::cache_types::{CacheStats, CachedNode, CallHierarchyInfo, NodeId, NodeKey};
+use crate::cache_types::{
+    CacheStats, CachedLspNode, CachedNode, CallHierarchyInfo, DefinitionInfo, DocumentSymbolsInfo,
+    HoverInfo, LocationInfo, LspCacheKey, LspOperation, NodeId, NodeKey, ReferencesInfo,
+};
 use crate::language_detector::Language;
 use crate::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
+use crate::protocol::{DocumentSymbol, HoverContent, Location, SymbolInformation};
 use anyhow::Result;
 use dashmap::DashMap;
 use std::collections::{HashSet, VecDeque};
@@ -135,6 +139,21 @@ pub struct CallGraphCache {
 
     /// Workspace-aware cache router for L2 cache operations
     workspace_cache_router: Option<Arc<crate::workspace_cache_router::WorkspaceCacheRouter>>,
+
+    /// Generic LSP operation caches
+    definition_cache: DashMap<LspCacheKey, Arc<CachedLspNode<DefinitionInfo>>>,
+    references_cache: DashMap<LspCacheKey, Arc<CachedLspNode<ReferencesInfo>>>,
+    hover_cache: DashMap<LspCacheKey, Arc<CachedLspNode<HoverInfo>>>,
+    document_symbols_cache: DashMap<PathBuf, Arc<CachedLspNode<DocumentSymbolsInfo>>>, // Per-file caching
+    workspace_symbols_cache: DashMap<String, Arc<CachedLspNode<Vec<SymbolInformation>>>>, // Query-based caching
+    implementations_cache: DashMap<LspCacheKey, Arc<CachedLspNode<Vec<LocationInfo>>>>,
+    type_definition_cache: DashMap<LspCacheKey, Arc<CachedLspNode<Vec<LocationInfo>>>>,
+
+    /// Access metadata for LSP caches (for LRU eviction)
+    lsp_access_meta: DashMap<String, AccessMeta>, // Using string key for generic access tracking
+
+    /// In-flight LSP operation tracking
+    lsp_inflight: DashMap<String, Arc<AsyncMutex<()>>>, // Using string key for generic operation tracking
 }
 
 impl CallGraphCache {
@@ -166,6 +185,15 @@ impl CallGraphCache {
             persistent_store: None,
             write_channel: None,
             workspace_cache_router: None,
+            definition_cache: DashMap::new(),
+            references_cache: DashMap::new(),
+            hover_cache: DashMap::new(),
+            document_symbols_cache: DashMap::new(),
+            workspace_symbols_cache: DashMap::new(),
+            implementations_cache: DashMap::new(),
+            type_definition_cache: DashMap::new(),
+            lsp_access_meta: DashMap::new(),
+            lsp_inflight: DashMap::new(),
         }
     }
 
@@ -222,6 +250,15 @@ impl CallGraphCache {
             persistent_store,
             write_channel,
             workspace_cache_router: None,
+            definition_cache: DashMap::new(),
+            references_cache: DashMap::new(),
+            hover_cache: DashMap::new(),
+            document_symbols_cache: DashMap::new(),
+            workspace_symbols_cache: DashMap::new(),
+            implementations_cache: DashMap::new(),
+            type_definition_cache: DashMap::new(),
+            lsp_access_meta: DashMap::new(),
+            lsp_inflight: DashMap::new(),
         })
     }
 
@@ -283,6 +320,15 @@ impl CallGraphCache {
             persistent_store,
             write_channel,
             workspace_cache_router: Some(workspace_cache_router),
+            definition_cache: DashMap::new(),
+            references_cache: DashMap::new(),
+            hover_cache: DashMap::new(),
+            document_symbols_cache: DashMap::new(),
+            workspace_symbols_cache: DashMap::new(),
+            implementations_cache: DashMap::new(),
+            type_definition_cache: DashMap::new(),
+            lsp_access_meta: DashMap::new(),
+            lsp_inflight: DashMap::new(),
         })
     }
 
@@ -1013,6 +1059,10 @@ impl CallGraphCache {
                 self.outgoing.remove(&id);
                 self.incoming.remove(&id);
             }
+            
+            // Also invalidate LSP caches for this file
+            self.invalidate_lsp_file_caches(file);
+            
             info!("Invalidated {} nodes from file {}", count, file.display());
         }
     }
@@ -1037,6 +1087,10 @@ impl CallGraphCache {
         self.incoming.clear();
         self.file_index.clear();
         self.inflight.clear();
+        
+        // Clear LSP operation caches
+        self.clear_lsp_caches();
+        
         info!("Cache cleared");
     }
 
@@ -1166,6 +1220,630 @@ impl CallGraphCache {
         // Git functionality has been removed - this is now a stub
         Err(anyhow::anyhow!("Git functionality has been removed"))
     }
+
+    // ========================================================================================
+    // LSP Operation Cache Methods
+    // ========================================================================================
+
+    /// Helper function to generate a cache key string for LSP operations
+    fn lsp_cache_key_string(key: &LspCacheKey) -> String {
+        format!(
+            "{}:{}:{}:{}:{:?}:{}",
+            key.file.display(),
+            key.line,
+            key.column,
+            key.content_md5,
+            key.operation,
+            key.extra_params.as_deref().unwrap_or("")
+        )
+    }
+
+    /// Get or compute definition locations with caching
+    pub async fn get_or_compute_definition<F, Fut>(
+        &self,
+        file: PathBuf,
+        line: u32,
+        column: u32,
+        content_md5: String,
+        compute: F,
+    ) -> Result<Arc<CachedLspNode<DefinitionInfo>>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Vec<Location>>>,
+    {
+        let key = LspCacheKey::new(file, line, column, content_md5, LspOperation::Definition, None);
+        let key_str = Self::lsp_cache_key_string(&key);
+
+        // Check L1 cache
+        if let Some(cached) = self.definition_cache.get(&key) {
+            // Touch access metadata
+            if let Some(mut meta) = self.lsp_access_meta.get_mut(&key_str) {
+                meta.touch();
+            }
+            debug!("Definition cache hit for {}:{}:{}", key.file.display(), key.line, key.column);
+            return Ok(cached.clone());
+        }
+
+        // Deduplication
+        let lock = self
+            .lsp_inflight
+            .entry(key_str.clone())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone();
+        let _guard = lock.lock().await;
+
+        // Double-check after lock
+        if let Some(cached) = self.definition_cache.get(&key) {
+            self.lsp_inflight.remove(&key_str);
+            return Ok(cached.clone());
+        }
+
+        // Compute the result
+        debug!("Computing definition for {}:{}:{}", key.file.display(), key.line, key.column);
+        let locations = compute().await?;
+        
+        let definition_info = DefinitionInfo {
+            locations: locations
+                .into_iter()
+                .map(|loc| LocationInfo {
+                    uri: loc.uri,
+                    range: crate::cache_types::RangeInfo {
+                        start_line: loc.range.start.line,
+                        start_character: loc.range.start.character,
+                        end_line: loc.range.end.line,
+                        end_character: loc.range.end.character,
+                    },
+                })
+                .collect(),
+        };
+
+        let cached_node = Arc::new(CachedLspNode::new(key.clone(), definition_info));
+        
+        // Insert into cache
+        self.definition_cache.insert(key.clone(), cached_node.clone());
+        self.lsp_access_meta.insert(key_str.clone(), AccessMeta::new());
+        
+        // Clean up in-flight tracker
+        self.lsp_inflight.remove(&key_str);
+        
+        Ok(cached_node)
+    }
+
+    /// Get or compute references with caching
+    pub async fn get_or_compute_references<F, Fut>(
+        &self,
+        file: PathBuf,
+        line: u32,
+        column: u32,
+        content_md5: String,
+        include_declaration: bool,
+        compute: F,
+    ) -> Result<Arc<CachedLspNode<ReferencesInfo>>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Vec<Location>>>,
+    {
+        let extra_params = if include_declaration {
+            Some("include_declaration".to_string())
+        } else {
+            None
+        };
+        let key = LspCacheKey::new(file, line, column, content_md5, LspOperation::References, extra_params);
+        let key_str = Self::lsp_cache_key_string(&key);
+
+        // Check L1 cache
+        if let Some(cached) = self.references_cache.get(&key) {
+            // Touch access metadata
+            if let Some(mut meta) = self.lsp_access_meta.get_mut(&key_str) {
+                meta.touch();
+            }
+            debug!("References cache hit for {}:{}:{}", key.file.display(), key.line, key.column);
+            return Ok(cached.clone());
+        }
+
+        // Deduplication
+        let lock = self
+            .lsp_inflight
+            .entry(key_str.clone())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone();
+        let _guard = lock.lock().await;
+
+        // Double-check after lock
+        if let Some(cached) = self.references_cache.get(&key) {
+            self.lsp_inflight.remove(&key_str);
+            return Ok(cached.clone());
+        }
+
+        // Compute the result
+        debug!("Computing references for {}:{}:{} (include_declaration: {})", 
+               key.file.display(), key.line, key.column, include_declaration);
+        let locations = compute().await?;
+        
+        let references_info = ReferencesInfo {
+            locations: locations
+                .into_iter()
+                .map(|loc| LocationInfo {
+                    uri: loc.uri,
+                    range: crate::cache_types::RangeInfo {
+                        start_line: loc.range.start.line,
+                        start_character: loc.range.start.character,
+                        end_line: loc.range.end.line,
+                        end_character: loc.range.end.character,
+                    },
+                })
+                .collect(),
+            include_declaration,
+        };
+
+        let cached_node = Arc::new(CachedLspNode::new(key.clone(), references_info));
+        
+        // Insert into cache
+        self.references_cache.insert(key.clone(), cached_node.clone());
+        self.lsp_access_meta.insert(key_str.clone(), AccessMeta::new());
+        
+        // Clean up in-flight tracker
+        self.lsp_inflight.remove(&key_str);
+        
+        Ok(cached_node)
+    }
+
+    /// Get or compute hover information with caching
+    pub async fn get_or_compute_hover<F, Fut>(
+        &self,
+        file: PathBuf,
+        line: u32,
+        column: u32,
+        content_md5: String,
+        compute: F,
+    ) -> Result<Arc<CachedLspNode<HoverInfo>>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Option<HoverContent>>>,
+    {
+        let key = LspCacheKey::new(file, line, column, content_md5, LspOperation::Hover, None);
+        let key_str = Self::lsp_cache_key_string(&key);
+
+        // Check L1 cache
+        if let Some(cached) = self.hover_cache.get(&key) {
+            // Touch access metadata
+            if let Some(mut meta) = self.lsp_access_meta.get_mut(&key_str) {
+                meta.touch();
+            }
+            debug!("Hover cache hit for {}:{}:{}", key.file.display(), key.line, key.column);
+            return Ok(cached.clone());
+        }
+
+        // Deduplication
+        let lock = self
+            .lsp_inflight
+            .entry(key_str.clone())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone();
+        let _guard = lock.lock().await;
+
+        // Double-check after lock
+        if let Some(cached) = self.hover_cache.get(&key) {
+            self.lsp_inflight.remove(&key_str);
+            return Ok(cached.clone());
+        }
+
+        // Compute the result
+        debug!("Computing hover for {}:{}:{}", key.file.display(), key.line, key.column);
+        let hover_content = compute().await?;
+        
+        let hover_info = HoverInfo {
+            contents: hover_content.as_ref().map(|h| h.contents.clone()),
+            range: hover_content.and_then(|h| h.range.map(|r| crate::cache_types::RangeInfo {
+                start_line: r.start.line,
+                start_character: r.start.character,
+                end_line: r.end.line,
+                end_character: r.end.character,
+            })),
+        };
+
+        let cached_node = Arc::new(CachedLspNode::new(key.clone(), hover_info));
+        
+        // Insert into cache
+        self.hover_cache.insert(key.clone(), cached_node.clone());
+        self.lsp_access_meta.insert(key_str.clone(), AccessMeta::new());
+        
+        // Clean up in-flight tracker
+        self.lsp_inflight.remove(&key_str);
+        
+        Ok(cached_node)
+    }
+
+    /// Get or compute document symbols with per-file caching
+    pub async fn get_or_compute_document_symbols<F, Fut>(
+        &self,
+        file: PathBuf,
+        content_md5: String,
+        compute: F,
+    ) -> Result<Arc<CachedLspNode<DocumentSymbolsInfo>>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Vec<DocumentSymbol>>>,
+    {
+        let key = LspCacheKey::new(file.clone(), 0, 0, content_md5, LspOperation::DocumentSymbols, None);
+        let key_str = format!("{}:{}", file.display(), key.content_md5);
+
+        // Check L1 cache
+        if let Some(cached) = self.document_symbols_cache.get(&file) {
+            // Check if MD5 matches (content hasn't changed)
+            if cached.key.content_md5 == key.content_md5 {
+                // Touch access metadata
+                if let Some(mut meta) = self.lsp_access_meta.get_mut(&key_str) {
+                    meta.touch();
+                }
+                debug!("Document symbols cache hit for {}", file.display());
+                return Ok(cached.clone());
+            }
+        }
+
+        // Deduplication
+        let lock = self
+            .lsp_inflight
+            .entry(key_str.clone())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone();
+        let _guard = lock.lock().await;
+
+        // Double-check after lock
+        if let Some(cached) = self.document_symbols_cache.get(&file) {
+            if cached.key.content_md5 == key.content_md5 {
+                self.lsp_inflight.remove(&key_str);
+                return Ok(cached.clone());
+            }
+        }
+
+        // Compute the result
+        debug!("Computing document symbols for {}", file.display());
+        let symbols = compute().await?;
+        
+        let document_symbols_info = DocumentSymbolsInfo {
+            symbols: symbols
+                .into_iter()
+                .map(|sym| crate::cache_types::DocumentSymbolInfo {
+                    name: sym.name,
+                    kind: format!("{:?}", sym.kind), // Convert SymbolKind enum to string
+                    range: crate::cache_types::RangeInfo {
+                        start_line: sym.range.start.line,
+                        start_character: sym.range.start.character,
+                        end_line: sym.range.end.line,
+                        end_character: sym.range.end.character,
+                    },
+                    selection_range: crate::cache_types::RangeInfo {
+                        start_line: sym.selection_range.start.line,
+                        start_character: sym.selection_range.start.character,
+                        end_line: sym.selection_range.end.line,
+                        end_character: sym.selection_range.end.character,
+                    },
+                    children: sym.children.map(|children| {
+                        children.into_iter().map(|child| crate::cache_types::DocumentSymbolInfo {
+                            name: child.name,
+                            kind: format!("{:?}", child.kind), // Convert SymbolKind enum to string
+                            range: crate::cache_types::RangeInfo {
+                                start_line: child.range.start.line,
+                                start_character: child.range.start.character,
+                                end_line: child.range.end.line,
+                                end_character: child.range.end.character,
+                            },
+                            selection_range: crate::cache_types::RangeInfo {
+                                start_line: child.selection_range.start.line,
+                                start_character: child.selection_range.start.character,
+                                end_line: child.selection_range.end.line,
+                                end_character: child.selection_range.end.character,
+                            },
+                            children: None, // Only support one level of nesting for now
+                        }).collect()
+                    }),
+                })
+                .collect(),
+        };
+
+        let cached_node = Arc::new(CachedLspNode::new(key.clone(), document_symbols_info));
+        
+        // Insert into cache
+        self.document_symbols_cache.insert(file.clone(), cached_node.clone());
+        self.lsp_access_meta.insert(key_str.clone(), AccessMeta::new());
+        
+        // Clean up in-flight tracker
+        self.lsp_inflight.remove(&key_str);
+        
+        Ok(cached_node)
+    }
+
+    /// Get or compute workspace symbols with query-based caching
+    pub async fn get_or_compute_workspace_symbols<F, Fut>(
+        &self,
+        query: String,
+        compute: F,
+    ) -> Result<Arc<CachedLspNode<Vec<SymbolInformation>>>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Vec<SymbolInformation>>>,
+    {
+        let key_str = format!("workspace_symbols:{}", query);
+
+        // Check L1 cache
+        if let Some(cached) = self.workspace_symbols_cache.get(&query) {
+            // Touch access metadata
+            if let Some(mut meta) = self.lsp_access_meta.get_mut(&key_str) {
+                meta.touch();
+            }
+            debug!("Workspace symbols cache hit for query: {}", query);
+            return Ok(cached.clone());
+        }
+
+        // Deduplication
+        let lock = self
+            .lsp_inflight
+            .entry(key_str.clone())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone();
+        let _guard = lock.lock().await;
+
+        // Double-check after lock
+        if let Some(cached) = self.workspace_symbols_cache.get(&query) {
+            self.lsp_inflight.remove(&key_str);
+            return Ok(cached.clone());
+        }
+
+        // Compute the result
+        debug!("Computing workspace symbols for query: {}", query);
+        let symbols = compute().await?;
+
+        // Create a dummy cache key for workspace symbols (workspace-wide operation)
+        let key = LspCacheKey::new(
+            PathBuf::from("workspace"),
+            0,
+            0,
+            "workspace".to_string(),
+            LspOperation::DocumentSymbols, // Reuse DocumentSymbols for workspace
+            Some(query.clone()),
+        );
+
+        let cached_node = Arc::new(CachedLspNode::new(key, symbols));
+        
+        // Insert into cache
+        self.workspace_symbols_cache.insert(query.clone(), cached_node.clone());
+        self.lsp_access_meta.insert(key_str.clone(), AccessMeta::new());
+        
+        // Clean up in-flight tracker
+        self.lsp_inflight.remove(&key_str);
+        
+        Ok(cached_node)
+    }
+
+    /// Get or compute implementations with caching
+    pub async fn get_or_compute_implementations<F, Fut>(
+        &self,
+        file: PathBuf,
+        line: u32,
+        column: u32,
+        content_md5: String,
+        compute: F,
+    ) -> Result<Arc<CachedLspNode<Vec<LocationInfo>>>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Vec<Location>>>,
+    {
+        let key = LspCacheKey::new(file, line, column, content_md5, LspOperation::References, None); // Reuse References operation
+        let key_str = format!("implementations:{}", Self::lsp_cache_key_string(&key));
+
+        // Check L1 cache
+        if let Some(cached) = self.implementations_cache.get(&key) {
+            // Touch access metadata
+            if let Some(mut meta) = self.lsp_access_meta.get_mut(&key_str) {
+                meta.touch();
+            }
+            debug!("Implementations cache hit for {}:{}:{}", key.file.display(), key.line, key.column);
+            return Ok(cached.clone());
+        }
+
+        // Deduplication
+        let lock = self
+            .lsp_inflight
+            .entry(key_str.clone())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone();
+        let _guard = lock.lock().await;
+
+        // Double-check after lock
+        if let Some(cached) = self.implementations_cache.get(&key) {
+            self.lsp_inflight.remove(&key_str);
+            return Ok(cached.clone());
+        }
+
+        // Compute the result
+        debug!("Computing implementations for {}:{}:{}", key.file.display(), key.line, key.column);
+        let locations = compute().await?;
+        
+        let location_infos: Vec<LocationInfo> = locations
+            .into_iter()
+            .map(|loc| LocationInfo {
+                uri: loc.uri,
+                range: crate::cache_types::RangeInfo {
+                    start_line: loc.range.start.line,
+                    start_character: loc.range.start.character,
+                    end_line: loc.range.end.line,
+                    end_character: loc.range.end.character,
+                },
+            })
+            .collect();
+
+        let cached_node = Arc::new(CachedLspNode::new(key.clone(), location_infos));
+        
+        // Insert into cache
+        self.implementations_cache.insert(key.clone(), cached_node.clone());
+        self.lsp_access_meta.insert(key_str.clone(), AccessMeta::new());
+        
+        // Clean up in-flight tracker
+        self.lsp_inflight.remove(&key_str);
+        
+        Ok(cached_node)
+    }
+
+    /// Get or compute type definitions with caching
+    pub async fn get_or_compute_type_definition<F, Fut>(
+        &self,
+        file: PathBuf,
+        line: u32,
+        column: u32,
+        content_md5: String,
+        compute: F,
+    ) -> Result<Arc<CachedLspNode<Vec<LocationInfo>>>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Vec<Location>>>,
+    {
+        let key = LspCacheKey::new(file, line, column, content_md5, LspOperation::References, None); // Reuse References operation
+        let key_str = format!("type_definition:{}", Self::lsp_cache_key_string(&key));
+
+        // Check L1 cache
+        if let Some(cached) = self.type_definition_cache.get(&key) {
+            // Touch access metadata
+            if let Some(mut meta) = self.lsp_access_meta.get_mut(&key_str) {
+                meta.touch();
+            }
+            debug!("Type definition cache hit for {}:{}:{}", key.file.display(), key.line, key.column);
+            return Ok(cached.clone());
+        }
+
+        // Deduplication
+        let lock = self
+            .lsp_inflight
+            .entry(key_str.clone())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone();
+        let _guard = lock.lock().await;
+
+        // Double-check after lock
+        if let Some(cached) = self.type_definition_cache.get(&key) {
+            self.lsp_inflight.remove(&key_str);
+            return Ok(cached.clone());
+        }
+
+        // Compute the result
+        debug!("Computing type definition for {}:{}:{}", key.file.display(), key.line, key.column);
+        let locations = compute().await?;
+        
+        let location_infos: Vec<LocationInfo> = locations
+            .into_iter()
+            .map(|loc| LocationInfo {
+                uri: loc.uri,
+                range: crate::cache_types::RangeInfo {
+                    start_line: loc.range.start.line,
+                    start_character: loc.range.start.character,
+                    end_line: loc.range.end.line,
+                    end_character: loc.range.end.character,
+                },
+            })
+            .collect();
+
+        let cached_node = Arc::new(CachedLspNode::new(key.clone(), location_infos));
+        
+        // Insert into cache
+        self.type_definition_cache.insert(key.clone(), cached_node.clone());
+        self.lsp_access_meta.insert(key_str.clone(), AccessMeta::new());
+        
+        // Clean up in-flight tracker
+        self.lsp_inflight.remove(&key_str);
+        
+        Ok(cached_node)
+    }
+
+    /// Invalidate all LSP caches for a specific file
+    pub fn invalidate_lsp_file_caches(&self, file: &Path) {
+        // Remove document symbols cache for this file
+        if let Some(_) = self.document_symbols_cache.remove(file) {
+            debug!("Invalidated document symbols cache for {}", file.display());
+        }
+
+        // Remove all position-based caches for this file
+        let mut keys_to_remove = Vec::new();
+        
+        // Collect keys that match the file
+        for entry in self.definition_cache.iter() {
+            if entry.key().file == file {
+                keys_to_remove.push(entry.key().clone());
+            }
+        }
+        for key in &keys_to_remove {
+            self.definition_cache.remove(key);
+            let key_str = Self::lsp_cache_key_string(key);
+            self.lsp_access_meta.remove(&key_str);
+        }
+
+        keys_to_remove.clear();
+        for entry in self.references_cache.iter() {
+            if entry.key().file == file {
+                keys_to_remove.push(entry.key().clone());
+            }
+        }
+        for key in &keys_to_remove {
+            self.references_cache.remove(key);
+            let key_str = Self::lsp_cache_key_string(key);
+            self.lsp_access_meta.remove(&key_str);
+        }
+
+        keys_to_remove.clear();
+        for entry in self.hover_cache.iter() {
+            if entry.key().file == file {
+                keys_to_remove.push(entry.key().clone());
+            }
+        }
+        for key in &keys_to_remove {
+            self.hover_cache.remove(key);
+            let key_str = Self::lsp_cache_key_string(key);
+            self.lsp_access_meta.remove(&key_str);
+        }
+
+        keys_to_remove.clear();
+        for entry in self.implementations_cache.iter() {
+            if entry.key().file == file {
+                keys_to_remove.push(entry.key().clone());
+            }
+        }
+        for key in &keys_to_remove {
+            self.implementations_cache.remove(key);
+            let key_str = format!("implementations:{}", Self::lsp_cache_key_string(key));
+            self.lsp_access_meta.remove(&key_str);
+        }
+
+        keys_to_remove.clear();
+        for entry in self.type_definition_cache.iter() {
+            if entry.key().file == file {
+                keys_to_remove.push(entry.key().clone());
+            }
+        }
+        for key in &keys_to_remove {
+            self.type_definition_cache.remove(key);
+            let key_str = format!("type_definition:{}", Self::lsp_cache_key_string(key));
+            self.lsp_access_meta.remove(&key_str);
+        }
+
+        info!("Invalidated all LSP caches for file {}", file.display());
+    }
+
+    /// Clear all LSP operation caches
+    pub fn clear_lsp_caches(&self) {
+        self.definition_cache.clear();
+        self.references_cache.clear();
+        self.hover_cache.clear();
+        self.document_symbols_cache.clear();
+        self.workspace_symbols_cache.clear();
+        self.implementations_cache.clear();
+        self.type_definition_cache.clear();
+        self.lsp_access_meta.clear();
+        self.lsp_inflight.clear();
+        info!("Cleared all LSP operation caches");
+    }
+
+    // ========================================================================================
+    // End of LSP Operation Cache Methods
+    // ========================================================================================
 
     /// Get cache statistics including persistence information
     pub async fn stats(&self) -> CacheStats {

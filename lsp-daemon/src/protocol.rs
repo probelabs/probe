@@ -90,6 +90,22 @@ pub enum DaemonRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         workspace_hint: Option<PathBuf>,
     },
+    Implementations {
+        request_id: Uuid,
+        file_path: PathBuf,
+        line: u32,
+        column: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
+    },
+    TypeDefinition {
+        request_id: Uuid,
+        file_path: PathBuf,
+        line: u32,
+        column: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_hint: Option<PathBuf>,
+    },
     // System requests
     Status {
         request_id: Uuid,
@@ -248,6 +264,22 @@ pub enum DaemonResponse {
     Completion {
         request_id: Uuid,
         items: Vec<CompletionItem>,
+    },
+    DocumentSymbols {
+        request_id: Uuid,
+        symbols: Vec<DocumentSymbol>,
+    },
+    WorkspaceSymbols {
+        request_id: Uuid,
+        symbols: Vec<SymbolInformation>,
+    },
+    Implementations {
+        request_id: Uuid,
+        locations: Vec<Location>,
+    },
+    TypeDefinition {
+        request_id: Uuid,
+        locations: Vec<Location>,
     },
     // System responses
     Status {
@@ -445,6 +477,56 @@ pub enum CompletionItemKind {
     Reference = 18,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentSymbol {
+    pub name: String,
+    pub detail: Option<String>,
+    pub kind: SymbolKind,
+    pub deprecated: Option<bool>,
+    pub range: Range,
+    pub selection_range: Range,
+    pub children: Option<Vec<DocumentSymbol>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolInformation {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub deprecated: Option<bool>,
+    pub location: Location,
+    pub container_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum SymbolKind {
+    File = 1,
+    Module = 2,
+    Namespace = 3,
+    Package = 4,
+    Class = 5,
+    Method = 6,
+    Property = 7,
+    Field = 8,
+    Constructor = 9,
+    Enum = 10,
+    Interface = 11,
+    Function = 12,
+    Variable = 13,
+    Constant = 14,
+    String = 15,
+    Number = 16,
+    Boolean = 17,
+    Array = 18,
+    Object = 19,
+    Key = 20,
+    Null = 21,
+    EnumMember = 22,
+    Struct = 23,
+    Event = 24,
+    Operator = 25,
+    TypeParameter = 26,
+}
+
 // Indexing configuration and status types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexingConfig {
@@ -464,6 +546,30 @@ pub struct IndexingConfig {
     pub languages: Vec<String>,
     #[serde(default)]
     pub recursive: bool,
+
+    // LSP Caching Configuration
+    #[serde(default)]
+    pub cache_call_hierarchy: Option<bool>,
+    #[serde(default)]
+    pub cache_definitions: Option<bool>,
+    #[serde(default)]
+    pub cache_references: Option<bool>,
+    #[serde(default)]
+    pub cache_hover: Option<bool>,
+    #[serde(default)]
+    pub cache_document_symbols: Option<bool>,
+    #[serde(default)]
+    pub cache_during_indexing: Option<bool>,
+    #[serde(default)]
+    pub preload_common_symbols: Option<bool>,
+    #[serde(default)]
+    pub max_cache_entries_per_operation: Option<usize>,
+    #[serde(default)]
+    pub lsp_operation_timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub lsp_priority_operations: Vec<String>,
+    #[serde(default)]
+    pub lsp_disabled_operations: Vec<String>,
 }
 
 impl Default for IndexingConfig {
@@ -483,6 +589,19 @@ impl Default for IndexingConfig {
             incremental: Some(true),
             languages: vec![],
             recursive: true,
+
+            // LSP Caching defaults (None means use system defaults)
+            cache_call_hierarchy: None,
+            cache_definitions: None,
+            cache_references: None,
+            cache_hover: None,
+            cache_document_symbols: None,
+            cache_during_indexing: None,
+            preload_common_symbols: None,
+            max_cache_entries_per_operation: None,
+            lsp_operation_timeout_ms: None,
+            lsp_priority_operations: vec![],
+            lsp_disabled_operations: vec![],
         }
     }
 }

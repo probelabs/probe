@@ -1,7 +1,7 @@
 use crate::cache_management::CacheManager;
 use crate::cache_types::{
-    CallHierarchyInfo, CallInfo, DefinitionInfo, HoverInfo, LspOperation, NodeId, NodeKey,
-    ReferencesInfo,
+    CallHierarchyInfo, CallInfo, DefinitionInfo, HoverInfo, 
+    LspOperation, NodeId, NodeKey, ReferencesInfo,
 };
 use crate::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use crate::hash_utils::md5_hex_file;
@@ -17,8 +17,8 @@ use crate::pid_lock::PidLock;
 use crate::process_group::ProcessGroup;
 use crate::protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, ClearFilter,
-    CompactOptions, DaemonRequest, DaemonResponse, DaemonStatus, ExportOptions, LanguageInfo,
-    MessageCodec, PoolStatus,
+    CompactOptions, DaemonRequest, DaemonResponse, DaemonStatus, DocumentSymbol, ExportOptions, 
+    HoverContent, LanguageInfo, Location, MessageCodec, PoolStatus, SymbolInformation,
 };
 use crate::server_manager::SingleServerManager;
 use crate::socket_path::{get_default_socket_path, remove_socket_file};
@@ -1519,19 +1519,170 @@ impl LspDaemon {
                 }
             }
 
-            // Explicit "not implemented" responses for analysis requests we have not wired yet.
-            // CRITICAL: We must return the same request_id to avoid client hanging forever waiting
-            // for a response with the correct ID. This was the root cause of CI test hangs.
-            DaemonRequest::Definition { request_id, .. }
-            | DaemonRequest::References { request_id, .. }
-            | DaemonRequest::Hover { request_id, .. }
-            | DaemonRequest::Completion { request_id, .. }
-            | DaemonRequest::DocumentSymbols { request_id, .. }
-            | DaemonRequest::WorkspaceSymbols { request_id, .. } => {
-                warn!("Received unimplemented LSP request type, returning error with original request_id");
+            DaemonRequest::Definition {
+                request_id,
+                file_path,
+                line,
+                column,
+                workspace_hint,
+            } => {
+                info!(
+                    "Received DaemonRequest::Definition for {:?} at {}:{} (request_id: {})",
+                    file_path, line, column, request_id
+                );
+                match self
+                    .handle_definition(&file_path, line, column, workspace_hint)
+                    .await
+                {
+                    Ok(locations) => DaemonResponse::Definition { request_id, locations },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::References {
+                request_id,
+                file_path,
+                line,
+                column,
+                include_declaration,
+                workspace_hint,
+            } => {
+                info!(
+                    "Received DaemonRequest::References for {:?} at {}:{} include_decl={} (request_id: {})",
+                    file_path, line, column, include_declaration, request_id
+                );
+                match self
+                    .handle_references(&file_path, line, column, include_declaration, workspace_hint)
+                    .await
+                {
+                    Ok(locations) => DaemonResponse::References { request_id, locations },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::Hover {
+                request_id,
+                file_path,
+                line,
+                column,
+                workspace_hint,
+            } => {
+                info!(
+                    "Received DaemonRequest::Hover for {:?} at {}:{} (request_id: {})",
+                    file_path, line, column, request_id
+                );
+                match self
+                    .handle_hover(&file_path, line, column, workspace_hint)
+                    .await
+                {
+                    Ok(content) => DaemonResponse::Hover { request_id, content },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::DocumentSymbols {
+                request_id,
+                file_path,
+                workspace_hint,
+            } => {
+                info!(
+                    "Received DaemonRequest::DocumentSymbols for {:?} (request_id: {})",
+                    file_path, request_id
+                );
+                match self
+                    .handle_document_symbols(&file_path, workspace_hint)
+                    .await
+                {
+                    Ok(symbols) => DaemonResponse::DocumentSymbols { request_id, symbols },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::WorkspaceSymbols {
+                request_id,
+                query,
+                workspace_hint,
+            } => {
+                info!(
+                    "Received DaemonRequest::WorkspaceSymbols query='{}' (request_id: {})",
+                    query, request_id
+                );
+                match self
+                    .handle_workspace_symbols(&query, workspace_hint)
+                    .await
+                {
+                    Ok(symbols) => DaemonResponse::WorkspaceSymbols { request_id, symbols },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::Implementations {
+                request_id,
+                file_path,
+                line,
+                column,
+                workspace_hint,
+            } => {
+                info!(
+                    "Received DaemonRequest::Implementations for {:?} at {}:{} (request_id: {})",
+                    file_path, line, column, request_id
+                );
+                match self
+                    .handle_implementations(&file_path, line, column, workspace_hint)
+                    .await
+                {
+                    Ok(locations) => DaemonResponse::Implementations { request_id, locations },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            DaemonRequest::TypeDefinition {
+                request_id,
+                file_path,
+                line,
+                column,
+                workspace_hint,
+            } => {
+                info!(
+                    "Received DaemonRequest::TypeDefinition for {:?} at {}:{} (request_id: {})",
+                    file_path, line, column, request_id
+                );
+                match self
+                    .handle_type_definition(&file_path, line, column, workspace_hint)
+                    .await
+                {
+                    Ok(locations) => DaemonResponse::TypeDefinition { request_id, locations },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
+            // Explicit "not implemented" response for completion - not part of this implementation
+            DaemonRequest::Completion { request_id, .. } => {
+                warn!("Received unimplemented completion request, returning error with original request_id");
                 DaemonResponse::Error {
                     request_id,
-                    error: "Request type not implemented".to_string(),
+                    error: "Completion request type not implemented".to_string(),
                 }
             }
         }
@@ -2060,6 +2211,322 @@ impl LspDaemon {
             "outgoing": outgoing
         })
     }
+
+    // ========================================================================================
+    // LSP Response Parsing Helper Functions
+    // ========================================================================================
+
+    /// Parse LSP definition response (JSON) into Vec<Location>
+    fn parse_definition_response(response: &serde_json::Value) -> Result<Vec<Location>> {
+        if let Some(locations) = response.as_array() {
+            let mut result = Vec::new();
+            for loc_value in locations {
+                if let Ok(location) = serde_json::from_value::<Location>(loc_value.clone()) {
+                    result.push(location);
+                }
+            }
+            Ok(result)
+        } else if let Ok(location) = serde_json::from_value::<Location>(response.clone()) {
+            Ok(vec![location])
+        } else if response.is_null() {
+            Ok(Vec::new())
+        } else {
+            Err(anyhow!("Invalid definition response format: {}", response))
+        }
+    }
+
+    /// Parse LSP references response (JSON) into Vec<Location>
+    fn parse_references_response(response: &serde_json::Value) -> Result<Vec<Location>> {
+        if let Some(locations) = response.as_array() {
+            let mut result = Vec::new();
+            for loc_value in locations {
+                if let Ok(location) = serde_json::from_value::<Location>(loc_value.clone()) {
+                    result.push(location);
+                }
+            }
+            Ok(result)
+        } else if response.is_null() {
+            Ok(Vec::new())
+        } else {
+            Err(anyhow!("Invalid references response format: {}", response))
+        }
+    }
+
+    /// Parse LSP hover response (JSON) into Option<HoverContent>
+    fn parse_hover_response(response: &serde_json::Value) -> Result<Option<HoverContent>> {
+        if response.is_null() {
+            return Ok(None);
+        }
+        
+        if let Ok(hover) = serde_json::from_value::<HoverContent>(response.clone()) {
+            Ok(Some(hover))
+        } else {
+            // Try to parse basic hover format
+            if let Some(contents) = response.get("contents") {
+                let contents_str = if contents.is_string() {
+                    contents.as_str().unwrap_or("").to_string()
+                } else if contents.is_array() {
+                    // Handle array of markup content
+                    contents.as_array().unwrap_or(&vec![])
+                        .iter()
+                        .map(|v| v.as_str().unwrap_or(""))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    contents.to_string()
+                };
+                
+                let range = response.get("range")
+                    .and_then(|r| serde_json::from_value::<crate::protocol::Range>(r.clone()).ok());
+                
+                Ok(Some(HoverContent {
+                    contents: contents_str,
+                    range,
+                }))
+            } else {
+                Err(anyhow!("Invalid hover response format: {}", response))
+            }
+        }
+    }
+
+    // ========================================================================================
+    // New LSP Operation Handler Methods
+    // ========================================================================================
+
+    async fn handle_definition(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+        workspace_hint: Option<PathBuf>,
+    ) -> Result<Vec<Location>> {
+        let absolute_file_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+        let content_md5 = md5_hex_file(&absolute_file_path)?;
+
+        // Use cache
+        let cached_result = self
+            .call_graph_cache
+            .get_or_compute_definition(
+                absolute_file_path.clone(),
+                line,
+                column,
+                content_md5,
+                || async {
+                    // Call LSP server for computation
+                    let language = self.detector.detect(&absolute_file_path)?;
+                    if language == Language::Unknown {
+                        return Err(anyhow!("Unknown language for file: {:?}", absolute_file_path));
+                    }
+
+                    let workspace_root = {
+                        let mut resolver = self.workspace_resolver.lock().await;
+                        resolver.resolve_workspace(&absolute_file_path, workspace_hint.clone())?
+                    };
+
+                    let server_instance = self
+                        .server_manager
+                        .ensure_workspace_registered(language, workspace_root)
+                        .await?;
+                    
+                    let server = server_instance.lock().await;
+                    let response_json = server.server.definition(&absolute_file_path, line, column).await?;
+                    let locations = Self::parse_definition_response(&response_json)?;
+                    Ok(locations)
+                },
+            )
+            .await?;
+
+        // Convert cached LocationInfo to protocol Location
+        Ok(cached_result
+            .data
+            .locations
+            .clone()
+            .into_iter()
+            .map(|loc| Location {
+                uri: loc.uri,
+                range: crate::protocol::Range {
+                    start: crate::protocol::Position {
+                        line: loc.range.start_line,
+                        character: loc.range.start_character,
+                    },
+                    end: crate::protocol::Position {
+                        line: loc.range.end_line,
+                        character: loc.range.end_character,
+                    },
+                },
+            })
+            .collect())
+    }
+
+    async fn handle_references(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+        include_declaration: bool,
+        workspace_hint: Option<PathBuf>,
+    ) -> Result<Vec<Location>> {
+        let absolute_file_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+        let content_md5 = md5_hex_file(&absolute_file_path)?;
+
+        // Use cache
+        let cached_result = self
+            .call_graph_cache
+            .get_or_compute_references(
+                absolute_file_path.clone(),
+                line,
+                column,
+                content_md5,
+                include_declaration,
+                || async {
+                    // Call LSP server for computation
+                    let language = self.detector.detect(&absolute_file_path)?;
+                    if language == Language::Unknown {
+                        return Err(anyhow!("Unknown language for file: {:?}", absolute_file_path));
+                    }
+
+                    let workspace_root = {
+                        let mut resolver = self.workspace_resolver.lock().await;
+                        resolver.resolve_workspace(&absolute_file_path, workspace_hint.clone())?
+                    };
+
+                    let server_instance = self
+                        .server_manager
+                        .ensure_workspace_registered(language, workspace_root)
+                        .await?;
+                    
+                    let server = server_instance.lock().await;
+                    let response_json = server.server.references(&absolute_file_path, line, column, include_declaration).await?;
+                    let locations = Self::parse_references_response(&response_json)?;
+                    Ok(locations)
+                },
+            )
+            .await?;
+
+        // Convert cached LocationInfo to protocol Location
+        Ok(cached_result
+            .data
+            .locations
+            .clone()
+            .into_iter()
+            .map(|loc| Location {
+                uri: loc.uri,
+                range: crate::protocol::Range {
+                    start: crate::protocol::Position {
+                        line: loc.range.start_line,
+                        character: loc.range.start_character,
+                    },
+                    end: crate::protocol::Position {
+                        line: loc.range.end_line,
+                        character: loc.range.end_character,
+                    },
+                },
+            })
+            .collect())
+    }
+
+    async fn handle_hover(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+        workspace_hint: Option<PathBuf>,
+    ) -> Result<Option<HoverContent>> {
+        let absolute_file_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+        let content_md5 = md5_hex_file(&absolute_file_path)?;
+
+        // Use cache
+        let cached_result = self
+            .call_graph_cache
+            .get_or_compute_hover(
+                absolute_file_path.clone(),
+                line,
+                column,
+                content_md5,
+                || async {
+                    // Call LSP server for computation
+                    let language = self.detector.detect(&absolute_file_path)?;
+                    if language == Language::Unknown {
+                        return Err(anyhow!("Unknown language for file: {:?}", absolute_file_path));
+                    }
+
+                    let workspace_root = {
+                        let mut resolver = self.workspace_resolver.lock().await;
+                        resolver.resolve_workspace(&absolute_file_path, workspace_hint.clone())?
+                    };
+
+                    let server_instance = self
+                        .server_manager
+                        .ensure_workspace_registered(language, workspace_root)
+                        .await?;
+                    
+                    let server = server_instance.lock().await;
+                    let response_json = server.server.hover(&absolute_file_path, line, column).await?;
+                    let hover = Self::parse_hover_response(&response_json)?;
+                    Ok(hover)
+                },
+            )
+            .await?;
+
+        // Convert cached HoverInfo to protocol HoverContent
+        Ok(cached_result.data.contents.clone().map(|contents| HoverContent {
+            contents,
+            range: cached_result.data.range.clone().map(|r| crate::protocol::Range {
+                start: crate::protocol::Position {
+                    line: r.start_line,
+                    character: r.start_character,
+                },
+                end: crate::protocol::Position {
+                    line: r.end_line,
+                    character: r.end_character,
+                },
+            }),
+        }))
+    }
+
+    async fn handle_document_symbols(
+        &self,
+        _file_path: &Path,
+        _workspace_hint: Option<PathBuf>,
+    ) -> Result<Vec<DocumentSymbol>> {
+        // TODO: Implement document symbols support in LSP server
+        Err(anyhow!("Document symbols operation is not yet implemented"))
+    }
+
+    async fn handle_workspace_symbols(
+        &self,
+        _query: &str,
+        _workspace_hint: Option<PathBuf>,
+    ) -> Result<Vec<SymbolInformation>> {
+        // TODO: Implement workspace symbols support in LSP server
+        Err(anyhow!("Workspace symbols operation is not yet implemented"))
+    }
+
+    async fn handle_implementations(
+        &self,
+        _file_path: &Path,
+        _line: u32,
+        _column: u32,
+        _workspace_hint: Option<PathBuf>,
+    ) -> Result<Vec<Location>> {
+        // TODO: Implement implementations support in LSP server
+        Err(anyhow!("Implementations operation is not yet implemented"))
+    }
+
+    async fn handle_type_definition(
+        &self,
+        _file_path: &Path,
+        _line: u32,
+        _column: u32,
+        _workspace_hint: Option<PathBuf>,
+    ) -> Result<Vec<Location>> {
+        // TODO: Implement type definition support in LSP server
+        Err(anyhow!("Type definition operation is not yet implemented"))
+    }
+
+    // ========================================================================================
+    // End of New LSP Operation Handler Methods
+    // ========================================================================================
 
     async fn handle_initialize_workspace(
         &self,
@@ -2796,38 +3263,8 @@ impl LspDaemon {
         &self,
         config: crate::protocol::IndexingConfig,
     ) -> Result<()> {
-        // Convert protocol config to internal config
-        let internal_config = crate::indexing::IndexingConfig {
-            enabled: true,
-            auto_index: false,
-            watch_files: false,
-            default_depth: 3,
-            max_workers: config.max_workers.unwrap_or_else(|| num_cpus::get().max(2)),
-            memory_budget_mb: config.memory_budget_mb.unwrap_or(512),
-            memory_pressure_threshold: 0.8,
-            max_queue_size: 10000,
-            global_exclude_patterns: config.exclude_patterns,
-            global_include_patterns: config.include_patterns,
-            max_file_size_bytes: config
-                .max_file_size_mb
-                .map(|mb| mb * 1024 * 1024)
-                .unwrap_or(10 * 1024 * 1024),
-            incremental_mode: config.incremental.unwrap_or(true),
-            discovery_batch_size: 100,
-            status_update_interval_secs: 5,
-            file_processing_timeout_ms: 30000,
-            parallel_file_processing: true,
-            persist_cache: false,
-            cache_directory: None,
-            features: crate::indexing::IndexingFeatures::default(),
-            language_configs: std::collections::HashMap::new(),
-            priority_languages: vec![
-                crate::language_detector::Language::Rust,
-                crate::language_detector::Language::TypeScript,
-                crate::language_detector::Language::Python,
-            ],
-            disabled_languages: vec![],
-        };
+        // Convert protocol config to internal config using the proper conversion function
+        let internal_config = crate::indexing::IndexingConfig::from_protocol_config(&config);
 
         // Update stored config
         *self.indexing_config.write().await = internal_config;
@@ -2840,16 +3277,8 @@ impl LspDaemon {
         &self,
         config: &crate::indexing::IndexingConfig,
     ) -> crate::protocol::IndexingConfig {
-        crate::protocol::IndexingConfig {
-            max_workers: Some(config.max_workers),
-            memory_budget_mb: Some(config.memory_budget_mb),
-            exclude_patterns: config.global_exclude_patterns.clone(),
-            include_patterns: config.global_include_patterns.clone(),
-            max_file_size_mb: Some(config.max_file_size_bytes / (1024 * 1024)),
-            incremental: Some(config.incremental_mode),
-            languages: vec![], // TODO: Convert language configs
-            recursive: true,   // Default value
-        }
+        // Use the proper conversion function
+        config.to_protocol_config()
     }
 
     /// Handle call hierarchy at commit request (stub - git functionality removed)

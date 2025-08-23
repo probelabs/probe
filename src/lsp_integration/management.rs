@@ -72,9 +72,9 @@ impl LspManager {
         // Delegate to the single, lock-protected spawn path in client.rs
         crate::lsp_integration::client::start_embedded_daemon_background().await?;
 
-        // Wait for daemon to be ready (up to 10 seconds)
+        // Wait for daemon to be ready (up to 30 seconds)
         let socket_path = lsp_daemon::get_default_socket_path();
-        for _ in 0..20 {
+        for _ in 0..60 {
             if lsp_daemon::ipc::IpcStream::connect(&socket_path)
                 .await
                 .is_ok()
@@ -221,6 +221,9 @@ impl LspManager {
             }
             LspSubcommands::IndexConfig { config_command } => {
                 Self::handle_index_config_command(config_command, format).await
+            }
+            LspSubcommands::Call { command } => {
+                Self::handle_call_command(command).await
             }
         }
     }
@@ -1336,23 +1339,22 @@ impl LspManager {
             vec![]
         };
 
-        // Create indexing config
-        let indexing_config = lsp_daemon::protocol::IndexingConfig {
-            max_workers,
-            memory_budget_mb: memory_budget,
-            exclude_patterns: vec![
-                "*.git/*".to_string(),
-                "*/node_modules/*".to_string(),
-                "*/target/*".to_string(),
-                "*/build/*".to_string(),
-                "*/dist/*".to_string(),
-            ],
-            include_patterns: vec![],
-            max_file_size_mb: Some(10),
-            incremental: Some(true),
-            languages: language_list,
-            recursive,
-        };
+        // Create indexing config using defaults and override specific fields
+        let mut indexing_config = lsp_daemon::protocol::IndexingConfig::default();
+        indexing_config.max_workers = max_workers;
+        indexing_config.memory_budget_mb = memory_budget;
+        indexing_config.exclude_patterns = vec![
+            "*.git/*".to_string(),
+            "*/node_modules/*".to_string(),
+            "*/target/*".to_string(),
+            "*/build/*".to_string(),
+            "*/dist/*".to_string(),
+        ];
+        indexing_config.include_patterns = vec![];
+        indexing_config.max_file_size_mb = Some(10);
+        indexing_config.incremental = Some(true);
+        indexing_config.languages = language_list;
+        indexing_config.recursive = recursive;
 
         match client
             .start_indexing(workspace_root.clone(), indexing_config)
@@ -1499,6 +1501,17 @@ impl LspManager {
                 include_patterns,
                 max_file_size,
                 incremental,
+                cache_call_hierarchy,
+                cache_definitions,
+                cache_references,
+                cache_hover,
+                cache_document_symbols,
+                cache_during_indexing,
+                preload_common_symbols,
+                max_cache_entries_per_operation,
+                lsp_operation_timeout_ms,
+                lsp_priority_operations,
+                lsp_disabled_operations,
                 format,
             } => {
                 let mut config = client.get_indexing_config().await?;
@@ -1523,6 +1536,49 @@ impl LspManager {
                 }
                 if let Some(inc) = incremental {
                     config.incremental = Some(*inc);
+                }
+
+                // Update LSP caching configuration fields
+                if let Some(cache_ch) = cache_call_hierarchy {
+                    config.cache_call_hierarchy = Some(*cache_ch);
+                }
+                if let Some(cache_def) = cache_definitions {
+                    config.cache_definitions = Some(*cache_def);
+                }
+                if let Some(cache_ref) = cache_references {
+                    config.cache_references = Some(*cache_ref);
+                }
+                if let Some(cache_hover_val) = cache_hover {
+                    config.cache_hover = Some(*cache_hover_val);
+                }
+                if let Some(cache_doc) = cache_document_symbols {
+                    config.cache_document_symbols = Some(*cache_doc);
+                }
+                if let Some(cache_during) = cache_during_indexing {
+                    config.cache_during_indexing = Some(*cache_during);
+                }
+                if let Some(preload) = preload_common_symbols {
+                    config.preload_common_symbols = Some(*preload);
+                }
+                if let Some(max_entries) = max_cache_entries_per_operation {
+                    config.max_cache_entries_per_operation = Some(*max_entries);
+                }
+                if let Some(timeout_ms) = lsp_operation_timeout_ms {
+                    config.lsp_operation_timeout_ms = Some(*timeout_ms);
+                }
+                if let Some(priority_ops) = lsp_priority_operations {
+                    config.lsp_priority_operations = priority_ops
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
+                if let Some(disabled_ops) = lsp_disabled_operations {
+                    config.lsp_disabled_operations = disabled_ops
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
                 }
 
                 client.set_indexing_config(config.clone()).await?;
@@ -1715,6 +1771,48 @@ impl LspManager {
                     );
                 } else {
                     println!("  {}: All files", "Include Patterns".bold());
+                }
+
+                // LSP Caching Configuration section  
+                println!("\n{}", "LSP Caching Configuration".bold().magenta());
+                
+                let cache_ch = config.cache_call_hierarchy.map(|b| b.to_string()).unwrap_or_else(|| "Default".to_string());
+                println!("  {}: {}", "Cache Call Hierarchy".bold(), cache_ch);
+                
+                let cache_def = config.cache_definitions.map(|b| b.to_string()).unwrap_or_else(|| "Default".to_string());
+                println!("  {}: {}", "Cache Definitions".bold(), cache_def);
+                
+                let cache_ref = config.cache_references.map(|b| b.to_string()).unwrap_or_else(|| "Default".to_string());
+                println!("  {}: {}", "Cache References".bold(), cache_ref);
+                
+                let cache_hover = config.cache_hover.map(|b| b.to_string()).unwrap_or_else(|| "Default".to_string());
+                println!("  {}: {}", "Cache Hover".bold(), cache_hover);
+                
+                let cache_doc = config.cache_document_symbols.map(|b| b.to_string()).unwrap_or_else(|| "Default".to_string());
+                println!("  {}: {}", "Cache Document Symbols".bold(), cache_doc);
+                
+                let cache_during = config.cache_during_indexing.map(|b| b.to_string()).unwrap_or_else(|| "Default".to_string());
+                println!("  {}: {}", "Cache During Indexing".bold(), cache_during);
+                
+                let preload = config.preload_common_symbols.map(|b| b.to_string()).unwrap_or_else(|| "Default".to_string());
+                println!("  {}: {}", "Preload Common Symbols".bold(), preload);
+                
+                let max_entries = config.max_cache_entries_per_operation.map(|n| n.to_string()).unwrap_or_else(|| "Default".to_string());
+                println!("  {}: {}", "Max Cache Entries Per Operation".bold(), max_entries);
+                
+                let timeout = config.lsp_operation_timeout_ms.map(|n| format!("{}ms", n)).unwrap_or_else(|| "Default".to_string());
+                println!("  {}: {}", "LSP Operation Timeout".bold(), timeout);
+                
+                if !config.lsp_priority_operations.is_empty() {
+                    println!("  {}: {}", "Priority Operations".bold(), config.lsp_priority_operations.join(", "));
+                } else {
+                    println!("  {}: Default", "Priority Operations".bold());
+                }
+                
+                if !config.lsp_disabled_operations.is_empty() {
+                    println!("  {}: {}", "Disabled Operations".bold(), config.lsp_disabled_operations.join(", "));
+                } else {
+                    println!("  {}: None", "Disabled Operations".bold());
                 }
             }
         }
@@ -2187,6 +2285,492 @@ impl LspManager {
         }
 
         Ok(())
+    }
+
+    /// Handle LSP call commands
+    async fn handle_call_command(command: &crate::lsp_integration::LspCallCommands) -> Result<()> {
+        use crate::lsp_integration::LspCallCommands;
+        
+        // Ensure daemon is ready
+        Self::ensure_ready().await?;
+        
+        // Create client
+        let config = LspConfig::default();
+        let mut client = LspClient::new(config).await?;
+        
+        match command {
+            LspCallCommands::Definition { location, format } => {
+                let resolved = crate::lsp_integration::symbol_resolver::resolve_location(location)?;
+                let results = client.call_definition(&resolved.file_path, resolved.line, resolved.column).await?;
+                Self::display_locations(&results, "Definition", format).await
+            }
+            LspCallCommands::References { location, include_declaration, format } => {
+                let resolved = crate::lsp_integration::symbol_resolver::resolve_location(location)?;
+                let results = client.call_references(&resolved.file_path, resolved.line, resolved.column, *include_declaration).await?;
+                Self::display_locations(&results, "References", format).await
+            }
+            LspCallCommands::Hover { location, format } => {
+                let resolved = crate::lsp_integration::symbol_resolver::resolve_location(location)?;
+                let result = client.call_hover(&resolved.file_path, resolved.line, resolved.column).await?;
+                Self::display_hover_info(&result, format).await
+            }
+            LspCallCommands::DocumentSymbols { file, format } => {
+                let results = client.call_document_symbols(file).await?;
+                Self::display_document_symbols(&results, format).await
+            }
+            LspCallCommands::WorkspaceSymbols { query, max_results, format } => {
+                let results = client.call_workspace_symbols(query, *max_results).await?;
+                Self::display_workspace_symbols(&results, format).await
+            }
+            LspCallCommands::CallHierarchy { location, format } => {
+                let resolved = crate::lsp_integration::symbol_resolver::resolve_location(location)?;
+                let result = client.get_call_hierarchy(&resolved.file_path, resolved.line, resolved.column).await?;
+                Self::display_call_hierarchy(&result, format).await
+            }
+            LspCallCommands::Implementations { location, format } => {
+                let resolved = crate::lsp_integration::symbol_resolver::resolve_location(location)?;
+                let results = client.call_implementations(&resolved.file_path, resolved.line, resolved.column).await?;
+                Self::display_locations(&results, "Implementations", format).await
+            }
+            LspCallCommands::TypeDefinition { location, format } => {
+                let resolved = crate::lsp_integration::symbol_resolver::resolve_location(location)?;
+                let results = client.call_type_definition(&resolved.file_path, resolved.line, resolved.column).await?;
+                Self::display_locations(&results, "Type Definition", format).await
+            }
+        }
+    }
+    
+    /// Display location results (for definition, references, implementations, type definition)
+    async fn display_locations(
+        locations: &[lsp_daemon::protocol::Location],
+        command_name: &str,
+        format: &str,
+    ) -> Result<()> {
+        match format {
+            "json" => {
+                println!("{}", serde_json::to_string_pretty(locations)?);
+            }
+            "plain" => {
+                for location in locations {
+                    println!(
+                        "{}:{}:{}",
+                        location.uri,
+                        location.range.start.line + 1,
+                        location.range.start.character + 1
+                    );
+                }
+            }
+            _ => {
+                // Terminal format
+                if locations.is_empty() {
+                    println!("{}", format!("No {} found", command_name.to_lowercase()).yellow());
+                    return Ok(());
+                }
+
+                println!("{}", format!("{} Results:", command_name).bold().green());
+                println!();
+
+                for (i, location) in locations.iter().enumerate() {
+                    let file_path = location.uri
+                        .strip_prefix("file://")
+                        .unwrap_or(&location.uri);
+                    
+                    println!(
+                        "{} {}:{}:{}",
+                        format!("{}.", i + 1).dimmed(),
+                        file_path.cyan(),
+                        (location.range.start.line + 1).to_string().yellow(),
+                        (location.range.start.character + 1).to_string().yellow()
+                    );
+                    
+                    // Show a snippet of code if possible
+                    if let Ok(content) = std::fs::read_to_string(file_path) {
+                        let lines: Vec<&str> = content.lines().collect();
+                        let line_idx = location.range.start.line as usize;
+                        if line_idx < lines.len() {
+                            let line = lines[line_idx].trim();
+                            if !line.is_empty() {
+                                println!("   {}", line.dimmed());
+                            }
+                        }
+                    }
+                    println!();
+                }
+                
+                let count = locations.len();
+                println!(
+                    "{} {}",
+                    format!("Found {} {}", count, if count == 1 { "result" } else { "results" }).green(),
+                    format!("for {}", command_name.to_lowercase()).dimmed()
+                );
+            }
+        }
+        Ok(())
+    }
+    
+    /// Display hover information
+    async fn display_hover_info(
+        hover: &Option<lsp_daemon::protocol::HoverContent>,
+        format: &str,
+    ) -> Result<()> {
+        match format {
+            "json" => {
+                println!("{}", serde_json::to_string_pretty(hover)?);
+            }
+            "plain" => {
+                if let Some(hover_content) = hover {
+                    println!("{}", hover_content.contents);
+                } else {
+                    println!("No hover information available");
+                }
+            }
+            _ => {
+                // Terminal format
+                match hover {
+                    Some(hover_content) => {
+                        println!("{}", "Hover Information:".bold().green());
+                        println!();
+                        
+                        // Format the hover contents nicely
+                        let contents = &hover_content.contents;
+                        if contents.starts_with("```") && contents.ends_with("```") {
+                            // It's a markdown code block, display with syntax highlighting
+                            let lines: Vec<&str> = contents.lines().collect();
+                            if lines.len() > 2 {
+                                println!("{}", lines[0].dimmed()); // Language marker
+                                for line in &lines[1..lines.len()-1] {
+                                    println!("  {}", line);
+                                }
+                                println!("{}", lines.last().unwrap().dimmed()); // Closing ```
+                            } else {
+                                println!("{}", contents);
+                            }
+                        } else {
+                            // Regular text, just display it
+                            for line in contents.lines() {
+                                if line.trim().is_empty() {
+                                    println!();
+                                } else {
+                                    println!("  {}", line);
+                                }
+                            }
+                        }
+                        
+                        if let Some(ref range) = hover_content.range {
+                            println!();
+                            println!(
+                                "{} {}:{}-{}:{}",
+                                "Range:".bold(),
+                                (range.start.line + 1).to_string().yellow(),
+                                (range.start.character + 1).to_string().yellow(),
+                                (range.end.line + 1).to_string().yellow(),
+                                (range.end.character + 1).to_string().yellow()
+                            );
+                        }
+                    }
+                    None => {
+                        println!("{}", "No hover information available".yellow());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    /// Display document symbols
+    async fn display_document_symbols(
+        symbols: &[lsp_daemon::protocol::DocumentSymbol],
+        format: &str,
+    ) -> Result<()> {
+        match format {
+            "json" => {
+                println!("{}", serde_json::to_string_pretty(symbols)?);
+            }
+            "plain" => {
+                Self::print_document_symbols_plain(symbols, 0);
+            }
+            _ => {
+                // Terminal format
+                if symbols.is_empty() {
+                    println!("{}", "No symbols found in document".yellow());
+                    return Ok(());
+                }
+
+                println!("{}", "Document Symbols:".bold().green());
+                println!();
+                
+                Self::print_document_symbols_tree(symbols, 0);
+                
+                let total_count = Self::count_document_symbols(symbols);
+                println!();
+                println!(
+                    "{} {}",
+                    format!("Found {} {}", total_count, if total_count == 1 { "symbol" } else { "symbols" }).green(),
+                    "in document".dimmed()
+                );
+            }
+        }
+        Ok(())
+    }
+    
+    /// Print document symbols in plain format (one per line)
+    fn print_document_symbols_plain(symbols: &[lsp_daemon::protocol::DocumentSymbol], _depth: usize) {
+        for symbol in symbols {
+            println!(
+                "{}:{}:{} {} {}",
+                symbol.range.start.line + 1,
+                symbol.range.start.character + 1,
+                symbol.range.end.line + 1,
+                Self::format_symbol_kind(&symbol.kind),
+                symbol.name
+            );
+            
+            if let Some(ref children) = symbol.children {
+                Self::print_document_symbols_plain(children, _depth + 1);
+            }
+        }
+    }
+    
+    /// Print document symbols in tree format
+    fn print_document_symbols_tree(symbols: &[lsp_daemon::protocol::DocumentSymbol], depth: usize) {
+        for (i, symbol) in symbols.iter().enumerate() {
+            let is_last = i == symbols.len() - 1;
+            let prefix = if depth == 0 {
+                "".to_string()
+            } else {
+                let mut p = "  ".repeat(depth - 1);
+                p.push_str(if is_last { "└─ " } else { "├─ " });
+                p
+            };
+            
+            let kind_str = Self::format_symbol_kind(&symbol.kind);
+            let location_str = format!(
+                "{}:{}",
+                symbol.range.start.line + 1,
+                symbol.range.start.character + 1
+            ).dimmed();
+            
+            println!(
+                "{}{} {} {}",
+                prefix,
+                kind_str.bold(),
+                symbol.name.cyan(),
+                location_str
+            );
+            
+            if let Some(ref detail) = symbol.detail {
+                if !detail.is_empty() {
+                    let detail_prefix = if depth == 0 {
+                        "  ".to_string()
+                    } else {
+                        let mut p = "  ".repeat(depth);
+                        p.push_str("   ");
+                        p
+                    };
+                    println!("{}{}", detail_prefix, detail.dimmed());
+                }
+            }
+            
+            if let Some(ref children) = symbol.children {
+                Self::print_document_symbols_tree(children, depth + 1);
+            }
+        }
+    }
+    
+    /// Count total symbols including children
+    fn count_document_symbols(symbols: &[lsp_daemon::protocol::DocumentSymbol]) -> usize {
+        let mut count = symbols.len();
+        for symbol in symbols {
+            if let Some(ref children) = symbol.children {
+                count += Self::count_document_symbols(children);
+            }
+        }
+        count
+    }
+    
+    /// Display workspace symbols
+    async fn display_workspace_symbols(
+        symbols: &[lsp_daemon::protocol::SymbolInformation],
+        format: &str,
+    ) -> Result<()> {
+        match format {
+            "json" => {
+                println!("{}", serde_json::to_string_pretty(symbols)?);
+            }
+            "plain" => {
+                for symbol in symbols {
+                    let file_path = symbol.location.uri
+                        .strip_prefix("file://")
+                        .unwrap_or(&symbol.location.uri);
+                    println!(
+                        "{}:{}:{} {} {}",
+                        file_path,
+                        symbol.location.range.start.line + 1,
+                        symbol.location.range.start.character + 1,
+                        Self::format_symbol_kind(&symbol.kind),
+                        symbol.name
+                    );
+                }
+            }
+            _ => {
+                // Terminal format
+                if symbols.is_empty() {
+                    println!("{}", "No workspace symbols found".yellow());
+                    return Ok(());
+                }
+
+                println!("{}", "Workspace Symbols:".bold().green());
+                println!();
+                
+                // Group symbols by file for better readability
+                use std::collections::HashMap;
+                let mut symbols_by_file: HashMap<String, Vec<&lsp_daemon::protocol::SymbolInformation>> = HashMap::new();
+                
+                for symbol in symbols {
+                    let file_path = symbol.location.uri
+                        .strip_prefix("file://")
+                        .unwrap_or(&symbol.location.uri)
+                        .to_string();
+                    symbols_by_file.entry(file_path).or_default().push(symbol);
+                }
+                
+                let mut files: Vec<_> = symbols_by_file.keys().collect();
+                files.sort();
+                
+                for file_path in files {
+                    if let Some(file_symbols) = symbols_by_file.get(file_path) {
+                        println!("{}", file_path.bold());
+                        
+                        for symbol in file_symbols {
+                            let kind_str = Self::format_symbol_kind(&symbol.kind);
+                            let location_str = format!(
+                                "{}:{}",
+                                symbol.location.range.start.line + 1,
+                                symbol.location.range.start.character + 1
+                            ).dimmed();
+                            
+                            print!("  {} {} {}", kind_str.bold(), symbol.name.cyan(), location_str);
+                            
+                            if let Some(ref container) = symbol.container_name {
+                                print!(" {}", format!("in {}", container).dimmed());
+                            }
+                            
+                            println!();
+                        }
+                        println!();
+                    }
+                }
+                
+                let count = symbols.len();
+                println!(
+                    "{} {}",
+                    format!("Found {} {}", count, if count == 1 { "symbol" } else { "symbols" }).green(),
+                    "in workspace".dimmed()
+                );
+            }
+        }
+        Ok(())
+    }
+    
+    /// Display call hierarchy information
+    async fn display_call_hierarchy(
+        hierarchy: &crate::lsp_integration::types::CallHierarchyInfo,
+        format: &str,
+    ) -> Result<()> {
+        match format {
+            "json" => {
+                println!("{}", serde_json::to_string_pretty(hierarchy)?);
+            }
+            "plain" => {
+                // Plain format: just list all the calls
+                for caller in &hierarchy.incoming_calls {
+                    println!("INCOMING: {}", caller.name);
+                }
+                for callee in &hierarchy.outgoing_calls {
+                    println!("OUTGOING: {}", callee.name);
+                }
+            }
+            _ => {
+                // Terminal format
+                println!("{}", "Call Hierarchy:".bold().green());
+                println!();
+                
+                if !hierarchy.incoming_calls.is_empty() {
+                    println!("{} ({} calls)", "Incoming Calls:".bold().blue(), hierarchy.incoming_calls.len());
+                    for (i, call) in hierarchy.incoming_calls.iter().enumerate() {
+                        println!(
+                            "  {}. {} {} {}",
+                            (i + 1).to_string().dimmed(),
+                            call.symbol_kind.dimmed(),
+                            call.name.cyan(),
+                            format!("({}:{})", call.line + 1, call.column + 1).dimmed()
+                        );
+                        println!(
+                            "     {}",
+                            call.file_path.dimmed()
+                        );
+                    }
+                    println!();
+                }
+                
+                if !hierarchy.outgoing_calls.is_empty() {
+                    println!("{} ({} calls)", "Outgoing Calls:".bold().yellow(), hierarchy.outgoing_calls.len());
+                    for (i, call) in hierarchy.outgoing_calls.iter().enumerate() {
+                        println!(
+                            "  {}. {} {} {}",
+                            (i + 1).to_string().dimmed(),
+                            call.symbol_kind.dimmed(),
+                            call.name.cyan(),
+                            format!("({}:{})", call.line + 1, call.column + 1).dimmed()
+                        );
+                        println!(
+                            "     {}",
+                            call.file_path.dimmed()
+                        );
+                    }
+                    println!();
+                }
+                
+                if hierarchy.incoming_calls.is_empty() && hierarchy.outgoing_calls.is_empty() {
+                    println!("{}", "No call hierarchy information found".yellow());
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    /// Format symbol kind as a readable string with icon
+    fn format_symbol_kind(kind: &lsp_daemon::protocol::SymbolKind) -> String {
+        use lsp_daemon::protocol::SymbolKind;
+        
+        match kind {
+            SymbolKind::File => "📄 File".to_string(),
+            SymbolKind::Module => "📦 Module".to_string(),
+            SymbolKind::Namespace => "🏠 Namespace".to_string(),
+            SymbolKind::Package => "📦 Package".to_string(),
+            SymbolKind::Class => "🏛️  Class".to_string(),
+            SymbolKind::Method => "⚡ Method".to_string(),
+            SymbolKind::Property => "🔧 Property".to_string(),
+            SymbolKind::Field => "🔹 Field".to_string(),
+            SymbolKind::Constructor => "🏗️  Constructor".to_string(),
+            SymbolKind::Enum => "🔢 Enum".to_string(),
+            SymbolKind::Interface => "🔌 Interface".to_string(),
+            SymbolKind::Function => "⚙️  Function".to_string(),
+            SymbolKind::Variable => "📋 Variable".to_string(),
+            SymbolKind::Constant => "🔒 Constant".to_string(),
+            SymbolKind::String => "📝 String".to_string(),
+            SymbolKind::Number => "🔢 Number".to_string(),
+            SymbolKind::Boolean => "✅ Boolean".to_string(),
+            SymbolKind::Array => "📚 Array".to_string(),
+            SymbolKind::Object => "🧩 Object".to_string(),
+            SymbolKind::Key => "🔑 Key".to_string(),
+            SymbolKind::Null => "⭕ Null".to_string(),
+            SymbolKind::EnumMember => "🔸 EnumMember".to_string(),
+            SymbolKind::Struct => "🏗️  Struct".to_string(),
+            SymbolKind::Event => "⚡ Event".to_string(),
+            SymbolKind::Operator => "➕ Operator".to_string(),
+            SymbolKind::TypeParameter => "🏷️  TypeParameter".to_string(),
+        }
     }
 }
 

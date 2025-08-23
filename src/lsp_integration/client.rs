@@ -447,6 +447,102 @@ impl LspClient {
         Ok(response)
     }
 
+    /// Get call hierarchy with fallback position testing
+    /// rust-analyzer can be picky about cursor position, so this function tries multiple
+    /// positions within the symbol name until one returns call hierarchy data
+    async fn get_call_hierarchy_with_fallback(
+        &mut self,
+        file_path: &Path,
+        symbol_name: &str,
+        line: u32,
+        start_column: u32,
+    ) -> Result<CallHierarchyInfo> {
+        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        
+        if debug_mode {
+            println!(
+                "[DEBUG] Trying call hierarchy for symbol '{}' at {}:{}",
+                symbol_name, line, start_column
+            );
+        }
+
+        // Calculate the estimated length of the symbol
+        let symbol_length = symbol_name.len() as u32;
+        
+        // Generate candidate positions within the symbol
+        // Try start, quarter, half, three-quarters, and near-end positions
+        let mut candidates = vec![start_column]; // Start with the given position
+        
+        if symbol_length > 4 {
+            candidates.push(start_column + symbol_length / 4);
+            candidates.push(start_column + symbol_length / 2);
+            candidates.push(start_column + 3 * symbol_length / 4);
+            candidates.push(start_column + symbol_length - 2); // Near the end
+        } else if symbol_length > 1 {
+            candidates.push(start_column + symbol_length / 2);
+        }
+        
+        // Also try some additional offsets that empirically work well with rust-analyzer
+        for offset in [1, 2, 3, 6, 8] {
+            if offset < symbol_length {
+                candidates.push(start_column + offset);
+            }
+        }
+        
+        // Remove duplicates and sort
+        candidates.sort();
+        candidates.dedup();
+        
+        if debug_mode {
+            println!("[DEBUG] Trying {} candidate positions: {:?}", candidates.len(), candidates);
+        }
+        
+        // Try each candidate position
+        for (attempt, &column) in candidates.iter().enumerate() {
+            if debug_mode {
+                println!("[DEBUG] Attempt {}: trying position {}:{}", attempt + 1, line, column);
+            }
+            
+            match self.get_call_hierarchy(file_path, line, column).await {
+                Ok(hierarchy) => {
+                    // Check if we got meaningful call hierarchy data
+                    let has_data = !hierarchy.incoming_calls.is_empty() || !hierarchy.outgoing_calls.is_empty();
+                    
+                    if debug_mode {
+                        println!(
+                            "[DEBUG] Position {}:{} returned {} incoming, {} outgoing calls",
+                            line, column,
+                            hierarchy.incoming_calls.len(),
+                            hierarchy.outgoing_calls.len()
+                        );
+                    }
+                    
+                    if has_data {
+                        if debug_mode {
+                            println!("[DEBUG] Success! Found call hierarchy data at position {}:{}", line, column);
+                        }
+                        return Ok(hierarchy);
+                    }
+                }
+                Err(e) => {
+                    if debug_mode {
+                        println!("[DEBUG] Position {}:{} failed: {}", line, column, e);
+                    }
+                }
+            }
+        }
+        
+        if debug_mode {
+            println!("[DEBUG] No position returned call hierarchy data, using empty result");
+        }
+        
+        // If none of the positions worked, return an empty result
+        Ok(CallHierarchyInfo {
+            incoming_calls: Vec::new(),
+            outgoing_calls: Vec::new(),
+        })
+    }
+
     /// Get enhanced symbol information including call hierarchy and references
     pub async fn get_symbol_info(
         &mut self,
@@ -468,7 +564,8 @@ impl LspClient {
         }
 
         // Get call hierarchy information
-        let call_hierarchy = match self.get_call_hierarchy(file_path, line, column).await {
+        // rust-analyzer can be picky about cursor position, so try multiple positions
+        let call_hierarchy = match self.get_call_hierarchy_with_fallback(file_path, symbol_name, line, column).await {
             Ok(hierarchy) => Some(hierarchy),
             Err(e) => {
                 warn!("Failed to get call hierarchy: {}", e);
@@ -476,7 +573,33 @@ impl LspClient {
             }
         };
 
-        // For now, we focus on call hierarchy. References and other info can be added later
+        // Get references
+        let references = match self.call_references(file_path, line, column, false).await {
+            Ok(locations) => locations
+                .into_iter()
+                .map(|loc| ReferenceInfo {
+                    file_path: loc.uri,
+                    line: loc.range.start.line,
+                    column: loc.range.start.character,
+                    context: "reference".to_string(), // Could be enhanced with actual context
+                })
+                .collect(),
+            Err(e) => {
+                warn!("Failed to get references: {}", e);
+                Vec::new()
+            }
+        };
+
+        // Get hover information for documentation
+        let (documentation, type_info) = match self.call_hover(file_path, line, column).await {
+            Ok(Some(hover)) => (Some(hover.contents.clone()), Some(hover.contents)),
+            Ok(None) => (None, None),
+            Err(e) => {
+                warn!("Failed to get hover info: {}", e);
+                (None, None)
+            }
+        };
+
         Ok(Some(EnhancedSymbolInfo {
             name: symbol_name.to_string(),
             file_path: file_path.to_string_lossy().to_string(),
@@ -484,14 +607,14 @@ impl LspClient {
             column,
             symbol_kind: "unknown".to_string(), // Will be determined by tree-sitter
             call_hierarchy,
-            references: Vec::new(), // TODO: implement references
-            documentation: None,    // TODO: implement hover info
-            type_info: None,        // TODO: implement type info
+            references,
+            documentation,
+            type_info,
         }))
     }
 
     /// Get call hierarchy for a symbol
-    async fn get_call_hierarchy(
+    pub async fn get_call_hierarchy(
         &mut self,
         file_path: &Path,
         line: u32,
@@ -1008,10 +1131,10 @@ pub(crate) async fn start_embedded_daemon_background() -> Result<()> {
         probe_binary
     );
 
-    // Start daemon using "probe lsp start" command
+    // Start daemon using "probe lsp start" command in foreground mode
     // Environment variables are inherited by default
     let mut cmd = std::process::Command::new(&probe_binary);
-    cmd.args(["lsp", "start"])
+    cmd.args(["lsp", "start", "-f"])
         .stdin(std::process::Stdio::null());
     // In CI or when debugging, inherit stdout/stderr so early failures (bind/lock) are visible.
     // Enable by setting LSP_VERBOSE_SPAWN=1 in the environment.
@@ -1286,6 +1409,177 @@ impl LspClient {
             _ => Err(anyhow!("Unexpected response type")),
         }
     }
+
+    // LSP operations methods
+
+    /// Get definition locations for a symbol
+    pub async fn call_definition(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<lsp_daemon::protocol::Location>> {
+        let request = DaemonRequest::Definition {
+            request_id: Uuid::new_v4(),
+            file_path: file.to_path_buf(),
+            line,
+            column,
+            workspace_hint: self.config.workspace_hint.as_ref().map(PathBuf::from),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::Definition { locations, .. } => Ok(locations),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Get reference locations for a symbol
+    pub async fn call_references(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+        include_declaration: bool,
+    ) -> Result<Vec<lsp_daemon::protocol::Location>> {
+        let request = DaemonRequest::References {
+            request_id: Uuid::new_v4(),
+            file_path: file.to_path_buf(),
+            line,
+            column,
+            include_declaration,
+            workspace_hint: self.config.workspace_hint.as_ref().map(PathBuf::from),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::References { locations, .. } => Ok(locations),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Get hover information for a symbol
+    pub async fn call_hover(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Option<lsp_daemon::protocol::HoverContent>> {
+        let request = DaemonRequest::Hover {
+            request_id: Uuid::new_v4(),
+            file_path: file.to_path_buf(),
+            line,
+            column,
+            workspace_hint: self.config.workspace_hint.as_ref().map(PathBuf::from),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::Hover { content, .. } => Ok(content),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Get document symbols for a file
+    pub async fn call_document_symbols(
+        &mut self,
+        file: &Path,
+    ) -> Result<Vec<lsp_daemon::protocol::DocumentSymbol>> {
+        let request = DaemonRequest::DocumentSymbols {
+            request_id: Uuid::new_v4(),
+            file_path: file.to_path_buf(),
+            workspace_hint: self.config.workspace_hint.as_ref().map(PathBuf::from),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::DocumentSymbols { symbols, .. } => Ok(symbols),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Search for symbols in the workspace
+    pub async fn call_workspace_symbols(
+        &mut self,
+        query: &str,
+        max_results: Option<usize>,
+    ) -> Result<Vec<lsp_daemon::protocol::SymbolInformation>> {
+        let request = DaemonRequest::WorkspaceSymbols {
+            request_id: Uuid::new_v4(),
+            query: query.to_string(),
+            workspace_hint: self.config.workspace_hint.as_ref().map(PathBuf::from),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::WorkspaceSymbols { mut symbols, .. } => {
+                if let Some(max) = max_results {
+                    symbols.truncate(max);
+                }
+                Ok(symbols)
+            }
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Get implementation locations for a symbol
+    pub async fn call_implementations(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<lsp_daemon::protocol::Location>> {
+        let request = DaemonRequest::Implementations {
+            request_id: Uuid::new_v4(),
+            file_path: file.to_path_buf(),
+            line,
+            column,
+            workspace_hint: self.config.workspace_hint.as_ref().map(PathBuf::from),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::Implementations { locations, .. } => Ok(locations),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Get type definition locations for a symbol
+    pub async fn call_type_definition(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<lsp_daemon::protocol::Location>> {
+        let request = DaemonRequest::TypeDefinition {
+            request_id: Uuid::new_v4(),
+            file_path: file.to_path_buf(),
+            line,
+            column,
+            workspace_hint: self.config.workspace_hint.as_ref().map(PathBuf::from),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::TypeDefinition { locations, .. } => Ok(locations),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
 }
 
 #[cfg(test)]
