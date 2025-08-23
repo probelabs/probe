@@ -280,6 +280,10 @@ pub enum Commands {
         /// Enable LSP integration for call hierarchy and reference graphs
         #[arg(long = "lsp")]
         lsp: bool,
+
+        /// Include standard library references in LSP results (when using --lsp flag)
+        #[arg(long = "include-stdlib")]
+        include_stdlib: bool,
     },
 
     /// Search code using AST patterns for precise structural matching

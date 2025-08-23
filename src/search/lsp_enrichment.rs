@@ -56,6 +56,7 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                         use_daemon: true,
                         workspace_hint: None,
                         timeout_ms: 8000,
+                        include_stdlib: false,
                     };
                     match LspClient::new(config).await {
                         Ok(client) => {
@@ -161,6 +162,7 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                     use_daemon: true,
                     workspace_hint: None,
                     timeout_ms: 8000,
+                    include_stdlib: false,
                 };
                 match LspClient::new(config).await {
                     Ok(client) => {

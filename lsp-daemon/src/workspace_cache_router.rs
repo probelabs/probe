@@ -1467,11 +1467,11 @@ mod tests {
         // (In real usage, this would happen through LSP operations)
 
         // Test cross-workspace invalidation
-        let invalidated_count = router.invalidate_file_across(&shared_file).await.unwrap();
+        let _invalidated_count = router.invalidate_file_across(&shared_file).await.unwrap();
 
         // Should attempt to invalidate across all potential caches
         // The count depends on how many actual entries existed
-        assert!(invalidated_count >= 0); // No entries to invalidate in this test setup
+        // No entries to invalidate in this test setup - invalidated_count should be 0 or positive
 
         // Verify that invalidation works for files in read path
         let read_caches = router.pick_read_path(&shared_file).await.unwrap();
@@ -1716,8 +1716,7 @@ mod tests {
         for entry in &cache_entries {
             assert!(workspaces.iter().any(|ws| entry.workspace_id.contains(ws)));
             assert!(entry.cache_path.exists());
-            assert!(entry.size_bytes >= 0);
-            assert!(entry.file_count >= 0);
+            // Size bytes and file count should be non-negative by definition of their types
             assert!(!entry.last_accessed.is_empty());
             assert!(!entry.created_at.is_empty());
         }

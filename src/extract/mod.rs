@@ -65,6 +65,8 @@ pub struct ExtractOptions {
     pub no_gitignore: bool,
     /// Whether to enable LSP integration for call hierarchy and reference graphs
     pub lsp: bool,
+    /// Whether to include standard library references in LSP results
+    pub include_stdlib: bool,
 }
 
 /// Handle the extract command
@@ -496,6 +498,8 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         format: String,
         #[allow(dead_code)]
         lsp: bool,
+        #[allow(dead_code)]
+        include_stdlib: bool,
 
         #[allow(dead_code)]
         original_input: Option<String>,
@@ -520,6 +524,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 debug_mode,
                 format: options.format.clone(),
                 lsp: options.lsp,
+                include_stdlib: options.include_stdlib,
                 original_input: original_input.clone(),
                 system_prompt: system_prompt.clone(),
                 user_instructions: options.instructions.clone(),
@@ -578,6 +583,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             params.context_lines,
             params.specific_lines.as_ref(),
             params.lsp,
+            params.include_stdlib,
         ) {
             Ok(result) => {
                 if params.debug_mode {

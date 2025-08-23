@@ -1,11 +1,13 @@
 pub mod call_graph_cache;
 pub mod client;
 pub mod management;
+pub mod stdlib_filter;
 pub mod symbol_resolver;
 pub mod types;
 
 pub use client::LspClient;
 pub use management::LspManager;
+pub use stdlib_filter::{is_stdlib_path, is_stdlib_path_cached};
 pub use symbol_resolver::{resolve_location, ResolvedLocation};
 pub use types::*;
 

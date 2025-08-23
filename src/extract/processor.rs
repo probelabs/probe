@@ -41,6 +41,7 @@ pub fn process_file_for_extraction(
         context_lines,
         specific_lines,
         false,
+        false, // default to not including stdlib
     )
 }
 
@@ -59,6 +60,7 @@ pub fn process_file_for_extraction_with_lsp(
     context_lines: usize,
     specific_lines: Option<&HashSet<usize>>,
     enable_lsp: bool,
+    include_stdlib: bool,
 ) -> Result<SearchResult> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -126,8 +128,14 @@ pub fn process_file_for_extraction_with_lsp(
                 } else {
                     std::env::current_dir().unwrap_or_default().join(path)
                 };
-                result.lsp_info =
-                    get_lsp_symbol_info_sync(&abs_path, symbol_name, line, column, debug_mode);
+                result.lsp_info = get_lsp_symbol_info_sync(
+                    &abs_path,
+                    symbol_name,
+                    line,
+                    column,
+                    debug_mode,
+                    include_stdlib,
+                );
                 // Ensure the formatter shows the section even if the server isn't ready yet.
                 if enable_lsp && result.lsp_info.is_none() {
                     result.lsp_info = Some(serde_json::json!({"error":"lsp_unavailable"}));
@@ -407,6 +415,7 @@ pub fn process_file_for_extraction_with_lsp(
                             decl_line,
                             decl_column,
                             debug_mode,
+                            include_stdlib,
                         )
                     } else {
                         if debug_mode {
@@ -415,7 +424,14 @@ pub fn process_file_for_extraction_with_lsp(
                             );
                         }
                         // Fallback to original behavior if no function declaration found
-                        get_lsp_symbol_info_sync(&abs_path, "", line_num as u32, 0, debug_mode)
+                        get_lsp_symbol_info_sync(
+                            &abs_path,
+                            "",
+                            line_num as u32,
+                            0,
+                            debug_mode,
+                            include_stdlib,
+                        )
                     }
                 } else {
                     None
@@ -512,13 +528,21 @@ pub fn process_file_for_extraction_with_lsp(
                             decl_line,
                             decl_column,
                             debug_mode,
+                            include_stdlib,
                         )
                     } else {
                         if debug_mode {
                             println!("[DEBUG] No enclosing function found for line {line_num} (fallback), using original position");
                         }
                         // Fallback to original behavior if no function declaration found
-                        get_lsp_symbol_info_sync(&abs_path, "", line_num as u32, 0, debug_mode)
+                        get_lsp_symbol_info_sync(
+                            &abs_path,
+                            "",
+                            line_num as u32,
+                            0,
+                            debug_mode,
+                            include_stdlib,
+                        )
                     }
                 } else {
                     None
@@ -809,6 +833,7 @@ async fn get_lsp_symbol_info(
     line: u32,
     column: u32,
     debug_mode: bool,
+    include_stdlib: bool,
 ) -> Option<serde_json::Value> {
     if debug_mode {
         println!("[DEBUG] Attempting to get LSP info for symbol: {symbol_name}");
@@ -845,16 +870,24 @@ async fn get_lsp_symbol_info(
                 None
             }
         });
+    // Determine whether to include stdlib frames. Default: filter out stdlib.
+    // This can be controlled by the CLI flag or the PROBE_INCLUDE_STDLIB environment variable.
+    let final_include_stdlib = include_stdlib
+        || std::env::var("PROBE_INCLUDE_STDLIB")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
     let config = LspConfig {
         use_daemon: true,
         workspace_hint: workspace_hint.clone(),
         timeout_ms: 90000, // 90 seconds timeout for complex projects with rust-analyzer
+        include_stdlib: final_include_stdlib,
     };
 
     if debug_mode {
         println!(
-            "[DEBUG] LSP config: timeout={}ms, workspace_hint={:?}",
-            config.timeout_ms, config.workspace_hint
+            "[DEBUG] LSP config: timeout={}ms, workspace_hint={:?}, include_stdlib={}",
+            config.timeout_ms, config.workspace_hint, config.include_stdlib
         );
     }
 
@@ -1196,6 +1229,7 @@ fn get_lsp_symbol_info_sync(
     line: u32,
     column: u32,
     debug_mode: bool,
+    include_stdlib: bool,
 ) -> Option<serde_json::Value> {
     // Use spawn_blocking to run the async LSP code from within an async context
     let file_path = file_path.to_path_buf();
@@ -1223,7 +1257,14 @@ fn get_lsp_symbol_info_sync(
         match rt.block_on(async {
             tokio::time::timeout(
                 timeout_duration,
-                get_lsp_symbol_info(&file_path, &symbol_name, line, column, debug_mode),
+                get_lsp_symbol_info(
+                    &file_path,
+                    &symbol_name,
+                    line,
+                    column,
+                    debug_mode,
+                    include_stdlib,
+                ),
             )
             .await
         }) {

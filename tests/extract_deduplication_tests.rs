@@ -53,6 +53,7 @@ fn standalone_function() {
         instructions: None,
         no_gitignore: false,
         lsp: false,
+        include_stdlib: true,
     };
 
     // Call handle_extract
