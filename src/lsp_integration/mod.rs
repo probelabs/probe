@@ -392,7 +392,7 @@ pub enum LspCallCommands {
     Definition {
         /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
         location: String,
-        
+
         /// Output format (terminal, json, plain)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
         format: String,
@@ -402,11 +402,11 @@ pub enum LspCallCommands {
     References {
         /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
         location: String,
-        
+
         /// Include the declaration/definition in results
         #[clap(long = "include-declaration")]
         include_declaration: bool,
-        
+
         /// Output format (terminal, json, plain)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
         format: String,
@@ -416,7 +416,7 @@ pub enum LspCallCommands {
     Hover {
         /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
         location: String,
-        
+
         /// Output format (terminal, json, plain)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
         format: String,
@@ -426,7 +426,7 @@ pub enum LspCallCommands {
     DocumentSymbols {
         /// File path to get symbols from
         file: std::path::PathBuf,
-        
+
         /// Output format (terminal, json, plain)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
         format: String,
@@ -436,11 +436,11 @@ pub enum LspCallCommands {
     WorkspaceSymbols {
         /// Query string to search for
         query: String,
-        
+
         /// Maximum number of results to return
         #[clap(long = "max-results")]
         max_results: Option<usize>,
-        
+
         /// Output format (terminal, json, plain)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
         format: String,
@@ -450,7 +450,7 @@ pub enum LspCallCommands {
     CallHierarchy {
         /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
         location: String,
-        
+
         /// Output format (terminal, json, plain)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
         format: String,
@@ -460,7 +460,7 @@ pub enum LspCallCommands {
     Implementations {
         /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
         location: String,
-        
+
         /// Output format (terminal, json, plain)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
         format: String,
@@ -470,7 +470,7 @@ pub enum LspCallCommands {
     TypeDefinition {
         /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
         location: String,
-        
+
         /// Output format (terminal, json, plain)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
         format: String,

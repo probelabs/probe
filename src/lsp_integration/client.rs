@@ -458,21 +458,20 @@ impl LspClient {
         start_column: u32,
     ) -> Result<CallHierarchyInfo> {
         let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-        
+
         if debug_mode {
             println!(
-                "[DEBUG] Trying call hierarchy for symbol '{}' at {}:{}",
-                symbol_name, line, start_column
+                "[DEBUG] Trying call hierarchy for symbol '{symbol_name}' at {line}:{start_column}"
             );
         }
 
         // Calculate the estimated length of the symbol
         let symbol_length = symbol_name.len() as u32;
-        
+
         // Generate candidate positions within the symbol
         // Try start, quarter, half, three-quarters, and near-end positions
         let mut candidates = vec![start_column]; // Start with the given position
-        
+
         if symbol_length > 4 {
             candidates.push(start_column + symbol_length / 4);
             candidates.push(start_column + symbol_length / 2);
@@ -481,61 +480,69 @@ impl LspClient {
         } else if symbol_length > 1 {
             candidates.push(start_column + symbol_length / 2);
         }
-        
+
         // Also try some additional offsets that empirically work well with rust-analyzer
         for offset in [1, 2, 3, 6, 8] {
             if offset < symbol_length {
                 candidates.push(start_column + offset);
             }
         }
-        
+
         // Remove duplicates and sort
         candidates.sort();
         candidates.dedup();
-        
+
         if debug_mode {
-            println!("[DEBUG] Trying {} candidate positions: {:?}", candidates.len(), candidates);
+            println!(
+                "[DEBUG] Trying {} candidate positions: {candidates:?}",
+                candidates.len()
+            );
         }
-        
+
         // Try each candidate position
         for (attempt, &column) in candidates.iter().enumerate() {
             if debug_mode {
-                println!("[DEBUG] Attempt {}: trying position {}:{}", attempt + 1, line, column);
+                println!(
+                    "[DEBUG] Attempt {}: trying position {line}:{column}",
+                    attempt + 1
+                );
             }
-            
+
             match self.get_call_hierarchy(file_path, line, column).await {
                 Ok(hierarchy) => {
                     // Check if we got meaningful call hierarchy data
-                    let has_data = !hierarchy.incoming_calls.is_empty() || !hierarchy.outgoing_calls.is_empty();
-                    
+                    let has_data = !hierarchy.incoming_calls.is_empty()
+                        || !hierarchy.outgoing_calls.is_empty();
+
                     if debug_mode {
                         println!(
-                            "[DEBUG] Position {}:{} returned {} incoming, {} outgoing calls",
-                            line, column,
+                            "[DEBUG] Position {line}:{column} returned {} incoming, {} outgoing calls",
                             hierarchy.incoming_calls.len(),
                             hierarchy.outgoing_calls.len()
                         );
                     }
-                    
+
                     if has_data {
                         if debug_mode {
-                            println!("[DEBUG] Success! Found call hierarchy data at position {}:{}", line, column);
+                            println!(
+                                "[DEBUG] Success! Found call hierarchy data at position {line}:{column}"
+                            );
                         }
                         return Ok(hierarchy);
                     }
                 }
                 Err(e) => {
                     if debug_mode {
-                        println!("[DEBUG] Position {}:{} failed: {}", line, column, e);
+                        println!("[DEBUG] Position {line}:{column} failed: {e}");
                     }
                 }
             }
         }
-        
+
         if debug_mode {
             println!("[DEBUG] No position returned call hierarchy data, using empty result");
         }
-        
+
         // If none of the positions worked, return an empty result
         Ok(CallHierarchyInfo {
             incoming_calls: Vec::new(),
@@ -565,7 +572,10 @@ impl LspClient {
 
         // Get call hierarchy information
         // rust-analyzer can be picky about cursor position, so try multiple positions
-        let call_hierarchy = match self.get_call_hierarchy_with_fallback(file_path, symbol_name, line, column).await {
+        let call_hierarchy = match self
+            .get_call_hierarchy_with_fallback(file_path, symbol_name, line, column)
+            .await
+        {
             Ok(hierarchy) => Some(hierarchy),
             Err(e) => {
                 warn!("Failed to get call hierarchy: {}", e);
@@ -1579,7 +1589,6 @@ impl LspClient {
             _ => Err(anyhow!("Unexpected response type")),
         }
     }
-
 }
 
 #[cfg(test)]
