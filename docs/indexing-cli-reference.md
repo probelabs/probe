@@ -304,11 +304,374 @@ probe lsp shutdown --force --cleanup
 probe lsp shutdown --timeout 5
 ```
 
+## Direct LSP Operations
+
+Probe provides direct access to all LSP operations through the `probe lsp call` command family, offering IDE-level code intelligence from the command line.
+
+### `probe lsp call definition`
+
+Find the definition of a symbol.
+
+```bash
+probe lsp call definition <LOCATION> [OPTIONS]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<LOCATION>` | Yes | Location in format `file:line:column` or `file#symbol` |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--output <FORMAT>` | String | `text` | Output format: `text`, `json` |
+| `--workspace-hint <PATH>` | String | Auto | Workspace root hint for context |
+
+#### Examples
+
+```bash
+# Find definition by line:column
+probe lsp call definition src/main.rs:42:10
+
+# Find definition by symbol name
+probe lsp call definition src/main.rs#main_function
+
+# JSON output
+probe lsp call definition src/auth.rs#authenticate --output json
+```
+
+### `probe lsp call references`
+
+Find all references to a symbol.
+
+```bash
+probe lsp call references <LOCATION> [OPTIONS]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<LOCATION>` | Yes | Location in format `file:line:column` or `file#symbol` |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--include-declaration` | Flag | `false` | Include the declaration/definition in results |
+| `--output <FORMAT>` | String | `text` | Output format: `text`, `json` |
+| `--workspace-hint <PATH>` | String | Auto | Workspace root hint for context |
+
+#### Examples
+
+```bash
+# Find references without declaration
+probe lsp call references src/api.rs:25:8
+
+# Include declaration in results
+probe lsp call references src/auth.rs#validate_user --include-declaration
+
+# JSON output for scripting
+probe lsp call references src/types.rs#UserAccount --output json
+```
+
+### `probe lsp call hover`
+
+Get hover information (documentation, types) for a symbol.
+
+```bash
+probe lsp call hover <LOCATION> [OPTIONS]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<LOCATION>` | Yes | Location in format `file:line:column` or `file#symbol` |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--output <FORMAT>` | String | `text` | Output format: `text`, `json`, `markdown` |
+| `--workspace-hint <PATH>` | String | Auto | Workspace root hint for context |
+
+#### Examples
+
+```bash
+# Get hover information
+probe lsp call hover src/lib.rs:18:5
+
+# Get hover by symbol name
+probe lsp call hover src/types.rs#UserAccount
+
+# Markdown format for documentation
+probe lsp call hover src/api.rs#process_request --output markdown
+```
+
+### `probe lsp call document-symbols`
+
+List all symbols in a document.
+
+```bash
+probe lsp call document-symbols <FILE> [OPTIONS]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<FILE>` | Yes | File path to analyze |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--output <FORMAT>` | String | `text` | Output format: `text`, `json`, `tree` |
+| `--symbol-type <TYPE>` | String | All | Filter by symbol type |
+| `--workspace-hint <PATH>` | String | Auto | Workspace root hint for context |
+
+#### Examples
+
+```bash
+# List all symbols in file
+probe lsp call document-symbols src/lib.rs
+
+# Filter by symbol type
+probe lsp call document-symbols src/main.rs --symbol-type function
+
+# Tree view output
+probe lsp call document-symbols src/types.rs --output tree
+```
+
+### `probe lsp call workspace-symbols`
+
+Search for symbols across the workspace.
+
+```bash
+probe lsp call workspace-symbols <QUERY> [OPTIONS]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<QUERY>` | Yes | Symbol search query |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--max-results <N>` | Integer | `50` | Maximum number of results |
+| `--output <FORMAT>` | String | `text` | Output format: `text`, `json` |
+| `--workspace-hint <PATH>` | String | Auto | Workspace root hint for context |
+
+#### Examples
+
+```bash
+# Search for symbols containing "user"
+probe lsp call workspace-symbols "user"
+
+# Limit results
+probe lsp call workspace-symbols "auth" --max-results 10
+
+# JSON output for processing
+probe lsp call workspace-symbols "handler" --output json
+```
+
+### `probe lsp call call-hierarchy`
+
+Get call hierarchy information for a symbol.
+
+```bash
+probe lsp call call-hierarchy <LOCATION> [OPTIONS]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<LOCATION>` | Yes | Location in format `file:line:column` or `file#symbol` |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--output <FORMAT>` | String | `text` | Output format: `text`, `json`, `graph` |
+| `--max-depth <N>` | Integer | `5` | Maximum call hierarchy depth |
+| `--workspace-hint <PATH>` | String | Auto | Workspace root hint for context |
+
+#### Examples
+
+```bash
+# Get call hierarchy
+probe lsp call call-hierarchy src/calculator.rs#calculate
+
+# Limit depth for complex hierarchies
+probe lsp call call-hierarchy src/main.rs:42:10 --max-depth 3
+
+# Graph format output
+probe lsp call call-hierarchy src/api.rs#handle_request --output graph
+```
+
+### `probe lsp call implementations`
+
+Find all implementations of an interface or trait.
+
+```bash
+probe lsp call implementations <LOCATION> [OPTIONS]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<LOCATION>` | Yes | Location in format `file:line:column` or `file#symbol` |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--output <FORMAT>` | String | `text` | Output format: `text`, `json` |
+| `--workspace-hint <PATH>` | String | Auto | Workspace root hint for context |
+
+#### Examples
+
+```bash
+# Find trait implementations
+probe lsp call implementations src/traits.rs#Display
+
+# Find interface implementations
+probe lsp call implementations src/interfaces.ts:15:8
+```
+
+### `probe lsp call type-definition`
+
+Go to the type definition of a symbol.
+
+```bash
+probe lsp call type-definition <LOCATION> [OPTIONS]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<LOCATION>` | Yes | Location in format `file:line:column` or `file#symbol` |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--output <FORMAT>` | String | `text` | Output format: `text`, `json` |
+| `--workspace-hint <PATH>` | String | Auto | Workspace root hint for context |
+
+#### Examples
+
+```bash
+# Find type definition
+probe lsp call type-definition src/main.rs:42:10
+
+# Type definition by symbol
+probe lsp call type-definition src/types.rs#user_variable
+```
+
 ## Cache Management
 
 The LSP daemon provides comprehensive cache management commands for the persistent cache system.
 
-### `probe lsp cache stats`
+### Workspace Cache Commands
+
+#### `probe lsp cache list`
+
+List all workspace caches.
+
+```bash
+probe lsp cache list [OPTIONS]
+```
+
+##### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--detailed` | Flag | `false` | Show detailed information for each workspace cache |
+| `--format <FORMAT>` | String | `terminal` | Output format: `terminal`, `json` |
+
+##### Examples
+
+```bash
+# List all workspace caches
+probe lsp cache list
+
+# Detailed view
+probe lsp cache list --detailed
+
+# JSON output
+probe lsp cache list --format json
+```
+
+#### `probe lsp cache info`
+
+Show detailed information about workspace caches.
+
+```bash
+probe lsp cache info [OPTIONS]
+```
+
+##### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--workspace <PATH>` | String | All | Workspace path to get info for |
+| `--format <FORMAT>` | String | `terminal` | Output format: `terminal`, `json` |
+
+##### Examples
+
+```bash
+# Info for all workspaces
+probe lsp cache info
+
+# Info for specific workspace
+probe lsp cache info --workspace /path/to/project
+
+# JSON format
+probe lsp cache info --format json
+```
+
+#### `probe lsp cache clear-workspace`
+
+Clear workspace caches.
+
+```bash
+probe lsp cache clear-workspace [OPTIONS]
+```
+
+##### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--workspace <PATH>` | String | All | Workspace path to clear (all if not specified) |
+| `--force` | Flag | `false` | Force clear without confirmation |
+| `--format <FORMAT>` | String | `terminal` | Output format: `terminal`, `json` |
+
+##### Examples
+
+```bash
+# Clear specific workspace cache
+probe lsp cache clear-workspace --workspace /path/to/project
+
+# Clear all workspace caches with confirmation
+probe lsp cache clear-workspace
+
+# Force clear without confirmation
+probe lsp cache clear-workspace --force
+```
+
+### Global Cache Commands
+
+#### `probe lsp cache stats`
 
 Display detailed cache performance statistics and information.
 

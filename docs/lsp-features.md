@@ -152,6 +152,8 @@ The content-addressed cache provides extraordinary performance improvements:
 | **Go to Definition** | 50-500ms | 1-3ms | **50,000x+** |
 | **Find References** | 100-1000ms | 2-8ms | **100,000x+** |
 | **Hover Information** | 30-200ms | 1-2ms | **30,000x+** |
+| **Document Symbols** | 50-300ms | 1-2ms | **25,000x+** |
+| **Workspace Symbols** | 100-1000ms | 5-10ms | **20,000x+** |
 
 ### Initial Indexing
 
@@ -169,6 +171,327 @@ This only happens once - subsequent requests are instant thanks to caching.
 3. **Pre-warm workspaces**: Run `probe lsp init` after opening projects
 4. **Monitor cache**: Use `probe lsp cache stats` to check hit rates
 5. **Index in advance**: Use `probe lsp index --wait` for full project indexing
+
+## Direct LSP Commands
+
+Probe now offers direct access to all LSP operations through the `probe lsp call` command, providing IDE-level code intelligence from the command line.
+
+### Available LSP Operations
+
+#### Go to Definition
+
+Find where a symbol is defined:
+
+```bash
+# Using line:column position
+probe lsp call definition src/main.rs:42:10
+
+# Using symbol name (automatically locates symbol)
+probe lsp call definition src/main.rs#main_function
+```
+
+Output includes precise location information:
+```
+Definition for 'main_function':
+  Location: /project/src/main.rs:42:10
+  Symbol: main_function (function)
+```
+
+#### Find All References
+
+Find all locations where a symbol is used:
+
+```bash
+# Find references without declaration
+probe lsp call references src/auth.rs:25:8
+
+# Include declaration in results
+probe lsp call references src/auth.rs#validate_user --include-declaration
+```
+
+Output shows all usages:
+```
+References to 'validate_user':
+  - /project/src/main.rs:15:5 (function call)
+  - /project/src/handlers.rs:42:12 (function call)
+  - /project/tests/auth_test.rs:10:8 (test usage)
+```
+
+#### Get Hover Information
+
+Get documentation and type information:
+
+```bash
+# Get hover info at specific position
+probe lsp call hover src/api.rs:18:5
+
+# Get hover for specific symbol
+probe lsp call hover src/types.rs#UserAccount
+```
+
+Output includes documentation:
+```
+Hover for 'UserAccount':
+  Type: struct UserAccount
+  Documentation:
+    Represents a user account with authentication details.
+    
+    Fields:
+    - id: String - Unique user identifier
+    - email: String - User email address
+    - created_at: DateTime<Utc> - Account creation time
+```
+
+#### Document Symbols
+
+List all symbols in a file:
+
+```bash
+# Get all symbols in a file
+probe lsp call document-symbols src/lib.rs
+```
+
+Output shows file structure:
+```
+Document symbols for 'src/lib.rs':
+  - mod auth (module) at line 10
+  - struct User (struct) at line 25
+    - fn new (method) at line 30
+    - fn validate (method) at line 45
+  - fn main (function) at line 60
+```
+
+#### Workspace Symbols
+
+Search for symbols across the entire workspace:
+
+```bash
+# Search for symbols containing "user"
+probe lsp call workspace-symbols "user"
+
+# Limit results
+probe lsp call workspace-symbols "auth" --max-results 10
+```
+
+Output shows workspace-wide matches:
+```
+Workspace symbols matching 'user':
+  - User (struct) in src/types.rs:25
+  - UserService (struct) in src/services.rs:15  
+  - authenticate_user (function) in src/auth.rs:42
+  - create_user (function) in src/handlers.rs:18
+```
+
+#### Call Hierarchy (Advanced)
+
+Get detailed call relationships:
+
+```bash
+# Get call hierarchy for a function
+probe lsp call call-hierarchy src/calculator.rs#calculate
+```
+
+Output shows incoming and outgoing calls:
+```
+Call hierarchy for 'calculate':
+  
+  📥 Incoming calls (functions that call this):
+     ← main (src/main.rs:25)
+     ← test_calculate (tests/calc_test.rs:10)
+  
+  📤 Outgoing calls (this function calls):
+     → add_numbers (src/calculator.rs:20)
+     → multiply (src/calculator.rs:30)
+```
+
+#### Implementations
+
+Find all implementations of an interface or trait:
+
+```bash
+# Find trait implementations
+probe lsp call implementations src/traits.rs#Display
+
+# Find interface implementations  
+probe lsp call implementations src/interfaces.ts:15:8
+```
+
+#### Type Definition
+
+Go to the type definition of a symbol:
+
+```bash
+# Find type definition
+probe lsp call type-definition src/main.rs:42:10
+```
+
+### Location Syntax
+
+Probe supports two location formats for maximum flexibility:
+
+**Line:Column Format** (precise positioning):
+```bash
+probe lsp call definition file.rs:42:10
+#                          ^   ^  ^
+#                        file line column
+```
+
+**Symbol Name Format** (automatic location):
+```bash
+probe lsp call references file.rs#function_name
+#                          ^     ^
+#                        file   symbol
+```
+
+The symbol format automatically finds the symbol definition and uses its precise location.
+
+### Performance Benefits
+
+All direct LSP commands benefit from Probe's sophisticated caching:
+
+- **First call**: 100ms-10s (LSP server computation)
+- **Cached calls**: 1-5ms (nearly instant)
+- **Cross-session**: Persistent cache survives daemon restarts
+
+## Per-Workspace Cache Management
+
+Probe implements sophisticated per-workspace caching that isolates cache entries by project:
+
+### Workspace Cache Benefits
+
+- **Isolation**: Each workspace has its own cache, preventing pollution
+- **Monorepo Support**: Nested workspaces get separate caches automatically
+- **Smart Routing**: Files are cached in the nearest workspace
+- **Team Collaboration**: Workspace-specific caches can be shared
+- **Resource Management**: LRU eviction of unused workspace caches
+
+### Cache Directory Structure
+
+```bash
+# macOS: ~/Library/Caches/probe/lsp/workspaces/
+# Linux: ~/.cache/probe/lsp/workspaces/
+# Windows: %LOCALAPPDATA%/probe/lsp/workspaces/
+
+├── abc123_my-rust-project/
+│   ├── call_graph.db          # sled database
+│   └── metadata.json          # cache statistics
+├── def456_backend-service/
+│   ├── call_graph.db
+│   └── metadata.json
+└── ghi789_frontend-app/
+    ├── call_graph.db
+    └── metadata.json
+```
+
+### Workspace Cache Commands
+
+#### List Workspace Caches
+
+```bash
+# List all workspace caches
+probe lsp cache list
+
+# Detailed view with statistics
+probe lsp cache list --detailed
+
+# JSON output for scripting
+probe lsp cache list --format json
+```
+
+Output shows all workspace caches:
+```
+Workspace Caches:
+  abc123_my-rust-project (opened 2h ago, 1,234 entries, 45MB)
+    Path: /Users/dev/projects/my-rust-project
+    Last accessed: 5 minutes ago
+    Hit rate: 94.2%
+  
+  def456_backend-service (opened 1d ago, 856 entries, 32MB)
+    Path: /Users/dev/work/backend-service  
+    Last accessed: 1 hour ago
+    Hit rate: 89.1%
+```
+
+#### Get Workspace Cache Info
+
+```bash
+# Info for all workspaces
+probe lsp cache info
+
+# Info for specific workspace
+probe lsp cache info --workspace /path/to/project
+
+# JSON format
+probe lsp cache info --format json
+```
+
+Detailed information includes:
+- Cache size and entry count
+- Hit/miss ratios
+- Last access times
+- Memory usage
+- Workspace detection markers
+
+#### Clear Workspace Caches
+
+```bash
+# Clear specific workspace cache
+probe lsp cache clear-workspace --workspace /path/to/project
+
+# Clear all workspace caches (with confirmation)
+probe lsp cache clear-workspace
+
+# Force clear without confirmation
+probe lsp cache clear-workspace --force
+```
+
+### Workspace Detection
+
+Probe automatically detects workspaces using these markers:
+
+**Rust**: `Cargo.toml`
+**TypeScript/JavaScript**: `package.json`, `tsconfig.json`
+**Python**: `pyproject.toml`, `setup.py`, `requirements.txt`
+**Go**: `go.mod`
+**Java**: `pom.xml`, `build.gradle`
+**C/C++**: `CMakeLists.txt`
+**Generic**: `.git`, `README.md`
+
+### Monorepo Support
+
+For complex project structures with nested workspaces:
+
+```bash
+# Example monorepo structure
+monorepo/
+├── package.json          # Root workspace
+├── backend/              
+│   └── Cargo.toml        # Rust workspace  
+├── frontend/
+│   ├── package.json      # Frontend workspace
+│   └── tsconfig.json
+└── shared/
+    └── utils.js          # Uses root workspace
+```
+
+Probe creates separate caches:
+- `monorepo_root` for shared files and root-level code
+- `backend_rust` for Rust backend code
+- `frontend_ts` for TypeScript frontend code
+
+Files are automatically routed to the nearest workspace cache.
+
+### Configuration
+
+```bash
+# Configure workspace cache behavior
+export PROBE_LSP_WORKSPACE_CACHE_MAX=8         # Max concurrent open caches
+export PROBE_LSP_WORKSPACE_CACHE_SIZE_MB=100   # Size limit per workspace  
+export PROBE_LSP_WORKSPACE_LOOKUP_DEPTH=3      # Max parent dirs to search
+
+# Custom base cache directory
+export PROBE_LSP_WORKSPACE_CACHE_DIR=/custom/cache/location
+```
 
 ## Advanced Features
 
@@ -361,43 +684,95 @@ probe lsp logs -n 100
 
 ## Use Cases
 
-### Code Review
+### Code Review with Direct LSP Commands
 
 Understand unfamiliar code quickly:
 ```bash
-probe extract src/auth/handler.rs#authenticate --lsp
+# Get function documentation
+probe lsp call hover src/auth/handler.rs#authenticate
+
+# See all places this function is called
+probe lsp call references src/auth/handler.rs#authenticate
+
+# Understand what this function calls
+probe lsp call call-hierarchy src/auth/handler.rs#authenticate
 ```
 
-### Refactoring
+### Refactoring with References
 
 Identify all callers before changing APIs:
 ```bash
-probe extract src/api/v1.rs#deprecated_endpoint --lsp | grep "Incoming"
+# Find all references to a deprecated function
+probe lsp call references src/api/v1.rs#deprecated_endpoint --include-declaration
+
+# Find implementations of an interface you're changing
+probe lsp call implementations src/traits.rs#AuthProvider
 ```
 
-### Test Coverage
+### Test Coverage Analysis
 
 Find which tests exercise specific functions:
 ```bash
-probe extract src/core.rs#critical_function --lsp | grep test_
+# Find all references to see test usage
+probe lsp call references src/core.rs#critical_function | grep test_
+
+# Get workspace symbols for test functions
+probe lsp call workspace-symbols "test_critical" --max-results 20
 ```
 
-### Documentation
+### Documentation Generation
 
 Generate comprehensive function documentation:
 ```bash
-probe extract src/lib.rs#public_api --lsp > docs/api.md
+# Get hover information for all public APIs
+probe lsp call document-symbols src/lib.rs | grep "(function)" | while read symbol; do
+  probe lsp call hover "src/lib.rs#$symbol"
+done > docs/api.md
+```
+
+### Legacy Code Understanding
+
+```bash
+# Start with a file and understand its structure
+probe lsp call document-symbols legacy/complex.rs
+
+# Pick a function and see what calls it
+probe lsp call references legacy/complex.rs#mysterious_function
+
+# Understand what the function does
+probe lsp call hover legacy/complex.rs#mysterious_function
+
+# See what it calls internally  
+probe lsp call call-hierarchy legacy/complex.rs#mysterious_function
+```
+
+### Multi-Workspace Development
+
+```bash
+# List all your workspace caches
+probe lsp cache list --detailed
+
+# Work in backend
+cd backend/
+probe lsp call definition src/main.rs#process_request
+
+# Switch to frontend (different workspace cache)
+cd ../frontend/
+probe lsp call references src/api.ts#processRequest
+
+# Check cache stats across workspaces
+probe lsp cache info --format json
 ```
 
 ## Future Roadmap
 
 Planned enhancements:
-- Go-to definition
-- Find all references
-- Hover documentation
-- Code completion
-- Rename refactoring
-- Quick fixes
+- Code completion via LSP
+- Rename refactoring across workspace
+- Quick fixes and code actions
+- Semantic highlighting
+- Inlay hints
+- Code lens integration
 
 ## Learn More
 

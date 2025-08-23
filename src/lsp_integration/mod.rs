@@ -1,10 +1,12 @@
 pub mod call_graph_cache;
 pub mod client;
 pub mod management;
+pub mod symbol_resolver;
 pub mod types;
 
 pub use client::LspClient;
 pub use management::LspManager;
+pub use symbol_resolver::{resolve_location, ResolvedLocation};
 pub use types::*;
 
 use clap::Subcommand;
@@ -100,6 +102,12 @@ pub enum LspSubcommands {
         /// Enable watchdog monitoring for daemon health and resource usage
         #[clap(long = "watchdog")]
         watchdog: bool,
+    },
+
+    /// Call LSP methods directly
+    Call {
+        #[clap(subcommand)]
+        command: LspCallCommands,
     },
 
     /// Cache management subcommands
@@ -215,6 +223,51 @@ pub enum IndexConfigSubcommands {
         #[clap(long = "incremental")]
         incremental: Option<bool>,
 
+        // LSP Caching Configuration Options
+        /// Enable caching of call hierarchy operations during indexing
+        #[clap(long = "cache-call-hierarchy")]
+        cache_call_hierarchy: Option<bool>,
+
+        /// Enable caching of definition lookups during indexing
+        #[clap(long = "cache-definitions")]
+        cache_definitions: Option<bool>,
+
+        /// Enable caching of reference lookups during indexing
+        #[clap(long = "cache-references")]
+        cache_references: Option<bool>,
+
+        /// Enable caching of hover information during indexing
+        #[clap(long = "cache-hover")]
+        cache_hover: Option<bool>,
+
+        /// Enable caching of document symbols during indexing
+        #[clap(long = "cache-document-symbols")]
+        cache_document_symbols: Option<bool>,
+
+        /// Perform LSP operations during indexing (vs only on-demand)
+        #[clap(long = "cache-during-indexing")]
+        cache_during_indexing: Option<bool>,
+
+        /// Preload cache with common operations after indexing
+        #[clap(long = "preload-common-symbols")]
+        preload_common_symbols: Option<bool>,
+
+        /// Maximum LSP operations to cache per operation type during indexing
+        #[clap(long = "max-cache-entries-per-operation")]
+        max_cache_entries_per_operation: Option<usize>,
+
+        /// Timeout for LSP operations during indexing (milliseconds)
+        #[clap(long = "lsp-operation-timeout-ms")]
+        lsp_operation_timeout_ms: Option<u64>,
+
+        /// Priority operations during indexing (comma-separated: call_hierarchy,definition,references,hover,document_symbols)
+        #[clap(long = "lsp-priority-operations")]
+        lsp_priority_operations: Option<String>,
+
+        /// Operations to skip during indexing (comma-separated: call_hierarchy,definition,references,hover,document_symbols)
+        #[clap(long = "lsp-disabled-operations")]
+        lsp_disabled_operations: Option<String>,
+
         /// Output format (terminal, json)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
         format: String,
@@ -329,6 +382,97 @@ pub enum CacheSubcommands {
 
         /// Output format (terminal, json)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum LspCallCommands {
+    /// Go to definition of a symbol
+    Definition {
+        /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
+        location: String,
+        
+        /// Output format (terminal, json, plain)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
+        format: String,
+    },
+
+    /// Find all references to a symbol
+    References {
+        /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
+        location: String,
+        
+        /// Include the declaration/definition in results
+        #[clap(long = "include-declaration")]
+        include_declaration: bool,
+        
+        /// Output format (terminal, json, plain)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
+        format: String,
+    },
+
+    /// Get hover information for a symbol
+    Hover {
+        /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
+        location: String,
+        
+        /// Output format (terminal, json, plain)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
+        format: String,
+    },
+
+    /// List all symbols in a document
+    DocumentSymbols {
+        /// File path to get symbols from
+        file: std::path::PathBuf,
+        
+        /// Output format (terminal, json, plain)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
+        format: String,
+    },
+
+    /// Search for symbols in the workspace
+    WorkspaceSymbols {
+        /// Query string to search for
+        query: String,
+        
+        /// Maximum number of results to return
+        #[clap(long = "max-results")]
+        max_results: Option<usize>,
+        
+        /// Output format (terminal, json, plain)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
+        format: String,
+    },
+
+    /// Get call hierarchy information for a symbol
+    CallHierarchy {
+        /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
+        location: String,
+        
+        /// Output format (terminal, json, plain)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
+        format: String,
+    },
+
+    /// Find implementations of a symbol (interfaces, traits)
+    Implementations {
+        /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
+        location: String,
+        
+        /// Output format (terminal, json, plain)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
+        format: String,
+    },
+
+    /// Go to type definition of a symbol
+    TypeDefinition {
+        /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
+        location: String,
+        
+        /// Output format (terminal, json, plain)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
         format: String,
     },
 }

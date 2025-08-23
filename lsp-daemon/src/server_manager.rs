@@ -988,6 +988,70 @@ impl SingleServerManager {
             }
         }
     }
+
+    /// Execute textDocument/definition request for the given file and position
+    pub async fn definition(
+        &self,
+        language: Language,
+        workspace_root: PathBuf,
+        file_path: &std::path::Path,
+        line: u32,
+        column: u32,
+    ) -> Result<serde_json::Value> {
+        // Get or create server for this language and workspace
+        let server_instance = self
+            .ensure_workspace_registered(language, workspace_root)
+            .await?;
+
+        let server = server_instance.lock().await;
+
+        // Delegate to the underlying LspServer
+        server.server.definition(file_path, line, column).await
+    }
+
+    /// Execute textDocument/references request for the given file and position
+    pub async fn references(
+        &self,
+        language: Language,
+        workspace_root: PathBuf,
+        file_path: &std::path::Path,
+        line: u32,
+        column: u32,
+        include_declaration: bool,
+    ) -> Result<serde_json::Value> {
+        // Get or create server for this language and workspace
+        let server_instance = self
+            .ensure_workspace_registered(language, workspace_root)
+            .await?;
+
+        let server = server_instance.lock().await;
+
+        // Delegate to the underlying LspServer
+        server
+            .server
+            .references(file_path, line, column, include_declaration)
+            .await
+    }
+
+    /// Execute textDocument/hover request for the given file and position
+    pub async fn hover(
+        &self,
+        language: Language,
+        workspace_root: PathBuf,
+        file_path: &std::path::Path,
+        line: u32,
+        column: u32,
+    ) -> Result<serde_json::Value> {
+        // Get or create server for this language and workspace
+        let server_instance = self
+            .ensure_workspace_registered(language, workspace_root)
+            .await?;
+
+        let server = server_instance.lock().await;
+
+        // Delegate to the underlying LspServer
+        server.server.hover(file_path, line, column).await
+    }
 }
 
 #[derive(Debug, Clone)]
