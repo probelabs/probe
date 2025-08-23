@@ -32,7 +32,7 @@ pub struct Args {
     #[arg(short = 'n', long = "exclude-filenames")]
     pub exclude_filenames: bool,
 
-    /// Ranking algorithm for search results
+    /// Ranking algorithm for search results. BERT models (ms-marco-*) require --features bert-reranker
     #[arg(short = 'r', long = "reranker", default_value = "bm25", value_parser = ["bm25", "hybrid", "hybrid2", "tfidf", "ms-marco-tinybert", "ms-marco-minilm-l6", "ms-marco-minilm-l12"])]
     pub reranker: String,
 
@@ -89,7 +89,7 @@ pub struct Args {
     #[arg(long = "timeout", default_value = "30")]
     pub timeout: u64,
 
-    /// Natural language question for BERT reranking (uses search keywords if not specified)
+    /// Natural language question for BERT reranking (requires --features bert-reranker)
     #[arg(long = "question")]
     pub question: Option<String>,
 
@@ -130,7 +130,7 @@ pub enum Commands {
         #[arg(short = 'n', long = "exclude-filenames")]
         exclude_filenames: bool,
 
-        /// Ranking algorithm for search results
+        /// Ranking algorithm for search results. BERT models (ms-marco-*) require --features bert-reranker
         #[arg(short = 'r', long = "reranker", default_value = "bm25", value_parser = ["bm25", "hybrid", "hybrid2", "tfidf", "ms-marco-tinybert", "ms-marco-minilm-l6", "ms-marco-minilm-l12"])]
         reranker: String,
 
@@ -204,7 +204,7 @@ pub enum Commands {
         #[arg(long = "timeout", default_value = "30")]
         timeout: u64,
 
-        /// Natural language question for BERT reranking (uses search keywords if not specified)
+        /// Natural language question for BERT reranking (requires --features bert-reranker)
         #[arg(long = "question")]
         question: Option<String>,
 
