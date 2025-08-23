@@ -63,7 +63,7 @@ pub fn resolve_location(spec: &str) -> Result<ResolvedLocation> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("[DEBUG] Resolving location spec: '{}'", spec);
+        println!("[DEBUG] Resolving location spec: '{spec}'");
     }
 
     // Check if this is a symbol reference (contains '#')
@@ -83,7 +83,7 @@ fn parse_line_column_spec(spec: &str) -> Result<ResolvedLocation> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("[DEBUG] Parsing line:column spec: '{}'", spec);
+        println!("[DEBUG] Parsing line:column spec: '{spec}'");
     }
 
     // Check if this is a Windows absolute path (e.g., C:\path\file.rs:42:10)
@@ -104,7 +104,7 @@ fn parse_line_column_spec(spec: &str) -> Result<ResolvedLocation> {
             // parts[0] = column (or line if no column)
             // parts[1] = line (or file if no column)
             // parts[2..] = file path components (reversed)
-            
+
             let column_str = parts[0];
             let line_str = parts[1];
             let file_part = if parts.len() > 2 {
@@ -121,11 +121,11 @@ fn parse_line_column_spec(spec: &str) -> Result<ResolvedLocation> {
                 return Ok(ResolvedLocation::from_one_based(file_path, line, column));
             } else if let Ok(line) = column_str.parse::<u32>() {
                 // Only line was provided, column is in line_str position
-                let file_path = resolve_file_path(&format!("{}:{}", file_part, line_str))?;
+                let file_path = resolve_file_path(&format!("{file_part}:{line_str}"))?;
                 return Ok(ResolvedLocation::from_one_based(file_path, line, 0));
             }
         }
-        
+
         return Err(anyhow::anyhow!(
             "Failed to parse Windows path with line:column: '{}'",
             spec
@@ -134,7 +134,7 @@ fn parse_line_column_spec(spec: &str) -> Result<ResolvedLocation> {
 
     // For non-Windows paths, split on ':' from the right
     let parts: Vec<&str> = spec.rsplitn(3, ':').collect();
-    
+
     match parts.len() {
         3 => {
             // file:line:column format
@@ -142,16 +142,22 @@ fn parse_line_column_spec(spec: &str) -> Result<ResolvedLocation> {
             let line_str = parts[1];
             let file_part = parts[2];
 
-            let line = line_str.parse::<u32>()
-                .with_context(|| format!("Invalid line number: '{}'", line_str))?;
-            let column = column_str.parse::<u32>()
-                .with_context(|| format!("Invalid column number: '{}'", column_str))?;
+            let line = line_str
+                .parse::<u32>()
+                .with_context(|| format!("Invalid line number: '{line_str}'"))?;
+            let column = column_str
+                .parse::<u32>()
+                .with_context(|| format!("Invalid column number: '{column_str}'"))?;
 
             let file_path = resolve_file_path(file_part)?;
 
             if debug_mode {
-                println!("[DEBUG] Parsed file: '{}', line: {}, column: {}", 
-                         file_path.display(), line, column);
+                println!(
+                    "[DEBUG] Parsed file: '{}', line: {}, column: {}",
+                    file_path.display(),
+                    line,
+                    column
+                );
             }
 
             Ok(ResolvedLocation::from_one_based(file_path, line, column))
@@ -161,24 +167,26 @@ fn parse_line_column_spec(spec: &str) -> Result<ResolvedLocation> {
             let line_str = parts[0];
             let file_part = parts[1];
 
-            let line = line_str.parse::<u32>()
-                .with_context(|| format!("Invalid line number: '{}'", line_str))?;
+            let line = line_str
+                .parse::<u32>()
+                .with_context(|| format!("Invalid line number: '{line_str}'"))?;
 
             let file_path = resolve_file_path(file_part)?;
 
             if debug_mode {
-                println!("[DEBUG] Parsed file: '{}', line: {} (column defaulted to 0)", 
-                         file_path.display(), line);
+                println!(
+                    "[DEBUG] Parsed file: '{}', line: {} (column defaulted to 0)",
+                    file_path.display(),
+                    line
+                );
             }
 
             Ok(ResolvedLocation::from_one_based(file_path, line, 0))
         }
-        _ => {
-            Err(anyhow::anyhow!(
-                "Invalid line:column format: '{}'. Expected 'file:line' or 'file:line:column'",
-                spec
-            ))
-        }
+        _ => Err(anyhow::anyhow!(
+            "Invalid line:column format: '{}'. Expected 'file:line' or 'file:line:column'",
+            spec
+        )),
     }
 }
 
@@ -189,11 +197,12 @@ fn resolve_symbol_location(spec: &str) -> Result<ResolvedLocation> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("[DEBUG] Resolving symbol location: '{}'", spec);
+        println!("[DEBUG] Resolving symbol location: '{spec}'");
     }
 
-    let (file_part, symbol) = spec.split_once('#')
-        .ok_or_else(|| anyhow::anyhow!("Invalid symbol format: '{}'. Expected 'file#symbol'", spec))?;
+    let (file_part, symbol) = spec.split_once('#').ok_or_else(|| {
+        anyhow::anyhow!("Invalid symbol format: '{}'. Expected 'file#symbol'", spec)
+    })?;
 
     if symbol.is_empty() {
         return Err(anyhow::anyhow!("Empty symbol name in: '{}'", spec));
@@ -202,7 +211,11 @@ fn resolve_symbol_location(spec: &str) -> Result<ResolvedLocation> {
     let file_path = resolve_file_path(file_part)?;
 
     if debug_mode {
-        println!("[DEBUG] Looking for symbol '{}' in file '{}'", symbol, file_path.display());
+        println!(
+            "[DEBUG] Looking for symbol '{}' in file '{}'",
+            symbol,
+            file_path.display()
+        );
     }
 
     // Read the file content
@@ -211,17 +224,13 @@ fn resolve_symbol_location(spec: &str) -> Result<ResolvedLocation> {
 
     // Use the existing symbol finder to locate the symbol
     let (search_result, position) = find_symbol_in_file_with_position(
-        &file_path,
-        symbol,
-        &content,
-        true, // allow_tests
+        &file_path, symbol, &content, true, // allow_tests
         0,    // context_lines (not used for position finding)
     )?;
 
     if let Some((line, column)) = position {
         if debug_mode {
-            println!("[DEBUG] Found symbol '{}' at line {}, column {}", 
-                     symbol, line, column);
+            println!("[DEBUG] Found symbol '{symbol}' at line {line}, column {column}");
         }
 
         // find_symbol_in_file_with_position returns 0-based positions
@@ -229,10 +238,12 @@ fn resolve_symbol_location(spec: &str) -> Result<ResolvedLocation> {
     } else {
         // If we get a search result but no exact position, use the start of the search result
         if debug_mode {
-            println!("[DEBUG] No exact position found, using search result lines: {}-{}", 
-                     search_result.lines.0, search_result.lines.1);
+            println!(
+                "[DEBUG] No exact position found, using search result lines: {}-{}",
+                search_result.lines.0, search_result.lines.1
+            );
         }
-        
+
         // search_result.lines are 1-based, convert to 0-based
         let line = search_result.lines.0.saturating_sub(1) as u32;
         Ok(ResolvedLocation::new(file_path, line, 0))
@@ -244,7 +255,7 @@ fn resolve_file_path(file_part: &str) -> Result<PathBuf> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
-        println!("[DEBUG] Resolving file path: '{}'", file_part);
+        println!("[DEBUG] Resolving file path: '{file_part}'");
     }
 
     let path = PathBuf::from(file_part);
@@ -259,14 +270,16 @@ fn resolve_file_path(file_part: &str) -> Result<PathBuf> {
     }
 
     // For relative paths, try to resolve from the current directory
-    let current_dir = std::env::current_dir()
-        .context("Failed to get current directory")?;
-    
+    let current_dir = std::env::current_dir().context("Failed to get current directory")?;
+
     let resolved = current_dir.join(&path);
-    
+
     if resolved.exists() {
         if debug_mode {
-            println!("[DEBUG] Resolved relative path to: '{}'", resolved.display());
+            println!(
+                "[DEBUG] Resolved relative path to: '{}'",
+                resolved.display()
+            );
         }
         Ok(resolved)
     } else {
@@ -274,17 +287,18 @@ fn resolve_file_path(file_part: &str) -> Result<PathBuf> {
         match probe_code::path_resolver::resolve_path(file_part) {
             Ok(resolved_path) => {
                 if debug_mode {
-                    println!("[DEBUG] Resolved via path_resolver to: '{}'", resolved_path.display());
+                    println!(
+                        "[DEBUG] Resolved via path_resolver to: '{}'",
+                        resolved_path.display()
+                    );
                 }
                 Ok(resolved_path)
             }
-            Err(_) => {
-                Err(anyhow::anyhow!(
-                    "File not found: '{}' (tried relative to current directory: '{}')",
-                    file_part,
-                    resolved.display()
-                ))
-            }
+            Err(_) => Err(anyhow::anyhow!(
+                "File not found: '{}' (tried relative to current directory: '{}')",
+                file_part,
+                resolved.display()
+            )),
         }
     }
 }
@@ -302,15 +316,15 @@ mod tests {
         let temp_path = temp_file.path().to_string_lossy();
 
         // Test file:line:column format
-        let spec = format!("{}:10:5", temp_path);
+        let spec = format!("{temp_path}:10:5");
         let result = parse_line_column_spec(&spec).unwrap();
-        assert_eq!(result.line, 9);  // 0-based
+        assert_eq!(result.line, 9); // 0-based
         assert_eq!(result.column, 4); // 0-based
-        
+
         // Test file:line format (column should default to 0)
-        let spec = format!("{}:10", temp_path);
+        let spec = format!("{temp_path}:10");
         let result = parse_line_column_spec(&spec).unwrap();
-        assert_eq!(result.line, 9);  // 0-based
+        assert_eq!(result.line, 9); // 0-based
         assert_eq!(result.column, 0); // default
     }
 
@@ -332,10 +346,10 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let temp_path = temp_file.path().to_string_lossy();
 
-        let spec = format!("{}:5:10", temp_path);
+        let spec = format!("{temp_path}:5:10");
         let result = resolve_location(&spec).unwrap();
-        
-        assert_eq!(result.line, 4);  // 0-based
+
+        assert_eq!(result.line, 4); // 0-based
         assert_eq!(result.column, 9); // 0-based
         assert_eq!(result.line_one_based(), 5); // 1-based for display
         assert_eq!(result.column_one_based(), 10); // 1-based for display
@@ -373,15 +387,15 @@ pub fn test_function() -> i32 {
 
         let spec = format!("{}#test_function", temp_file.path().to_string_lossy());
         let result = resolve_location(&spec);
-        
+
         // Should successfully find the function
         let location = match result {
             Ok(loc) => loc,
             Err(e) => {
-                panic!("Failed to resolve location '{}': {}", spec, e);
+                panic!("Failed to resolve location '{spec}': {e}");
             }
         };
-        
+
         // The function should be found somewhere in the file
         // Just verify that we got a valid location
         assert!(location.file_path.exists());
@@ -407,17 +421,20 @@ impl TestStruct {
 "#;
         fs::write(temp_file.path(), rust_code).unwrap();
 
-        let spec = format!("{}#TestStruct.test_method", temp_file.path().to_string_lossy());
+        let spec = format!(
+            "{}#TestStruct.test_method",
+            temp_file.path().to_string_lossy()
+        );
         let result = resolve_location(&spec);
-        
+
         // Should successfully find the nested method
         let location = match result {
             Ok(loc) => loc,
             Err(e) => {
-                panic!("Failed to resolve location '{}': {}", spec, e);
+                panic!("Failed to resolve location '{spec}': {e}");
             }
         };
-        
+
         // The method should be found somewhere in the file
         // Just verify that we got a valid location
         assert!(location.file_path.exists());
@@ -428,14 +445,14 @@ impl TestStruct {
     #[test]
     fn test_resolved_location_creation() {
         let path = PathBuf::from("/test/file.rs");
-        
+
         // Test zero-based constructor
         let loc = ResolvedLocation::new(path.clone(), 5, 10);
         assert_eq!(loc.line, 5);
         assert_eq!(loc.column, 10);
         assert_eq!(loc.line_one_based(), 6);
         assert_eq!(loc.column_one_based(), 11);
-        
+
         // Test one-based constructor
         let loc = ResolvedLocation::from_one_based(path, 6, 11);
         assert_eq!(loc.line, 5);

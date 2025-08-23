@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tracing::{debug, info, warn};
 
-use crate::language_detector::Language;
 use crate::cache_types::LspOperation;
+use crate::language_detector::Language;
 
 /// Comprehensive configuration for the indexing subsystem
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,22 +123,26 @@ impl Default for LspCachingConfig {
     fn default() -> Self {
         Self {
             // CORRECTED defaults - cache operations actually used by search/extract
-            cache_call_hierarchy: true,   // ✅ MOST IMPORTANT - primary operation for search/extract
-            cache_definitions: false,     // ❌ NOT used by search/extract commands
-            cache_references: true,       // ✅ Used by extract for reference counts
-            cache_hover: true,           // ✅ Used by extract for documentation/type info
+            cache_call_hierarchy: true, // ✅ MOST IMPORTANT - primary operation for search/extract
+            cache_definitions: false,   // ❌ NOT used by search/extract commands
+            cache_references: true,     // ✅ Used by extract for reference counts
+            cache_hover: true,          // ✅ Used by extract for documentation/type info
             cache_document_symbols: false, // ❌ NOT used by search/extract commands
-            
+
             // Indexing behavior
             cache_during_indexing: false, // Off by default to avoid slowing indexing
             preload_common_symbols: false, // Off by default to avoid overhead
-            
+
             // Limits and timeouts
             max_cache_entries_per_operation: 1000, // Reasonable limit
-            lsp_operation_timeout_ms: 5000, // 5 second timeout during indexing
-            
+            lsp_operation_timeout_ms: 5000,        // 5 second timeout during indexing
+
             // Priority and filtering - CORRECTED to prioritize operations used by search/extract
-            priority_operations: vec![LspOperation::CallHierarchy, LspOperation::References, LspOperation::Hover],
+            priority_operations: vec![
+                LspOperation::CallHierarchy,
+                LspOperation::References,
+                LspOperation::Hover,
+            ],
             disabled_operations: vec![], // None disabled by default
         }
     }
@@ -167,16 +171,19 @@ impl LspCachingConfig {
         }
 
         if let Ok(value) = std::env::var("PROBE_LSP_CACHE_DOCUMENT_SYMBOLS") {
-            config.cache_document_symbols = parse_bool_env(&value, "PROBE_LSP_CACHE_DOCUMENT_SYMBOLS")?;
+            config.cache_document_symbols =
+                parse_bool_env(&value, "PROBE_LSP_CACHE_DOCUMENT_SYMBOLS")?;
         }
 
         // Indexing behavior flags
         if let Ok(value) = std::env::var("PROBE_LSP_CACHE_DURING_INDEXING") {
-            config.cache_during_indexing = parse_bool_env(&value, "PROBE_LSP_CACHE_DURING_INDEXING")?;
+            config.cache_during_indexing =
+                parse_bool_env(&value, "PROBE_LSP_CACHE_DURING_INDEXING")?;
         }
 
         if let Ok(value) = std::env::var("PROBE_LSP_PRELOAD_COMMON_SYMBOLS") {
-            config.preload_common_symbols = parse_bool_env(&value, "PROBE_LSP_PRELOAD_COMMON_SYMBOLS")?;
+            config.preload_common_symbols =
+                parse_bool_env(&value, "PROBE_LSP_PRELOAD_COMMON_SYMBOLS")?;
         }
 
         // Numeric configurations
@@ -194,12 +201,14 @@ impl LspCachingConfig {
 
         // Priority operations (comma-separated list)
         if let Ok(value) = std::env::var("PROBE_LSP_PRIORITY_OPERATIONS") {
-            config.priority_operations = parse_lsp_operations_list(&value, "PROBE_LSP_PRIORITY_OPERATIONS")?;
+            config.priority_operations =
+                parse_lsp_operations_list(&value, "PROBE_LSP_PRIORITY_OPERATIONS")?;
         }
 
         // Disabled operations (comma-separated list)
         if let Ok(value) = std::env::var("PROBE_LSP_DISABLED_OPERATIONS") {
-            config.disabled_operations = parse_lsp_operations_list(&value, "PROBE_LSP_DISABLED_OPERATIONS")?;
+            config.disabled_operations =
+                parse_lsp_operations_list(&value, "PROBE_LSP_DISABLED_OPERATIONS")?;
         }
 
         Ok(config)
@@ -224,7 +233,8 @@ impl LspCachingConfig {
         merge_bool_field!(cache_during_indexing);
         merge_bool_field!(preload_common_symbols);
 
-        if other.max_cache_entries_per_operation != Self::default().max_cache_entries_per_operation {
+        if other.max_cache_entries_per_operation != Self::default().max_cache_entries_per_operation
+        {
             self.max_cache_entries_per_operation = other.max_cache_entries_per_operation;
         }
 
@@ -248,11 +258,16 @@ impl LspCachingConfig {
         }
 
         if self.max_cache_entries_per_operation == 0 {
-            return Err(anyhow!("max_cache_entries_per_operation must be greater than 0"));
+            return Err(anyhow!(
+                "max_cache_entries_per_operation must be greater than 0"
+            ));
         }
 
         if self.max_cache_entries_per_operation > 100000 {
-            warn!("max_cache_entries_per_operation is very high ({}), may consume excessive memory", self.max_cache_entries_per_operation);
+            warn!(
+                "max_cache_entries_per_operation is very high ({}), may consume excessive memory",
+                self.max_cache_entries_per_operation
+            );
         }
 
         Ok(())
@@ -300,7 +315,7 @@ fn parse_lsp_operations_list(value: &str, var_name: &str) -> Result<Vec<LspOpera
             _ => Err(anyhow!("Invalid LSP operation: {}", s)),
         })
         .collect::<Result<Vec<_>>>()
-        .context(format!("Invalid LSP operations list for {}", var_name))?;
+        .context(format!("Invalid LSP operations list for {var_name}"))?;
 
     Ok(operations)
 }
@@ -1022,8 +1037,18 @@ impl IndexingConfig {
             preload_common_symbols: Some(self.lsp_caching.preload_common_symbols),
             max_cache_entries_per_operation: Some(self.lsp_caching.max_cache_entries_per_operation),
             lsp_operation_timeout_ms: Some(self.lsp_caching.lsp_operation_timeout_ms),
-            lsp_priority_operations: self.lsp_caching.priority_operations.iter().map(op_to_string).collect(),
-            lsp_disabled_operations: self.lsp_caching.disabled_operations.iter().map(op_to_string).collect(),
+            lsp_priority_operations: self
+                .lsp_caching
+                .priority_operations
+                .iter()
+                .map(op_to_string)
+                .collect(),
+            lsp_disabled_operations: self
+                .lsp_caching
+                .disabled_operations
+                .iter()
+                .map(op_to_string)
+                .collect(),
         }
     }
 
@@ -1032,11 +1057,15 @@ impl IndexingConfig {
         // Helper function to parse LSP operation from string
         let string_to_op = |s: &str| -> Option<crate::cache_types::LspOperation> {
             match s.to_lowercase().as_str() {
-                "call_hierarchy" | "callhierarchy" => Some(crate::cache_types::LspOperation::CallHierarchy),
+                "call_hierarchy" | "callhierarchy" => {
+                    Some(crate::cache_types::LspOperation::CallHierarchy)
+                }
                 "definition" | "definitions" => Some(crate::cache_types::LspOperation::Definition),
                 "references" => Some(crate::cache_types::LspOperation::References),
                 "hover" => Some(crate::cache_types::LspOperation::Hover),
-                "document_symbols" | "documentsymbols" => Some(crate::cache_types::LspOperation::DocumentSymbols),
+                "document_symbols" | "documentsymbols" => {
+                    Some(crate::cache_types::LspOperation::DocumentSymbols)
+                }
                 _ => None,
             }
         };
@@ -1742,10 +1771,17 @@ mod tests {
         assert!(config.should_cache_operation(&LspOperation::CallHierarchy)); // ✅ MOST IMPORTANT for search/extract
 
         // Test priority - CORRECTED to prioritize operations used by search/extract
-        assert_eq!(config.get_operation_priority(&LspOperation::CallHierarchy), 100); // High priority - primary operation
-        assert_eq!(config.get_operation_priority(&LspOperation::References), 100); // High priority - used by extract
+        assert_eq!(
+            config.get_operation_priority(&LspOperation::CallHierarchy),
+            100
+        ); // High priority - primary operation
+        assert_eq!(
+            config.get_operation_priority(&LspOperation::References),
+            100
+        ); // High priority - used by extract
         assert_eq!(config.get_operation_priority(&LspOperation::Hover), 100); // High priority - used by extract
-        assert_eq!(config.get_operation_priority(&LspOperation::Definition), 50); // Normal priority - not used
+        assert_eq!(config.get_operation_priority(&LspOperation::Definition), 50);
+        // Normal priority - not used
     }
 
     #[test]
@@ -1761,8 +1797,9 @@ mod tests {
     fn test_lsp_operation_parsing() {
         // Test parsing LSP operations from strings
         use crate::cache_types::LspOperation;
-        
-        let operations = parse_lsp_operations_list("definition,hover,call_hierarchy", "TEST").unwrap();
+
+        let operations =
+            parse_lsp_operations_list("definition,hover,call_hierarchy", "TEST").unwrap();
         assert_eq!(operations.len(), 3);
         assert!(operations.contains(&LspOperation::Definition));
         assert!(operations.contains(&LspOperation::Hover));
@@ -1812,7 +1849,10 @@ mod tests {
         let restored_config = IndexingConfig::from_protocol_config(&protocol_config);
         assert_eq!(restored_config.lsp_caching.cache_definitions, true);
         assert_eq!(restored_config.lsp_caching.cache_call_hierarchy, false);
-        assert_eq!(restored_config.lsp_caching.max_cache_entries_per_operation, 2000);
+        assert_eq!(
+            restored_config.lsp_caching.max_cache_entries_per_operation,
+            2000
+        );
     }
 
     #[test]

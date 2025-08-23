@@ -87,14 +87,9 @@ fn find_identifier_position_in_node(
                     let row = node.start_position().row as u32;
                     let start_col = node.start_position().column as u32;
                     let end_col = node.end_position().column as u32;
-                    
+
                     if debug_mode {
-                        println!(
-                            "[DEBUG] AST search found '{}' at {}:{}",
-                            target_name,
-                            row,
-                            start_col
-                        );
+                        println!("[DEBUG] AST search found '{target_name}' at {row}:{start_col}");
                         println!(
                             "[DEBUG] Identifier node range: {}:{} - {}:{}",
                             row,
@@ -104,10 +99,10 @@ fn find_identifier_position_in_node(
                         );
                         // Show what's at that exact position
                         if let Ok(text_at_pos) = node.utf8_text(content) {
-                            println!("[DEBUG] Text at identifier position: '{}'", text_at_pos);
+                            println!("[DEBUG] Text at identifier position: '{text_at_pos}'");
                         }
                     }
-                    
+
                     // For LSP calls, rust-analyzer can be picky about cursor position.
                     // Instead of guessing a single position, return multiple candidate positions
                     // within the identifier. The LSP client can try them in order until one works.
@@ -141,28 +136,26 @@ fn find_identifier_position_in_node(
             .find('{')
             .or_else(|| full_text.find(':'))
             .or_else(|| full_text.find(';'))
-            .unwrap_or_else(|| full_text.len());
+            .unwrap_or(full_text.len());
         let header = &full_text[..header_end];
-        
+
         if debug_mode {
-            println!(
-                "[DEBUG] AST search failed, trying header search"
-            );
+            println!("[DEBUG] AST search failed, trying header search");
             println!(
                 "[DEBUG] Node start: {}:{}, header length: {}",
                 node.start_position().row,
                 node.start_position().column,
                 header.len()
             );
-            println!("[DEBUG] Header text preview: {:?}", &header[..std::cmp::min(200, header.len())]);
+            println!(
+                "[DEBUG] Header text preview: {:?}",
+                &header[..std::cmp::min(200, header.len())]
+            );
         }
 
         // Find token with identifier boundaries so we don't match inside a longer word.
         fn is_ident_char(b: u8) -> bool {
-            (b'A'..=b'Z').contains(&b)
-                || (b'a'..=b'z').contains(&b)
-                || (b'0'..=b'9').contains(&b)
-                || b == b'_'
+            b.is_ascii_uppercase() || b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'
         }
 
         let hay = header.as_bytes();
@@ -186,10 +179,7 @@ fn find_identifier_position_in_node(
                         }
                     }
                     if debug_mode {
-                        println!(
-                            "[DEBUG] Header search found '{}' at {}:{}",
-                            identifier_name, row, col
-                        );
+                        println!("[DEBUG] Header search found '{identifier_name}' at {row}:{col}");
                     }
                     return Some((row, col));
                 }

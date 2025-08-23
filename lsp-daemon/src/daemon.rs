@@ -1,7 +1,7 @@
 use crate::cache_management::CacheManager;
 use crate::cache_types::{
-    CallHierarchyInfo, CallInfo, DefinitionInfo, HoverInfo, 
-    LspOperation, NodeId, NodeKey, ReferencesInfo,
+    CallHierarchyInfo, CallInfo, DefinitionInfo, HoverInfo, LspOperation, NodeId, NodeKey,
+    ReferencesInfo,
 };
 use crate::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use crate::hash_utils::md5_hex_file;
@@ -17,7 +17,7 @@ use crate::pid_lock::PidLock;
 use crate::process_group::ProcessGroup;
 use crate::protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, ClearFilter,
-    CompactOptions, DaemonRequest, DaemonResponse, DaemonStatus, DocumentSymbol, ExportOptions, 
+    CompactOptions, DaemonRequest, DaemonResponse, DaemonStatus, DocumentSymbol, ExportOptions,
     HoverContent, LanguageInfo, Location, MessageCodec, PoolStatus, SymbolInformation,
 };
 use crate::server_manager::SingleServerManager;
@@ -1534,7 +1534,10 @@ impl LspDaemon {
                     .handle_definition(&file_path, line, column, workspace_hint)
                     .await
                 {
-                    Ok(locations) => DaemonResponse::Definition { request_id, locations },
+                    Ok(locations) => DaemonResponse::Definition {
+                        request_id,
+                        locations,
+                    },
                     Err(e) => DaemonResponse::Error {
                         request_id,
                         error: e.to_string(),
@@ -1555,10 +1558,19 @@ impl LspDaemon {
                     file_path, line, column, include_declaration, request_id
                 );
                 match self
-                    .handle_references(&file_path, line, column, include_declaration, workspace_hint)
+                    .handle_references(
+                        &file_path,
+                        line,
+                        column,
+                        include_declaration,
+                        workspace_hint,
+                    )
                     .await
                 {
-                    Ok(locations) => DaemonResponse::References { request_id, locations },
+                    Ok(locations) => DaemonResponse::References {
+                        request_id,
+                        locations,
+                    },
                     Err(e) => DaemonResponse::Error {
                         request_id,
                         error: e.to_string(),
@@ -1581,7 +1593,10 @@ impl LspDaemon {
                     .handle_hover(&file_path, line, column, workspace_hint)
                     .await
                 {
-                    Ok(content) => DaemonResponse::Hover { request_id, content },
+                    Ok(content) => DaemonResponse::Hover {
+                        request_id,
+                        content,
+                    },
                     Err(e) => DaemonResponse::Error {
                         request_id,
                         error: e.to_string(),
@@ -1602,7 +1617,10 @@ impl LspDaemon {
                     .handle_document_symbols(&file_path, workspace_hint)
                     .await
                 {
-                    Ok(symbols) => DaemonResponse::DocumentSymbols { request_id, symbols },
+                    Ok(symbols) => DaemonResponse::DocumentSymbols {
+                        request_id,
+                        symbols,
+                    },
                     Err(e) => DaemonResponse::Error {
                         request_id,
                         error: e.to_string(),
@@ -1619,11 +1637,11 @@ impl LspDaemon {
                     "Received DaemonRequest::WorkspaceSymbols query='{}' (request_id: {})",
                     query, request_id
                 );
-                match self
-                    .handle_workspace_symbols(&query, workspace_hint)
-                    .await
-                {
-                    Ok(symbols) => DaemonResponse::WorkspaceSymbols { request_id, symbols },
+                match self.handle_workspace_symbols(&query, workspace_hint).await {
+                    Ok(symbols) => DaemonResponse::WorkspaceSymbols {
+                        request_id,
+                        symbols,
+                    },
                     Err(e) => DaemonResponse::Error {
                         request_id,
                         error: e.to_string(),
@@ -1646,7 +1664,10 @@ impl LspDaemon {
                     .handle_implementations(&file_path, line, column, workspace_hint)
                     .await
                 {
-                    Ok(locations) => DaemonResponse::Implementations { request_id, locations },
+                    Ok(locations) => DaemonResponse::Implementations {
+                        request_id,
+                        locations,
+                    },
                     Err(e) => DaemonResponse::Error {
                         request_id,
                         error: e.to_string(),
@@ -1669,7 +1690,10 @@ impl LspDaemon {
                     .handle_type_definition(&file_path, line, column, workspace_hint)
                     .await
                 {
-                    Ok(locations) => DaemonResponse::TypeDefinition { request_id, locations },
+                    Ok(locations) => DaemonResponse::TypeDefinition {
+                        request_id,
+                        locations,
+                    },
                     Err(e) => DaemonResponse::Error {
                         request_id,
                         error: e.to_string(),
@@ -2257,7 +2281,7 @@ impl LspDaemon {
         if response.is_null() {
             return Ok(None);
         }
-        
+
         if let Ok(hover) = serde_json::from_value::<HoverContent>(response.clone()) {
             Ok(Some(hover))
         } else {
@@ -2267,7 +2291,9 @@ impl LspDaemon {
                     contents.as_str().unwrap_or("").to_string()
                 } else if contents.is_array() {
                     // Handle array of markup content
-                    contents.as_array().unwrap_or(&vec![])
+                    contents
+                        .as_array()
+                        .unwrap_or(&vec![])
                         .iter()
                         .map(|v| v.as_str().unwrap_or(""))
                         .collect::<Vec<_>>()
@@ -2275,10 +2301,11 @@ impl LspDaemon {
                 } else {
                     contents.to_string()
                 };
-                
-                let range = response.get("range")
+
+                let range = response
+                    .get("range")
                     .and_then(|r| serde_json::from_value::<crate::protocol::Range>(r.clone()).ok());
-                
+
                 Ok(Some(HoverContent {
                     contents: contents_str,
                     range,
@@ -2300,7 +2327,9 @@ impl LspDaemon {
         column: u32,
         workspace_hint: Option<PathBuf>,
     ) -> Result<Vec<Location>> {
-        let absolute_file_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+        let absolute_file_path = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
         let content_md5 = md5_hex_file(&absolute_file_path)?;
 
         // Use cache
@@ -2315,7 +2344,10 @@ impl LspDaemon {
                     // Call LSP server for computation
                     let language = self.detector.detect(&absolute_file_path)?;
                     if language == Language::Unknown {
-                        return Err(anyhow!("Unknown language for file: {:?}", absolute_file_path));
+                        return Err(anyhow!(
+                            "Unknown language for file: {:?}",
+                            absolute_file_path
+                        ));
                     }
 
                     let workspace_root = {
@@ -2327,9 +2359,12 @@ impl LspDaemon {
                         .server_manager
                         .ensure_workspace_registered(language, workspace_root)
                         .await?;
-                    
+
                     let server = server_instance.lock().await;
-                    let response_json = server.server.definition(&absolute_file_path, line, column).await?;
+                    let response_json = server
+                        .server
+                        .definition(&absolute_file_path, line, column)
+                        .await?;
                     let locations = Self::parse_definition_response(&response_json)?;
                     Ok(locations)
                 },
@@ -2366,7 +2401,9 @@ impl LspDaemon {
         include_declaration: bool,
         workspace_hint: Option<PathBuf>,
     ) -> Result<Vec<Location>> {
-        let absolute_file_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+        let absolute_file_path = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
         let content_md5 = md5_hex_file(&absolute_file_path)?;
 
         // Use cache
@@ -2382,7 +2419,10 @@ impl LspDaemon {
                     // Call LSP server for computation
                     let language = self.detector.detect(&absolute_file_path)?;
                     if language == Language::Unknown {
-                        return Err(anyhow!("Unknown language for file: {:?}", absolute_file_path));
+                        return Err(anyhow!(
+                            "Unknown language for file: {:?}",
+                            absolute_file_path
+                        ));
                     }
 
                     let workspace_root = {
@@ -2394,9 +2434,12 @@ impl LspDaemon {
                         .server_manager
                         .ensure_workspace_registered(language, workspace_root)
                         .await?;
-                    
+
                     let server = server_instance.lock().await;
-                    let response_json = server.server.references(&absolute_file_path, line, column, include_declaration).await?;
+                    let response_json = server
+                        .server
+                        .references(&absolute_file_path, line, column, include_declaration)
+                        .await?;
                     let locations = Self::parse_references_response(&response_json)?;
                     Ok(locations)
                 },
@@ -2432,7 +2475,9 @@ impl LspDaemon {
         column: u32,
         workspace_hint: Option<PathBuf>,
     ) -> Result<Option<HoverContent>> {
-        let absolute_file_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+        let absolute_file_path = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
         let content_md5 = md5_hex_file(&absolute_file_path)?;
 
         // Use cache
@@ -2447,7 +2492,10 @@ impl LspDaemon {
                     // Call LSP server for computation
                     let language = self.detector.detect(&absolute_file_path)?;
                     if language == Language::Unknown {
-                        return Err(anyhow!("Unknown language for file: {:?}", absolute_file_path));
+                        return Err(anyhow!(
+                            "Unknown language for file: {:?}",
+                            absolute_file_path
+                        ));
                     }
 
                     let workspace_root = {
@@ -2459,9 +2507,12 @@ impl LspDaemon {
                         .server_manager
                         .ensure_workspace_registered(language, workspace_root)
                         .await?;
-                    
+
                     let server = server_instance.lock().await;
-                    let response_json = server.server.hover(&absolute_file_path, line, column).await?;
+                    let response_json = server
+                        .server
+                        .hover(&absolute_file_path, line, column)
+                        .await?;
                     let hover = Self::parse_hover_response(&response_json)?;
                     Ok(hover)
                 },
@@ -2469,19 +2520,27 @@ impl LspDaemon {
             .await?;
 
         // Convert cached HoverInfo to protocol HoverContent
-        Ok(cached_result.data.contents.clone().map(|contents| HoverContent {
-            contents,
-            range: cached_result.data.range.clone().map(|r| crate::protocol::Range {
-                start: crate::protocol::Position {
-                    line: r.start_line,
-                    character: r.start_character,
-                },
-                end: crate::protocol::Position {
-                    line: r.end_line,
-                    character: r.end_character,
-                },
-            }),
-        }))
+        Ok(cached_result
+            .data
+            .contents
+            .clone()
+            .map(|contents| HoverContent {
+                contents,
+                range: cached_result
+                    .data
+                    .range
+                    .clone()
+                    .map(|r| crate::protocol::Range {
+                        start: crate::protocol::Position {
+                            line: r.start_line,
+                            character: r.start_character,
+                        },
+                        end: crate::protocol::Position {
+                            line: r.end_line,
+                            character: r.end_character,
+                        },
+                    }),
+            }))
     }
 
     async fn handle_document_symbols(
@@ -2499,7 +2558,9 @@ impl LspDaemon {
         _workspace_hint: Option<PathBuf>,
     ) -> Result<Vec<SymbolInformation>> {
         // TODO: Implement workspace symbols support in LSP server
-        Err(anyhow!("Workspace symbols operation is not yet implemented"))
+        Err(anyhow!(
+            "Workspace symbols operation is not yet implemented"
+        ))
     }
 
     async fn handle_implementations(
