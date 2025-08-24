@@ -37,9 +37,10 @@ impl LspManager {
             }
         };
 
-        // Quick health check
-        if client.ping().await.is_err() {
-            // If ping fails, restart daemon
+        // Quick health check with timeout
+        let ping_result = tokio::time::timeout(Duration::from_secs(5), client.ping()).await;
+        if ping_result.is_err() || ping_result.unwrap().is_err() {
+            // If ping fails or times out, restart daemon
             let _ = client.shutdown_daemon().await;
             tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -47,22 +48,9 @@ impl LspManager {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
-        // Auto-initialize current workspace if it looks like a code project
-        let current_dir = std::env::current_dir()?;
-        if Self::is_code_workspace(&current_dir)?
-            && client
-                .init_workspaces(
-                    current_dir,
-                    None,  // Auto-detect languages
-                    false, // Not recursive by default
-                    false, // No watchdog by default
-                )
-                .await
-                .is_err()
-        {
-            // Init failure is not critical for basic operations
-            // The workspace will be initialized on-demand during operations
-        }
+        // Skip workspace initialization for basic operations to avoid hanging
+        // Workspace initialization will happen on-demand when LSP features are actually used
+        // This prevents test timeouts and improves startup time for simple search operations
 
         Ok(())
     }
@@ -88,6 +76,7 @@ impl LspManager {
     }
 
     /// Check if a directory looks like a code workspace
+    #[allow(dead_code)] // Keep for potential future use
     fn is_code_workspace(path: &Path) -> Result<bool> {
         // Check for common project indicators
         let indicators = [
