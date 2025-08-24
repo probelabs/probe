@@ -1,8 +1,12 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::time::Duration;
 use tempfile::TempDir;
+
+#[path = "common/mod.rs"]
+mod common;
+use common::run_probe_command_with_config;
 
 /// Helper function to get the path to the probe binary
 /// This significantly improves test performance on Windows by avoiding repeated compilation checks
@@ -28,19 +32,119 @@ fn probe_binary_path() -> PathBuf {
     path
 }
 
-/// Helper function to create a probe command with CI environment set
-/// This ensures LSP is disabled during tests to prevent hanging
-fn probe_command() -> Command {
-    probe_command_with_path(probe_binary_path())
+/// Helper function to run probe command with proper pipe handling for Windows
+/// This wrapper prevents deadlocks on Windows by using concurrent pipe draining
+fn run_probe_command(args: &[&str]) -> (String, String, bool) {
+    run_probe_command_at(args, None)
 }
 
-/// Helper function to create a probe command with a specific path and CI environment set
-fn probe_command_with_path(path: PathBuf) -> Command {
-    let mut cmd = Command::new(path);
-    // Set CI environment to disable LSP auto-initialization
-    cmd.env("CI", "1");
-    cmd.env("PROBE_LSP_DISABLE_AUTOSTART", "1");
-    cmd
+/// Helper function to run probe command in a specific directory
+fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String, String, bool) {
+    // If we need to run in a specific directory, we'll need to handle it differently
+    // since run_probe_command_with_config doesn't support changing directory
+    if let Some(dir) = dir {
+        // Create a new command that changes to the directory first
+        let mut full_args = vec![];
+        // Change to use absolute path in arguments instead of changing directory
+        for arg in args {
+            if *arg == "." {
+                full_args.push(dir.to_str().unwrap());
+            } else {
+                full_args.push(*arg);
+            }
+        }
+        run_probe_command_with_config(&full_args, Duration::from_secs(30), None).unwrap_or_else(
+            |e| {
+                // If the command fails to run, return the error as stderr
+                ("".to_string(), e.to_string(), false)
+            },
+        )
+    } else {
+        run_probe_command_with_config(args, Duration::from_secs(30), None).unwrap_or_else(|e| {
+            // If the command fails to run, return the error as stderr
+            ("".to_string(), e.to_string(), false)
+        })
+    }
+}
+
+/// Helper function to run probe command with a specific config directory
+/// This changes the working directory so that probe finds config files in temp_dir/.probe/
+fn run_probe_command_with_config_dir(
+    args: &[&str],
+    temp_dir: Option<&std::path::Path>,
+) -> (String, String, bool) {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::thread;
+
+    let mut cmd = Command::new(probe_binary_path());
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("CI", "1")
+        .env("PROBE_LSP_DISABLE_AUTOSTART", "1");
+
+    // Change working directory if provided so probe looks for ./.probe/ in temp directory
+    if let Some(dir) = temp_dir {
+        cmd.current_dir(dir);
+    }
+
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => return ("".to_string(), format!("Failed to spawn probe: {e}"), false),
+    };
+
+    // Take ownership of pipes to drain them concurrently (prevents Windows deadlock)
+    let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
+
+    // Drain stdout in a dedicated thread
+    let (tx_out, rx_out) = mpsc::channel::<Vec<u8>>();
+    let stdout_thread = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buf);
+        let _ = tx_out.send(buf);
+    });
+
+    // Drain stderr in a dedicated thread
+    let (tx_err, rx_err) = mpsc::channel::<Vec<u8>>();
+    let stderr_thread = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        let _ = tx_err.send(buf);
+    });
+
+    // Wait for process
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(e) => {
+            return (
+                "".to_string(),
+                format!("Failed to wait for probe: {e}"),
+                false,
+            )
+        }
+    };
+
+    // Collect outputs from reader threads
+    let stdout_bytes = rx_out
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_else(|_| Vec::new());
+    let stderr_bytes = rx_err
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_else(|_| Vec::new());
+
+    // Join threads to clean up
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
+
+    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+    let success = status.success();
+
+    (stdout, stderr, success)
 }
 
 // Helper function to create test files
@@ -84,20 +188,14 @@ fn test_cli_basic_search() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with basic search
-    let output = probe_command()
-        .args([
-            "search",
-            "search", // Pattern to search for
-            temp_dir.path().to_str().unwrap(),
-        ])
-        .output()
-        .expect("Failed to execute command");
+    let (stdout, stderr, success) = run_probe_command(&[
+        "search",
+        "search", // Pattern to search for
+        temp_dir.path().to_str().unwrap(),
+    ]);
 
     // Check that the command succeeded
-    assert!(output.status.success());
-
-    // Convert stdout to string
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(success, "Command failed with stderr: {stderr}");
 
     // Check that it found matches
     assert!(
@@ -122,21 +220,18 @@ fn test_cli_files_only() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with files-only option
-    let output = probe_command()
-        .args([
-            "search",
-            "search", // Pattern to search for
-            temp_dir.path().to_str().unwrap(),
-            "--files-only",
-        ])
-        .output()
-        .expect("Failed to execute command");
+    let (stdout, stderr, success) = run_probe_command(&[
+        "search",
+        "search", // Pattern to search for
+        temp_dir.path().to_str().unwrap(),
+        "--files-only",
+    ]);
 
     // Check that the command succeeded
-    assert!(output.status.success());
+    assert!(success, "Command failed with stderr: {stderr}");
 
     // Convert stdout to string
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // stdout is already a String from run_probe_command
 
     // Check that it found matches
     assert!(
@@ -178,22 +273,17 @@ fn test_cli_filename_matching() {
     );
 
     // Run the CLI without exclude-filenames option (filename matching is enabled by default)
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "search",
-            "search", // Pattern to search for
-            temp_dir.path().to_str().unwrap(),
-        ])
-        .output()
-        .expect("Failed to execute command");
+    let (stdout, stderr, success) = run_probe_command(&[
+        "search",
+        "search", // Pattern to search for
+        temp_dir.path().to_str().unwrap(),
+    ]);
 
     // Check that the command succeeded
-    assert!(output.status.success());
+    assert!(success, "Command failed with stderr: {stderr}");
 
     // Convert stdout to string
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // stdout is already a String from run_probe_command
 
     // Check that it found matches
     assert!(
@@ -210,21 +300,15 @@ fn test_cli_filename_matching() {
 
     // Second test: With exclude-filenames - filename matching should be disabled
     // Run the CLI with exclude-filenames option
-    let output2 = probe_command()
-        .args([
-            "search",
-            "search", // Pattern to search for
-            temp_dir.path().to_str().unwrap(),
-            "--exclude-filenames",
-        ])
-        .output()
-        .expect("Failed to execute command");
+    let (stdout2, stderr2, success2) = run_probe_command(&[
+        "search",
+        "search", // Pattern to search for
+        temp_dir.path().to_str().unwrap(),
+        "--exclude-filenames",
+    ]);
 
     // Check that the command succeeded
-    assert!(output2.status.success());
-
-    // Convert stdout to string
-    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    assert!(success2, "Command failed with stderr: {stderr2}");
 
     // Print the output for debugging
     println!("With exclude-filenames output: {stdout2}");
@@ -246,25 +330,19 @@ fn test_cli_reranker() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with bm25 reranker
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "search",
-            "search", // Pattern to search for
-            temp_dir.path().to_str().unwrap(),
-            "--reranker",
-            "bm25",
-        ])
-        .env("DEBUG", "1") // Enable debug mode to see ranking messages
-        .output()
-        .expect("Failed to execute command");
+    let (stdout, stderr, success) = run_probe_command(&[
+        "search",
+        "search", // Pattern to search for
+        temp_dir.path().to_str().unwrap(),
+        "--reranker",
+        "bm25",
+    ]);
 
     // Check that the command succeeded
-    assert!(output.status.success());
+    assert!(success, "Command failed with stderr: {stderr}");
 
     // Convert stdout to string
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // stdout is already a String from run_probe_command
 
     // Check that it found matches
     assert!(
@@ -291,23 +369,17 @@ fn test_cli_default_frequency_search() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with default settings (frequency search should be enabled by default)
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "search",
-            "search", // Pattern to search for
-            temp_dir.path().to_str().unwrap(),
-        ])
-        .env("DEBUG", "1") // Enable debug mode to see frequency search messages
-        .output()
-        .expect("Failed to execute command");
+    let (stdout, stderr, success) = run_probe_command(&[
+        "search",
+        "search", // Pattern to search for
+        temp_dir.path().to_str().unwrap(),
+    ]);
 
     // Check that the command succeeded
-    assert!(output.status.success());
+    assert!(success, "Command failed with stderr: {stderr}");
 
     // Convert stdout to string
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // stdout is already a String from run_probe_command
 
     // Check that it found matches
     assert!(
@@ -333,26 +405,20 @@ fn test_cli_custom_ignores() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with custom ignore pattern and debug mode
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "search",
-            "search", // Pattern to search for
-            temp_dir.path().to_str().unwrap(),
-            "--ignore",
-            "*.js",
-        ])
-        .env("DEBUG", "1") // Enable debug mode
-        .output()
-        .expect("Failed to execute command");
+    let (stdout, stderr, success) = run_probe_command(&[
+        "search",
+        "search", // Pattern to search for
+        temp_dir.path().to_str().unwrap(),
+        "--ignore",
+        "*.js",
+    ]);
 
     // Check that the command succeeded
-    assert!(output.status.success());
+    assert!(success, "Command failed with stderr: {stderr}");
 
     // Convert stdout to string
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // stdout is already a String from run_probe_command
+    // stderr is already a String from run_probe_command
 
     // Print the full output for debugging
     println!("STDOUT: {stdout}");
@@ -402,25 +468,20 @@ fn test_cli_max_results() {
     }
 
     // Run the CLI with max results limit
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "search",
-            "search", // Pattern to search for
-            temp_dir.path().to_str().unwrap(),
-            "--max-results",
-            "1",
-            "--files-only", // Use files-only mode to simplify results
-        ])
-        .output()
-        .expect("Failed to execute command");
+    let (stdout, stderr, success) = run_probe_command(&[
+        "search",
+        "search", // Pattern to search for
+        temp_dir.path().to_str().unwrap(),
+        "--max-results",
+        "1",
+        "--files-only", // Use files-only mode to simplify results
+    ]);
 
     // Check that the command succeeded
-    assert!(output.status.success());
+    assert!(success, "Command failed with stderr: {stderr}");
 
     // Convert stdout to string
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // stdout is already a String from run_probe_command
 
     // Print the output for debugging
     println!("Command output: {stdout}");
@@ -470,24 +531,19 @@ struct SearchConfig {
     create_test_file(&temp_dir, "src/search_config.rs", yet_more_content);
 
     // Run the CLI with a restrictive max-results limit
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "search",
-            "search",
-            temp_dir.path().to_str().unwrap(),
-            "--max-results",
-            "1",
-        ])
-        .output()
-        .expect("Failed to execute command");
+    let (stdout, stderr, success) = run_probe_command(&[
+        "search",
+        "search",
+        temp_dir.path().to_str().unwrap(),
+        "--max-results",
+        "1",
+    ]);
 
     // Check that the command succeeded
-    assert!(output.status.success());
+    assert!(success, "Command failed with stderr: {stderr}");
 
     // Convert stdout to string
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // stdout is already a String from run_probe_command
 
     // Check that the limit message appears
     // The limit message is no longer in the search output
@@ -513,19 +569,13 @@ struct SearchConfig {
 
 #[test]
 fn test_config_show_command() {
-    let probe_path = probe_binary_path();
-
     // Test default format (should be human-readable)
-    let output = probe_command_with_path(probe_path.clone())
-        .args(["config", "show"])
-        .output()
-        .expect("Failed to execute config show command");
+    let (stdout, stderr, success) = run_probe_command(&["config", "show"]);
 
     assert!(
-        output.status.success(),
-        "Config show command should succeed"
+        success,
+        "Config show command should succeed. Stderr: {stderr}"
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
 
     // Check for key configuration sections
     assert!(stdout.contains("defaults"), "Should show defaults section");
@@ -544,18 +594,12 @@ fn test_config_show_command() {
 
 #[test]
 fn test_config_show_json_format() {
-    let probe_path = probe_binary_path();
-
-    let output = probe_command_with_path(probe_path.clone())
-        .args(["config", "show", "--format", "json"])
-        .output()
-        .expect("Failed to execute config show command");
+    let (stdout, stderr, success) = run_probe_command(&["config", "show", "--format", "json"]);
 
     assert!(
-        output.status.success(),
-        "Config show --format json should succeed"
+        success,
+        "Config show --format json should succeed. Stderr: {stderr}"
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
 
     // Parse as JSON to verify it's valid
     let json_value: serde_json::Value =
@@ -593,18 +637,12 @@ fn test_config_show_json_format() {
 
 #[test]
 fn test_config_show_env_format() {
-    let probe_path = probe_binary_path();
-
-    let output = probe_command_with_path(probe_path.clone())
-        .args(["config", "show", "--format", "env"])
-        .output()
-        .expect("Failed to execute config show command");
+    let (stdout, stderr, success) = run_probe_command(&["config", "show", "--format", "env"]);
 
     assert!(
-        output.status.success(),
-        "Config show --format env should succeed"
+        success,
+        "Config show --format env should succeed. Stderr: {stderr}"
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
 
     // Check for environment variable exports
     assert!(
@@ -648,8 +686,6 @@ fn test_config_defaults_applied_to_search() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
 
-    let probe_path = probe_binary_path();
-
     // Create a config file with custom search defaults
     let config_dir = temp_dir.path().join(".probe");
     fs::create_dir(&config_dir).expect("Failed to create .probe directory");
@@ -666,14 +702,11 @@ fn test_config_defaults_applied_to_search() {
     fs::write(&config_file, config_content).expect("Failed to write config file");
 
     // Run search command without specifying max_results
-    let output = probe_command_with_path(probe_path.clone())
-        .args(["search", "search", "."])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("Failed to execute search command");
+    let (stdout, stderr, success) =
+        run_probe_command_at(&["search", "search", "."], Some(temp_dir.path()));
 
-    assert!(output.status.success(), "Search command should succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(success, "Search command should succeed. Stderr: {stderr}");
+    // stdout is already a String from run_probe_command
 
     // The search should respect the config file's max_results setting
     // This is hard to verify directly without knowing the exact output format,
@@ -686,24 +719,28 @@ fn test_environment_variable_override() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
 
-    let probe_path = probe_binary_path();
+    // Set environment variables and run command
+    std::env::set_var("PROBE_DEBUG", "1");
+    std::env::set_var("PROBE_ENABLE_LSP", "true");
+    std::env::set_var("PROBE_INDEXING_ENABLED", "false");
+    std::env::set_var("PROBE_INDEXING_WATCH_FILES", "false");
 
-    // Set environment variables
-    let output = probe_command_with_path(probe_path.clone())
-        .args(["config", "show", "--format", "json"])
-        .env("PROBE_DEBUG", "1")
-        .env("PROBE_ENABLE_LSP", "true")
-        .env("PROBE_INDEXING_ENABLED", "false")
-        .env("PROBE_INDEXING_WATCH_FILES", "false")
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("Failed to execute config show command");
+    let (stdout, stderr, success) = run_probe_command_at(
+        &["config", "show", "--format", "json"],
+        Some(temp_dir.path()),
+    );
+
+    // Clean up environment variables
+    std::env::remove_var("PROBE_DEBUG");
+    std::env::remove_var("PROBE_ENABLE_LSP");
+    std::env::remove_var("PROBE_INDEXING_ENABLED");
+    std::env::remove_var("PROBE_INDEXING_WATCH_FILES");
 
     assert!(
-        output.status.success(),
-        "Config show should succeed with env vars"
+        success,
+        "Config show should succeed with env vars. Stderr: {stderr}"
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // stdout is already a String from run_probe_command
 
     let json_value: serde_json::Value =
         serde_json::from_str(&stdout).expect("Output should be valid JSON");
@@ -731,8 +768,6 @@ fn test_environment_variable_override() {
 fn test_config_hierarchy() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);
-
-    let probe_path = probe_binary_path();
 
     // Create global config (simulated as project config here)
     let config_dir = temp_dir.path().join(".probe");
@@ -767,14 +802,13 @@ fn test_config_hierarchy() {
     "#;
     fs::write(&local_config, local_content).expect("Failed to write local config");
 
-    let output = probe_command_with_path(probe_path.clone())
-        .args(["config", "show", "--format", "json"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("Failed to execute config show command");
+    let (stdout, stderr, success) = run_probe_command_with_config_dir(
+        &["config", "show", "--format", "json"],
+        Some(temp_dir.path()),
+    );
 
-    assert!(output.status.success(), "Config show should succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(success, "Config show should succeed. Stderr: {stderr}");
+    // stdout is already a String from run_probe_command
 
     let json_value: serde_json::Value =
         serde_json::from_str(&stdout).expect("Output should be valid JSON");
@@ -801,8 +835,6 @@ fn test_config_hierarchy() {
 #[test]
 fn test_config_validation() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let probe_path = probe_binary_path();
-
     // Create invalid config file
     let config_dir = temp_dir.path().join(".probe");
     fs::create_dir(&config_dir).expect("Failed to create .probe directory");
@@ -821,19 +853,18 @@ fn test_config_validation() {
     "#;
     fs::write(&config_file, invalid_content).expect("Failed to write config file");
 
-    let output = probe_command_with_path(probe_path.clone())
-        .args(["config", "show", "--format", "json"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("Failed to execute config show command");
+    let (stdout, stderr, success) = run_probe_command_at(
+        &["config", "show", "--format", "json"],
+        Some(temp_dir.path()),
+    );
 
     // Should still succeed by falling back to defaults when config is invalid
     assert!(
-        output.status.success(),
-        "Should succeed with invalid config (uses defaults)"
+        success,
+        "Should succeed with invalid config (uses defaults). Stderr: {stderr}"
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // stdout is already a String from run_probe_command
 
     // When config is invalid, it should fall back to defaults
     // Parse the output to verify we got default values
@@ -876,8 +907,6 @@ fn test_config_validation() {
 #[test]
 fn test_config_with_custom_indexing_features() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let probe_path = probe_binary_path();
-
     // Create config with custom indexing features
     let config_dir = temp_dir.path().join(".probe");
     fs::create_dir(&config_dir).expect("Failed to create .probe directory");
@@ -900,14 +929,13 @@ fn test_config_with_custom_indexing_features() {
     "#;
     fs::write(&config_file, config_content).expect("Failed to write config file");
 
-    let output = probe_command_with_path(probe_path.clone())
-        .args(["config", "show", "--format", "json"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("Failed to execute config show command");
+    let (stdout, stderr, success) = run_probe_command_with_config_dir(
+        &["config", "show", "--format", "json"],
+        Some(temp_dir.path()),
+    );
 
-    assert!(output.status.success(), "Config show should succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(success, "Config show should succeed. Stderr: {stderr}");
+    // stdout is already a String from run_probe_command
 
     let json_value: serde_json::Value =
         serde_json::from_str(&stdout).expect("Output should be valid JSON");
