@@ -400,10 +400,20 @@ impl ProbeConfig {
         }
 
         // 2. Project config: ./.probe/settings.json
-        paths.push(PathBuf::from(".probe").join("settings.json"));
+        // Get current directory safely, handling potential junction/symlink issues
+        // If we can't get the current directory (e.g., due to junction issues), skip project configs
+        if let Ok(cwd) = env::current_dir() {
+            // Try to canonicalize to resolve symlinks/junctions, but if it fails, use the original
+            let safe_cwd = cwd.canonicalize().unwrap_or(cwd);
+            paths.push(safe_cwd.join(".probe").join("settings.json"));
 
-        // 3. Local config: ./.probe/settings.local.json
-        paths.push(PathBuf::from(".probe").join("settings.local.json"));
+            // 3. Local config: ./.probe/settings.local.json
+            paths.push(safe_cwd.join(".probe").join("settings.local.json"));
+        } else {
+            // If we can't get current directory, skip project-level configs
+            // This prevents issues with junction points on Windows
+            eprintln!("Warning: Unable to determine current directory for config loading");
+        }
 
         // 4. Custom path via environment variable - HIGHEST precedence (last wins)
         if let Ok(custom_path) = env::var("PROBE_CONFIG_PATH") {
@@ -424,9 +434,21 @@ impl ProbeConfig {
         let mut configs = Vec::new();
 
         for path in paths {
-            if path.exists() {
-                if let Ok(config) = Self::load_from_file(&path) {
-                    configs.push(config);
+            // Use metadata check instead of exists() to avoid potential issues with junctions
+            // metadata() is more reliable on Windows with junction points
+            match fs::metadata(&path) {
+                Ok(metadata) if metadata.is_file() => {
+                    if let Ok(config) = Self::load_from_file(&path) {
+                        configs.push(config);
+                    }
+                }
+                Ok(_) => {
+                    // Path exists but is not a file (could be directory, symlink, etc.)
+                    continue;
+                }
+                Err(_) => {
+                    // Path doesn't exist or can't be accessed - skip it
+                    continue;
                 }
             }
         }
