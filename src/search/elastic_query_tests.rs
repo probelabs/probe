@@ -555,3 +555,150 @@ fn test_invalid_queries() {
     assert_parse_fails("++foo"); // Multiple prefixes
     assert_parse_fails("AND OR"); // Only operators
 }
+
+#[test]
+fn test_quoted_strings() {
+    // Basic quoted string
+    assert_parse_eq(
+        "\"find_config_file\"",
+        Expr::Term {
+            keywords: vec!["find_config_file".to_string()],
+            field: None,
+            required: false,
+            excluded: false,
+            exact: true,
+        }
+    );
+
+    // Quoted string with underscores and special characters
+    assert_parse_eq(
+        "\"discover_config\"", 
+        Expr::Term {
+            keywords: vec!["discover_config".to_string()],
+            field: None,
+            required: false,
+            excluded: false,
+            exact: true,
+        }
+    );
+
+    // Multiple quoted strings with OR
+    assert_parse_eq(
+        "\"find_config_file\" OR \"discover_config\"",
+        Expr::Or(
+            Box::new(Expr::Term {
+                keywords: vec!["find_config_file".to_string()],
+                field: None,
+                required: false,
+                excluded: false,
+                exact: true,
+            }),
+            Box::new(Expr::Term {
+                keywords: vec!["discover_config".to_string()],
+                field: None,
+                required: false,
+                excluded: false,
+                exact: true,
+            })
+        )
+    );
+
+    // User's specific query pattern - complex OR with multiple quoted terms
+    assert_parse_eq(
+        "\"find_config_file\" OR \"discover_config\" OR \"load_config_files\"",
+        Expr::Or(
+            Box::new(Expr::Or(
+                Box::new(Expr::Term {
+                    keywords: vec!["find_config_file".to_string()],
+                    field: None,
+                    required: false,
+                    excluded: false,
+                    exact: true,
+                }),
+                Box::new(Expr::Term {
+                    keywords: vec!["discover_config".to_string()],
+                    field: None,
+                    required: false,
+                    excluded: false,
+                    exact: true,
+                })
+            )),
+            Box::new(Expr::Term {
+                keywords: vec!["load_config_files".to_string()],
+                field: None,
+                required: false,
+                excluded: false,
+                exact: true,
+            })
+        )
+    );
+
+    // Required quoted string
+    assert_parse_eq(
+        "+\"required_function\"",
+        Expr::Term {
+            keywords: vec!["required_function".to_string()],
+            field: None,
+            required: true,
+            excluded: false,
+            exact: true,
+        }
+    );
+
+    // Excluded quoted string
+    assert_parse_eq(
+        "-\"excluded_function\"",
+        Expr::Term {
+            keywords: vec!["excluded_function".to_string()],
+            field: None,
+            required: false,
+            excluded: true,
+            exact: true,
+        }
+    );
+
+    // Field-specific quoted string
+    assert_parse_eq(
+        "field:\"exact_value\"",
+        Expr::Term {
+            keywords: vec!["exact_value".to_string()],
+            field: Some("field".to_string()),
+            required: false,
+            excluded: false,
+            exact: true,
+        }
+    );
+
+    // Quoted string with escaped quotes
+    assert_parse_eq(
+        "\"function_with_\\\"quotes\\\"\"",
+        Expr::Term {
+            keywords: vec!["function_with_\"quotes\"".to_string()],
+            field: None,
+            required: false,
+            excluded: false,
+            exact: true,
+        }
+    );
+
+    // Mixed quoted and unquoted terms
+    assert_parse_eq(
+        "regular_term AND \"exact_term\"",
+        Expr::And(
+            Box::new(Expr::Term {
+                keywords: vec!["regular".to_string(), "term".to_string()], // "regular_term" gets tokenized
+                field: None,
+                required: false,
+                excluded: false,
+                exact: false,
+            }),
+            Box::new(Expr::Term {
+                keywords: vec!["exact_term".to_string()],
+                field: None,
+                required: false,
+                excluded: false,
+                exact: true,
+            })
+        )
+    );
+}
