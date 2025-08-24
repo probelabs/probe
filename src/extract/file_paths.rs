@@ -769,7 +769,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
         // If the path is absolute and exists, use it directly
         if path.is_absolute() && path.exists() {
             let is_test = is_test_file(&path);
-            if allow_tests || !is_test {
+            if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
                 // Symbol can be a simple name or a dot-separated path (e.g., "Class.method")
                 results.push((path, None, None, Some(symbol.to_string()), None));
             }
@@ -791,7 +791,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                     // Fall back to the original path if it exists
                     if path.exists() {
                         let is_test = is_test_file(&path);
-                        if allow_tests || !is_test {
+                        if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
                             // Symbol can be a simple name or a dot-separated path (e.g., "Class.method")
                             results.push((path, None, None, Some(symbol.to_string()), None));
                         }
@@ -953,7 +953,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                     // If the path is absolute and exists, use it directly
                     if path.is_absolute() && path.exists() {
                         let is_test = is_test_file(&path);
-                        if allow_tests || !is_test {
+                        if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
                             // Create a HashSet with just this line number
                             let mut lines_set = HashSet::new();
                             lines_set.insert(num);
@@ -987,7 +987,8 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                                 // Fall back to the original path if it exists
                                 if path.exists() {
                                     let is_test = is_test_file(&path);
-                                    if allow_tests || !is_test {
+                                    if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test)
+                                    {
                                         // Create a HashSet with just this line number
                                         let mut lines_set = HashSet::new();
                                         lines_set.insert(num);
@@ -1030,7 +1031,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
             // If the path is absolute and exists, use it directly
             if path.is_absolute() && path.exists() {
                 let is_test = is_test_file(&path);
-                if allow_tests || !is_test {
+                if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
                     results.push((path, None, None, None, None));
                 }
             } else {
@@ -1051,7 +1052,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                         // Fall back to the original path if it exists
                         if path.exists() {
                             let is_test = is_test_file(&path);
-                            if allow_tests || !is_test {
+                            if !is_ignored_by_gitignore(&path) && (allow_tests || !is_test) {
                                 results.push((path, None, None, None, None));
                             }
                         } else if debug_mode {
