@@ -720,7 +720,9 @@ async fn main() -> Result<()> {
                 timeout: args.timeout,
                 question: args.question,
                 no_gitignore: args.no_gitignore
-                    || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+                    || std::env::var("PROBE_NO_GITIGNORE")
+                        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                        .unwrap_or(false),
                 lsp: args.lsp,
             })?
         }
@@ -771,7 +773,9 @@ async fn main() -> Result<()> {
             timeout,
             question,
             no_gitignore: no_gitignore
-                || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+                || std::env::var("PROBE_NO_GITIGNORE")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false),
             lsp,
         })?,
         Some(Commands::Extract {
@@ -811,7 +815,9 @@ async fn main() -> Result<()> {
             }),
             instructions,
             no_gitignore: no_gitignore
-                || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+                || std::env::var("PROBE_NO_GITIGNORE")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false),
             lsp,
             include_stdlib,
         })?,

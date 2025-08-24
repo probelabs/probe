@@ -271,7 +271,19 @@ pub fn cleanup_test_namespace(socket_path: &Path) {
 
 /// Get base probe command with test-specific configuration
 fn probe_cmd_base(socket_path: Option<&Path>) -> Command {
-    let mut cmd = Command::new("./target/debug/probe");
+    // Use the same logic as cli_tests.rs to get the probe binary path
+    let probe_path = if let Ok(path) = std::env::var("CARGO_BIN_EXE_probe") {
+        PathBuf::from(path)
+    } else {
+        // Construct the path to the debug binary
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("target");
+        path.push("debug");
+        path.push(if cfg!(windows) { "probe.exe" } else { "probe" });
+        path
+    };
+
+    let mut cmd = Command::new(probe_path);
 
     // Set test-specific environment variables
     if let Some(socket) = socket_path {
@@ -309,125 +321,147 @@ pub fn run_probe_command_with_config(
     timeout: Duration,
     socket_path: Option<&Path>,
 ) -> Result<(String, String, bool)> {
+    use std::io::Read;
+    use std::sync::mpsc;
+
     let start = Instant::now();
 
     let mut child = probe_cmd_base(socket_path)
         .args(args)
+        .stdin(Stdio::null()) // Never wait for input - prevents hangs
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("Failed to execute probe command: probe {}", args.join(" ")))?;
 
-    // Poll until the process exits or the timeout elapses; kill on timeout.
-    loop {
-        if let Some(_status) = child.try_wait().context("Failed to poll probe process")? {
-            // Process finished; collect outputs.
-            let output = child
-                .wait_with_output()
-                .context("Failed to collect probe output")?;
+    // Take ownership of pipes immediately to drain them concurrently
+    let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
 
-            let elapsed = start.elapsed();
-            if elapsed > timeout {
-                return Err(anyhow::anyhow!(
-                    "Command timed out after {:?} (limit: {:?}): probe {}",
-                    elapsed,
-                    timeout,
-                    args.join(" ")
-                ));
-            }
+    // Drain stdout in a dedicated thread to prevent deadlock
+    let (tx_out, rx_out) = mpsc::channel::<Vec<u8>>();
+    let stdout_thread = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buf);
+        let _ = tx_out.send(buf);
+    });
 
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let mut success = output.status.success();
+    // Drain stderr in a dedicated thread to prevent deadlock
+    let (tx_err, rx_err) = mpsc::channel::<Vec<u8>>();
+    let stderr_thread = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        let _ = tx_err.send(buf);
+    });
 
-            // Some probe subcommands currently print errors but still exit 0; treat *obvious* error strings as failures in tests.
-            // Be careful not to misclassify benign phrases like "No results found."
-            if success {
-                let combined_output_lc =
-                    format!("{}{}", stdout.to_lowercase(), stderr.to_lowercase());
-                let looks_like_no_results = combined_output_lc.contains("no results found");
-                let looks_like_error = combined_output_lc.contains("error:")
-                    || combined_output_lc.contains("no such file")
-                    || combined_output_lc.contains("file does not exist")
-                    || combined_output_lc.contains("file not found")
-                    || combined_output_lc.contains("path not found")
-                    || (combined_output_lc.contains("encountered")
-                        && combined_output_lc.contains("error"));
-                if looks_like_error && !looks_like_no_results {
-                    success = false;
-                }
-            }
+    // Wait for process with timeout, using try_wait to avoid blocking
+    let mut timed_out = false;
+    let exit_status = loop {
+        if let Some(status) = child.try_wait().context("Failed to poll probe process")? {
+            break status;
+        }
 
-            // If we failed but don't have a clear, user-friendly message, synthesize one so tests have a stable string to assert on.
-            if !success {
-                let out_lc = stdout.to_lowercase();
-                let err_lc = stderr.to_lowercase();
-                let has_human_msg = out_lc.contains("error:")
-                    || err_lc.contains("error:")
-                    || out_lc.contains("invalid file")
-                    || err_lc.contains("invalid file")
-                    || out_lc.contains("no such file")
-                    || err_lc.contains("no such file")
-                    || out_lc.contains("file not found")
-                    || err_lc.contains("file not found")
-                    || out_lc.contains("path not found")
-                    || err_lc.contains("path not found");
+        if start.elapsed() >= timeout {
+            timed_out = true;
+            // Kill the child process; pipes will close and readers will finish
+            let _ = child.kill();
+            // Wait for the process to actually exit
+            break child.wait().context("Failed to wait for killed process")?;
+        }
 
-                if !has_human_msg {
-                    // Heuristically surface any path-like args to help the user.
-                    let likely_paths: Vec<&str> = args
-                        .iter()
-                        .copied()
-                        .filter(|a| {
-                            a.contains('/')
-                                || a.contains('\\')
-                                || a.ends_with(".ts")
-                                || a.ends_with(".js")
-                                || a.ends_with(".go")
-                        })
-                        .collect();
-                    // Normalize to a stable, cross-platform message that the tests can match reliably.
-                    let normalized = if likely_paths.is_empty() {
-                        "Error: file not found (one or more provided paths do not exist)"
-                            .to_string()
-                    } else {
-                        format!("Error: file not found: {}", likely_paths.join(", "))
-                    };
-                    let stderr = if stderr.is_empty() {
-                        normalized
-                    } else {
-                        format!("{stderr}\n{normalized}")
-                    };
-                    return Ok((stdout, stderr, success));
-                }
-            }
+        // Short sleep to avoid busy waiting
+        thread::sleep(Duration::from_millis(10));
+    };
 
+    // Collect outputs from reader threads (with timeout to avoid hanging)
+    let stdout_bytes = rx_out
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_else(|_| Vec::new());
+    let stderr_bytes = rx_err
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_else(|_| Vec::new());
+
+    // Join threads to clean up
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
+
+    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+
+    // Check if we timed out
+    if timed_out {
+        return Err(anyhow::anyhow!(
+            "Command timed out after {:?} (limit: {:?}): probe {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            timeout,
+            timeout,
+            args.join(" "),
+            stdout,
+            stderr
+        ));
+    }
+
+    let mut success = exit_status.success();
+
+    // Some probe subcommands currently print errors but still exit 0; treat *obvious* error strings as failures in tests.
+    // Be careful not to misclassify benign phrases like "No results found."
+    if success {
+        let combined_output_lc = format!("{}{}", stdout.to_lowercase(), stderr.to_lowercase());
+        let looks_like_no_results = combined_output_lc.contains("no results found");
+        let looks_like_error = combined_output_lc.contains("error:")
+            || combined_output_lc.contains("no such file")
+            || combined_output_lc.contains("file does not exist")
+            || combined_output_lc.contains("file not found")
+            || combined_output_lc.contains("path not found")
+            || (combined_output_lc.contains("encountered") && combined_output_lc.contains("error"));
+        if looks_like_error && !looks_like_no_results {
+            success = false;
+        }
+    }
+
+    // If we failed but don't have a clear, user-friendly message, synthesize one so tests have a stable string to assert on.
+    if !success {
+        let out_lc = stdout.to_lowercase();
+        let err_lc = stderr.to_lowercase();
+        let has_human_msg = out_lc.contains("error:")
+            || err_lc.contains("error:")
+            || out_lc.contains("invalid file")
+            || err_lc.contains("invalid file")
+            || out_lc.contains("no such file")
+            || err_lc.contains("no such file")
+            || out_lc.contains("file not found")
+            || err_lc.contains("file not found")
+            || out_lc.contains("path not found")
+            || err_lc.contains("path not found");
+
+        if !has_human_msg {
+            // Heuristically surface any path-like args to help the user.
+            let likely_paths: Vec<&str> = args
+                .iter()
+                .copied()
+                .filter(|a| {
+                    a.contains('/')
+                        || a.contains('\\')
+                        || a.ends_with(".ts")
+                        || a.ends_with(".js")
+                        || a.ends_with(".go")
+                })
+                .collect();
+            // Normalize to a stable, cross-platform message that the tests can match reliably.
+            let normalized = if likely_paths.is_empty() {
+                "Error: file not found (one or more provided paths do not exist)".to_string()
+            } else {
+                format!("Error: file not found: {}", likely_paths.join(", "))
+            };
+            let stderr = if stderr.is_empty() {
+                normalized
+            } else {
+                format!("{stderr}\n{normalized}")
+            };
             return Ok((stdout, stderr, success));
         }
-
-        // Still running?
-        if start.elapsed() >= timeout {
-            // Hard timeout: kill and surface an error, but return whatever output we can capture.
-            let _ = child.kill();
-            let output = child
-                .wait_with_output()
-                .context("Failed to collect probe output after kill")?;
-
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-            return Err(anyhow::anyhow!(
-                "Command timed out after {:?} (limit: {:?}): probe {}\n--- partial stdout ---\n{}\n--- partial stderr ---\n{}",
-                start.elapsed(),
-                timeout,
-                args.join(" "),
-                stdout,
-                stderr
-            ));
-        }
-
-        thread::sleep(Duration::from_millis(50));
     }
+
+    Ok((stdout, stderr, success))
 }
 
 /// Helper to ensure daemon is stopped (cleanup)
