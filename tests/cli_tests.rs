@@ -28,6 +28,21 @@ fn probe_binary_path() -> PathBuf {
     path
 }
 
+/// Helper function to create a probe command with CI environment set
+/// This ensures LSP is disabled during tests to prevent hanging
+fn probe_command() -> Command {
+    probe_command_with_path(probe_binary_path())
+}
+
+/// Helper function to create a probe command with a specific path and CI environment set
+fn probe_command_with_path(path: PathBuf) -> Command {
+    let mut cmd = Command::new(path);
+    // Set CI environment to disable LSP auto-initialization
+    cmd.env("CI", "1");
+    cmd.env("PROBE_LSP_DISABLE_AUTOSTART", "1");
+    cmd
+}
+
 // Helper function to create test files
 fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
     let file_path = dir.path().join(filename);
@@ -69,7 +84,7 @@ fn test_cli_basic_search() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with basic search
-    let output = Command::new(probe_binary_path())
+    let output = probe_command()
         .args([
             "search",
             "search", // Pattern to search for
@@ -107,7 +122,7 @@ fn test_cli_files_only() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with files-only option
-    let output = Command::new(probe_binary_path())
+    let output = probe_command()
         .args([
             "search",
             "search", // Pattern to search for
@@ -195,7 +210,7 @@ fn test_cli_filename_matching() {
 
     // Second test: With exclude-filenames - filename matching should be disabled
     // Run the CLI with exclude-filenames option
-    let output2 = Command::new(probe_binary_path())
+    let output2 = probe_command()
         .args([
             "search",
             "search", // Pattern to search for
@@ -501,7 +516,7 @@ fn test_config_show_command() {
     let probe_path = probe_binary_path();
 
     // Test default format (should be human-readable)
-    let output = Command::new(&probe_path)
+    let output = probe_command_with_path(probe_path.clone())
         .args(["config", "show"])
         .output()
         .expect("Failed to execute config show command");
@@ -531,7 +546,7 @@ fn test_config_show_command() {
 fn test_config_show_json_format() {
     let probe_path = probe_binary_path();
 
-    let output = Command::new(&probe_path)
+    let output = probe_command_with_path(probe_path.clone())
         .args(["config", "show", "--format", "json"])
         .output()
         .expect("Failed to execute config show command");
@@ -580,7 +595,7 @@ fn test_config_show_json_format() {
 fn test_config_show_env_format() {
     let probe_path = probe_binary_path();
 
-    let output = Command::new(&probe_path)
+    let output = probe_command_with_path(probe_path.clone())
         .args(["config", "show", "--format", "env"])
         .output()
         .expect("Failed to execute config show command");
@@ -651,7 +666,7 @@ fn test_config_defaults_applied_to_search() {
     fs::write(&config_file, config_content).expect("Failed to write config file");
 
     // Run search command without specifying max_results
-    let output = Command::new(&probe_path)
+    let output = probe_command_with_path(probe_path.clone())
         .args(["search", "search", "."])
         .current_dir(temp_dir.path())
         .output()
@@ -674,7 +689,7 @@ fn test_environment_variable_override() {
     let probe_path = probe_binary_path();
 
     // Set environment variables
-    let output = Command::new(&probe_path)
+    let output = probe_command_with_path(probe_path.clone())
         .args(["config", "show", "--format", "json"])
         .env("PROBE_DEBUG", "1")
         .env("PROBE_ENABLE_LSP", "true")
@@ -752,7 +767,7 @@ fn test_config_hierarchy() {
     "#;
     fs::write(&local_config, local_content).expect("Failed to write local config");
 
-    let output = Command::new(&probe_path)
+    let output = probe_command_with_path(probe_path.clone())
         .args(["config", "show", "--format", "json"])
         .current_dir(temp_dir.path())
         .output()
@@ -806,7 +821,7 @@ fn test_config_validation() {
     "#;
     fs::write(&config_file, invalid_content).expect("Failed to write config file");
 
-    let output = Command::new(&probe_path)
+    let output = probe_command_with_path(probe_path.clone())
         .args(["config", "show", "--format", "json"])
         .current_dir(temp_dir.path())
         .output()
@@ -885,7 +900,7 @@ fn test_config_with_custom_indexing_features() {
     "#;
     fs::write(&config_file, config_content).expect("Failed to write config file");
 
-    let output = Command::new(&probe_path)
+    let output = probe_command_with_path(probe_path.clone())
         .args(["config", "show", "--format", "json"])
         .current_dir(temp_dir.path())
         .output()

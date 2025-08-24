@@ -405,9 +405,14 @@ impl ProbeConfig {
         // 3. Local config: ./.probe/settings.local.json
         paths.push(PathBuf::from(".probe").join("settings.local.json"));
 
-        // Allow custom path override via environment variable
+        // 4. Custom path via environment variable - HIGHEST precedence (last wins)
         if let Ok(custom_path) = env::var("PROBE_CONFIG_PATH") {
-            paths.insert(0, PathBuf::from(custom_path));
+            let mut p = PathBuf::from(custom_path);
+            // If a directory is given, assume default filename inside it
+            if p.is_dir() {
+                p = p.join("settings.json");
+            }
+            paths.push(p); // Push to end for highest precedence
         }
 
         paths
@@ -431,10 +436,17 @@ impl ProbeConfig {
 
     /// Load a single configuration file
     fn load_from_file(path: &Path) -> Result<ProbeConfig> {
-        let contents =
-            fs::read_to_string(path).context(format!("Failed to read config file: {path:?}"))?;
+        // Read raw bytes to handle potential UTF-8 BOM (common on Windows)
+        let bytes = fs::read(path).context(format!("Failed to read config file: {path:?}"))?;
 
-        let config: ProbeConfig = serde_json::from_str(&contents)
+        // Strip UTF-8 BOM if present (0xEF, 0xBB, 0xBF)
+        let content_bytes = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            &bytes[3..]
+        } else {
+            &bytes[..]
+        };
+
+        let config: ProbeConfig = serde_json::from_slice(content_bytes)
             .context(format!("Failed to parse config file: {path:?}"))?;
 
         Ok(config)
@@ -1075,24 +1087,26 @@ impl ProbeConfig {
 
     /// Validate configuration values
     pub fn validate(&self) -> Result<()> {
-        // Validate format if set
+        // Validate format if set (case-insensitive)
         if let Some(ref defaults) = self.defaults {
             if let Some(ref format) = defaults.format {
                 let valid_formats = ["terminal", "markdown", "plain", "json", "xml", "color"];
-                if !valid_formats.contains(&format.as_str()) {
+                let format_lower = format.to_lowercase();
+                if !valid_formats.contains(&format_lower.as_str()) {
                     anyhow::bail!("Invalid format: {}", format);
                 }
             }
 
             if let Some(ref log_level) = defaults.log_level {
                 let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
-                if !valid_log_levels.contains(&log_level.as_str()) {
+                let level_lower = log_level.to_lowercase();
+                if !valid_log_levels.contains(&level_lower.as_str()) {
                     anyhow::bail!("Invalid log level: {}", log_level);
                 }
             }
         }
 
-        // Validate reranker if set
+        // Validate reranker if set (case-insensitive)
         if let Some(ref search) = self.search {
             if let Some(ref reranker) = search.reranker {
                 let valid_rerankers = [
@@ -1104,7 +1118,8 @@ impl ProbeConfig {
                     "ms-marco-minilm-l6",
                     "ms-marco-minilm-l12",
                 ];
-                if !valid_rerankers.contains(&reranker.as_str()) {
+                let reranker_lower = reranker.to_lowercase();
+                if !valid_rerankers.contains(&reranker_lower.as_str()) {
                     anyhow::bail!("Invalid reranker: {}", reranker);
                 }
             }
