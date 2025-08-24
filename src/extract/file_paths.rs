@@ -999,6 +999,32 @@ fn is_ignored_by_gitignore(path: &PathBuf) -> bool {
         "\\__pycache__\\", // __pycache__ directory (Python)
     ];
 
+    // Also check for paths that start with these directory names (for root level)
+    let common_root_directory_patterns = [
+        "node_modules/",
+        "node_modules\\",
+        "vendor/",
+        "vendor\\",
+        "target/",
+        "target\\",
+        "dist/",
+        "dist\\",
+        "build/",
+        "build\\",
+        ".git/",
+        ".git\\",
+        ".svn/",
+        ".svn\\",
+        ".hg/",
+        ".hg\\",
+        ".idea/",
+        ".idea\\",
+        ".vscode/",
+        ".vscode\\",
+        "__pycache__/",
+        "__pycache__\\",
+    ];
+
     // Get custom ignore patterns
     let mut custom_patterns = Vec::new();
     CUSTOM_IGNORES.with(|cell| {
@@ -1012,6 +1038,18 @@ fn is_ignored_by_gitignore(path: &PathBuf) -> bool {
             if debug_mode {
                 println!(
                     "DEBUG: File {path:?} is ignored (contains directory pattern '{pattern}')"
+                );
+            }
+            return true;
+        }
+    }
+
+    // Check if the path starts with any of the root ignore directory patterns
+    for pattern in &common_root_directory_patterns {
+        if path_str.starts_with(pattern) {
+            if debug_mode {
+                println!(
+                    "DEBUG: File {path:?} is ignored (starts with directory pattern '{pattern}')"
                 );
             }
             return true;
@@ -1057,6 +1095,7 @@ fn is_ignored_by_gitignore(path: &PathBuf) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_extract_file_paths_with_markdown_bold() {
@@ -1625,5 +1664,143 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
         // Clean up
         let _ = fs::remove_file(&test_file);
         let _ = fs::remove_dir(&test_dir);
+    }
+
+    #[test]
+    fn test_github_files_not_ignored() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create .github directory structure
+        let github_dir = temp_dir.path().join(".github");
+        let workflows_dir = github_dir.join("workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+
+        // Create a GitHub workflow file
+        let workflow_file = workflows_dir.join("ci.yml");
+        fs::write(&workflow_file, "name: CI\non: [push, pull_request]\n").unwrap();
+
+        // Create a regular .git directory that SHOULD be ignored
+        let git_dir = temp_dir.path().join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
+        let git_config = git_dir.join("config");
+        fs::write(&git_config, "[core]\n    repositoryformatversion = 0\n").unwrap();
+
+        // Test that .github files are NOT ignored
+        let results = parse_file_with_line(&workflow_file.to_string_lossy(), true);
+        assert_eq!(
+            results.len(),
+            1,
+            ".github workflow file should not be ignored"
+        );
+        assert_eq!(results[0].0, workflow_file);
+
+        // Test that .git files ARE still ignored
+        let git_results = parse_file_with_line(&git_config.to_string_lossy(), true);
+        assert_eq!(git_results.len(), 0, ".git config file should be ignored");
+    }
+
+    #[test]
+    fn test_gitignore_file_not_ignored() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a .gitignore file
+        let gitignore_file = temp_dir.path().join(".gitignore");
+        fs::write(&gitignore_file, "*.log\ntmp/\n").unwrap();
+
+        // Test that .gitignore files are NOT ignored
+        let results = parse_file_with_line(&gitignore_file.to_string_lossy(), true);
+        assert_eq!(results.len(), 1, ".gitignore file should not be ignored");
+        assert_eq!(results[0].0, gitignore_file);
+    }
+
+    #[test]
+    fn test_git_directory_patterns() {
+        use std::path::PathBuf;
+
+        // Test various path patterns with .git in them
+        let test_cases = vec![
+            // These should NOT be ignored (false positives we're fixing)
+            (".github/workflows/ci.yml", false),
+            ("docs/.github/issue_template.md", false),
+            ("project/.gitignore", false),
+            ("src/.gitkeep", false),
+            ("config/git_config.toml", false),
+            ("digital_assets/logo.png", false),
+            // These SHOULD be ignored (actual .git directory files)
+            (".git/config", true),
+            (".git/HEAD", true),
+            ("project/.git/index", true),
+            ("repo/.git/hooks/pre-commit", true),
+            ("nested/path/.git/objects/abc123", true),
+        ];
+
+        for (path_str, should_be_ignored) in test_cases {
+            let path = PathBuf::from(path_str);
+            let is_ignored = super::is_ignored_by_gitignore(&path);
+
+            if should_be_ignored {
+                assert!(
+                    is_ignored,
+                    "Path '{}' should be ignored but wasn't",
+                    path_str
+                );
+            } else {
+                assert!(
+                    !is_ignored,
+                    "Path '{}' should NOT be ignored but was",
+                    path_str
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_github_workflow_line_ranges() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create .github directory structure
+        let github_dir = temp_dir.path().join(".github");
+        let workflows_dir = github_dir.join("workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+
+        // Create a GitHub workflow file with multiple lines
+        let workflow_file = workflows_dir.join("test.yml");
+        let workflow_content = r#"name: Test Workflow
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Run tests
+      run: |
+        echo "Running tests"
+        cargo test
+"#;
+        fs::write(&workflow_file, workflow_content).unwrap();
+
+        // Test extracting specific line ranges
+        let line_range_input = format!("{}:5-10", workflow_file.to_string_lossy());
+        let results = parse_file_with_line(&line_range_input, true);
+
+        assert_eq!(
+            results.len(),
+            1,
+            "Should extract line range from .github workflow file"
+        );
+        assert_eq!(results[0].0, workflow_file);
+        assert_eq!(results[0].1, Some(5)); // start line
+        assert_eq!(results[0].2, Some(10)); // end line
     }
 }
