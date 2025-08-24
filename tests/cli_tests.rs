@@ -37,18 +37,9 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
 
     // Set the working directory if specified
     if let Some(dir) = dir {
-        // Canonicalize the directory to avoid junction issues on Windows
-        let canonical_dir = match dir.canonicalize() {
-            Ok(path) => path,
-            Err(e) => {
-                return (
-                    "".to_string(),
-                    format!("Failed to canonicalize directory: {e}"),
-                    false,
-                )
-            }
-        };
-        cmd.current_dir(canonical_dir);
+        // Don't canonicalize on Windows - it can cause stack overflows in CI environments
+        // Just use the directory as-is
+        cmd.current_dir(dir);
     }
 
     // Set test environment variables

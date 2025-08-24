@@ -401,14 +401,15 @@ impl ProbeConfig {
 
         // 2. Project config: ./.probe/settings.json
         // Get current directory safely, handling potential junction/symlink issues
-        // If we can't get the current directory (e.g., due to junction issues), skip project configs
+        // On Windows CI environments, canonicalize() can cause stack overflows with certain paths
+        // So we avoid it entirely and just use the current directory as-is
         if let Ok(cwd) = env::current_dir() {
-            // Try to canonicalize to resolve symlinks/junctions, but if it fails, use the original
-            let safe_cwd = cwd.canonicalize().unwrap_or(cwd);
-            paths.push(safe_cwd.join(".probe").join("settings.json"));
+            // Don't canonicalize - it can cause stack overflows on Windows with certain paths
+            // Just use the current directory as-is
+            paths.push(cwd.join(".probe").join("settings.json"));
 
             // 3. Local config: ./.probe/settings.local.json
-            paths.push(safe_cwd.join(".probe").join("settings.local.json"));
+            paths.push(cwd.join(".probe").join("settings.local.json"));
         } else {
             // If we can't get current directory, skip project-level configs
             // This prevents issues with junction points on Windows
