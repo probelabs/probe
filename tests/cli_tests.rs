@@ -6,31 +6,6 @@ use tempfile::TempDir;
 
 #[path = "common/mod.rs"]
 mod common;
-use common::run_probe_command_with_config;
-
-/// Helper function to get the path to the probe binary
-/// This significantly improves test performance on Windows by avoiding repeated compilation checks
-fn probe_binary_path() -> PathBuf {
-    // First, check if cargo has set the binary path for us (cargo test does this)
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_probe") {
-        return PathBuf::from(path);
-    }
-
-    // Otherwise, construct the path to the debug binary
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("target");
-    path.push("debug");
-    path.push(if cfg!(windows) { "probe.exe" } else { "probe" });
-
-    // Verify the binary exists
-    if !path.exists() {
-        panic!(
-            "Probe binary not found at {path:?}. Please run 'cargo build' before running tests."
-        );
-    }
-
-    path
-}
 
 /// Helper function to run probe command with proper pipe handling for Windows
 /// This wrapper prevents deadlocks on Windows by using concurrent pipe draining
@@ -40,95 +15,100 @@ fn run_probe_command(args: &[&str]) -> (String, String, bool) {
 
 /// Helper function to run probe command in a specific directory
 fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String, String, bool) {
-    // If we need to run in a specific directory, we'll need to handle it differently
-    // since run_probe_command_with_config doesn't support changing directory
-    if let Some(dir) = dir {
-        // Create a new command that changes to the directory first
-        let mut full_args = vec![];
-        // Change to use absolute path in arguments instead of changing directory
-        for arg in args {
-            if *arg == "." {
-                full_args.push(dir.to_str().unwrap());
-            } else {
-                full_args.push(*arg);
-            }
-        }
-        run_probe_command_with_config(&full_args, Duration::from_secs(30), None).unwrap_or_else(
-            |e| {
-                // If the command fails to run, return the error as stderr
-                ("".to_string(), e.to_string(), false)
-            },
-        )
-    } else {
-        run_probe_command_with_config(args, Duration::from_secs(30), None).unwrap_or_else(|e| {
-            // If the command fails to run, return the error as stderr
-            ("".to_string(), e.to_string(), false)
-        })
-    }
-}
-
-/// Helper function to run probe command with a specific config directory
-/// This changes the working directory so that probe finds config files in temp_dir/.probe/
-fn run_probe_command_with_config_dir(
-    args: &[&str],
-    temp_dir: Option<&std::path::Path>,
-) -> (String, String, bool) {
     use std::io::Read;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
     use std::sync::mpsc;
     use std::thread;
+    use std::time::Instant;
 
-    let mut cmd = Command::new(probe_binary_path());
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("CI", "1")
-        .env("PROBE_LSP_DISABLE_AUTOSTART", "1");
+    // Get the probe binary path
+    let probe_path = if let Ok(path) = std::env::var("CARGO_BIN_EXE_probe") {
+        PathBuf::from(path)
+    } else {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("target");
+        path.push("debug");
+        path.push(if cfg!(windows) { "probe.exe" } else { "probe" });
+        path
+    };
 
-    // Change working directory if provided so probe looks for ./.probe/ in temp directory
-    if let Some(dir) = temp_dir {
-        cmd.current_dir(dir);
+    let mut cmd = Command::new(probe_path);
+    cmd.args(args);
+
+    // Set the working directory if specified
+    if let Some(dir) = dir {
+        // Canonicalize the directory to avoid junction issues on Windows
+        let canonical_dir = match dir.canonicalize() {
+            Ok(path) => path,
+            Err(e) => {
+                return (
+                    "".to_string(),
+                    format!("Failed to canonicalize directory: {e}"),
+                    false,
+                )
+            }
+        };
+        cmd.current_dir(canonical_dir);
     }
+
+    // Set test environment variables
+    cmd.env("CI", "1");
+    cmd.env("PROBE_LSP_DISABLE_AUTOSTART", "1");
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
 
     let mut child = match cmd.spawn() {
         Ok(child) => child,
-        Err(e) => return ("".to_string(), format!("Failed to spawn probe: {e}"), false),
+        Err(e) => return ("".to_string(), e.to_string(), false),
     };
 
-    // Take ownership of pipes to drain them concurrently (prevents Windows deadlock)
+    // Take ownership of pipes immediately
     let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
     let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
 
-    // Drain stdout in a dedicated thread
-    let (tx_out, rx_out) = mpsc::channel::<Vec<u8>>();
+    // Drain pipes concurrently to prevent deadlock
+    let (tx_out, rx_out) = mpsc::channel();
     let stdout_thread = thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = stdout_pipe.read_to_end(&mut buf);
         let _ = tx_out.send(buf);
     });
 
-    // Drain stderr in a dedicated thread
-    let (tx_err, rx_err) = mpsc::channel::<Vec<u8>>();
+    let (tx_err, rx_err) = mpsc::channel();
     let stderr_thread = thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = stderr_pipe.read_to_end(&mut buf);
         let _ = tx_err.send(buf);
     });
 
-    // Wait for process
-    let status = match child.wait() {
-        Ok(status) => status,
-        Err(e) => {
-            return (
-                "".to_string(),
-                format!("Failed to wait for probe: {e}"),
-                false,
-            )
+    // Wait for process with timeout
+    let start = Instant::now();
+    let timeout = Duration::from_secs(30);
+    let exit_status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    match child.wait() {
+                        Ok(status) => break status,
+                        Err(e) => return ("".to_string(), format!("Failed to wait: {e}"), false),
+                    }
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => {
+                return (
+                    "".to_string(),
+                    format!("Failed to poll process: {e}"),
+                    false,
+                )
+            }
         }
     };
 
-    // Collect outputs from reader threads
+    // Collect outputs
     let stdout_bytes = rx_out
         .recv_timeout(Duration::from_secs(5))
         .unwrap_or_else(|_| Vec::new());
@@ -136,15 +116,22 @@ fn run_probe_command_with_config_dir(
         .recv_timeout(Duration::from_secs(5))
         .unwrap_or_else(|_| Vec::new());
 
-    // Join threads to clean up
     let _ = stdout_thread.join();
     let _ = stderr_thread.join();
 
     let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
     let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
-    let success = status.success();
 
-    (stdout, stderr, success)
+    (stdout, stderr, exit_status.success())
+}
+
+// Helper to run probe with a specific config directory as the working directory
+fn run_probe_with_config_dir(
+    args: &[&str],
+    config_dir: &std::path::Path,
+) -> (String, String, bool) {
+    // Run probe in the specified directory so it finds .probe/settings.json there
+    run_probe_command_at(args, Some(config_dir))
 }
 
 // Helper function to create test files
@@ -802,10 +789,9 @@ fn test_config_hierarchy() {
     "#;
     fs::write(&local_config, local_content).expect("Failed to write local config");
 
-    let (stdout, stderr, success) = run_probe_command_with_config_dir(
-        &["config", "show", "--format", "json"],
-        Some(temp_dir.path()),
-    );
+    // Use config path helper to point probe to the temp directory's config
+    let (stdout, stderr, success) =
+        run_probe_with_config_dir(&["config", "show", "--format", "json"], temp_dir.path());
 
     assert!(success, "Config show should succeed. Stderr: {stderr}");
     // stdout is already a String from run_probe_command
@@ -929,10 +915,9 @@ fn test_config_with_custom_indexing_features() {
     "#;
     fs::write(&config_file, config_content).expect("Failed to write config file");
 
-    let (stdout, stderr, success) = run_probe_command_with_config_dir(
-        &["config", "show", "--format", "json"],
-        Some(temp_dir.path()),
-    );
+    // Use config path helper to point probe to the temp directory's config
+    let (stdout, stderr, success) =
+        run_probe_with_config_dir(&["config", "show", "--format", "json"], temp_dir.path());
 
     assert!(success, "Config show should succeed. Stderr: {stderr}");
     // stdout is already a String from run_probe_command
