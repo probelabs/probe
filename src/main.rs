@@ -521,9 +521,26 @@ async fn main() -> Result<()> {
             eprintln!("Initializing LSP features...");
         }
 
-        if let Err(e) = LspManager::ensure_ready().await {
-            eprintln!("Warning: LSP initialization failed: {e}");
-            eprintln!("Continuing without LSP features...");
+        // Add timeout to prevent hanging, especially in CI environments
+        let timeout_duration =
+            if std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
+                std::time::Duration::from_secs(10) // Shorter timeout in CI
+            } else {
+                std::time::Duration::from_secs(30) // Normal timeout for interactive use
+            };
+
+        match tokio::time::timeout(timeout_duration, LspManager::ensure_ready()).await {
+            Ok(Ok(())) => {
+                // LSP initialization succeeded
+            }
+            Ok(Err(e)) => {
+                eprintln!("Warning: LSP initialization failed: {e}");
+                eprintln!("Continuing without LSP features...");
+            }
+            Err(_) => {
+                eprintln!("Warning: LSP initialization timed out after {timeout_duration:?}");
+                eprintln!("Continuing without LSP features...");
+            }
         }
     }
 

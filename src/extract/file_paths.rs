@@ -1087,59 +1087,38 @@ fn is_ignored_by_gitignore(path: &PathBuf) -> bool {
     let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Simple check for common ignore patterns in the path
-    let path_str = path.to_string_lossy();
+    // Normalize path separators for cross-platform compatibility
+    let path_str = path.to_string_lossy().replace('\\', "/");
 
     // Check for common ignore directory patterns directly in the path
     // These patterns should match directory boundaries, not arbitrary substrings
     let common_directory_patterns = [
         "/node_modules/",
-        "\\node_modules\\", // node_modules directory
         "/vendor/",
-        "\\vendor\\", // vendor directory
-        "/target/",
-        "\\target\\", // target directory (Rust)
+        "/target/", // target directory (Rust)
         "/dist/",
-        "\\dist\\", // dist directory
         "/build/",
-        "\\build\\", // build directory
         "/.git/",
-        "\\.git\\", // .git directory
         "/.svn/",
-        "\\.svn\\", // .svn directory
         "/.hg/",
-        "\\.hg\\", // .hg directory
-        "/.idea/",
-        "\\.idea\\", // .idea directory (IntelliJ)
+        "/.idea/", // .idea directory (IntelliJ)
         "/.vscode/",
-        "\\.vscode\\", // .vscode directory
-        "/__pycache__/",
-        "\\__pycache__\\", // __pycache__ directory (Python)
+        "/__pycache__/", // __pycache__ directory (Python)
     ];
 
     // Also check for paths that start with these directory names (for root level)
     let common_root_directory_patterns = [
         "node_modules/",
-        "node_modules\\",
         "vendor/",
-        "vendor\\",
         "target/",
-        "target\\",
         "dist/",
-        "dist\\",
         "build/",
-        "build\\",
         ".git/",
-        ".git\\",
         ".svn/",
-        ".svn\\",
         ".hg/",
-        ".hg\\",
         ".idea/",
-        ".idea\\",
         ".vscode/",
-        ".vscode\\",
         "__pycache__/",
-        "__pycache__\\",
     ];
 
     // Get custom ignore patterns
@@ -1174,21 +1153,15 @@ fn is_ignored_by_gitignore(path: &PathBuf) -> bool {
     }
 
     // Also check if the path ends with these directories (for root level matching)
+    // Since we normalized path separators to forward slashes, we only need to check forward slash patterns
     let path_lowercase = path_str.to_lowercase();
     if path_lowercase.ends_with("/node_modules")
-        || path_lowercase.ends_with("\\node_modules")
         || path_lowercase.ends_with("/.git")
-        || path_lowercase.ends_with("\\.git")
         || path_lowercase.ends_with("/.svn")
-        || path_lowercase.ends_with("\\.svn")
         || path_lowercase.ends_with("/.hg")
-        || path_lowercase.ends_with("\\.hg")
         || path_lowercase.ends_with("/.idea")
-        || path_lowercase.ends_with("\\.idea")
         || path_lowercase.ends_with("/.vscode")
-        || path_lowercase.ends_with("\\.vscode")
         || path_lowercase.ends_with("/__pycache__")
-        || path_lowercase.ends_with("\\__pycache__")
     {
         if debug_mode {
             println!("DEBUG: File {path:?} is ignored (ends with ignore directory)");
