@@ -970,21 +970,33 @@ fn is_ignored_by_gitignore(path: &PathBuf) -> bool {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Simple check for common ignore patterns in the path
-    let path_str = path.to_string_lossy().to_lowercase();
+    let path_str = path.to_string_lossy();
 
-    // Check for common ignore patterns directly in the path
-    let common_ignore_patterns = [
-        "node_modules",
-        "vendor",
-        "target",
-        "dist",
-        "build",
-        ".git",
-        ".svn",
-        ".hg",
-        ".idea",
-        ".vscode",
-        "__pycache__",
+    // Check for common ignore directory patterns directly in the path
+    // These patterns should match directory boundaries, not arbitrary substrings
+    let common_directory_patterns = [
+        "/node_modules/",
+        "\\node_modules\\", // node_modules directory
+        "/vendor/",
+        "\\vendor\\", // vendor directory
+        "/target/",
+        "\\target\\", // target directory (Rust)
+        "/dist/",
+        "\\dist\\", // dist directory
+        "/build/",
+        "\\build\\", // build directory
+        "/.git/",
+        "\\.git\\", // .git directory
+        "/.svn/",
+        "\\.svn\\", // .svn directory
+        "/.hg/",
+        "\\.hg\\", // .hg directory
+        "/.idea/",
+        "\\.idea\\", // .idea directory (IntelliJ)
+        "/.vscode/",
+        "\\.vscode\\", // .vscode directory
+        "/__pycache__/",
+        "\\__pycache__\\", // __pycache__ directory (Python)
     ];
 
     // Get custom ignore patterns
@@ -994,17 +1006,42 @@ fn is_ignored_by_gitignore(path: &PathBuf) -> bool {
         custom_patterns.extend(ignores.iter().cloned());
     });
 
-    // Check if the path contains any of the common ignore patterns
-    for pattern in &common_ignore_patterns {
+    // Check if the path contains any of the common ignore directory patterns
+    for pattern in &common_directory_patterns {
         if path_str.contains(pattern) {
             if debug_mode {
-                println!("DEBUG: File {path:?} is ignored (contains pattern '{pattern}')");
+                println!(
+                    "DEBUG: File {path:?} is ignored (contains directory pattern '{pattern}')"
+                );
             }
             return true;
         }
     }
 
-    // Check if the path contains any of the custom ignore patterns
+    // Also check if the path ends with these directories (for root level matching)
+    let path_lowercase = path_str.to_lowercase();
+    if path_lowercase.ends_with("/node_modules")
+        || path_lowercase.ends_with("\\node_modules")
+        || path_lowercase.ends_with("/.git")
+        || path_lowercase.ends_with("\\.git")
+        || path_lowercase.ends_with("/.svn")
+        || path_lowercase.ends_with("\\.svn")
+        || path_lowercase.ends_with("/.hg")
+        || path_lowercase.ends_with("\\.hg")
+        || path_lowercase.ends_with("/.idea")
+        || path_lowercase.ends_with("\\.idea")
+        || path_lowercase.ends_with("/.vscode")
+        || path_lowercase.ends_with("\\.vscode")
+        || path_lowercase.ends_with("/__pycache__")
+        || path_lowercase.ends_with("\\__pycache__")
+    {
+        if debug_mode {
+            println!("DEBUG: File {path:?} is ignored (ends with ignore directory)");
+        }
+        return true;
+    }
+
+    // Check if the path contains any of the custom ignore patterns (keep original logic for custom patterns)
     for pattern in &custom_patterns {
         if path_str.contains(pattern) {
             if debug_mode {
