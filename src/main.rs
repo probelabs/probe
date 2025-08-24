@@ -481,14 +481,19 @@ async fn main() -> Result<()> {
     // Apply config defaults to CLI args where not specified
     apply_config_defaults(&mut args, config);
 
+    // Store whether the user explicitly passed --lsp before config defaults were applied
+    let explicit_lsp = std::env::args().any(|arg| arg == "--lsp");
+
     // Auto-initialize LSP when explicitly requested via --lsp flag
     // IMPORTANT: Never auto-initialize for LSP management commands to prevent infinite loops!
+    // In CI environments, only initialize LSP if explicitly requested by the user
+    let is_ci = std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok();
     let needs_lsp = match &args.command {
         // LSP subcommands handle their own initialization - NEVER auto-init for them
         Some(Commands::Lsp { .. }) => false,
-        Some(Commands::Search { lsp, .. }) if *lsp => true,
-        Some(Commands::Extract { lsp, .. }) if *lsp => true,
-        None if args.lsp => true, // Default mode with --lsp flag
+        Some(Commands::Search { lsp, .. }) if *lsp => !is_ci || explicit_lsp,
+        Some(Commands::Extract { lsp, .. }) if *lsp => !is_ci || explicit_lsp,
+        None if args.lsp => !is_ci || explicit_lsp, // Default mode with --lsp flag
         _ => false,
     };
 
@@ -913,25 +918,27 @@ fn handle_config_command(subcommand: &cli::ConfigSubcommands) -> Result<()> {
             let config_path = if let Some(path) = file {
                 std::path::PathBuf::from(path)
             } else {
-                // Use default config path
-                // Get default config path
-                #[cfg(target_os = "windows")]
-                let default_path = {
-                    let userprofile = std::env::var("USERPROFILE")
-                        .unwrap_or_else(|_| "C:\\Users\\Default".to_string());
-                    std::path::PathBuf::from(userprofile)
-                        .join(".probe")
-                        .join("settings.json")
-                };
-                #[cfg(not(target_os = "windows"))]
-                let default_path = {
-                    let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
-                    std::path::PathBuf::from(home)
-                        .join(".probe")
-                        .join("settings.json")
-                };
-
-                default_path
+                // Use default config path with robust cross-platform support
+                if let Some(home_dir) = dirs::home_dir() {
+                    home_dir.join(".probe").join("settings.json")
+                } else {
+                    // Fallback to environment variables if dirs crate fails
+                    #[cfg(target_os = "windows")]
+                    {
+                        let userprofile = std::env::var("USERPROFILE")
+                            .unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+                        std::path::PathBuf::from(userprofile)
+                            .join(".probe")
+                            .join("settings.json")
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+                        std::path::PathBuf::from(home)
+                            .join(".probe")
+                            .join("settings.json")
+                    }
+                }
             };
 
             if !config_path.exists() {
