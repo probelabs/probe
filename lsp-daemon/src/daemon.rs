@@ -141,7 +141,7 @@ impl LspDaemon {
             invalidation_depth: 2, // Invalidate connected nodes up to depth 2
             // Persistence settings (can be overridden by environment variables)
             // IMPORTANT: Always disable persistence in CI to prevent hanging
-            persistence_enabled: if std::env::var("CI").is_ok()
+            persistence_enabled: if std::env::var("PROBE_CI").is_ok()
                 || std::env::var("GITHUB_ACTIONS").is_ok()
             {
                 false // Force disable in CI
@@ -174,7 +174,7 @@ impl LspDaemon {
         cache_config: CallGraphCacheConfig,
     ) -> Result<Self> {
         // Log CI environment detection and persistence status
-        if std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
+        if std::env::var("PROBE_CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
             info!("CI environment detected - persistence disabled to prevent hanging");
         }
         info!(
@@ -207,8 +207,9 @@ impl LspDaemon {
             .with(memory_layer)
             .with(filter);
 
-        // If LSP_LOG is set, also add stderr logging
-        if std::env::var("LSP_LOG").is_ok() {
+        // If PROBE_LOG_LEVEL is set to debug or trace, also add stderr logging
+        let log_level = std::env::var("PROBE_LOG_LEVEL").unwrap_or_default();
+        if log_level == "debug" || log_level == "trace" {
             use tracing_subscriber::fmt;
 
             let fmt_layer = fmt::layer().with_target(false).with_writer(std::io::stderr);
@@ -227,7 +228,7 @@ impl LspDaemon {
         let process_monitor = Arc::new(ProcessMonitor::with_limits(80.0, 1024)); // 80% CPU, 1GB memory
 
         // Initialize indexing grace period from environment variable
-        let index_grace_secs = std::env::var("LSP_INDEX_GRACE_SECS")
+        let index_grace_secs = std::env::var("PROBE_LSP_INDEX_GRACE_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(30); // Default 30 seconds for language server indexing
@@ -319,14 +320,32 @@ impl LspDaemon {
             hover_cache.clone(),
         ));
 
-        // Load indexing configuration
-        let indexing_config = Arc::new(RwLock::new(IndexingConfig::load().unwrap_or_else(|e| {
+        // Load indexing configuration with updated defaults
+        let mut indexing_config = IndexingConfig::load().unwrap_or_else(|e| {
             warn!(
                 "Failed to load indexing configuration: {}. Using defaults.",
                 e
             );
             IndexingConfig::default()
-        })));
+        });
+
+        // Override from environment if set - these take priority
+        if let Ok(val) = std::env::var("PROBE_INDEXING_ENABLED") {
+            indexing_config.enabled = val == "true" || val == "1";
+        }
+        if let Ok(val) = std::env::var("PROBE_INDEXING_AUTO_INDEX") {
+            indexing_config.auto_index = val == "true" || val == "1";
+        }
+        if let Ok(val) = std::env::var("PROBE_INDEXING_WATCH_FILES") {
+            indexing_config.watch_files = val == "true" || val == "1";
+        }
+
+        info!(
+            "Loaded indexing configuration (enabled={}, auto_index={}, watch_files={})",
+            indexing_config.enabled, indexing_config.auto_index, indexing_config.watch_files
+        );
+
+        let indexing_config = Arc::new(RwLock::new(indexing_config));
 
         Ok(Self {
             socket_path,
@@ -1805,7 +1824,7 @@ impl LspDaemon {
         let content = fs::read_to_string(&absolute_file_path)?;
 
         // Adaptive timing for Go/TypeScript in CI environments
-        let is_ci = std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok();
+        let is_ci = std::env::var("PROBE_CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok();
         // New strategy: probe immediately, then back off. This removes unconditional sleeps
         // and avoids blowing up test budgets, especially in "initialization timeout" paths.
         let (initial_wait, max_attempts, retry_delay) = match language {

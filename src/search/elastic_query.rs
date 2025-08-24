@@ -160,7 +160,7 @@ impl Expr {
             return false;
         }
 
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
         // CRITICAL FIX: Check required terms FIRST before any other evaluation
         // In Lucene semantics, if ANY required term is missing, the entire query fails
@@ -383,7 +383,7 @@ impl Expr {
             return false;
         }
 
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
         // If ignoring negatives, let's ensure that all required terms are present up front.
         // (We skip enforcing them again for each subtree.)
@@ -554,7 +554,7 @@ fn make_term(
 fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
     let mut chars = input.chars().peekable();
     let mut tokens = Vec::new();
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     while let Some(&ch) = chars.peek() {
         match ch {
@@ -693,7 +693,7 @@ impl Parser {
     }
 
     fn parse_or_expr(&mut self) -> Result<Expr, ParseError> {
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
         if debug_mode {
             println!("DEBUG: parse_or_expr => pos={pos}", pos = self.pos);
         }
@@ -712,7 +712,7 @@ impl Parser {
     }
 
     fn parse_and_expr(&mut self) -> Result<Expr, ParseError> {
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
         if debug_mode {
             println!("DEBUG: parse_and_expr => pos={pos}", pos = self.pos);
         }
@@ -774,7 +774,7 @@ impl Parser {
     fn parse_prefixed_term(&mut self) -> Result<Expr, ParseError> {
         let mut required = false;
         let mut excluded = false;
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
         match self.peek() {
             Some(Token::Plus) => {
@@ -831,7 +831,7 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
         match self.peek() {
             // Quoted => exact
@@ -882,7 +882,7 @@ impl Parser {
 
 /// Parse the query string into an AST
 pub fn parse_query(input: &str, exact: bool) -> Result<Expr, ParseError> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("DEBUG: parse_query('{input}', exact={exact})");

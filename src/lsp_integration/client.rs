@@ -457,7 +457,7 @@ impl LspClient {
         line: u32,
         start_column: u32,
     ) -> Result<CallHierarchyInfo> {
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
         if debug_mode {
             println!(

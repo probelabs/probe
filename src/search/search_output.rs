@@ -39,7 +39,7 @@ pub fn format_and_print_search_results(
     skipped_files: Option<&[SearchResult]>,
     limits: Option<&probe_code::models::SearchLimits>,
 ) {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Count valid results (with non-empty file names)
     let valid_results: Vec<&SearchResult> = results.iter().filter(|r| !r.file.is_empty()).collect();
@@ -991,7 +991,7 @@ fn format_and_print_json_results(
     let json_results: Vec<JsonResult> = results
         .iter()
         .map(|r| {
-            if std::env::var("DEBUG").is_ok() {
+            if std::env::var("PROBE_DEBUG").is_ok() {
                 if r.lsp_info.is_some() {
                     eprintln!(
                         "DEBUG format_json: Result has LSP info for file {} at lines {:?}",

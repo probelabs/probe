@@ -6,7 +6,7 @@ use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 
 // Default capacity can be overridden at runtime:
-//   LSP_LOG_BUFFER_CAPACITY=20000
+//   PROBE_LSP_LOG_BUFFER_CAPACITY=20000
 const DEFAULT_LOG_CAPACITY: usize = 10_000;
 
 /// Thread-safe circular buffer for storing log entries
@@ -20,7 +20,7 @@ pub struct LogBuffer {
 impl LogBuffer {
     /// Create a new empty log buffer
     pub fn new() -> Self {
-        let capacity = std::env::var("LSP_LOG_BUFFER_CAPACITY")
+        let capacity = std::env::var("PROBE_LSP_LOG_BUFFER_CAPACITY")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|&n| n > 0)

@@ -51,34 +51,33 @@ pub fn calculate_fibonacci(n: usize) -> u64 {
 
 #### Configuration
 
-```toml
-# .probe-lsp.toml
-[indexing.language_configs.rust]
-enabled = true
-max_workers = 2
-memory_budget_mb = 512
-timeout_ms = 45000  # Rust can be slow to initialize
-file_extensions = ["rs"]
-exclude_patterns = [
-    "**/target/**",     # Build artifacts
-    "**/benches/**",    # Benchmarks
-    "**/examples/**"    # Examples (optional)
-]
-priority = 100
-
-[indexing.language_configs.rust.features]
-call_graphs = true
-macro_expansion = true      # Enable macro expansion analysis
-trait_resolution = true     # Resolve trait implementations
-proc_macros = true         # Support procedural macros
-cross_crate_analysis = true # Analyze dependencies
-
-[indexing.language_configs.rust.parser_config]
-# rust-analyzer specific settings
-"rust-analyzer.cargo.loadOutDirsFromCheck" = true
-"rust-analyzer.procMacro.enable" = true
-"rust-analyzer.cargo.runBuildScripts" = true
-"rust-analyzer.checkOnSave.command" = "check"
+```json
+// ./.probe/settings.json
+{
+  "indexing": {
+    "language_configs": {
+      "rust": {
+        "enabled": true,
+        "max_workers": 2,
+        "memory_budget_mb": 512,
+        "timeout_ms": 45000,
+        "file_extensions": ["rs"],
+        "exclude_patterns": [
+          "**/target/**",
+          "**/benches/**",
+          "**/examples/**"
+        ],
+        "priority": 100,
+        "features": {
+          "extract_macros": true,
+          "extract_traits": true,
+          "extract_lifetimes": true,
+          "extract_async": true
+        }
+      }
+    }
+  }
+}
 ```
 
 #### Environment Variables
@@ -178,35 +177,35 @@ export async function fetchUserData(id: string): Promise<ApiResponse<User>> {
 
 #### Configuration
 
-```toml
-# .probe-lsp.toml
-[indexing.language_configs.typescript]
-enabled = true
-max_workers = 2
-memory_budget_mb = 256
-timeout_ms = 25000
-file_extensions = ["ts", "tsx", "js", "jsx", "mjs"]
-exclude_patterns = [
-    "**/node_modules/**",
-    "**/dist/**",
-    "**/build/**",
-    "**/.next/**",
-    "**/coverage/**"
-]
-priority = 90
-
-[indexing.language_configs.typescript.features]
-call_graphs = true
-type_checking = true
-jsx_analysis = true
-module_resolution = true
-declaration_maps = true
-
-[indexing.language_configs.typescript.parser_config]
-# TypeScript language server settings
-"typescript.preferences.includePackageJsonAutoImports" = "auto"
-"typescript.suggest.autoImports" = true
-"typescript.preferences.importModuleSpecifier" = "relative"
+```json
+// ./.probe/settings.json
+{
+  "indexing": {
+    "language_configs": {
+      "typescript": {
+        "enabled": true,
+        "max_workers": 2,
+        "memory_budget_mb": 256,
+        "timeout_ms": 25000,
+        "file_extensions": ["ts", "tsx", "js", "jsx", "mjs"],
+        "exclude_patterns": [
+          "**/node_modules/**",
+          "**/dist/**",
+          "**/build/**",
+          "**/.next/**",
+          "**/coverage/**"
+        ],
+        "priority": 90,
+        "features": {
+          "extract_interfaces": true,
+          "extract_decorators": true,
+          "extract_jsx": true,
+          "extract_types": true
+        }
+      }
+    }
+  }
+}
 ```
 
 #### Environment Variables
@@ -285,37 +284,34 @@ class UserRepository:
 
 #### Configuration
 
-```toml
-# .probe-lsp.toml
-[indexing.language_configs.python]
-enabled = true
-max_workers = 1
-memory_budget_mb = 128
-timeout_ms = 20000
-file_extensions = ["py", "pyi", "pyw"]
-exclude_patterns = [
-    "**/__pycache__/**",
-    "**/venv/**",
-    "**/env/**",
-    "**/.pytest_cache/**",
-    "**/build/**",
-    "**/dist/**"
-]
-priority = 80
-
-[indexing.language_configs.python.features]
-call_graphs = true
-import_analysis = true
-type_hints = true
-docstring_analysis = true
-virtual_env_support = true
-
-[indexing.language_configs.python.parser_config]
-# pylsp specific settings
-"pylsp.plugins.pycodestyle.enabled" = false
-"pylsp.plugins.pyflakes.enabled" = true
-"pylsp.plugins.pylint.enabled" = false
-"pylsp.plugins.rope_completion.enabled" = true
+```json
+// ./.probe/settings.json
+{
+  "indexing": {
+    "language_configs": {
+      "python": {
+        "enabled": true,
+        "max_workers": 1,
+        "memory_budget_mb": 128,
+        "timeout_ms": 20000,
+        "file_extensions": ["py", "pyi", "pyw"],
+        "exclude_patterns": [
+          "**/__pycache__/**",
+          "**/venv/**",
+          "**/.venv/**",
+          "**/site-packages/**"
+        ],
+        "priority": 85,
+        "features": {
+          "extract_decorators": true,
+          "extract_docstrings": true,
+          "extract_async": true,
+          "extract_type_hints": true
+        }
+      }
+    }
+  }
+}
 ```
 
 #### Environment Variables
@@ -403,31 +399,31 @@ func (s *UserService) fetchFromAPI(ctx context.Context, path string) (*User, err
 
 #### Configuration
 
-```toml
-# .probe-lsp.toml
-[indexing.language_configs.go]
-enabled = true
-max_workers = 2
-memory_budget_mb = 256
-timeout_ms = 20000
-file_extensions = ["go"]
-exclude_patterns = [
-    "**/vendor/**",
-    "**/testdata/**"
-]
-priority = 85
-
-[indexing.language_configs.go.features]
-call_graphs = true
-package_analysis = true
-interface_analysis = true
-method_sets = true
-
-[indexing.language_configs.go.parser_config]
-# gopls specific settings
-"gopls.analyses.unusedparams" = true
-"gopls.analyses.shadow" = true
-"gopls.staticcheck" = true
+```json
+// ./.probe/settings.json
+{
+  "indexing": {
+    "language_configs": {
+      "go": {
+        "enabled": true,
+        "max_workers": 2,
+        "memory_budget_mb": 256,
+        "timeout_ms": 20000,
+        "file_extensions": ["go"],
+        "exclude_patterns": [
+          "**/vendor/**",
+          "**/*_test.go"
+        ],
+        "priority": 90,
+        "features": {
+          "extract_interfaces": true,
+          "extract_channels": true,
+          "extract_goroutines": true
+        }
+      }
+    }
+  }
+}
 ```
 
 #### Environment Variables
@@ -481,31 +477,32 @@ public class UserController {
 
 #### Configuration
 
-```toml
-# .probe-lsp.toml
-[indexing.language_configs.java]
-enabled = true
-max_workers = 1
-memory_budget_mb = 512
-timeout_ms = 60000  # Java can be slow
-file_extensions = ["java"]
-exclude_patterns = [
-    "**/target/**",
-    "**/build/**",
-    "**/.gradle/**"
-]
-priority = 75
-
-[indexing.language_configs.java.features]
-call_graphs = true
-inheritance_analysis = true
-annotation_processing = true
-classpath_resolution = true
-
-[indexing.language_configs.java.parser_config]
-# JDT specific settings
-"java.configuration.updateBuildConfiguration" = "automatic"
-"java.compile.nullAnalysis.mode" = "automatic"
+```json
+// ./.probe/settings.json
+{
+  "indexing": {
+    "language_configs": {
+      "java": {
+        "enabled": true,
+        "max_workers": 1,
+        "memory_budget_mb": 512,
+        "timeout_ms": 60000,
+        "file_extensions": ["java"],
+        "exclude_patterns": [
+          "**/target/**",
+          "**/build/**",
+          "**/out/**"
+        ],
+        "priority": 85,
+        "features": {
+          "extract_annotations": true,
+          "extract_generics": true,
+          "extract_interfaces": true
+        }
+      }
+    }
+  }
+}
 ```
 
 ### C/C++
@@ -551,29 +548,32 @@ public:
 
 #### Configuration
 
-```toml
-# .probe-lsp.toml
-[indexing.language_configs.cpp]
-enabled = true
-max_workers = 2
-memory_budget_mb = 256
-timeout_ms = 25000
-file_extensions = ["c", "cpp", "cc", "cxx", "h", "hpp", "hxx"]
-exclude_patterns = [
-    "**/build/**",
-    "**/cmake-build-*/**"
-]
-priority = 70
-
-[indexing.language_configs.cpp.features]
-call_graphs = true
-template_analysis = true
-macro_expansion = true
-header_resolution = true
-
-[indexing.language_configs.cpp.parser_config]
-# clangd specific settings
-"clangd.fallbackFlags" = ["-std=c++17"]
+```json
+// ./.probe/settings.json
+{
+  "indexing": {
+    "language_configs": {
+      "cpp": {
+        "enabled": true,
+        "max_workers": 2,
+        "memory_budget_mb": 256,
+        "timeout_ms": 25000,
+        "file_extensions": ["c", "cpp", "cc", "cxx", "h", "hpp", "hxx"],
+        "exclude_patterns": [
+          "**/build/**",
+          "**/cmake-build-*/**",
+          "**/.cache/**"
+        ],
+        "priority": 80,
+        "features": {
+          "extract_templates": true,
+          "extract_namespaces": true,
+          "extract_classes": true
+        }
+      }
+    }
+  }
+}
 ```
 
 ## Multi-Language Projects
@@ -605,24 +605,24 @@ my-project/
 
 ### Configuration Priorities
 
-```toml
-# .probe-lsp.toml
-[indexing]
-priority_languages = ["rust", "typescript", "python"]
-disabled_languages = ["java"]  # Skip if not needed
-
-# Language-specific resource allocation
-[indexing.language_configs.rust]
-memory_budget_mb = 512
-max_workers = 2
-
-[indexing.language_configs.typescript]
-memory_budget_mb = 256
-max_workers = 2
-
-[indexing.language_configs.python]
-memory_budget_mb = 128
-max_workers = 1
+```json
+// ./.probe/settings.json
+{
+  "indexing": {
+    "priority_languages": ["rust", "typescript", "python"],
+    "disabled_languages": ["java"],
+    "language_configs": {
+      "rust": {
+        "memory_budget_mb": 512,
+        "max_workers": 2
+      },
+      "typescript": {
+        "memory_budget_mb": 256,
+        "max_workers": 2
+      }
+    }
+  }
+}
 ```
 
 ## Language Server Troubleshooting
@@ -697,44 +697,44 @@ probe lsp debug server rust
 
 ### Memory-Constrained Environments
 
-```toml
-# Low-memory configuration
-[indexing]
-memory_budget_mb = 256
-max_workers = 1
-
-[indexing.language_configs.rust]
-memory_budget_mb = 128
-max_workers = 1
-
-[indexing.language_configs.typescript]
-memory_budget_mb = 64
-max_workers = 1
-
-[indexing.language_configs.python]
-memory_budget_mb = 32
-max_workers = 1
+```json
+// Low-memory configuration
+{
+  "indexing": {
+    "max_workers": 1,
+    "memory_budget_mb": 128,
+    "features": {
+      "build_call_graph": false,
+      "analyze_complexity": false,
+      "extract_literals": false
+    }
+  }
+}
 ```
 
 ### High-Performance Environments
 
-```toml
-# High-performance configuration
-[indexing]
-memory_budget_mb = 2048
-max_workers = 8
-
-[indexing.language_configs.rust]
-memory_budget_mb = 1024
-max_workers = 3
-
-[indexing.language_configs.typescript]
-memory_budget_mb = 512
-max_workers = 2
-
-[indexing.language_configs.python]
-memory_budget_mb = 256
-max_workers = 2
+```json
+// High-performance configuration
+{
+  "indexing": {
+    "max_workers": 8,
+    "memory_budget_mb": 2048,
+    "features": {
+      "build_call_graph": true,
+      "analyze_complexity": true,
+      "extract_functions": true,
+      "extract_types": true,
+      "extract_variables": true,
+      "extract_imports": true,
+      "extract_docs": true
+    },
+    "lsp_caching": {
+      "cache_during_indexing": true,
+      "preload_common_symbols": true
+    }
+  }
+}
 ```
 
 ## Next Steps

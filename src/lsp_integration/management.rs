@@ -743,7 +743,7 @@ impl LspManager {
     /// Start embedded LSP daemon
     async fn start_embedded_daemon(
         socket: Option<String>,
-        log_level: String,
+        _log_level: String,
         foreground: bool,
     ) -> Result<()> {
         // Check if we're being run via cargo and warn about potential conflicts
@@ -760,7 +760,8 @@ impl LspManager {
 
         // Don't initialize tracing here - let the daemon handle it with memory logging
         // The daemon will set up both memory logging and stderr logging as needed
-        if std::env::var("LSP_LOG").is_ok() {
+        let log_level = std::env::var("PROBE_LOG_LEVEL").unwrap_or_default();
+        if log_level == "debug" || log_level == "trace" {
             eprintln!("LSP logging enabled - logs stored in-memory (use 'probe lsp logs' to view)");
         }
 

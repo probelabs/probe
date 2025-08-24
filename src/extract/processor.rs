@@ -65,7 +65,7 @@ pub fn process_file_for_extraction_with_lsp(
     include_stdlib: bool,
 ) -> Result<SearchResult> {
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("\n[DEBUG] ===== Processing File for Extraction =====");
@@ -138,10 +138,7 @@ pub fn process_file_for_extraction_with_lsp(
                     debug_mode,
                     include_stdlib,
                 );
-                // Ensure the formatter shows the section even if the server isn't ready yet.
-                if enable_lsp && result.lsp_info.is_none() {
-                    result.lsp_info = Some(serde_json::json!({"error":"lsp_unavailable"}));
-                }
+                // Don't add error placeholder - let formatter handle missing LSP info gracefully
             } else if debug_mode {
                 println!(
                     "[DEBUG] No position information available from tree-sitter, skipping LSP"
@@ -415,7 +412,7 @@ pub fn process_file_for_extraction_with_lsp(
                     crate::ranking::preprocess_text_with_filename(&merged_content, &filename);
 
                 // Attempt to get LSP information for line-based extraction
-                let mut lsp_info = if enable_lsp {
+                let lsp_info = if enable_lsp {
                     if debug_mode {
                         println!("[DEBUG] LSP enabled for line extraction, finding function declaration for line {line_num}");
                     }
@@ -467,10 +464,7 @@ pub fn process_file_for_extraction_with_lsp(
                 } else {
                     None
                 };
-                // Force a visible LSP section in output even if enrichment is unavailable.
-                if enable_lsp && lsp_info.is_none() {
-                    lsp_info = Some(serde_json::json!({"error":"lsp_unavailable"}));
-                }
+                // Don't add error placeholder - let formatter handle missing LSP info gracefully
 
                 Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
@@ -538,7 +532,7 @@ pub fn process_file_for_extraction_with_lsp(
                     crate::ranking::preprocess_text_with_filename(&context_code, &filename);
 
                 // Attempt to get LSP information for line-based extraction fallback
-                let mut lsp_info = if enable_lsp {
+                let lsp_info = if enable_lsp {
                     if debug_mode {
                         println!("[DEBUG] LSP enabled for line fallback extraction, finding function declaration for line {line_num}");
                     }
@@ -586,10 +580,7 @@ pub fn process_file_for_extraction_with_lsp(
                 } else {
                     None
                 };
-                // Force a visible LSP section in output even if enrichment is unavailable.
-                if enable_lsp && lsp_info.is_none() {
-                    lsp_info = Some(serde_json::json!({"error":"lsp_unavailable"}));
-                }
+                // Don't add error placeholder - let formatter handle missing LSP info gracefully
 
                 Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
@@ -990,9 +981,12 @@ async fn get_lsp_symbol_info(
         }
         attempts += 1;
         if attempts >= max_attempts {
-            eprintln!(
-                "LSP server not ready after {attempts} attempts, skipping LSP enrichment for symbol: {symbol_name}"
-            );
+            if debug_mode {
+                eprintln!(
+                    "[DEBUG] LSP server not ready after {attempts} attempts for symbol: {symbol_name}"
+                );
+            }
+            // Don't print error in non-debug mode - LSP is optional enhancement
             return None;
         }
         if debug_mode {
@@ -1333,7 +1327,7 @@ fn get_lsp_symbol_info_sync(
         };
 
         // Use different timeouts for CI vs local environments
-        let timeout_duration = if std::env::var("CI").is_ok() {
+        let timeout_duration = if std::env::var("PROBE_CI").is_ok() {
             std::time::Duration::from_secs(30) // Much longer timeout in CI
         } else {
             std::time::Duration::from_secs(10) // Standard timeout locally

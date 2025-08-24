@@ -163,7 +163,7 @@ impl CallGraphCache {
         // Common CI indicators + explicit override
         std::env::var("PROBE_DISABLE_PERSISTENCE").is_ok()
             || std::env::var("PROBE_CI").is_ok()
-            || std::env::var("CI").is_ok()
+            || std::env::var("PROBE_CI").is_ok()
             || std::env::var("GITHUB_ACTIONS").is_ok()
             || std::env::var("TF_BUILD").is_ok()
     }

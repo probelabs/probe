@@ -1151,7 +1151,7 @@ pub mod performance {
 
     /// Check if running in CI environment
     pub fn is_ci_environment() -> bool {
-        std::env::var("CI").is_ok()
+        std::env::var("PROBE_CI").is_ok()
             || std::env::var("GITHUB_ACTIONS").is_ok()
             || std::env::var("TRAVIS").is_ok()
             || std::env::var("CIRCLECI").is_ok()

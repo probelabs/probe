@@ -112,7 +112,7 @@ pub fn smart_warm_parser_pool_for_directory(path: &Path) {
         return;
     }
 
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     if debug_mode {
         println!("[DEBUG] Smart pre-warming detected languages: {detected_languages:?}");
     }
@@ -173,7 +173,7 @@ pub fn smart_warm_parser_pool_for_directory(path: &Path) {
 /// return_pooled_parser("rs", parser);
 /// ```
 pub fn get_pooled_parser(extension: &str) -> Result<Parser> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // First, try to get a parser from the pool
     {
@@ -224,7 +224,7 @@ pub fn get_pooled_parser(extension: &str) -> Result<Parser> {
 /// The pool will maintain a reasonable number of parsers per language to balance
 /// performance with memory usage.
 pub fn return_pooled_parser(extension: &str, parser: Parser) {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     let mut pool = PARSER_POOL
         .lock()
@@ -276,7 +276,7 @@ pub fn clear_parser_pool() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         let total_parsers: usize = pool.values().map(|v| v.len()).sum();

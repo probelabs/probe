@@ -1100,7 +1100,7 @@ def version():
     fn test_indexing_features() {
         let mut features = IndexingFeatures::default();
         assert!(features.extract_functions);
-        assert!(!features.build_call_graph);
+        assert!(features.extract_imports);
 
         features.set_language_feature("custom_feature".to_string(), true);
         assert!(features.is_language_feature_enabled("custom_feature"));
@@ -1111,8 +1111,8 @@ def version():
         assert!(!minimal.extract_variables);
 
         let comprehensive = IndexingFeatures::comprehensive();
-        assert!(comprehensive.build_call_graph);
-        assert!(comprehensive.extract_literals);
+        assert!(comprehensive.extract_imports);
+        assert!(comprehensive.extract_security);
     }
 
     #[test]
