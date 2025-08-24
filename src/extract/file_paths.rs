@@ -802,10 +802,6 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
             }
         }
         return results;
-    } else if !is_windows_path && cleaned_input.contains(':') {
-        // Only try to split on ':' if it's not a Windows path
-        // Use rsplit_once to split at the LAST colon to handle absolute paths correctly
-        let (file_part, line_spec) = cleaned_input.rsplit_once(':').unwrap();
     } else if cleaned_input.contains(':') {
         // Handle line ranges in both Windows and Unix paths
         let (file_part, rest) = if is_windows_path {
