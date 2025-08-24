@@ -1743,10 +1743,7 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
             let is_ignored = super::is_ignored_by_gitignore(&path);
 
             if should_be_ignored {
-                assert!(
-                    is_ignored,
-                    "Path '{path_str}' should be ignored but wasn't"
-                );
+                assert!(is_ignored, "Path '{path_str}' should be ignored but wasn't");
             } else {
                 assert!(
                     !is_ignored,
