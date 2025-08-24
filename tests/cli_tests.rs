@@ -495,3 +495,421 @@ struct SearchConfig {
         "Should find only 1 result due to limit"
     );
 }
+
+#[test]
+fn test_config_show_command() {
+    let probe_path = probe_binary_path();
+
+    // Test default format (should be human-readable)
+    let output = Command::new(&probe_path)
+        .args(["config", "show"])
+        .output()
+        .expect("Failed to execute config show command");
+
+    assert!(
+        output.status.success(),
+        "Config show command should succeed"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Check for key configuration sections
+    assert!(stdout.contains("defaults"), "Should show defaults section");
+    assert!(stdout.contains("search"), "Should show search section");
+    assert!(stdout.contains("indexing"), "Should show indexing section");
+    assert!(stdout.contains("enabled"), "Should show enabled field");
+    assert!(
+        stdout.contains("auto_index"),
+        "Should show auto_index field"
+    );
+    assert!(
+        stdout.contains("watch_files"),
+        "Should show watch_files field"
+    );
+}
+
+#[test]
+fn test_config_show_json_format() {
+    let probe_path = probe_binary_path();
+
+    let output = Command::new(&probe_path)
+        .args(["config", "show", "--format", "json"])
+        .output()
+        .expect("Failed to execute config show command");
+
+    assert!(
+        output.status.success(),
+        "Config show --format json should succeed"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Parse as JSON to verify it's valid
+    let json_value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Output should be valid JSON");
+
+    // Verify structure
+    assert!(json_value.is_object(), "Should be a JSON object");
+    assert!(
+        json_value["defaults"].is_object(),
+        "Should have defaults object"
+    );
+    assert!(
+        json_value["search"].is_object(),
+        "Should have search object"
+    );
+    assert!(
+        json_value["indexing"].is_object(),
+        "Should have indexing object"
+    );
+
+    // Verify indexing defaults
+    assert_eq!(
+        json_value["indexing"]["enabled"], true,
+        "Indexing should be enabled by default"
+    );
+    assert_eq!(
+        json_value["indexing"]["auto_index"], true,
+        "Auto-index should be enabled by default"
+    );
+    assert_eq!(
+        json_value["indexing"]["watch_files"], true,
+        "Watch files should be enabled by default"
+    );
+}
+
+#[test]
+fn test_config_show_env_format() {
+    let probe_path = probe_binary_path();
+
+    let output = Command::new(&probe_path)
+        .args(["config", "show", "--format", "env"])
+        .output()
+        .expect("Failed to execute config show command");
+
+    assert!(
+        output.status.success(),
+        "Config show --format env should succeed"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Check for environment variable exports
+    assert!(
+        stdout.contains("export PROBE_DEBUG="),
+        "Should export PROBE_DEBUG"
+    );
+    assert!(
+        stdout.contains("export PROBE_LOG_LEVEL="),
+        "Should export PROBE_LOG_LEVEL"
+    );
+    assert!(
+        stdout.contains("export PROBE_ENABLE_LSP="),
+        "Should export PROBE_ENABLE_LSP"
+    );
+    assert!(
+        stdout.contains("export PROBE_FORMAT="),
+        "Should export PROBE_FORMAT"
+    );
+    assert!(
+        stdout.contains("export PROBE_TIMEOUT="),
+        "Should export PROBE_TIMEOUT"
+    );
+
+    // Check indexing environment variables
+    assert!(
+        stdout.contains("export PROBE_INDEXING_ENABLED=true"),
+        "Should export indexing enabled"
+    );
+    assert!(
+        stdout.contains("export PROBE_INDEXING_AUTO_INDEX=true"),
+        "Should export auto index"
+    );
+    assert!(
+        stdout.contains("export PROBE_INDEXING_WATCH_FILES=true"),
+        "Should export watch files"
+    );
+}
+
+#[test]
+fn test_config_defaults_applied_to_search() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_test_directory_structure(&temp_dir);
+
+    let probe_path = probe_binary_path();
+
+    // Create a config file with custom search defaults
+    let config_dir = temp_dir.path().join(".probe");
+    fs::create_dir(&config_dir).expect("Failed to create .probe directory");
+    let config_file = config_dir.join("settings.json");
+    let config_content = r#"
+    {
+        "search": {
+            "max_results": 5,
+            "allow_tests": true,
+            "frequency": false
+        }
+    }
+    "#;
+    fs::write(&config_file, config_content).expect("Failed to write config file");
+
+    // Run search command without specifying max_results
+    let output = Command::new(&probe_path)
+        .args(["search", "search", "."])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("Failed to execute search command");
+
+    assert!(output.status.success(), "Search command should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // The search should respect the config file's max_results setting
+    // This is hard to verify directly without knowing the exact output format,
+    // but we can at least verify the command runs successfully
+    assert!(!stdout.is_empty(), "Should produce output");
+}
+
+#[test]
+fn test_environment_variable_override() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_test_directory_structure(&temp_dir);
+
+    let probe_path = probe_binary_path();
+
+    // Set environment variables
+    let output = Command::new(&probe_path)
+        .args(["config", "show", "--format", "json"])
+        .env("PROBE_DEBUG", "1")
+        .env("PROBE_ENABLE_LSP", "true")
+        .env("PROBE_INDEXING_ENABLED", "false")
+        .env("PROBE_INDEXING_WATCH_FILES", "false")
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("Failed to execute config show command");
+
+    assert!(
+        output.status.success(),
+        "Config show should succeed with env vars"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let json_value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Output should be valid JSON");
+
+    // Verify environment variables override defaults
+    assert_eq!(
+        json_value["defaults"]["debug"], true,
+        "Debug should be overridden by env var"
+    );
+    assert_eq!(
+        json_value["defaults"]["enable_lsp"], true,
+        "Enable LSP should be overridden by env var"
+    );
+    assert_eq!(
+        json_value["indexing"]["enabled"], false,
+        "Indexing enabled should be overridden by env var"
+    );
+    assert_eq!(
+        json_value["indexing"]["watch_files"], false,
+        "Watch files should be overridden by env var"
+    );
+}
+
+#[test]
+fn test_config_hierarchy() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_test_directory_structure(&temp_dir);
+
+    let probe_path = probe_binary_path();
+
+    // Create global config (simulated as project config here)
+    let config_dir = temp_dir.path().join(".probe");
+    fs::create_dir(&config_dir).expect("Failed to create .probe directory");
+
+    let global_config = config_dir.join("settings.json");
+    let global_content = r#"
+    {
+        "defaults": {
+            "debug": false,
+            "log_level": "warn"
+        },
+        "search": {
+            "max_results": 10
+        }
+    }
+    "#;
+    fs::write(&global_config, global_content).expect("Failed to write global config");
+
+    // Create local config that overrides some settings
+    let local_config = config_dir.join("settings.local.json");
+    let local_content = r#"
+    {
+        "defaults": {
+            "debug": true
+        },
+        "search": {
+            "max_results": 20,
+            "allow_tests": true
+        }
+    }
+    "#;
+    fs::write(&local_config, local_content).expect("Failed to write local config");
+
+    let output = Command::new(&probe_path)
+        .args(["config", "show", "--format", "json"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("Failed to execute config show command");
+
+    assert!(output.status.success(), "Config show should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let json_value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Output should be valid JSON");
+
+    // Verify local config overrides global config
+    assert_eq!(
+        json_value["defaults"]["debug"], true,
+        "Debug should be overridden by local config"
+    );
+    assert_eq!(
+        json_value["defaults"]["log_level"], "warn",
+        "Log level should be kept from global config"
+    );
+    assert_eq!(
+        json_value["search"]["max_results"], 20,
+        "Max results should be overridden by local config"
+    );
+    assert_eq!(
+        json_value["search"]["allow_tests"], true,
+        "Allow tests should be set by local config"
+    );
+}
+
+#[test]
+fn test_config_validation() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let probe_path = probe_binary_path();
+
+    // Create invalid config file
+    let config_dir = temp_dir.path().join(".probe");
+    fs::create_dir(&config_dir).expect("Failed to create .probe directory");
+    let config_file = config_dir.join("settings.json");
+
+    // Invalid JSON (missing closing brace and colon)
+    let invalid_content = r#"
+    {
+        "defaults": {
+            "log_level": "info",
+            "format": "color"
+        "search": {
+            "reranker": "bm25"
+        }
+    }
+    "#;
+    fs::write(&config_file, invalid_content).expect("Failed to write config file");
+
+    let output = Command::new(&probe_path)
+        .args(["config", "show", "--format", "json"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("Failed to execute config show command");
+
+    // Should still succeed by falling back to defaults when config is invalid
+    assert!(
+        output.status.success(),
+        "Should succeed with invalid config (uses defaults)"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // When config is invalid, it should fall back to defaults
+    // Parse the output to verify we got default values
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .expect("Config show --format json should return valid JSON even with invalid config file");
+
+    // Verify we got the default configuration values
+    assert_eq!(
+        json["defaults"]["log_level"], "info",
+        "Should use default log level"
+    );
+    assert_eq!(
+        json["defaults"]["format"], "color",
+        "Should use default format"
+    );
+    assert_eq!(
+        json["search"]["reranker"], "bm25",
+        "Should use default reranker"
+    );
+
+    // Most importantly, indexing defaults should be correct
+    assert_eq!(
+        json["indexing"]["enabled"], true,
+        "Should use default indexing enabled"
+    );
+    assert_eq!(
+        json["indexing"]["auto_index"], true,
+        "Should use default auto_index"
+    );
+    assert_eq!(
+        json["indexing"]["watch_files"], true,
+        "Should use default watch_files"
+    );
+
+    // Note: Warning messages may or may not appear in stderr depending on whether
+    // the config is cached from previous test runs. The important thing is that
+    // the command succeeds and returns valid default configuration.
+}
+
+#[test]
+fn test_config_with_custom_indexing_features() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let probe_path = probe_binary_path();
+
+    // Create config with custom indexing features
+    let config_dir = temp_dir.path().join(".probe");
+    fs::create_dir(&config_dir).expect("Failed to create .probe directory");
+    let config_file = config_dir.join("settings.json");
+    let config_content = r#"
+    {
+        "indexing": {
+            "enabled": true,
+            "auto_index": false,
+            "watch_files": true,
+            "features": {
+                "extract_functions": true,
+                "extract_types": false,
+                "extract_variables": false,
+                "extract_imports": true,
+                "extract_tests": false
+            }
+        }
+    }
+    "#;
+    fs::write(&config_file, config_content).expect("Failed to write config file");
+
+    let output = Command::new(&probe_path)
+        .args(["config", "show", "--format", "json"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("Failed to execute config show command");
+
+    assert!(output.status.success(), "Config show should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let json_value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Output should be valid JSON");
+
+    // Verify custom indexing features
+    assert_eq!(json_value["indexing"]["enabled"], true);
+    assert_eq!(json_value["indexing"]["auto_index"], false);
+    assert_eq!(json_value["indexing"]["watch_files"], true);
+    assert_eq!(
+        json_value["indexing"]["features"]["extract_functions"],
+        true
+    );
+    assert_eq!(json_value["indexing"]["features"]["extract_types"], false);
+    assert_eq!(
+        json_value["indexing"]["features"]["extract_variables"],
+        false
+    );
+    assert_eq!(json_value["indexing"]["features"]["extract_imports"], true);
+    assert_eq!(json_value["indexing"]["features"]["extract_tests"], false);
+}

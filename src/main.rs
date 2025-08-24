@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser as ClapParser};
 use colored::*;
 use std::path::PathBuf;
@@ -51,6 +51,126 @@ struct BenchmarkParams {
     baseline: Option<String>,
     #[allow(dead_code)]
     fast: bool,
+}
+
+/// Apply configuration defaults to CLI arguments where not explicitly specified
+fn apply_config_defaults(args: &mut Args, config: &probe_code::config::ResolvedConfig) {
+    // Apply defaults to top-level args if not set
+    if args.max_results.is_none() {
+        args.max_results = config.search.max_results;
+    }
+    if args.max_bytes.is_none() {
+        args.max_bytes = config.search.max_bytes;
+    }
+    if args.max_tokens.is_none() {
+        args.max_tokens = config.search.max_tokens;
+    }
+
+    // Apply enable_lsp default if not explicitly set
+    if !args.lsp && config.defaults.enable_lsp {
+        args.lsp = true;
+    }
+
+    // Apply defaults to command-specific args
+    if let Some(ref mut command) = args.command {
+        match command {
+            Commands::Search {
+                max_results,
+                max_bytes,
+                max_tokens,
+                allow_tests,
+                no_gitignore,
+                merge_threshold,
+                format,
+                timeout,
+                lsp,
+                reranker,
+                frequency_search,
+                ..
+            } => {
+                if max_results.is_none() {
+                    *max_results = config.search.max_results;
+                }
+                if max_bytes.is_none() {
+                    *max_bytes = config.search.max_bytes;
+                }
+                if max_tokens.is_none() {
+                    *max_tokens = config.search.max_tokens;
+                }
+                if !*allow_tests {
+                    *allow_tests = config.search.allow_tests;
+                }
+                if !*no_gitignore {
+                    *no_gitignore = config.search.no_gitignore;
+                }
+                if merge_threshold.is_none() {
+                    *merge_threshold = Some(config.search.merge_threshold);
+                }
+                if format == "color" {
+                    // Only override if using default
+                    *format = config.defaults.format.clone();
+                }
+                if *timeout == 30 {
+                    // Only override if using default
+                    *timeout = config.defaults.timeout;
+                }
+                if !*lsp && config.defaults.enable_lsp {
+                    *lsp = true;
+                }
+                if reranker == "bm25" {
+                    // Only override if using default
+                    *reranker = config.search.reranker.clone();
+                }
+                if *frequency_search && !config.search.frequency {
+                    *frequency_search = false;
+                }
+            }
+            Commands::Extract {
+                context_lines,
+                allow_tests,
+                format,
+                lsp,
+                include_stdlib,
+                ..
+            } => {
+                if *context_lines == 0 {
+                    // Only override if using default
+                    *context_lines = config.extract.context_lines;
+                }
+                if !*allow_tests {
+                    *allow_tests = config.extract.allow_tests;
+                }
+                if format == "color" {
+                    // Only override if using default
+                    *format = config.defaults.format.clone();
+                }
+                if !*lsp && config.defaults.enable_lsp {
+                    *lsp = true;
+                }
+                if !*include_stdlib {
+                    *include_stdlib = config.lsp.include_stdlib;
+                }
+            }
+            Commands::Query {
+                max_results,
+                allow_tests,
+                format,
+                ..
+            } => {
+                if max_results.is_none() {
+                    *max_results = config.query.max_results;
+                }
+                if !*allow_tests {
+                    *allow_tests = config.query.allow_tests;
+                }
+                if format == "color" {
+                    // Only override if using default
+                    *format = config.defaults.format.clone();
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn handle_search(params: SearchParams) -> Result<()> {
@@ -237,7 +357,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
                 }
 
                 // Show breakdown in debug mode
-                if std::env::var("DEBUG").is_ok() && total_skipped > 0 {
+                if std::env::var("PROBE_DEBUG").is_ok() && total_skipped > 0 {
                     if results_skipped > 0 {
                         println!(
                             "  {} {}",
@@ -352,7 +472,14 @@ fn handle_benchmark(params: BenchmarkParams) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    // Load global configuration
+    let config = probe_code::config::get_config();
+
+    // Parse CLI arguments (will override config defaults)
+    let mut args = Args::parse();
+
+    // Apply config defaults to CLI args where not specified
+    apply_config_defaults(&mut args, config);
 
     // Auto-initialize LSP when explicitly requested via --lsp flag
     // IMPORTANT: Never auto-initialize for LSP management commands to prevent infinite loops!
@@ -584,6 +711,232 @@ async fn main() -> Result<()> {
         })?,
         Some(Commands::Lsp { subcommand }) => {
             LspManager::handle_command(&subcommand, "color").await?;
+        }
+        Some(Commands::Config { subcommand }) => {
+            handle_config_command(&subcommand)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_config_command(subcommand: &cli::ConfigSubcommands) -> Result<()> {
+    use cli::ConfigSubcommands;
+
+    match subcommand {
+        ConfigSubcommands::Show { format } => {
+            let config = probe_code::config::get_config();
+
+            match format.as_str() {
+                "json" => {
+                    println!("{}", config.to_json_string()?);
+                }
+                "env" => {
+                    // Show as environment variables
+                    println!("# Probe configuration as environment variables");
+                    println!("# Set these in your shell to override config file settings");
+                    println!();
+                    println!("# General settings");
+                    println!(
+                        "export PROBE_DEBUG={}",
+                        if config.defaults.debug { "1" } else { "0" }
+                    );
+                    println!("export PROBE_LOG_LEVEL={}", config.defaults.log_level);
+                    println!(
+                        "export PROBE_ENABLE_LSP={}",
+                        if config.defaults.enable_lsp {
+                            "true"
+                        } else {
+                            "false"
+                        }
+                    );
+                    println!("export PROBE_FORMAT={}", config.defaults.format);
+                    println!("export PROBE_TIMEOUT={}", config.defaults.timeout);
+                    println!();
+                    println!("# Search settings");
+                    if let Some(max) = config.search.max_results {
+                        println!("export PROBE_MAX_RESULTS={max}");
+                    }
+                    if let Some(max) = config.search.max_tokens {
+                        println!("export PROBE_MAX_TOKENS={max}");
+                    }
+                    if let Some(max) = config.search.max_bytes {
+                        println!("export PROBE_MAX_BYTES={max}");
+                    }
+                    println!(
+                        "export PROBE_SEARCH_FREQUENCY={}",
+                        if config.search.frequency {
+                            "true"
+                        } else {
+                            "false"
+                        }
+                    );
+                    println!("export PROBE_SEARCH_RERANKER={}", config.search.reranker);
+                    println!(
+                        "export PROBE_SEARCH_MERGE_THRESHOLD={}",
+                        config.search.merge_threshold
+                    );
+                    println!(
+                        "export PROBE_ALLOW_TESTS={}",
+                        if config.search.allow_tests {
+                            "true"
+                        } else {
+                            "false"
+                        }
+                    );
+                    println!(
+                        "export PROBE_NO_GITIGNORE={}",
+                        if config.search.no_gitignore {
+                            "true"
+                        } else {
+                            "false"
+                        }
+                    );
+                    println!();
+                    println!("# Extract settings");
+                    println!(
+                        "export PROBE_EXTRACT_CONTEXT_LINES={}",
+                        config.extract.context_lines
+                    );
+                    println!();
+                    println!("# LSP settings");
+                    println!(
+                        "export PROBE_LSP_INCLUDE_STDLIB={}",
+                        if config.lsp.include_stdlib {
+                            "true"
+                        } else {
+                            "false"
+                        }
+                    );
+                    if let Some(ref path) = config.lsp.socket_path {
+                        println!("export PROBE_LSP_SOCKET_PATH={path}");
+                    }
+                    println!(
+                        "export PROBE_LSP_DISABLE_AUTOSTART={}",
+                        if config.lsp.disable_autostart {
+                            "1"
+                        } else {
+                            "0"
+                        }
+                    );
+                    println!(
+                        "export PROBE_LSP_WORKSPACE_CACHE_MAX={}",
+                        config.lsp.workspace_cache.max_open_caches
+                    );
+                    println!(
+                        "export PROBE_LSP_WORKSPACE_CACHE_SIZE_MB={}",
+                        config.lsp.workspace_cache.size_mb_per_workspace
+                    );
+                    println!(
+                        "export PROBE_LSP_WORKSPACE_LOOKUP_DEPTH={}",
+                        config.lsp.workspace_cache.lookup_depth
+                    );
+                    if let Some(ref dir) = config.lsp.workspace_cache.base_dir {
+                        println!("export PROBE_LSP_WORKSPACE_CACHE_DIR={dir}");
+                    }
+                    println!();
+                    println!("# Performance settings");
+                    println!(
+                        "export PROBE_TREE_CACHE_SIZE={}",
+                        config.performance.tree_cache_size
+                    );
+                    println!(
+                        "export PROBE_OPTIMIZE_BLOCKS={}",
+                        if config.performance.optimize_blocks {
+                            "1"
+                        } else {
+                            "0"
+                        }
+                    );
+                    println!();
+                    println!("# Indexing settings");
+                    println!(
+                        "export PROBE_INDEXING_ENABLED={}",
+                        if config.indexing.enabled {
+                            "true"
+                        } else {
+                            "false"
+                        }
+                    );
+                    println!(
+                        "export PROBE_INDEXING_AUTO_INDEX={}",
+                        if config.indexing.auto_index {
+                            "true"
+                        } else {
+                            "false"
+                        }
+                    );
+                    println!(
+                        "export PROBE_INDEXING_WATCH_FILES={}",
+                        if config.indexing.watch_files {
+                            "true"
+                        } else {
+                            "false"
+                        }
+                    );
+                    println!(
+                        "export PROBE_INDEXING_DEFAULT_DEPTH={}",
+                        config.indexing.default_depth
+                    );
+                    println!(
+                        "export PROBE_INDEXING_MAX_WORKERS={}",
+                        config.indexing.max_workers
+                    );
+                    println!(
+                        "export PROBE_INDEXING_MEMORY_BUDGET_MB={}",
+                        config.indexing.memory_budget_mb
+                    );
+                }
+                _ => {
+                    eprintln!("Unknown format: {format}");
+                }
+            }
+        }
+        ConfigSubcommands::Validate { file } => {
+            let config_path = if let Some(path) = file {
+                std::path::PathBuf::from(path)
+            } else {
+                // Use default config path
+                // Get default config path
+                #[cfg(target_os = "windows")]
+                let default_path = {
+                    let userprofile = std::env::var("USERPROFILE")
+                        .unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+                    std::path::PathBuf::from(userprofile)
+                        .join(".probe")
+                        .join("settings.json")
+                };
+                #[cfg(not(target_os = "windows"))]
+                let default_path = {
+                    let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+                    std::path::PathBuf::from(home)
+                        .join(".probe")
+                        .join("settings.json")
+                };
+
+                default_path
+            };
+
+            if !config_path.exists() {
+                eprintln!("Config file not found: {}", config_path.display());
+                return Ok(());
+            }
+
+            let contents = std::fs::read_to_string(&config_path)
+                .context(format!("Failed to read config file: {config_path:?}"))?;
+
+            // Parse as ProbeConfig (with Options) for validation
+            match serde_json::from_str::<probe_code::config::ProbeConfig>(&contents) {
+                Ok(config) => {
+                    // Also validate the values
+                    config.validate()?;
+                    println!("✓ Configuration is valid");
+                }
+                Err(e) => {
+                    eprintln!("✗ Configuration is invalid: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 

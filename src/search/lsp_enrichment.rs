@@ -1027,7 +1027,7 @@ async fn get_lsp_info_async_with_client(
 
     // Try to get symbol info with short timeout to avoid delays in search
     // Use aggressive timeout for search results to prevent command timeouts
-    let timeout_secs = if std::env::var("CI").is_ok() {
+    let timeout_secs = if std::env::var("PROBE_CI").is_ok() {
         3 // Very short timeout in CI
     } else {
         10 // Increased timeout for local development in search context (was 5)
@@ -1063,7 +1063,8 @@ async fn get_lsp_info_async_with_client(
             None
         }
         Ok(Err(e)) => {
-            if debug_mode || std::env::var("LSP_LOG").unwrap_or_default() == "1" {
+            let log_level = std::env::var("PROBE_LOG_LEVEL").unwrap_or_default();
+            if debug_mode || log_level == "debug" || log_level == "trace" {
                 println!(
                     "[DEBUG] LSP query failed for symbol '{}' at {}:{}:{}: {}",
                     symbol_name,
@@ -1076,7 +1077,8 @@ async fn get_lsp_info_async_with_client(
             None
         }
         Err(_) => {
-            if debug_mode || std::env::var("LSP_LOG").unwrap_or_default() == "1" {
+            let log_level = std::env::var("PROBE_LOG_LEVEL").unwrap_or_default();
+            if debug_mode || log_level == "debug" || log_level == "trace" {
                 println!(
                     "[DEBUG] LSP query timed out for symbol '{}' at {}:{}:{} after {}s",
                     symbol_name,

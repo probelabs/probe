@@ -18,7 +18,7 @@ pub struct RipgrepSearcher {
 impl RipgrepSearcher {
     /// Create a new RipgrepSearcher with optimized settings
     pub fn new(patterns: &[String], _enable_simd: bool) -> Result<Self> {
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
         if debug_mode {
             println!(

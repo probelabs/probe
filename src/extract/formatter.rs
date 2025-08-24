@@ -443,7 +443,7 @@ fn format_extraction_internal(
                             }
                             Err(e) => {
                                 // Debug: log deserialization error
-                                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                                if std::env::var("PROBE_DEBUG").unwrap_or_default() == "1" {
                                     eprintln!("[DEBUG] Failed to deserialize LSP info: {e}");
                                 }
                                 // Fallback: display raw JSON if we can't parse it

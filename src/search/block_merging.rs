@@ -20,7 +20,7 @@ pub fn merge_ranked_blocks(
     results: Vec<SearchResult>,
     threshold: Option<usize>,
 ) -> Vec<SearchResult> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     let threshold = threshold.unwrap_or(5); // Default to 5 lines if not specified
 
     if results.is_empty() {
@@ -190,7 +190,7 @@ pub fn merge_ranked_blocks(
 /// # Returns
 /// `true` if blocks should be merged, `false` otherwise
 pub fn should_merge_blocks(block1: &SearchResult, block2: &SearchResult, threshold: usize) -> bool {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Check if both blocks have parent_file_id, and if they match
     if let (Some(file_id1), Some(file_id2)) = (&block1.parent_file_id, &block2.parent_file_id) {
@@ -310,7 +310,7 @@ fn merge_block_content(block1: &SearchResult, block2: &SearchResult) -> String {
     // Build the merged content from the line map
     let mut merged_lines = Vec::new();
     let mut current_line = merged_start;
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Try to open the file to fill small gaps
     let file_path = Path::new(&block1.file);

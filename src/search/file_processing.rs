@@ -1086,7 +1086,7 @@ pub fn process_file_with_results(
         .unwrap_or("");
 
     // Get debug mode setting
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Filter out lines longer than 500 characters
     let lines: Vec<&str> = content

@@ -205,7 +205,7 @@ fn test_extract_non_blocking_without_daemon() -> Result<()> {
     let _ = stderr; // Mark as used
 
     // Should complete quickly (under 5 seconds in CI, 2 seconds locally)
-    let max_duration = if std::env::var("CI").is_ok() {
+    let max_duration = if std::env::var("PROBE_CI").is_ok() {
         5 // More lenient timeout for CI environments
     } else {
         2 // Stricter timeout for local development
@@ -246,7 +246,7 @@ fn test_search_non_blocking_without_daemon() -> Result<()> {
     );
 
     // Should complete quickly (under 5 seconds in CI, 2 seconds locally)
-    let max_duration = if std::env::var("CI").is_ok() {
+    let max_duration = if std::env::var("PROBE_CI").is_ok() {
         5 // More lenient timeout for CI environments
     } else {
         2 // Stricter timeout for local development

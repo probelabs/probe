@@ -120,7 +120,7 @@ fn test_parallel_extraction_performance() {
     // than sequential extraction for a large number of files
 
     // Skip this test in CI environments where performance might vary
-    if std::env::var("CI").is_ok() {
+    if std::env::var("PROBE_CI").is_ok() {
         return;
     }
 

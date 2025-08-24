@@ -80,7 +80,7 @@ pub fn get_file_list(
     custom_ignores: &[String],
     no_gitignore: bool,
 ) -> Result<Arc<FileList>> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 
     if debug_mode {
@@ -143,7 +143,7 @@ fn build_file_list(
     custom_ignores: &[String],
     no_gitignore: bool,
 ) -> Result<FileList> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 
     if debug_mode {
@@ -368,7 +368,7 @@ pub fn find_matching_filenames(
     language: Option<&str>,
     no_gitignore: bool,
 ) -> Result<HashMap<PathBuf, HashSet<usize>>> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 
     if debug_mode {
@@ -501,7 +501,7 @@ pub fn get_file_list_by_language(
         return get_file_list(path, allow_tests, custom_ignores, no_gitignore);
     }
 
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 
     if debug_mode {

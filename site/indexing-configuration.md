@@ -328,185 +328,126 @@ probe lsp logs --since "2024-01-01 10:00:00"
 
 ### Global Configuration
 
-Create a configuration file at `~/.config/probe/lsp.toml`:
+The configuration is now part of the unified `settings.json` file at `~/.probe/settings.json`:
 
-```toml
-# ~/.config/probe/lsp.toml
+```json
+{
+  "lsp": {
+    "socket_path": "/tmp/probe-lsp.sock",
+    "disable_autostart": false,
+    "workspace_cache": {
+      "max_open_caches": 8,
+      "size_mb_per_workspace": 100,
+      "lookup_depth": 3
+    }
+  },
+  "indexing": {
+    "enabled": true,
+    "auto_index": true,
+    "watch_files": true,
+    "default_depth": 3,
+    "max_workers": 4,
+    "memory_budget_mb": 512,
+    "incremental_mode": true,
+    "global_exclude_patterns": [
+      "**/target/**",
+      "**/node_modules/**",
+      "**/.git/**",
+      "**/__pycache__/**",
+      "**/build/**"
+    ],
+    "priority_languages": ["rust", "typescript", "python"],
+    "disabled_languages": [],
+    "features": {
+      "build_call_graph": true,
+      "extract_functions": true,
+      "extract_types": true,
+      "extract_variables": true,
+      "extract_imports": true,
+      "extract_docs": true
+    },
+    "lsp_caching": {
+      "cache_call_hierarchy": true,
+      "cache_definitions": false,
+      "cache_references": true,
+      "cache_hover": true,
+      "cache_document_symbols": false
+    },
+    "language_configs": {
+      "rust":
 
-[daemon]
-# Core daemon settings
-socket_path = "/tmp/probe-lsp.sock"
-max_connections = 100
-log_level = "info"
-auto_start = true
-
-# Process management
-restart_on_crash = true
-shutdown_timeout_secs = 30
-cleanup_on_exit = true
-
-[cache]
-# Cache configuration
-size_per_operation = 500
-ttl_seconds = 1800
-eviction_interval_seconds = 60
-persistent = false
-directory = "/var/cache/probe-lsp"
-
-# Memory management
-memory_limit_mb = 1024
-memory_pressure_threshold = 0.8
-eviction_batch_size = 50
-
-[workspace]
-# Workspace discovery
-allowed_roots = ["/home/user/projects", "/opt/work"]
-cache_size = 1000
-discovery_timeout_ms = 5000
-max_depth = 10
-
-[file_watcher]
-# File change monitoring
-enabled = true
-poll_interval_ms = 1000
-max_files_per_workspace = 10000
-exclude_patterns = [
-    "*.log",
-    "*.tmp", 
-    "**/node_modules/**",
-    "**/target/**",
-    "**/.git/**"
-]
-
-[language_servers]
-# Language server binaries
-rust_analyzer = "rust-analyzer"
-typescript = "typescript-language-server"
-python = "pylsp"
-go = "gopls"
-java = "jdtls"
-cpp = "clangd"
-
-# Per-language timeouts (milliseconds)
-timeout_rust = 30000
-timeout_typescript = 20000
-timeout_python = 15000
-timeout_go = 25000
-timeout_java = 45000
-timeout_cpp = 20000
-
-[indexing]
-# Indexing features
-enabled = true
-auto_index = true
-watch_files = true
-default_depth = 3
-max_workers = 4
-memory_budget_mb = 512
-incremental_mode = true
-
-# Global patterns
-exclude_patterns = [
-    "**/target/**",
-    "**/node_modules/**", 
-    "**/.git/**",
-    "**/__pycache__/**",
-    "**/build/**"
-]
-
-priority_languages = ["rust", "typescript", "python"]
-disabled_languages = []
-
-[indexing.features]
-# Enable specific indexing features
-call_graphs = true
-definitions = true
-references = true
-hover_info = true
-document_symbols = true
-workspace_symbols = false
-
-[indexing.language_configs.rust]
-# Rust-specific indexing configuration
-enabled = true
-max_workers = 2
-memory_budget_mb = 256
-timeout_ms = 30000
-file_extensions = ["rs"]
-exclude_patterns = ["**/target/**"]
-priority = 100
-
-[indexing.language_configs.rust.features]
-call_graphs = true
-macro_expansion = true
-trait_resolution = true
-
-[indexing.language_configs.typescript]
-# TypeScript-specific configuration
-enabled = true
-max_workers = 2
-memory_budget_mb = 128
-timeout_ms = 20000
-file_extensions = ["ts", "tsx", "js", "jsx"]
-exclude_patterns = ["**/node_modules/**", "**/dist/**"]
-
-[indexing.language_configs.python]
-# Python-specific configuration
-enabled = true
-max_workers = 1
-memory_budget_mb = 64
-timeout_ms = 15000
-file_extensions = ["py", "pyi"]
-exclude_patterns = ["**/__pycache__/**", "**/venv/**"]
+        {
+          "enabled": true,
+          "max_workers": 2,
+          "memory_budget_mb": 256,
+          "timeout_ms": 30000,
+          "file_extensions": ["rs"],
+          "exclude_patterns": ["**/target/**"],
+          "priority": 100,
+          "features": {
+            "extract_macros": true,
+            "extract_traits": true
+          }
+        },
+        "typescript": {
+          "enabled": true,
+          "max_workers": 2,
+          "memory_budget_mb": 128,
+          "timeout_ms": 20000,
+          "file_extensions": ["ts", "tsx", "js", "jsx"],
+          "exclude_patterns": ["**/node_modules/**", "**/dist/**"]
+        },
+        "python": {
+          "enabled": true,
+          "max_workers": 1,
+          "memory_budget_mb": 64,
+          "timeout_ms": 15000,
+          "file_extensions": ["py", "pyi"],
+          "exclude_patterns": ["**/__pycache__/**", "**/venv/**"]
+        }
+      }
+    }
+  }
+}
 ```
 
 ### Workspace-Specific Configuration
 
-Create `.probe-lsp.toml` in your project root:
+Create `./.probe/settings.json` in your project root:
 
-```toml
-# .probe-lsp.toml (project-specific configuration)
-
-[workspace]
-# Override workspace settings for this project
-name = "my-rust-project"
-language_priority = ["rust", "toml", "yaml"]
-
-[cache]
-# Project-specific cache settings
-size_per_operation = 1000
-ttl_seconds = 3600
-
-[indexing]
-# Custom indexing for this project
-enabled = true
-max_workers = 6
-memory_budget_mb = 1024
-
-exclude_patterns = [
-    "**/target/**",
-    "**/examples/**",
-    "**/benches/**"
-]
-
-[indexing.language_configs.rust]
-# Project-specific Rust configuration
-memory_budget_mb = 512
-exclude_patterns = [
-    "**/target/**",
-    "**/tests/fixtures/**"
-]
-
-[indexing.language_configs.rust.features]
-call_graphs = true
-macro_expansion = true
-trait_resolution = true
-proc_macros = true
-
-[indexing.language_configs.rust.parser_config]
-# Custom rust-analyzer settings
-"rust-analyzer.cargo.features" = ["full", "derive"]
-"rust-analyzer.checkOnSave.enable" = false
+```json
+{
+  "lsp": {
+    "workspace_cache": {
+      "size_mb_per_workspace": 200
+    }
+  },
+  "indexing": {
+    "enabled": true,
+    "max_workers": 6,
+    "memory_budget_mb": 1024,
+    "global_exclude_patterns": [
+      "**/target/**",
+      "**/examples/**",
+      "**/benches/**"
+    ],
+    "language_configs": {
+      "rust": {
+        "enabled": true,
+        "memory_budget_mb": 512,
+        "exclude_patterns": [
+          "**/target/**",
+          "**/tests/fixtures/**"
+        ],
+        "features": {
+          "extract_macros": true,
+          "extract_traits": true,
+          "extract_lifetimes": true
+        }
+      }
+    }
+  }
+}
 ```
 
 ## Runtime Configuration

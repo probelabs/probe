@@ -98,7 +98,7 @@ pub fn extract_file_paths_from_git_diff(text: &str, allow_tests: bool) -> Vec<Fi
     let mut current_file_lines = HashSet::new();
 
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Split the text into lines
     let lines: Vec<&str> = text.lines().collect();
@@ -277,7 +277,7 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
     let mut processed_paths = HashSet::new();
 
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Preprocess the text to handle paths wrapped in backticks, quotes, and markdown formatting
     // This replaces backticks, single quotes, double quotes, and markdown bold/italic with spaces
@@ -731,7 +731,7 @@ pub fn extract_file_paths_from_text(text: &str, allow_tests: bool) -> Vec<FilePa
 /// If allow_tests is false, test files will be filtered out.
 pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo> {
     let mut results = Vec::new();
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Remove any surrounding backticks or quotes, but not apostrophes within words
     // First check if the input starts and ends with the same quote character
@@ -784,7 +784,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                     }
                 }
                 Err(err) => {
-                    if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                    if std::env::var("PROBE_DEBUG").unwrap_or_default() == "1" {
                         println!("DEBUG: Failed to resolve path '{file_part}': {err}");
                     }
 
@@ -862,7 +862,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                                 }
                             }
                             Err(err) => {
-                                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                                if std::env::var("PROBE_DEBUG").unwrap_or_default() == "1" {
                                     println!("DEBUG: Failed to resolve path '{file_part}': {err}");
                                 }
 
@@ -936,7 +936,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                                 }
                             }
                             Err(err) => {
-                                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                                if std::env::var("PROBE_DEBUG").unwrap_or_default() == "1" {
                                     println!("DEBUG: Failed to resolve path '{file_part}': {err}");
                                 }
 
@@ -1039,7 +1039,7 @@ pub fn set_custom_ignores(patterns: &[String]) {
 /// Check if a file should be ignored according to .gitignore rules
 fn is_ignored_by_gitignore(path: &PathBuf) -> bool {
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Simple check for common ignore patterns in the path
     let path_str = path.to_string_lossy().to_lowercase();

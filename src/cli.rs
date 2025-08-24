@@ -386,4 +386,31 @@ pub enum Commands {
         #[command(subcommand)]
         subcommand: LspSubcommands,
     },
+
+    /// Manage probe configuration
+    ///
+    /// This command provides tools for managing probe's configuration settings.
+    /// Use it to view the current configuration, validate config files, or
+    /// see what environment variables and config file settings are in effect.
+    Config {
+        #[command(subcommand)]
+        subcommand: ConfigSubcommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigSubcommands {
+    /// Show the current effective configuration
+    Show {
+        /// Output format
+        #[arg(short = 'o', long = "format", default_value = "json", value_parser = ["json", "env"])]
+        format: String,
+    },
+
+    /// Validate the configuration file
+    Validate {
+        /// Path to config file to validate (defaults to ~/.config/probe/config.json)
+        #[arg(short = 'f', long = "file")]
+        file: Option<String>,
+    },
 }

@@ -25,7 +25,7 @@ pub fn rank_search_results(
     let start_time = Instant::now();
 
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!(

@@ -80,7 +80,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     }
 
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         eprintln!("\n[DEBUG] ===== Extract Command Started =====");

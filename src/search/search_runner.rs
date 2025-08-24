@@ -78,7 +78,7 @@ pub fn format_duration(duration: Duration) -> String {
 
 /// Helper function to print timing information in debug mode
 pub fn print_timings(timings: &SearchTimings) {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     if !debug_mode {
         return;
     }
@@ -243,7 +243,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let timeout_handle = timeout::start_timeout_thread(*timeout);
 
     let include_filenames = !exclude_filenames;
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Handle session ID generation if session is provided but empty
     // For test runs, force session to None to disable caching
@@ -1632,7 +1632,7 @@ pub fn search_with_structured_patterns(
     let root_path = if let Some(path_str) = root_path_str.to_str() {
         match resolve_path(path_str) {
             Ok(resolved_path) => {
-                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                if std::env::var("PROBE_DEBUG").unwrap_or_default() == "1" {
                     println!(
                         "DEBUG: Resolved path '{}' to '{}'",
                         path_str,
@@ -1642,7 +1642,7 @@ pub fn search_with_structured_patterns(
                 resolved_path
             }
             Err(err) => {
-                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                if std::env::var("PROBE_DEBUG").unwrap_or_default() == "1" {
                     println!("DEBUG: Failed to resolve path '{path_str}': {err}");
                 }
                 // Fall back to the original path
@@ -1655,7 +1655,7 @@ pub fn search_with_structured_patterns(
     };
     use crate::search::ripgrep_searcher::RipgrepSearcher;
 
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     let search_start = Instant::now();
 
     // Step 1: Create pattern matching infrastructure (SIMD, RipgrepSearcher, or RegexSet)
@@ -1817,7 +1817,7 @@ fn search_file_with_simd(
     pattern_to_terms: &[HashSet<usize>],
 ) -> Result<HashMap<usize, HashSet<usize>>> {
     let mut term_map = HashMap::new();
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Define a reasonable maximum file size (e.g., 1MB)
     const MAX_FILE_SIZE: u64 = 1024 * 1024;

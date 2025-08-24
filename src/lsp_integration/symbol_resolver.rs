@@ -60,7 +60,7 @@ impl ResolvedLocation {
 ///
 /// Returns the resolved location with 0-based line and column numbers.
 pub fn resolve_location(spec: &str) -> Result<ResolvedLocation> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("[DEBUG] Resolving location spec: '{spec}'");
@@ -80,7 +80,7 @@ pub fn resolve_location(spec: &str) -> Result<ResolvedLocation> {
 /// Both line and column are expected to be 1-based and will be converted to 0-based internally.
 /// If only line is provided (no column), column defaults to 0.
 fn parse_line_column_spec(spec: &str) -> Result<ResolvedLocation> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("[DEBUG] Parsing line:column spec: '{spec}'");
@@ -194,7 +194,7 @@ fn parse_line_column_spec(spec: &str) -> Result<ResolvedLocation> {
 ///
 /// Uses tree-sitter to find the symbol position in the file.
 fn resolve_symbol_location(spec: &str) -> Result<ResolvedLocation> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("[DEBUG] Resolving symbol location: '{spec}'");
@@ -252,7 +252,7 @@ fn resolve_symbol_location(spec: &str) -> Result<ResolvedLocation> {
 
 /// Resolve a file path, handling relative paths and path normalization
 fn resolve_file_path(file_part: &str) -> Result<PathBuf> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("[DEBUG] Resolving file path: '{file_part}'");

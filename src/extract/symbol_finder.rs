@@ -204,7 +204,7 @@ pub fn find_symbol_in_file_with_position(
     _allow_tests: bool,
     context_lines: usize,
 ) -> Result<(SearchResult, Option<(u32, u32)>)> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Check if the symbol contains a dot, indicating a nested symbol path
     let symbol_parts: Vec<&str> = symbol.split('.').collect();

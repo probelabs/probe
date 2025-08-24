@@ -176,7 +176,7 @@ export PROBE_LSP_CACHE_DIR=/fast/ssd/path # Fast storage
 ```
 
 ```toml
-# .probe-lsp.toml - High-performance configuration
+# ./.probe/settings.json - High-performance configuration
 [cache]
 size_per_operation = 2000
 ttl_seconds = 7200
