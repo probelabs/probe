@@ -50,7 +50,7 @@ jobs:
 
     // Test extracting the entire file
     let output = Command::new(env!("CARGO_BIN_EXE_probe"))
-        .args(&["extract", &workflow_file.to_string_lossy()])
+        .args(["extract", &workflow_file.to_string_lossy()])
         .current_dir(temp_dir.path())
         .output()
         .expect("Failed to execute probe extract");
@@ -60,13 +60,11 @@ jobs:
 
     assert!(
         output.status.success(),
-        "probe extract should succeed for .github files. stderr: {}",
-        stderr
+        "probe extract should succeed for .github files. stderr: {stderr}"
     );
     assert!(
         stdout.contains("CI Pipeline"),
-        "Should extract content from GitHub workflow file. stdout: {}",
-        stdout
+        "Should extract content from GitHub workflow file. stdout: {stdout}"
     );
     assert!(
         !stdout.contains("No results found"),
@@ -101,7 +99,7 @@ jobs:
     // Test extracting specific lines (lines 3-7)
     let file_with_range = format!("{}:3-7", workflow_file.to_string_lossy());
     let output = Command::new(env!("CARGO_BIN_EXE_probe"))
-        .args(&["extract", &file_with_range])
+        .args(["extract", &file_with_range])
         .current_dir(temp_dir.path())
         .output()
         .expect("Failed to execute probe extract with line range");
@@ -111,18 +109,15 @@ jobs:
 
     assert!(
         output.status.success(),
-        "probe extract should succeed for .github files with line ranges. stderr: {}",
-        stderr
+        "probe extract should succeed for .github files with line ranges. stderr: {stderr}"
     );
     assert!(
         stdout.contains("jobs:"),
-        "Should extract the specified line range. stdout: {}",
-        stdout
+        "Should extract the specified line range. stdout: {stdout}"
     );
     assert!(
         stdout.contains("Lines: 3-7"),
-        "Should show the correct line range in output. stdout: {}",
-        stdout
+        "Should show the correct line range in output. stdout: {stdout}"
     );
 }
 
@@ -138,7 +133,7 @@ fn test_git_directory_still_ignored() {
 
     // Test that .git files are still ignored
     let output = Command::new(env!("CARGO_BIN_EXE_probe"))
-        .args(&["extract", &git_config.to_string_lossy()])
+        .args(["extract", &git_config.to_string_lossy()])
         .current_dir(temp_dir.path())
         .output()
         .expect("Failed to execute probe extract");
@@ -148,8 +143,7 @@ fn test_git_directory_still_ignored() {
     // .git files should still be ignored (should return "No results found")
     assert!(
         stdout.contains("No results found"),
-        ".git directory files should still be ignored. stdout: {}",
-        stdout
+        ".git directory files should still be ignored. stdout: {stdout}"
     );
 }
 
@@ -163,7 +157,7 @@ fn test_gitignore_file_not_ignored() {
 
     // Test that .gitignore files are NOT ignored
     let output = Command::new(env!("CARGO_BIN_EXE_probe"))
-        .args(&["extract", &gitignore_file.to_string_lossy()])
+        .args(["extract", &gitignore_file.to_string_lossy()])
         .current_dir(temp_dir.path())
         .output()
         .expect("Failed to execute probe extract");
@@ -173,13 +167,11 @@ fn test_gitignore_file_not_ignored() {
 
     assert!(
         output.status.success(),
-        "probe extract should succeed for .gitignore files. stderr: {}",
-        stderr
+        "probe extract should succeed for .gitignore files. stderr: {stderr}"
     );
     assert!(
         stdout.contains("*.log"),
-        "Should extract content from .gitignore file. stdout: {}",
-        stdout
+        "Should extract content from .gitignore file. stdout: {stdout}"
     );
     assert!(
         !stdout.contains("No results found"),
@@ -219,7 +211,7 @@ A clear and concise description of what you expected to happen.
 
     // Test extracting the issue template
     let output = Command::new(env!("CARGO_BIN_EXE_probe"))
-        .args(&["extract", &issue_template.to_string_lossy()])
+        .args(["extract", &issue_template.to_string_lossy()])
         .current_dir(temp_dir.path())
         .output()
         .expect("Failed to execute probe extract");
@@ -229,17 +221,14 @@ A clear and concise description of what you expected to happen.
 
     assert!(
         output.status.success(),
-        "probe extract should succeed for .github issue templates. stderr: {}",
-        stderr
+        "probe extract should succeed for .github issue templates. stderr: {stderr}"
     );
     assert!(
         stdout.contains("Bug report"),
-        "Should extract content from GitHub issue template. stdout: {}",
-        stdout
+        "Should extract content from GitHub issue template. stdout: {stdout}"
     );
     assert!(
         stdout.contains("Describe the bug"),
-        "Should extract the issue template content. stdout: {}",
-        stdout
+        "Should extract the issue template content. stdout: {stdout}"
     );
 }

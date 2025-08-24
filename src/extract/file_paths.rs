@@ -1745,14 +1745,12 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
             if should_be_ignored {
                 assert!(
                     is_ignored,
-                    "Path '{}' should be ignored but wasn't",
-                    path_str
+                    "Path '{path_str}' should be ignored but wasn't"
                 );
             } else {
                 assert!(
                     !is_ignored,
-                    "Path '{}' should NOT be ignored but was",
-                    path_str
+                    "Path '{path_str}' should NOT be ignored but was"
                 );
             }
         }
