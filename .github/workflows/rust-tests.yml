@@ -51,19 +51,47 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Lint with clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            # On Windows CI, use a custom target directory to avoid D:\a junction points
+            export CARGO_TARGET_DIR="C:/probe-target"
+            mkdir -p "$CARGO_TARGET_DIR"
+          fi
+          cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Build
-        run: cargo build
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            # On Windows CI, use a custom target directory to avoid D:\a junction points
+            export CARGO_TARGET_DIR="C:/probe-target"
+            mkdir -p "$CARGO_TARGET_DIR"
+          fi
+          cargo build
 
       - name: Run unit tests
-        run: cargo test --lib
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            export CARGO_TARGET_DIR="C:/probe-target"
+          fi
+          cargo test --lib
 
       - name: Run integration tests
-        run: cargo test --test integration_tests
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            export CARGO_TARGET_DIR="C:/probe-target"
+          fi
+          cargo test --test integration_tests
 
       - name: Run property tests
-        run: cargo test --test property_tests
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            export CARGO_TARGET_DIR="C:/probe-target"
+          fi
+          cargo test --test property_tests
 
       - name: Run CLI tests (Sequential on CI)
-        run: cargo test --test cli_tests -- --test-threads=1
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            export CARGO_TARGET_DIR="C:/probe-target"
+          fi
+          cargo test --test cli_tests -- --test-threads=1
