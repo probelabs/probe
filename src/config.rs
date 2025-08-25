@@ -1357,7 +1357,7 @@ pub mod config_ops {
         let mut file = fs::File::create(&config_path)?;
         file.write_all(pretty_json.as_bytes())?;
 
-        println!("✓ Set {} = {} in {} config", key, value, scope);
+        println!("✓ Set {key} = {value} in {scope} config");
         println!("  Config file: {}", config_path.display());
 
         Ok(())
@@ -1382,7 +1382,7 @@ pub mod config_ops {
                     if path.exists() {
                         if let Ok(content) = fs::read_to_string(&path) {
                             if let Ok(json) = serde_json::from_str::<Value>(&content) {
-                                if let Ok(_) = get_nested_value(&json, key) {
+                                if get_nested_value(&json, key).is_ok() {
                                     source = name;
                                     break;
                                 }
@@ -1392,9 +1392,9 @@ pub mod config_ops {
                 }
             }
 
-            println!("{} = {} (source: {})", key, value, source);
+            println!("{key} = {value} (source: {source})");
         } else {
-            println!("{}", value);
+            println!("{value}");
         }
 
         Ok(())
@@ -1413,12 +1413,12 @@ pub mod config_ops {
                             let mut input = String::new();
                             std::io::stdin().read_line(&mut input)?;
                             if !input.trim().eq_ignore_ascii_case("y") {
-                                println!("Skipping {}", s);
+                                println!("Skipping {s}");
                                 continue;
                             }
                         }
                         fs::remove_file(&path)?;
-                        println!("✓ Reset {} config", s);
+                        println!("✓ Reset {s} config");
                     }
                 }
             }
@@ -1436,9 +1436,9 @@ pub mod config_ops {
                     }
                 }
                 fs::remove_file(&path)?;
-                println!("✓ Reset {} config", scope);
+                println!("✓ Reset {scope} config");
             } else {
-                println!("No {} config file exists", scope);
+                println!("No {scope} config file exists");
             }
         }
 
@@ -2119,6 +2119,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_config_ops_set_config_value() {
         use config_ops::set_config_value;
         use serde_json::json;
@@ -2158,6 +2159,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_config_ops_reset_config() {
         use config_ops::{reset_config, set_config_value};
 
