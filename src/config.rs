@@ -1312,11 +1312,13 @@ pub mod config_ops {
             }
             "project" => {
                 // Project config: ./.probe/settings.json
-                Ok(PathBuf::from(".probe").join("settings.json"))
+                Ok(PathBuf::from(".").join(".probe").join("settings.json"))
             }
             "local" => {
                 // Local config: ./.probe/settings.local.json
-                Ok(PathBuf::from(".probe").join("settings.local.json"))
+                Ok(PathBuf::from(".")
+                    .join(".probe")
+                    .join("settings.local.json"))
             }
             _ => Err(anyhow::anyhow!("Invalid scope: {}", scope)),
         }
@@ -1365,34 +1367,39 @@ pub mod config_ops {
 
     /// Get a configuration value
     pub fn get_config_value(key: &str, show_source: bool) -> Result<()> {
-        let resolved = get_config();
-        // Convert ResolvedConfig to ProbeConfig which is serializable
-        let probe_config = resolved.to_probe_config();
-        let config_json = serde_json::to_value(probe_config)?;
+        // Try to find the value in config files directly, in priority order
+        let mut found_value: Option<Value> = None;
+        let mut found_source = "default";
 
-        let value = get_nested_value(&config_json, key)?;
-
-        if show_source {
-            // Try to find which config file provides this value
-            let mut source = "default";
-
-            // Check each config file in priority order
-            for (scope, name) in [("local", "local"), ("project", "project"), ("user", "user")] {
-                if let Ok(path) = get_config_path_for_scope(scope) {
-                    if path.exists() {
-                        if let Ok(content) = fs::read_to_string(&path) {
-                            if let Ok(json) = serde_json::from_str::<Value>(&content) {
-                                if get_nested_value(&json, key).is_ok() {
-                                    source = name;
-                                    break;
-                                }
+        // Check each config file in priority order (local > project > user)
+        for (scope, name) in [("local", "local"), ("project", "project"), ("user", "user")] {
+            if let Ok(path) = get_config_path_for_scope(scope) {
+                if path.exists() {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        if let Ok(json) = serde_json::from_str::<Value>(&content) {
+                            if let Ok(value) = get_nested_value(&json, key) {
+                                found_value = Some(value);
+                                found_source = name;
+                                break;
                             }
                         }
                     }
                 }
             }
+        }
 
-            println!("{key} = {value} (source: {source})");
+        // If not found in any config file, try to get from defaults
+        let value = if let Some(val) = found_value {
+            val
+        } else {
+            // Load defaults and check there
+            let default_config = ProbeConfig::default();
+            let default_json = serde_json::to_value(default_config)?;
+            get_nested_value(&default_json, key)?
+        };
+
+        if show_source {
+            println!("{key} = {value} (source: {found_source})");
         } else {
             println!("{value}");
         }
@@ -2108,11 +2115,19 @@ mod tests {
 
         // Test project scope
         let project_path = get_config_path_for_scope("project").unwrap();
-        assert_eq!(project_path, PathBuf::from(".probe/settings.json"));
+        assert_eq!(
+            project_path,
+            PathBuf::from(".").join(".probe").join("settings.json")
+        );
 
         // Test local scope
         let local_path = get_config_path_for_scope("local").unwrap();
-        assert_eq!(local_path, PathBuf::from(".probe/settings.local.json"));
+        assert_eq!(
+            local_path,
+            PathBuf::from(".")
+                .join(".probe")
+                .join("settings.local.json")
+        );
 
         // Test invalid scope
         assert!(get_config_path_for_scope("invalid").is_err());
