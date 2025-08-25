@@ -65,10 +65,5 @@ jobs:
       - name: Run property tests
         run: cargo test --test property_tests
 
-      - name: Run CLI tests
-        run: cargo test --test cli_tests
-        if: runner.os != 'Windows'
-      
-      - name: Run CLI tests (Windows - Sequential)
+      - name: Run CLI tests (Sequential on CI)
         run: cargo test --test cli_tests -- --test-threads=1
-        if: runner.os == 'Windows'
