@@ -13,6 +13,7 @@
 //! - Graceful shutdown and error handling
 
 use anyhow::{anyhow, Result};
+use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -22,7 +23,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::time::{interval, sleep};
 use tracing::{debug, error, info, trace, warn};
-use walkdir::WalkDir;
 
 /// Configuration for the file watcher
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,13 +178,28 @@ impl FileTracker {
             );
         }
 
-        // Walk the workspace directory
-        for entry in WalkDir::new(&self.workspace_root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| !self.should_exclude_path(e.path()))
-        {
-            let entry = match entry {
+        // Walk the workspace directory safely using ignore::WalkBuilder
+        let mut builder = WalkBuilder::new(&self.workspace_root);
+
+        // CRITICAL: Never follow symlinks to avoid junction point cycles on Windows
+        builder.follow_links(false);
+
+        // Stay on the same file system to avoid traversing mount points
+        builder.same_file_system(true);
+
+        // CRITICAL: Disable parent directory discovery to prevent climbing into junction cycles
+        builder.parents(false);
+
+        // For file watching, we typically want to respect gitignore
+        builder.git_ignore(true);
+        builder.git_global(false); // Skip global gitignore for performance
+        builder.git_exclude(false); // Skip .git/info/exclude for performance
+
+        // Use single thread for file watcher to avoid overwhelming the system
+        builder.threads(1);
+
+        for result in builder.build() {
+            let entry = match result {
                 Ok(e) => e,
                 Err(err) => {
                     if self.config.debug_logging {
@@ -195,11 +210,24 @@ impl FileTracker {
             };
 
             // Skip directories
-            if entry.file_type().is_dir() {
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                continue;
+            }
+
+            // Extra defensive check: skip symlinks even though we configured the walker not to follow them
+            if entry.file_type().is_some_and(|ft| ft.is_symlink()) {
+                if self.config.debug_logging {
+                    trace!("Skipping symlink file: {:?}", entry.path());
+                }
                 continue;
             }
 
             let file_path = entry.path().to_path_buf();
+
+            // Apply directory exclusion patterns
+            if self.should_exclude_path(&file_path) {
+                continue;
+            }
 
             // Apply inclusion/exclusion patterns at the file level too
             if self.should_exclude_file(&file_path) {

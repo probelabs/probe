@@ -18,6 +18,7 @@ use crate::language_detector::{Language, LanguageDetector};
 use crate::lsp_cache::LspCache;
 use crate::server_manager::SingleServerManager;
 use anyhow::{anyhow, Result};
+use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -526,16 +527,33 @@ impl IndexingManager {
         let mut discovered_count = 0u64;
         let mut batch = Vec::new();
 
-        // Use walkdir for recursive directory traversal
-        use walkdir::WalkDir;
+        // Use ignore::WalkBuilder for safe recursive directory traversal
+        let mut builder = WalkBuilder::new(&root_path);
 
-        for entry in WalkDir::new(&root_path).follow_links(false).into_iter() {
+        // CRITICAL: Never follow symlinks to avoid junction point cycles on Windows
+        builder.follow_links(false);
+
+        // Stay on the same file system to avoid traversing mount points
+        builder.same_file_system(true);
+
+        // CRITICAL: Disable parent directory discovery to prevent climbing into junction cycles
+        builder.parents(false);
+
+        // Configure gitignore handling (optional - can be disabled for indexing)
+        builder.git_ignore(true);
+        builder.git_global(false); // Skip global gitignore for performance
+        builder.git_exclude(false); // Skip .git/info/exclude for performance
+
+        // Enable parallel walking for large directories
+        builder.threads(1); // Use 1 thread to avoid overwhelming the system during indexing
+
+        for result in builder.build() {
             if shutdown.load(Ordering::Relaxed) {
                 debug!("File discovery interrupted by shutdown signal");
                 break;
             }
 
-            let entry = match entry {
+            let entry = match result {
                 Ok(entry) => entry,
                 Err(e) => {
                     warn!("Error accessing directory entry: {}", e);
@@ -544,7 +562,13 @@ impl IndexingManager {
             };
 
             // Skip directories
-            if entry.file_type().is_dir() {
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                continue;
+            }
+
+            // Extra defensive check: skip symlinks even though we configured the walker not to follow them
+            if entry.file_type().is_some_and(|ft| ft.is_symlink()) {
+                debug!("Skipping symlink file: {:?}", entry.path());
                 continue;
             }
 

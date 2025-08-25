@@ -1,4 +1,5 @@
 use crate::language_detector::Language;
+use crate::path_safety;
 use crate::socket_path::normalize_executable;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -338,8 +339,8 @@ impl LspRegistry {
             for marker in &config.root_markers {
                 // Handle glob patterns (e.g., "*.sln")
                 if marker.contains('*') {
-                    if let Ok(entries) = std::fs::read_dir(current) {
-                        for entry in entries.flatten() {
+                    if let Ok(entries) = path_safety::safe_read_dir(current) {
+                        for entry in entries {
                             if let Some(name) = entry.file_name().to_str() {
                                 if Self::matches_glob(name, marker) {
                                     return Some(current.to_path_buf());
@@ -348,8 +349,8 @@ impl LspRegistry {
                         }
                     }
                 } else {
-                    // Direct file/directory check
-                    if current.join(marker).exists() {
+                    // Direct file/directory check using safe path operations
+                    if path_safety::exists_no_follow(&current.join(marker)) {
                         return Some(current.to_path_buf());
                     }
                 }
@@ -384,7 +385,7 @@ impl LspRegistry {
             dirs::config_dir().ok_or_else(|| anyhow!("Could not find config directory"))?;
         let config_path = config_dir.join("lsp-daemon").join("config.toml");
 
-        if !config_path.exists() {
+        if !path_safety::exists_no_follow(&config_path) {
             return Ok(HashMap::new());
         }
 

@@ -39,7 +39,7 @@ fs2 = "0.4"
 md5 = "0.7"
 sled = { version = "0.34", features = ["compression"] }
 bincode = "1.3"
-walkdir = "2"
+ignore = "0.4"
 futures = "0.3"
 num_cpus = "1"
 flate2 = "1.0"
