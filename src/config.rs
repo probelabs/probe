@@ -1,3 +1,4 @@
+use crate::path_safety;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -449,21 +450,11 @@ impl ProbeConfig {
                 }
             }
 
-            // Use metadata check instead of exists() to avoid potential issues with junctions
-            // metadata() is more reliable on Windows with junction points
-            match fs::metadata(&path) {
-                Ok(metadata) if metadata.is_file() => {
-                    if let Ok(config) = Self::load_from_file(&path) {
-                        configs.push(config);
-                    }
-                }
-                Ok(_) => {
-                    // Path exists but is not a file (could be directory, symlink, etc.)
-                    continue;
-                }
-                Err(_) => {
-                    // Path doesn't exist or can't be accessed - skip it
-                    continue;
+            // Use path_safety module to avoid following symlinks/junctions
+            // This prevents stack overflow on Windows with junction point cycles
+            if path_safety::is_file_no_follow(&path) {
+                if let Ok(config) = Self::load_from_file(&path) {
+                    configs.push(config);
                 }
             }
         }
