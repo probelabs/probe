@@ -368,8 +368,29 @@ fn run_probe_with_config_dir(
     args: &[&str],
     config_dir: &std::path::Path,
 ) -> (String, String, bool) {
+    // On Windows CI, PROBE_SKIP_PROJECT_CONFIG is set, so we need to use PROBE_CONFIG_PATH
+    // to point to the config directory explicitly to bypass the project config skipping logic
+    #[cfg(target_os = "windows")]
+    if is_windows_ci() {
+        // Add trailing separator to indicate it's a directory, not a file
+        let probe_config_dir = config_dir.join(".probe");
+        let mut path_str = probe_config_dir.to_string_lossy().to_string();
+        if !path_str.ends_with('\\') && !path_str.ends_with('/') {
+            path_str.push('\\');
+        }
+        std::env::set_var("PROBE_CONFIG_PATH", &path_str);
+    }
+
     // Run probe in the specified directory so it finds .probe/settings.json there
-    run_probe_command_at(args, Some(config_dir))
+    let result = run_probe_command_at(args, Some(config_dir));
+
+    // Clean up the environment variable
+    #[cfg(target_os = "windows")]
+    if is_windows_ci() {
+        std::env::remove_var("PROBE_CONFIG_PATH");
+    }
+
+    result
 }
 
 // Helper function to create test files

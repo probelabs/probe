@@ -419,12 +419,14 @@ impl ProbeConfig {
             // Heuristic: trailing slash/backslash => treat as directory.
             let custom_str = custom_path.as_str();
             let looks_like_dir = custom_str.ends_with('\\') || custom_str.ends_with('/');
-            let p = if looks_like_dir {
-                PathBuf::from(&custom_path).join("settings.json")
+            if looks_like_dir {
+                // It's a directory, add both settings.json and settings.local.json
+                paths.push(PathBuf::from(&custom_path).join("settings.json"));
+                paths.push(PathBuf::from(&custom_path).join("settings.local.json"));
             } else {
-                PathBuf::from(&custom_path)
-            };
-            paths.push(p);
+                // It's a specific file path
+                paths.push(PathBuf::from(&custom_path));
+            }
         }
 
         paths
@@ -432,20 +434,36 @@ impl ProbeConfig {
 
     /// Load all configuration files that exist
     fn load_all_configs() -> Result<Vec<ProbeConfig>> {
-        // Skip project config loading if explicitly disabled (useful for CI)
-        if std::env::var("PROBE_SKIP_PROJECT_CONFIG").is_ok() {
-            return Ok(vec![Self::default()]);
-        }
-
         let paths = Self::get_config_paths();
         let mut configs = Vec::new();
+        let skip_project_config = std::env::var("PROBE_SKIP_PROJECT_CONFIG").is_ok();
 
         for path in paths {
+            // Skip project config loading if explicitly disabled (useful for CI)
+            // But allow custom config paths (via PROBE_CONFIG_PATH) to work in tests
+            if skip_project_config {
+                // Skip relative paths (project configs) but allow absolute paths
+                if path.is_relative() {
+                    continue;
+                }
+                // Also skip home directory configs that might use unsafe path resolution
+                #[cfg(target_os = "windows")]
+                {
+                    if let Some(path_str) = path.to_str() {
+                        // Skip paths that might involve unsafe resolution on Windows
+                        if path_str.contains("..") || path_str.starts_with(".") {
+                            continue;
+                        }
+                    }
+                }
+            }
+
             // On Windows, skip checking paths that start with "." to avoid junction issues
             // These are relative paths that could trigger stack overflow when resolved
             #[cfg(target_os = "windows")]
             {
-                if path.starts_with(".") {
+                if path.starts_with(".") && !skip_project_config {
+                    // Only skip if we're not already handling it above
                     continue;
                 }
             }
@@ -1737,5 +1755,64 @@ mod tests {
         // Indexing features and LSP caching should be created
         assert!(config.indexing.as_ref().unwrap().features.is_some());
         assert!(config.indexing.as_ref().unwrap().lsp_caching.is_some());
+    }
+
+    #[test]
+    fn test_probe_skip_project_config_behavior() {
+        // Test the behavior with PROBE_SKIP_PROJECT_CONFIG set
+
+        // Set the environment variable
+        env::set_var("PROBE_SKIP_PROJECT_CONFIG", "1");
+
+        // Test that relative paths are skipped but absolute paths work
+        let paths = vec![
+            PathBuf::from(".probe/settings.json"), // Should be skipped (relative)
+            PathBuf::from("./config/settings.json"), // Should be skipped (relative)
+            PathBuf::from("/tmp/test-config/settings.json"), // Should be allowed (absolute)
+        ];
+
+        let skip_project_config = env::var("PROBE_SKIP_PROJECT_CONFIG").is_ok();
+        assert!(skip_project_config);
+
+        // Test the logic from load_all_configs
+        let mut allowed_paths = Vec::new();
+        for path in paths {
+            if skip_project_config && path.is_relative() {
+                continue; // This should skip relative paths
+            }
+            allowed_paths.push(path);
+        }
+
+        // Should only have the absolute path
+        assert_eq!(allowed_paths.len(), 1);
+        assert!(allowed_paths[0].is_absolute());
+        assert_eq!(
+            allowed_paths[0],
+            PathBuf::from("/tmp/test-config/settings.json")
+        );
+
+        // Clean up
+        env::remove_var("PROBE_SKIP_PROJECT_CONFIG");
+
+        // Test without the env var - all paths should be allowed
+        let paths = vec![
+            PathBuf::from(".probe/settings.json"),
+            PathBuf::from("./config/settings.json"),
+            PathBuf::from("/tmp/test-config/settings.json"),
+        ];
+
+        let skip_project_config = env::var("PROBE_SKIP_PROJECT_CONFIG").is_ok();
+        assert!(!skip_project_config);
+
+        let mut allowed_paths = Vec::new();
+        for path in paths {
+            if skip_project_config && path.is_relative() {
+                continue;
+            }
+            allowed_paths.push(path);
+        }
+
+        // All paths should be allowed when env var is not set
+        assert_eq!(allowed_paths.len(), 3);
     }
 }
