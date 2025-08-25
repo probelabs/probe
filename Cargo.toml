@@ -86,8 +86,7 @@ criterion = "0.5"
 roxmltree = "0.18.0"
 jsonschema = "0.17.1"
 
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_System_Environment"] }
+# Windows-specific dependencies removed - we skip project config on Windows to avoid stack overflow
 
 [lib]
 name = "probe_code"
