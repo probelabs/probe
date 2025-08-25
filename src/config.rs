@@ -401,42 +401,16 @@ impl ProbeConfig {
         }
 
         // 2. Project config: ./.probe/settings.json
-        // IMPORTANT (Windows): Avoid relative path I/O that implicitly consults CWD.
-        // Build absolute paths from GetCurrentDirectoryW instead of using std::env::current_dir().
-        #[cfg(target_os = "windows")]
-        {
-            unsafe {
-                use std::os::windows::ffi::OsStringExt;
-                use windows_sys::Win32::System::Environment::GetCurrentDirectoryW;
-
-                // First call returns required length (excludes NUL). Add 1 for the NUL, per WinAPI docs.
-                let needed = GetCurrentDirectoryW(0, std::ptr::null_mut()) + 1;
-                if needed > 1 && needed < 32768 {
-                    let mut buf: Vec<u16> = vec![0; needed as usize];
-                    let got = GetCurrentDirectoryW(needed, buf.as_mut_ptr());
-                    if got > 0 && (got as usize) < buf.len() {
-                        let cwd = std::ffi::OsString::from_wide(&buf[..got as usize]);
-                        let base = PathBuf::from(cwd);
-                        paths.push(base.join(".probe").join("settings.json"));
-                        paths.push(base.join(".probe").join("settings.local.json"));
-                    } else {
-                        // Fallback to relative if the API fails (rare).
-                        paths.push(PathBuf::from(".probe").join("settings.json"));
-                        paths.push(PathBuf::from(".probe").join("settings.local.json"));
-                    }
-                } else {
-                    // Fallback to relative if the API fails (rare).
-                    paths.push(PathBuf::from(".probe").join("settings.json"));
-                    paths.push(PathBuf::from(".probe").join("settings.local.json"));
-                }
-            }
-        }
+        // IMPORTANT (Windows): Skip ALL project config on Windows to avoid stack overflow
+        // from path resolution in temp directories with junction points.
+        // Even relative paths can trigger the issue when they're resolved.
         #[cfg(not(target_os = "windows"))]
         {
             // Safe on Unix: relative paths won't trigger the Windows junction recursion.
             paths.push(PathBuf::from(".probe").join("settings.json"));
             paths.push(PathBuf::from(".probe").join("settings.local.json"));
         }
+        // On Windows, we completely skip project config to avoid any path resolution issues
 
         // 3. Custom path via environment variable - HIGHEST precedence (last wins)
         if let Ok(custom_path) = env::var("PROBE_CONFIG_PATH") {
