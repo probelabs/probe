@@ -413,4 +413,42 @@ pub enum ConfigSubcommands {
         #[arg(short = 'f', long = "file")]
         file: Option<String>,
     },
+
+    /// Set a configuration value
+    Set {
+        /// Configuration key in dot notation (e.g., "search.max_results", "lsp.enable_lsp")
+        key: String,
+
+        /// Value to set (will be parsed based on the key type)
+        value: String,
+
+        /// Configuration scope
+        #[arg(short = 's', long = "scope", default_value = "user", value_parser = ["user", "project", "local"])]
+        scope: String,
+
+        /// Force creation of config file if it doesn't exist
+        #[arg(short = 'f', long = "force")]
+        force: bool,
+    },
+
+    /// Get a specific configuration value
+    Get {
+        /// Configuration key in dot notation (e.g., "search.max_results", "lsp.enable_lsp")
+        key: String,
+
+        /// Show the source of the configuration value
+        #[arg(long = "show-source")]
+        show_source: bool,
+    },
+
+    /// Reset configuration to defaults
+    Reset {
+        /// Configuration scope to reset
+        #[arg(short = 's', long = "scope", default_value = "user", value_parser = ["user", "project", "local", "all"])]
+        scope: String,
+
+        /// Force reset without confirmation
+        #[arg(short = 'f', long = "force")]
+        force: bool,
+    },
 }

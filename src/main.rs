@@ -1005,6 +1005,20 @@ fn handle_config_command(subcommand: &cli::ConfigSubcommands) -> Result<()> {
                 }
             }
         }
+        ConfigSubcommands::Set {
+            key,
+            value,
+            scope,
+            force,
+        } => {
+            probe_code::config::config_ops::set_config_value(key, value, scope, *force)?;
+        }
+        ConfigSubcommands::Get { key, show_source } => {
+            probe_code::config::config_ops::get_config_value(key, *show_source)?;
+        }
+        ConfigSubcommands::Reset { scope, force } => {
+            probe_code::config::config_ops::reset_config(scope, *force)?;
+        }
     }
 
     Ok(())
