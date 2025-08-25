@@ -40,15 +40,8 @@ pub struct WorkspaceCacheRouterConfig {
 
 impl Default for WorkspaceCacheRouterConfig {
     fn default() -> Self {
-        // Default cache location: ~/Library/Caches/probe/lsp/workspaces on macOS
-        let base_cache_dir = dirs::cache_dir()
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
-            .join("probe")
-            .join("lsp")
-            .join("workspaces");
-
         Self {
-            base_cache_dir,
+            base_cache_dir: default_cache_directory(),
             max_open_caches: 8,
             max_parent_lookup_depth: 3,
             cache_config_template: crate::persistent_cache::PersistentCacheConfig {
@@ -59,6 +52,20 @@ impl Default for WorkspaceCacheRouterConfig {
             },
         }
     }
+}
+
+/// Lazily compute the default cache directory to avoid early filesystem access on Windows CI.
+/// This prevents stack overflow issues that occur when dirs::cache_dir() or dirs::home_dir()
+/// are called during static initialization (e.g., when the lsp_daemon crate is imported).
+fn default_cache_directory() -> PathBuf {
+    // Default cache location: ~/Library/Caches/probe/lsp/workspaces on macOS
+    // %LOCALAPPDATA%/probe/lsp/workspaces on Windows
+    // ~/.cache/probe/lsp/workspaces on Linux
+    dirs::cache_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+        .join("probe")
+        .join("lsp")
+        .join("workspaces")
 }
 
 /// Metadata for tracking cache access and lifecycle
