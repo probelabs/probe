@@ -283,6 +283,8 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
         cmd.env("NO_COLOR", "1");
         // Completely disable config discovery to avoid any path traversal issues
         cmd.env("PROBE_SKIP_PROJECT_CONFIG", "1");
+        // CRITICAL: Disable parent .gitignore discovery to prevent climbing into junction cycles
+        cmd.env("PROBE_NO_GITIGNORE", "1");
     }
 
     // Apply safe environment variables on Windows CI to avoid junction points
