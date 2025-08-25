@@ -164,8 +164,13 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
             .get_or_init(|| {
                 // Get the original probe binary path without evaluating it in problematic context
                 let original_path_str = std::env::var("CARGO_BIN_EXE_probe").unwrap_or_else(|_| {
-                    // Build path as string to avoid any path resolution
-                    format!("{}\\target\\debug\\probe.exe", env!("CARGO_MANIFEST_DIR"))
+                    // Check if CARGO_TARGET_DIR is set (as in CI)
+                    if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+                        format!("{}\\debug\\probe.exe", target_dir)
+                    } else {
+                        // Build path as string to avoid any path resolution
+                        format!("{}\\target\\debug\\probe.exe", env!("CARGO_MANIFEST_DIR"))
+                    }
                 });
 
                 // Use process ID to ensure uniqueness across different test runs
@@ -212,14 +217,17 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
                 // Use the string path to get parent directory
                 if let Some(parent_end) = original_path_str.rfind('\\') {
                     let parent_dir = &original_path_str[..parent_end];
-                    if let Ok(entries) = std::fs::read_dir(parent_dir) {
-                        for entry in entries.flatten() {
-                            if let Some(name) = entry.file_name().to_str() {
-                                if name.ends_with(".dll") {
-                                    let dll_dest = safe_bin_dir.join(name);
-                                    // Try hard link first, then copy
-                                    if std::fs::hard_link(entry.path(), &dll_dest).is_err() {
-                                        let _ = std::fs::copy(entry.path(), &dll_dest);
+                    // Only copy DLLs if the directory exists (it should after building)
+                    if std::path::Path::new(parent_dir).exists() {
+                        if let Ok(entries) = std::fs::read_dir(parent_dir) {
+                            for entry in entries.flatten() {
+                                if let Some(name) = entry.file_name().to_str() {
+                                    if name.ends_with(".dll") {
+                                        let dll_dest = safe_bin_dir.join(name);
+                                        // Try hard link first, then copy
+                                        if std::fs::hard_link(entry.path(), &dll_dest).is_err() {
+                                            let _ = std::fs::copy(entry.path(), &dll_dest);
+                                        }
                                     }
                                 }
                             }
