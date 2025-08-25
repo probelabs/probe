@@ -50,48 +50,27 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Lint with clippy
+      - name: Set custom target directory on Windows
+        if: runner.os == 'Windows'
         run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            # On Windows CI, use a custom target directory to avoid D:\a junction points
-            export CARGO_TARGET_DIR="C:/probe-target"
-            mkdir -p "$CARGO_TARGET_DIR"
-          fi
-          cargo clippy --all-targets --all-features -- -D warnings
+          echo "CARGO_TARGET_DIR=C:/probe-target" >> "$GITHUB_ENV"
+          mkdir -p C:/probe-target
+        shell: bash
+
+      - name: Lint with clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Build
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            # On Windows CI, use a custom target directory to avoid D:\a junction points
-            export CARGO_TARGET_DIR="C:/probe-target"
-            mkdir -p "$CARGO_TARGET_DIR"
-          fi
-          cargo build
+        run: cargo build
 
       - name: Run unit tests
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            export CARGO_TARGET_DIR="C:/probe-target"
-          fi
-          cargo test --lib
+        run: cargo test --lib
 
       - name: Run integration tests
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            export CARGO_TARGET_DIR="C:/probe-target"
-          fi
-          cargo test --test integration_tests
+        run: cargo test --test integration_tests
 
       - name: Run property tests
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            export CARGO_TARGET_DIR="C:/probe-target"
-          fi
-          cargo test --test property_tests
+        run: cargo test --test property_tests
 
       - name: Run CLI tests (Sequential on CI)
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            export CARGO_TARGET_DIR="C:/probe-target"
-          fi
-          cargo test --test cli_tests -- --test-threads=1
+        run: cargo test --test cli_tests -- --test-threads=1
