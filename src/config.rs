@@ -1294,6 +1294,284 @@ pub fn get_config() -> &'static ResolvedConfig {
     })
 }
 
+/// Configuration operations for CLI commands
+pub mod config_ops {
+    use super::*;
+    use serde_json::{json, Value};
+    use std::fs;
+    use std::io::Write;
+
+    /// Get the config file path for the given scope
+    pub fn get_config_path_for_scope(scope: &str) -> Result<PathBuf> {
+        match scope {
+            "user" => {
+                // Global config: ~/.probe/settings.json
+                let home_dir = dirs::home_dir()
+                    .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+                Ok(home_dir.join(".probe").join("settings.json"))
+            }
+            "project" => {
+                // Project config: ./.probe/settings.json
+                Ok(PathBuf::from(".probe").join("settings.json"))
+            }
+            "local" => {
+                // Local config: ./.probe/settings.local.json
+                Ok(PathBuf::from(".probe").join("settings.local.json"))
+            }
+            _ => Err(anyhow::anyhow!("Invalid scope: {}", scope)),
+        }
+    }
+
+    /// Set a configuration value
+    pub fn set_config_value(key: &str, value: &str, scope: &str, force: bool) -> Result<()> {
+        let config_path = get_config_path_for_scope(scope)?;
+
+        // Ensure parent directory exists
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Load existing config or create new one
+        let mut config_json = if config_path.exists() {
+            let content = fs::read_to_string(&config_path)?;
+            serde_json::from_str(&content)?
+        } else if force {
+            json!({})
+        } else {
+            return Err(anyhow::anyhow!(
+                "Config file does not exist: {}. Use --force to create it.",
+                config_path.display()
+            ));
+        };
+
+        // Parse the key path and set the value
+        set_nested_value(&mut config_json, key, value)?;
+
+        // Validate the config structure
+        let config: ProbeConfig = serde_json::from_value(config_json.clone())
+            .context("Invalid configuration structure")?;
+        config.validate()?;
+
+        // Write back to file
+        let pretty_json = serde_json::to_string_pretty(&config_json)?;
+        let mut file = fs::File::create(&config_path)?;
+        file.write_all(pretty_json.as_bytes())?;
+
+        println!("✓ Set {} = {} in {} config", key, value, scope);
+        println!("  Config file: {}", config_path.display());
+
+        Ok(())
+    }
+
+    /// Get a configuration value
+    pub fn get_config_value(key: &str, show_source: bool) -> Result<()> {
+        let resolved = get_config();
+        // Convert ResolvedConfig to ProbeConfig which is serializable
+        let probe_config = resolved.to_probe_config();
+        let config_json = serde_json::to_value(probe_config)?;
+
+        let value = get_nested_value(&config_json, key)?;
+
+        if show_source {
+            // Try to find which config file provides this value
+            let mut source = "default";
+
+            // Check each config file in priority order
+            for (scope, name) in [("local", "local"), ("project", "project"), ("user", "user")] {
+                if let Ok(path) = get_config_path_for_scope(scope) {
+                    if path.exists() {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            if let Ok(json) = serde_json::from_str::<Value>(&content) {
+                                if let Ok(_) = get_nested_value(&json, key) {
+                                    source = name;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            println!("{} = {} (source: {})", key, value, source);
+        } else {
+            println!("{}", value);
+        }
+
+        Ok(())
+    }
+
+    /// Reset configuration to defaults
+    pub fn reset_config(scope: &str, force: bool) -> Result<()> {
+        if scope == "all" {
+            // Reset all scopes
+            for s in ["user", "project", "local"] {
+                if let Ok(path) = get_config_path_for_scope(s) {
+                    if path.exists() {
+                        if !force {
+                            print!("Reset {} config at {}? [y/N]: ", s, path.display());
+                            std::io::stdout().flush()?;
+                            let mut input = String::new();
+                            std::io::stdin().read_line(&mut input)?;
+                            if !input.trim().eq_ignore_ascii_case("y") {
+                                println!("Skipping {}", s);
+                                continue;
+                            }
+                        }
+                        fs::remove_file(&path)?;
+                        println!("✓ Reset {} config", s);
+                    }
+                }
+            }
+        } else {
+            let path = get_config_path_for_scope(scope)?;
+            if path.exists() {
+                if !force {
+                    print!("Reset {} config at {}? [y/N]: ", scope, path.display());
+                    std::io::stdout().flush()?;
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input)?;
+                    if !input.trim().eq_ignore_ascii_case("y") {
+                        println!("Aborted");
+                        return Ok(());
+                    }
+                }
+                fs::remove_file(&path)?;
+                println!("✓ Reset {} config", scope);
+            } else {
+                println!("No {} config file exists", scope);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Set a nested value in a JSON object using dot notation
+    fn set_nested_value(obj: &mut Value, key: &str, value: &str) -> Result<()> {
+        let parts: Vec<&str> = key.split('.').collect();
+        if parts.is_empty() {
+            return Err(anyhow::anyhow!("Empty key"));
+        }
+
+        let mut current = obj;
+
+        // Navigate to the parent of the target
+        for part in &parts[..parts.len() - 1] {
+            if !current.is_object() {
+                *current = json!({});
+            }
+            current = current
+                .as_object_mut()
+                .ok_or_else(|| anyhow::anyhow!("Cannot navigate through non-object"))?
+                .entry(*part)
+                .or_insert(json!({}));
+        }
+
+        // Set the final value
+        let last_key = parts[parts.len() - 1];
+        let parsed_value = parse_config_value(value, key)?;
+
+        if !current.is_object() {
+            *current = json!({});
+        }
+        current
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("Cannot set value on non-object"))?
+            .insert(last_key.to_string(), parsed_value);
+
+        Ok(())
+    }
+
+    /// Get a nested value from a JSON object using dot notation
+    fn get_nested_value(obj: &Value, key: &str) -> Result<Value> {
+        let parts: Vec<&str> = key.split('.').collect();
+        if parts.is_empty() {
+            return Err(anyhow::anyhow!("Empty key"));
+        }
+
+        let mut current = obj;
+
+        for part in &parts {
+            match current {
+                Value::Object(map) => {
+                    current = map
+                        .get(*part)
+                        .ok_or_else(|| anyhow::anyhow!("Key not found: {}", key))?;
+                }
+                _ => return Err(anyhow::anyhow!("Cannot access {} in non-object", part)),
+            }
+        }
+
+        Ok(current.clone())
+    }
+
+    /// Parse a string value into the appropriate JSON type based on the key
+    fn parse_config_value(value: &str, key: &str) -> Result<Value> {
+        // Try to infer type from key name and common patterns
+        let key_lower = key.to_lowercase();
+
+        // Check for boolean fields
+        if key_lower.ends_with("enabled")
+            || key_lower.ends_with("enable")
+            || key_lower.contains("allow")
+            || key_lower.contains("disable")
+            || key_lower.contains("watch")
+            || key_lower.contains("auto")
+            || key_lower.contains("optimize")
+            || key_lower.ends_with("_lsp")
+            || key_lower.contains("debug")
+            || key_lower.contains("force")
+            || key_lower.contains("stdlib")
+            || key_lower.contains("autostart")
+            || key_lower.contains("gitignore")
+            || key_lower.contains("tests")
+            || key_lower.contains("blocks")
+            || key_lower.contains("frequency")
+        {
+            // Boolean fields
+            match value.to_lowercase().as_str() {
+                "true" | "yes" | "1" | "on" => Ok(json!(true)),
+                "false" | "no" | "0" | "off" => Ok(json!(false)),
+                _ => Err(anyhow::anyhow!("Invalid boolean value: {}", value)),
+            }
+        } else if key_lower.contains("timeout")
+            || key_lower.contains("max")
+            || key_lower.contains("size")
+            || key_lower.contains("depth")
+            || key_lower.contains("workers")
+            || key_lower.contains("budget")
+            || key_lower.contains("threshold")
+            || key_lower.contains("lines")
+            || key_lower.contains("cache")
+            || key_lower.contains("limit")
+        {
+            // Numeric fields
+            value
+                .parse::<u64>()
+                .map(|n| json!(n))
+                .or_else(|_| value.parse::<f64>().map(|n| json!(n)))
+                .map_err(|_| anyhow::anyhow!("Invalid number: {}", value))
+        } else {
+            // String fields (format, reranker, log_level, etc.)
+            // Also try to parse as boolean or number if it looks like one
+            match value.to_lowercase().as_str() {
+                "true" | "yes" | "on" => Ok(json!(true)),
+                "false" | "no" | "off" => Ok(json!(false)),
+                _ => {
+                    // Try as number first
+                    if let Ok(n) = value.parse::<u64>() {
+                        Ok(json!(n))
+                    } else if let Ok(n) = value.parse::<f64>() {
+                        Ok(json!(n))
+                    } else {
+                        // Default to string
+                        Ok(json!(value))
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1817,5 +2095,93 @@ mod tests {
 
         // All paths should be allowed when env var is not set
         assert_eq!(allowed_paths.len(), 3);
+    }
+
+    // Tests for the new config_ops module
+    #[test]
+    fn test_config_ops_get_config_path_for_scope() {
+        use config_ops::get_config_path_for_scope;
+
+        // Test user scope
+        let user_path = get_config_path_for_scope("user").unwrap();
+        assert!(user_path.ends_with(".probe/settings.json"));
+
+        // Test project scope
+        let project_path = get_config_path_for_scope("project").unwrap();
+        assert_eq!(project_path, PathBuf::from(".probe/settings.json"));
+
+        // Test local scope
+        let local_path = get_config_path_for_scope("local").unwrap();
+        assert_eq!(local_path, PathBuf::from(".probe/settings.local.json"));
+
+        // Test invalid scope
+        assert!(get_config_path_for_scope("invalid").is_err());
+    }
+
+    #[test]
+    fn test_config_ops_set_config_value() {
+        use config_ops::set_config_value;
+        use serde_json::json;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Change to temp directory to avoid affecting real configs
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // The config file will be created relative to current directory
+        let config_file = PathBuf::from(".probe").join("settings.json");
+
+        // Test creating new config with force flag
+        assert!(set_config_value("search.max_results", "30", "project", true).is_ok());
+        assert!(config_file.exists());
+
+        // Verify the content
+        let content = fs::read_to_string(&config_file).unwrap();
+        let json_val: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(json_val["search"]["max_results"], json!(30));
+
+        // Test updating existing config
+        assert!(set_config_value("search.reranker", "hybrid", "project", false).is_ok());
+
+        let content = fs::read_to_string(&config_file).unwrap();
+        let json_val: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(json_val["search"]["max_results"], json!(30));
+        assert_eq!(json_val["search"]["reranker"], json!("hybrid"));
+
+        // Test without force flag on non-existent file
+        fs::remove_file(&config_file).unwrap();
+        assert!(set_config_value("search.max_results", "20", "project", false).is_err());
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_config_ops_reset_config() {
+        use config_ops::{reset_config, set_config_value};
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Change to temp directory
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // The config file will be created relative to current directory
+        let config_file = PathBuf::from(".probe").join("settings.json");
+
+        // Create a config file
+        set_config_value("search.max_results", "25", "project", true).unwrap();
+        assert!(config_file.exists());
+
+        // Reset with force flag
+        reset_config("project", true).unwrap();
+        assert!(!config_file.exists());
+
+        // Reset non-existent config (should not error)
+        reset_config("project", true).unwrap();
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
     }
 }
