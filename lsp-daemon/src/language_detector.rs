@@ -1,3 +1,4 @@
+use crate::path_safety;
 use anyhow::Result;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -269,9 +270,9 @@ impl LanguageDetector {
             return Ok(());
         }
 
-        // Read directory entries
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
+        // Read directory entries safely
+        if let Ok(entries) = path_safety::safe_read_dir(dir) {
+            for entry in entries {
                 let path = entry.path();
 
                 // Skip hidden directories and common build/dependency directories
@@ -347,14 +348,14 @@ impl LanguageDetector {
         ];
 
         for (marker, language) in markers {
-            if dir.join(marker).exists() {
+            if path_safety::exists_no_follow(&dir.join(marker)) {
                 languages.insert(language);
             }
         }
 
         // Special case: Check for .csproj or .sln files
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
+        if let Ok(entries) = path_safety::safe_read_dir(dir) {
+            for entry in entries {
                 if let Some(name) = entry.file_name().to_str() {
                     if name.ends_with(".csproj") || name.ends_with(".sln") {
                         languages.insert(Language::CSharp);
@@ -391,10 +392,10 @@ impl LanguageDetector {
         let mut checked_extensions = HashSet::new();
 
         // Scan files in the directory (non-recursive)
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
+        if let Ok(entries) = path_safety::safe_read_dir(dir) {
+            for entry in entries {
                 let path = entry.path();
-                if path.is_file() {
+                if path_safety::is_file_no_follow(&path) {
                     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                         // Only check each extension once
                         if !checked_extensions.contains(ext) {
@@ -419,10 +420,10 @@ impl LanguageDetector {
 
     /// Check if directory contains files with given extensions
     fn has_files_with_extension(&self, dir: &Path, extensions: &[&str]) -> Result<bool> {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
+        if let Ok(entries) = path_safety::safe_read_dir(dir) {
+            for entry in entries {
                 let path = entry.path();
-                if path.is_file() {
+                if path_safety::is_file_no_follow(&path) {
                     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                         if extensions.contains(&ext) {
                             return Ok(true);

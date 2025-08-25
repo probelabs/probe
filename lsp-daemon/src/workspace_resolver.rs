@@ -1,4 +1,5 @@
 use crate::language_detector::Language;
+use crate::path_safety;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -121,7 +122,7 @@ impl WorkspaceResolver {
             ];
 
             for (marker, priority) in &markers_with_priority {
-                if current.join(marker).exists() {
+                if path_safety::exists_no_follow(&current.join(marker)) {
                     match &best_match {
                         None => best_match = Some((current.to_path_buf(), *priority)),
                         Some((_, current_priority)) => {

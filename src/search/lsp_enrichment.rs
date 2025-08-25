@@ -1,3 +1,4 @@
+use crate::path_safety;
 use anyhow::Result;
 use dashmap::DashMap;
 use probe_code::language::factory::get_language_impl;
@@ -1112,7 +1113,7 @@ fn find_workspace_root(file_path: &Path) -> Option<&Path> {
 
     while current.parent().is_some() {
         for marker in &markers {
-            if current.join(marker).exists() {
+            if path_safety::exists_no_follow(&current.join(marker)) {
                 return Some(current);
             }
         }

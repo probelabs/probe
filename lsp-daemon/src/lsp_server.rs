@@ -1,4 +1,5 @@
 use crate::lsp_registry::LspServerConfig;
+use crate::path_safety;
 use crate::socket_path::normalize_executable;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -447,7 +448,7 @@ impl LspServer {
         if config.language == crate::language_detector::Language::Rust {
             // Find Cargo.toml files in the workspace
             let cargo_toml_path = project_root.join("Cargo.toml");
-            if cargo_toml_path.exists() {
+            if path_safety::exists_no_follow(&cargo_toml_path) {
                 debug!(
                     "Found Cargo.toml at {:?}, adding to linkedProjects",
                     cargo_toml_path
@@ -1117,7 +1118,7 @@ impl LspServer {
     fn find_go_module_root(start_dir: &Path) -> Option<PathBuf> {
         let mut current = start_dir;
         loop {
-            if current.join("go.mod").exists() {
+            if path_safety::exists_no_follow(&current.join("go.mod")) {
                 debug!("Found go.mod at {:?}", current);
                 return Some(current.to_path_buf());
             }
