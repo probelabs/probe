@@ -129,6 +129,22 @@ To run the site locally:
 2. Install dependencies: `npm install`
 3. Start the development server: `npm run dev`
 
+## Deployment
+
+The site is deployed using **Cloudflare Pages** with automatic deployments from the main branch to **probelabs.com**.
+
+### Deployment Configuration
+- Platform: Cloudflare Pages
+- Domain: probelabs.com
+- Build command: `npm run build`
+- Output directory: `.vitepress/dist`
+- Node.js version: 20
+
+For detailed deployment instructions, see [DEPLOYMENT.md](./DEPLOYMENT.md).
+
+### Previous Deployment
+The site was previously deployed via GitHub Pages. The old workflow has been disabled and renamed to `vitepress-gh-pages.yml.disabled`.
+
 ## Building for Production
 
 To build the site for production:

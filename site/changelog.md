@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🚀 Major Features
 
+#### Enhanced Extract Command Markdown Robustness
+- **Markdown formatting support**: Extract command now handles markdown bold (`**text**`), italic (`*text*`), strikethrough (`~~text~~`), and code blocks (```text```)
+- **Flexible file path detection**: Improved regex patterns recognize file paths after punctuation and markdown symbols
+- **Real-world compatibility**: Works with GitHub issues, documentation, chat messages, and other markdown-formatted content
+- **Comprehensive test coverage**: 14 unit tests covering all markdown scenarios and edge cases
+- **Backward compatibility**: All existing functionality preserved while adding robustness
+
 #### Cross-Platform Claude Code Backend Detection
 - **Removed Unix-specific commands**: No more `which` command dependency, works on all platforms
 - **Windows support**: Full support for `.cmd` files and Windows-specific paths

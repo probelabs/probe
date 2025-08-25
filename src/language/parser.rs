@@ -1831,19 +1831,20 @@ pub fn parse_file_for_code_blocks_with_tree(
     _term_matches: Option<&HashMap<usize, HashSet<usize>>>, // Query index to line numbers
     pre_parsed_tree: Option<tree_sitter::Tree>,
 ) -> Result<Vec<CodeBlock>> {
+    // Check for debug mode
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
     // Get the appropriate language implementation
     let language_impl = match get_language_impl(extension) {
         Some(lang) => lang,
         None => {
-            return Err(anyhow::anyhow!(format!(
-                "Unsupported file type: {}",
-                extension
-            )))
+            // For unsupported languages, return empty blocks to trigger fallback to literal extraction
+            if debug_mode {
+                eprintln!("DEBUG: File extension '{extension}' not supported for AST parsing, returning empty blocks for fallback");
+            }
+            return Ok(Vec::new());
         }
     };
-
-    // Check for debug mode
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Calculate content hash for cache key
     let content_hash = calculate_content_hash(content);
@@ -1935,4 +1936,79 @@ pub fn parse_file_for_code_blocks_with_tree(
     }
 
     Ok(code_blocks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_parse_file_unsupported_language_returns_empty() {
+        // Test that parsing an unsupported language returns empty blocks instead of error
+        let content = r#"
+        # Terraform configuration
+        resource "aws_instance" "example" {
+          ami           = "ami-0c55b159cbfafe1f0"
+          instance_type = "t2.micro"
+        }
+        "#;
+
+        let mut line_numbers = HashSet::new();
+        line_numbers.insert(3); // Line with 'resource'
+
+        // .tf extension is not supported by tree-sitter
+        let result = parse_file_for_code_blocks(
+            content,
+            "tf", // Terraform extension, not supported
+            &line_numbers,
+            false, // allow_tests
+            None,  // term_matches
+        );
+
+        // Should return Ok with empty vector, not an error
+        assert!(result.is_ok(), "Should not error for unsupported language");
+        let blocks = result.unwrap();
+        assert_eq!(
+            blocks.len(),
+            0,
+            "Should return empty blocks for unsupported language"
+        );
+    }
+
+    #[test]
+    fn test_parse_file_supported_language_returns_blocks() {
+        // Test that parsing a supported language returns appropriate blocks
+        let content = r#"fn main() {
+    println!("Hello, world!");
+}
+
+fn test_function() {
+    assert_eq!(1, 1);
+}"#;
+
+        let mut line_numbers = HashSet::new();
+        line_numbers.insert(2); // Line inside main function
+
+        let result = parse_file_for_code_blocks(
+            content,
+            "rs", // Rust extension, supported
+            &line_numbers,
+            false, // allow_tests
+            None,  // term_matches
+        );
+
+        assert!(result.is_ok(), "Should succeed for supported language");
+        let blocks = result.unwrap();
+        assert!(
+            !blocks.is_empty(),
+            "Should return code blocks for supported language"
+        );
+
+        // Check that we found a function block
+        let has_function = blocks
+            .iter()
+            .any(|b| b.node_type == "function_item" || b.node_type == "function");
+        assert!(has_function, "Should find a function block");
+    }
 }
