@@ -11,6 +11,7 @@ use crate::language_detector::{Language, LanguageDetector};
 use crate::logging::{LogBuffer, MemoryLogLayer};
 use crate::lsp_cache::{LspCache, LspCacheConfig};
 use crate::lsp_registry::LspRegistry;
+use crate::path_safety::safe_canonicalize;
 use crate::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
 use crate::pid_lock::PidLock;
 #[cfg(unix)]
@@ -1104,12 +1105,7 @@ impl LspDaemon {
                             workspaces: s
                                 .workspaces
                                 .iter()
-                                .map(|w| {
-                                    w.canonicalize()
-                                        .unwrap_or_else(|_| w.clone())
-                                        .to_string_lossy()
-                                        .to_string()
-                                })
+                                .map(|w| safe_canonicalize(w).to_string_lossy().to_string())
                                 .collect(),
                             uptime_secs: s.uptime.as_secs(),
                             status: format!("{:?}", s.status),
@@ -1763,9 +1759,9 @@ impl LspDaemon {
 
         // Convert relative path to absolute path
         // Be tolerant to transient canonicalize issues (e.g., symlinks/overlays in test fixtures).
-        let absolute_file_path = match file_path.canonicalize() {
-            Ok(p) => p,
-            Err(_) => {
+        let absolute_file_path = match safe_canonicalize(file_path).as_path() {
+            p if p.exists() => p.to_path_buf(),
+            _ => {
                 if file_path.is_absolute() {
                     file_path.to_path_buf()
                 } else {
@@ -2346,9 +2342,7 @@ impl LspDaemon {
         column: u32,
         workspace_hint: Option<PathBuf>,
     ) -> Result<Vec<Location>> {
-        let absolute_file_path = file_path
-            .canonicalize()
-            .unwrap_or_else(|_| file_path.to_path_buf());
+        let absolute_file_path = safe_canonicalize(file_path);
         let content_md5 = md5_hex_file(&absolute_file_path)?;
 
         // Use cache
@@ -2420,9 +2414,7 @@ impl LspDaemon {
         include_declaration: bool,
         workspace_hint: Option<PathBuf>,
     ) -> Result<Vec<Location>> {
-        let absolute_file_path = file_path
-            .canonicalize()
-            .unwrap_or_else(|_| file_path.to_path_buf());
+        let absolute_file_path = safe_canonicalize(file_path);
         let content_md5 = md5_hex_file(&absolute_file_path)?;
 
         // Use cache
@@ -2494,9 +2486,7 @@ impl LspDaemon {
         column: u32,
         workspace_hint: Option<PathBuf>,
     ) -> Result<Option<HoverContent>> {
-        let absolute_file_path = file_path
-            .canonicalize()
-            .unwrap_or_else(|_| file_path.to_path_buf());
+        let absolute_file_path = safe_canonicalize(file_path);
         let content_md5 = md5_hex_file(&absolute_file_path)?;
 
         // Use cache
@@ -2622,9 +2612,7 @@ impl LspDaemon {
         }
 
         // Canonicalize the workspace root to ensure it's an absolute path
-        let canonical_root = workspace_root
-            .canonicalize()
-            .unwrap_or_else(|_| workspace_root.clone());
+        let canonical_root = safe_canonicalize(&workspace_root);
 
         // Check if workspace is allowed
         {
@@ -2718,9 +2706,7 @@ impl LspDaemon {
         }
 
         // Canonicalize the workspace root to ensure it's an absolute path
-        let canonical_root = workspace_root
-            .canonicalize()
-            .unwrap_or_else(|_| workspace_root.clone());
+        let canonical_root = safe_canonicalize(&workspace_root);
 
         // Discover workspaces
         let detector = crate::language_detector::LanguageDetector::new();
@@ -2736,9 +2722,7 @@ impl LspDaemon {
         // Filter by requested languages if specified
         for (workspace_path, detected_languages) in discovered_workspaces {
             // Canonicalize each workspace path to ensure it's absolute
-            let canonical_workspace = workspace_path
-                .canonicalize()
-                .unwrap_or_else(|_| workspace_path.clone());
+            let canonical_workspace = safe_canonicalize(&workspace_path);
 
             let languages_to_init = if let Some(ref requested_languages) = languages {
                 // Only initialize requested languages that were detected
@@ -2779,11 +2763,10 @@ impl LspDaemon {
                         let absolute_workspace = if canonical_workspace.is_absolute() {
                             canonical_workspace.clone()
                         } else {
-                            std::env::current_dir()
+                            let joined_path = std::env::current_dir()
                                 .unwrap_or_else(|_| PathBuf::from("/"))
-                                .join(&canonical_workspace)
-                                .canonicalize()
-                                .unwrap_or_else(|_| canonical_workspace.clone())
+                                .join(&canonical_workspace);
+                            safe_canonicalize(&joined_path)
                         };
 
                         initialized.push(InitializedWorkspace {
