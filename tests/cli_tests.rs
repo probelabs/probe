@@ -152,8 +152,13 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
     use std::thread;
     use std::time::Instant;
 
-    // Get the probe binary path
-    let probe_path = if let Ok(path) = std::env::var("CARGO_BIN_EXE_probe") {
+    #[cfg(target_os = "windows")]
+    use std::process::id;
+    #[cfg(target_os = "windows")]
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Get the original probe binary path
+    let original_probe_path = if let Ok(path) = std::env::var("CARGO_BIN_EXE_probe") {
         PathBuf::from(path)
     } else {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -162,6 +167,56 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
         path.push(if cfg!(windows) { "probe.exe" } else { "probe" });
         path
     };
+
+    // On Windows CI, copy the binary to a safe location to avoid junction points
+    // in the executable's own path that could trigger stack overflow during startup
+    #[cfg(target_os = "windows")]
+    let probe_path = if is_windows_ci() {
+        // Create a unique directory for this test run to avoid conflicts
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let unique_name = format!("run-{}-{}", id(), timestamp);
+
+        let mut safe_bin_dir = choose_windows_safe_base();
+        safe_bin_dir.push("bin");
+        safe_bin_dir.push(unique_name);
+
+        // Create the directory and copy the binary
+        if let Err(e) = std::fs::create_dir_all(&safe_bin_dir) {
+            eprintln!("Warning: Failed to create safe bin dir: {}", e);
+            original_probe_path
+        } else {
+            let safe_probe_path = safe_bin_dir.join("probe.exe");
+
+            // Copy the binary
+            if let Err(e) = std::fs::copy(&original_probe_path, &safe_probe_path) {
+                eprintln!("Warning: Failed to copy probe.exe to safe location: {}", e);
+                original_probe_path
+            } else {
+                // Also copy any potential DLL dependencies (if they exist)
+                if let Some(parent) = original_probe_path.parent() {
+                    if let Ok(entries) = std::fs::read_dir(parent) {
+                        for entry in entries.flatten() {
+                            if let Some(name) = entry.file_name().to_str() {
+                                if name.ends_with(".dll") {
+                                    let dll_dest = safe_bin_dir.join(name);
+                                    let _ = std::fs::copy(entry.path(), dll_dest);
+                                }
+                            }
+                        }
+                    }
+                }
+                safe_probe_path
+            }
+        }
+    } else {
+        original_probe_path
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let probe_path = original_probe_path;
 
     let mut cmd = Command::new(probe_path);
     cmd.args(args);
