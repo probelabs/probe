@@ -87,7 +87,7 @@ roxmltree = "0.18.0"
 jsonschema = "0.17.1"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.52", features = ["Win32_System_Environment"] }
 
 [lib]
 name = "probe_code"

@@ -407,7 +407,7 @@ impl ProbeConfig {
         {
             unsafe {
                 use std::os::windows::ffi::OsStringExt;
-                use windows_sys::Win32::Storage::FileSystem::GetCurrentDirectoryW;
+                use windows_sys::Win32::System::Environment::GetCurrentDirectoryW;
 
                 // First call returns required length (excludes NUL). Add 1 for the NUL, per WinAPI docs.
                 let needed = GetCurrentDirectoryW(0, std::ptr::null_mut()) + 1;
