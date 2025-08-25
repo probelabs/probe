@@ -7,23 +7,51 @@ use tempfile::TempDir;
 #[path = "common/mod.rs"]
 mod common;
 
+/// True when running on Windows GitHub Actions (or CI)
+#[cfg(target_os = "windows")]
+fn is_windows_ci() -> bool {
+    std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok()
+}
+
+/// Choose a safe base directory on Windows, preferring C:\ to avoid D:\a\ junctions.
+/// Falls back to repo target/ if C:\ is not writable (e.g., in locked-down runners).
+#[cfg(target_os = "windows")]
+fn choose_windows_safe_base() -> PathBuf {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(sys_drive) = std::env::var("SystemDrive") {
+        // Typical: "C:"
+        candidates.push(PathBuf::from(format!(r"{}\__probe-ci-sandbox", sys_drive)));
+    }
+    candidates.push(PathBuf::from(r"C:\__probe-ci-sandbox"));
+    // Fallback to repo/target if the above fail (still better than system temp)
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-sandbox"),
+    );
+    for p in candidates {
+        if std::fs::create_dir_all(&p).is_ok() {
+            return p;
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("test-sandbox")
+}
+
 /// Create a safe temporary directory that avoids Windows junction point issues
 /// On Windows CI, we create temp dirs under target/ instead of the system temp
 /// to avoid junction point cycles that cause stack overflows
 fn make_safe_tempdir() -> TempDir {
-    // On Windows CI, use target directory to avoid junction points in system temp
+    // On Windows CI, use safe base directory to avoid junction points
     #[cfg(target_os = "windows")]
-    if std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
-        // Create temp directory under target/ which is safe from junction points
-        let mut target_temp = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        target_temp.push("target");
-        target_temp.push("test-temp");
-
-        // Ensure the parent directory exists
-        let _ = std::fs::create_dir_all(&target_temp);
-
-        // Create temp dir under our safe location
-        return TempDir::new_in(target_temp).expect("Failed to create safe temp dir");
+    if is_windows_ci() {
+        // Prefer a safe base on C:\ if available, fall back to repo/target
+        let base = choose_windows_safe_base();
+        return tempfile::Builder::new()
+            .prefix("probe-")
+            .tempdir_in(base)
+            .expect("Failed to create safe temp dir");
     }
 
     // For non-Windows or non-CI, use normal temp directory
@@ -36,28 +64,61 @@ fn get_safe_env_vars() -> Vec<(String, String)> {
     let mut env_vars = Vec::new();
 
     #[cfg(target_os = "windows")]
-    if std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
-        // Create a safe home and temp base under target/
-        let mut safe_base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        safe_base.push("target");
+    if is_windows_ci() {
+        // Create a safe base (prefer C:\) for home/temp/appdata
+        let mut safe_base = choose_windows_safe_base();
         safe_base.push("test-env");
 
         let safe_home = safe_base.join("home");
         let safe_temp = safe_base.join("temp");
+        let safe_appdata = safe_home.join("AppData").join("Roaming");
+        let safe_localappdata = safe_home.join("AppData").join("Local");
 
         // Ensure directories exist
         let _ = std::fs::create_dir_all(&safe_home);
         let _ = std::fs::create_dir_all(&safe_temp);
+        let _ = std::fs::create_dir_all(&safe_appdata);
+        let _ = std::fs::create_dir_all(&safe_localappdata);
 
         // Override all environment variables that might point to problematic paths
-        let home_str = safe_home.to_string_lossy().to_string();
-        let temp_str = safe_temp.to_string_lossy().to_string();
+        let home_str = safe_home.to_string_lossy().replace('/', "\\");
+        let temp_str = safe_temp.to_string_lossy().replace('/', "\\");
+        let appdata_str = safe_appdata.to_string_lossy().replace('/', "\\");
+        let localappdata_str = safe_localappdata.to_string_lossy().replace('/', "\\");
+
+        // Compute HOMEDRIVE/HOMEPATH from the safe home (best-effort)
+        let (home_drive, home_path) = if home_str.len() >= 2 && &home_str[1..2] == ":" {
+            (home_str[0..2].to_string(), {
+                let p = &home_str[2..];
+                if p.starts_with('\\') {
+                    p.to_string()
+                } else {
+                    format!(r"\{}", p)
+                }
+            })
+        } else {
+            ("C:".to_string(), r"\".to_string())
+        };
 
         env_vars.push(("HOME".to_string(), home_str.clone()));
         env_vars.push(("USERPROFILE".to_string(), home_str.clone()));
         env_vars.push(("TMP".to_string(), temp_str.clone()));
         env_vars.push(("TEMP".to_string(), temp_str.clone()));
         env_vars.push(("TMPDIR".to_string(), temp_str.clone()));
+        env_vars.push(("HOMEDRIVE".to_string(), home_drive));
+        env_vars.push(("HOMEPATH".to_string(), home_path));
+        env_vars.push(("APPDATA".to_string(), appdata_str));
+        env_vars.push(("LOCALAPPDATA".to_string(), localappdata_str));
+
+        // Isolate toolchain homes too (defensive; harmless if unused)
+        env_vars.push((
+            "CARGO_HOME".to_string(),
+            format!(r"{}\{}", home_str, ".cargo"),
+        ));
+        env_vars.push((
+            "RUSTUP_HOME".to_string(),
+            format!(r"{}\{}", home_str, ".rustup"),
+        ));
 
         // Clear RUNNER_TEMP which points to the problematic directory
         env_vars.push(("RUNNER_TEMP".to_string(), temp_str));
@@ -69,6 +130,17 @@ fn get_safe_env_vars() -> Vec<(String, String)> {
 /// Helper function to run probe command with proper pipe handling for Windows
 /// This wrapper prevents deadlocks on Windows by using concurrent pipe draining
 fn run_probe_command(args: &[&str]) -> (String, String, bool) {
+    // On Windows CI, default the child process CWD to a safe temp dir even for
+    // commands like `config show` that don't take an explicit path argument.
+    #[cfg(target_os = "windows")]
+    {
+        if is_windows_ci() {
+            let safe_cwd = make_safe_tempdir();
+            // Keep `safe_cwd` alive for the duration of the child process.
+            let (out, err, ok) = run_probe_command_at(args, Some(safe_cwd.path()));
+            return (out, err, ok);
+        }
+    }
     run_probe_command_at(args, None)
 }
 
@@ -104,6 +176,13 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
     // Set test environment variables
     cmd.env("CI", "1");
     cmd.env("PROBE_LSP_DISABLE_AUTOSTART", "1");
+
+    // Helpful for diagnosing any remaining issues
+    #[cfg(target_os = "windows")]
+    if is_windows_ci() {
+        cmd.env("RUST_BACKTRACE", "full");
+        cmd.env("NO_COLOR", "1");
+    }
 
     // Apply safe environment variables on Windows CI to avoid junction points
     for (key, value) in get_safe_env_vars() {
