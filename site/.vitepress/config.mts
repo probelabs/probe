@@ -9,6 +9,20 @@ export default defineConfig({
   appearance: true,
   ignoreDeadLinks: true,
   
+  // Site URL for sitemap and canonical URLs
+  sitemap: {
+    hostname: 'https://probelabs.com'
+  },
+  
+  // Site metadata for probelabs.com
+  head: [
+    ['link', { rel: 'canonical', href: 'https://probelabs.com/' }],
+    ['meta', { property: 'og:site_name', content: 'Probe Labs' }],
+    ['meta', { property: 'og:url', content: 'https://probelabs.com/' }],
+    ['meta', { property: 'twitter:site', content: '@buger' }],
+    ['meta', { name: 'robots', content: 'index,follow' }]
+  ],
+  
   markdown: {
     theme: {
       light: 'github-light',
