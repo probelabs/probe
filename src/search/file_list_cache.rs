@@ -160,8 +160,15 @@ fn build_file_list(
     // Stay on the same file system to avoid traversing mount points
     builder.same_file_system(true);
 
+    // CRITICAL: Disable parent directory discovery to prevent climbing into junction cycles
+    // This is THE KEY fix for Windows CI where temp dirs under D:\a\... have junction cycles
+    builder.parents(false);
+
+    // Honor PROBE_NO_GITIGNORE if set (e.g., by Windows CI safety guards)
+    let no_gitignore_override = no_gitignore || std::env::var("PROBE_NO_GITIGNORE").is_ok();
+
     // Configure the builder to conditionally respect gitignore files
-    if !no_gitignore {
+    if !no_gitignore_override {
         builder.git_ignore(true);
         builder.git_global(true);
         builder.git_exclude(true);
