@@ -1,6 +1,8 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
+#[cfg(target_os = "windows")]
+use std::sync::OnceLock;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -152,11 +154,6 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
     use std::thread;
     use std::time::Instant;
 
-    #[cfg(target_os = "windows")]
-    use std::process::id;
-    #[cfg(target_os = "windows")]
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     // Get the original probe binary path
     let original_probe_path = if let Ok(path) = std::env::var("CARGO_BIN_EXE_probe") {
         PathBuf::from(path)
@@ -168,49 +165,78 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
         path
     };
 
-    // On Windows CI, copy the binary to a safe location to avoid junction points
+    // On Windows CI, stage the binary to a safe location to avoid junction points
     // in the executable's own path that could trigger stack overflow during startup
     #[cfg(target_os = "windows")]
     let probe_path = if is_windows_ci() {
-        // Create a unique directory for this test run to avoid conflicts
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let unique_name = format!("run-{}-{}", id(), timestamp);
+        // Use OnceLock to stage the binary only once per test process
+        static SAFE_PROBE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-        let mut safe_bin_dir = choose_windows_safe_base();
-        safe_bin_dir.push("bin");
-        safe_bin_dir.push(unique_name);
+        SAFE_PROBE_PATH
+            .get_or_init(|| {
+                // Use process ID to ensure uniqueness across different test runs
+                let unique_name = format!("probe-test-{}", std::process::id());
 
-        // Create the directory and copy the binary
-        if let Err(e) = std::fs::create_dir_all(&safe_bin_dir) {
-            eprintln!("Warning: Failed to create safe bin dir: {}", e);
-            original_probe_path
-        } else {
-            let safe_probe_path = safe_bin_dir.join("probe.exe");
+                let mut safe_bin_dir = choose_windows_safe_base();
+                safe_bin_dir.push("bin");
+                safe_bin_dir.push(unique_name);
 
-            // Copy the binary
-            if let Err(e) = std::fs::copy(&original_probe_path, &safe_probe_path) {
-                eprintln!("Warning: Failed to copy probe.exe to safe location: {}", e);
-                original_probe_path
-            } else {
-                // Also copy any potential DLL dependencies (if they exist)
+                // Create the directory
+                if let Err(e) = std::fs::create_dir_all(&safe_bin_dir) {
+                    eprintln!("Warning: Failed to create safe bin dir: {}", e);
+                    return original_probe_path;
+                }
+
+                let safe_probe_path = safe_bin_dir.join("probe.exe");
+
+                // Try hard link first (atomic and works even if source is in use)
+                if std::fs::hard_link(&original_probe_path, &safe_probe_path).is_err() {
+                    // Fallback to copy with retries if hard link fails (e.g., different volumes)
+                    let mut attempts = 0;
+                    loop {
+                        match std::fs::copy(&original_probe_path, &safe_probe_path) {
+                            Ok(_) => break,
+                            Err(e) if attempts < 3 => {
+                                eprintln!(
+                                    "Warning: Failed to copy probe.exe (attempt {}): {}",
+                                    attempts + 1,
+                                    e
+                                );
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                attempts += 1;
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "Error: Failed to stage probe.exe after {} attempts: {}",
+                                    attempts + 1,
+                                    e
+                                );
+                                return original_probe_path;
+                            }
+                        }
+                    }
+                }
+
+                // Stage DLL dependencies using hard links (or copy as fallback)
                 if let Some(parent) = original_probe_path.parent() {
                     if let Ok(entries) = std::fs::read_dir(parent) {
                         for entry in entries.flatten() {
                             if let Some(name) = entry.file_name().to_str() {
                                 if name.ends_with(".dll") {
                                     let dll_dest = safe_bin_dir.join(name);
-                                    let _ = std::fs::copy(entry.path(), dll_dest);
+                                    // Try hard link first, then copy
+                                    if std::fs::hard_link(entry.path(), &dll_dest).is_err() {
+                                        let _ = std::fs::copy(entry.path(), &dll_dest);
+                                    }
                                 }
                             }
                         }
                     }
                 }
+
                 safe_probe_path
-            }
-        }
+            })
+            .clone()
     } else {
         original_probe_path
     };
