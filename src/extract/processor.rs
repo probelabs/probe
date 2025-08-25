@@ -1293,9 +1293,15 @@ fn file_extension(path: &Path) -> &str {
 
 /// Find the workspace root by walking up the directory tree looking for project markers
 fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
-    // Canonicalize first so symlinks/relative paths don't confuse marker discovery (CI-friendly)
-    let canonical_path = file_path.canonicalize().ok()?;
-    let mut current = canonical_path.parent()?;
+    // On Windows, avoid canonicalize() which can trigger stack overflow with junction points
+    // On other platforms, canonicalize for better symlink handling
+    #[cfg(target_os = "windows")]
+    let start_path = file_path.to_path_buf();
+
+    #[cfg(not(target_os = "windows"))]
+    let start_path = file_path.canonicalize().ok()?;
+
+    let mut current = start_path.parent()?;
 
     loop {
         // Check for Cargo.toml (Rust projects)
