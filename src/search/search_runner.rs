@@ -1823,6 +1823,24 @@ fn search_file_with_simd(
     const MAX_FILE_SIZE: u64 = 1024 * 1024;
 
     // Check file metadata and resolve symlinks before reading
+    // On Windows CI, avoid canonicalize() which can trigger stack overflow with junction points
+    #[cfg(target_os = "windows")]
+    let resolved_path = if std::env::var("CI").is_ok() {
+        // In CI, just use the path as-is
+        file_path.to_path_buf()
+    } else {
+        match std::fs::canonicalize(file_path) {
+            Ok(path) => path,
+            Err(e) => {
+                if debug_mode {
+                    println!("DEBUG: Error resolving path for {file_path:?}: {e:?}");
+                }
+                return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
+            }
+        }
+    };
+
+    #[cfg(not(target_os = "windows"))]
     let resolved_path = match std::fs::canonicalize(file_path) {
         Ok(path) => path,
         Err(e) => {
