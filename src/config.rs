@@ -431,6 +431,11 @@ impl ProbeConfig {
 
     /// Load all configuration files that exist
     fn load_all_configs() -> Result<Vec<ProbeConfig>> {
+        // Skip project config loading if explicitly disabled (useful for CI)
+        if std::env::var("PROBE_SKIP_PROJECT_CONFIG").is_ok() {
+            return Ok(vec![Self::default()]);
+        }
+
         let paths = Self::get_config_paths();
         let mut configs = Vec::new();
 
