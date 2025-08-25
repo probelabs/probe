@@ -41,7 +41,9 @@ pub struct WorkspaceCacheRouterConfig {
 impl Default for WorkspaceCacheRouterConfig {
     fn default() -> Self {
         Self {
-            base_cache_dir: default_cache_directory(),
+            // CRITICAL: Defer filesystem operations to avoid stack overflow on Windows
+            // during static initialization. Use a placeholder and compute it when actually needed.
+            base_cache_dir: PathBuf::from(".probe-temp-cache"),
             max_open_caches: 8,
             max_parent_lookup_depth: 3,
             cache_config_template: crate::persistent_cache::PersistentCacheConfig {
@@ -57,6 +59,9 @@ impl Default for WorkspaceCacheRouterConfig {
 /// Lazily compute the default cache directory to avoid early filesystem access on Windows CI.
 /// This prevents stack overflow issues that occur when dirs::cache_dir() or dirs::home_dir()
 /// are called during static initialization (e.g., when the lsp_daemon crate is imported).
+///
+/// IMPORTANT: This function should NOT be called during static initialization.
+/// It should only be called when the cache directory is actually needed at runtime.
 fn default_cache_directory() -> PathBuf {
     // Default cache location: ~/Library/Caches/probe/lsp/workspaces on macOS
     // %LOCALAPPDATA%/probe/lsp/workspaces on Windows
@@ -128,9 +133,14 @@ pub struct WorkspaceCacheRouter {
 impl WorkspaceCacheRouter {
     /// Create a new workspace cache router
     pub fn new(
-        config: WorkspaceCacheRouterConfig,
+        mut config: WorkspaceCacheRouterConfig,
         server_manager: Arc<SingleServerManager>,
     ) -> Self {
+        // CRITICAL: Initialize proper cache directory at runtime, not during static init
+        if config.base_cache_dir == PathBuf::from(".probe-temp-cache") {
+            config.base_cache_dir = default_cache_directory();
+        }
+
         info!(
             "Initializing WorkspaceCacheRouter with base dir: {:?}, max_open: {}",
             config.base_cache_dir, config.max_open_caches
