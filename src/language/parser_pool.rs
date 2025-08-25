@@ -35,7 +35,11 @@ lazy_static::lazy_static! {
 
     // PHASE 4 OPTIMIZATION: Pre-warm parsers for supported languages
     static ref PARSER_WARMER: () = {
-        if std::env::var("PROBE_NO_PARSER_WARMUP").is_err() {
+        // CRITICAL: Disable parser warming during static initialization on Windows
+        // to prevent potential stack overflow from junction points before main() runs.
+        // Parser warming will still happen lazily on first use, just not at startup.
+        // This protects both CI environments and users with junction points.
+        if std::env::var("PROBE_NO_PARSER_WARMUP").is_err() && !cfg!(target_os = "windows") {
             // Tier 1: Critical languages - used most frequently, warm immediately
             let critical_languages = ["rs", "js", "ts", "py", "go", "java"];
 
@@ -70,6 +74,12 @@ pub fn warm_parser_pool() {
 fn detect_languages_in_directory(path: &Path) -> HashSet<String> {
     let mut detected_extensions = HashSet::new();
 
+    // CRITICAL: Avoid file system operations on Windows to prevent potential stack overflow
+    // from junction point cycles during static initialization or early startup
+    if cfg!(target_os = "windows") {
+        return detected_extensions; // Return empty set
+    }
+
     // Use the existing file discovery system
     if let Ok(file_list) = file_list_cache::get_file_list(
         path,
@@ -96,6 +106,12 @@ fn detect_languages_in_directory(path: &Path) -> HashSet<String> {
 /// This dramatically reduces memory usage while maintaining performance benefits
 pub fn smart_warm_parser_pool_for_directory(path: &Path) {
     if std::env::var("PROBE_NO_PARSER_WARMUP").is_ok() {
+        return;
+    }
+
+    // CRITICAL: Disable parser warming on Windows to prevent potential stack overflow
+    // from junction points. Parsers will be created lazily on first use instead.
+    if cfg!(target_os = "windows") {
         return;
     }
 
