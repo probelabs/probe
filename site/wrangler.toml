@@ -5,10 +5,5 @@ compatibility_date = "2024-01-15"
 # Pages project configuration
 pages_build_output_dir = ".vitepress/dist"
 
-# Custom domain configuration
-[env.production]
-# Production deployment on probelabs.com
-routes = [
-  { pattern = "probelabs.com/*", custom_domain = true },
-  { pattern = "www.probelabs.com/*", custom_domain = true }
-]
+# Note: Custom domains (probelabs.com) are configured via Cloudflare Dashboard
+# Routes configuration is not supported in wrangler.toml for Pages
