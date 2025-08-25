@@ -67,3 +67,8 @@ jobs:
 
       - name: Run CLI tests
         run: cargo test --test cli_tests
+        if: runner.os != 'Windows'
+      
+      - name: Run CLI tests (Windows - Sequential)
+        run: cargo test --test cli_tests -- --test-threads=1
+        if: runner.os == 'Windows'
