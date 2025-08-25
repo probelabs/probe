@@ -400,45 +400,13 @@ impl ProbeConfig {
         }
 
         // 2. Project config: ./.probe/settings.json
-        // On Windows, skip project config if we detect we're in a problematic environment
-        #[cfg(target_os = "windows")]
-        {
-            // Check if we're likely in a CI/temp environment that causes issues
-            // Check RUNNER_TEMP which GitHub Actions sets to the temp directory
-            let skip_project = env::var("RUNNER_TEMP").is_ok()
-                || env::var("GITHUB_ACTIONS").is_ok()
-                || env::var("CI").is_ok();
+        // Use relative paths directly - the OS will resolve them relative to the current directory
+        // This avoids calling env::current_dir() which can cause stack overflow on Windows
+        // in temp directories with junction points
+        paths.push(PathBuf::from(".probe").join("settings.json"));
 
-            if !skip_project {
-                // Try to get current directory
-                if let Ok(cwd) = env::current_dir() {
-                    paths.push(cwd.join(".probe").join("settings.json"));
-                    paths.push(cwd.join(".probe").join("settings.local.json"));
-                } else {
-                    // If we can't get current directory, skip project-level configs
-                    if env::var("PROBE_DEBUG").is_ok() {
-                        eprintln!(
-                            "Warning: Unable to determine current directory for config loading"
-                        );
-                    }
-                }
-            } else if env::var("PROBE_DEBUG").is_ok() {
-                eprintln!("Note: Skipping project config loading on Windows CI");
-            }
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            if let Ok(cwd) = env::current_dir() {
-                paths.push(cwd.join(".probe").join("settings.json"));
-                paths.push(cwd.join(".probe").join("settings.local.json"));
-            } else {
-                // If we can't get current directory, skip project-level configs
-                if env::var("PROBE_DEBUG").is_ok() {
-                    eprintln!("Warning: Unable to determine current directory for config loading");
-                }
-            }
-        }
+        // 3. Local config: ./.probe/settings.local.json
+        paths.push(PathBuf::from(".probe").join("settings.local.json"));
 
         // 4. Custom path via environment variable - HIGHEST precedence (last wins)
         if let Ok(custom_path) = env::var("PROBE_CONFIG_PATH") {
