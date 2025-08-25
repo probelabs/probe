@@ -380,16 +380,9 @@ impl ProbeConfig {
         let mut paths = Vec::new();
 
         // 1. Global config: ~/.probe/settings.json
-        // Use dirs crate for more robust cross-platform support
-        if let Some(home_dir) = dirs::home_dir() {
-            paths.push(home_dir.join(".probe").join("settings.json"));
-        } else {
-            // Fallback to environment variables if dirs crate fails
-            #[cfg(not(target_os = "windows"))]
-            if let Ok(home) = env::var("HOME") {
-                paths.push(PathBuf::from(home).join(".probe").join("settings.json"));
-            }
-            #[cfg(target_os = "windows")]
+        // On Windows, prefer USERPROFILE env var to avoid extra OS calls
+        #[cfg(target_os = "windows")]
+        {
             if let Ok(userprofile) = env::var("USERPROFILE") {
                 paths.push(
                     PathBuf::from(userprofile)
@@ -398,24 +391,65 @@ impl ProbeConfig {
                 );
             }
         }
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Ok(home) = env::var("HOME") {
+                paths.push(PathBuf::from(home).join(".probe").join("settings.json"));
+            } else if let Some(home_dir) = dirs::home_dir() {
+                paths.push(home_dir.join(".probe").join("settings.json"));
+            }
+        }
 
         // 2. Project config: ./.probe/settings.json
-        // Use relative paths directly - the OS will resolve them relative to the current directory
-        // This avoids calling env::current_dir() which can cause stack overflow on Windows
-        // in temp directories with junction points
-        paths.push(PathBuf::from(".probe").join("settings.json"));
+        // IMPORTANT (Windows): Avoid relative path I/O that implicitly consults CWD.
+        // Build absolute paths from GetCurrentDirectoryW instead of using std::env::current_dir().
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                use std::os::windows::ffi::OsStringExt;
+                use windows_sys::Win32::Storage::FileSystem::GetCurrentDirectoryW;
 
-        // 3. Local config: ./.probe/settings.local.json
-        paths.push(PathBuf::from(".probe").join("settings.local.json"));
-
-        // 4. Custom path via environment variable - HIGHEST precedence (last wins)
-        if let Ok(custom_path) = env::var("PROBE_CONFIG_PATH") {
-            let mut p = PathBuf::from(custom_path);
-            // If a directory is given, assume default filename inside it
-            if p.is_dir() {
-                p = p.join("settings.json");
+                // First call returns required length (excludes NUL). Add 1 for the NUL, per WinAPI docs.
+                let needed = GetCurrentDirectoryW(0, std::ptr::null_mut()) + 1;
+                if needed > 1 && needed < 32768 {
+                    let mut buf: Vec<u16> = vec![0; needed as usize];
+                    let got = GetCurrentDirectoryW(needed, buf.as_mut_ptr());
+                    if got > 0 && (got as usize) < buf.len() {
+                        let cwd = std::ffi::OsString::from_wide(&buf[..got as usize]);
+                        let base = PathBuf::from(cwd);
+                        paths.push(base.join(".probe").join("settings.json"));
+                        paths.push(base.join(".probe").join("settings.local.json"));
+                    } else {
+                        // Fallback to relative if the API fails (rare).
+                        paths.push(PathBuf::from(".probe").join("settings.json"));
+                        paths.push(PathBuf::from(".probe").join("settings.local.json"));
+                    }
+                } else {
+                    // Fallback to relative if the API fails (rare).
+                    paths.push(PathBuf::from(".probe").join("settings.json"));
+                    paths.push(PathBuf::from(".probe").join("settings.local.json"));
+                }
             }
-            paths.push(p); // Push to end for highest precedence
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            // Safe on Unix: relative paths won't trigger the Windows junction recursion.
+            paths.push(PathBuf::from(".probe").join("settings.json"));
+            paths.push(PathBuf::from(".probe").join("settings.local.json"));
+        }
+
+        // 3. Custom path via environment variable - HIGHEST precedence (last wins)
+        if let Ok(custom_path) = env::var("PROBE_CONFIG_PATH") {
+            // Do NOT call is_dir(); it triggers metadata on possibly relative paths.
+            // Heuristic: trailing slash/backslash => treat as directory.
+            let custom_str = custom_path.as_str();
+            let looks_like_dir = custom_str.ends_with('\\') || custom_str.ends_with('/');
+            let p = if looks_like_dir {
+                PathBuf::from(&custom_path).join("settings.json")
+            } else {
+                PathBuf::from(&custom_path)
+            };
+            paths.push(p);
         }
 
         paths

@@ -86,6 +86,9 @@ criterion = "0.5"
 roxmltree = "0.18.0"
 jsonschema = "0.17.1"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem"] }
+
 [lib]
 name = "probe_code"
 path = "src/lib.rs"
