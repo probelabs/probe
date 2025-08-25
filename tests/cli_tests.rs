@@ -7,6 +7,65 @@ use tempfile::TempDir;
 #[path = "common/mod.rs"]
 mod common;
 
+/// Create a safe temporary directory that avoids Windows junction point issues
+/// On Windows CI, we create temp dirs under target/ instead of the system temp
+/// to avoid junction point cycles that cause stack overflows
+fn make_safe_tempdir() -> TempDir {
+    // On Windows CI, use target directory to avoid junction points in system temp
+    #[cfg(target_os = "windows")]
+    if std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
+        // Create temp directory under target/ which is safe from junction points
+        let mut target_temp = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        target_temp.push("target");
+        target_temp.push("test-temp");
+
+        // Ensure the parent directory exists
+        let _ = std::fs::create_dir_all(&target_temp);
+
+        // Create temp dir under our safe location
+        return TempDir::new_in(target_temp).expect("Failed to create safe temp dir");
+    }
+
+    // For non-Windows or non-CI, use normal temp directory
+    TempDir::new().expect("Failed to create temp dir")
+}
+
+/// Get safe environment variables for Windows CI that avoid junction points
+fn get_safe_env_vars() -> Vec<(String, String)> {
+    #[allow(unused_mut)]
+    let mut env_vars = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    if std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
+        // Create a safe home and temp base under target/
+        let mut safe_base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        safe_base.push("target");
+        safe_base.push("test-env");
+
+        let safe_home = safe_base.join("home");
+        let safe_temp = safe_base.join("temp");
+
+        // Ensure directories exist
+        let _ = std::fs::create_dir_all(&safe_home);
+        let _ = std::fs::create_dir_all(&safe_temp);
+
+        // Override all environment variables that might point to problematic paths
+        let home_str = safe_home.to_string_lossy().to_string();
+        let temp_str = safe_temp.to_string_lossy().to_string();
+
+        env_vars.push(("HOME".to_string(), home_str.clone()));
+        env_vars.push(("USERPROFILE".to_string(), home_str.clone()));
+        env_vars.push(("TMP".to_string(), temp_str.clone()));
+        env_vars.push(("TEMP".to_string(), temp_str.clone()));
+        env_vars.push(("TMPDIR".to_string(), temp_str.clone()));
+
+        // Clear RUNNER_TEMP which points to the problematic directory
+        env_vars.push(("RUNNER_TEMP".to_string(), temp_str));
+    }
+
+    env_vars
+}
+
 /// Helper function to run probe command with proper pipe handling for Windows
 /// This wrapper prevents deadlocks on Windows by using concurrent pipe draining
 fn run_probe_command(args: &[&str]) -> (String, String, bool) {
@@ -45,6 +104,12 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
     // Set test environment variables
     cmd.env("CI", "1");
     cmd.env("PROBE_LSP_DISABLE_AUTOSTART", "1");
+
+    // Apply safe environment variables on Windows CI to avoid junction points
+    for (key, value) in get_safe_env_vars() {
+        cmd.env(key, value);
+    }
+
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -162,7 +227,7 @@ function searchFunction(query) {
 
 #[test]
 fn test_cli_basic_search() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with basic search
@@ -194,7 +259,7 @@ fn test_cli_basic_search() {
 
 #[test]
 fn test_cli_files_only() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with files-only option
@@ -240,7 +305,7 @@ fn test_cli_files_only() {
 
 #[test]
 fn test_cli_filename_matching() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Create a file with "search" in the name but not in the content
@@ -304,7 +369,7 @@ fn test_cli_filename_matching() {
 
 #[test]
 fn test_cli_reranker() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with bm25 reranker
@@ -343,7 +408,7 @@ fn test_cli_reranker() {
 
 #[test]
 fn test_cli_default_frequency_search() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with default settings (frequency search should be enabled by default)
@@ -379,7 +444,7 @@ fn test_cli_default_frequency_search() {
 
 #[test]
 fn test_cli_custom_ignores() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with custom ignore pattern and debug mode
@@ -436,7 +501,7 @@ fn test_cli_custom_ignores() {
 #[test]
 #[ignore] // Temporarily disabled due to issues with limits display
 fn test_cli_max_results() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Add many more files with search terms to ensure we have enough results to trigger limits
@@ -489,7 +554,7 @@ fn test_cli_max_results() {
 
 #[test]
 fn test_cli_limit_message() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Create additional test files to ensure we have enough results to trigger limits
@@ -661,7 +726,7 @@ fn test_config_show_env_format() {
 
 #[test]
 fn test_config_defaults_applied_to_search() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Create a config file with custom search defaults
@@ -694,7 +759,7 @@ fn test_config_defaults_applied_to_search() {
 
 #[test]
 fn test_environment_variable_override() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Set environment variables and run command
@@ -744,7 +809,7 @@ fn test_environment_variable_override() {
 
 #[test]
 fn test_config_hierarchy() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Create global config (simulated as project config here)
@@ -811,7 +876,7 @@ fn test_config_hierarchy() {
 
 #[test]
 fn test_config_validation() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     // Create invalid config file
     let config_dir = temp_dir.path().join(".probe");
     fs::create_dir(&config_dir).expect("Failed to create .probe directory");
@@ -883,7 +948,7 @@ fn test_config_validation() {
 
 #[test]
 fn test_config_with_custom_indexing_features() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = make_safe_tempdir();
     // Create config with custom indexing features
     let config_dir = temp_dir.path().join(".probe");
     fs::create_dir(&config_dir).expect("Failed to create .probe directory");
