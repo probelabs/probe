@@ -56,32 +56,24 @@ impl RipgrepSearcher {
         // Define a reasonable maximum file size (same as old implementation)
         const MAX_FILE_SIZE: u64 = 1024 * 1024; // 1MB
 
-        // Check file metadata and resolve symlinks before reading
-        // On Windows CI, avoid canonicalize() which can trigger stack overflow with junction points
-        #[cfg(target_os = "windows")]
-        let resolved_path = if std::env::var("CI").is_ok() {
-            // In CI, just use the path as-is
+        // Skip symlinks and junctions entirely to avoid stack overflow
+        use crate::path_safety;
+
+        if path_safety::is_symlink_or_junction(file_path) {
+            if self.debug_mode {
+                println!("DEBUG: Skipping symlink/junction: {file_path:?}");
+            }
+            return Err(anyhow::anyhow!("Skipping symlink/junction"));
+        }
+
+        // Use the path as-is in CI to avoid any resolution issues
+        let resolved_path = if path_safety::is_ci_environment() {
             file_path.to_path_buf()
         } else {
+            // Only canonicalize if not in CI and not a symlink
             match std::fs::canonicalize(file_path) {
                 Ok(path) => path,
-                Err(e) => {
-                    if self.debug_mode {
-                        println!("DEBUG: Error resolving path for {file_path:?}: {e:?}");
-                    }
-                    return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
-                }
-            }
-        };
-
-        #[cfg(not(target_os = "windows"))]
-        let resolved_path = match std::fs::canonicalize(file_path) {
-            Ok(path) => path,
-            Err(e) => {
-                if self.debug_mode {
-                    println!("DEBUG: Error resolving path for {file_path:?}: {e:?}");
-                }
-                return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
+                Err(_) => file_path.to_path_buf(), // Fall back to original path
             }
         };
 

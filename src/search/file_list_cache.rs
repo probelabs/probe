@@ -154,6 +154,12 @@ fn build_file_list(
     let builder_start = Instant::now();
     let mut builder = WalkBuilder::new(path);
 
+    // CRITICAL: Never follow symlinks to avoid junction point cycles on Windows
+    builder.follow_links(false);
+
+    // Stay on the same file system to avoid traversing mount points
+    builder.same_file_system(true);
+
     // Configure the builder to conditionally respect gitignore files
     if !no_gitignore {
         builder.git_ignore(true);
@@ -319,6 +325,14 @@ fn build_file_list(
 
         // Skip directories
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+
+        // Extra defensive check: skip symlinks even though we configured the walker not to follow them
+        if entry.file_type().is_some_and(|ft| ft.is_symlink()) {
+            if debug_mode {
+                println!("DEBUG: Skipping symlink file: {:?}", entry.path());
+            }
             continue;
         }
 

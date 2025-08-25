@@ -1303,29 +1303,34 @@ fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
 
     let mut current = start_path.parent()?;
 
+    // Use safe path operations to avoid following symlinks/junctions
+    use crate::path_safety::exists_no_follow;
+
     loop {
         // Check for Cargo.toml (Rust projects)
-        if current.join("Cargo.toml").exists() {
+        if exists_no_follow(&current.join("Cargo.toml")) {
             return Some(current.to_path_buf());
         }
 
         // Check for package.json (Node.js projects)
-        if current.join("package.json").exists() {
+        if exists_no_follow(&current.join("package.json")) {
             return Some(current.to_path_buf());
         }
 
         // Check for go.mod (Go projects)
-        if current.join("go.mod").exists() {
+        if exists_no_follow(&current.join("go.mod")) {
             return Some(current.to_path_buf());
         }
 
         // Check for pom.xml or build.gradle (Java projects)
-        if current.join("pom.xml").exists() || current.join("build.gradle").exists() {
+        if exists_no_follow(&current.join("pom.xml"))
+            || exists_no_follow(&current.join("build.gradle"))
+        {
             return Some(current.to_path_buf());
         }
 
         // Check for .git directory (Git repository root)
-        if current.join(".git").exists() {
+        if exists_no_follow(&current.join(".git")) {
             return Some(current.to_path_buf());
         }
 

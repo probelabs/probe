@@ -101,6 +101,7 @@ pub mod language;
 pub mod lsp_integration;
 pub mod models;
 pub mod path_resolver;
+pub mod path_safety;
 pub mod query;
 pub mod ranking;
 pub mod search;

@@ -185,9 +185,12 @@ fn handle_search(params: SearchParams) -> Result<()> {
     // Normalize the search root early. Some downstream code paths are stricter about absolute paths.
     let raw_root = params.paths.first().unwrap();
 
+    // Use safe path operations to avoid following symlinks/junctions
+    use probe_code::path_safety;
+
     // On Windows CI, avoid canonicalize() which can trigger stack overflow with junction points
     #[cfg(target_os = "windows")]
-    let canonical_root = if std::env::var("CI").is_ok() {
+    let canonical_root = if path_safety::is_ci_environment() {
         // In CI, just use the path as-is or make it absolute without canonicalize
         if raw_root.is_absolute() {
             raw_root.clone()
@@ -196,7 +199,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .join(raw_root)
         }
-    } else if raw_root.exists() {
+    } else if path_safety::exists_no_follow(raw_root) {
         match raw_root.canonicalize() {
             Ok(p) => p,
             Err(_) => raw_root.clone(),
@@ -206,7 +209,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
     };
 
     #[cfg(not(target_os = "windows"))]
-    let canonical_root = if raw_root.exists() {
+    let canonical_root = if path_safety::exists_no_follow(raw_root) {
         match raw_root.canonicalize() {
             Ok(p) => p,
             Err(_) => raw_root.clone(),
