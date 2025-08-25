@@ -435,6 +435,15 @@ impl ProbeConfig {
         let mut configs = Vec::new();
 
         for path in paths {
+            // On Windows, skip checking paths that start with "." to avoid junction issues
+            // These are relative paths that could trigger stack overflow when resolved
+            #[cfg(target_os = "windows")]
+            {
+                if path.starts_with(".") {
+                    continue;
+                }
+            }
+
             // Use metadata check instead of exists() to avoid potential issues with junctions
             // metadata() is more reliable on Windows with junction points
             match fs::metadata(&path) {
