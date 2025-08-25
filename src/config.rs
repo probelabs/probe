@@ -1764,11 +1764,17 @@ mod tests {
         // Set the environment variable
         env::set_var("PROBE_SKIP_PROJECT_CONFIG", "1");
 
+        // Use platform-appropriate absolute path for testing
+        #[cfg(target_os = "windows")]
+        let absolute_test_path = PathBuf::from(r"C:\test-config\settings.json");
+        #[cfg(not(target_os = "windows"))]
+        let absolute_test_path = PathBuf::from("/tmp/test-config/settings.json");
+
         // Test that relative paths are skipped but absolute paths work
         let paths = vec![
             PathBuf::from(".probe/settings.json"), // Should be skipped (relative)
             PathBuf::from("./config/settings.json"), // Should be skipped (relative)
-            PathBuf::from("/tmp/test-config/settings.json"), // Should be allowed (absolute)
+            absolute_test_path.clone(),            // Should be allowed (absolute)
         ];
 
         let skip_project_config = env::var("PROBE_SKIP_PROJECT_CONFIG").is_ok();
@@ -1786,10 +1792,7 @@ mod tests {
         // Should only have the absolute path
         assert_eq!(allowed_paths.len(), 1);
         assert!(allowed_paths[0].is_absolute());
-        assert_eq!(
-            allowed_paths[0],
-            PathBuf::from("/tmp/test-config/settings.json")
-        );
+        assert_eq!(allowed_paths[0], absolute_test_path);
 
         // Clean up
         env::remove_var("PROBE_SKIP_PROJECT_CONFIG");
@@ -1798,7 +1801,7 @@ mod tests {
         let paths = vec![
             PathBuf::from(".probe/settings.json"),
             PathBuf::from("./config/settings.json"),
-            PathBuf::from("/tmp/test-config/settings.json"),
+            absolute_test_path,
         ];
 
         let skip_project_config = env::var("PROBE_SKIP_PROJECT_CONFIG").is_ok();
