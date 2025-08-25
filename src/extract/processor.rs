@@ -7,6 +7,7 @@ use probe_code::extract::symbol_finder::find_symbol_in_file_with_position;
 use probe_code::language::parser::parse_file_for_code_blocks;
 use probe_code::lsp_integration::{LspClient, LspConfig};
 use probe_code::models::SearchResult;
+use probe_code::path_safety;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -77,8 +78,8 @@ pub fn process_file_for_extraction_with_lsp(
         eprintln!("[DEBUG] LSP enabled: {enable_lsp}");
     }
 
-    // Check if the file exists
-    if !path.exists() {
+    // Check if the file exists (using safe no-follow check)
+    if !path_safety::exists_no_follow(path) {
         if debug_mode {
             eprintln!("[DEBUG] Error: File does not exist");
         }

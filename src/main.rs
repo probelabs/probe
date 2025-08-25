@@ -497,6 +497,18 @@ fn handle_benchmark(params: BenchmarkParams) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Set CI/Windows safety guards BEFORE any config/filesystem operations
+    // This prevents stack overflow from junction point cycles on Windows CI
+    #[cfg(target_os = "windows")]
+    {
+        if std::env::var("CI").is_ok() {
+            // Disable project config discovery to avoid junction traversal
+            std::env::set_var("PROBE_SKIP_PROJECT_CONFIG", "1");
+            // Disable parent .gitignore discovery to avoid climbing into junction cycles
+            std::env::set_var("PROBE_NO_GITIGNORE", "1");
+        }
+    }
+
     // Load global configuration
     let config = probe_code::config::get_config();
 
