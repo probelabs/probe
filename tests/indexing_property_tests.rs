@@ -564,12 +564,25 @@ proptest! {
                 LspCache::new(LspOperation::Definition, lsp_cache_config)
                     .expect("Failed to create definition cache"),
             );
+
+            // Create a temporary persistent cache for testing
+            let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+                cache_directory: Some(temp_dir.path().join("persistent_cache")),
+                ..Default::default()
+            };
+            let persistent_store = Arc::new(
+                lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+                    .await
+                    .expect("Failed to create persistent cache"),
+            );
+
             let manager = IndexingManager::new(
                 config,
                 language_detector,
                 server_manager,
                 call_graph_cache,
                 definition_cache,
+                persistent_store,
             );
 
             // Start indexing with timeout

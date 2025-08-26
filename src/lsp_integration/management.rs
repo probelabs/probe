@@ -1502,7 +1502,7 @@ impl LspManager {
                 cache_references,
                 cache_hover,
                 cache_document_symbols,
-                cache_during_indexing: _,  // cache_during_indexing removed
+                cache_during_indexing: _, // cache_during_indexing removed
                 preload_common_symbols,
                 max_cache_entries_per_operation,
                 lsp_operation_timeout_ms,
@@ -1801,7 +1801,7 @@ impl LspManager {
                 println!("  {}: {}", "Cache Document Symbols".bold(), cache_doc);
 
                 // cache_during_indexing removed - always enabled now
-                println!("  {}: {}", "Cache During Indexing".bold(), "Always Enabled".to_string());
+                println!("  {}: Always Enabled", "Cache During Indexing".bold());
 
                 let preload = config
                     .preload_common_symbols

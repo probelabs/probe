@@ -372,12 +372,25 @@ pub fn multiply(a: i32, b: i32) -> i32 {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create a temporary persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(workspace.path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = IndexingManager::new(
         manager_config.clone(),
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store.clone(),
     );
 
     // First indexing run
@@ -503,6 +516,7 @@ pub fn factorial(n: u32) -> u32 {
         server_manager2,
         call_graph_cache2,
         definition_cache2,
+        persistent_store,
     );
     manager2
         .start_indexing(workspace.path().to_path_buf())

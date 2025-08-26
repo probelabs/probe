@@ -618,12 +618,25 @@ async fn test_end_to_end_indexing_workflow() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(project.root_path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
 
     // Start indexing
@@ -762,12 +775,25 @@ async fn test_incremental_indexing() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(project.root_path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = IndexingManager::new(
         config.clone(),
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
 
     // First indexing run
@@ -841,12 +867,25 @@ impl Calculator {
         LspCache::new(LspOperation::Definition, lsp_cache_config2)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent cache for second manager
+    let persistent_config2 = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(project.root_path().join("persistent_cache2")),
+        ..Default::default()
+    };
+    let persistent_store2 = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config2)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager2 = IndexingManager::new(
         config.clone(),
         Arc::new(LanguageDetector::new()),
         server_manager2,
         call_graph_cache2,
         definition_cache2,
+        persistent_store2,
     );
     manager2
         .start_indexing(project.root_path().to_path_buf())
@@ -918,12 +957,25 @@ async fn test_memory_pressure_handling() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(project.root_path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
 
     // Start indexing
@@ -999,12 +1051,25 @@ async fn test_pause_and_resume_functionality() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(project.root_path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
 
     // Start indexing
@@ -1085,12 +1150,25 @@ async fn test_worker_statistics_tracking() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(project.root_path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
 
     // Start indexing
@@ -1165,12 +1243,25 @@ async fn test_language_specific_processing() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(project.root_path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
 
     // Start indexing
@@ -1245,12 +1336,25 @@ async fn test_file_exclusion_patterns() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(project.root_path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
 
     // Start indexing
@@ -1323,12 +1427,25 @@ async fn test_queue_operations() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(project.root_path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
 
     // Start indexing
@@ -1413,12 +1530,25 @@ async fn test_error_recovery() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(project.root_path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
 
     // Start indexing

@@ -343,12 +343,25 @@ async fn test_manager_concurrent_start_stop() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create a temporary persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(workspace.path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = Arc::new(IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     ));
     let successful_starts = Arc::new(AtomicUsize::new(0));
     let successful_stops = Arc::new(AtomicUsize::new(0));
@@ -644,12 +657,25 @@ async fn test_manager_worker_statistics_thread_safety() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create a temporary persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(workspace.path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = Arc::new(IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     ));
     manager
         .start_indexing(workspace.path().to_path_buf())
@@ -826,12 +852,25 @@ async fn test_indexing_with_simulated_contention() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create a temporary persistent cache for testing
+    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
+        cache_directory: Some(workspace.path().join("persistent_cache")),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent cache"),
+    );
+
     let manager = Arc::new(IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     ));
     let contention_operations = Arc::new(AtomicUsize::new(0));
 

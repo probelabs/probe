@@ -1807,7 +1807,6 @@ mod tests {
         assert_eq!(config.cache_references, None);
         assert_eq!(config.cache_hover, None);
         assert_eq!(config.cache_document_symbols, None);
-        assert_eq!(config.cache_during_indexing, None);
         assert_eq!(config.preload_common_symbols, None);
     }
 
@@ -1956,7 +1955,6 @@ mod tests {
         assert!(resolved.indexing.lsp_caching.cache_references);
         assert!(resolved.indexing.lsp_caching.cache_hover);
         assert!(!resolved.indexing.lsp_caching.cache_document_symbols);
-        assert!(!resolved.indexing.lsp_caching.cache_during_indexing);
         assert!(!resolved.indexing.lsp_caching.preload_common_symbols);
         assert_eq!(
             resolved
