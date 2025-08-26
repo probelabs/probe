@@ -748,6 +748,10 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
         input.trim_matches(|c| c == '`' || c == '"')
     };
 
+    // Replace :: with . to support Rust-style syntax (e.g., "SparseVector::new" -> "SparseVector.new")
+    let cleaned_input = cleaned_input.replace("::", ".");
+    let cleaned_input = cleaned_input.as_str();
+
     // Check if this is a Windows absolute path (e.g., C:\, D:\, etc.)
     // We need to check this before splitting on ':' because Windows paths contain ':'
     let is_windows_path = cleaned_input.len() >= 3
@@ -1840,5 +1844,67 @@ jobs:
         assert_eq!(results[0].0, workflow_file);
         assert_eq!(results[0].1, Some(5)); // start line
         assert_eq!(results[0].2, Some(10)); // end line
+    }
+
+    #[test]
+    fn test_rust_double_colon_syntax_conversion() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a temporary Rust file
+        let rust_file = temp_dir.path().join("test.rs");
+        let rust_content = r#"
+pub struct TestStruct;
+
+impl TestStruct {
+    pub fn new() -> Self {
+        Self
+    }
+    
+    pub fn method(&self) -> String {
+        "test".to_string()
+    }
+}
+
+impl Default for TestStruct {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+"#;
+        fs::write(&rust_file, rust_content).unwrap();
+
+        let rust_file_str = rust_file.to_string_lossy();
+
+        // Test that :: syntax gets converted to . syntax for symbol extraction
+        let double_colon_input = format!("{rust_file_str}#TestStruct::new");
+        let results = parse_file_with_line(&double_colon_input, true);
+
+        assert_eq!(results.len(), 1, "Should parse file with :: syntax");
+        assert_eq!(results[0].0, rust_file);
+        assert_eq!(results[0].1, None); // no line number
+        assert_eq!(results[0].2, None); // no end line
+        assert_eq!(results[0].3, Some("TestStruct.new".to_string())); // :: converted to .
+        assert_eq!(results[0].4, None); // no specific line set
+
+        // Test that . syntax still works (no regression)
+        let dot_input = format!("{rust_file_str}#TestStruct.method");
+        let dot_results = parse_file_with_line(&dot_input, true);
+
+        assert_eq!(dot_results.len(), 1, "Should parse file with . syntax");
+        assert_eq!(dot_results[0].0, rust_file);
+        assert_eq!(dot_results[0].3, Some("TestStruct.method".to_string()));
+
+        // Test multiple :: conversions
+        let complex_input = format!("{rust_file_str}#TestStruct::Default::default");
+        let complex_results = parse_file_with_line(&complex_input, true);
+
+        assert_eq!(complex_results.len(), 1, "Should parse complex :: syntax");
+        assert_eq!(complex_results[0].0, rust_file);
+        assert_eq!(
+            complex_results[0].3,
+            Some("TestStruct.Default.default".to_string())
+        );
     }
 }
