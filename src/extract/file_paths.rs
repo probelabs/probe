@@ -748,8 +748,18 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
         input.trim_matches(|c| c == '`' || c == '"')
     };
 
-    // Replace :: with . to support Rust-style syntax (e.g., "SparseVector::new" -> "SparseVector.new")
-    let cleaned_input = cleaned_input.replace("::", ".");
+    // Replace language-specific path separators with . for universal symbol access
+    // Note: We only replace these in the symbol part (after #), not in file paths
+    // Rust & C++ & Ruby: :: -> . (e.g., "std::vector::new" -> "std.vector.new")
+    // PHP: \ -> . (e.g., "App\Service\User" -> "App.Service.User")
+    let cleaned_input = if let Some(hash_pos) = cleaned_input.find('#') {
+        let (file_part, symbol_part) = cleaned_input.split_at(hash_pos + 1);
+        let converted_symbol = symbol_part.replace("::", ".").replace("\\", ".");
+        format!("{}{}", &file_part[..hash_pos + 1], converted_symbol)
+    } else {
+        // No symbol part, just replace :: (but not \ to avoid breaking Windows paths)
+        cleaned_input.replace("::", ".")
+    };
     let cleaned_input = cleaned_input.as_str();
 
     // Check if this is a Windows absolute path (e.g., C:\, D:\, etc.)
@@ -1905,6 +1915,72 @@ impl Default for TestStruct {
         assert_eq!(
             complex_results[0].3,
             Some("TestStruct.Default.default".to_string())
+        );
+    }
+
+    #[test]
+    fn test_multi_language_path_syntax_conversion() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create test files for different languages
+        let cpp_file = temp_dir.path().join("test.cpp");
+        let php_file = temp_dir.path().join("test.php");
+        let ruby_file = temp_dir.path().join("test.rb");
+
+        // Write minimal content to each file
+        fs::write(&cpp_file, "class TestClass {};").unwrap();
+        fs::write(&php_file, "<?php class TestClass {}").unwrap();
+        fs::write(&ruby_file, "class TestClass; end").unwrap();
+
+        let cpp_file_str = cpp_file.to_string_lossy();
+        let php_file_str = php_file.to_string_lossy();
+        let ruby_file_str = ruby_file.to_string_lossy();
+
+        // Test C++ :: syntax conversion
+        let cpp_input = format!("{cpp_file_str}#std::vector::push_back");
+        let cpp_results = parse_file_with_line(&cpp_input, true);
+
+        assert_eq!(cpp_results.len(), 1, "Should parse C++ :: syntax");
+        assert_eq!(cpp_results[0].0, cpp_file);
+        assert_eq!(cpp_results[0].3, Some("std.vector.push_back".to_string()));
+
+        // Test PHP \ syntax conversion
+        let php_input = format!(r"{php_file_str}#App\Services\UserService");
+        let php_results = parse_file_with_line(&php_input, true);
+
+        assert_eq!(php_results.len(), 1, "Should parse PHP \\ syntax");
+        assert_eq!(php_results[0].0, php_file);
+        assert_eq!(
+            php_results[0].3,
+            Some("App.Services.UserService".to_string())
+        );
+
+        // Test Ruby :: syntax conversion
+        let ruby_input = format!("{ruby_file_str}#ActiveRecord::Base::find");
+        let ruby_results = parse_file_with_line(&ruby_input, true);
+
+        assert_eq!(ruby_results.len(), 1, "Should parse Ruby :: syntax");
+        assert_eq!(ruby_results[0].0, ruby_file);
+        assert_eq!(
+            ruby_results[0].3,
+            Some("ActiveRecord.Base.find".to_string())
+        );
+
+        // Test mixed PHP syntax (both \ and ::)
+        let mixed_input = format!(r"{php_file_str}#App\Namespace::Class::method");
+        let mixed_results = parse_file_with_line(&mixed_input, true);
+
+        assert_eq!(
+            mixed_results.len(),
+            1,
+            "Should parse mixed \\ and :: syntax"
+        );
+        assert_eq!(mixed_results[0].0, php_file);
+        assert_eq!(
+            mixed_results[0].3,
+            Some("App.Namespace.Class.method".to_string())
         );
     }
 }
