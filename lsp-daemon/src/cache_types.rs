@@ -165,6 +165,9 @@ pub struct CacheStats {
     pub persistent_nodes: Option<u64>,
     pub persistent_size_bytes: Option<u64>,
     pub persistent_disk_size_bytes: Option<u64>,
+    // Hit/miss tracking
+    pub hit_count: u64,
+    pub miss_count: u64,
 }
 
 /// Generic cache key for LSP operations

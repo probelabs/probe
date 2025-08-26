@@ -78,6 +78,10 @@ pub struct PersistentCacheStats {
     pub total_files: usize,
     /// Database size on disk (bytes)
     pub disk_size_bytes: u64,
+    /// Cache hit count
+    pub hit_count: u64,
+    /// Cache miss count
+    pub miss_count: u64,
 }
 
 /// Configuration for the persistent cache
@@ -121,6 +125,9 @@ pub struct PersistentCallGraphCache {
     config: PersistentCacheConfig,
     /// In-memory metadata cache
     metadata: Arc<RwLock<CacheMetadata>>,
+    /// Hit/miss tracking for statistics
+    hit_count: Arc<std::sync::atomic::AtomicU64>,
+    miss_count: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl PersistentCallGraphCache {
@@ -232,6 +239,8 @@ impl PersistentCallGraphCache {
             file_index_tree,
             config,
             metadata,
+            hit_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            miss_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
 
         info!(
@@ -304,6 +313,7 @@ impl PersistentCallGraphCache {
                             key.symbol,
                             key.content_md5
                         );
+                        self.hit_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         Ok(Some(node))
                     }
                     Err(e) => {
@@ -326,6 +336,7 @@ impl PersistentCallGraphCache {
                     key.symbol,
                     key.content_md5
                 );
+                self.miss_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 Ok(None)
             }
         }
@@ -477,6 +488,8 @@ impl PersistentCallGraphCache {
             total_size_bytes: metadata.total_size_bytes,
             total_files,
             disk_size_bytes: disk_size,
+            hit_count: self.hit_count.load(std::sync::atomic::Ordering::Relaxed),
+            miss_count: self.miss_count.load(std::sync::atomic::Ordering::Relaxed),
         })
     }
 

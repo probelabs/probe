@@ -190,8 +190,7 @@ pub struct IndexingLspCaching {
     pub cache_hover: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_document_symbols: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_during_indexing: Option<bool>,
+    // cache_during_indexing removed - indexing ALWAYS caches LSP data
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preload_common_symbols: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -338,7 +337,7 @@ pub struct ResolvedIndexingLspCaching {
     pub cache_references: bool,
     pub cache_hover: bool,
     pub cache_document_symbols: bool,
-    pub cache_during_indexing: bool,
+    // cache_during_indexing removed - indexing ALWAYS caches LSP data
     pub preload_common_symbols: bool,
     pub max_cache_entries_per_operation: usize,
     pub lsp_operation_timeout_ms: u64,
@@ -724,10 +723,7 @@ impl ProbeConfig {
                     base_lsp_caching.cache_document_symbols =
                         other_lsp_caching.cache_document_symbols;
                 }
-                if other_lsp_caching.cache_during_indexing.is_some() {
-                    base_lsp_caching.cache_during_indexing =
-                        other_lsp_caching.cache_during_indexing;
-                }
+                // cache_during_indexing removed - indexing ALWAYS caches LSP data
                 if other_lsp_caching.preload_common_symbols.is_some() {
                     base_lsp_caching.preload_common_symbols =
                         other_lsp_caching.preload_common_symbols;
@@ -979,9 +975,7 @@ impl ProbeConfig {
         if let Ok(val) = env::var("PROBE_INDEXING_CACHE_DOCUMENT_SYMBOLS") {
             lsp_caching.cache_document_symbols = Some(val == "1" || val.to_lowercase() == "true");
         }
-        if let Ok(val) = env::var("PROBE_INDEXING_CACHE_DURING_INDEXING") {
-            lsp_caching.cache_during_indexing = Some(val == "1" || val.to_lowercase() == "true");
-        }
+        // cache_during_indexing removed - indexing ALWAYS caches LSP data
         if let Ok(val) = env::var("PROBE_INDEXING_PRELOAD_COMMON_SYMBOLS") {
             lsp_caching.preload_common_symbols = Some(val == "1" || val.to_lowercase() == "true");
         }
@@ -1108,7 +1102,7 @@ impl ProbeConfig {
                         cache_references: lsp_caching.cache_references.unwrap_or(true),
                         cache_hover: lsp_caching.cache_hover.unwrap_or(true),
                         cache_document_symbols: lsp_caching.cache_document_symbols.unwrap_or(false),
-                        cache_during_indexing: lsp_caching.cache_during_indexing.unwrap_or(false),
+                        // cache_during_indexing removed - indexing ALWAYS caches LSP data
                         preload_common_symbols: lsp_caching.preload_common_symbols.unwrap_or(false),
                         max_cache_entries_per_operation: lsp_caching
                             .max_cache_entries_per_operation
@@ -1253,7 +1247,7 @@ impl ResolvedConfig {
                     cache_references: Some(self.indexing.lsp_caching.cache_references),
                     cache_hover: Some(self.indexing.lsp_caching.cache_hover),
                     cache_document_symbols: Some(self.indexing.lsp_caching.cache_document_symbols),
-                    cache_during_indexing: Some(self.indexing.lsp_caching.cache_during_indexing),
+                    // cache_during_indexing removed - indexing ALWAYS caches LSP data
                     preload_common_symbols: Some(self.indexing.lsp_caching.preload_common_symbols),
                     max_cache_entries_per_operation: Some(
                         self.indexing.lsp_caching.max_cache_entries_per_operation,

@@ -558,8 +558,7 @@ pub struct IndexingConfig {
     pub cache_hover: Option<bool>,
     #[serde(default)]
     pub cache_document_symbols: Option<bool>,
-    #[serde(default)]
-    pub cache_during_indexing: Option<bool>,
+    // cache_during_indexing removed - indexing ALWAYS caches LSP data
     #[serde(default)]
     pub preload_common_symbols: Option<bool>,
     #[serde(default)]
@@ -596,7 +595,7 @@ impl Default for IndexingConfig {
             cache_references: None,
             cache_hover: None,
             cache_document_symbols: None,
-            cache_during_indexing: None,
+            // cache_during_indexing removed - always enabled
             preload_common_symbols: None,
             max_cache_entries_per_operation: None,
             lsp_operation_timeout_ms: None,
