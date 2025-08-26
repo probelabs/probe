@@ -2920,22 +2920,22 @@ mod tests {
         let test_subdir = temp_path.join("test-workspace");
         std::fs::create_dir(&test_subdir).expect("Failed to create test subdirectory");
 
-        // Test relative path resolution
-        let original_dir = std::env::current_dir().expect("Failed to get current dir");
-        std::env::set_current_dir(temp_path).expect("Failed to change directory");
-
-        // Test the path resolution logic (extracted from init_workspaces)
+        // Test the path resolution logic WITHOUT changing global working directory
+        // This avoids race conditions with other tests running in parallel
         let workspace_path = Some("test-workspace".to_string());
+
+        // Simulate the path resolution logic that would happen in production
+        // but resolve against our known base directory instead of global CWD
         let workspace_root = if let Some(ws) = workspace_path {
             let path = PathBuf::from(ws);
             // Convert relative paths to absolute paths for URI conversion
             if path.is_absolute() {
                 path
             } else {
-                // For relative paths, resolve them relative to current directory
-                std::env::current_dir()
-                    .context("Failed to get current directory")
-                    .unwrap()
+                // For relative paths, resolve them relative to temp_path (our base directory)
+                // In production this would use std::env::current_dir(), but in the test
+                // we use a known base to avoid race conditions
+                temp_path
                     .join(&path)
                     .canonicalize()
                     .context(format!(
@@ -2945,11 +2945,8 @@ mod tests {
                     .unwrap()
             }
         } else {
-            std::env::current_dir().unwrap()
+            temp_path.canonicalize().unwrap()
         };
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).expect("Failed to restore directory");
 
         // Verify the path was resolved correctly
         assert!(workspace_root.is_absolute());
@@ -2959,7 +2956,7 @@ mod tests {
         // (e.g., UNC paths, different drive letter casing, etc.)
         // So we check that both paths canonicalize to the same result
         let expected_canonical = test_subdir.canonicalize().unwrap();
-        // workspace_root is already canonicalized from line 2949
+        // workspace_root is already canonicalized from the logic above
         assert_eq!(workspace_root, expected_canonical);
     }
 
@@ -2976,20 +2973,17 @@ mod tests {
         let test_subdir = temp_path.join("test-workspace");
         std::fs::create_dir(&test_subdir).expect("Failed to create test subdirectory");
 
-        // Change to the temp directory
-        let original_dir = std::env::current_dir().expect("Failed to get current dir");
-        std::env::set_current_dir(temp_path).expect("Failed to change directory");
-
         // Test that relative path gets resolved to absolute
+        // WITHOUT changing global working directory to avoid race conditions
         let workspace_path = Some("test-workspace".to_string());
         let workspace_root = if let Some(ws) = workspace_path {
             let path = PathBuf::from(ws);
             if path.is_absolute() {
                 path
             } else {
-                std::env::current_dir()
-                    .context("Failed to get current directory")
-                    .unwrap()
+                // Resolve relative to temp_path instead of global CWD
+                // This avoids races while testing the same logic
+                temp_path
                     .join(&path)
                     .canonicalize()
                     .context(format!(
@@ -2999,11 +2993,8 @@ mod tests {
                     .unwrap()
             }
         } else {
-            std::env::current_dir().unwrap()
+            temp_path.canonicalize().unwrap()
         };
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).expect("Failed to restore directory");
 
         // Critical test: the path should be absolute (required for URI conversion)
         assert!(
