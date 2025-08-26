@@ -85,6 +85,9 @@ pub struct CallGraphCache {
     file_index: DashMap<PathBuf, HashSet<NodeId>>,
     /// In-flight computations keyed by NodeKey to prevent duplicate work.
     inflight: DashMap<NodeKey, Arc<AsyncMutex<()>>>,
+    /// Hit/miss tracking for statistics
+    hit_count: AtomicU64,
+    miss_count: AtomicU64,
 }
 
 impl CallGraphCache {
@@ -97,6 +100,8 @@ impl CallGraphCache {
             incoming: DashMap::new(),
             file_index: DashMap::new(),
             inflight: DashMap::new(),
+            hit_count: AtomicU64::new(0),
+            miss_count: AtomicU64::new(0),
         }
     }
 
@@ -104,6 +109,7 @@ impl CallGraphCache {
     pub fn get(&self, key: &NodeKey) -> Option<Arc<CachedNode>> {
         if let Some(entry) = self.nodes.get(key) {
             entry.value().touch();
+            self.hit_count.fetch_add(1, Ordering::Relaxed);
             return Some(entry.value().clone());
         }
         None
@@ -130,6 +136,8 @@ impl CallGraphCache {
             return Ok(hit);
         }
 
+        // Record cache miss since we need to compute the value
+        self.miss_count.fetch_add(1, Ordering::Relaxed);
         let info = provider().await?;
         let node = Arc::new(CachedNode::new(key.clone(), info));
         self.insert_node(node.clone());
@@ -353,6 +361,8 @@ impl CallGraphCache {
             total_files: self.file_index.len(),
             total_edges: self.outgoing.len() + self.incoming.len(),
             inflight_computations: self.inflight.len(),
+            hit_count: self.hit_count.load(Ordering::Relaxed),
+            miss_count: self.miss_count.load(Ordering::Relaxed),
         }
     }
 }
@@ -365,6 +375,8 @@ pub struct CacheStats {
     pub total_files: usize,
     pub total_edges: usize,
     pub inflight_computations: usize,
+    pub hit_count: u64,
+    pub miss_count: u64,
 }
 
 #[cfg(test)]

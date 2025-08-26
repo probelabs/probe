@@ -1502,7 +1502,7 @@ impl LspManager {
                 cache_references,
                 cache_hover,
                 cache_document_symbols,
-                cache_during_indexing,
+                cache_during_indexing: _,  // cache_during_indexing removed
                 preload_common_symbols,
                 max_cache_entries_per_operation,
                 lsp_operation_timeout_ms,
@@ -1550,9 +1550,7 @@ impl LspManager {
                 if let Some(cache_doc) = cache_document_symbols {
                     config.cache_document_symbols = Some(*cache_doc);
                 }
-                if let Some(cache_during) = cache_during_indexing {
-                    config.cache_during_indexing = Some(*cache_during);
-                }
+                // cache_during_indexing removed - indexing ALWAYS caches LSP data
                 if let Some(preload) = preload_common_symbols {
                     config.preload_common_symbols = Some(*preload);
                 }
@@ -1802,11 +1800,8 @@ impl LspManager {
                     .unwrap_or_else(|| "Default".to_string());
                 println!("  {}: {}", "Cache Document Symbols".bold(), cache_doc);
 
-                let cache_during = config
-                    .cache_during_indexing
-                    .map(|b| b.to_string())
-                    .unwrap_or_else(|| "Default".to_string());
-                println!("  {}: {}", "Cache During Indexing".bold(), cache_during);
+                // cache_during_indexing removed - always enabled now
+                println!("  {}: {}", "Cache During Indexing".bold(), "Always Enabled".to_string());
 
                 let preload = config
                     .preload_common_symbols

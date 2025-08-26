@@ -154,6 +154,10 @@ pub struct CallGraphCache {
 
     /// In-flight LSP operation tracking
     lsp_inflight: DashMap<String, Arc<AsyncMutex<()>>>, // Using string key for generic operation tracking
+    
+    /// Hit/miss tracking for statistics
+    hit_count: Arc<std::sync::atomic::AtomicU64>,
+    miss_count: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl CallGraphCache {
@@ -194,6 +198,8 @@ impl CallGraphCache {
             type_definition_cache: DashMap::new(),
             lsp_access_meta: DashMap::new(),
             lsp_inflight: DashMap::new(),
+            hit_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            miss_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -259,6 +265,8 @@ impl CallGraphCache {
             type_definition_cache: DashMap::new(),
             lsp_access_meta: DashMap::new(),
             lsp_inflight: DashMap::new(),
+            hit_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            miss_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
     }
 
@@ -329,6 +337,8 @@ impl CallGraphCache {
             type_definition_cache: DashMap::new(),
             lsp_access_meta: DashMap::new(),
             lsp_inflight: DashMap::new(),
+            hit_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            miss_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
     }
 
@@ -1982,6 +1992,8 @@ impl CallGraphCache {
             persistent_nodes,
             persistent_size_bytes,
             persistent_disk_size_bytes,
+            hit_count: self.hit_count.load(std::sync::atomic::Ordering::Relaxed),
+            miss_count: self.miss_count.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 }

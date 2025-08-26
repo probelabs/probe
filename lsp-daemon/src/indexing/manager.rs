@@ -10,6 +10,7 @@
 
 use crate::cache_types::DefinitionInfo;
 use crate::call_graph_cache::CallGraphCache;
+use crate::persistent_cache::PersistentCallGraphCache;
 use crate::indexing::{
     pipelines::SymbolInfo, IndexingConfig, IndexingPipeline, IndexingProgress, IndexingQueue,
     LanguageStrategyFactory, Priority, QueueItem,
@@ -184,6 +185,9 @@ pub struct IndexingManager {
     /// Definition cache for caching symbol definitions
     definition_cache: Arc<LspCache<DefinitionInfo>>,
 
+    /// Persistent storage for call graph data
+    persistent_store: Arc<PersistentCallGraphCache>,
+
     /// Start time for performance calculations
     #[allow(dead_code)]
     start_time: Instant,
@@ -197,6 +201,7 @@ impl IndexingManager {
         server_manager: Arc<SingleServerManager>,
         call_graph_cache: Arc<CallGraphCache>,
         definition_cache: Arc<LspCache<DefinitionInfo>>,
+        persistent_store: Arc<PersistentCallGraphCache>,
     ) -> Self {
         let queue = Arc::new(IndexingQueue::new(config.max_queue_size));
         let progress = Arc::new(IndexingProgress::new());
@@ -220,6 +225,7 @@ impl IndexingManager {
             server_manager,
             call_graph_cache,
             definition_cache,
+            persistent_store,
             start_time: Instant::now(),
         }
     }
@@ -231,6 +237,7 @@ impl IndexingManager {
         server_manager: Arc<SingleServerManager>,
         call_graph_cache: Arc<CallGraphCache>,
         definition_cache: Arc<LspCache<DefinitionInfo>>,
+        persistent_store: Arc<PersistentCallGraphCache>,
     ) -> Self {
         // Convert comprehensive config to legacy ManagerConfig for compatibility
         let manager_config = ManagerConfig {
@@ -257,6 +264,7 @@ impl IndexingManager {
             server_manager,
             call_graph_cache,
             definition_cache,
+            persistent_store,
         )
     }
 
@@ -828,6 +836,7 @@ impl IndexingManager {
         let server_manager = Arc::clone(&self.server_manager);
         let call_graph_cache = Arc::clone(&self.call_graph_cache);
         let definition_cache = Arc::clone(&self.definition_cache);
+        let persistent_store = Arc::clone(&self.persistent_store);
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
@@ -893,6 +902,7 @@ impl IndexingManager {
                     &server_manager,
                     &call_graph_cache,
                     &definition_cache,
+                    &persistent_store,
                 )
                 .await;
 
@@ -940,6 +950,7 @@ impl IndexingManager {
         server_manager: &Arc<SingleServerManager>,
         call_graph_cache: &Arc<CallGraphCache>,
         definition_cache: &Arc<LspCache<DefinitionInfo>>,
+        persistent_store: &Arc<PersistentCallGraphCache>,
     ) -> Result<(u64, u64)> {
         let file_path = &item.file_path;
 
@@ -1005,6 +1016,7 @@ impl IndexingManager {
                         server_manager,
                         call_graph_cache,
                         definition_cache,
+                        persistent_store,
                     )
                     .await
                     .unwrap_or(0);
@@ -1031,13 +1043,26 @@ impl IndexingManager {
         symbols: &[SymbolInfo],
         language: Language,
         server_manager: &Arc<SingleServerManager>,
-        _call_graph_cache: &Arc<CallGraphCache>,
-        _definition_cache: &Arc<LspCache<DefinitionInfo>>,
+        call_graph_cache: &Arc<CallGraphCache>,
+        definition_cache: &Arc<LspCache<DefinitionInfo>>,
+        persistent_store: &Arc<PersistentCallGraphCache>,
     ) -> Result<u64> {
         use std::time::Duration;
         use tokio::time::timeout;
+        use crate::cache_types::{NodeKey, CallHierarchyInfo, CallInfo};
+        use crate::hash_utils::md5_hex_file;
+        use crate::protocol::parse_call_hierarchy_from_lsp;
 
         let mut indexed_count = 0u64;
+        
+        // Get file content hash for cache keys
+        let content_md5 = match md5_hex_file(file_path) {
+            Ok(hash) => hash,
+            Err(e) => {
+                debug!("Worker {}: Failed to compute content hash for {:?}: {}", worker_id, file_path, e);
+                return Ok(0);
+            }
+        };
 
         // Get the LSP server for this language
         let server_instance =
@@ -1132,18 +1157,69 @@ impl IndexingManager {
                 }
             }
 
-            // If we got call hierarchy data, it's now cached
-            if let Some(_result) = call_hierarchy_result {
-                indexed_count += 1;
+            // If we got call hierarchy data, cache it properly
+            if let Some(result) = call_hierarchy_result {
+                // Parse the JSON result into CallHierarchyResult first
+                let hierarchy_result = match parse_call_hierarchy_from_lsp(&result) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        debug!("Worker {}: Failed to parse call hierarchy response for {}: {}", worker_id, symbol.name, e);
+                        continue;
+                    }
+                };
+                
+                // Convert CallHierarchyResult to CallHierarchyInfo
+                let call_hierarchy_info = CallHierarchyInfo {
+                    incoming_calls: hierarchy_result.incoming.into_iter().map(|call| CallInfo {
+                        name: call.from.name,
+                        file_path: call.from.uri.strip_prefix("file://").unwrap_or(&call.from.uri).to_string(),
+                        line: call.from.range.start.line,
+                        column: call.from.range.start.character,
+                        symbol_kind: call.from.kind,
+                    }).collect(),
+                    outgoing_calls: hierarchy_result.outgoing.into_iter().map(|call| CallInfo {
+                        name: call.from.name,
+                        file_path: call.from.uri.strip_prefix("file://").unwrap_or(&call.from.uri).to_string(),
+                        line: call.from.range.start.line,
+                        column: call.from.range.start.character,
+                        symbol_kind: call.from.kind,
+                    }).collect(),
+                };
 
-                // The call hierarchy is already cached by the LspServer's call_hierarchy method
-                // We can optionally store it in our call_graph_cache as well
-                // For now, just count it as indexed since the LspServer handles caching
-
-                debug!(
-                    "Worker {}: Successfully indexed call hierarchy for {} at {}:{}",
-                    worker_id, symbol.name, line, column
+                // Create cache key for this symbol
+                let node_key = NodeKey::new(
+                    symbol.name.clone(),
+                    file_path.to_path_buf(),
+                    content_md5.clone(),
                 );
+
+                // Cache in memory (call_graph_cache)
+                let cached_node = call_graph_cache.get_or_compute(
+                    node_key.clone(),
+                    || async { Ok(call_hierarchy_info.clone()) },
+                ).await;
+
+                match cached_node {
+                    Ok(_) => {
+                        // Also store in persistent storage
+                        if let Err(e) = persistent_store.insert(
+                            node_key,
+                            call_hierarchy_info,
+                            language,
+                        ).await {
+                            debug!("Worker {}: Failed to store in persistent cache for {}: {}", worker_id, symbol.name, e);
+                        } else {
+                            indexed_count += 1;
+                            debug!(
+                                "Worker {}: Successfully cached call hierarchy for {} at {}:{}",
+                                worker_id, symbol.name, line, column
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Worker {}: Failed to cache call hierarchy for {}: {}", worker_id, symbol.name, e);
+                    }
+                }
             }
         }
 
@@ -1230,19 +1306,30 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
+        
+        // Create test directory with some files
+        let temp_dir = tempdir().unwrap();
+        
+        // Create persistent store for testing
+        use crate::persistent_cache::{PersistentCallGraphCache, PersistentCacheConfig};
+        let cache_temp_dir = tempdir().unwrap();
+        let persistent_config = PersistentCacheConfig {
+            cache_directory: Some(cache_temp_dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let persistent_store = Arc::new(PersistentCallGraphCache::new(persistent_config).await.expect("Failed to create persistent store"));
+        
         let manager = IndexingManager::new(
             config,
             language_detector,
             server_manager,
             call_graph_cache,
             definition_cache,
+            persistent_store,
         );
 
         // Test initial state
         assert!(matches!(manager.get_status().await, ManagerStatus::Idle));
-
-        // Create test directory with some files
-        let temp_dir = tempdir().unwrap();
         let test_file = temp_dir.path().join("test.rs");
         fs::write(&test_file, "fn main() {}\n").unwrap();
 

@@ -100,8 +100,7 @@ pub struct LspCachingConfig {
     /// Enable caching of document symbols during indexing
     pub cache_document_symbols: bool,
 
-    /// Whether to perform LSP operations during indexing (vs only on-demand)
-    pub cache_during_indexing: bool,
+    // cache_during_indexing removed - indexing ALWAYS caches LSP data
 
     /// Whether to preload cache with common operations after indexing
     pub preload_common_symbols: bool,
@@ -129,8 +128,7 @@ impl Default for LspCachingConfig {
             cache_hover: true,          // ✅ Used by extract for documentation/type info
             cache_document_symbols: false, // ❌ NOT used by search/extract commands
 
-            // Indexing behavior
-            cache_during_indexing: false, // Off by default to avoid slowing indexing
+            // Indexing behavior - caching is now always enabled during indexing
             preload_common_symbols: false, // Off by default to avoid overhead
 
             // Limits and timeouts
@@ -175,11 +173,7 @@ impl LspCachingConfig {
                 parse_bool_env(&value, "PROBE_LSP_CACHE_DOCUMENT_SYMBOLS")?;
         }
 
-        // Indexing behavior flags
-        if let Ok(value) = std::env::var("PROBE_LSP_CACHE_DURING_INDEXING") {
-            config.cache_during_indexing =
-                parse_bool_env(&value, "PROBE_LSP_CACHE_DURING_INDEXING")?;
-        }
+        // Indexing behavior flags - cache_during_indexing removed, always enabled
 
         if let Ok(value) = std::env::var("PROBE_LSP_PRELOAD_COMMON_SYMBOLS") {
             config.preload_common_symbols =
@@ -230,7 +224,7 @@ impl LspCachingConfig {
         merge_bool_field!(cache_references);
         merge_bool_field!(cache_hover);
         merge_bool_field!(cache_document_symbols);
-        merge_bool_field!(cache_during_indexing);
+        // cache_during_indexing field removed - always enabled
         merge_bool_field!(preload_common_symbols);
 
         if other.max_cache_entries_per_operation != Self::default().max_cache_entries_per_operation
@@ -273,7 +267,8 @@ impl LspCachingConfig {
         Ok(())
     }
 
-    /// Check if a specific LSP operation should be cached
+    /// Check if a specific LSP operation should be cached during indexing
+    /// Note: cache_during_indexing was removed - indexing ALWAYS caches enabled operations
     pub fn should_cache_operation(&self, operation: &LspOperation) -> bool {
         // First check if the operation is disabled
         if self.disabled_operations.contains(operation) {
@@ -288,6 +283,11 @@ impl LspCachingConfig {
             LspOperation::Hover => self.cache_hover,
             LspOperation::DocumentSymbols => self.cache_document_symbols,
         }
+    }
+
+    /// Check if indexing should cache LSP operations (always true now)
+    pub fn should_cache_during_indexing(&self) -> bool {
+        true // Always cache during indexing - this is what makes indexing useful!
     }
 
     /// Get priority for an LSP operation (higher = processed first)
@@ -650,8 +650,7 @@ impl IndexingConfig {
         config.lsp_caching.cache_hover = main_indexing.cache_hover.unwrap_or(true);
         config.lsp_caching.cache_document_symbols =
             main_indexing.cache_document_symbols.unwrap_or(false);
-        config.lsp_caching.cache_during_indexing =
-            main_indexing.cache_during_indexing.unwrap_or(false);
+        // cache_during_indexing removed - indexing ALWAYS caches LSP data now
         config.lsp_caching.preload_common_symbols =
             main_indexing.preload_common_symbols.unwrap_or(false);
 
@@ -1112,7 +1111,7 @@ impl IndexingConfig {
             cache_references: Some(self.lsp_caching.cache_references),
             cache_hover: Some(self.lsp_caching.cache_hover),
             cache_document_symbols: Some(self.lsp_caching.cache_document_symbols),
-            cache_during_indexing: Some(self.lsp_caching.cache_during_indexing),
+            // cache_during_indexing removed - indexing ALWAYS caches LSP data
             preload_common_symbols: Some(self.lsp_caching.preload_common_symbols),
             max_cache_entries_per_operation: Some(self.lsp_caching.max_cache_entries_per_operation),
             lsp_operation_timeout_ms: Some(self.lsp_caching.lsp_operation_timeout_ms),
@@ -1205,9 +1204,7 @@ impl IndexingConfig {
             config.lsp_caching.cache_document_symbols = cache_document_symbols;
         }
 
-        if let Some(cache_during_indexing) = protocol.cache_during_indexing {
-            config.lsp_caching.cache_during_indexing = cache_during_indexing;
-        }
+        // cache_during_indexing removed - indexing ALWAYS caches LSP data now
 
         if let Some(preload_common_symbols) = protocol.preload_common_symbols {
             config.lsp_caching.preload_common_symbols = preload_common_symbols;

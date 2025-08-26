@@ -3198,6 +3198,7 @@ impl LspDaemon {
             self.server_manager.clone(),
             self.call_graph_cache.clone(),
             self.definition_cache.clone(),
+            self.persistent_store.clone(),
         );
         let session_id = Uuid::new_v4().to_string();
 
