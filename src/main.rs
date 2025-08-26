@@ -518,36 +518,19 @@ async fn main() -> Result<()> {
     // Apply config defaults to CLI args where not specified
     apply_config_defaults(&mut args, config);
 
-    // Store whether the user explicitly passed --lsp before config defaults were applied
-    let explicit_lsp = std::env::args().any(|arg| arg == "--lsp");
-
-    // Auto-initialize LSP when explicitly requested via --lsp flag
-    // IMPORTANT: Never auto-initialize for LSP management commands to prevent infinite loops!
-    // In CI environments, only initialize LSP if explicitly requested by the user
-    let is_ci = std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok();
-    let needs_lsp = match &args.command {
-        // LSP subcommands handle their own initialization - NEVER auto-init for them
-        Some(Commands::Lsp { .. }) => false,
-        Some(Commands::Search { lsp, .. }) if *lsp => !is_ci || explicit_lsp,
-        Some(Commands::Extract { lsp, .. }) if *lsp => !is_ci || explicit_lsp,
-        None if args.lsp => !is_ci || explicit_lsp, // Default mode with --lsp flag
-        _ => false,
-    };
-
     // Set/clear global autostart guard to prevent unwanted LSP daemon spawning
     // Only disable autostart for specific LSP subcommands that could cause recursion
     let should_disable_autostart = match &args.command {
         Some(Commands::Lsp { subcommand }) => {
             use probe_code::lsp_integration::LspSubcommands;
             // Only these specific commands should disable autostart to prevent recursion
+            // Note: Shutdown should NOT disable autostart as it needs to connect first
             matches!(
                 subcommand,
-                LspSubcommands::Start { .. }
-                    | LspSubcommands::Shutdown
-                    | LspSubcommands::Restart { .. }
+                LspSubcommands::Start { .. } | LspSubcommands::Restart { .. }
             )
         }
-        _ => needs_lsp, // For non-LSP commands, disable if needs_lsp (to avoid double init)
+        _ => false, // Never disable autostart for regular commands - let daemon handle lazy init
     };
 
     if should_disable_autostart {
@@ -558,33 +541,11 @@ async fn main() -> Result<()> {
         std::env::remove_var("PROBE_LSP_DISABLE_AUTOSTART");
     }
 
-    if needs_lsp {
-        if std::env::var("PROBE_QUIET").is_err() {
-            eprintln!("Initializing LSP features...");
-        }
-
-        // Add timeout to prevent hanging, especially in CI environments
-        let timeout_duration =
-            if std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
-                std::time::Duration::from_secs(10) // Shorter timeout in CI
-            } else {
-                std::time::Duration::from_secs(30) // Normal timeout for interactive use
-            };
-
-        match tokio::time::timeout(timeout_duration, LspManager::ensure_ready()).await {
-            Ok(Ok(())) => {
-                // LSP initialization succeeded
-            }
-            Ok(Err(e)) => {
-                eprintln!("Warning: LSP initialization failed: {e}");
-                eprintln!("Continuing without LSP features...");
-            }
-            Err(_) => {
-                eprintln!("Warning: LSP initialization timed out after {timeout_duration:?}");
-                eprintln!("Continuing without LSP features...");
-            }
-        }
-    }
+    // No more eager LSP initialization - let the daemon handle cache-first approach
+    // The daemon will:
+    // 1. Check cache first (fast, <100ms)
+    // 2. Only initialize LSP servers on cache miss
+    // 3. Auto-start daemon if needed during actual LSP operations
 
     match args.command {
         // When no subcommand provided and no pattern, show help

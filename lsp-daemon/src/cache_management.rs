@@ -121,75 +121,86 @@ impl CacheManager {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<crate::cache_types::CallHierarchyInfo>>,
     {
-        use crate::cache_types::CallHierarchyInfo;
-        
         // Level 1: Check in-memory call graph cache
         if let Some(cached) = self.call_graph_cache.get(key) {
-            debug!("Cache HIT (Level 1 - Memory): {} at {}", key.symbol, key.file.display());
-            
+            debug!(
+                "Cache HIT (Level 1 - Memory): {} at {}",
+                key.symbol,
+                key.file.display()
+            );
+
             // Update stats
             {
                 let mut stats = self.stats.write().await;
                 stats.stats_requests += 1;
             }
-            
+
             return Ok(cached.info.clone());
         }
-        
+
         // Level 2: Check persistent storage (disk)
         if let Some(persisted) = self.persistent_store.get(key).await? {
-            debug!("Cache HIT (Level 2 - Disk): {} at {}", key.symbol, key.file.display());
-            
+            debug!(
+                "Cache HIT (Level 2 - Disk): {} at {}",
+                key.symbol,
+                key.file.display()
+            );
+
             // Promote to memory cache for future access
-            let cached_node = self.call_graph_cache.get_or_compute(
-                key.clone(),
-                || async { Ok(persisted.info.clone()) },
-            ).await?;
-            
+            let _cached_node = self
+                .call_graph_cache
+                .get_or_compute(key.clone(), || async { Ok(persisted.info.clone()) })
+                .await?;
+
             // Update stats
             {
                 let mut stats = self.stats.write().await;
                 stats.stats_requests += 1;
             }
-            
+
             return Ok(persisted.info);
         }
-        
+
         // Level 3: Fallback to LSP (compute and cache)
-        debug!("Cache MISS - Falling back to LSP: {} at {}", key.symbol, key.file.display());
-        
+        debug!(
+            "Cache MISS - Falling back to LSP: {} at {}",
+            key.symbol,
+            key.file.display()
+        );
+
         let lsp_result = lsp_fallback().await?;
-        
+
         // Cache the result in both levels
         // Memory cache
-        let cached_node = self.call_graph_cache.get_or_compute(
-            key.clone(),
-            || async { Ok(lsp_result.clone()) },
-        ).await?;
-        
+        let _cached_node = self
+            .call_graph_cache
+            .get_or_compute(key.clone(), || async { Ok(lsp_result.clone()) })
+            .await?;
+
         // Persistent storage
         // Get language from key or use Unknown as fallback
         use crate::language_detector::Language;
-        let language = key.file
+        let language = key
+            .file
             .extension()
             .and_then(|ext| ext.to_str())
-            .and_then(|ext_str| Language::from_str(ext_str))
+            .and_then(Language::from_str)
             .unwrap_or(Language::Unknown);
-        
-        if let Err(e) = self.persistent_store.insert(
-            key.clone(),
-            lsp_result.clone(), 
-            language,
-        ).await {
+
+        if let Err(e) = self
+            .persistent_store
+            .insert(key.clone(), lsp_result.clone(), language)
+            .await
+        {
             warn!("Failed to cache LSP result in persistent storage: {}", e);
         }
-        
+
         // Update stats
         {
             let mut stats = self.stats.write().await;
             stats.stats_requests += 1;
         }
-        
+
         Ok(lsp_result)
     }
 
@@ -231,16 +242,16 @@ impl CacheManager {
         // Calculate hit rates from all cache levels that support hit/miss tracking
         let total_hits = call_graph_stats.hit_count
             + persistent_stats.hit_count
-            + definition_stats.hit_count 
-            + references_stats.hit_count 
+            + definition_stats.hit_count
+            + references_stats.hit_count
             + hover_stats.hit_count;
-            
+
         let total_misses = call_graph_stats.miss_count
             + persistent_stats.miss_count
-            + definition_stats.miss_count 
-            + references_stats.miss_count 
+            + definition_stats.miss_count
+            + references_stats.miss_count
             + hover_stats.miss_count;
-            
+
         let total_requests = total_hits + total_misses;
 
         let hit_rate = if total_requests > 0 {

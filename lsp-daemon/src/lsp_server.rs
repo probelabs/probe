@@ -1636,22 +1636,26 @@ impl LspServer {
         {
             Ok(response) => {
                 // Check if there's an error in the response
-                if let Some(_error) = response.get("error") {
-                    // Return empty result instead of failing
-                    json!({
-                        "result": []
-                    })
+                if let Some(error) = response.get("error") {
+                    // Log the error and propagate it - don't cache incomplete results
+                    warn!("Outgoing calls request failed: {:?}", error);
+                    return Err(anyhow!("Failed to get outgoing calls: {:?}", error));
                 } else {
                     response
                 }
             }
-            Err(_e) => {
-                // Return empty result instead of failing
-                json!({
-                    "result": []
-                })
+            Err(e) => {
+                // Propagate the error - don't cache incomplete results
+                warn!("Outgoing calls request timed out or failed: {}", e);
+                return Err(anyhow!("Failed to get outgoing calls: {}", e));
             }
         };
+
+        // Also validate incoming response properly
+        if let Some(error) = incoming_response.get("error") {
+            warn!("Incoming calls request had error: {:?}", error);
+            return Err(anyhow!("Failed to get incoming calls: {:?}", error));
+        }
 
         let result = json!({
             "item": item,

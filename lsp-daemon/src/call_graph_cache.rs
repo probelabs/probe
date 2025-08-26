@@ -154,7 +154,7 @@ pub struct CallGraphCache {
 
     /// In-flight LSP operation tracking
     lsp_inflight: DashMap<String, Arc<AsyncMutex<()>>>, // Using string key for generic operation tracking
-    
+
     /// Hit/miss tracking for statistics
     hit_count: Arc<std::sync::atomic::AtomicU64>,
     miss_count: Arc<std::sync::atomic::AtomicU64>,

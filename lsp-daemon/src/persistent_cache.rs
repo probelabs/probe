@@ -313,7 +313,8 @@ impl PersistentCallGraphCache {
                             key.symbol,
                             key.content_md5
                         );
-                        self.hit_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        self.hit_count
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         Ok(Some(node))
                     }
                     Err(e) => {
@@ -336,7 +337,8 @@ impl PersistentCallGraphCache {
                     key.symbol,
                     key.content_md5
                 );
-                self.miss_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.miss_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 Ok(None)
             }
         }

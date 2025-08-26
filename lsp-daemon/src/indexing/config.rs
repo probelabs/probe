@@ -101,7 +101,6 @@ pub struct LspCachingConfig {
     pub cache_document_symbols: bool,
 
     // cache_during_indexing removed - indexing ALWAYS caches LSP data
-
     /// Whether to preload cache with common operations after indexing
     pub preload_common_symbols: bool,
 

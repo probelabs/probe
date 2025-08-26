@@ -1018,12 +1018,27 @@ async fn test_multi_language_file_detection() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent storage for testing
+    use lsp_daemon::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
+    let cache_temp_dir = tempfile::tempdir().unwrap();
+    let persistent_config = PersistentCacheConfig {
+        cache_directory: Some(cache_temp_dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent store"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
 
     // Start indexing
@@ -1119,12 +1134,27 @@ async fn test_language_specific_filtering() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent storage for testing
+    use lsp_daemon::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
+    let cache_temp_dir = tempfile::tempdir().unwrap();
+    let persistent_config = PersistentCacheConfig {
+        cache_directory: Some(cache_temp_dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent store"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
     manager
         .start_indexing(workspace.path().to_path_buf())
@@ -1208,12 +1238,27 @@ async fn test_error_handling_with_problematic_files() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent storage for testing
+    use lsp_daemon::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
+    let cache_temp_dir = tempfile::tempdir().unwrap();
+    let persistent_config = PersistentCacheConfig {
+        cache_directory: Some(cache_temp_dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent store"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
     manager
         .start_indexing(workspace.path().to_path_buf())
@@ -1368,12 +1413,27 @@ async fn test_concurrent_multi_language_processing() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent storage for testing
+    use lsp_daemon::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
+    let cache_temp_dir = tempfile::tempdir().unwrap();
+    let persistent_config = PersistentCacheConfig {
+        cache_directory: Some(cache_temp_dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent store"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
     manager
         .start_indexing(workspace.path().to_path_buf())
@@ -1466,12 +1526,27 @@ async fn test_memory_pressure_with_large_files() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent storage for testing
+    use lsp_daemon::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
+    let cache_temp_dir = tempfile::tempdir().unwrap();
+    let persistent_config = PersistentCacheConfig {
+        cache_directory: Some(cache_temp_dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent store"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
     manager
         .start_indexing(workspace.path().to_path_buf())
@@ -1562,12 +1637,27 @@ async fn test_language_priority_processing() -> Result<()> {
         LspCache::new(LspOperation::Definition, lsp_cache_config)
             .expect("Failed to create definition cache"),
     );
+
+    // Create persistent storage for testing
+    use lsp_daemon::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
+    let cache_temp_dir = tempfile::tempdir().unwrap();
+    let persistent_config = PersistentCacheConfig {
+        cache_directory: Some(cache_temp_dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let persistent_store = Arc::new(
+        PersistentCallGraphCache::new(persistent_config)
+            .await
+            .expect("Failed to create persistent store"),
+    );
+
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         call_graph_cache,
         definition_cache,
+        persistent_store,
     );
     manager
         .start_indexing(workspace.path().to_path_buf())

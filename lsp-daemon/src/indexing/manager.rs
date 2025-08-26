@@ -10,13 +10,13 @@
 
 use crate::cache_types::DefinitionInfo;
 use crate::call_graph_cache::CallGraphCache;
-use crate::persistent_cache::PersistentCallGraphCache;
 use crate::indexing::{
     pipelines::SymbolInfo, IndexingConfig, IndexingPipeline, IndexingProgress, IndexingQueue,
     LanguageStrategyFactory, Priority, QueueItem,
 };
 use crate::language_detector::{Language, LanguageDetector};
 use crate::lsp_cache::LspCache;
+use crate::persistent_cache::PersistentCallGraphCache;
 use crate::server_manager::SingleServerManager;
 use anyhow::{anyhow, Result};
 use ignore::WalkBuilder;
@@ -1037,6 +1037,7 @@ impl IndexingManager {
     }
 
     /// Index symbols by calling LSP servers to pre-warm the cache
+    #[allow(clippy::too_many_arguments)]
     async fn index_symbols_with_lsp(
         worker_id: usize,
         file_path: &Path,
@@ -1044,22 +1045,25 @@ impl IndexingManager {
         language: Language,
         server_manager: &Arc<SingleServerManager>,
         call_graph_cache: &Arc<CallGraphCache>,
-        definition_cache: &Arc<LspCache<DefinitionInfo>>,
+        _definition_cache: &Arc<LspCache<DefinitionInfo>>,
         persistent_store: &Arc<PersistentCallGraphCache>,
     ) -> Result<u64> {
-        use std::time::Duration;
-        use tokio::time::timeout;
-        use crate::cache_types::{NodeKey, CallHierarchyInfo, CallInfo};
+        use crate::cache_types::{CallHierarchyInfo, CallInfo, NodeKey};
         use crate::hash_utils::md5_hex_file;
         use crate::protocol::parse_call_hierarchy_from_lsp;
+        use std::time::Duration;
+        use tokio::time::timeout;
 
         let mut indexed_count = 0u64;
-        
+
         // Get file content hash for cache keys
         let content_md5 = match md5_hex_file(file_path) {
             Ok(hash) => hash,
             Err(e) => {
-                debug!("Worker {}: Failed to compute content hash for {:?}: {}", worker_id, file_path, e);
+                debug!(
+                    "Worker {}: Failed to compute content hash for {:?}: {}",
+                    worker_id, file_path, e
+                );
                 return Ok(0);
             }
         };
@@ -1096,9 +1100,69 @@ impl IndexingManager {
             }
         };
 
-        // Wait for server to be ready (especially important for rust-analyzer)
-        let max_retries = 5;
-        let retry_delay = Duration::from_secs(3);
+        // Wait for server to be ready by testing with the first symbol
+        // Keep probing until we get a valid response structure
+        debug!(
+            "Worker {}: Waiting for {:?} server to be ready",
+            worker_id, language
+        );
+
+        // Test readiness with first function/method symbol if available
+        let test_symbol = symbols.iter().find(|s| {
+            let kind_lower = s.kind.to_lowercase();
+            kind_lower.contains("function") || kind_lower.contains("method")
+        });
+
+        if let Some(first_symbol) = test_symbol {
+            let mut ready_check_count = 0;
+            loop {
+                ready_check_count += 1;
+
+                // Try a call hierarchy request to check if server is ready
+                if let Ok(Ok(result)) = timeout(
+                    Duration::from_secs(5),
+                    server_guard.server.call_hierarchy(
+                        file_path,
+                        first_symbol.line,
+                        first_symbol.column,
+                    ),
+                )
+                .await
+                {
+                    if let Some(obj) = result.as_object() {
+                        // Server is ready if it returns proper structure
+                        if obj.contains_key("incoming") && obj.contains_key("outgoing") {
+                            debug!(
+                                "Worker {}: {:?} server ready after {} checks",
+                                worker_id, language, ready_check_count
+                            );
+                            break;
+                        }
+                    }
+                }
+
+                if ready_check_count % 10 == 0 {
+                    debug!(
+                        "Worker {}: Waiting for {:?} server to initialize (check {})",
+                        worker_id, language, ready_check_count
+                    );
+                }
+
+                // Wait before next readiness check
+                tokio::time::sleep(Duration::from_secs(1)).await;
+
+                // Safety: Give up after 2 minutes
+                if ready_check_count > 120 {
+                    warn!(
+                        "Worker {}: {:?} server not ready after 2 minutes, proceeding anyway",
+                        worker_id, language
+                    );
+                    break;
+                }
+            }
+        }
+
+        let _retry_delay = Duration::from_secs(1); // Check every second
 
         for symbol in symbols {
             // Skip non-function symbols for now (can expand later)
@@ -1111,11 +1175,14 @@ impl IndexingManager {
             let line = symbol.line;
             let column = symbol.column;
 
-            // Try to get call hierarchy with retries
+            // Try to get call hierarchy - keep retrying until we get a valid response
             let mut retry_count = 0;
             let mut call_hierarchy_result = None;
+            let max_retries_for_unsupported = 3; // After 3 nulls, consider it unsupported
+            let mut null_response_count = 0;
 
-            while retry_count < max_retries {
+            // Retry with exponential backoff up to a reasonable maximum
+            loop {
                 match timeout(
                     Duration::from_secs(10),
                     server_guard.server.call_hierarchy(file_path, line, column),
@@ -1123,19 +1190,107 @@ impl IndexingManager {
                 .await
                 {
                     Ok(Ok(result)) => {
-                        // Check if we got meaningful data
+                        // Check the response type to determine server state
                         if let Some(obj) = result.as_object() {
-                            // Check if the result contains actual call hierarchy data
-                            if obj.contains_key("incoming") || obj.contains_key("outgoing") {
-                                call_hierarchy_result = Some(result);
-                                break;
+                            // VALID RESPONSE: Must have both "incoming" and "outgoing" keys
+                            // These will be arrays (possibly empty for leaf functions)
+                            if obj.contains_key("incoming") && obj.contains_key("outgoing") {
+                                // Additional validation: ensure the arrays are actually present
+                                let incoming_valid =
+                                    obj.get("incoming").map(|v| v.is_array()).unwrap_or(false);
+                                let outgoing_valid =
+                                    obj.get("outgoing").map(|v| v.is_array()).unwrap_or(false);
+
+                                if incoming_valid && outgoing_valid {
+                                    // This is a properly initialized server response
+                                    // Empty arrays are valid (leaf functions have no callers/callees)
+                                    call_hierarchy_result = Some(result);
+                                    if retry_count > 0 {
+                                        debug!(
+                                            "Worker {}: Got valid call hierarchy for {} after {} retries",
+                                            worker_id, symbol.name, retry_count
+                                        );
+                                    }
+                                    break;
+                                } else {
+                                    debug!(
+                                        "Worker {}: Response has keys but invalid structure for {} (attempt {})",
+                                        worker_id, symbol.name, retry_count + 1
+                                    );
+                                }
+                            }
+                            // SERVER NOT READY: Empty or incomplete response structure
+                            else if obj.is_empty() {
+                                // Empty object = server not ready
+                                if retry_count % 10 == 0 {
+                                    debug!(
+                                        "Worker {}: LSP server returning empty object for {} - not initialized yet (attempt {})",
+                                        worker_id, symbol.name, retry_count + 1
+                                    );
+                                }
+                            }
+                            // PARTIAL RESPONSE: Has some fields but not the expected ones
+                            else if obj.contains_key("jsonrpc")
+                                || obj.contains_key("id")
+                                || obj.contains_key("method")
+                            {
+                                // Protocol-level response without data = server processing
+                                if retry_count % 10 == 0 {
+                                    debug!(
+                                        "Worker {}: LSP server returned protocol message without data for {} - still initializing (attempt {})",
+                                        worker_id, symbol.name, retry_count + 1
+                                    );
+                                }
+                            }
+                            // UNEXPECTED STRUCTURE: Log for debugging
+                            else {
+                                // Some other structure - could be error or different format
+                                let keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+                                if retry_count % 10 == 0 {
+                                    debug!(
+                                        "Worker {}: Unexpected response structure for {} with keys {:?} (attempt {})",
+                                        worker_id, symbol.name, keys, retry_count + 1
+                                    );
+                                }
                             }
                         }
-                        // Empty or incomplete response - server might still be indexing
-                        debug!(
-                            "Worker {}: Empty/incomplete call hierarchy for {} at {}:{}, retry {}/{}",
-                            worker_id, symbol.name, line, column, retry_count + 1, max_retries
-                        );
+                        // NULL RESPONSE: Symbol might not support call hierarchy
+                        else if result.is_null() {
+                            null_response_count += 1;
+                            // After multiple null responses, it's genuinely unsupported
+                            if null_response_count >= max_retries_for_unsupported {
+                                debug!(
+                                    "Worker {}: Symbol {} at {}:{} confirmed unsupported (null {} times)",
+                                    worker_id, symbol.name, line, column, null_response_count
+                                );
+                                break;
+                            }
+                            debug!(
+                                "Worker {}: Got null for {} (attempt {}/{} nulls)",
+                                worker_id,
+                                symbol.name,
+                                retry_count + 1,
+                                null_response_count
+                            );
+                        }
+                        // ARRAY RESPONSE: Some LSP servers return array for call hierarchy prepare
+                        else if result.is_array() {
+                            // This might be a valid response format for some servers
+                            debug!(
+                                "Worker {}: Got array response for {} - checking if valid",
+                                worker_id, symbol.name
+                            );
+                            // Accept array responses as potentially valid
+                            call_hierarchy_result = Some(result);
+                            break;
+                        }
+                        // OTHER TYPES: Unexpected
+                        else {
+                            debug!(
+                                "Worker {}: Non-object/non-null response type for {}: {}",
+                                worker_id, symbol.name, result
+                            );
+                        }
                     }
                     Ok(Err(e)) => {
                         debug!(
@@ -1152,9 +1307,19 @@ impl IndexingManager {
                 }
 
                 retry_count += 1;
-                if retry_count < max_retries {
-                    tokio::time::sleep(retry_delay).await;
+
+                // Safety limit: after 300 attempts (5 minutes), give up on this symbol
+                if retry_count >= 300 {
+                    debug!(
+                        "Worker {}: Giving up on {} at {}:{} after {} attempts",
+                        worker_id, symbol.name, line, column, retry_count
+                    );
+                    break;
                 }
+
+                // Exponential backoff: start at 1s, max 10s
+                let backoff_secs = std::cmp::min(10, 1 << (retry_count.min(4) - 1));
+                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
             }
 
             // If we got call hierarchy data, cache it properly
@@ -1163,27 +1328,48 @@ impl IndexingManager {
                 let hierarchy_result = match parse_call_hierarchy_from_lsp(&result) {
                     Ok(result) => result,
                     Err(e) => {
-                        debug!("Worker {}: Failed to parse call hierarchy response for {}: {}", worker_id, symbol.name, e);
+                        debug!(
+                            "Worker {}: Failed to parse call hierarchy response for {}: {}",
+                            worker_id, symbol.name, e
+                        );
                         continue;
                     }
                 };
-                
+
                 // Convert CallHierarchyResult to CallHierarchyInfo
                 let call_hierarchy_info = CallHierarchyInfo {
-                    incoming_calls: hierarchy_result.incoming.into_iter().map(|call| CallInfo {
-                        name: call.from.name,
-                        file_path: call.from.uri.strip_prefix("file://").unwrap_or(&call.from.uri).to_string(),
-                        line: call.from.range.start.line,
-                        column: call.from.range.start.character,
-                        symbol_kind: call.from.kind,
-                    }).collect(),
-                    outgoing_calls: hierarchy_result.outgoing.into_iter().map(|call| CallInfo {
-                        name: call.from.name,
-                        file_path: call.from.uri.strip_prefix("file://").unwrap_or(&call.from.uri).to_string(),
-                        line: call.from.range.start.line,
-                        column: call.from.range.start.character,
-                        symbol_kind: call.from.kind,
-                    }).collect(),
+                    incoming_calls: hierarchy_result
+                        .incoming
+                        .into_iter()
+                        .map(|call| CallInfo {
+                            name: call.from.name,
+                            file_path: call
+                                .from
+                                .uri
+                                .strip_prefix("file://")
+                                .unwrap_or(&call.from.uri)
+                                .to_string(),
+                            line: call.from.range.start.line,
+                            column: call.from.range.start.character,
+                            symbol_kind: call.from.kind,
+                        })
+                        .collect(),
+                    outgoing_calls: hierarchy_result
+                        .outgoing
+                        .into_iter()
+                        .map(|call| CallInfo {
+                            name: call.from.name,
+                            file_path: call
+                                .from
+                                .uri
+                                .strip_prefix("file://")
+                                .unwrap_or(&call.from.uri)
+                                .to_string(),
+                            line: call.from.range.start.line,
+                            column: call.from.range.start.character,
+                            symbol_kind: call.from.kind,
+                        })
+                        .collect(),
                 };
 
                 // Create cache key for this symbol
@@ -1194,20 +1380,23 @@ impl IndexingManager {
                 );
 
                 // Cache in memory (call_graph_cache)
-                let cached_node = call_graph_cache.get_or_compute(
-                    node_key.clone(),
-                    || async { Ok(call_hierarchy_info.clone()) },
-                ).await;
+                let cached_node = call_graph_cache
+                    .get_or_compute(node_key.clone(), || async {
+                        Ok(call_hierarchy_info.clone())
+                    })
+                    .await;
 
                 match cached_node {
                     Ok(_) => {
                         // Also store in persistent storage
-                        if let Err(e) = persistent_store.insert(
-                            node_key,
-                            call_hierarchy_info,
-                            language,
-                        ).await {
-                            debug!("Worker {}: Failed to store in persistent cache for {}: {}", worker_id, symbol.name, e);
+                        if let Err(e) = persistent_store
+                            .insert(node_key, call_hierarchy_info, language)
+                            .await
+                        {
+                            debug!(
+                                "Worker {}: Failed to store in persistent cache for {}: {}",
+                                worker_id, symbol.name, e
+                            );
                         } else {
                             indexed_count += 1;
                             debug!(
@@ -1217,7 +1406,10 @@ impl IndexingManager {
                         }
                     }
                     Err(e) => {
-                        debug!("Worker {}: Failed to cache call hierarchy for {}: {}", worker_id, symbol.name, e);
+                        debug!(
+                            "Worker {}: Failed to cache call hierarchy for {}: {}",
+                            worker_id, symbol.name, e
+                        );
                     }
                 }
             }
@@ -1306,19 +1498,23 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
-        
+
         // Create test directory with some files
         let temp_dir = tempdir().unwrap();
-        
+
         // Create persistent store for testing
-        use crate::persistent_cache::{PersistentCallGraphCache, PersistentCacheConfig};
+        use crate::persistent_cache::{PersistentCacheConfig, PersistentCallGraphCache};
         let cache_temp_dir = tempdir().unwrap();
         let persistent_config = PersistentCacheConfig {
             cache_directory: Some(cache_temp_dir.path().to_path_buf()),
             ..Default::default()
         };
-        let persistent_store = Arc::new(PersistentCallGraphCache::new(persistent_config).await.expect("Failed to create persistent store"));
-        
+        let persistent_store = Arc::new(
+            PersistentCallGraphCache::new(persistent_config)
+                .await
+                .expect("Failed to create persistent store"),
+        );
+
         let manager = IndexingManager::new(
             config,
             language_detector,

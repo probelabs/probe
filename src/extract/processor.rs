@@ -883,34 +883,31 @@ async fn get_lsp_symbol_info(
         );
     }
 
-    // Try non-blocking client creation with brief backoff (helps on cold CI runners)
-    let mut attempts = 0u32;
-    let max_attempts = 3u32;
-    let mut client = loop {
-        if let Some(c) = LspClient::new_non_blocking(config.clone()).await {
-            if debug_mode {
-                println!(
-                    "[DEBUG] LSP client connected successfully (attempt #{})",
-                    attempts + 1
-                );
-            }
-            break c;
-        }
-        attempts += 1;
-        if attempts >= max_attempts {
-            if debug_mode {
-                eprintln!(
-                    "[DEBUG] LSP server not ready after {attempts} attempts for symbol: {symbol_name}"
-                );
-            }
-            // Don't print error in non-debug mode - LSP is optional enhancement
-            return None;
-        }
+    // Try lightweight non-blocking connection first (fast path for running daemon)
+    let mut client = if let Some(c) = LspClient::new_non_blocking(config.clone()).await {
         if debug_mode {
-            println!("[DEBUG] LSP not ready (attempt #{attempts}), retrying shortly…");
+            println!("[DEBUG] LSP client connected to running daemon (fast path)");
         }
-        // Shorter delay to avoid breaking non-blocking test expectations
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        c
+    } else {
+        // Daemon not running - start it with full initialization (slow path)
+        if debug_mode {
+            println!("[DEBUG] Daemon not running, starting LSP daemon (slow path)");
+        }
+        match LspClient::new(config.clone()).await {
+            Ok(client) => {
+                if debug_mode {
+                    println!("[DEBUG] LSP daemon started and connected successfully");
+                }
+                client
+            }
+            Err(e) => {
+                if debug_mode {
+                    eprintln!("[DEBUG] Failed to start LSP daemon: {e}");
+                }
+                return None;
+            }
+        }
     };
 
     // Check if LSP is supported for this file
@@ -1244,10 +1241,12 @@ fn get_lsp_symbol_info_sync(
         };
 
         // Use different timeouts for CI vs local environments
+        // First run needs time for daemon startup + LSP server initialization (10-15s)
+        // Subsequent runs are very fast via cache (<100ms)
         let timeout_duration = if std::env::var("PROBE_CI").is_ok() {
-            std::time::Duration::from_secs(30) // Much longer timeout in CI
+            std::time::Duration::from_secs(60) // Long timeout in CI for rust-analyzer
         } else {
-            std::time::Duration::from_secs(10) // Standard timeout locally
+            std::time::Duration::from_secs(20) // Allow time for first-run initialization locally
         };
         match rt.block_on(async {
             tokio::time::timeout(

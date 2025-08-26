@@ -51,7 +51,8 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                 let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_LSP_REQUESTS));
                 let mut set = JoinSet::new();
 
-                // Create a shared LSP client for all symbols to use the daemon connection
+                // Create a shared LSP client with cache-first approach
+                // Try non-blocking first, fall back to full initialization if daemon not running
                 let shared_client = {
                     let config = LspConfig {
                         use_daemon: true,
@@ -59,18 +60,31 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                         timeout_ms: 8000,
                         include_stdlib: false,
                     };
-                    match LspClient::new(config).await {
-                        Ok(client) => {
-                            if debug_mode {
-                                println!("[DEBUG] Created shared LSP client for enrichment");
-                            }
-                            Some(Arc::new(AsyncMutex::new(client)))
+
+                    // Fast path: try non-blocking connection to running daemon
+                    if let Some(client) = LspClient::new_non_blocking(config.clone()).await {
+                        if debug_mode {
+                            println!("[DEBUG] Connected to running LSP daemon for enrichment (fast path)");
                         }
-                        Err(e) => {
-                            if debug_mode {
-                                println!("[DEBUG] Failed to create shared LSP client: {e}");
+                        Some(Arc::new(AsyncMutex::new(client)))
+                    } else {
+                        // Slow path: start daemon if needed
+                        if debug_mode {
+                            println!("[DEBUG] Starting LSP daemon for enrichment (slow path)");
+                        }
+                        match LspClient::new(config).await {
+                            Ok(client) => {
+                                if debug_mode {
+                                    println!("[DEBUG] LSP daemon started for enrichment");
+                                }
+                                Some(Arc::new(AsyncMutex::new(client)))
                             }
-                            None
+                            Err(e) => {
+                                if debug_mode {
+                                    println!("[DEBUG] Failed to start LSP daemon for enrichment: {e}");
+                                }
+                                None
+                            }
                         }
                     }
                 };
