@@ -750,7 +750,7 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
 
     // Replace language-specific path separators with . for universal symbol access
     // Note: We only replace these in the symbol part (after #), not in file paths
-    // Rust & C++ & Ruby: :: -> . (e.g., "std::vector::new" -> "std.vector.new")  
+    // Rust & C++ & Ruby: :: -> . (e.g., "std::vector::new" -> "std.vector.new")
     // PHP: \ -> . (e.g., "App\Service\User" -> "App.Service.User")
     let cleaned_input = if let Some(hash_pos) = cleaned_input.find('#') {
         let (file_part, symbol_part) = cleaned_input.split_at(hash_pos + 1);
@@ -1952,7 +1952,10 @@ impl Default for TestStruct {
 
         assert_eq!(php_results.len(), 1, "Should parse PHP \\ syntax");
         assert_eq!(php_results[0].0, php_file);
-        assert_eq!(php_results[0].3, Some("App.Services.UserService".to_string()));
+        assert_eq!(
+            php_results[0].3,
+            Some("App.Services.UserService".to_string())
+        );
 
         // Test Ruby :: syntax conversion
         let ruby_input = format!("{ruby_file_str}#ActiveRecord::Base::find");
@@ -1960,14 +1963,24 @@ impl Default for TestStruct {
 
         assert_eq!(ruby_results.len(), 1, "Should parse Ruby :: syntax");
         assert_eq!(ruby_results[0].0, ruby_file);
-        assert_eq!(ruby_results[0].3, Some("ActiveRecord.Base.find".to_string()));
+        assert_eq!(
+            ruby_results[0].3,
+            Some("ActiveRecord.Base.find".to_string())
+        );
 
         // Test mixed PHP syntax (both \ and ::)
         let mixed_input = format!(r"{php_file_str}#App\Namespace::Class::method");
         let mixed_results = parse_file_with_line(&mixed_input, true);
 
-        assert_eq!(mixed_results.len(), 1, "Should parse mixed \\ and :: syntax");
+        assert_eq!(
+            mixed_results.len(),
+            1,
+            "Should parse mixed \\ and :: syntax"
+        );
         assert_eq!(mixed_results[0].0, php_file);
-        assert_eq!(mixed_results[0].3, Some("App.Namespace.Class.method".to_string()));
+        assert_eq!(
+            mixed_results[0].3,
+            Some("App.Namespace.Class.method".to_string())
+        );
     }
 }
