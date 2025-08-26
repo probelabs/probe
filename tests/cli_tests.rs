@@ -1207,54 +1207,66 @@ fn test_config_set_get_commands() {
 
     // Create a temporary directory for test configs
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
 
     // Test setting a value in project scope
-    let (stdout, stderr, success) = run_probe_command(&[
-        "config",
-        "set",
-        "search.max_results",
-        "42",
-        "--scope",
-        "project",
-        "--force",
-    ]);
+    let (stdout, stderr, success) = run_probe_command_at(
+        &[
+            "config",
+            "set",
+            "search.max_results",
+            "42",
+            "--scope",
+            "project",
+            "--force",
+        ],
+        Some(temp_dir.path()),
+    );
     assert!(success, "Failed to set config value: {stderr}");
     assert!(stdout.contains("✓ Set search.max_results = 42"));
 
     // Test getting the value
-    let (stdout, stderr, success) = run_probe_command(&["config", "get", "search.max_results"]);
+    let (stdout, stderr, success) = run_probe_command_at(
+        &["config", "get", "search.max_results"],
+        Some(temp_dir.path()),
+    );
     assert!(success, "Failed to get config value: {stderr}");
     assert!(stdout.contains("42"));
 
     // Test getting with source
-    let (stdout, stderr, success) =
-        run_probe_command(&["config", "get", "search.max_results", "--show-source"]);
+    let (stdout, stderr, success) = run_probe_command_at(
+        &["config", "get", "search.max_results", "--show-source"],
+        Some(temp_dir.path()),
+    );
     assert!(success, "Failed to get config with source: {stderr}");
     assert!(stdout.contains("42"));
     assert!(stdout.contains("(source: project)"));
 
     // Test setting a boolean value
-    let (_stdout, stderr, success) = run_probe_command(&[
-        "config",
-        "set",
-        "defaults.enable_lsp",
-        "true",
-        "--scope",
-        "project",
-    ]);
+    let (_stdout, stderr, success) = run_probe_command_at(
+        &[
+            "config",
+            "set",
+            "defaults.enable_lsp",
+            "true",
+            "--scope",
+            "project",
+        ],
+        Some(temp_dir.path()),
+    );
     assert!(success, "Failed to set boolean value: {stderr}");
 
     // Test setting a string value
-    let (_stdout, stderr, success) = run_probe_command(&[
-        "config",
-        "set",
-        "search.reranker",
-        "hybrid",
-        "--scope",
-        "project",
-    ]);
+    let (_stdout, stderr, success) = run_probe_command_at(
+        &[
+            "config",
+            "set",
+            "search.reranker",
+            "hybrid",
+            "--scope",
+            "project",
+        ],
+        Some(temp_dir.path()),
+    );
     assert!(success, "Failed to set string value: {stderr}");
 
     // Verify the config file was created
@@ -1262,14 +1274,13 @@ fn test_config_set_get_commands() {
     assert!(config_file.exists(), "Config file was not created");
 
     // Test resetting config
-    let (stdout, stderr, success) =
-        run_probe_command(&["config", "reset", "--scope", "project", "--force"]);
+    let (stdout, stderr, success) = run_probe_command_at(
+        &["config", "reset", "--scope", "project", "--force"],
+        Some(temp_dir.path()),
+    );
     assert!(success, "Failed to reset config: {stderr}");
     assert!(stdout.contains("✓ Reset project config"));
     assert!(!config_file.exists(), "Config file was not removed");
-
-    // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
 }
 
 #[test]
@@ -1331,45 +1342,58 @@ fn test_config_scope_precedence() {
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
 
     // Set different values in different scopes
-    run_probe_command(&[
-        "config",
-        "set",
-        "search.max_results",
-        "10",
-        "--scope",
-        "project",
-        "--force",
-    ]);
-    run_probe_command(&[
-        "config",
-        "set",
-        "search.max_results",
-        "20",
-        "--scope",
-        "local",
-        "--force",
-    ]);
+    run_probe_command_at(
+        &[
+            "config",
+            "set",
+            "search.max_results",
+            "10",
+            "--scope",
+            "project",
+            "--force",
+        ],
+        Some(temp_dir.path()),
+    );
+    run_probe_command_at(
+        &[
+            "config",
+            "set",
+            "search.max_results",
+            "20",
+            "--scope",
+            "local",
+            "--force",
+        ],
+        Some(temp_dir.path()),
+    );
 
     // Get the value - should return local scope value
-    let (stdout, _, _) =
-        run_probe_command(&["config", "get", "search.max_results", "--show-source"]);
+    let (stdout, _, _) = run_probe_command_at(
+        &["config", "get", "search.max_results", "--show-source"],
+        Some(temp_dir.path()),
+    );
     assert!(stdout.contains("20"));
     assert!(stdout.contains("(source: local)"));
 
     // Reset local config
-    run_probe_command(&["config", "reset", "--scope", "local", "--force"]);
+    run_probe_command_at(
+        &["config", "reset", "--scope", "local", "--force"],
+        Some(temp_dir.path()),
+    );
 
     // Now should get project value
-    let (stdout, _, _) =
-        run_probe_command(&["config", "get", "search.max_results", "--show-source"]);
+    let (stdout, _, _) = run_probe_command_at(
+        &["config", "get", "search.max_results", "--show-source"],
+        Some(temp_dir.path()),
+    );
     assert!(stdout.contains("10"));
     assert!(stdout.contains("(source: project)"));
 
     // Clean up
-    run_probe_command(&["config", "reset", "--scope", "project", "--force"]);
-    std::env::set_current_dir(original_dir).unwrap();
+    run_probe_command_at(
+        &["config", "reset", "--scope", "project", "--force"],
+        Some(temp_dir.path()),
+    );
 }
