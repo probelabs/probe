@@ -20,7 +20,15 @@ export default defineConfig({
     ['meta', { property: 'og:site_name', content: 'Probe Labs' }],
     ['meta', { property: 'og:url', content: 'https://probelabs.com/' }],
     ['meta', { property: 'twitter:site', content: '@buger' }],
-    ['meta', { name: 'robots', content: 'index,follow' }]
+    ['meta', { name: 'robots', content: 'index,follow' }],
+    // Google Analytics
+    ['script', { async: '', src: 'https://www.googletagmanager.com/gtag/js?id=G-3Y0Z9SZLF2' }],
+    ['script', {}, `
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-3Y0Z9SZLF2');
+    `]
   ],
   
   markdown: {
