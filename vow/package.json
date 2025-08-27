@@ -1,0 +1,34 @@
+{
+  "name": "@probelabs/vow",
+  "version": "0.1.0",
+  "description": "Minimal cross-platform consent gate for commits/agents",
+  "bin": {
+    "vow-consent": "bin/vow.js"
+  },
+  "type": "commonjs",
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE",
+    "AGENT_VOW.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/probelabs/vow.git"
+  },
+  "keywords": [
+    "consent",
+    "git-hook",
+    "pre-commit",
+    "claude",
+    "cross-platform"
+  ],
+  "author": "Probelabs",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

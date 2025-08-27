@@ -1126,15 +1126,13 @@ impl LspManager {
 
     /// Handle cache management commands
     async fn handle_cache_command(cache_command: &CacheSubcommands, format: &str) -> Result<()> {
-        let config = LspConfig::default();
-        let mut client = LspClient::new(config).await?;
-
         match cache_command {
             CacheSubcommands::Stats {
                 detailed: _,
                 git: _,
             } => {
-                let stats = client.cache_stats().await?;
+                // Handle cache stats with fallback to disk reading
+                let stats = Self::get_cache_stats_with_fallback().await?;
 
                 match format {
                     "json" => {
@@ -1196,6 +1194,287 @@ impl LspManager {
                         }
                     }
                 }
+            }
+            _ => {
+                // For all other cache commands, try to create client normally
+                let config = LspConfig::default();
+                let mut client = LspClient::new(config).await?;
+
+                Self::handle_other_cache_commands(&mut client, cache_command, format).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle cache stats with fallback to disk reading
+    async fn get_cache_stats_with_fallback() -> Result<lsp_daemon::protocol::CacheStatistics> {
+        eprintln!("[DEBUG] get_cache_stats_with_fallback called");
+        // Check if daemon autostart is disabled
+        eprintln!(
+            "[DEBUG] Checking PROBE_LSP_DISABLE_AUTOSTART: {:?}",
+            std::env::var("PROBE_LSP_DISABLE_AUTOSTART")
+        );
+        if std::env::var("PROBE_LSP_DISABLE_AUTOSTART").is_ok() {
+            eprintln!("[DEBUG] PROBE_LSP_DISABLE_AUTOSTART is set, calling read_disk_cache_stats_directly");
+            return Self::read_disk_cache_stats_directly().await;
+        }
+
+        // Try to get stats from daemon first
+        let config = LspConfig::default();
+        match LspClient::new(config).await {
+            Ok(mut client) => match client.cache_stats().await {
+                Ok(stats) => Ok(stats),
+                Err(e) => {
+                    eprintln!("[DEBUG] Failed to get stats from daemon: {:?}, falling back to disk reading", e);
+                    Self::read_disk_cache_stats_directly().await
+                }
+            },
+            Err(e) => {
+                eprintln!(
+                    "[DEBUG] Failed to connect to daemon: {:?}, falling back to disk reading",
+                    e
+                );
+                Self::read_disk_cache_stats_directly().await
+            }
+        }
+    }
+
+    /// Read cache statistics directly from disk files (static version)
+    async fn read_disk_cache_stats_directly() -> Result<lsp_daemon::protocol::CacheStatistics> {
+        eprintln!("[DEBUG] read_disk_cache_stats_directly called - reading from filesystem");
+
+        // Get cache base directory (same logic as in client.rs)
+        let cache_base_dir = if let Ok(cache_dir) = std::env::var("PROBE_LSP_CACHE_DIR") {
+            eprintln!(
+                "Using cache dir from env var PROBE_LSP_CACHE_DIR: {}",
+                cache_dir
+            );
+            std::path::PathBuf::from(cache_dir)
+        } else if let Some(cache_dir) = dirs::cache_dir() {
+            let probe_lsp_dir = cache_dir.join("probe").join("lsp");
+            eprintln!("Using default cache dir: {:?}", probe_lsp_dir);
+            probe_lsp_dir
+        } else {
+            let tmp_dir = std::path::PathBuf::from("/tmp").join("probe-lsp-cache");
+            eprintln!("Using fallback tmp cache dir: {:?}", tmp_dir);
+            tmp_dir
+        };
+
+        eprintln!("Cache base directory: {:?}", cache_base_dir);
+        eprintln!("Cache base directory exists: {}", cache_base_dir.exists());
+
+        if !cache_base_dir.exists() {
+            eprintln!("Cache base directory does not exist, returning empty stats");
+            return Ok(lsp_daemon::protocol::CacheStatistics {
+                total_entries: 0,
+                total_size_bytes: 0,
+                disk_size_bytes: 0,
+                entries_per_file: std::collections::HashMap::new(),
+                entries_per_language: std::collections::HashMap::new(),
+                hit_rate: 0.0,
+                miss_rate: 0.0,
+                age_distribution: lsp_daemon::protocol::AgeDistribution {
+                    entries_last_hour: 0,
+                    entries_last_day: 0,
+                    entries_last_week: 0,
+                    entries_last_month: 0,
+                    entries_older: 0,
+                },
+                most_accessed: Vec::new(),
+                memory_usage: lsp_daemon::protocol::MemoryUsage {
+                    in_memory_cache_bytes: 0,
+                    persistent_cache_bytes: 0,
+                    metadata_bytes: 0,
+                    index_bytes: 0,
+                },
+            });
+        }
+
+        let mut total_entries = 0u64;
+        let mut total_size_bytes = 0u64;
+        let mut total_disk_size = 0u64;
+
+        // Check legacy global cache
+        let legacy_cache_path = cache_base_dir.join("call_graph.db");
+        eprintln!("Checking legacy cache at: {:?}", legacy_cache_path);
+        eprintln!("Legacy cache exists: {}", legacy_cache_path.exists());
+        eprintln!("Legacy cache is_dir: {}", legacy_cache_path.is_dir());
+
+        if legacy_cache_path.exists() && legacy_cache_path.is_dir() {
+            eprintln!("Reading legacy cache stats");
+            match Self::read_sled_db_stats_static(&legacy_cache_path).await {
+                Ok(stats) => {
+                    eprintln!(
+                        "Legacy cache stats: entries={}, size={}, disk={}",
+                        stats.0, stats.1, stats.2
+                    );
+                    total_entries += stats.0;
+                    total_size_bytes += stats.1;
+                    total_disk_size += stats.2;
+                }
+                Err(e) => {
+                    eprintln!("Failed to read legacy cache stats: {}", e);
+                }
+            }
+        }
+
+        // Check workspace caches
+        let workspaces_dir = cache_base_dir.join("workspaces");
+        eprintln!("Checking workspaces dir at: {:?}", workspaces_dir);
+        eprintln!("Workspaces dir exists: {}", workspaces_dir.exists());
+
+        if workspaces_dir.exists() {
+            eprintln!("Reading workspace directory entries");
+            match tokio::fs::read_dir(&workspaces_dir).await {
+                Ok(mut entries) => {
+                    let mut workspace_count = 0;
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let entry_path = entry.path();
+                        eprintln!("Found workspace entry: {:?}", entry_path);
+
+                        if entry.file_type().await.map_or(false, |ft| ft.is_dir()) {
+                            workspace_count += 1;
+                            let call_graph_db = entry.path().join("call_graph.db");
+                            eprintln!("Checking call_graph.db at: {:?}", call_graph_db);
+                            eprintln!("call_graph.db exists: {}", call_graph_db.exists());
+                            eprintln!("call_graph.db is_dir: {}", call_graph_db.is_dir());
+
+                            if call_graph_db.exists() && call_graph_db.is_dir() {
+                                eprintln!("Reading workspace cache stats for: {:?}", call_graph_db);
+                                match Self::read_sled_db_stats_static(&call_graph_db).await {
+                                    Ok(stats) => {
+                                        eprintln!(
+                                            "Workspace cache stats: entries={}, size={}, disk={}",
+                                            stats.0, stats.1, stats.2
+                                        );
+                                        total_entries += stats.0;
+                                        total_size_bytes += stats.1;
+                                        total_disk_size += stats.2;
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Failed to read workspace cache stats for {:?}: {}",
+                                            call_graph_db, e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    eprintln!("Processed {} workspace directories", workspace_count);
+                }
+                Err(e) => {
+                    eprintln!("Failed to read workspaces directory: {}", e);
+                }
+            }
+        }
+
+        Ok(lsp_daemon::protocol::CacheStatistics {
+            total_entries,
+            total_size_bytes,
+            disk_size_bytes: total_disk_size,
+            entries_per_file: std::collections::HashMap::new(),
+            entries_per_language: std::collections::HashMap::new(),
+            hit_rate: 0.0,
+            miss_rate: 0.0,
+            age_distribution: lsp_daemon::protocol::AgeDistribution {
+                entries_last_hour: 0,
+                entries_last_day: 0,
+                entries_last_week: 0,
+                entries_last_month: 0,
+                entries_older: total_entries,
+            },
+            most_accessed: Vec::new(),
+            memory_usage: lsp_daemon::protocol::MemoryUsage {
+                in_memory_cache_bytes: 0,
+                persistent_cache_bytes: total_disk_size,
+                metadata_bytes: 0,
+                index_bytes: 0,
+            },
+        })
+    }
+
+    /// Static version of sled database stats reading
+    async fn read_sled_db_stats_static(db_path: &std::path::Path) -> Result<(u64, u64, u64)> {
+        // Calculate directory size
+        let disk_size_bytes = Self::calculate_directory_size_static(db_path).await;
+
+        // Try to open the sled database for reading
+        match sled::Config::default()
+            .path(db_path)
+            .cache_capacity(1024 * 1024)
+            .open()
+        {
+            Ok(db) => {
+                let mut entries = 0u64;
+                let mut size_bytes = 0u64;
+
+                if let Ok(nodes_tree) = db.open_tree("nodes") {
+                    entries = nodes_tree.len() as u64;
+
+                    // Sample some entries to estimate size
+                    let mut sample_count = 0;
+                    let mut sample_total_size = 0;
+
+                    for result in nodes_tree.iter().take(100) {
+                        if let Ok((key, value)) = result {
+                            sample_count += 1;
+                            sample_total_size += key.len() + value.len();
+                        }
+                    }
+
+                    if sample_count > 0 {
+                        let avg_entry_size = sample_total_size / sample_count;
+                        size_bytes = entries * avg_entry_size as u64;
+                    }
+                }
+
+                Ok((entries, size_bytes, disk_size_bytes))
+            }
+            Err(_) => {
+                // Return minimal stats based on file size
+                Ok((
+                    if disk_size_bytes > 0 { 1 } else { 0 },
+                    disk_size_bytes,
+                    disk_size_bytes,
+                ))
+            }
+        }
+    }
+
+    /// Static version of directory size calculation
+    async fn calculate_directory_size_static(dir_path: &std::path::Path) -> u64 {
+        let mut total_size = 0u64;
+        let mut dirs_to_process = vec![dir_path.to_path_buf()];
+
+        while let Some(current_dir) = dirs_to_process.pop() {
+            if let Ok(mut entries) = tokio::fs::read_dir(&current_dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    if let Ok(metadata) = entry.metadata().await {
+                        if metadata.is_file() {
+                            total_size += metadata.len();
+                        } else if metadata.is_dir() {
+                            dirs_to_process.push(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+
+        total_size
+    }
+
+    /// Handle other cache commands (non-stats commands)
+    async fn handle_other_cache_commands(
+        client: &mut LspClient,
+        cache_command: &CacheSubcommands,
+        format: &str,
+    ) -> Result<()> {
+        match cache_command {
+            CacheSubcommands::Stats { .. } => {
+                // This should not happen, but add for completeness
+                unreachable!("Stats command should be handled separately")
             }
             CacheSubcommands::Clear {
                 older_than,
@@ -1281,21 +1560,21 @@ impl LspManager {
                 }
             }
             CacheSubcommands::List { detailed, format } => {
-                Self::handle_workspace_cache_list(&mut client, *detailed, format).await?
+                Self::handle_workspace_cache_list(client, *detailed, format).await?
             }
             CacheSubcommands::Info { workspace, format } => {
-                Self::handle_workspace_cache_info(&mut client, workspace.as_ref(), format).await?
+                Self::handle_workspace_cache_info(client, workspace.as_ref(), format).await?
             }
             CacheSubcommands::ClearWorkspace {
                 workspace,
                 force,
                 format,
             } => {
-                Self::handle_workspace_cache_clear(&mut client, workspace.as_ref(), *force, format)
+                Self::handle_workspace_cache_clear(client, workspace.as_ref(), *force, format)
                     .await?
             }
             CacheSubcommands::Universal { universal_command } => {
-                Self::handle_universal_cache_command(&mut client, universal_command, format).await?
+                Self::handle_universal_cache_command(client, universal_command, format).await?
             }
         }
 

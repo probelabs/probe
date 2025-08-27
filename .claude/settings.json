@@ -131,7 +131,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -lc 'repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; trap \"cd \\\"$repo_root\\\"; [ -f AGENT_CONSENT.md ] && [ -e .AGENT_CONSENT ] && rm -f .AGENT_CONSENT || true\" EXIT; cd \"$repo_root\"; [ ! -f AGENT_CONSENT.md ] || [ -e .AGENT_CONSENT ] || { cat AGENT_CONSENT.md >&2; exit 1; }'"
+            "command": "bash -lc 'node \"$HOME/go/src/vow/bin/vow.js\" || sh -lc '\''repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; cd \"$repo_root\"; md=; [ -f AGENT_VOW.md ] && md=AGENT_VOW.md || true; [ -z \"$md\" ] && [ -f AGENT_CONSENT.md ] && md=AGENT_CONSENT.md || true; [ -z \"$md\" ] || [ -e .AGENT_CONSENT ] || { cat \"$md\" >&2; exit 1; }; [ -n \"$md\" ] && [ -e .AGENT_CONSENT ] && rm -f .AGENT_CONSENT || true'\'''"
           }
         ]
       }
