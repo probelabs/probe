@@ -1272,6 +1272,7 @@ fn convert_daemon_status(status: DaemonStatus) -> LspDaemonStatus {
         version: status.version.clone(),
         git_hash: status.git_hash.clone(),
         build_date: status.build_date.clone(),
+        universal_cache_stats: status.universal_cache_stats.clone(),
     }
 }
 

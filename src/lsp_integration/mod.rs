@@ -386,6 +386,243 @@ pub enum CacheSubcommands {
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
         format: String,
     },
+
+    /// Universal cache management commands
+    Universal {
+        #[clap(subcommand)]
+        universal_command: UniversalCacheSubcommands,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum UniversalCacheSubcommands {
+    /// Show universal cache statistics and configuration
+    Stats {
+        /// Show detailed per-method statistics
+        #[clap(long)]
+        detailed: bool,
+
+        /// Show per-workspace breakdown
+        #[clap(long)]
+        per_workspace: bool,
+
+        /// Show layer-specific statistics (memory, disk, server)
+        #[clap(long)]
+        layers: bool,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Configure universal cache settings
+    Config {
+        #[clap(subcommand)]
+        config_command: UniversalCacheConfigSubcommands,
+    },
+
+    /// Clear universal cache entries
+    Clear {
+        /// Clear entries for specific LSP method
+        #[clap(long)]
+        method: Option<String>,
+
+        /// Clear entries for specific workspace
+        #[clap(long)]
+        workspace: Option<std::path::PathBuf>,
+
+        /// Clear entries for specific file
+        #[clap(long)]
+        file: Option<std::path::PathBuf>,
+
+        /// Clear entries older than N seconds
+        #[clap(long)]
+        older_than: Option<u64>,
+
+        /// Clear all entries (requires confirmation)
+        #[clap(long)]
+        all: bool,
+
+        /// Force clear without confirmation
+        #[clap(short = 'f', long = "force")]
+        force: bool,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Test universal cache functionality
+    Test {
+        /// Workspace path to test (defaults to current directory)
+        #[clap(short = 'w', long = "workspace")]
+        workspace: Option<std::path::PathBuf>,
+
+        /// Specific LSP methods to test (comma-separated)
+        #[clap(long)]
+        methods: Option<String>,
+
+        /// Number of test operations to perform
+        #[clap(long, default_value = "10")]
+        operations: usize,
+
+        /// Test only cache performance (no LSP server interaction)
+        #[clap(long)]
+        cache_only: bool,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Migrate from legacy cache to universal cache
+    Migrate {
+        /// Source cache type to migrate from
+        #[clap(long, value_parser = ["legacy", "workspace", "global"])]
+        from: String,
+
+        /// Workspace path to migrate (optional, migrates all if not specified)
+        #[clap(short = 'w', long = "workspace")]
+        workspace: Option<std::path::PathBuf>,
+
+        /// Dry run - show what would be migrated without making changes
+        #[clap(long)]
+        dry_run: bool,
+
+        /// Force migration even if data might be overwritten
+        #[clap(short = 'f', long = "force")]
+        force: bool,
+
+        /// Backup existing data before migration
+        #[clap(long, default_value = "true")]
+        backup: bool,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Validate universal cache integrity
+    Validate {
+        /// Workspace path to validate (optional, validates all if not specified)
+        #[clap(short = 'w', long = "workspace")]
+        workspace: Option<std::path::PathBuf>,
+
+        /// Fix validation errors automatically
+        #[clap(long)]
+        fix: bool,
+
+        /// Show detailed validation results
+        #[clap(long)]
+        detailed: bool,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum UniversalCacheConfigSubcommands {
+    /// Show current universal cache configuration
+    Show {
+        /// Show only configuration for specific method
+        #[clap(long)]
+        method: Option<String>,
+
+        /// Show configuration for specific layer (memory, disk, server)
+        #[clap(long, value_parser = ["memory", "disk", "server"])]
+        layer: Option<String>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Enable universal cache globally
+    Enable {
+        /// Enable for specific methods only (comma-separated)
+        #[clap(long)]
+        methods: Option<String>,
+
+        /// Enable specific layers only (comma-separated: memory,disk,server)
+        #[clap(long)]
+        layers: Option<String>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Disable universal cache globally or selectively
+    Disable {
+        /// Disable for specific methods only (comma-separated)
+        #[clap(long)]
+        methods: Option<String>,
+
+        /// Disable specific layers only (comma-separated: memory,disk,server)
+        #[clap(long)]
+        layers: Option<String>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Set cache TTL (Time To Live) for methods
+    SetTtl {
+        /// LSP method to configure
+        method: String,
+
+        /// TTL in seconds
+        ttl_seconds: u64,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Configure cache layer settings
+    SetLayer {
+        /// Cache layer to configure (memory, disk, server)
+        #[clap(value_parser = ["memory", "disk", "server"])]
+        layer: String,
+
+        /// Maximum size in MB for the layer
+        #[clap(long)]
+        max_size_mb: Option<u64>,
+
+        /// Maximum number of entries for the layer
+        #[clap(long)]
+        max_entries: Option<u64>,
+
+        /// Enable/disable the layer
+        #[clap(long)]
+        enabled: Option<bool>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Reset universal cache configuration to defaults
+    Reset {
+        /// Reset only specific method configuration
+        #[clap(long)]
+        method: Option<String>,
+
+        /// Reset only specific layer configuration
+        #[clap(long, value_parser = ["memory", "disk", "server"])]
+        layer: Option<String>,
+
+        /// Force reset without confirmation
+        #[clap(short = 'f', long = "force")]
+        force: bool,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]

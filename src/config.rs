@@ -87,6 +87,8 @@ pub struct LspConfig {
     pub disable_autostart: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_cache: Option<LspWorkspaceCacheConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub universal_cache: Option<LspUniversalCacheConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -99,6 +101,190 @@ pub struct LspWorkspaceCacheConfig {
     pub lookup_depth: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_dir: Option<String>,
+}
+
+/// Universal cache configuration providing unified caching for all LSP operations
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LspUniversalCacheConfig {
+    /// Enable universal cache system (feature flag)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+
+    /// Cache configuration per LSP method
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub methods: Option<UniversalCacheMethodsConfig>,
+
+    /// Memory layer configuration (in-memory caching)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<UniversalCacheMemoryConfig>,
+
+    /// Disk layer configuration (persistent caching)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk: Option<UniversalCacheDiskConfig>,
+
+    /// Server layer configuration (network/shared cache)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server: Option<UniversalCacheServerConfig>,
+
+    /// Migration and rollback settings
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub migration: Option<UniversalCacheMigrationConfig>,
+}
+
+/// Configuration for individual LSP methods in universal cache
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UniversalCacheMethodsConfig {
+    /// Cache configuration for definition lookups
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub definition: Option<MethodCacheConfig>,
+
+    /// Cache configuration for references
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub references: Option<MethodCacheConfig>,
+
+    /// Cache configuration for hover information
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hover: Option<MethodCacheConfig>,
+
+    /// Cache configuration for document symbols
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_symbols: Option<MethodCacheConfig>,
+
+    /// Cache configuration for workspace symbols
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_symbols: Option<MethodCacheConfig>,
+
+    /// Cache configuration for call hierarchy
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_hierarchy: Option<MethodCacheConfig>,
+
+    /// Cache configuration for type definitions
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_definition: Option<MethodCacheConfig>,
+
+    /// Cache configuration for implementations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implementation: Option<MethodCacheConfig>,
+
+    /// Cache configuration for completion
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion: Option<MethodCacheConfig>,
+
+    /// Cache configuration for signature help
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature_help: Option<MethodCacheConfig>,
+}
+
+/// Cache configuration for a specific LSP method
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MethodCacheConfig {
+    /// Enable caching for this method
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+
+    /// TTL in seconds for cached entries
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
+
+    /// Maximum number of entries to cache for this method
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_entries: Option<usize>,
+
+    /// Cache scope (file, workspace, project, session)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+
+    /// Cache layers to use (memory, disk, server)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<String>>,
+}
+
+/// Memory layer configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UniversalCacheMemoryConfig {
+    /// Enable memory layer
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+
+    /// Maximum memory usage in MB
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_size_mb: Option<usize>,
+
+    /// Maximum number of entries in memory
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_entries: Option<usize>,
+
+    /// Eviction policy (lru, lfu, fifo)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eviction_policy: Option<String>,
+}
+
+/// Disk layer configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UniversalCacheDiskConfig {
+    /// Enable disk layer
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+
+    /// Base directory for disk cache
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_dir: Option<String>,
+
+    /// Maximum disk usage in MB
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_size_mb: Option<usize>,
+
+    /// Enable compression for disk storage
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compression: Option<bool>,
+
+    /// Cleanup interval in hours
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup_interval_hours: Option<u64>,
+}
+
+/// Server layer configuration (for future network caching)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UniversalCacheServerConfig {
+    /// Enable server layer
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+
+    /// Server endpoint URL
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+
+    /// Connection timeout in seconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+
+    /// Retry attempts for server operations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_attempts: Option<u32>,
+}
+
+/// Migration and rollback configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UniversalCacheMigrationConfig {
+    /// Enable gradual migration from legacy cache
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gradual_migration: Option<bool>,
+
+    /// Migration batch size
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<usize>,
+
+    /// Enable rollback to legacy cache if issues occur
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_rollback: Option<bool>,
+
+    /// Rollback trigger threshold (error rate 0.0-1.0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollback_threshold: Option<f64>,
+
+    /// Import existing cache data on first run
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_existing: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1208,6 +1394,7 @@ impl ResolvedConfig {
                     lookup_depth: Some(self.lsp.workspace_cache.lookup_depth),
                     base_dir: self.lsp.workspace_cache.base_dir.clone(),
                 }),
+                universal_cache: None, // Universal cache uses defaults, configured separately
             }),
             performance: Some(PerformanceConfig {
                 tree_cache_size: Some(self.performance.tree_cache_size),

@@ -1165,9 +1165,17 @@ impl IndexingManager {
         let _retry_delay = Duration::from_secs(1); // Check every second
 
         for symbol in symbols {
-            // Skip non-function symbols for now (can expand later)
+            // Skip symbols that aren't callable (expand to include constructors, lambdas, etc.)
             let kind_lower = symbol.kind.to_lowercase();
-            if !kind_lower.contains("function") && !kind_lower.contains("method") {
+            if !kind_lower.contains("function")
+                && !kind_lower.contains("method")
+                && !kind_lower.contains("constructor")
+                && !kind_lower.contains("lambda")
+                && !kind_lower.contains("closure")
+                && !kind_lower.contains("macro")
+                && !kind_lower.contains("procedure")
+                && !kind_lower.contains("subroutine")
+            {
                 continue;
             }
 
@@ -1358,7 +1366,7 @@ impl IndexingManager {
                         .outgoing
                         .into_iter()
                         .map(|call| CallInfo {
-                            name: call.from.name,
+                            name: call.from.name, // Note: For outgoing calls, the 'from' field contains the callee info
                             file_path: call
                                 .from
                                 .uri
@@ -1372,12 +1380,12 @@ impl IndexingManager {
                         .collect(),
                 };
 
-                // Create cache key for this symbol
-                let node_key = NodeKey::new(
-                    symbol.name.clone(),
-                    file_path.to_path_buf(),
-                    content_md5.clone(),
-                );
+                // Create cache key for this symbol with canonical path
+                let canonical_path = file_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| file_path.to_path_buf());
+                let node_key =
+                    NodeKey::new(symbol.name.clone(), canonical_path, content_md5.clone());
 
                 // Cache in memory (call_graph_cache)
                 let cached_node = call_graph_cache
