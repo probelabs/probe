@@ -1,8 +1,16 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Shared consent mechanism for both git pre-commit hooks and Claude Hooks
 # This script implements a universal AI agent consent system using .AGENT_CONSENT file
 #
+# SECURITY: This script includes protections against symlink attacks:
+# - Uses 'printf | tee' instead of '>' redirection for safe file creation
+# - Validates consent files are not symlinks before reading them
+# - Prevents file clobbering outside the repository through malicious symlinks
+#
+
+# Strict mode for better error handling
+set -euo pipefail
 
 # Colors for better output
 RED='\033[0;31m'
@@ -53,8 +61,12 @@ show_consent_prompt() {
     echo "" >&2
     echo "${BLUE}═══════════════════════════════════════════════════════════${NC}" >&2
     echo "" >&2
-    echo "${YELLOW}If you agree with all applicable items above, create:${NC}" >&2
-    echo "${YELLOW}  echo '1' > $consent_file${NC}" >&2
+    echo "${YELLOW}If you agree with all applicable items above, create the consent file with EXACTLY the content '1':${NC}" >&2
+    echo "${YELLOW}  printf '1' | tee $consent_file >/dev/null${NC}" >&2
+    echo "${YELLOW}  (This uses safe file creation that prevents symlink attacks)${NC}" >&2
+    echo "" >&2
+    echo "${RED}IMPORTANT: The file must contain exactly '1' (no extra spaces, newlines, or other content)${NC}" >&2
+    echo "${RED}Any other content will be rejected as invalid consent.${NC}" >&2
     echo "" >&2
     echo "${YELLOW}If you cannot complete the task but are ready to inform the user, you may also create the consent file.${NC}" >&2
     echo "" >&2
@@ -69,12 +81,34 @@ check_consent() {
     if [ ! -f "$consent_file" ]; then
         show_consent_prompt "$consent_file" "$context"
         return 1
-    else
-        echo "${GREEN}$success_message${NC}"
-        # Remove the consent file after successful check
-        rm -f "$consent_file"
-        return 0
     fi
+    
+    # SECURITY: Validate that the consent file is not a symlink
+    # This prevents symlink attacks where malicious symlinks redirect file operations
+    if [ -L "$consent_file" ]; then
+        echo "${RED}SECURITY ERROR: Consent file is a symlink. This is not allowed for security reasons.${NC}" >&2
+        echo "${RED}Please remove the symlink: rm '$consent_file'${NC}" >&2
+        echo "${RED}Then create the consent file properly using the safe command shown above.${NC}" >&2
+        return 1
+    fi
+    
+    # SECURITY: Validate that the consent file contains exactly "1"
+    # This prevents bypassing consent with empty files or other content
+    local consent_content
+    consent_content="$(cat "$consent_file" 2>/dev/null | tr -d '[:space:]')"
+    
+    if [ "$consent_content" != "1" ]; then
+        echo "${RED}Error: Invalid consent file content. Expected '1', got: '$consent_content'${NC}" >&2
+        echo "${RED}Please remove the consent file and follow the instructions to create it correctly.${NC}" >&2
+        rm -f "$consent_file"  # Remove invalid file
+        show_consent_prompt "$consent_file" "$context"
+        return 1
+    fi
+    
+    echo "${GREEN}$success_message${NC}"
+    # Remove the consent file after successful check
+    rm -f "$consent_file"
+    return 0
 }
 
 # Main function - determine context and consent file location
@@ -85,7 +119,7 @@ main() {
     # Handle Claude-specific logic
     if [ "$context" = "claude" ]; then
         # Check if we're already in a stop hook continuation
-        if [ "$stop_hook_active" = "true" ]; then
+        if [ "${CLAUDE_STOP_HOOK_ACTIVE:-false}" = "true" ]; then
             echo "Stop hook continuation detected. Skipping consent check."
             exit 0
         fi
@@ -116,6 +150,7 @@ main() {
 }
 
 # If script is run directly (not sourced), execute main with arguments
-if [ "${BASH_SOURCE[0]}" = "${0}" ] || [ -z "${BASH_SOURCE[0]}" ]; then
+# Use BASH_SOURCE if available (bash), otherwise fall back to $0 comparison
+if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
     main "$@"
 fi

@@ -822,3 +822,179 @@ fn test_lsp_performance_benchmark() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_lsp_cache_stats_comprehensive() -> Result<()> {
+    let _guard = LspTestGuard::new("test_lsp_cache_stats_comprehensive");
+    setup_comprehensive_tests()?;
+
+    let socket_path = init_test_namespace("cache_stats_comprehensive");
+
+    // Start daemon and wait for it to be ready
+    start_daemon_and_wait_with_config(Some(&socket_path))?;
+    wait_for_lsp_servers_ready_with_config(&["go"], Duration::from_secs(30), Some(&socket_path))?;
+
+    // Initialize workspace for LSP operations
+    let workspace_path = fixtures::get_go_project1();
+    init_lsp_workspace_with_config(
+        &workspace_path.to_string_lossy(),
+        &["go"],
+        Some(&socket_path),
+    )?;
+
+    println!("Testing cache stats reporting...");
+
+    // 1. Test initial cache stats (should be empty or minimal)
+    let (initial_output, _, _) = run_probe_command_with_config(
+        &["lsp", "cache", "stats"],
+        Duration::from_secs(10),
+        Some(&socket_path),
+    )?;
+
+    println!("Initial cache stats:");
+    println!("{}", initial_output);
+
+    // Verify the output format is correct
+    assert!(initial_output.contains("LSP Cache Statistics"));
+    assert!(initial_output.contains("Total Entries:"));
+    assert!(initial_output.contains("Total Size:"));
+    assert!(initial_output.contains("Hit Rate:"));
+    assert!(initial_output.contains("Miss Rate:"));
+
+    // 2. Perform some LSP operations to populate the cache
+    println!("Performing LSP operations to populate cache...");
+
+    let test_file = workspace_path.join("calculator.go");
+
+    // Make several LSP requests to build up cache entries
+    for i in 1..=3 {
+        println!("LSP operation {}: extracting with call hierarchy", i);
+        let _result = extract_with_call_hierarchy_retry_config(
+            &[&format!("{}:10", test_file.display())],
+            1, // expected incoming
+            1, // expected outgoing
+            Duration::from_secs(10),
+            Some(&socket_path),
+        );
+
+        // Small delay to let cache operations settle
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // 3. Test cache stats after operations
+    let (populated_output, _, _) = run_probe_command_with_config(
+        &["lsp", "cache", "stats"],
+        Duration::from_secs(10),
+        Some(&socket_path),
+    )?;
+
+    println!("Cache stats after LSP operations:");
+    println!("{}", populated_output);
+
+    // Verify the cache has been populated
+    assert!(populated_output.contains("LSP Cache Statistics"));
+
+    // Parse and validate specific metrics
+    let lines: Vec<&str> = populated_output.lines().collect();
+    let mut total_entries = 0u64;
+    let mut total_size_bytes = 0u64;
+    let mut hit_rate = 0.0f64;
+    let mut miss_rate = 0.0f64;
+
+    for line in lines {
+        if let Some(entry_str) = line.strip_prefix("  Total Entries: ") {
+            total_entries = entry_str.trim().parse().unwrap_or(0);
+        } else if let Some(size_str) = line.strip_prefix("  Total Size: ") {
+            // Parse size (could be in B, KB, MB, etc.)
+            if let Some(size_part) = size_str.trim().split_whitespace().next() {
+                if let Ok(size) = size_part.parse::<f64>() {
+                    total_size_bytes = size as u64;
+                    if size_str.contains("KB") {
+                        total_size_bytes *= 1024;
+                    } else if size_str.contains("MB") {
+                        total_size_bytes *= 1024 * 1024;
+                    }
+                }
+            }
+        } else if let Some(hit_str) = line.strip_prefix("  Hit Rate: ") {
+            if let Some(rate_part) = hit_str.trim().strip_suffix('%') {
+                hit_rate = rate_part.parse().unwrap_or(0.0);
+            }
+        } else if let Some(miss_str) = line.strip_prefix("  Miss Rate: ") {
+            if let Some(rate_part) = miss_str.trim().strip_suffix('%') {
+                miss_rate = rate_part.parse().unwrap_or(0.0);
+            }
+        }
+    }
+
+    // 4. Validate cache metrics are realistic
+    println!("Parsed cache metrics:");
+    println!("  Total entries: {}", total_entries);
+    println!("  Total size: {} bytes", total_size_bytes);
+    println!("  Hit rate: {}%", hit_rate);
+    println!("  Miss rate: {}%", miss_rate);
+
+    // After performing LSP operations, we should have some cache entries
+    assert!(
+        total_entries > 0,
+        "Cache should have entries after LSP operations"
+    );
+    assert!(total_size_bytes > 0, "Cache should have non-zero size");
+
+    // Hit rate + miss rate should equal 100% (allowing for small floating point errors)
+    let total_rate = hit_rate + miss_rate;
+    assert!(
+        (total_rate - 100.0).abs() < 0.1,
+        "Hit rate ({:.1}%) + Miss rate ({:.1}%) should equal 100%, got {:.1}%",
+        hit_rate,
+        miss_rate,
+        total_rate
+    );
+
+    // 5. Test cache stats with JSON format
+    let (json_output, _, _) = run_probe_command_with_config(
+        &["lsp", "cache", "stats", "--format", "json"],
+        Duration::from_secs(10),
+        Some(&socket_path),
+    )?;
+
+    println!("JSON cache stats output:");
+    println!("{}", json_output);
+
+    // Verify JSON is parseable
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&json_output).is_ok(),
+        "Cache stats JSON output should be valid JSON"
+    );
+
+    // 6. Perform one more LSP operation to test hit rates
+    println!("Performing repeat LSP operation to test cache hits...");
+    let _result = extract_with_call_hierarchy_retry_config(
+        &[&format!("{}:10", test_file.display())],
+        1, // expected incoming
+        1, // expected outgoing
+        Duration::from_secs(10),
+        Some(&socket_path),
+    );
+
+    // Get final cache stats
+    let (final_output, _, _) = run_probe_command_with_config(
+        &["lsp", "cache", "stats"],
+        Duration::from_secs(10),
+        Some(&socket_path),
+    )?;
+
+    println!("Final cache stats after repeat operation:");
+    println!("{}", final_output);
+
+    // The repeat operation should have resulted in some cache hits
+    // (though this depends on the specific implementation and timing)
+    assert!(final_output.contains("LSP Cache Statistics"));
+
+    // Cleanup
+    ensure_daemon_stopped_with_config(Some(&socket_path));
+    cleanup_test_namespace(&socket_path);
+
+    println!("✅ Cache stats comprehensive test completed successfully");
+    Ok(())
+}
