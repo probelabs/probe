@@ -18,6 +18,7 @@ pub mod call_graph_cache;
 pub mod hash_utils;
 pub mod lsp_cache;
 pub mod persistent_cache;
+pub mod universal_cache;
 
 // Handler modules
 pub mod definition_handler;
@@ -97,6 +98,12 @@ pub use file_watcher::{
 // Re-export workspace cache router types for external use
 pub use workspace_cache_router::{
     WorkspaceCacheRouter, WorkspaceCacheRouterConfig, WorkspaceCacheRouterStats, WorkspaceStats,
+};
+
+// Re-export universal cache types for external use
+pub use universal_cache::{
+    CacheKey, CachePolicy, CacheScope, CacheStats, KeyBuilder, LspMethod, MethodStats,
+    PolicyRegistry, UniversalCache,
 };
 
 // Re-export pipeline-specific types

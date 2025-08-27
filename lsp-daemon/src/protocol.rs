@@ -223,6 +223,7 @@ pub enum DaemonRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum DaemonResponse {
     Connected {
         request_id: Uuid,
@@ -667,6 +668,152 @@ pub struct DaemonStatus {
     pub git_hash: String,
     #[serde(default)]
     pub build_date: String,
+    /// Universal cache statistics (if enabled)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub universal_cache_stats: Option<UniversalCacheStats>,
+}
+
+/// Universal cache statistics for monitoring and observability
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UniversalCacheStats {
+    /// Whether universal cache is enabled
+    pub enabled: bool,
+    /// Total number of cache entries across all workspaces
+    pub total_entries: u64,
+    /// Total cache size in bytes across all workspaces
+    pub total_size_bytes: u64,
+    /// Number of active workspaces with caches
+    pub active_workspaces: usize,
+    /// Overall hit rate (0.0 - 1.0)
+    pub hit_rate: f64,
+    /// Overall miss rate (0.0 - 1.0)
+    pub miss_rate: f64,
+    /// Total cache hits
+    pub total_hits: u64,
+    /// Total cache misses
+    pub total_misses: u64,
+    /// Cache statistics per LSP method
+    pub method_stats: std::collections::HashMap<String, UniversalCacheMethodStats>,
+    /// Cache layer performance (memory, disk, server)
+    pub layer_stats: UniversalCacheLayerStats,
+    /// Workspace-specific cache summaries
+    pub workspace_summaries: Vec<UniversalCacheWorkspaceSummary>,
+    /// Cache configuration summary
+    pub config_summary: UniversalCacheConfigSummary,
+}
+
+/// Statistics for a specific LSP method in universal cache
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UniversalCacheMethodStats {
+    /// LSP method name (e.g., "textDocument/definition")
+    pub method: String,
+    /// Whether caching is enabled for this method
+    pub enabled: bool,
+    /// Number of entries for this method
+    pub entries: u64,
+    /// Size in bytes for this method
+    pub size_bytes: u64,
+    /// Hit count for this method
+    pub hits: u64,
+    /// Miss count for this method
+    pub misses: u64,
+    /// Hit rate for this method (0.0 - 1.0)
+    pub hit_rate: f64,
+    /// Average response time from cache (microseconds)
+    pub avg_cache_response_time_us: u64,
+    /// Average response time from LSP server (microseconds)
+    pub avg_lsp_response_time_us: u64,
+    /// TTL settings for this method (seconds)
+    pub ttl_seconds: Option<u64>,
+}
+
+/// Cache layer performance statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UniversalCacheLayerStats {
+    /// Memory layer statistics
+    pub memory: CacheLayerStat,
+    /// Disk layer statistics
+    pub disk: CacheLayerStat,
+    /// Server layer statistics (if enabled)
+    pub server: Option<CacheLayerStat>,
+}
+
+/// Individual cache layer statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheLayerStat {
+    /// Whether this layer is enabled
+    pub enabled: bool,
+    /// Number of entries in this layer
+    pub entries: u64,
+    /// Size in bytes used by this layer
+    pub size_bytes: u64,
+    /// Hit count for this layer
+    pub hits: u64,
+    /// Miss count for this layer
+    pub misses: u64,
+    /// Hit rate for this layer (0.0 - 1.0)
+    pub hit_rate: f64,
+    /// Average response time for this layer (microseconds)
+    pub avg_response_time_us: u64,
+    /// Maximum capacity for this layer
+    pub max_capacity: Option<u64>,
+    /// Current capacity utilization (0.0 - 1.0)
+    pub capacity_utilization: f64,
+}
+
+/// Workspace-specific cache summary
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UniversalCacheWorkspaceSummary {
+    /// Workspace identifier
+    pub workspace_id: String,
+    /// Workspace root path
+    pub workspace_root: std::path::PathBuf,
+    /// Number of cache entries for this workspace
+    pub entries: u64,
+    /// Cache size for this workspace in bytes
+    pub size_bytes: u64,
+    /// Hit count for this workspace
+    pub hits: u64,
+    /// Miss count for this workspace
+    pub misses: u64,
+    /// Hit rate for this workspace (0.0 - 1.0)
+    pub hit_rate: f64,
+    /// Last accessed timestamp
+    pub last_accessed: String,
+    /// Languages with cached data in this workspace
+    pub languages: Vec<String>,
+}
+
+/// Configuration summary for universal cache
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UniversalCacheConfigSummary {
+    /// Whether gradual migration is enabled
+    pub gradual_migration_enabled: bool,
+    /// Whether rollback is enabled
+    pub rollback_enabled: bool,
+    /// Memory layer configuration
+    pub memory_config: CacheLayerConfigSummary,
+    /// Disk layer configuration
+    pub disk_config: CacheLayerConfigSummary,
+    /// Server layer configuration (if enabled)
+    pub server_config: Option<CacheLayerConfigSummary>,
+    /// Number of methods with custom configuration
+    pub custom_method_configs: usize,
+}
+
+/// Cache layer configuration summary
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheLayerConfigSummary {
+    /// Whether this layer is enabled
+    pub enabled: bool,
+    /// Maximum size in MB (if configured)
+    pub max_size_mb: Option<usize>,
+    /// Maximum number of entries (if configured)
+    pub max_entries: Option<usize>,
+    /// Eviction policy
+    pub eviction_policy: Option<String>,
+    /// Compression enabled (disk layer)
+    pub compression: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

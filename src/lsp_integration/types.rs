@@ -15,6 +15,9 @@ pub struct LspDaemonStatus {
     pub git_hash: String,
     #[serde(default)]
     pub build_date: String,
+    /// Universal cache statistics (if enabled)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub universal_cache_stats: Option<lsp_daemon::protocol::UniversalCacheStats>,
 }
 
 /// Status of a language server pool

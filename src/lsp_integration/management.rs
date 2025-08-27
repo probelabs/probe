@@ -1294,6 +1294,9 @@ impl LspManager {
                 Self::handle_workspace_cache_clear(&mut client, workspace.as_ref(), *force, format)
                     .await?
             }
+            CacheSubcommands::Universal { universal_command } => {
+                Self::handle_universal_cache_command(&mut client, universal_command, format).await?
+            }
         }
 
         Ok(())
@@ -2310,6 +2313,490 @@ impl LspManager {
                 );
                 if !result.errors.is_empty() {
                     println!("  {} {}", "Errors:".bold().red(), result.errors.len());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle universal cache commands
+    async fn handle_universal_cache_command(
+        client: &mut LspClient,
+        universal_command: &crate::lsp_integration::UniversalCacheSubcommands,
+        format: &str,
+    ) -> Result<()> {
+        use crate::lsp_integration::UniversalCacheSubcommands;
+
+        match universal_command {
+            UniversalCacheSubcommands::Stats {
+                detailed,
+                per_workspace,
+                layers,
+                format: output_format,
+            } => {
+                // Get universal cache statistics from daemon
+                let status = client.get_status().await?;
+
+                if let Some(universal_stats) = status.universal_cache_stats {
+                    match output_format.as_str() {
+                        "json" => {
+                            println!("{}", serde_json::to_string_pretty(&universal_stats)?);
+                        }
+                        _ => {
+                            use colored::Colorize;
+
+                            println!("{}", "Universal Cache Statistics".bold().green());
+                            println!();
+
+                            println!(
+                                "  {} {}",
+                                "Status:".bold(),
+                                if universal_stats.enabled {
+                                    "Enabled".green()
+                                } else {
+                                    "Disabled".red()
+                                }
+                            );
+                            println!(
+                                "  {} {}",
+                                "Total Entries:".bold(),
+                                universal_stats.total_entries.to_string().cyan()
+                            );
+                            println!(
+                                "  {} {}",
+                                "Total Size:".bold(),
+                                format_bytes(universal_stats.total_size_bytes as usize)
+                            );
+                            println!(
+                                "  {} {}",
+                                "Active Workspaces:".bold(),
+                                universal_stats.active_workspaces.to_string().cyan()
+                            );
+                            println!(
+                                "  {} {:.1}%",
+                                "Hit Rate:".bold(),
+                                universal_stats.hit_rate * 100.0
+                            );
+                            println!(
+                                "  {} {:.1}%",
+                                "Miss Rate:".bold(),
+                                universal_stats.miss_rate * 100.0
+                            );
+
+                            if *detailed && !universal_stats.method_stats.is_empty() {
+                                println!("\n{}", "Method Statistics:".bold());
+                                for (method, stats) in &universal_stats.method_stats {
+                                    println!("  {} {}:", "•".cyan(), method.bold());
+                                    println!("    Entries: {}", stats.entries.to_string().green());
+                                    println!("    Hit Rate: {:.1}%", stats.hit_rate * 100.0);
+                                    println!(
+                                        "    Avg Response: {}μs",
+                                        stats.avg_cache_response_time_us
+                                    );
+                                }
+                            }
+
+                            if *layers {
+                                println!("\n{}", "Layer Statistics:".bold());
+                                println!("  {} Memory:", "•".cyan());
+                                println!(
+                                    "    Entries: {}",
+                                    universal_stats
+                                        .layer_stats
+                                        .memory
+                                        .entries
+                                        .to_string()
+                                        .green()
+                                );
+                                println!(
+                                    "    Hit Rate: {:.1}%",
+                                    universal_stats.layer_stats.memory.hit_rate * 100.0
+                                );
+                                println!(
+                                    "    Avg Response: {}μs",
+                                    universal_stats.layer_stats.memory.avg_response_time_us
+                                );
+
+                                println!("  {} Disk:", "•".cyan());
+                                println!(
+                                    "    Entries: {}",
+                                    universal_stats.layer_stats.disk.entries.to_string().green()
+                                );
+                                println!(
+                                    "    Hit Rate: {:.1}%",
+                                    universal_stats.layer_stats.disk.hit_rate * 100.0
+                                );
+                                println!(
+                                    "    Avg Response: {}μs",
+                                    universal_stats.layer_stats.disk.avg_response_time_us
+                                );
+                            }
+
+                            if *per_workspace && !universal_stats.workspace_summaries.is_empty() {
+                                println!("\n{}", "Workspace Summaries:".bold());
+                                for workspace in &universal_stats.workspace_summaries {
+                                    println!("  {} {}:", "•".cyan(), workspace.workspace_id.bold());
+                                    println!(
+                                        "    Path: {}",
+                                        workspace.workspace_root.display().to_string().dimmed()
+                                    );
+                                    println!(
+                                        "    Entries: {}",
+                                        workspace.entries.to_string().green()
+                                    );
+                                    println!("    Hit Rate: {:.1}%", workspace.hit_rate * 100.0);
+                                    if !workspace.languages.is_empty() {
+                                        println!(
+                                            "    Languages: {}",
+                                            workspace.languages.join(", ")
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    println!("{}", "Universal cache is not enabled".yellow());
+                }
+            }
+            UniversalCacheSubcommands::Config { config_command } => {
+                Self::handle_universal_cache_config(client, config_command, format).await?
+            }
+            UniversalCacheSubcommands::Clear {
+                method,
+                workspace,
+                file,
+                older_than,
+                all,
+                force,
+                format: output_format,
+            } => {
+                // Confirmation prompt for destructive operations
+                if !force && std::env::var("PROBE_BATCH").unwrap_or_default() != "1" {
+                    use std::io::{self, Write};
+
+                    if *all {
+                        print!(
+                            "Are you sure you want to clear ALL universal cache entries? [y/N]: "
+                        );
+                    } else {
+                        print!("Are you sure you want to clear selected universal cache entries? [y/N]: ");
+                    }
+                    io::stdout().flush()?;
+
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input)?;
+
+                    if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
+                        println!("{}", "Operation cancelled".yellow());
+                        return Ok(());
+                    }
+                }
+
+                // TODO: Implement universal cache clear via daemon protocol
+                match output_format.as_str() {
+                    "json" => {
+                        let json_output = json!({
+                            "status": "not_implemented",
+                            "message": "Universal cache clear not yet implemented",
+                            "filters": {
+                                "method": method,
+                                "workspace": workspace,
+                                "file": file,
+                                "older_than": older_than,
+                                "all": all
+                            }
+                        });
+                        println!("{}", serde_json::to_string_pretty(&json_output)?);
+                    }
+                    _ => {
+                        println!("{}", "Universal cache clear not yet implemented".yellow());
+                        if let Some(method) = method {
+                            println!("  Method filter: {method}");
+                        }
+                        if let Some(workspace) = workspace {
+                            println!("  Workspace filter: {}", workspace.display());
+                        }
+                        if let Some(file) = file {
+                            println!("  File filter: {}", file.display());
+                        }
+                        if let Some(seconds) = older_than {
+                            println!("  Age filter: older than {seconds} seconds");
+                        }
+                    }
+                }
+            }
+            UniversalCacheSubcommands::Test {
+                workspace,
+                methods,
+                operations,
+                cache_only,
+                format: output_format,
+            } => match output_format.as_str() {
+                "json" => {
+                    let json_output = json!({
+                        "status": "not_implemented",
+                        "message": "Universal cache testing not yet implemented",
+                        "parameters": {
+                            "workspace": workspace,
+                            "methods": methods,
+                            "operations": operations,
+                            "cache_only": cache_only
+                        }
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json_output)?);
+                }
+                _ => {
+                    println!("{}", "Universal cache testing not yet implemented".yellow());
+                    if let Some(workspace) = workspace {
+                        println!("  Workspace: {}", workspace.display());
+                    }
+                    if let Some(methods) = methods {
+                        println!("  Methods: {methods}");
+                    }
+                    println!("  Operations: {operations}");
+                    println!("  Cache only: {cache_only}");
+                }
+            },
+            UniversalCacheSubcommands::Migrate {
+                from,
+                workspace,
+                dry_run,
+                force,
+                backup,
+                format: output_format,
+            } => match output_format.as_str() {
+                "json" => {
+                    let json_output = json!({
+                        "status": "not_implemented",
+                        "message": "Universal cache migration not yet implemented",
+                        "parameters": {
+                            "from": from,
+                            "workspace": workspace,
+                            "dry_run": dry_run,
+                            "force": force,
+                            "backup": backup
+                        }
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json_output)?);
+                }
+                _ => {
+                    println!(
+                        "{}",
+                        "Universal cache migration not yet implemented".yellow()
+                    );
+                    println!("  From: {from}");
+                    if let Some(workspace) = workspace {
+                        println!("  Workspace: {}", workspace.display());
+                    }
+                    println!("  Dry run: {dry_run}");
+                    println!("  Force: {force}");
+                    println!("  Backup: {backup}");
+                }
+            },
+            UniversalCacheSubcommands::Validate {
+                workspace,
+                fix,
+                detailed,
+                format: output_format,
+            } => match output_format.as_str() {
+                "json" => {
+                    let json_output = json!({
+                        "status": "not_implemented",
+                        "message": "Universal cache validation not yet implemented",
+                        "parameters": {
+                            "workspace": workspace,
+                            "fix": fix,
+                            "detailed": detailed
+                        }
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json_output)?);
+                }
+                _ => {
+                    println!(
+                        "{}",
+                        "Universal cache validation not yet implemented".yellow()
+                    );
+                    if let Some(workspace) = workspace {
+                        println!("  Workspace: {}", workspace.display());
+                    }
+                    println!("  Fix: {fix}");
+                    println!("  Detailed: {detailed}");
+                }
+            },
+        }
+
+        Ok(())
+    }
+
+    /// Handle universal cache configuration commands
+    async fn handle_universal_cache_config(
+        client: &mut LspClient,
+        config_command: &crate::lsp_integration::UniversalCacheConfigSubcommands,
+        format: &str,
+    ) -> Result<()> {
+        use crate::lsp_integration::UniversalCacheConfigSubcommands;
+
+        match config_command {
+            UniversalCacheConfigSubcommands::Show {
+                method,
+                layer,
+                format: output_format,
+            } => {
+                // Get current universal cache configuration
+                let status = client.get_status().await?;
+
+                if let Some(universal_stats) = status.universal_cache_stats {
+                    match output_format.as_str() {
+                        "json" => {
+                            let mut config_data = json!({
+                                "enabled": universal_stats.enabled,
+                                "config": universal_stats.config_summary
+                            });
+
+                            if let Some(method) = method {
+                                if let Some(method_stats) = universal_stats.method_stats.get(method)
+                                {
+                                    config_data = json!({
+                                        "method": method,
+                                        "config": {
+                                            "enabled": method_stats.enabled,
+                                            "ttl_seconds": method_stats.ttl_seconds,
+                                        }
+                                    });
+                                }
+                            }
+
+                            println!("{}", serde_json::to_string_pretty(&config_data)?);
+                        }
+                        _ => {
+                            use colored::Colorize;
+
+                            println!("{}", "Universal Cache Configuration".bold().green());
+                            println!();
+
+                            println!(
+                                "  {} {}",
+                                "Global Status:".bold(),
+                                if universal_stats.enabled {
+                                    "Enabled".green()
+                                } else {
+                                    "Disabled".red()
+                                }
+                            );
+
+                            let config = &universal_stats.config_summary;
+                            println!(
+                                "  {} {}",
+                                "Gradual Migration:".bold(),
+                                if config.gradual_migration_enabled {
+                                    "Enabled".green()
+                                } else {
+                                    "Disabled".red()
+                                }
+                            );
+                            println!(
+                                "  {} {}",
+                                "Rollback Enabled:".bold(),
+                                if config.rollback_enabled {
+                                    "Enabled".green()
+                                } else {
+                                    "Disabled".red()
+                                }
+                            );
+
+                            if method.is_none() && layer.is_none() {
+                                println!("\n{}", "Layer Configuration:".bold());
+                                println!("  {} Memory:", "•".cyan());
+                                println!(
+                                    "    Enabled: {}",
+                                    if config.memory_config.enabled {
+                                        "Yes".green()
+                                    } else {
+                                        "No".red()
+                                    }
+                                );
+                                if let Some(size) = config.memory_config.max_size_mb {
+                                    println!("    Max Size: {size} MB");
+                                }
+                                if let Some(entries) = config.memory_config.max_entries {
+                                    println!("    Max Entries: {entries}");
+                                }
+
+                                println!("  {} Disk:", "•".cyan());
+                                println!(
+                                    "    Enabled: {}",
+                                    if config.disk_config.enabled {
+                                        "Yes".green()
+                                    } else {
+                                        "No".red()
+                                    }
+                                );
+                                if let Some(size) = config.disk_config.max_size_mb {
+                                    println!("    Max Size: {size} MB");
+                                }
+                                if let Some(entries) = config.disk_config.max_entries {
+                                    println!("    Max Entries: {entries}");
+                                }
+
+                                println!("\n{}", "Method Configuration:".bold());
+                                println!(
+                                    "  Custom Configurations: {}",
+                                    config.custom_method_configs
+                                );
+                            }
+
+                            if let Some(method) = method {
+                                if let Some(method_stats) = universal_stats.method_stats.get(method)
+                                {
+                                    println!(
+                                        "\n{} {}:",
+                                        "Method Configuration for".bold(),
+                                        method.bold()
+                                    );
+                                    println!(
+                                        "  Enabled: {}",
+                                        if method_stats.enabled {
+                                            "Yes".green()
+                                        } else {
+                                            "No".red()
+                                        }
+                                    );
+                                    if let Some(ttl) = method_stats.ttl_seconds {
+                                        println!("  TTL: {ttl} seconds");
+                                    }
+                                } else {
+                                    println!(
+                                        "{} {}",
+                                        "No configuration found for method:".yellow(),
+                                        method
+                                    );
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    println!("{}", "Universal cache is not enabled".yellow());
+                }
+            }
+            _ => {
+                // All other config commands are not implemented yet
+                match format {
+                    "json" => {
+                        let json_output = json!({
+                            "status": "not_implemented",
+                            "message": "Universal cache configuration changes not yet implemented"
+                        });
+                        println!("{}", serde_json::to_string_pretty(&json_output)?);
+                    }
+                    _ => {
+                        println!(
+                            "{}",
+                            "Universal cache configuration changes not yet implemented".yellow()
+                        );
+                        println!("Currently only 'show' command is supported.");
+                    }
                 }
             }
         }

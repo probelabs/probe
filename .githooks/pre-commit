@@ -27,8 +27,8 @@ rust_files_changed=$(git diff --cached --name-only | grep -E '\.(rs|toml)$|^Carg
 workflow_files_changed=$(git diff --cached --name-only | grep -E '^\.github/workflows/.*\.ya?ml$')
 
 if [ -z "$rust_files_changed" ] && [ -z "$workflow_files_changed" ]; then
-    echo "${YELLOW}No Rust or workflow files changed. Skipping checks.${NC}"
-    exit 0
+    echo "${YELLOW}No Rust or workflow files changed. Skipping Rust/workflow checks.${NC}"
+    # Don't exit here - we still need to run the consent check
 fi
 
 # Run actionlint if workflow files changed
@@ -91,6 +91,16 @@ if [ $status -eq 0 ]; then
 else
     echo "${RED}Pre-commit checks failed. Commit aborted.${NC}"
     echo "${YELLOW}You can bypass this check with 'git commit --no-verify'${NC}"
+    exit $status
+fi
+
+# Commit consent check - run at the end only if all other checks passed
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+SHARED_CONSENT="$PROJECT_ROOT/scripts/shared-consent.sh"
+
+if [ -f "$SHARED_CONSENT" ]; then
+    "$SHARED_CONSENT" "git-commit"
+    exit $?
 fi
 
 exit $status
