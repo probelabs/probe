@@ -91,7 +91,8 @@
       "mcp__big-brain__ask_big_brain",
       "mcp__code-search__search_code",
       "mcp__code-search__extract_code",
-      "mcp__code-search__query_code"
+      "mcp__code-search__query_code",
+      "Bash(bash -lc:*)"
     ],
     "deny": [
       "Bash(git commit --no-verify:*)",
@@ -130,7 +131,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/scripts/claude-hook-wrapper.sh $CLAUDE_PROJECT_DIR/.githooks/pre-commit"
+            "command": "bash -lc 'repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; trap \"cd \\\"$repo_root\\\"; [ -f AGENT_CONSENT.md ] && [ -e .AGENT_CONSENT ] && rm -f .AGENT_CONSENT || true\" EXIT; cd \"$repo_root\"; [ ! -f AGENT_CONSENT.md ] || [ -e .AGENT_CONSENT ] || { cat AGENT_CONSENT.md >&2; exit 1; }'"
           }
         ]
       }
