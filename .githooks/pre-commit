@@ -9,6 +9,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
+# Always cleanup consent file after any commit attempt
+trap 'repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; cd "$repo_root"; [ -f AGENT_CONSENT.md ] && [ -e .AGENT_CONSENT ] && rm -f .AGENT_CONSENT || true' EXIT
+
 echo "${YELLOW}Running pre-commit checks...${NC}"
 
 # Store the exit status of each command
