@@ -1226,14 +1226,13 @@ impl LspManager {
             Ok(mut client) => match client.cache_stats().await {
                 Ok(stats) => Ok(stats),
                 Err(e) => {
-                    eprintln!("[DEBUG] Failed to get stats from daemon: {:?}, falling back to disk reading", e);
+                    eprintln!("[DEBUG] Failed to get stats from daemon: {e:?}, falling back to disk reading");
                     Self::read_disk_cache_stats_directly().await
                 }
             },
             Err(e) => {
                 eprintln!(
-                    "[DEBUG] Failed to connect to daemon: {:?}, falling back to disk reading",
-                    e
+                    "[DEBUG] Failed to connect to daemon: {e:?}, falling back to disk reading"
                 );
                 Self::read_disk_cache_stats_directly().await
             }
@@ -1246,22 +1245,19 @@ impl LspManager {
 
         // Get cache base directory (same logic as in client.rs)
         let cache_base_dir = if let Ok(cache_dir) = std::env::var("PROBE_LSP_CACHE_DIR") {
-            eprintln!(
-                "Using cache dir from env var PROBE_LSP_CACHE_DIR: {}",
-                cache_dir
-            );
+            eprintln!("Using cache dir from env var PROBE_LSP_CACHE_DIR: {cache_dir}");
             std::path::PathBuf::from(cache_dir)
         } else if let Some(cache_dir) = dirs::cache_dir() {
             let probe_lsp_dir = cache_dir.join("probe").join("lsp");
-            eprintln!("Using default cache dir: {:?}", probe_lsp_dir);
+            eprintln!("Using default cache dir: {probe_lsp_dir:?}");
             probe_lsp_dir
         } else {
             let tmp_dir = std::path::PathBuf::from("/tmp").join("probe-lsp-cache");
-            eprintln!("Using fallback tmp cache dir: {:?}", tmp_dir);
+            eprintln!("Using fallback tmp cache dir: {tmp_dir:?}");
             tmp_dir
         };
 
-        eprintln!("Cache base directory: {:?}", cache_base_dir);
+        eprintln!("Cache base directory: {cache_base_dir:?}");
         eprintln!("Cache base directory exists: {}", cache_base_dir.exists());
 
         if !cache_base_dir.exists() {
@@ -1297,7 +1293,7 @@ impl LspManager {
 
         // Check legacy global cache
         let legacy_cache_path = cache_base_dir.join("call_graph.db");
-        eprintln!("Checking legacy cache at: {:?}", legacy_cache_path);
+        eprintln!("Checking legacy cache at: {legacy_cache_path:?}");
         eprintln!("Legacy cache exists: {}", legacy_cache_path.exists());
         eprintln!("Legacy cache is_dir: {}", legacy_cache_path.is_dir());
 
@@ -1314,14 +1310,14 @@ impl LspManager {
                     total_disk_size += stats.2;
                 }
                 Err(e) => {
-                    eprintln!("Failed to read legacy cache stats: {}", e);
+                    eprintln!("Failed to read legacy cache stats: {e}");
                 }
             }
         }
 
         // Check workspace caches
         let workspaces_dir = cache_base_dir.join("workspaces");
-        eprintln!("Checking workspaces dir at: {:?}", workspaces_dir);
+        eprintln!("Checking workspaces dir at: {workspaces_dir:?}");
         eprintln!("Workspaces dir exists: {}", workspaces_dir.exists());
 
         if workspaces_dir.exists() {
@@ -1331,17 +1327,17 @@ impl LspManager {
                     let mut workspace_count = 0;
                     while let Ok(Some(entry)) = entries.next_entry().await {
                         let entry_path = entry.path();
-                        eprintln!("Found workspace entry: {:?}", entry_path);
+                        eprintln!("Found workspace entry: {entry_path:?}");
 
-                        if entry.file_type().await.map_or(false, |ft| ft.is_dir()) {
+                        if entry.file_type().await.is_ok_and(|ft| ft.is_dir()) {
                             workspace_count += 1;
                             let call_graph_db = entry.path().join("call_graph.db");
-                            eprintln!("Checking call_graph.db at: {:?}", call_graph_db);
+                            eprintln!("Checking call_graph.db at: {call_graph_db:?}");
                             eprintln!("call_graph.db exists: {}", call_graph_db.exists());
                             eprintln!("call_graph.db is_dir: {}", call_graph_db.is_dir());
 
                             if call_graph_db.exists() && call_graph_db.is_dir() {
-                                eprintln!("Reading workspace cache stats for: {:?}", call_graph_db);
+                                eprintln!("Reading workspace cache stats for: {call_graph_db:?}");
                                 match Self::read_sled_db_stats_static(&call_graph_db).await {
                                     Ok(stats) => {
                                         eprintln!(
@@ -1354,18 +1350,17 @@ impl LspManager {
                                     }
                                     Err(e) => {
                                         eprintln!(
-                                            "Failed to read workspace cache stats for {:?}: {}",
-                                            call_graph_db, e
+                                            "Failed to read workspace cache stats for {call_graph_db:?}: {e}"
                                         );
                                     }
                                 }
                             }
                         }
                     }
-                    eprintln!("Processed {} workspace directories", workspace_count);
+                    eprintln!("Processed {workspace_count} workspace directories");
                 }
                 Err(e) => {
-                    eprintln!("Failed to read workspaces directory: {}", e);
+                    eprintln!("Failed to read workspaces directory: {e}");
                 }
             }
         }
@@ -1417,11 +1412,9 @@ impl LspManager {
                     let mut sample_count = 0;
                     let mut sample_total_size = 0;
 
-                    for result in nodes_tree.iter().take(100) {
-                        if let Ok((key, value)) = result {
-                            sample_count += 1;
-                            sample_total_size += key.len() + value.len();
-                        }
+                    for (key, value) in nodes_tree.iter().take(100).flatten() {
+                        sample_count += 1;
+                        sample_total_size += key.len() + value.len();
                     }
 
                     if sample_count > 0 {

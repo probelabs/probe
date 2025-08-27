@@ -20,6 +20,7 @@ struct WorkspaceCacheStats {
     entries: u64,
     size_bytes: u64,
     disk_size_bytes: u64,
+    #[allow(dead_code)]
     files: u64,
 }
 
@@ -949,7 +950,7 @@ impl LspClient {
             match tokio::fs::read_dir(&workspaces_dir).await {
                 Ok(mut entries) => {
                     while let Ok(Some(entry)) = entries.next_entry().await {
-                        if entry.file_type().await.map_or(false, |ft| ft.is_dir()) {
+                        if entry.file_type().await.is_ok_and(|ft| ft.is_dir()) {
                             match self.read_workspace_cache_stats(&entry.path()).await {
                                 Ok(workspace_stats) => {
                                     let _workspace_name =
@@ -1102,12 +1103,10 @@ impl LspClient {
                         let mut sample_count = 0;
                         let mut sample_total_size = 0;
 
-                        for result in nodes_tree.iter().take(100) {
+                        for (key, value) in nodes_tree.iter().take(100).flatten() {
                             // Sample first 100 entries
-                            if let Ok((key, value)) = result {
-                                sample_count += 1;
-                                sample_total_size += key.len() + value.len();
-                            }
+                            sample_count += 1;
+                            sample_total_size += key.len() + value.len();
                         }
 
                         if sample_count > 0 {
