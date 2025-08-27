@@ -4002,11 +4002,9 @@ impl LspDaemon {
                         let mut sample_count = 0;
                         let mut sample_total_size = 0;
 
-                        for result in nodes_tree.iter().take(100) {
-                            if let Ok((key, value)) = result {
-                                sample_count += 1;
-                                sample_total_size += key.len() + value.len();
-                            }
+                        for (key, value) in nodes_tree.iter().take(100).filter_map(Result::ok) {
+                            sample_count += 1;
+                            sample_total_size += key.len() + value.len();
                         }
 
                         if sample_count > 0 {

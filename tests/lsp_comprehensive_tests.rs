@@ -852,7 +852,7 @@ fn test_lsp_cache_stats_comprehensive() -> Result<()> {
     )?;
 
     println!("Initial cache stats:");
-    println!("{}", initial_output);
+    println!("{initial_output}");
 
     // Verify the output format is correct
     assert!(initial_output.contains("LSP Cache Statistics"));
@@ -868,7 +868,7 @@ fn test_lsp_cache_stats_comprehensive() -> Result<()> {
 
     // Make several LSP requests to build up cache entries
     for i in 1..=3 {
-        println!("LSP operation {}: extracting with call hierarchy", i);
+        println!("LSP operation {i}: extracting with call hierarchy");
         let _result = extract_with_call_hierarchy_retry_config(
             &[&format!("{}:10", test_file.display())],
             1, // expected incoming
@@ -889,7 +889,7 @@ fn test_lsp_cache_stats_comprehensive() -> Result<()> {
     )?;
 
     println!("Cache stats after LSP operations:");
-    println!("{}", populated_output);
+    println!("{populated_output}");
 
     // Verify the cache has been populated
     assert!(populated_output.contains("LSP Cache Statistics"));
@@ -906,7 +906,7 @@ fn test_lsp_cache_stats_comprehensive() -> Result<()> {
             total_entries = entry_str.trim().parse().unwrap_or(0);
         } else if let Some(size_str) = line.strip_prefix("  Total Size: ") {
             // Parse size (could be in B, KB, MB, etc.)
-            if let Some(size_part) = size_str.trim().split_whitespace().next() {
+            if let Some(size_part) = size_str.split_whitespace().next() {
                 if let Ok(size) = size_part.parse::<f64>() {
                     total_size_bytes = size as u64;
                     if size_str.contains("KB") {
@@ -929,10 +929,10 @@ fn test_lsp_cache_stats_comprehensive() -> Result<()> {
 
     // 4. Validate cache metrics are realistic
     println!("Parsed cache metrics:");
-    println!("  Total entries: {}", total_entries);
-    println!("  Total size: {} bytes", total_size_bytes);
-    println!("  Hit rate: {}%", hit_rate);
-    println!("  Miss rate: {}%", miss_rate);
+    println!("  Total entries: {total_entries}");
+    println!("  Total size: {total_size_bytes} bytes");
+    println!("  Hit rate: {hit_rate}%");
+    println!("  Miss rate: {miss_rate}%");
 
     // After performing LSP operations, we should have some cache entries
     assert!(
@@ -945,10 +945,7 @@ fn test_lsp_cache_stats_comprehensive() -> Result<()> {
     let total_rate = hit_rate + miss_rate;
     assert!(
         (total_rate - 100.0).abs() < 0.1,
-        "Hit rate ({:.1}%) + Miss rate ({:.1}%) should equal 100%, got {:.1}%",
-        hit_rate,
-        miss_rate,
-        total_rate
+        "Hit rate ({hit_rate:.1}%) + Miss rate ({miss_rate:.1}%) should equal 100%, got {total_rate:.1}%"
     );
 
     // 5. Test cache stats with JSON format
@@ -959,7 +956,7 @@ fn test_lsp_cache_stats_comprehensive() -> Result<()> {
     )?;
 
     println!("JSON cache stats output:");
-    println!("{}", json_output);
+    println!("{json_output}");
 
     // Verify JSON is parseable
     assert!(
@@ -985,7 +982,7 @@ fn test_lsp_cache_stats_comprehensive() -> Result<()> {
     )?;
 
     println!("Final cache stats after repeat operation:");
-    println!("{}", final_output);
+    println!("{final_output}");
 
     // The repeat operation should have resulted in some cache hits
     // (though this depends on the specific implementation and timing)
