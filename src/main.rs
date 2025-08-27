@@ -531,7 +531,7 @@ async fn main() -> Result<()> {
             )
         }
         _ => false, // Never disable autostart for regular commands - let daemon handle lazy init
-    };
+    } || config.lsp.disable_autostart; // Also check config setting
 
     if should_disable_autostart {
         // Set the autostart disable flag to prevent implicit LSP daemon spawning

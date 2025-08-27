@@ -1249,54 +1249,140 @@ impl LspDaemon {
                 detailed: _detailed,
                 git: _git,
             } => {
-                // Get universal cache stats through the cache layer and convert to proper format
-                match self.universal_cache_layer.get_stats().await {
-                    Ok(layer_stats) => {
-                        // Convert cache layer stats to universal cache stats format
-                        match self.convert_cache_layer_stats_to_universal_cache_stats(layer_stats).await {
-                            Ok(universal_stats) => {
-                                // For backward compatibility with CLI, we need to convert to legacy format
-                                // But we'll include much richer data from the universal cache
-                                let cache_stats = &universal_stats;
-                                let legacy_stats = crate::protocol::CacheStatistics {
-                                    hit_rate: cache_stats.hit_rate,
-                                    miss_rate: cache_stats.miss_rate,
-                                    total_entries: cache_stats.total_entries,
-                                    total_size_bytes: cache_stats.total_size_bytes,
-                                    disk_size_bytes: cache_stats.layer_stats.disk.size_bytes,
-                                    entries_per_file: std::collections::HashMap::new(), // Could be populated from workspace summaries
-                                    entries_per_language: std::collections::HashMap::new(), // Could be populated from method stats
-                                    age_distribution: crate::protocol::AgeDistribution {
-                                        entries_last_hour: cache_stats.total_entries / 4, // Rough estimate
-                                        entries_last_day: cache_stats.total_entries / 2,
-                                        entries_last_week: cache_stats.total_entries * 3 / 4,
-                                        entries_last_month: cache_stats.total_entries,
-                                        entries_older: 0,
-                                    },
-                                    most_accessed: Vec::new(),
-                                    memory_usage: crate::protocol::MemoryUsage {
-                                        in_memory_cache_bytes: cache_stats.layer_stats.memory.size_bytes,
-                                        persistent_cache_bytes: cache_stats.layer_stats.disk.size_bytes,
-                                        metadata_bytes: cache_stats.total_size_bytes / 100, // Rough estimate
-                                        index_bytes: cache_stats.total_size_bytes / 50, // Rough estimate
-                                    },
-                                };
+                // Get workspace cache router stats from open caches first
+                info!("Getting cache stats from workspace cache router (open caches)");
+                let router_stats = self.workspace_cache_router.get_stats().await;
+                info!(
+                    "Workspace cache router stats: {} workspaces seen, {} current open caches",
+                    router_stats.total_workspaces_seen, router_stats.current_open_caches
+                );
 
-                                DaemonResponse::CacheStats {
-                                    request_id,
-                                    stats: legacy_stats,
+                // Also scan the filesystem for all available workspace caches
+                info!("Scanning filesystem for all workspace caches");
+                let all_workspace_caches = match self
+                    .workspace_cache_router
+                    .list_all_workspace_caches()
+                    .await
+                {
+                    Ok(caches) => {
+                        info!("Found {} workspace caches on disk", caches.len());
+                        caches
+                    }
+                    Err(e) => {
+                        warn!("Failed to list workspace caches: {}", e);
+                        Vec::new()
+                    }
+                };
+
+                // Aggregate stats from all workspace caches (open + on-disk)
+                let mut total_entries = 0u64;
+                let mut total_size_bytes = 0u64;
+                let mut total_disk_size_bytes = 0u64;
+                let mut total_hits = 0u64;
+                let mut total_misses = 0u64;
+
+                // First, include stats from currently open caches
+                for workspace_stats in &router_stats.workspace_stats {
+                    info!(
+                        "Processing open workspace: {}",
+                        workspace_stats.workspace_id
+                    );
+                    if let Some(cache_stats) = &workspace_stats.cache_stats {
+                        info!(
+                            "Cache stats for open workspace {}: {} nodes, {} bytes disk",
+                            workspace_stats.workspace_id,
+                            cache_stats.total_nodes,
+                            cache_stats.disk_size_bytes
+                        );
+                        total_entries += cache_stats.total_nodes;
+                        total_size_bytes += cache_stats.total_size_bytes;
+                        total_disk_size_bytes += cache_stats.disk_size_bytes;
+                        total_hits += cache_stats.hit_count;
+                        total_misses += cache_stats.miss_count;
+                    }
+                }
+
+                // For on-disk caches that aren't currently open, read stats directly from sled
+                for cache_entry in &all_workspace_caches {
+                    // Check if this cache is already included in open caches
+                    let already_counted = router_stats
+                        .workspace_stats
+                        .iter()
+                        .any(|ws| ws.workspace_id == cache_entry.workspace_id);
+
+                    if !already_counted {
+                        info!("Processing disk workspace: {}", cache_entry.workspace_id);
+                        let call_graph_db_path = cache_entry.cache_path.join("call_graph.db");
+
+                        if call_graph_db_path.exists() && call_graph_db_path.is_dir() {
+                            match self
+                                .read_sled_db_stats_for_cache_stats(&call_graph_db_path)
+                                .await
+                            {
+                                Ok((entries, size_bytes, disk_bytes)) => {
+                                    info!("Disk cache stats for workspace {}: {} entries, {} bytes disk", cache_entry.workspace_id, entries, disk_bytes);
+                                    total_entries += entries;
+                                    total_size_bytes += size_bytes;
+                                    total_disk_size_bytes += disk_bytes;
+                                    // Note: disk-only caches don't have hit/miss stats in memory
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Failed to read stats for disk cache {}: {}",
+                                        cache_entry.workspace_id, e
+                                    );
                                 }
                             }
-                            Err(e) => DaemonResponse::Error {
-                                request_id,
-                                error: format!("Failed to convert cache layer stats to universal cache stats: {e}"),
-                            },
                         }
                     }
-                    Err(e) => DaemonResponse::Error {
-                        request_id,
-                        error: format!("Failed to get universal cache stats: {e}"),
+                }
+
+                info!(
+                    "Aggregated stats: entries={}, size_bytes={}, disk_bytes={}",
+                    total_entries, total_size_bytes, total_disk_size_bytes
+                );
+
+                // Calculate hit/miss rates
+                let total_requests = total_hits + total_misses;
+                let hit_rate = if total_requests > 0 {
+                    total_hits as f64 / total_requests as f64
+                } else {
+                    0.0
+                };
+                let miss_rate = 1.0 - hit_rate;
+
+                let legacy_stats = crate::protocol::CacheStatistics {
+                    hit_rate,
+                    miss_rate,
+                    total_entries,
+                    total_size_bytes,
+                    disk_size_bytes: total_disk_size_bytes,
+                    entries_per_file: std::collections::HashMap::new(), // TODO: Could be populated from workspace summaries
+                    entries_per_language: std::collections::HashMap::new(), // TODO: Could be populated from method stats
+                    age_distribution: crate::protocol::AgeDistribution {
+                        entries_last_hour: 0, // TODO: Would need timestamp tracking
+                        entries_last_day: 0,
+                        entries_last_week: 0,
+                        entries_last_month: total_entries, // Assume all entries are recent
+                        entries_older: 0,
                     },
+                    most_accessed: Vec::new(), // TODO: Could be populated from access counts
+                    memory_usage: crate::protocol::MemoryUsage {
+                        in_memory_cache_bytes: 0, // Workspace cache router doesn't track in-memory size
+                        persistent_cache_bytes: total_disk_size_bytes,
+                        metadata_bytes: total_disk_size_bytes / 100, // Rough estimate (1% metadata)
+                        index_bytes: total_disk_size_bytes / 50,     // Rough estimate (2% index)
+                    },
+                };
+
+                info!(
+                    "Returning legacy stats: entries={}, disk_size={}",
+                    legacy_stats.total_entries, legacy_stats.disk_size_bytes
+                );
+
+                DaemonResponse::CacheStats {
+                    request_id,
+                    stats: legacy_stats,
                 }
             }
 
@@ -3888,6 +3974,89 @@ impl LspDaemon {
         } else {
             None
         }
+    }
+
+    /// Read sled database stats for cache stats (similar to management.rs but for daemon use)
+    async fn read_sled_db_stats_for_cache_stats(
+        &self,
+        db_path: &std::path::Path,
+    ) -> Result<(u64, u64, u64)> {
+        // Calculate directory size
+        let disk_size_bytes = self.calculate_directory_size_for_cache_stats(db_path).await;
+
+        // Try to open the sled database for reading
+        match sled::Config::default()
+            .path(db_path)
+            .cache_capacity(1024 * 1024)
+            .open()
+        {
+            Ok(db) => {
+                let mut entries = 0u64;
+                let mut size_bytes = 0u64;
+
+                match db.open_tree("nodes") {
+                    Ok(nodes_tree) => {
+                        entries = nodes_tree.len() as u64;
+
+                        // Sample some entries to estimate size
+                        let mut sample_count = 0;
+                        let mut sample_total_size = 0;
+
+                        for result in nodes_tree.iter().take(100) {
+                            if let Ok((key, value)) = result {
+                                sample_count += 1;
+                                sample_total_size += key.len() + value.len();
+                            }
+                        }
+
+                        if sample_count > 0 {
+                            let avg_entry_size = sample_total_size / sample_count;
+                            size_bytes = entries * avg_entry_size as u64;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to open nodes tree for {}: {}", db_path.display(), e);
+                    }
+                }
+
+                Ok((entries, size_bytes, disk_size_bytes))
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to open sled database at {}: {}",
+                    db_path.display(),
+                    e
+                );
+                // Return minimal stats based on file size
+                Ok((
+                    if disk_size_bytes > 0 { 1 } else { 0 },
+                    disk_size_bytes,
+                    disk_size_bytes,
+                ))
+            }
+        }
+    }
+
+    /// Calculate directory size for cache stats
+    async fn calculate_directory_size_for_cache_stats(&self, dir_path: &std::path::Path) -> u64 {
+        let mut total_size = 0u64;
+        let mut dirs_to_process = vec![dir_path.to_path_buf()];
+
+        while let Some(current_dir) = dirs_to_process.pop() {
+            if let Ok(mut entries) = tokio::fs::read_dir(&current_dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    if let Ok(metadata) = entry.metadata().await {
+                        if metadata.is_file() {
+                            total_size += metadata.len();
+                        } else if metadata.is_dir() {
+                            dirs_to_process.push(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+
+        total_size
     }
 }
 

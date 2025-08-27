@@ -97,14 +97,14 @@ else
     exit $status
 fi
 
-# Commit consent check (simplified one-liner)
-# If AGENT_CONSENT.md exists but .AGENT_CONSENT does not, print markdown and fail
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-cd "$repo_root"
-
-if [ -f AGENT_CONSENT.md ] && [ ! -e .AGENT_CONSENT ]; then
-    cat >&2 AGENT_CONSENT.md
-    exit 1
+# Commit consent check via cross-platform Node tool (fallback to shell)
+if command -v node >/dev/null 2>&1; then
+    "$HOME/go/src/vow/bin/vow.js" || exit $?
+else
+    repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; cd "$repo_root"
+    if [ -f AGENT_VOW.md ]; then md=AGENT_VOW.md; elif [ -f AGENT_CONSENT.md ]; then md=AGENT_CONSENT.md; else md=""; fi
+    [ -z "$md" ] || [ -e .AGENT_CONSENT ] || { cat "$md" >&2; exit 1; }
+    [ -n "$md" ] && [ -e .AGENT_CONSENT ] && rm -f .AGENT_CONSENT || true
 fi
 
 exit $status

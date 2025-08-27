@@ -38,7 +38,19 @@ json_escape() {
     jq -Rn --arg text "$1" '$text'
   else
     # Fallback if jq is not available - ensure output is properly quoted JSON string
-    printf '"%s"' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | awk '{gsub(/\r/,"\\r"); gsub(/\n/,"\\n"); printf "%s", $0}'
+    # Use a more robust approach that handles multiline strings correctly
+    escaped=$(printf '%s' "$1" | awk '
+    BEGIN { RS = ""; FS = ""; }
+    {
+      # Process the entire input as one record
+      gsub(/\\/, "\\\\");
+      gsub(/"/, "\\\"");
+      gsub(/\t/, "\\t");
+      gsub(/\r/, "\\r");
+      gsub(/\n/, "\\n");
+      printf "%s", $0;
+    }')
+    printf '"%s"' "$escaped"
   fi
 }
 
