@@ -94,13 +94,14 @@ else
     exit $status
 fi
 
-# Commit consent check - run at the end only if all other checks passed
-PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-SHARED_CONSENT="$PROJECT_ROOT/scripts/shared-consent.sh"
+# Commit consent check (simplified one-liner)
+# If AGENT_CONSENT.md exists but .AGENT_CONSENT does not, print markdown and fail
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$repo_root"
 
-if [ -f "$SHARED_CONSENT" ]; then
-    "$SHARED_CONSENT" "git-commit"
-    exit $?
+if [ -f AGENT_CONSENT.md ] && [ ! -e .AGENT_CONSENT ]; then
+    cat >&2 AGENT_CONSENT.md
+    exit 1
 fi
 
 exit $status
