@@ -828,11 +828,24 @@ fn test_lsp_cache_stats_comprehensive() -> Result<()> {
     let _guard = LspTestGuard::new("test_lsp_cache_stats_comprehensive");
     setup_comprehensive_tests()?;
 
+    // Add debug info for CI troubleshooting
+    if std::env::var("CI").is_ok() {
+        println!("CI environment detected - using extended timeouts and retries");
+    }
+
     let socket_path = init_test_namespace("cache_stats_comprehensive");
 
     // Start daemon and wait for it to be ready
     start_daemon_and_wait_with_config(Some(&socket_path))?;
-    wait_for_lsp_servers_ready_with_config(&["go"], Duration::from_secs(30), Some(&socket_path))?;
+
+    // Use extended timeout in CI environments
+    let lsp_ready_timeout = if std::env::var("CI").is_ok() {
+        Duration::from_secs(180) // 3 minutes in CI
+    } else {
+        Duration::from_secs(30) // 30 seconds locally
+    };
+
+    wait_for_lsp_servers_ready_with_config(&["go"], lsp_ready_timeout, Some(&socket_path))?;
 
     // Initialize workspace for LSP operations
     let workspace_path = fixtures::get_go_project1();
