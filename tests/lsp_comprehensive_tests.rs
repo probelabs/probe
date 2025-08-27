@@ -840,7 +840,7 @@ fn test_lsp_cache_stats_comprehensive() -> Result<()> {
 
     // Use extended timeout in CI environments
     let lsp_ready_timeout = if std::env::var("CI").is_ok() {
-        Duration::from_secs(180) // 3 minutes in CI
+        Duration::from_secs(300) // 5 minutes in CI (gopls can take 181+ seconds)
     } else {
         Duration::from_secs(30) // 30 seconds locally
     };
