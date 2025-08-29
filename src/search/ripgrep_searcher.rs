@@ -36,18 +36,16 @@ impl RipgrepSearcher {
                 if p.starts_with("(?i") {
                     p.clone()
                 } else {
-                    format!("(?i:{})", p)
+                    format!("(?i:{p})")
                 }
             })
             .collect();
 
         // Calculate estimated regex size to avoid exceeding limits (10MB)
-        let total_pattern_size: usize = case_insensitive_patterns.iter()
-            .map(|p| p.len())
-            .sum();
-        
+        let total_pattern_size: usize = case_insensitive_patterns.iter().map(|p| p.len()).sum();
+
         const MAX_REGEX_SIZE: usize = 8 * 1024 * 1024; // 8MB safety margin
-        
+
         if total_pattern_size > MAX_REGEX_SIZE {
             return Err(anyhow::anyhow!(
                 "Pattern set too large ({} bytes > {} bytes limit). Consider simplifying your query or using more specific search terms.",
@@ -55,19 +53,22 @@ impl RipgrepSearcher {
                 MAX_REGEX_SIZE
             ));
         }
-        
+
         if debug_mode {
-            println!("DEBUG: Creating RegexSet with {} patterns, total size: {} bytes", 
-                case_insensitive_patterns.len(), total_pattern_size);
+            println!(
+                "DEBUG: Creating RegexSet with {} patterns, total size: {} bytes",
+                case_insensitive_patterns.len(),
+                total_pattern_size
+            );
         }
 
         // Use RegexSetBuilder with size limits for additional protection
         let mut builder = RegexSetBuilder::new(&case_insensitive_patterns);
         builder.size_limit(10 * 1024 * 1024); // 10MB compiled program limit
-        
-        let regex_set = builder
-            .build()
-            .context("Failed to build RegexSet during initialization - compiled regex exceeds size limits")?;
+
+        let regex_set = builder.build().context(
+            "Failed to build RegexSet during initialization - compiled regex exceeds size limits",
+        )?;
 
         Ok(RipgrepSearcher {
             debug_mode,
@@ -330,10 +331,10 @@ mod tests {
         // Test that very large patterns are rejected
         let huge_pattern = "a".repeat(9 * 1024 * 1024); // 9MB pattern
         let patterns = vec![huge_pattern];
-        
+
         let result = RipgrepSearcher::new(&patterns, true);
         assert!(result.is_err());
-        
+
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Pattern set too large"));
     }

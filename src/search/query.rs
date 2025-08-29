@@ -345,7 +345,11 @@ pub fn build_combined_pattern(terms: &[String]) -> String {
     const MAX_TERMS_IN_PATTERN: usize = 1000;
     let limited_terms = if terms.len() > MAX_TERMS_IN_PATTERN {
         if debug_mode {
-            println!("DEBUG: Limiting pattern to first {} terms (was {})", MAX_TERMS_IN_PATTERN, terms.len());
+            println!(
+                "DEBUG: Limiting pattern to first {} terms (was {})",
+                MAX_TERMS_IN_PATTERN,
+                terms.len()
+            );
         }
         &terms[..MAX_TERMS_IN_PATTERN]
     } else {
@@ -353,7 +357,10 @@ pub fn build_combined_pattern(terms: &[String]) -> String {
     };
 
     // Escape special characters in each term
-    let escaped_terms = limited_terms.iter().map(|t| regex_escape(t)).collect::<Vec<_>>();
+    let escaped_terms = limited_terms
+        .iter()
+        .map(|t| regex_escape(t))
+        .collect::<Vec<_>>();
 
     // Join terms with | operator and add case-insensitive flag without word boundaries
     let pattern = format!("(?i)({terms})", terms = escaped_terms.join("|"));
@@ -364,7 +371,11 @@ pub fn build_combined_pattern(terms: &[String]) -> String {
             "DEBUG: Combined pattern built in {} with {} terms: {}",
             format_duration(duration),
             limited_terms.len(),
-            if pattern.len() > 200 { format!("{}...", &pattern[..200]) } else { pattern.clone() }
+            if pattern.len() > 200 {
+                format!("{}...", &pattern[..200])
+            } else {
+                pattern.clone()
+            }
         );
     }
 
@@ -618,7 +629,8 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
     }
 
     // First, deduplicate by exact pattern match using BTreeMap for deterministic iteration
-    let mut pattern_map: std::collections::BTreeMap<String, HashSet<usize>> = std::collections::BTreeMap::new();
+    let mut pattern_map: std::collections::BTreeMap<String, HashSet<usize>> =
+        std::collections::BTreeMap::new();
 
     for (pattern, indices) in results {
         pattern_map
@@ -628,7 +640,8 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
     }
 
     // Then, deduplicate patterns that match the same term using BTreeMap for deterministic iteration
-    let mut term_patterns: std::collections::BTreeMap<String, Vec<(String, HashSet<usize>)>> = std::collections::BTreeMap::new();
+    let mut term_patterns: std::collections::BTreeMap<String, Vec<(String, HashSet<usize>)>> =
+        std::collections::BTreeMap::new();
 
     // Group patterns by the terms they match
     for (pattern, indices) in pattern_map.iter() {
@@ -656,10 +669,8 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
             deduplicated_results.extend(patterns);
         } else {
             // Sort patterns by specificity: longer patterns first, then lexicographic
-            patterns.sort_by(|a, b| {
-                b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0))
-            });
-            
+            patterns.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+
             // Keep the 2 most specific patterns
             deduplicated_results.extend(patterns.into_iter().take(2));
         }
@@ -683,8 +694,9 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
         // Sort by smallest term index first, then by pattern length (longer first), then lexicographic
         let min_index_a = a.1.iter().min().unwrap_or(&usize::MAX);
         let min_index_b = b.1.iter().min().unwrap_or(&usize::MAX);
-        
-        min_index_a.cmp(min_index_b)
+
+        min_index_a
+            .cmp(min_index_b)
             .then_with(|| b.0.len().cmp(&a.0.len()))
             .then_with(|| a.0.cmp(&b.0))
     });
@@ -692,9 +704,16 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
     // Apply pattern limit to prevent regex size explosion
     let limited_results = if deduplicated_results.len() > MAX_PATTERNS {
         if debug_mode {
-            println!("DEBUG: Limiting patterns to {} (was {})", MAX_PATTERNS, deduplicated_results.len());
+            println!(
+                "DEBUG: Limiting patterns to {} (was {})",
+                MAX_PATTERNS,
+                deduplicated_results.len()
+            );
         }
-        deduplicated_results.into_iter().take(MAX_PATTERNS).collect()
+        deduplicated_results
+            .into_iter()
+            .take(MAX_PATTERNS)
+            .collect()
     } else {
         deduplicated_results
     };
