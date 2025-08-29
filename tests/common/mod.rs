@@ -1424,7 +1424,15 @@ pub mod call_hierarchy {
                 || lc.starts_with("## outgoing calls")
                 || lc.starts_with("### outgoing calls")
                 || lc == "outgoing calls:"
-                || lc.starts_with("outgoing calls:");
+                || lc.starts_with("outgoing calls:")
+                || lc == "references:"
+                || lc.starts_with("references:")
+                || lc.starts_with("## references")
+                || lc.starts_with("### references")
+                || lc == "documentation:"
+                || lc.starts_with("documentation:")
+                || lc.starts_with("## documentation")
+                || lc.starts_with("### documentation");
             let is_md_header = t.starts_with("## ");
             next_is_ch || is_md_header
         };

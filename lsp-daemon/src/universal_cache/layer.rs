@@ -432,7 +432,7 @@ impl CacheLayer {
                 self.analyze_request_and_response(&request, &result.data);
 
             info!(
-                "Cache {} for {:?} in {:?} (singleflight: {:?}) {} - {}",
+                "Cache {} for {:?} in {:?} (singleflight: {:?}) {} - {} | Key: ws={}, method={}, file={}, params={}",
                 cache_status,
                 lsp_method,
                 result.duration,
@@ -442,7 +442,11 @@ impl CacheLayer {
                 } else {
                     "✗ NO_DATA"
                 },
-                request_info
+                request_info,
+                cache_key.workspace_id,
+                cache_key.method.as_str(),
+                cache_key.workspace_relative_path.display(),
+                params.chars().take(80).collect::<String>()
             );
         }
 
@@ -1044,6 +1048,7 @@ mod tests {
                             version: "test".to_string(),
                             git_hash: "test".to_string(),
                             build_date: "test".to_string(),
+                            universal_cache_stats: None,
                         },
                     }
                 }

@@ -215,6 +215,82 @@ impl LspManager {
         }
     }
 
+    /// Find symbol position using tree-sitter parsing (deterministic approach)
+    pub fn find_symbol_position_with_tree_sitter(
+        file_path: &Path,
+        symbol_name: &str,
+    ) -> Result<Vec<(u32, u32)>> {
+        use crate::language::factory::get_language_impl;
+        use anyhow::Context;
+
+        // Read file content
+        let content = std::fs::read_to_string(file_path)
+            .with_context(|| format!("Failed to read file: {:?}", file_path))?;
+
+        // Determine file extension
+        let extension = file_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("");
+
+        // Get language implementation
+        let language_impl = get_language_impl(extension).ok_or_else(|| {
+            anyhow::anyhow!("No language implementation for extension: {}", extension)
+        })?;
+
+        // Create parser
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&language_impl.get_tree_sitter_language())
+            .context("Failed to set parser language")?;
+
+        // Parse the file
+        let tree = parser
+            .parse(&content, None)
+            .ok_or_else(|| anyhow::anyhow!("Failed to parse file"))?;
+
+        let root_node = tree.root_node();
+        let source = content.as_bytes();
+
+        // Find all positions where the symbol appears as an identifier
+        let mut positions = Vec::new();
+        Self::find_symbol_positions_recursive(root_node, symbol_name, source, &mut positions);
+
+        // Convert positions to 0-based line, column format expected by LSP
+        let result = positions
+            .into_iter()
+            .map(|(line, col)| (line as u32, col as u32))
+            .collect();
+
+        Ok(result)
+    }
+
+    /// Recursively search for symbol positions in tree-sitter AST
+    fn find_symbol_positions_recursive(
+        node: tree_sitter::Node,
+        target_name: &str,
+        content: &[u8],
+        positions: &mut Vec<(usize, usize)>,
+    ) {
+        // Check if this node is an identifier and matches our target
+        if matches!(
+            node.kind(),
+            "identifier" | "field_identifier" | "type_identifier" | "property_identifier"
+        ) {
+            if let Ok(name) = node.utf8_text(content) {
+                if name == target_name {
+                    positions.push((node.start_position().row, node.start_position().column));
+                }
+            }
+        }
+
+        // Search in children
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            Self::find_symbol_positions_recursive(child, target_name, content, positions);
+        }
+    }
+
     /// Show daemon status
     async fn show_status(
         use_daemon: bool,
@@ -1564,21 +1640,30 @@ impl LspManager {
             CacheSubcommands::ClearSymbol {
                 file,
                 symbol,
-                line,
-                column,
                 methods,
                 all_positions,
                 force,
                 format: output_format,
             } => {
+                // Parse file#symbol format if symbol is None
+                let (file_path, symbol_name) = if let Some(symbol) = symbol {
+                    (std::path::PathBuf::from(file), symbol.clone())
+                } else if let Some((file_part, symbol_part)) = file.split_once('#') {
+                    (std::path::PathBuf::from(file_part), symbol_part.to_string())
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "Symbol name required. Use 'file path symbol' or 'file#symbol' format"
+                    ));
+                };
+
                 // Confirmation prompt for destructive operations
                 if !force && std::env::var("PROBE_BATCH").unwrap_or_default() != "1" {
                     use std::io::{self, Write};
 
                     print!(
                         "Are you sure you want to clear cache for symbol '{}' in {}? [y/N]: ",
-                        symbol,
-                        file.display()
+                        symbol_name,
+                        file_path.display()
                     );
                     io::stdout().flush()?;
 
@@ -1591,43 +1676,115 @@ impl LspManager {
                     }
                 }
 
-                match output_format.as_str() {
-                    "json" => {
-                        let json_output = json!({
-                            "status": "not_implemented",
-                            "message": "Symbol cache clear not yet implemented",
-                            "parameters": {
-                                "file": file,
-                                "symbol": symbol,
-                                "line": line,
-                                "column": column,
-                                "methods": methods,
-                                "all_positions": all_positions,
-                                "force": force
-                            }
-                        });
-                        println!("{}", serde_json::to_string_pretty(&json_output)?);
-                    }
-                    _ => {
-                        use colored::Colorize;
+                // Parse methods if specified
+                let methods_vec = methods.as_ref().map(|m| {
+                    m.split(',')
+                        .map(|s| s.trim().to_string())
+                        .collect::<Vec<String>>()
+                });
 
-                        println!("{}", "Symbol Cache Clear Parameters:".bold());
-                        println!("  {} {}", "File:".bold(), file.display());
-                        println!("  {} {}", "Symbol:".bold(), symbol.green());
-                        if let Some(line) = line {
-                            println!("  {} {}", "Line:".bold(), line);
+                // Use tree-sitter to find the exact symbol position (deterministic approach)
+                let symbol_position =
+                    Self::find_symbol_position_with_tree_sitter(&file_path, &symbol_name)?;
+
+                if symbol_position.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "Symbol '{}' not found in file '{}' using tree-sitter analysis",
+                        symbol_name,
+                        file_path.display()
+                    ));
+                }
+
+                // Use the first (most precise) position found
+                let (line, column) = symbol_position[0];
+
+                // Call the clear symbol cache function with exact position
+                match client
+                    .clear_symbol_cache(
+                        file_path.clone(),
+                        symbol_name.clone(),
+                        Some(line),
+                        Some(column),
+                        methods_vec,
+                        *all_positions,
+                    )
+                    .await
+                {
+                    Ok(result) => match output_format.as_str() {
+                        "json" => {
+                            let json_output = json!({
+                                "status": "success",
+                                "result": {
+                                    "symbol_name": result.symbol_name,
+                                    "file_path": result.file_path,
+                                    "entries_cleared": result.entries_cleared,
+                                    "positions_cleared": result.positions_cleared,
+                                    "methods_cleared": result.methods_cleared,
+                                    "cache_size_freed_bytes": result.cache_size_freed_bytes,
+                                    "duration_ms": result.duration_ms
+                                }
+                            });
+                            println!("{}", serde_json::to_string_pretty(&json_output)?);
                         }
-                        if let Some(column) = column {
-                            println!("  {} {}", "Column:".bold(), column);
+                        _ => {
+                            use colored::Colorize;
+
+                            println!("{}", "✅ Symbol cache cleared successfully".green());
+                            println!(
+                                "  {} {} in {}",
+                                "Symbol:".bold(),
+                                result.symbol_name.cyan(),
+                                result.file_path.display()
+                            );
+                            println!(
+                                "  {} {}",
+                                "Cache entries cleared:".bold(),
+                                result.entries_cleared
+                            );
+                            println!(
+                                "  {} {} bytes",
+                                "Cache size freed:".bold(),
+                                result.cache_size_freed_bytes
+                            );
+                            if !result.positions_cleared.is_empty() {
+                                println!(
+                                    "  {} {:?}",
+                                    "Positions cleared:".bold(),
+                                    result.positions_cleared
+                                );
+                            }
+                            if !result.methods_cleared.is_empty() {
+                                println!(
+                                    "  {} {}",
+                                    "Methods cleared:".bold(),
+                                    result.methods_cleared.join(", ")
+                                );
+                            }
+                            println!("  {} {}ms", "Duration:".bold(), result.duration_ms);
                         }
-                        if let Some(methods) = methods {
-                            println!("  {} {}", "Methods:".bold(), methods.cyan());
-                        } else {
-                            println!("  {} all methods", "Methods:".bold());
+                    },
+                    Err(e) => {
+                        match output_format.as_str() {
+                            "json" => {
+                                let json_output = json!({
+                                    "status": "error",
+                                    "error": e.to_string(),
+                                    "parameters": {
+                                        "file": file_path,
+                                        "symbol": symbol_name,
+                                        "methods": methods,
+                                        "all_positions": all_positions,
+                                        "force": force
+                                    }
+                                });
+                                println!("{}", serde_json::to_string_pretty(&json_output)?);
+                            }
+                            _ => {
+                                use colored::Colorize;
+                                println!("{} {}", "❌ Error clearing symbol cache:".red(), e);
+                            }
                         }
-                        if *all_positions {
-                            println!("  {} {}", "All positions:".bold(), "yes".green());
-                        }
+                        std::process::exit(1);
                     }
                 }
             }
