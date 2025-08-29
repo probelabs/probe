@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use lsp_daemon::{
-    DaemonRequest, DaemonResponse, HealthMonitor, IpcStream, LspDaemon, MessageCodec, Watchdog,
+    DaemonRequest, DaemonResponse, IpcStream, LspDaemon, MessageCodec, ProcessMonitor, Watchdog,
 };
 use serde_json::json;
 use std::path::PathBuf;
@@ -516,7 +516,7 @@ async fn test_health_monitor_restarts_unhealthy_servers() -> Result<()> {
         Arc::new(lsp_daemon::lsp_registry::LspRegistry::new()?),
     ));
 
-    let _health_monitor = HealthMonitor::new();
+    let _process_monitor = ProcessMonitor::new();
 
     // Wait for several health checks to occur
     sleep(Duration::from_secs(30)).await;
@@ -524,8 +524,8 @@ async fn test_health_monitor_restarts_unhealthy_servers() -> Result<()> {
     // For this test, we'll just verify the health monitor can be created
     // The actual health checking would require integration with the server manager
 
-    // Verify health monitor was created successfully
-    info!("Health monitor created successfully");
+    // Verify process monitor was created successfully
+    info!("Process monitor created successfully");
 
     mock_server.stop();
 

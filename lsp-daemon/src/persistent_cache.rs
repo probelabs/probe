@@ -19,11 +19,11 @@
 //! ```
 
 use crate::cache_types::{CallHierarchyInfo, NodeKey};
+use crate::database::{DatabaseBackend, DatabaseConfig, DatabaseTree, SledBackend};
 use crate::language_detector::Language;
 use anyhow::{Context, Result};
 use bincode;
 use serde::{Deserialize, Serialize};
-use sled::Db;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -95,6 +95,22 @@ pub struct PersistentCacheConfig {
     pub ttl_days: u64,
     /// Whether to compress stored data
     pub compress: bool,
+    /// Force in-memory mode (overrides environment variables)
+    pub memory_only: bool,
+    /// Database backend type to use
+    pub backend_type: DatabaseBackendType,
+}
+
+/// Supported database backend types
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum DatabaseBackendType {
+    /// Use Sled database backend
+    #[default]
+    Sled,
+    /// Use Sled in temporary/in-memory mode
+    Memory,
+    // Future: DuckDB backend
+    // DuckDB,
 }
 
 impl Default for PersistentCacheConfig {
@@ -104,6 +120,8 @@ impl Default for PersistentCacheConfig {
             max_size_bytes: 0, // Unlimited by default
             ttl_days: 30,      // 30 days default TTL
             compress: true,
+            memory_only: false, // Persistent by default
+            backend_type: DatabaseBackendType::Sled,
         }
     }
 }
@@ -113,14 +131,14 @@ pub type PersistentStoreConfig = PersistentCacheConfig;
 
 /// Persistent storage backend for call graph cache
 pub struct PersistentCallGraphCache {
-    /// Main sled database
-    db: Arc<Db>,
+    /// Database backend abstraction
+    db: Arc<SledBackend>,
     /// Tree for storing cached nodes
-    nodes_tree: sled::Tree,
+    nodes_tree: Arc<dyn DatabaseTree>,
     /// Tree for storing cache metadata
-    metadata_tree: sled::Tree,
+    metadata_tree: Arc<dyn DatabaseTree>,
     /// Tree for file -> keys index
-    file_index_tree: sled::Tree,
+    file_index_tree: Arc<dyn DatabaseTree>,
     /// Configuration
     config: PersistentCacheConfig,
     /// In-memory metadata cache
@@ -138,9 +156,8 @@ impl PersistentCallGraphCache {
             .clone()
             .unwrap_or_else(Self::default_cache_directory);
 
-        let persistence_disabled = std::env::var("PROBE_DISABLE_PERSISTENCE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        // Check multiple flags for in-memory mode with priority order
+        let persistence_disabled = Self::should_use_memory_mode(&config);
 
         // Ensure cache directory exists (unless persistence is disabled)
         if !persistence_disabled {
@@ -149,7 +166,10 @@ impl PersistentCallGraphCache {
         }
 
         if persistence_disabled {
-            info!("PROBE_DISABLE_PERSISTENCE=1 — using temporary in-memory sled store (no disk writes)");
+            info!(
+                "Using in-memory mode — no disk persistence (memory_only={}, env flags detected)",
+                config.memory_only
+            );
         }
 
         let db_path = cache_dir.join("call_graph.db");
@@ -160,42 +180,54 @@ impl PersistentCallGraphCache {
             info!("Opening persistent call graph cache at: {:?}", db_path);
         }
 
-        // Configure sled database
-        let db = if persistence_disabled {
-            sled::Config::default()
-                .temporary(true)
-                .cache_capacity(64 * 1024 * 1024) // 64MB cache
-                .flush_every_ms(None) // Do not flush to disk when disabled
-                .compression_factor(1)
-                .use_compression(false)
-                .open()
-                .context("Failed to open temporary sled database")?
-        } else {
-            sled::Config::default()
-                .path(&db_path)
-                .cache_capacity(64 * 1024 * 1024) // 64MB cache
-                .flush_every_ms(Some(1000)) // Flush every second
-                .compression_factor(if config.compress { 5 } else { 1 })
-                .use_compression(config.compress)
-                .open()
-                .context(format!("Failed to open sled database at: {db_path:?}"))?
+        // Create database configuration based on settings
+        let db_config = DatabaseConfig {
+            path: if persistence_disabled {
+                None
+            } else {
+                Some(db_path)
+            },
+            temporary: persistence_disabled,
+            compression: config.compress && !persistence_disabled, // Skip compression for temporary
+            cache_capacity: 64 * 1024 * 1024,                      // 64MB cache
+            compression_factor: if config.compress && !persistence_disabled {
+                5
+            } else {
+                1
+            },
+            flush_every_ms: if persistence_disabled {
+                None
+            } else {
+                Some(1000)
+            },
         };
 
-        let db = Arc::new(db);
+        // Create database backend
+        let db = Arc::new(
+            SledBackend::new(db_config)
+                .await
+                .context("Failed to create database backend")?,
+        );
 
-        // Open trees
-        let nodes_tree = db.open_tree("nodes").context("Failed to open nodes tree")?;
+        // Open trees using the abstraction
+        let nodes_tree = db
+            .open_tree("nodes")
+            .await
+            .context("Failed to open nodes tree")?;
 
         let metadata_tree = db
             .open_tree("metadata")
+            .await
             .context("Failed to open metadata tree")?;
 
         let file_index_tree = db
             .open_tree("file_index")
+            .await
             .context("Failed to open file_index tree")?;
 
         // Load or initialize metadata and handle version compatibility
-        let mut metadata = Self::load_metadata(&metadata_tree).await?;
+        let metadata_tree_trait: Arc<dyn DatabaseTree> = metadata_tree.clone();
+        let mut metadata = Self::load_metadata(&metadata_tree_trait).await?;
 
         // Check for version compatibility and handle migrations
         let current_version = 1u32; // Current cache format version
@@ -216,12 +248,9 @@ impl PersistentCallGraphCache {
                         e
                     );
 
-                    // Clear all trees on migration failure
-                    let nodes_tree = db.open_tree("nodes")?;
-                    let file_index_tree = db.open_tree("file_index")?;
-
-                    nodes_tree.clear()?;
-                    file_index_tree.clear()?;
+                    // Clear all trees on migration failure using abstraction
+                    nodes_tree.clear().await?;
+                    file_index_tree.clear().await?;
 
                     // Reset metadata
                     metadata = CacheMetadata::default();
@@ -262,10 +291,44 @@ impl PersistentCallGraphCache {
         }
     }
 
+    /// Determine if in-memory mode should be used based on configuration and environment
+    /// Priority order: config.memory_only > PROBE_MEMORY_ONLY_CACHE > PROBE_DISABLE_PERSISTENCE
+    fn should_use_memory_mode(config: &PersistentCacheConfig) -> bool {
+        // 1. Configuration flag has highest priority
+        if config.memory_only {
+            debug!("In-memory mode: config.memory_only=true");
+            return true;
+        }
+
+        // 2. Check PROBE_MEMORY_ONLY_CACHE environment variable
+        if let Ok(val) = std::env::var("PROBE_MEMORY_ONLY_CACHE") {
+            if val == "1" || val.eq_ignore_ascii_case("true") {
+                debug!("In-memory mode: PROBE_MEMORY_ONLY_CACHE={}", val);
+                return true;
+            }
+        }
+
+        // 3. Check legacy PROBE_DISABLE_PERSISTENCE for backwards compatibility
+        if let Ok(val) = std::env::var("PROBE_DISABLE_PERSISTENCE") {
+            if val == "1" || val.eq_ignore_ascii_case("true") {
+                debug!("In-memory mode: PROBE_DISABLE_PERSISTENCE={} (legacy)", val);
+                return true;
+            }
+        }
+
+        // 4. Check backend type configuration
+        if config.backend_type == DatabaseBackendType::Memory {
+            debug!("In-memory mode: backend_type=Memory");
+            return true;
+        }
+
+        false
+    }
+
     /// Load metadata from storage or create default
-    async fn load_metadata(metadata_tree: &sled::Tree) -> Result<CacheMetadata> {
-        match metadata_tree.get("cache_metadata")? {
-            Some(data) => match bincode::deserialize::<CacheMetadata>(&data) {
+    async fn load_metadata(metadata_tree: &Arc<dyn DatabaseTree>) -> Result<CacheMetadata> {
+        match metadata_tree.get(b"cache_metadata").await {
+            Ok(Some(data)) => match bincode::deserialize::<CacheMetadata>(&data) {
                 Ok(metadata) => Ok(metadata),
                 Err(e) => {
                     warn!(
@@ -275,7 +338,11 @@ impl PersistentCallGraphCache {
                     Ok(CacheMetadata::default())
                 }
             },
-            None => Ok(CacheMetadata::default()),
+            Ok(None) => Ok(CacheMetadata::default()),
+            Err(e) => {
+                warn!("Failed to load cache metadata: {}, using defaults", e);
+                Ok(CacheMetadata::default())
+            }
         }
     }
 
@@ -285,8 +352,10 @@ impl PersistentCallGraphCache {
         let data = bincode::serialize(&*metadata).context("Failed to serialize cache metadata")?;
 
         self.metadata_tree
-            .insert("cache_metadata", data)
-            .context("Failed to save cache metadata")?;
+            .set(b"cache_metadata", &data)
+            .await
+            .context("Failed to save cache metadata")
+            .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
 
         Ok(())
     }
@@ -303,8 +372,8 @@ impl PersistentCallGraphCache {
             md5::compute(&key_bytes)[..8].to_vec()
         );
 
-        match self.nodes_tree.get(&key_bytes)? {
-            Some(data) => {
+        match self.nodes_tree.get(&key_bytes).await {
+            Ok(Some(data)) => {
                 match bincode::deserialize::<PersistedNode>(&data) {
                     Ok(node) => {
                         info!(
@@ -330,7 +399,7 @@ impl PersistentCallGraphCache {
                     }
                 }
             }
-            None => {
+            Ok(None) => {
                 info!(
                     "Persistent cache MISS: {}:{} (md5: {})",
                     key.file.display(),
@@ -339,6 +408,10 @@ impl PersistentCallGraphCache {
                 );
                 self.miss_count
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(None)
+            }
+            Err(e) => {
+                warn!("Database error during get: {}", e);
                 Ok(None)
             }
         }
@@ -372,14 +445,16 @@ impl PersistentCallGraphCache {
 
         // Insert the node
         self.nodes_tree
-            .insert(&key_bytes, node_bytes.clone())
-            .context("Failed to insert node")?;
+            .set(&key_bytes, &node_bytes)
+            .await
+            .context("Failed to insert node")
+            .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
 
         // Update file index
         let file_key = key.file.to_string_lossy().as_bytes().to_vec();
-        let mut file_keys: Vec<Vec<u8>> = match self.file_index_tree.get(&file_key)? {
-            Some(data) => bincode::deserialize(&data).unwrap_or_default(),
-            None => Vec::new(),
+        let mut file_keys: Vec<Vec<u8>> = match self.file_index_tree.get(&file_key).await {
+            Ok(Some(data)) => bincode::deserialize(&data).unwrap_or_default(),
+            _ => Vec::new(),
         };
 
         if !file_keys.contains(&key_bytes) {
@@ -387,8 +462,10 @@ impl PersistentCallGraphCache {
             let file_keys_data =
                 bincode::serialize(&file_keys).context("Failed to serialize file keys")?;
             self.file_index_tree
-                .insert(&file_key, file_keys_data)
-                .context("Failed to update file index")?;
+                .set(&file_key, &file_keys_data)
+                .await
+                .context("Failed to update file index")
+                .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
         }
 
         // Update metadata
@@ -414,21 +491,27 @@ impl PersistentCallGraphCache {
     pub async fn remove(&self, key: &NodeKey) -> Result<bool> {
         let key_bytes = bincode::serialize(key).context("Failed to serialize node key")?;
 
-        let was_present = self.nodes_tree.remove(&key_bytes)?.is_some();
+        let was_present = match self.nodes_tree.remove(&key_bytes).await {
+            Ok(existed) => existed,
+            Err(e) => {
+                warn!("Database error during remove: {}", e);
+                return Ok(false);
+            }
+        };
 
         if was_present {
             // Update file index
             let file_key = key.file.to_string_lossy().as_bytes().to_vec();
-            if let Some(data) = self.file_index_tree.get(&file_key)? {
+            if let Ok(Some(data)) = self.file_index_tree.get(&file_key).await {
                 let mut file_keys: Vec<Vec<u8>> = bincode::deserialize(&data).unwrap_or_default();
                 file_keys.retain(|k| k != &key_bytes);
 
                 if file_keys.is_empty() {
-                    self.file_index_tree.remove(&file_key)?;
+                    let _ = self.file_index_tree.remove(&file_key).await;
                 } else {
                     let file_keys_data =
                         bincode::serialize(&file_keys).context("Failed to serialize file keys")?;
-                    self.file_index_tree.insert(&file_key, file_keys_data)?;
+                    let _ = self.file_index_tree.set(&file_key, &file_keys_data).await;
                 }
             }
 
@@ -448,20 +531,20 @@ impl PersistentCallGraphCache {
     pub async fn get_by_file(&self, file_path: &Path) -> Result<Vec<PersistedNode>> {
         let file_key = file_path.to_string_lossy().as_bytes().to_vec();
 
-        let key_list: Vec<Vec<u8>> = match self.file_index_tree.get(&file_key)? {
-            Some(data) => bincode::deserialize(&data).unwrap_or_default(),
-            None => return Ok(Vec::new()),
+        let key_list: Vec<Vec<u8>> = match self.file_index_tree.get(&file_key).await {
+            Ok(Some(data)) => bincode::deserialize(&data).unwrap_or_default(),
+            _ => return Ok(Vec::new()),
         };
 
         let mut nodes = Vec::new();
         for key_bytes in key_list {
-            if let Some(node_data) = self.nodes_tree.get(&key_bytes)? {
+            if let Ok(Some(node_data)) = self.nodes_tree.get(&key_bytes).await {
                 match bincode::deserialize::<PersistedNode>(&node_data) {
                     Ok(node) => nodes.push(node),
                     Err(e) => {
                         warn!("Failed to deserialize node in file index: {}", e);
                         // Clean up corrupted entry
-                        self.nodes_tree.remove(&key_bytes)?;
+                        let _ = self.nodes_tree.remove(&key_bytes).await;
                     }
                 }
             }
@@ -480,10 +563,10 @@ impl PersistentCallGraphCache {
         let metadata = self.metadata.read().await;
 
         // Get database size on disk
-        let disk_size = self.db.size_on_disk().unwrap_or(0);
+        let disk_size = self.db.size_on_disk().await.unwrap_or(0);
 
         // Count files
-        let total_files = self.file_index_tree.len();
+        let total_files = self.file_index_tree.len().await.unwrap_or(0) as usize;
 
         Ok(PersistentCacheStats {
             total_nodes: metadata.total_nodes,
@@ -499,9 +582,15 @@ impl PersistentCallGraphCache {
     pub async fn clear(&self) -> Result<()> {
         info!("Clearing persistent call graph cache");
 
-        // Clear all trees
-        self.nodes_tree.clear()?;
-        self.file_index_tree.clear()?;
+        // Clear all trees using abstraction
+        self.nodes_tree
+            .clear()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to clear nodes tree: {}", e))?;
+        self.file_index_tree
+            .clear()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to clear file index tree: {}", e))?;
 
         // Reset metadata
         {
@@ -510,7 +599,10 @@ impl PersistentCallGraphCache {
         }
 
         self.save_metadata().await?;
-        self.db.flush_async().await?;
+        self.db
+            .flush()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to flush database: {}", e))?;
 
         info!("Persistent cache cleared");
         Ok(())
@@ -523,8 +615,11 @@ impl PersistentCallGraphCache {
         // Save metadata before compaction
         self.save_metadata().await?;
 
-        // Flush and compact
-        self.db.flush_async().await?;
+        // Flush database using abstraction
+        self.db
+            .flush()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to flush database: {}", e))?;
 
         info!("Database compaction completed");
         Ok(())
@@ -538,32 +633,31 @@ impl PersistentCallGraphCache {
         let mut expired_keys = Vec::new();
         let mut total_scanned = 0;
 
-        // Scan all nodes to find expired ones
-        // We use iter() to go through all key-value pairs
-        for result in self.nodes_tree.iter() {
-            total_scanned += 1;
-            match result {
-                Ok((key_bytes, value_bytes)) => {
-                    match bincode::deserialize::<PersistedNode>(&value_bytes) {
-                        Ok(node) => {
-                            // Check if node is older than the configured TTL
-                            let max_age =
-                                std::time::Duration::from_secs(self.config.ttl_days * 24 * 60 * 60);
+        // Scan all nodes to find expired ones using prefix scan
+        // We scan all entries by using an empty prefix
+        let all_entries = self
+            .nodes_tree
+            .scan_prefix(b"")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to scan nodes: {}", e))?;
 
-                            if let Ok(age) = now.duration_since(node.created_at) {
-                                if age > max_age {
-                                    expired_keys.push(key_bytes.to_vec());
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Found corrupted node during cleanup, will remove: {}", e);
-                            expired_keys.push(key_bytes.to_vec());
+        for (key_bytes, value_bytes) in all_entries {
+            total_scanned += 1;
+            match bincode::deserialize::<PersistedNode>(&value_bytes) {
+                Ok(node) => {
+                    // Check if node is older than the configured TTL
+                    let max_age =
+                        std::time::Duration::from_secs(self.config.ttl_days * 24 * 60 * 60);
+
+                    if let Ok(age) = now.duration_since(node.created_at) {
+                        if age > max_age {
+                            expired_keys.push(key_bytes);
                         }
                     }
                 }
                 Err(e) => {
-                    warn!("Error scanning node during cleanup: {}", e);
+                    warn!("Found corrupted node during cleanup, will remove: {}", e);
+                    expired_keys.push(key_bytes);
                 }
             }
         }
@@ -571,23 +665,22 @@ impl PersistentCallGraphCache {
         // Remove expired entries
         let mut removed_count = 0;
         for key_bytes in &expired_keys {
-            if self.nodes_tree.remove(key_bytes)?.is_some() {
+            if let Ok(true) = self.nodes_tree.remove(key_bytes).await {
                 removed_count += 1;
 
-                // Also clean up from file index and git index
-                // Note: This is not perfectly efficient, but ensures consistency
+                // Also clean up from file index
                 if let Ok(node_key) = bincode::deserialize::<NodeKey>(key_bytes) {
                     let file_key = node_key.file.to_string_lossy().as_bytes().to_vec();
-                    if let Some(data) = self.file_index_tree.get(&file_key)? {
+                    if let Ok(Some(data)) = self.file_index_tree.get(&file_key).await {
                         let mut file_keys: Vec<Vec<u8>> =
                             bincode::deserialize(&data).unwrap_or_default();
                         file_keys.retain(|k| k != key_bytes);
 
                         if file_keys.is_empty() {
-                            self.file_index_tree.remove(&file_key)?;
+                            let _ = self.file_index_tree.remove(&file_key).await;
                         } else {
                             let file_keys_data = bincode::serialize(&file_keys)?;
-                            self.file_index_tree.insert(&file_key, file_keys_data)?;
+                            let _ = self.file_index_tree.set(&file_key, &file_keys_data).await;
                         }
                     }
                 }
@@ -622,7 +715,7 @@ impl PersistentCallGraphCache {
 
     /// Handle cache version migrations
     async fn migrate_cache_version(
-        _db: &Arc<sled::Db>,
+        _db: &Arc<SledBackend>,
         from_version: u32,
         to_version: u32,
     ) -> Result<()> {
@@ -661,27 +754,26 @@ impl PersistentCallGraphCache {
     pub async fn iter_nodes(&self) -> Result<Vec<(NodeKey, PersistedNode)>> {
         let mut nodes = Vec::new();
 
-        for result in self.nodes_tree.iter() {
-            match result {
-                Ok((key_bytes, value_bytes)) => {
-                    match (
-                        bincode::deserialize::<NodeKey>(&key_bytes),
-                        bincode::deserialize::<PersistedNode>(&value_bytes),
-                    ) {
-                        (Ok(key), Ok(node)) => {
-                            nodes.push((key, node));
-                        }
-                        (Err(e), _) => {
-                            warn!("Failed to deserialize key during iteration: {}", e);
-                        }
-                        (_, Err(e)) => {
-                            warn!("Failed to deserialize node during iteration: {}", e);
-                        }
-                    }
+        // Use prefix scan to get all entries
+        let all_entries = self
+            .nodes_tree
+            .scan_prefix(b"")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to scan nodes: {}", e))?;
+
+        for (key_bytes, value_bytes) in all_entries {
+            match (
+                bincode::deserialize::<NodeKey>(&key_bytes),
+                bincode::deserialize::<PersistedNode>(&value_bytes),
+            ) {
+                (Ok(key), Ok(node)) => {
+                    nodes.push((key, node));
                 }
-                Err(e) => {
-                    warn!("Error iterating nodes: {}", e);
-                    break;
+                (Err(e), _) => {
+                    warn!("Failed to deserialize key during iteration: {}", e);
+                }
+                (_, Err(e)) => {
+                    warn!("Failed to deserialize node during iteration: {}", e);
                 }
             }
         }
@@ -695,44 +787,70 @@ impl PersistentCallGraphCache {
 
     /// Get an entry from the universal cache tree
     pub async fn get_universal_entry(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        match self.db.open_tree("universal_cache")?.get(key)? {
-            Some(data) => Ok(Some(data.to_vec())),
-            None => Ok(None),
+        let tree = self
+            .db
+            .open_tree("universal_cache")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open universal_cache tree: {}", e))?;
+        match tree.get(key.as_bytes()).await {
+            Ok(data) => Ok(data),
+            Err(e) => {
+                warn!("Database error getting universal cache entry: {}", e);
+                Ok(None)
+            }
         }
     }
 
     /// Set an entry in the universal cache tree
     pub async fn set_universal_entry(&self, key: &str, data: &[u8]) -> Result<()> {
-        self.db.open_tree("universal_cache")?.insert(key, data)?;
+        let tree = self
+            .db
+            .open_tree("universal_cache")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open universal_cache tree: {}", e))?;
+        tree.set(key.as_bytes(), data)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to set universal cache entry: {}", e))?;
         Ok(())
     }
 
     /// Remove an entry from the universal cache tree
     pub async fn remove_universal_entry(&self, key: &str) -> Result<()> {
-        self.db.open_tree("universal_cache")?.remove(key)?;
+        let tree = self
+            .db
+            .open_tree("universal_cache")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open universal_cache tree: {}", e))?;
+        tree.remove(key.as_bytes())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to remove universal cache entry: {}", e))?;
         Ok(())
     }
 
     /// Clear universal cache entries by prefix
     pub async fn clear_universal_entries_by_prefix(&self, prefix: &str) -> Result<usize> {
-        let tree = self.db.open_tree("universal_cache")?;
+        let tree = self
+            .db
+            .open_tree("universal_cache")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open universal_cache tree: {}", e))?;
         let mut cleared_count = 0;
 
         // Scan for entries with matching prefix
-        for result in tree.scan_prefix(prefix.as_bytes()) {
-            match result {
-                Ok((key, _value)) => {
-                    tree.remove(&key)?;
-                    cleared_count += 1;
-                    debug!(
-                        "Removed universal cache entry with key: {:?}",
-                        String::from_utf8_lossy(&key)
-                    );
-                }
-                Err(e) => {
-                    warn!("Error scanning universal cache: {}", e);
-                    break;
-                }
+        let entries = tree
+            .scan_prefix(prefix.as_bytes())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to scan universal cache: {}", e))?;
+
+        for (key, _value) in entries {
+            if let Err(e) = tree.remove(&key).await {
+                warn!("Failed to remove universal cache entry: {}", e);
+            } else {
+                cleared_count += 1;
+                debug!(
+                    "Removed universal cache entry with key: {:?}",
+                    String::from_utf8_lossy(&key)
+                );
             }
         }
 
@@ -975,7 +1093,8 @@ mod tests {
             let cache = PersistentCallGraphCache::new(config.clone()).await.unwrap();
             cache
                 .metadata_tree
-                .insert("cache_metadata", b"invalid_data")
+                .set(b"cache_metadata", b"invalid_data")
+                .await
                 .unwrap();
         }
 

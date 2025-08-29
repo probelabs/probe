@@ -39,7 +39,7 @@ mod tests {
         fs::write(&file_path, "Test content")?;
 
         let hash = md5_hex_file(&file_path)?;
-        assert_eq!(hash, "9e107d9d372bb6826bd81d3542a419d6");
+        assert_eq!(hash, "8bfa8e0684108f419933a5995264d150");
 
         Ok(())
     }

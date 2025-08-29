@@ -208,8 +208,8 @@ impl LanguageIndexingStrategy {
             }
         }
 
-        // Check if it's a test file and tests are excluded
-        if !self.file_strategy.include_tests && self.is_test_file(file_path) {
+        // Check if it's a test file - test files always get minimal priority regardless of include_tests setting
+        if self.is_test_file(file_path) {
             return IndexingPriority::Minimal;
         }
 
@@ -493,9 +493,8 @@ impl LanguageStrategyFactory {
                 "*manage.py".to_string(),
             ],
             low_priority_patterns: vec![
-                "*/test_*".to_string(),
-                "*_test.py".to_string(),
                 "*/tests/*".to_string(),
+                "*_test.py".to_string(),
                 "*/__pycache__/*".to_string(),
                 "*/venv/*".to_string(),
                 "*/env/*".to_string(),

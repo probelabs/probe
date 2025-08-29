@@ -13,7 +13,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
-use tokio::sync::mpsc;
 
 /// Mock LSP server that simulates realistic LSP responses and latencies
 #[derive(Clone)]

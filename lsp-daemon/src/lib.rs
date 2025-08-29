@@ -13,6 +13,7 @@ pub mod socket_path;
 
 // Cache modules
 pub mod cache_types;
+pub mod database;
 pub mod hash_utils;
 pub mod lsp_cache;
 pub mod persistent_cache;
@@ -99,6 +100,12 @@ pub use workspace_cache_router::{
 pub use universal_cache::{
     CacheKey, CachePolicy, CacheScope, CacheStats, KeyBuilder, LspMethod, MethodStats,
     PolicyRegistry, UniversalCache,
+};
+
+// Re-export database types for external use
+pub use database::{
+    DatabaseBackend, DatabaseBackendExt, DatabaseConfig, DatabaseError, DatabaseStats,
+    DatabaseTree, DatabaseTreeExt, SledBackend,
 };
 
 // Re-export pipeline-specific types
