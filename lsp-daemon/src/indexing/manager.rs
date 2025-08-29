@@ -2186,6 +2186,33 @@ mod tests {
     use std::time::Duration;
     use tempfile::tempdir;
 
+    /// Helper function to create universal cache layer for tests
+    async fn create_test_universal_cache_layer(
+        server_manager: Arc<SingleServerManager>,
+    ) -> Arc<crate::universal_cache::CacheLayer> {
+        let temp_cache_dir = tempdir().unwrap();
+        let workspace_config = crate::workspace_cache_router::WorkspaceCacheRouterConfig {
+            base_cache_dir: temp_cache_dir.path().to_path_buf(),
+            max_open_caches: 3,
+            max_parent_lookup_depth: 2,
+            ..Default::default()
+        };
+        let workspace_router = Arc::new(crate::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config,
+            server_manager,
+        ));
+        let universal_cache = Arc::new(
+            crate::universal_cache::UniversalCache::new(workspace_router)
+                .await
+                .unwrap(),
+        );
+        Arc::new(crate::universal_cache::CacheLayer::new(
+            universal_cache,
+            None,
+            None,
+        ))
+    }
+
     #[tokio::test]
     async fn test_manager_lifecycle() {
         let config = ManagerConfig {
@@ -2209,8 +2236,14 @@ mod tests {
 
         // Create persistent store for testing
 
-        let manager =
-            IndexingManager::new(config, language_detector, server_manager, definition_cache);
+        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            definition_cache,
+            universal_cache_layer,
+        );
 
         // Test initial state
         assert!(matches!(manager.get_status().await, ManagerStatus::Idle));
@@ -2290,8 +2323,14 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
-        let manager =
-            IndexingManager::new(config, language_detector, server_manager, definition_cache);
+        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            definition_cache,
+            universal_cache_layer,
+        );
 
         // Initially no pressure
         assert!(!manager.is_memory_pressure());
@@ -2394,8 +2433,14 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
-        let manager =
-            IndexingManager::new(config, language_detector, server_manager, definition_cache);
+        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            definition_cache,
+            universal_cache_layer,
+        );
 
         // Initially no workers
         let stats = manager.get_worker_stats().await;
@@ -2441,8 +2486,14 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
-        let manager =
-            IndexingManager::new(config, language_detector, server_manager, definition_cache);
+        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            definition_cache,
+            universal_cache_layer,
+        );
 
         let temp_dir = tempdir().unwrap();
         fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
@@ -2487,8 +2538,14 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
-        let manager =
-            IndexingManager::new(config, language_detector, server_manager, definition_cache);
+        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            definition_cache,
+            universal_cache_layer,
+        );
 
         // Initially empty queue
         let snapshot = manager.get_queue_snapshot().await;
@@ -2547,8 +2604,14 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
-        let manager =
-            IndexingManager::new(config, language_detector, server_manager, definition_cache);
+        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            definition_cache,
+            universal_cache_layer,
+        );
 
         let temp_dir = tempdir().unwrap();
         for i in 0..3 {
@@ -2619,12 +2682,36 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
+
+        // Create universal cache layer for tests
+        let temp_cache_dir = tempdir().unwrap();
+        let workspace_config = crate::workspace_cache_router::WorkspaceCacheRouterConfig {
+            base_cache_dir: temp_cache_dir.path().to_path_buf(),
+            max_open_caches: 3,
+            max_parent_lookup_depth: 2,
+            ..Default::default()
+        };
+        let workspace_router = Arc::new(crate::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config,
+            server_manager.clone(),
+        ));
+        let universal_cache = Arc::new(
+            crate::universal_cache::UniversalCache::new(workspace_router)
+                .await
+                .unwrap(),
+        );
+        let universal_cache_layer = Arc::new(crate::universal_cache::CacheLayer::new(
+            universal_cache,
+            None,
+            None,
+        ));
+
         let manager1 = IndexingManager::new(
             config.clone(),
             language_detector.clone(),
             server_manager.clone(),
-            call_graph_cache.clone(),
             definition_cache.clone(),
+            universal_cache_layer.clone(),
         );
 
         manager1
@@ -2639,8 +2726,15 @@ mod tests {
         manager1.stop_indexing().await.unwrap();
 
         // Second run - incremental (should detect no changes if file hasn't changed)
-        let manager2 =
-            IndexingManager::new(config, language_detector, server_manager, definition_cache);
+        let universal_cache_layer2 =
+            create_test_universal_cache_layer(server_manager.clone()).await;
+        let manager2 = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            definition_cache,
+            universal_cache_layer2,
+        );
         manager2
             .start_indexing(temp_dir.path().to_path_buf())
             .await
@@ -2709,8 +2803,14 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
-        let manager =
-            IndexingManager::new(config, language_detector, server_manager, definition_cache);
+        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            definition_cache,
+            universal_cache_layer,
+        );
 
         manager
             .start_indexing(temp_dir.path().to_path_buf())
@@ -2751,8 +2851,14 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
-        let manager =
-            IndexingManager::new(config, language_detector, server_manager, definition_cache);
+        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            definition_cache,
+            universal_cache_layer,
+        );
 
         manager
             .start_indexing(temp_dir.path().to_path_buf())
@@ -2785,11 +2891,13 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
+        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
         let manager = IndexingManager::from_indexing_config(
             &indexing_config,
             language_detector,
             server_manager,
             definition_cache,
+            universal_cache_layer,
         );
 
         // Verify configuration was properly converted
@@ -2813,11 +2921,13 @@ mod tests {
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
                 .expect("Failed to create LspCache"),
         );
+        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
         let manager = Arc::new(IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
+            universal_cache_layer,
         ));
 
         let temp_dir = tempdir().unwrap();

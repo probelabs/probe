@@ -1849,7 +1849,7 @@ mod tests {
         assert!(config.cache_references); // ✅ Used by extract for reference counts
         assert!(config.cache_hover); // ✅ Used by extract for documentation/type info
         assert!(!config.cache_document_symbols); // ❌ NOT used by search/extract commands
-        assert!(!config.cache_during_indexing); // Performance default
+                                                 // cache_during_indexing field removed - indexing ALWAYS caches LSP data now
         assert!(!config.preload_common_symbols); // Performance default
         assert_eq!(config.max_cache_entries_per_operation, 1000);
         assert_eq!(config.lsp_operation_timeout_ms, 5000);

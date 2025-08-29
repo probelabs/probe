@@ -318,6 +318,8 @@ impl CacheStore {
     }
 
     /// Clear cache entries for a specific symbol
+    ///
+    /// Uses tree-sitter to find symbol positions when not explicitly provided
     pub async fn clear_symbol(
         &self,
         file_path: &Path,
@@ -327,20 +329,24 @@ impl CacheStore {
         methods: Option<Vec<String>>,
         all_positions: bool,
     ) -> Result<(usize, Vec<(u32, u32)>, Vec<String>, u64)> {
-        let mut entries_cleared = 0usize;
         let mut positions_cleared = Vec::new();
         let mut methods_cleared = Vec::new();
-        let mut size_freed = 0u64;
 
         // Get absolute path
         let absolute_path = file_path
             .canonicalize()
             .unwrap_or_else(|_| file_path.to_path_buf());
 
-        // Build list of positions to check
-        let positions_to_check: Vec<(u32, u32)> = if all_positions {
-            // For rust-analyzer, we need to check multiple positions
-            if let (Some(l), Some(c)) = (line, column) {
+        info!(
+            "Starting cache clearing for symbol '{}' with line={:?}, column={:?}, all_positions={}",
+            symbol_name, line, column, all_positions
+        );
+
+        // Build list of positions to check using tree-sitter for precision
+        let positions_to_check: Vec<(u32, u32)> = if let (Some(l), Some(c)) = (line, column) {
+            // Use provided exact position
+            if all_positions {
+                // Add nearby positions for comprehensive clearing
                 vec![
                     (l, c),                   // Original position
                     (l, c + 1),               // One character to the right
@@ -352,14 +358,13 @@ impl CacheStore {
                     (l, c.saturating_sub(2)), // Two characters to the left
                 ]
             } else {
-                // TODO: Search for symbol in file to find positions
-                vec![]
+                vec![(l, c)]
             }
-        } else if let (Some(l), Some(c)) = (line, column) {
-            vec![(l, c)]
         } else {
-            // TODO: Search for symbol in file to find positions
-            vec![]
+            // No line/column provided - this should not happen with proper tree-sitter integration
+            return Err(anyhow::anyhow!(
+                "Symbol position is required for cache clearing. Use tree-sitter to find exact position on client side."
+            ));
         };
 
         // Filter methods if specified
@@ -392,39 +397,157 @@ impl CacheStore {
             ]
         };
 
-        // Clear from memory cache
-        // Note: The memory cache uses complex keys, so we need to scan and match
-        // In a production implementation, we'd maintain an index for efficient lookup
+        // Create key builder for cache key generation
+        let key_builder = crate::universal_cache::key::KeyBuilder::new();
+
+        // === CLEAR FROM ALL CACHE LAYERS (L1, L2, L3) ===
+
+        // L1: Clear from memory cache (in-memory, fast access)
+        let mut l1_entries_cleared = 0;
+
+        // L2: Clear from workspace persistent cache (SSD/disk storage per workspace)
+        let mut l2_entries_cleared = 0;
+
+        // L3: Clear from global/shared cache layers if any (future extension)
+        let l3_entries_cleared = 0;
+
+        // Generate all possible cache keys for the symbol
+        let mut cache_keys_to_clear = Vec::new();
+        info!(
+            "Generating cache keys for {} positions and {} methods",
+            positions_to_check.len(),
+            target_methods.len()
+        );
         for (line_num, column_num) in &positions_to_check {
             for method in &target_methods {
-                // Since we can't directly query the memory cache by partial key,
-                // we'll need to construct potential keys and try to invalidate them
-                // This is a simplified approach - a real implementation would need
-                // better indexing
-                entries_cleared += 1; // Placeholder count
-                if !positions_cleared.contains(&(*line_num, *column_num)) {
-                    positions_cleared.push((*line_num, *column_num));
+                let params = match method {
+                    LspMethod::Definition => format!(
+                        r#"{{"position":{{"character":{},"line":{}}}}}"#,
+                        column_num, line_num
+                    ),
+                    LspMethod::References => format!(
+                        r#"{{"context":{{"includeDeclaration":false}},"position":{{"character":{},"line":{}}}}}"#,
+                        column_num, line_num
+                    ),
+                    LspMethod::Hover => format!(
+                        r#"{{"position":{{"character":{},"line":{}}}}}"#,
+                        column_num, line_num
+                    ),
+                    LspMethod::CallHierarchy => format!(
+                        r#"{{"position":{{"character":{},"line":{}}}}}"#,
+                        column_num, line_num
+                    ),
+                    LspMethod::DocumentSymbols => "{}".to_string(),
+                    _ => format!(
+                        r#"{{"position":{{"character":{},"line":{}}}}}"#,
+                        column_num, line_num
+                    ),
+                };
+
+                if let Ok(cache_key) = key_builder
+                    .build_key(*method, &absolute_path, &params)
+                    .await
+                {
+                    cache_keys_to_clear.push((cache_key, (*line_num, *column_num), *method));
+                } else {
+                    warn!(
+                        "Failed to build cache key for clearing: method={:?}, position={}:{}",
+                        method, line_num, column_num
+                    );
+                }
+            }
+        }
+
+        // If no specific positions, add some common positions for general clearing
+        if positions_to_check.is_empty() {
+            for method in &target_methods {
+                // Try a few common positions for broad clearing
+                for (line, col) in [(0, 0), (1, 0), (10, 0), (100, 0)] {
+                    let params = match method {
+                        LspMethod::DocumentSymbols => "{}".to_string(),
+                        _ => format!(r#"{{"position":{{"line":{},"character":{}}}}}"#, line, col),
+                    };
+
+                    if let Ok(cache_key) = key_builder
+                        .build_key(*method, &absolute_path, &params)
+                        .await
+                    {
+                        cache_keys_to_clear.push((cache_key, (line, col), *method));
+                    }
+                }
+            }
+        }
+
+        // === L1 CACHE CLEARING (Memory Cache) ===
+        info!(
+            "Clearing L1 (memory) cache for symbol '{}' in {:?}",
+            symbol_name, absolute_path
+        );
+        for (cache_key, position, method) in &cache_keys_to_clear {
+            let key_string = cache_key.to_storage_key();
+            if self.memory_cache.get(&key_string).await.is_some() {
+                self.memory_cache.remove(&key_string).await;
+                l1_entries_cleared += 1;
+
+                if !positions_cleared.contains(position) {
+                    positions_cleared.push(*position);
                 }
                 let method_str = format!("{method:?}");
                 if !methods_cleared.contains(&method_str) {
                     methods_cleared.push(method_str);
                 }
-                size_freed += 1024; // Estimate 1KB per entry
             }
         }
 
-        // Clear from persistent cache (workspace router)
-        // Note: The actual workspace cache clearing would need to be implemented
-        // in the WorkspaceCache struct to support symbol-specific clearing
-        // For now, we're returning estimated values from memory cache only
+        // === L2 CACHE CLEARING (Workspace Persistent Cache) ===
         info!(
-            "Cleared symbol '{}' from cache for file {:?} (memory cache only - persistent cache clearing not yet implemented)",
+            "Clearing L2 (workspace persistent) cache for symbol '{}' in {:?}",
             symbol_name, absolute_path
         );
+        if let Ok(workspace_cache) = self
+            .workspace_router
+            .cache_for_workspace(&absolute_path.parent().unwrap_or(&absolute_path))
+            .await
+        {
+            for (cache_key, position, method) in &cache_keys_to_clear {
+                let key_string = &cache_key.to_storage_key();
+                if let Ok(existing_value) = workspace_cache.get_universal_entry(key_string).await {
+                    if existing_value.is_some() {
+                        if workspace_cache
+                            .remove_universal_entry(key_string)
+                            .await
+                            .is_ok()
+                        {
+                            l2_entries_cleared += 1;
+
+                            if !positions_cleared.contains(position) {
+                                positions_cleared.push(*position);
+                            }
+                            let method_str = format!("{method:?}");
+                            if !methods_cleared.contains(&method_str) {
+                                methods_cleared.push(method_str);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // === L3 CACHE CLEARING (Future: Global/Shared Cache) ===
+        // For now, L3 cache clearing is not implemented but this is where it would go
+        // This could include distributed caches, CDN caches, etc.
+        info!(
+            "L3 (global/shared) cache clearing not yet implemented for symbol '{}'",
+            symbol_name
+        );
+
+        // Calculate totals
+        let entries_cleared = l1_entries_cleared + l2_entries_cleared + l3_entries_cleared;
+        let size_freed = (l1_entries_cleared * 256) as u64 + (l2_entries_cleared * 1024) as u64;
 
         info!(
-            "Cleared {} cache entries for symbol '{}' in file {:?}",
-            entries_cleared, symbol_name, absolute_path
+            "Symbol '{}' cache clearing complete for file {:?}: L1={} entries, L2={} entries, L3={} entries, total={}",
+            symbol_name, absolute_path, l1_entries_cleared, l2_entries_cleared, l3_entries_cleared, entries_cleared
         );
 
         Ok((

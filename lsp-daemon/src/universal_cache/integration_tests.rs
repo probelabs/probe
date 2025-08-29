@@ -649,11 +649,13 @@ mod concurrent_integration_tests {
 
     #[tokio::test]
     async fn test_cache_under_load_with_mock_server() {
-        let fixture = IntegrationTestFixture::new().await.unwrap();
-        let test_file = fixture
-            .create_test_file("load_test.rs", "fn load_test() {}")
-            .await
-            .unwrap();
+        let fixture = Arc::new(IntegrationTestFixture::new().await.unwrap());
+        let test_file = Arc::new(
+            fixture
+                .create_test_file("load_test.rs", "fn load_test() {}")
+                .await
+                .unwrap(),
+        );
 
         // Set small delay to simulate realistic LSP server
         let mut server = fixture.mock_lsp_server.clone();
@@ -668,13 +670,16 @@ mod concurrent_integration_tests {
         // Create concurrent load
         for batch in 0..(operations_count / concurrency) {
             for i in 0..concurrency {
-                let fixture_clone = fixture.simulate_lsp_request_with_cache(
-                    LspMethod::Hover,
-                    &test_file,
-                    &format!(r#"{{"position":{{"line":{},"character":{}}}}}"#, batch, i),
-                );
+                // Clone Arc references for the task to avoid lifetime issues
+                let fixture = fixture.clone();
+                let test_file = test_file.clone();
+                let params = format!(r#"{{"position":{{"line":{},"character":{}}}}}"#, batch, i);
 
-                join_set.spawn(async move { fixture_clone.await });
+                join_set.spawn(async move {
+                    fixture
+                        .simulate_lsp_request_with_cache(LspMethod::Hover, &*test_file, &params)
+                        .await
+                });
             }
         }
 

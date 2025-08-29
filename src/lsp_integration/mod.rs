@@ -383,21 +383,13 @@ pub enum CacheSubcommands {
 
     /// Clear cache for a specific symbol
     ClearSymbol {
-        /// File path containing the symbol
+        /// File path containing the symbol, or file#symbol format
         #[clap(required = true)]
-        file: std::path::PathBuf,
+        file: String,
 
-        /// Symbol name to clear cache for
-        #[clap(required = true)]
-        symbol: String,
-
-        /// Line number of the symbol (optional, will search if not provided)
-        #[clap(short = 'l', long = "line")]
-        line: Option<u32>,
-
-        /// Column number of the symbol (optional, will search if not provided)
-        #[clap(short = 'c', long = "column")]
-        column: Option<u32>,
+        /// Symbol name to clear cache for (optional if using file#symbol format)
+        #[clap(required = false)]
+        symbol: Option<String>,
 
         /// Clear for specific LSP methods only (comma-separated: CallHierarchy,References,Hover,Definition)
         #[clap(long = "methods")]
