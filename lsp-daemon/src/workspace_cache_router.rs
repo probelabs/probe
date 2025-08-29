@@ -191,6 +191,68 @@ impl WorkspaceCacheRouter {
         Ok(workspace_id)
     }
 
+    /// Get workspace root path from workspace ID
+    ///
+    /// This provides reverse lookup from workspace_id to workspace_root
+    /// by checking the access metadata of open caches.
+    pub async fn workspace_root_for(&self, workspace_id: &str) -> Result<PathBuf> {
+        // Check open cache metadata first
+        {
+            let metadata = self.access_metadata.read().await;
+            if let Some(meta) = metadata.get(workspace_id) {
+                debug!(
+                    "Found workspace root {:?} for workspace_id {}",
+                    meta.workspace_root, workspace_id
+                );
+                return Ok(meta.workspace_root.clone());
+            }
+        }
+
+        // If not found in metadata, try to reconstruct from the workspace ID format
+        // Format is: {8-char-hash}_{folder-name}
+        if let Some((hash, _folder_name)) = workspace_id.split_once('_') {
+            if hash.len() == 8 {
+                // This is a heuristic approach - we can't perfectly reconstruct the path
+                // from just the hash and folder name, but we can make educated guesses
+
+                // Try current working directory and its parent directories
+                let current_dir =
+                    std::env::current_dir().context("Failed to get current directory")?;
+
+                // Check if current directory matches
+                if let Ok(current_workspace_id) = self.workspace_id_for(&current_dir) {
+                    if current_workspace_id == workspace_id {
+                        debug!(
+                            "Resolved workspace_id {} to current directory: {:?}",
+                            workspace_id, current_dir
+                        );
+                        return Ok(current_dir);
+                    }
+                }
+
+                // Check parent directories
+                let mut parent = current_dir.parent();
+                while let Some(dir) = parent {
+                    if let Ok(parent_workspace_id) = self.workspace_id_for(dir) {
+                        if parent_workspace_id == workspace_id {
+                            debug!(
+                                "Resolved workspace_id {} to parent directory: {:?}",
+                                workspace_id, dir
+                            );
+                            return Ok(dir.to_path_buf());
+                        }
+                    }
+                    parent = dir.parent();
+                }
+            }
+        }
+
+        anyhow::bail!(
+            "Unable to resolve workspace_id '{}' to workspace root",
+            workspace_id
+        )
+    }
+
     /// Get or create a cache for a specific workspace
     ///
     /// This method handles:

@@ -250,8 +250,17 @@ impl CacheStore {
             .await;
 
         // Store in L2 cache (persistent)
-        if let Err(e) = self.set_in_persistent_cache(key, &entry).await {
-            warn!("Failed to store in persistent cache: {}", e);
+        info!("Attempting to store in L2 cache for key: {}", storage_key);
+        match self.set_in_persistent_cache(key, &entry).await {
+            Ok(()) => {
+                info!("Successfully stored in L2 cache: {}", storage_key);
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to store in persistent cache for key {}: {}",
+                    storage_key, e
+                );
+            }
         }
 
         // Update statistics
@@ -421,27 +430,22 @@ impl CacheStore {
         for (line_num, column_num) in &positions_to_check {
             for method in &target_methods {
                 let params = match method {
-                    LspMethod::Definition => format!(
-                        r#"{{"position":{{"character":{},"line":{}}}}}"#,
-                        column_num, line_num
-                    ),
+                    LspMethod::Definition => {
+                        format!(r#"{{"position":{{"character":{column_num},"line":{line_num}}}}}"#,)
+                    }
                     LspMethod::References => format!(
-                        r#"{{"context":{{"includeDeclaration":false}},"position":{{"character":{},"line":{}}}}}"#,
-                        column_num, line_num
+                        r#"{{"context":{{"includeDeclaration":false}},"position":{{"character":{column_num},"line":{line_num}}}}}"#,
                     ),
-                    LspMethod::Hover => format!(
-                        r#"{{"position":{{"character":{},"line":{}}}}}"#,
-                        column_num, line_num
-                    ),
-                    LspMethod::CallHierarchy => format!(
-                        r#"{{"position":{{"character":{},"line":{}}}}}"#,
-                        column_num, line_num
-                    ),
+                    LspMethod::Hover => {
+                        format!(r#"{{"position":{{"character":{column_num},"line":{line_num}}}}}"#,)
+                    }
+                    LspMethod::CallHierarchy => {
+                        format!(r#"{{"position":{{"character":{column_num},"line":{line_num}}}}}"#,)
+                    }
                     LspMethod::DocumentSymbols => "{}".to_string(),
-                    _ => format!(
-                        r#"{{"position":{{"character":{},"line":{}}}}}"#,
-                        column_num, line_num
-                    ),
+                    _ => {
+                        format!(r#"{{"position":{{"character":{column_num},"line":{line_num}}}}}"#,)
+                    }
                 };
 
                 if let Ok(cache_key) = key_builder
@@ -465,7 +469,7 @@ impl CacheStore {
                 for (line, col) in [(0, 0), (1, 0), (10, 0), (100, 0)] {
                     let params = match method {
                         LspMethod::DocumentSymbols => "{}".to_string(),
-                        _ => format!(r#"{{"position":{{"line":{},"character":{}}}}}"#, line, col),
+                        _ => format!(r#"{{"position":{{"line":{line},"character":{col}}}}}"#),
                     };
 
                     if let Ok(cache_key) = key_builder
@@ -504,33 +508,98 @@ impl CacheStore {
             "Clearing L2 (workspace persistent) cache for symbol '{}' in {:?}",
             symbol_name, absolute_path
         );
-        if let Ok(workspace_cache) = self
-            .workspace_router
-            .cache_for_workspace(&absolute_path.parent().unwrap_or(&absolute_path))
-            .await
-        {
-            for (cache_key, position, method) in &cache_keys_to_clear {
-                let key_string = &cache_key.to_storage_key();
-                if let Ok(existing_value) = workspace_cache.get_universal_entry(key_string).await {
-                    if existing_value.is_some() {
-                        if workspace_cache
-                            .remove_universal_entry(key_string)
-                            .await
-                            .is_ok()
-                        {
-                            l2_entries_cleared += 1;
+        // Resolve workspace root from the cache key to ensure we use the correct workspace
+        // that was used when the entries were originally stored
+        if let Some((cache_key, _, _)) = cache_keys_to_clear.first() {
+            match self.resolve_workspace_root(cache_key).await {
+                Ok(workspace_root) => {
+                    debug!(
+                        "Resolved workspace root {:?} for cache clearing of symbol '{}' in {:?}",
+                        workspace_root, symbol_name, absolute_path
+                    );
+                    if let Ok(workspace_cache) = self
+                        .workspace_router
+                        .cache_for_workspace(&workspace_root)
+                        .await
+                    {
+                        info!("Got workspace cache for clearing, will clear by prefix matching");
 
-                            if !positions_cleared.contains(position) {
-                                positions_cleared.push(*position);
+                        // Build prefixes for each method and position combination
+                        // We need to match entries regardless of content hash
+                        let mut cleared_methods = std::collections::HashSet::new();
+                        let mut cleared_positions = std::collections::HashSet::new();
+
+                        for (cache_key, position, method) in &cache_keys_to_clear {
+                            // Build prefix without content hash: workspace_id:method:file:
+                            // This will match all entries for this file/method combo regardless of content
+                            // Note: method names have '/' replaced with '_' in storage keys
+                            let prefix = format!(
+                                "{}:{}:{}:",
+                                cache_key.workspace_id,
+                                cache_key.method.as_str().replace('/', "_"),
+                                cache_key.workspace_relative_path.display()
+                            );
+
+                            info!(
+                    "Clearing L2 cache entries with prefix: {} for method={:?}, position={:?}",
+                    prefix, method, position
+                );
+
+                            match workspace_cache
+                                .clear_universal_entries_by_prefix(&prefix)
+                                .await
+                            {
+                                Ok(count) => {
+                                    if count > 0 {
+                                        l2_entries_cleared += count;
+                                        cleared_methods.insert(*method);
+                                        cleared_positions.insert(*position);
+                                        info!(
+                                            "Cleared {} L2 cache entries for {:?} with prefix: {}",
+                                            count, method, prefix
+                                        );
+                                    } else {
+                                        debug!("No L2 entries found with prefix: {}", prefix);
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Failed to clear L2 entries with prefix {}: {}",
+                                        prefix, e
+                                    );
+                                }
                             }
+                        }
+
+                        // Convert cleared items to the expected format
+                        for pos in cleared_positions {
+                            if !positions_cleared.contains(&pos) {
+                                positions_cleared.push(pos);
+                            }
+                        }
+                        for method in cleared_methods {
                             let method_str = format!("{method:?}");
                             if !methods_cleared.contains(&method_str) {
                                 methods_cleared.push(method_str);
                             }
                         }
+                    } else {
+                        warn!("Failed to get workspace cache for clearing symbol '{}' in workspace {:?}", 
+                              symbol_name, workspace_root);
                     }
                 }
+                Err(e) => {
+                    warn!(
+                        "Failed to resolve workspace root for symbol '{}' cache clearing: {}",
+                        symbol_name, e
+                    );
+                }
             }
+        } else {
+            warn!(
+                "No cache keys available for L2 clearing of symbol '{}'",
+                symbol_name
+            );
         }
 
         // === L3 CACHE CLEARING (Future: Global/Shared Cache) ===
@@ -990,76 +1059,64 @@ impl CacheStore {
             .set_universal_entry(&storage_key, &data)
             .await?;
 
-        debug!("L2 cache stored entry for key: {}", storage_key);
+        info!(
+            "L2 cache stored entry for key: {} (workspace_id: {})",
+            storage_key, key.workspace_id
+        );
         Ok(())
     }
 
     /// Resolve workspace root from cache key
     async fn resolve_workspace_root(&self, key: &CacheKey) -> Result<PathBuf> {
-        // Simple pragmatic approach: use the current working directory as the workspace root
-        // This works for the majority of use cases where the LSP daemon is running in the
-        // context of the workspace being indexed.
-        //
-        // TODO: In the future, we could maintain a reverse mapping from workspace_id to
-        // workspace_root in the WorkspaceCacheRouter to make this lookup more accurate.
-        let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-
-        // Quick validation: check if current directory has the expected workspace ID
-        if let Ok(current_workspace_id) = self.workspace_router.workspace_id_for(&current_dir) {
-            if current_workspace_id == key.workspace_id {
+        // Use the workspace router's reverse lookup capability
+        match self
+            .workspace_router
+            .workspace_root_for(&key.workspace_id)
+            .await
+        {
+            Ok(workspace_root) => {
                 debug!(
-                    "Resolved workspace root {} (current directory) for workspace_id {}",
-                    current_dir.display(),
+                    "Resolved workspace root {} for workspace_id {}",
+                    workspace_root.display(),
                     key.workspace_id
                 );
-                return Ok(current_dir);
+                Ok(workspace_root)
+            }
+            Err(e) => {
+                // Fallback: try to reconstruct from current directory and relative path
+                let current_dir =
+                    std::env::current_dir().context("Failed to get current directory")?;
+                let relative_path = &key.workspace_relative_path;
+                let potential_file = current_dir.join(relative_path);
+
+                if potential_file.exists() {
+                    // Try to find the workspace root that would contain this file
+                    let mut candidate_dir = potential_file.parent();
+                    while let Some(dir) = candidate_dir {
+                        if let Ok(workspace_id) = self.workspace_router.workspace_id_for(dir) {
+                            if workspace_id == key.workspace_id {
+                                debug!(
+                                    "Found workspace root {} for workspace_id {} via file path reconstruction",
+                                    dir.display(),
+                                    key.workspace_id
+                                );
+                                return Ok(dir.to_path_buf());
+                            }
+                        }
+                        candidate_dir = dir.parent();
+                    }
+                }
+
+                // Final fallback: use current directory
+                warn!(
+                    "Could not resolve workspace root for workspace_id {} ({}), using current directory: {}",
+                    key.workspace_id,
+                    e,
+                    current_dir.display()
+                );
+                Ok(current_dir)
             }
         }
-
-        // Try to reconstruct an absolute file path from the workspace-relative path
-        // and attempt to find the workspace that way
-        let relative_path = &key.workspace_relative_path;
-        let potential_file = current_dir.join(relative_path);
-
-        if potential_file.exists() {
-            // Use the file path to get the appropriate workspace cache via pick_write_target
-            match self
-                .workspace_router
-                .pick_write_target(&potential_file)
-                .await
-            {
-                Ok(_cache) => {
-                    // Unfortunately pick_write_target doesn't directly return workspace root,
-                    // so we'll use current directory as a reasonable approximation
-                    debug!("Found workspace cache for file {}, using current directory as workspace root", 
-                          potential_file.display());
-                    return Ok(current_dir);
-                }
-                Err(e) => {
-                    debug!(
-                        "Failed to pick write target for {}: {}",
-                        potential_file.display(),
-                        e
-                    );
-                }
-            }
-        }
-
-        // Fallback: try to parse workspace name from workspace_id for better UX
-        if let Some(underscore_pos) = key.workspace_id.find('_') {
-            let workspace_name = &key.workspace_id[underscore_pos + 1..];
-            debug!(
-                "Using current directory as workspace root for workspace '{}' (id: {})",
-                workspace_name, key.workspace_id
-            );
-        } else {
-            debug!(
-                "Using current directory as workspace root for workspace_id {}",
-                key.workspace_id
-            );
-        }
-
-        Ok(current_dir)
     }
 
     /// Record a cache hit

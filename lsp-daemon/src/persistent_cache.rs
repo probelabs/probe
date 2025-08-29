@@ -712,6 +712,32 @@ impl PersistentCallGraphCache {
         self.db.open_tree("universal_cache")?.remove(key)?;
         Ok(())
     }
+
+    /// Clear universal cache entries by prefix
+    pub async fn clear_universal_entries_by_prefix(&self, prefix: &str) -> Result<usize> {
+        let tree = self.db.open_tree("universal_cache")?;
+        let mut cleared_count = 0;
+
+        // Scan for entries with matching prefix
+        for result in tree.scan_prefix(prefix.as_bytes()) {
+            match result {
+                Ok((key, _value)) => {
+                    tree.remove(&key)?;
+                    cleared_count += 1;
+                    debug!(
+                        "Removed universal cache entry with key: {:?}",
+                        String::from_utf8_lossy(&key)
+                    );
+                }
+                Err(e) => {
+                    warn!("Error scanning universal cache: {}", e);
+                    break;
+                }
+            }
+        }
+
+        Ok(cleared_count)
+    }
 }
 
 #[cfg(test)]
