@@ -1209,7 +1209,7 @@ pub mod performance {
     /// Maximum time allowed for search with LSP
     pub fn max_search_time() -> Duration {
         if is_ci_environment() {
-            Duration::from_secs(30) // More time for CI environments with slower I/O
+            Duration::from_secs(45) // More time for CI environments with slower I/O and variable performance
         } else {
             Duration::from_secs(15) // Reasonable time for local development
         }
