@@ -225,7 +225,7 @@ impl LspManager {
 
         // Read file content
         let content = std::fs::read_to_string(file_path)
-            .with_context(|| format!("Failed to read file: {:?}", file_path))?;
+            .with_context(|| format!("Failed to read file: {file_path:?}"))?;
 
         // Determine file extension
         let extension = file_path

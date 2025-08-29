@@ -485,8 +485,9 @@ impl LspDaemon {
         });
         self.background_tasks.lock().await.push(monitor_handle);
 
-        // Start cache warming background task if enabled
-        self.start_cache_warming_task().await;
+        // NOTE: Old CallGraph cache warming has been disabled.
+        // The universal cache system handles its own cache persistence and loading.
+        // self.start_cache_warming_task().await;
 
         // Trigger auto-indexing if enabled in configuration
         self.trigger_auto_indexing().await;
@@ -2145,86 +2146,25 @@ impl LspDaemon {
 
         // NOTE: Position-based cache lookup is now handled transparently by universal cache layer
 
-        // Fallback: Try workspace persistent cache by discovering symbol at position
-        // This handles the case where daemon restarted and position index is empty
+        // NOTE: Old CallGraph cache fallback has been removed.
+        // The universal cache system handles all caching through the cache layer middleware.
+        // If we reach this point, it means the cache truly missed and we need to query the LSP server.
+
         info!(
-            "Position-based cache miss for {}:{}:{} (md5: {}) - trying workspace persistent cache fallback",
-            absolute_file_path.display(), line, column, content_md5
+            "Cache miss for {}:{}:{} - proceeding to LSP server",
+            absolute_file_path.display(),
+            line,
+            column
         );
 
-        // Read file content to discover what symbol is at the requested position
-        let content = fs::read_to_string(&absolute_file_path)?;
+        // The following old fallback logic has been intentionally removed to ensure
+        // only the universal cache system is used:
+        // - Symbol discovery at position
+        // - NodeKey creation for CallGraph cache
+        // - Workspace persistent cache lookup
+        // All caching is now handled by the universal cache layer.
 
-        // Try to find the symbol at the specified position using regex-based extraction
-        if let Ok(symbol_at_position) =
-            self.find_symbol_at_position(&absolute_file_path, &content, line, column)
         {
-            info!(
-                "Found symbol '{}' at {}:{}:{} - checking workspace persistent cache",
-                symbol_at_position,
-                absolute_file_path.display(),
-                line,
-                column
-            );
-
-            // Create a NodeKey for this symbol and try the workspace persistent cache
-            let cache_key = crate::cache_types::NodeKey::new(
-                &symbol_at_position,
-                absolute_file_path.clone(),
-                content_md5.clone(),
-            );
-
-            info!(
-                "Created cache key for persistent lookup: symbol='{}', file='{}', md5='{}'",
-                cache_key.symbol,
-                cache_key.file.display(),
-                cache_key.content_md5
-            );
-
-            // Get the workspace cache for this file (automatically finds nearest workspace)
-            if let Ok(workspace_cache) = self
-                .workspace_cache_router
-                .pick_write_target(&absolute_file_path)
-                .await
-            {
-                // Try to get cached data from workspace persistent cache
-                if let Ok(Some(persisted_node)) = workspace_cache.get(&cache_key).await {
-                    info!(
-                        "Call hierarchy cache HIT (workspace persistent fallback) for {} at {}:{} (md5: {}): symbol={} with {} incoming, {} outgoing",
-                        absolute_file_path.display(),
-                        line,
-                        column,
-                        content_md5,
-                        symbol_at_position,
-                        persisted_node.info.incoming_calls.len(),
-                        persisted_node.info.outgoing_calls.len()
-                    );
-
-                    // Rebuild an LSP-like JSON response from cached info and parse it into our protocol
-                    let response = self.cache_to_lsp_json(
-                        &absolute_file_path,
-                        &symbol_at_position,
-                        &persisted_node.info,
-                    );
-                    let protocol_result = parse_call_hierarchy_from_lsp(&response)?;
-
-                    // NOTE: In universal cache system, position indexing is handled automatically
-                    // by the cache layer middleware. No manual indexing needed.
-
-                    return Ok(protocol_result);
-                } else {
-                    info!(
-                        "Workspace persistent cache also missed for symbol '{}' at {}:{}:{} with md5='{}'",
-                        symbol_at_position, absolute_file_path.display(), line, column, content_md5
-                    );
-                }
-            } else {
-                info!(
-                    "Failed to get workspace cache for {}",
-                    absolute_file_path.display()
-                );
-            }
-        } else {
             info!(
                 "Could not determine symbol at position {}:{}:{} for persistent cache fallback",
                 absolute_file_path.display(),
@@ -2585,6 +2525,7 @@ impl LspDaemon {
 
     /// Convert cached CallHierarchyInfo back into an LSP-like JSON envelope
     /// so we can reuse `parse_call_hierarchy_from_lsp(...)` and return the same protocol type.
+    #[allow(dead_code)]
     fn cache_to_lsp_json(
         &self,
         file: &Path,
@@ -3797,6 +3738,7 @@ impl LspDaemon {
     }
 
     /// Start cache warming task in background
+    #[allow(dead_code)]
     async fn start_cache_warming_task(&self) {
         // Check if cache warming is enabled
         let cache_warming_enabled = std::env::var("PROBE_CACHE_WARMING_ENABLED")
@@ -3830,6 +3772,7 @@ impl LspDaemon {
     }
 
     /// Warm the cache by loading previously cached entries from persistent storage
+    #[allow(dead_code)]
     async fn warm_cache_from_persistent_storage(&self, concurrency: usize) {
         let start_time = std::time::Instant::now();
         info!("Starting cache warming from persistent storage...");
@@ -3992,6 +3935,7 @@ impl LspDaemon {
 
     /// Find what symbol is at a specific line/column position in a file
     /// This is used for persistent cache fallback when position index is empty after restart
+    #[allow(dead_code)]
     fn find_symbol_at_position(
         &self,
         file_path: &Path,
@@ -4068,6 +4012,7 @@ impl LspDaemon {
     }
 
     /// Extract a symbol name from a line of code (function, method, struct, etc.)
+    #[allow(dead_code)]
     fn extract_symbol_from_line(&self, line: &str, file_path: &Path) -> Option<String> {
         let trimmed = line.trim();
 
@@ -4165,6 +4110,7 @@ impl LspDaemon {
     }
 
     /// Extract any identifier at a specific column position in a line
+    #[allow(dead_code)]
     fn extract_identifier_at_position(&self, line: &str, column: u32) -> Option<String> {
         let chars: Vec<char> = line.chars().collect();
         let col_idx = column as usize;
