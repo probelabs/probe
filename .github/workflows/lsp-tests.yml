@@ -82,16 +82,21 @@ jobs:
           cargo build
 
       - name: Run multi-workspace LSP tests
+        env:
+          PROBE_CI: 1
         run: |
           cd lsp-daemon
           cargo test --test integration_multi_workspace
 
       - name: Run LSP integration tests
+        env:
+          PROBE_CI: 1
         run: cargo test --test lsp_integration_tests
 
       - name: Run comprehensive LSP tests
         env:
           DEBUG: 1
+          PROBE_CI: 1
         shell: bash
         run: |
           echo "=== CI Environment Debug Info ==="

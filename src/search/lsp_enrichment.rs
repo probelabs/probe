@@ -1041,12 +1041,13 @@ async fn get_lsp_info_async_with_client(
     // Client is provided as a parameter, no need to create one
 
     // Try to get symbol info with short timeout to avoid delays in search
-    // Use aggressive timeout for search results to prevent command timeouts
-    let timeout_secs = if std::env::var("PROBE_CI").is_ok() {
-        3 // Very short timeout in CI
-    } else {
-        10 // Increased timeout for local development in search context (was 5)
-    };
+    // Use reasonable timeout for CI environments which can be slower
+    let timeout_secs =
+        if std::env::var("PROBE_CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
+            15 // Reasonable timeout in CI - allows for slower CI environments
+        } else {
+            10 // Timeout for local development in search context
+        };
 
     match tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
