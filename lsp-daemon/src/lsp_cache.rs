@@ -1,4 +1,5 @@
 use crate::cache_types::{AllCacheStats, CachedLspNode, LspCacheKey, LspCacheStats, LspOperation};
+use crate::database::{DatabaseBackend, DatabaseConfig, SledBackend};
 use anyhow::Result;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -56,15 +57,53 @@ pub struct LspCache<T> {
     /// Last eviction check time
     last_eviction: Arc<AsyncMutex<Instant>>,
     /// Persistent storage backend
-    persistent_store: Option<Arc<sled::Db>>,
+    persistent_store: Option<Arc<SledBackend>>,
 }
 
 impl<T> LspCache<T>
 where
     T: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static,
 {
-    pub fn new(operation: LspOperation, config: LspCacheConfig) -> Result<Self> {
-        let persistent_store = if config.persistent {
+    /// Determine if in-memory mode should be used based on environment variables
+    /// Priority order: PROBE_MEMORY_ONLY_CACHE > PROBE_DISABLE_PERSISTENCE
+    fn should_use_memory_mode(config: &LspCacheConfig) -> bool {
+        // 1. Check PROBE_MEMORY_ONLY_CACHE environment variable
+        if let Ok(val) = std::env::var("PROBE_MEMORY_ONLY_CACHE") {
+            if val == "1" || val.eq_ignore_ascii_case("true") {
+                debug!("LSP cache in-memory mode: PROBE_MEMORY_ONLY_CACHE={}", val);
+                return true;
+            }
+        }
+
+        // 2. Check legacy PROBE_DISABLE_PERSISTENCE for backwards compatibility
+        if let Ok(val) = std::env::var("PROBE_DISABLE_PERSISTENCE") {
+            if val == "1" || val.eq_ignore_ascii_case("true") {
+                debug!(
+                    "LSP cache in-memory mode: PROBE_DISABLE_PERSISTENCE={} (legacy)",
+                    val
+                );
+                return true;
+            }
+        }
+
+        // 3. If persistence is disabled in config, use memory mode
+        if !config.persistent {
+            debug!("LSP cache in-memory mode: config.persistent=false");
+            return true;
+        }
+
+        false
+    }
+
+    pub async fn new(operation: LspOperation, config: LspCacheConfig) -> Result<Self> {
+        // Check environment variables for in-memory mode
+        let should_disable_persistence = Self::should_use_memory_mode(&config);
+
+        if should_disable_persistence && config.persistent {
+            info!("LSP cache {:?}: Persistence disabled by environment variables, using in-memory mode only", operation);
+        }
+
+        let persistent_store = if config.persistent && !should_disable_persistence {
             let cache_dir = config.cache_directory.clone().unwrap_or_else(|| {
                 dirs::cache_dir()
                     .unwrap_or_else(|| PathBuf::from("/tmp"))
@@ -73,7 +112,17 @@ where
 
             std::fs::create_dir_all(&cache_dir)?;
             let db_path = cache_dir.join(format!("{operation:?}.db"));
-            let db = sled::open(db_path)?;
+
+            let db_config = DatabaseConfig {
+                path: Some(db_path),
+                temporary: false,
+                compression: true,
+                cache_capacity: 64 * 1024 * 1024, // 64MB cache
+                compression_factor: 5,
+                flush_every_ms: Some(1000),
+            };
+
+            let db = SledBackend::new(db_config).await?;
             Some(Arc::new(db))
         } else {
             None
@@ -113,7 +162,7 @@ where
         // Check persistent storage if enabled
         if let Some(ref db) = self.persistent_store {
             let key_bytes = bincode::serialize(key).ok()?;
-            if let Ok(Some(value_bytes)) = db.get(&key_bytes) {
+            if let Ok(Some(value_bytes)) = db.get(&key_bytes).await {
                 if let Ok(node) = bincode::deserialize::<CachedLspNode<T>>(&value_bytes) {
                     // Verify TTL
                     if node.created_at.elapsed() < self.config.ttl {
@@ -162,7 +211,7 @@ where
             let value_bytes = bincode::serialize(&node).ok();
 
             if let (Some(kb), Some(vb)) = (key_bytes, value_bytes) {
-                let _ = db.insert(kb, vb);
+                let _ = db.set(&kb, &vb).await;
             }
         }
 
@@ -210,7 +259,7 @@ where
             // Remove from persistent storage
             if let Some(ref db) = self.persistent_store {
                 if let Ok(key_bytes) = bincode::serialize(&key) {
-                    let _ = db.remove(key_bytes);
+                    let _ = db.remove(&key_bytes).await;
                 }
             }
         }
@@ -300,12 +349,12 @@ where
     /// Get entry from persistent storage
     async fn get_from_persistent(
         &self,
-        store: &sled::Db,
+        store: &SledBackend,
         key: &LspCacheKey,
     ) -> Result<Option<Arc<CachedLspNode<T>>>> {
         let key_bytes = bincode::serialize(key)?;
 
-        if let Some(value_bytes) = store.get(&key_bytes)? {
+        if let Some(value_bytes) = store.get(&key_bytes).await? {
             match bincode::deserialize::<CachedLspNode<T>>(&value_bytes) {
                 Ok(node) => {
                     // Check if entry is still valid (not expired)
@@ -313,13 +362,13 @@ where
                         return Ok(Some(Arc::new(node)));
                     } else {
                         // Remove expired entry
-                        let _ = store.remove(&key_bytes);
+                        let _ = store.remove(&key_bytes).await;
                     }
                 }
                 Err(e) => {
                     warn!("Failed to deserialize persistent cache entry: {}", e);
                     // Remove corrupted entry
-                    let _ = store.remove(&key_bytes);
+                    let _ = store.remove(&key_bytes).await;
                 }
             }
         }
@@ -342,10 +391,14 @@ where
     }
 
     /// Insert entry into persistent storage
-    async fn insert_in_persistent(&self, store: &sled::Db, node: &CachedLspNode<T>) -> Result<()> {
+    async fn insert_in_persistent(
+        &self,
+        store: &SledBackend,
+        node: &CachedLspNode<T>,
+    ) -> Result<()> {
         let key_bytes = bincode::serialize(&node.key)?;
         let value_bytes = bincode::serialize(node)?;
-        store.insert(&key_bytes, value_bytes)?;
+        store.set(&key_bytes, &value_bytes).await?;
         Ok(())
     }
 
@@ -361,7 +414,7 @@ where
                 // Remove from persistent storage if enabled
                 if let Some(ref store) = self.persistent_store {
                     if let Ok(key_bytes) = bincode::serialize(&key) {
-                        let _ = store.remove(&key_bytes);
+                        let _ = store.remove(&key_bytes).await;
                     }
                 }
             }
@@ -388,7 +441,7 @@ where
 
         // Clear persistent storage if enabled
         if let Some(ref store) = self.persistent_store {
-            let _ = store.clear();
+            let _ = store.clear().await;
         }
 
         *self.eviction_count.lock().await += count as u64;
@@ -463,7 +516,7 @@ where
             // Remove from persistent storage if enabled
             if let Some(ref store) = self.persistent_store {
                 if let Ok(key_bytes) = bincode::serialize(key) {
-                    let _ = store.remove(&key_bytes);
+                    let _ = store.remove(&key_bytes).await;
                 }
             }
 
@@ -509,7 +562,7 @@ where
     /// Compact persistent storage (if enabled)
     pub async fn compact_persistent_storage(&self) -> Result<()> {
         if let Some(ref store) = self.persistent_store {
-            store.flush_async().await?;
+            store.flush().await?;
             info!(
                 "Compacted persistent storage for {:?} cache",
                 self.operation
@@ -689,8 +742,9 @@ mod tests {
     #[tokio::test]
     async fn test_lsp_cache_basic_operations() {
         let config = LspCacheConfig::default();
-        let cache: LspCache<DefinitionInfo> =
-            LspCache::new(LspOperation::Definition, config).unwrap();
+        let cache: LspCache<DefinitionInfo> = LspCache::new(LspOperation::Definition, config)
+            .await
+            .unwrap();
 
         let key = LspCacheKey::new(
             "/test/file.rs",
@@ -730,8 +784,9 @@ mod tests {
     #[tokio::test]
     async fn test_lsp_cache_file_invalidation() {
         let config = LspCacheConfig::default();
-        let cache: LspCache<DefinitionInfo> =
-            LspCache::new(LspOperation::Definition, config).unwrap();
+        let cache: LspCache<DefinitionInfo> = LspCache::new(LspOperation::Definition, config)
+            .await
+            .unwrap();
 
         let key = LspCacheKey::new(
             "/test/file.rs",
@@ -767,8 +822,9 @@ mod tests {
         config.persistent = true;
         config.cache_directory = Some(temp_dir.path().to_path_buf());
 
-        let cache: LspCache<DefinitionInfo> =
-            LspCache::new(LspOperation::Definition, config).unwrap();
+        let cache: LspCache<DefinitionInfo> = LspCache::new(LspOperation::Definition, config)
+            .await
+            .unwrap();
 
         let key = LspCacheKey::new(
             "/test/file.rs",
@@ -819,7 +875,9 @@ mod tests {
 
         // Register definition cache
         let def_cache: LspCache<DefinitionInfo> =
-            LspCache::new(LspOperation::Definition, config.clone()).unwrap();
+            LspCache::new(LspOperation::Definition, config.clone())
+                .await
+                .unwrap();
         manager.register_cache(LspOperation::Definition, def_cache);
 
         // Add some test data

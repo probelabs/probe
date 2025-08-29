@@ -36,6 +36,8 @@ pub struct WorkspaceCacheRouterConfig {
 
     /// Cache configuration template for new workspace caches
     pub cache_config_template: crate::persistent_cache::PersistentCacheConfig,
+    /// Force in-memory mode for all workspace caches
+    pub force_memory_only: bool,
 }
 
 impl Default for WorkspaceCacheRouterConfig {
@@ -51,7 +53,10 @@ impl Default for WorkspaceCacheRouterConfig {
                 max_size_bytes: 100 * 1024 * 1024, // 100MB per workspace
                 ttl_days: 30,
                 compress: true,
+                memory_only: false, // Per-workspace decision
+                backend_type: crate::persistent_cache::DatabaseBackendType::Sled,
             },
+            force_memory_only: false, // Don't force memory-only mode by default
         }
     }
 }
@@ -142,8 +147,8 @@ impl WorkspaceCacheRouter {
         }
 
         info!(
-            "Initializing WorkspaceCacheRouter with base dir: {:?}, max_open: {}",
-            config.base_cache_dir, config.max_open_caches
+            "Initializing WorkspaceCacheRouter with base dir: {:?}, max_open: {}, memory_only: {}",
+            config.base_cache_dir, config.max_open_caches, config.force_memory_only
         );
 
         Self {
@@ -153,6 +158,32 @@ impl WorkspaceCacheRouter {
             server_manager,
             workspace_cache: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Configure the router to use in-memory mode for all workspaces
+    /// This is useful for testing or when persistence is not desired
+    pub fn set_memory_only_mode(&mut self, memory_only: bool) {
+        self.config.force_memory_only = memory_only;
+        if memory_only {
+            self.config.cache_config_template.memory_only = true;
+            self.config.cache_config_template.backend_type =
+                crate::persistent_cache::DatabaseBackendType::Memory;
+            info!("Workspace cache router configured for memory-only mode");
+        } else {
+            info!("Workspace cache router configured for persistent mode");
+        }
+    }
+
+    /// Update the database backend type for the cache template
+    pub fn set_database_backend(
+        &mut self,
+        backend_type: crate::persistent_cache::DatabaseBackendType,
+    ) {
+        info!(
+            "Workspace cache router configured with backend: {:?}",
+            backend_type
+        );
+        self.config.cache_config_template.backend_type = backend_type;
     }
 
     /// Generate a stable workspace ID from a workspace root path
@@ -302,6 +333,16 @@ impl WorkspaceCacheRouter {
         // Create cache configuration for this workspace
         let mut cache_config = self.config.cache_config_template.clone();
         cache_config.cache_directory = Some(cache_dir);
+
+        // Apply router-level memory-only setting if configured
+        if self.config.force_memory_only {
+            cache_config.memory_only = true;
+            cache_config.backend_type = crate::persistent_cache::DatabaseBackendType::Memory;
+            debug!(
+                "Force memory-only mode enabled for workspace '{}'",
+                workspace_id
+            );
+        }
 
         // Create the cache instance
         let cache = Arc::new(PersistentCallGraphCache::new(cache_config).await.context(

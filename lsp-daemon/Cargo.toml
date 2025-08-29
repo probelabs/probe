@@ -45,6 +45,7 @@ num_cpus = "1"
 flate2 = "1.0"
 blake3 = "1.5"
 moka = { version = "0.12", features = ["future"] }
+thiserror = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -101,6 +101,43 @@ pub struct LspWorkspaceCacheConfig {
     pub lookup_depth: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_dir: Option<String>,
+    /// Database backend configuration for workspace caches
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database: Option<CacheDatabaseConfig>,
+}
+
+/// Database configuration for cache storage
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CacheDatabaseConfig {
+    /// Database backend type ("sled", "memory")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_type: Option<String>,
+    /// Force in-memory mode (overrides environment variables)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_only: Option<bool>,
+    /// Sled-specific configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sled_config: Option<SledDatabaseConfig>,
+    // Future: DuckDB configuration
+    // #[serde(skip_serializing_if = "Option::is_none")]
+    // pub duckdb_config: Option<DuckDbDatabaseConfig>,
+}
+
+/// Sled database specific configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SledDatabaseConfig {
+    /// Enable compression
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compression: Option<bool>,
+    /// Compression factor (1-22)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compression_factor: Option<i32>,
+    /// Cache capacity in MB
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_capacity_mb: Option<u64>,
+    /// Flush interval in milliseconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flush_every_ms: Option<u64>,
 }
 
 /// Universal cache configuration providing unified caching for all LSP operations
@@ -472,6 +509,24 @@ pub struct ResolvedLspWorkspaceCacheConfig {
     pub size_mb_per_workspace: usize,
     pub lookup_depth: usize,
     pub base_dir: Option<String>,
+    pub database: ResolvedCacheDatabaseConfig,
+}
+
+/// Resolved database configuration with all defaults applied
+#[derive(Debug, Clone)]
+pub struct ResolvedCacheDatabaseConfig {
+    pub backend_type: String,
+    pub memory_only: bool,
+    pub sled_config: ResolvedSledDatabaseConfig,
+}
+
+/// Resolved Sled configuration with all defaults applied
+#[derive(Debug, Clone)]
+pub struct ResolvedSledDatabaseConfig {
+    pub compression: bool,
+    pub compression_factor: i32,
+    pub cache_capacity_mb: u64,
+    pub flush_every_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -786,6 +841,36 @@ impl ProbeConfig {
                 if other_cache.base_dir.is_some() {
                     base_cache.base_dir = other_cache.base_dir;
                 }
+
+                // Merge database configuration
+                if let Some(other_db) = other_cache.database {
+                    let base_db = base_cache
+                        .database
+                        .get_or_insert(CacheDatabaseConfig::default());
+                    if other_db.backend_type.is_some() {
+                        base_db.backend_type = other_db.backend_type;
+                    }
+                    if other_db.memory_only.is_some() {
+                        base_db.memory_only = other_db.memory_only;
+                    }
+                    if let Some(other_sled) = other_db.sled_config {
+                        let base_sled = base_db
+                            .sled_config
+                            .get_or_insert(SledDatabaseConfig::default());
+                        if other_sled.compression.is_some() {
+                            base_sled.compression = other_sled.compression;
+                        }
+                        if other_sled.compression_factor.is_some() {
+                            base_sled.compression_factor = other_sled.compression_factor;
+                        }
+                        if other_sled.cache_capacity_mb.is_some() {
+                            base_sled.cache_capacity_mb = other_sled.cache_capacity_mb;
+                        }
+                        if other_sled.flush_every_ms.is_some() {
+                            base_sled.flush_every_ms = other_sled.flush_every_ms;
+                        }
+                    }
+                }
             }
         }
 
@@ -1044,6 +1129,38 @@ impl ProbeConfig {
             cache.base_dir = Some(val);
         }
 
+        // LSP Workspace Cache Database Configuration
+        let db_config = cache.database.get_or_insert(CacheDatabaseConfig::default());
+        if let Ok(val) = env::var("PROBE_LSP_CACHE_BACKEND_TYPE") {
+            db_config.backend_type = Some(val);
+        }
+        if let Ok(val) = env::var("PROBE_LSP_CACHE_MEMORY_ONLY") {
+            db_config.memory_only = Some(val == "1" || val.to_lowercase() == "true");
+        }
+
+        // Sled-specific configuration
+        let sled_config = db_config
+            .sled_config
+            .get_or_insert(SledDatabaseConfig::default());
+        if let Ok(val) = env::var("PROBE_LSP_CACHE_SLED_COMPRESSION") {
+            sled_config.compression = Some(val == "1" || val.to_lowercase() == "true");
+        }
+        if let Ok(val) = env::var("PROBE_LSP_CACHE_SLED_COMPRESSION_FACTOR") {
+            if let Ok(factor) = val.parse() {
+                sled_config.compression_factor = Some(factor);
+            }
+        }
+        if let Ok(val) = env::var("PROBE_LSP_CACHE_SLED_CAPACITY_MB") {
+            if let Ok(capacity) = val.parse() {
+                sled_config.cache_capacity_mb = Some(capacity);
+            }
+        }
+        if let Ok(val) = env::var("PROBE_LSP_CACHE_SLED_FLUSH_MS") {
+            if let Ok(flush) = val.parse() {
+                sled_config.flush_every_ms = Some(flush);
+            }
+        }
+
         // Performance
         let perf = self.performance.get_or_insert(PerformanceConfig::default());
         if let Ok(val) = env::var("PROBE_TREE_CACHE_SIZE") {
@@ -1224,6 +1341,22 @@ impl ProbeConfig {
                         size_mb_per_workspace: cache.size_mb_per_workspace.unwrap_or(100),
                         lookup_depth: cache.lookup_depth.unwrap_or(3),
                         base_dir: cache.base_dir,
+                        database: {
+                            let db = cache.database.unwrap_or_default();
+                            ResolvedCacheDatabaseConfig {
+                                backend_type: db.backend_type.unwrap_or_else(|| "sled".to_string()),
+                                memory_only: db.memory_only.unwrap_or(false),
+                                sled_config: {
+                                    let sled = db.sled_config.unwrap_or_default();
+                                    ResolvedSledDatabaseConfig {
+                                        compression: sled.compression.unwrap_or(true),
+                                        compression_factor: sled.compression_factor.unwrap_or(5),
+                                        cache_capacity_mb: sled.cache_capacity_mb.unwrap_or(64),
+                                        flush_every_ms: sled.flush_every_ms,
+                                    }
+                                },
+                            }
+                        },
                     }
                 },
             },
@@ -1393,6 +1526,35 @@ impl ResolvedConfig {
                     size_mb_per_workspace: Some(self.lsp.workspace_cache.size_mb_per_workspace),
                     lookup_depth: Some(self.lsp.workspace_cache.lookup_depth),
                     base_dir: self.lsp.workspace_cache.base_dir.clone(),
+                    database: Some(CacheDatabaseConfig {
+                        backend_type: Some(self.lsp.workspace_cache.database.backend_type.clone()),
+                        memory_only: Some(self.lsp.workspace_cache.database.memory_only),
+                        sled_config: Some(SledDatabaseConfig {
+                            compression: Some(
+                                self.lsp.workspace_cache.database.sled_config.compression,
+                            ),
+                            compression_factor: Some(
+                                self.lsp
+                                    .workspace_cache
+                                    .database
+                                    .sled_config
+                                    .compression_factor,
+                            ),
+                            cache_capacity_mb: Some(
+                                self.lsp
+                                    .workspace_cache
+                                    .database
+                                    .sled_config
+                                    .cache_capacity_mb,
+                            ),
+                            flush_every_ms: self
+                                .lsp
+                                .workspace_cache
+                                .database
+                                .sled_config
+                                .flush_every_ms,
+                        }),
+                    }),
                 }),
                 universal_cache: None, // Universal cache uses defaults, configured separately
             }),

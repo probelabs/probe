@@ -173,7 +173,7 @@ pub struct CacheLayerConfig {
 impl Default for CacheLayerConfig {
     fn default() -> Self {
         Self {
-            cache_warming_enabled: true,
+            cache_warming_enabled: false,
             cache_warming_concurrency: 4,
             singleflight_timeout: Duration::from_secs(30),
             detailed_metrics: true,
@@ -1320,7 +1320,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_warming() {
-        let (cache_layer, temp_dir) = create_test_cache_layer().await;
+        // Create cache layer with warming enabled for this test
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create workspace cache router
+        let config = crate::workspace_cache_router::WorkspaceCacheRouterConfig {
+            base_cache_dir: temp_dir.path().join("caches"),
+            max_open_caches: 3,
+            max_parent_lookup_depth: 2,
+            ..Default::default()
+        };
+
+        let registry = Arc::new(crate::lsp_registry::LspRegistry::new().unwrap());
+        let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let server_manager = Arc::new(
+            crate::server_manager::SingleServerManager::new_with_tracker(registry, child_processes),
+        );
+
+        let workspace_router = Arc::new(WorkspaceCacheRouter::new(config, server_manager));
+
+        // Create universal cache
+        let universal_cache = Arc::new(UniversalCache::new(workspace_router).await.unwrap());
+
+        // Create cache layer with warming enabled
+        let cache_warming_config = CacheLayerConfig {
+            cache_warming_enabled: true,
+            ..Default::default()
+        };
+        let cache_layer = CacheLayer::new(universal_cache, None, Some(cache_warming_config));
 
         // Create test workspace with multiple files
         let workspace = temp_dir.path().join("warming-workspace");

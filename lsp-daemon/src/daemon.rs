@@ -6,7 +6,7 @@ use crate::language_detector::{Language, LanguageDetector};
 use crate::logging::{LogBuffer, MemoryLogLayer};
 use crate::lsp_registry::LspRegistry;
 use crate::path_safety::safe_canonicalize;
-use crate::persistent_cache::PersistentCacheConfig;
+use crate::persistent_cache::{DatabaseBackendType, PersistentCacheConfig};
 use crate::pid_lock::PidLock;
 #[cfg(unix)]
 use crate::process_group::ProcessGroup;
@@ -189,6 +189,8 @@ impl LspDaemon {
             max_size_bytes: 1_000_000_000, // 1GB
             ttl_days: 30,
             compress: true,
+            memory_only: false,                      // Default to persistent
+            backend_type: DatabaseBackendType::Sled, // Default to Sled backend
         };
 
         // Initialize workspace cache router for universal cache
@@ -3475,6 +3477,7 @@ impl LspDaemon {
                 crate::cache_types::LspOperation::Definition,
                 crate::lsp_cache::LspCacheConfig::default(),
             )
+            .await
             .map_err(|e| anyhow!("Failed to create definition cache: {}", e))?,
         );
 

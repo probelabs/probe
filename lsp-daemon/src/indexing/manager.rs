@@ -2228,6 +2228,7 @@ mod tests {
         let lsp_cache_config = LspCacheConfig::default();
         let definition_cache = Arc::new(
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
                 .expect("Failed to create LspCache"),
         );
 
@@ -2321,6 +2322,7 @@ mod tests {
         let lsp_cache_config = LspCacheConfig::default();
         let definition_cache = Arc::new(
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
                 .expect("Failed to create LspCache"),
         );
         let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
@@ -2431,6 +2433,7 @@ mod tests {
         let lsp_cache_config = LspCacheConfig::default();
         let definition_cache = Arc::new(
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
                 .expect("Failed to create LspCache"),
         );
         let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
@@ -2484,6 +2487,7 @@ mod tests {
         let lsp_cache_config = LspCacheConfig::default();
         let definition_cache = Arc::new(
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
                 .expect("Failed to create LspCache"),
         );
         let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
@@ -2536,6 +2540,7 @@ mod tests {
         let lsp_cache_config = LspCacheConfig::default();
         let definition_cache = Arc::new(
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
                 .expect("Failed to create LspCache"),
         );
         let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
@@ -2602,6 +2607,7 @@ mod tests {
         let lsp_cache_config = LspCacheConfig::default();
         let definition_cache = Arc::new(
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
                 .expect("Failed to create LspCache"),
         );
         let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
@@ -2680,6 +2686,7 @@ mod tests {
         let lsp_cache_config = LspCacheConfig::default();
         let definition_cache = Arc::new(
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
                 .expect("Failed to create LspCache"),
         );
 
@@ -2801,6 +2808,7 @@ mod tests {
         let lsp_cache_config = LspCacheConfig::default();
         let definition_cache = Arc::new(
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
                 .expect("Failed to create LspCache"),
         );
         let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
@@ -2849,6 +2857,7 @@ mod tests {
         let lsp_cache_config = LspCacheConfig::default();
         let definition_cache = Arc::new(
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
                 .expect("Failed to create LspCache"),
         );
         let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
@@ -2889,6 +2898,7 @@ mod tests {
         let lsp_cache_config = LspCacheConfig::default();
         let definition_cache = Arc::new(
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
                 .expect("Failed to create LspCache"),
         );
         let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
@@ -2919,6 +2929,7 @@ mod tests {
         let lsp_cache_config = LspCacheConfig::default();
         let definition_cache = Arc::new(
             LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
                 .expect("Failed to create LspCache"),
         );
         let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;

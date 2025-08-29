@@ -291,6 +291,7 @@ proptest! {
             size_mb_per_workspace: Some(size_mb),
             lookup_depth: Some(lookup_depth),
             base_dir: None,
+            database: None,
         };
 
         // All values should be within reasonable ranges
