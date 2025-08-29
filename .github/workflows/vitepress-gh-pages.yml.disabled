@@ -1,5 +1,9 @@
+# DEPRECATED: This workflow has been disabled in favor of Cloudflare Pages deployment
+# The site is now deployed automatically via Cloudflare Pages integration
+# See site/wrangler.toml for the new deployment configuration
+# 
 # .github/workflows/deploy.yml
-name: Build and Deploy VitePress Site
+name: Build and Deploy VitePress Site (DISABLED)
 
 on:
   push:

@@ -1,0 +1,11 @@
+# Redirect rules for Cloudflare Pages
+
+# Redirect www to main domain
+https://www.probelabs.com/* https://probelabs.com/:splat 301
+
+# Handle clean URLs - VitePress already generates clean URLs
+# but this ensures fallback behavior
+/docs/* /404.html 404
+
+# Fallback for any 404s to custom 404 page
+/* /404.html 404

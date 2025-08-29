@@ -1,0 +1,9 @@
+# Cloudflare Pages configuration for Probe documentation site
+name = "probe-docs"
+compatibility_date = "2024-01-15"
+
+# Pages project configuration
+pages_build_output_dir = ".vitepress/dist"
+
+# Note: Custom domains (probelabs.com) are configured via Cloudflare Dashboard
+# Routes configuration is not supported in wrangler.toml for Pages
