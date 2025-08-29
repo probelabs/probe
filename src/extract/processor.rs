@@ -1243,11 +1243,12 @@ fn get_lsp_symbol_info_sync(
         // Use different timeouts for CI vs local environments
         // First run needs time for daemon startup + LSP server initialization (10-15s)
         // Subsequent runs are very fast via cache (<100ms)
-        let timeout_duration = if std::env::var("PROBE_CI").is_ok() {
-            std::time::Duration::from_secs(60) // Long timeout in CI for rust-analyzer
-        } else {
-            std::time::Duration::from_secs(20) // Allow time for first-run initialization locally
-        };
+        let timeout_duration =
+            if std::env::var("PROBE_CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
+                std::time::Duration::from_secs(60) // Long timeout in CI for rust-analyzer
+            } else {
+                std::time::Duration::from_secs(20) // Allow time for first-run initialization locally
+            };
         match rt.block_on(async {
             tokio::time::timeout(
                 timeout_duration,
