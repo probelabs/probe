@@ -1213,6 +1213,35 @@ impl LspClient {
             _ => Err(anyhow!("Unexpected response type for cache export")),
         }
     }
+
+    /// Clear cache for a specific symbol
+    pub async fn clear_symbol_cache(
+        &mut self,
+        file_path: PathBuf,
+        symbol_name: String,
+        line: Option<u32>,
+        column: Option<u32>,
+        methods: Option<Vec<String>>,
+        all_positions: bool,
+    ) -> Result<lsp_daemon::protocol::SymbolCacheClearResult> {
+        let request = DaemonRequest::ClearSymbolCache {
+            request_id: Uuid::new_v4(),
+            file_path,
+            symbol_name,
+            line,
+            column,
+            methods,
+            all_positions,
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::SymbolCacheCleared { result, .. } => Ok(result),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type for symbol cache clear")),
+        }
+    }
 }
 
 /// Get current probe binary version info

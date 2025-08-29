@@ -1,5 +1,4 @@
 use crate::cache_types::{CallHierarchyInfo, CallInfo, LspOperation, NodeId, NodeKey};
-use crate::call_graph_cache::CallGraphCacheConfig;
 use crate::hash_utils::md5_hex_file;
 use crate::indexing::{IndexingConfig, IndexingManager};
 use crate::ipc::{IpcListener, IpcStream};
@@ -24,6 +23,7 @@ use crate::workspace_resolver::WorkspaceResolver;
 use anyhow::Context;
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
+use futures;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -110,11 +110,7 @@ impl LspDaemon {
         // Use the runtime to call the async version with persistence disabled
         let runtime = tokio::runtime::Handle::current();
         runtime.block_on(async {
-            let config = CallGraphCacheConfig {
-                persistence_enabled: false, // Explicitly disable for sync constructor
-                ..Default::default()
-            };
-            Self::new_with_config_and_cache_async(socket_path, allowed_roots, config).await
+            Self::new_with_config_and_cache_async(socket_path, allowed_roots).await
         })
     }
 
@@ -123,54 +119,18 @@ impl LspDaemon {
         socket_path: String,
         allowed_roots: Option<Vec<PathBuf>>,
     ) -> Result<Self> {
-        // Create default cache config with persistence and git settings from environment
-        let cache_config = CallGraphCacheConfig {
-            capacity: 1000,                                   // Cache up to 1000 nodes
-            ttl: Duration::from_secs(1800),                   // 30 minutes TTL
-            eviction_check_interval: Duration::from_secs(60), // Check every minute
-            invalidation_depth: 2, // Invalidate connected nodes up to depth 2
-            // Persistence settings (can be overridden by environment variables)
-            // IMPORTANT: Always disable persistence in CI to prevent hanging
-            persistence_enabled: if std::env::var("PROBE_CI").is_ok()
-                || std::env::var("GITHUB_ACTIONS").is_ok()
-            {
-                false // Force disable in CI
-            } else {
-                std::env::var("PROBE_LSP_PERSISTENCE_ENABLED")
-                    .map(|v| v.to_lowercase() == "true")
-                    .unwrap_or(false)
-            },
-            persistence_path: std::env::var("PROBE_LSP_PERSISTENCE_PATH")
-                .ok()
-                .map(PathBuf::from),
-            persistence_write_batch_size: std::env::var("PROBE_LSP_PERSISTENCE_BATCH_SIZE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10),
-            persistence_write_interval: Duration::from_millis(
-                std::env::var("PROBE_LSP_PERSISTENCE_INTERVAL_MS")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(5000),
-            ),
-        };
-
-        Self::new_with_config_and_cache_async(socket_path, allowed_roots, cache_config).await
+        Self::new_with_config_and_cache_async(socket_path, allowed_roots).await
     }
 
     async fn new_with_config_and_cache_async(
         socket_path: String,
         allowed_roots: Option<Vec<PathBuf>>,
-        cache_config: CallGraphCacheConfig,
     ) -> Result<Self> {
         // Log CI environment detection and persistence status
         if std::env::var("PROBE_CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
             info!("CI environment detected - persistence disabled to prevent hanging");
         }
-        info!(
-            "LSP daemon starting with persistence_enabled: {}",
-            cache_config.persistence_enabled
-        );
+        info!("LSP daemon starting");
 
         let registry = Arc::new(LspRegistry::new()?);
         let detector = Arc::new(LanguageDetector::new());
@@ -223,9 +183,9 @@ impl LspDaemon {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30); // Default 30 seconds for language server indexing
 
-        // Initialize persistent cache store configuration first
+        // Initialize persistent cache store configuration
         let persistent_cache_config = PersistentCacheConfig {
-            cache_directory: cache_config.persistence_path.clone(),
+            cache_directory: None,         // Will use default location
             max_size_bytes: 1_000_000_000, // 1GB
             ttl_days: 30,
             compress: true,
@@ -430,13 +390,7 @@ impl LspDaemon {
         });
         self.background_tasks.lock().await.push(cleanup_handle);
 
-        // Start health monitoring
-        let health_monitor_handle = self.server_manager.start_health_monitoring();
-        info!("Started health monitoring for LSP servers");
-        self.background_tasks
-            .lock()
-            .await
-            .push(health_monitor_handle);
+        // Health monitoring has been simplified and removed in favor of basic process monitoring
 
         // Start process monitoring task with grace period for indexing
         let process_monitor = self.process_monitor.clone();
@@ -530,6 +484,9 @@ impl LspDaemon {
             }
         });
         self.background_tasks.lock().await.push(monitor_handle);
+
+        // Start cache warming background task if enabled
+        self.start_cache_warming_task().await;
 
         // Trigger auto-indexing if enabled in configuration
         self.trigger_auto_indexing().await;
@@ -948,33 +905,19 @@ impl LspDaemon {
                 let active_connections = self.connections.len();
                 let active_servers = self.server_manager.get_active_server_count().await;
 
-                // Get LSP server health information
-                let health_status = self
-                    .server_manager
-                    .health_monitor()
-                    .get_health_status()
-                    .await;
+                // Get LSP server status information (simplified without health monitoring)
                 let server_stats = self.server_manager.get_stats().await;
 
                 let lsp_server_health: Vec<crate::protocol::LspServerHealthInfo> = server_stats
                     .into_iter()
                     .map(|s| {
-                        let server_key = format!("{:?}", s.language);
-                        let health = health_status.get(&server_key);
-
                         crate::protocol::LspServerHealthInfo {
                             language: s.language,
-                            is_healthy: health.map(|h| h.is_healthy).unwrap_or(true),
-                            consecutive_failures: health
-                                .map(|h| h.consecutive_failures)
-                                .unwrap_or(0),
-                            circuit_breaker_open: health
-                                .map(|h| h.is_circuit_breaker_open())
-                                .unwrap_or(false),
-                            last_check_ms: health
-                                .map(|h| h.last_check.elapsed().as_millis() as u64)
-                                .unwrap_or(0),
-                            response_time_ms: health.map(|h| h.response_time_ms).unwrap_or(0),
+                            is_healthy: s.initialized, // Simplified: healthy if initialized
+                            consecutive_failures: 0,   // No failure tracking without health monitor
+                            circuit_breaker_open: false, // No circuit breaker
+                            last_check_ms: 0,          // No health check tracking
+                            response_time_ms: 0,       // No response time tracking
                         }
                     })
                     .collect();
@@ -1103,29 +1046,12 @@ impl LspDaemon {
 
             DaemonRequest::Status { request_id } => {
                 let server_stats = self.server_manager.get_stats().await;
-                let health_status = self
-                    .server_manager
-                    .health_monitor()
-                    .get_health_status()
-                    .await;
 
                 let pool_status: Vec<PoolStatus> = server_stats
                     .into_iter()
                     .map(|s| {
-                        let server_key = format!("{:?}", s.language);
-                        let health = health_status.get(&server_key);
-
-                        // Consider a server "ready" if either:
-                        // 1) we know it's initialized, or
-                        // 2) the health monitor reports it as healthy (the stats lock may be busy
-                        //    while the server is in active use, which used to surface as initialized=false).
-                        let is_ready = if s.initialized {
-                            true
-                        } else if let Some(h) = health {
-                            h.is_healthy && !h.is_circuit_breaker_open()
-                        } else {
-                            false
-                        };
+                        // Consider a server "ready" if it's initialized (simplified without health monitoring)
+                        let is_ready = s.initialized;
 
                         PoolStatus {
                             language: s.language,
@@ -1139,21 +1065,13 @@ impl LspDaemon {
                                 .collect(),
                             uptime_secs: s.uptime.as_secs(),
                             status: format!("{:?}", s.status),
-                            health_status: if let Some(h) = health {
-                                if h.is_healthy {
-                                    "healthy".to_string()
-                                } else {
-                                    "unhealthy".to_string()
-                                }
+                            health_status: if is_ready {
+                                "healthy".to_string()
                             } else {
-                                "unknown".to_string()
+                                "initializing".to_string()
                             },
-                            consecutive_failures: health
-                                .map(|h| h.consecutive_failures)
-                                .unwrap_or(0),
-                            circuit_breaker_open: health
-                                .map(|h| h.is_circuit_breaker_open())
-                                .unwrap_or(false),
+                            consecutive_failures: 0, // No failure tracking without health monitor
+                            circuit_breaker_open: false, // No circuit breaker
                         }
                     })
                     .collect();
@@ -1909,6 +1827,39 @@ impl LspDaemon {
                 }
             }
 
+            // Symbol-specific cache clearing
+            DaemonRequest::ClearSymbolCache {
+                request_id,
+                file_path,
+                symbol_name,
+                line,
+                column,
+                methods,
+                all_positions,
+            } => {
+                info!(
+                    "Received DaemonRequest::ClearSymbolCache for symbol '{}' in {:?} at {:?}:{:?}",
+                    symbol_name, file_path, line, column
+                );
+                match self
+                    .handle_clear_symbol_cache(
+                        &file_path,
+                        &symbol_name,
+                        line,
+                        column,
+                        methods,
+                        all_positions,
+                    )
+                    .await
+                {
+                    Ok(result) => DaemonResponse::SymbolCacheCleared { request_id, result },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: e.to_string(),
+                    },
+                }
+            }
+
             // Explicit "not implemented" response for completion - not part of this implementation
             DaemonRequest::Completion { request_id, .. } => {
                 warn!("Received unimplemented completion request, returning error with original request_id");
@@ -1918,6 +1869,44 @@ impl LspDaemon {
                 }
             }
         }
+    }
+
+    /// Handle clearing cache for a specific symbol
+    async fn handle_clear_symbol_cache(
+        &self,
+        file_path: &Path,
+        symbol_name: &str,
+        line: Option<u32>,
+        column: Option<u32>,
+        methods: Option<Vec<String>>,
+        all_positions: bool,
+    ) -> Result<crate::protocol::SymbolCacheClearResult> {
+        let start_time = std::time::Instant::now();
+
+        // Clear the symbol cache through the universal cache layer
+        let (entries_cleared, positions_cleared, methods_cleared, size_freed) = self
+            .universal_cache_layer
+            .clear_symbol(
+                file_path,
+                symbol_name,
+                line,
+                column,
+                methods.clone(),
+                all_positions,
+            )
+            .await?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+
+        Ok(crate::protocol::SymbolCacheClearResult {
+            symbol_name: symbol_name.to_string(),
+            file_path: file_path.to_path_buf(),
+            entries_cleared,
+            positions_cleared,
+            methods_cleared,
+            cache_size_freed_bytes: size_freed,
+            duration_ms,
+        })
     }
 
     /// Convert cache layer stats to universal cache stats format
@@ -3497,13 +3486,13 @@ impl LspDaemon {
     // Indexing management methods
     async fn handle_start_indexing(
         &self,
-        _workspace_root: PathBuf,
+        workspace_root: PathBuf,
         config: crate::protocol::IndexingConfig,
     ) -> Result<String> {
         use crate::indexing::manager::ManagerConfig;
 
         // Convert protocol config to internal manager config
-        let _manager_config = ManagerConfig {
+        let manager_config = ManagerConfig {
             max_workers: config.max_workers.unwrap_or_else(|| num_cpus::get().max(2)),
             memory_budget_bytes: config
                 .memory_budget_mb
@@ -3523,20 +3512,106 @@ impl LspDaemon {
             status_update_interval_secs: 5,
         };
 
-        // Create and start indexing manager with LSP dependencies
-        // NOTE: IndexingManager with universal cache system needs to be redesigned
-        // For now, return an error as indexing is not compatible with universal cache
-        Err(anyhow!("Indexing is not yet supported with the universal cache system. Manual LSP operations are available."))
-        // NOTE: Unreachable code removed - method returns error above
+        // Check if indexing manager is already running
+        {
+            let manager_guard = self.indexing_manager.lock().await;
+            if manager_guard.is_some() {
+                return Err(anyhow!("Indexing is already running"));
+            }
+        }
+
+        // Create indexing manager using universal cache system
+        // The IndexingManager will be adapted to work with the universal cache layer
+        // by routing LSP operations through the universal_cache_layer.handle_request method
+        info!(
+            "Creating IndexingManager with universal cache integration for workspace: {:?}",
+            workspace_root
+        );
+
+        // Create definition cache for IndexingManager
+        let definition_cache = Arc::new(
+            crate::lsp_cache::LspCache::new(
+                crate::cache_types::LspOperation::Definition,
+                crate::lsp_cache::LspCacheConfig::default(),
+            )
+            .map_err(|e| anyhow!("Failed to create definition cache: {}", e))?,
+        );
+
+        // Create the IndexingManager
+        let indexing_manager = IndexingManager::new(
+            manager_config,
+            self.detector.clone(),
+            self.server_manager.clone(),
+            definition_cache,
+            self.universal_cache_layer.clone(),
+        );
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+
+        // Store the indexing manager
+        {
+            let mut manager_guard = self.indexing_manager.lock().await;
+            *manager_guard = Some(indexing_manager);
+        }
+
+        // Start indexing in background
+        let indexing_manager_clone = self.indexing_manager.clone();
+        let workspace_root_clone = workspace_root.clone();
+        let _universal_cache_layer = self.universal_cache_layer.clone();
+        let session_id_clone = session_id.clone();
+
+        tokio::spawn(async move {
+            info!(
+                "Starting background indexing for workspace: {:?} with session: {}",
+                workspace_root_clone, session_id_clone
+            );
+
+            // Get the indexing manager and start indexing
+            let manager_guard = indexing_manager_clone.lock().await;
+            if let Some(manager) = manager_guard.as_ref() {
+                info!(
+                    "Starting file discovery and indexing for workspace: {:?}",
+                    workspace_root_clone
+                );
+
+                // Actually start the indexing process!
+                if let Err(e) = manager.start_indexing(workspace_root_clone.clone()).await {
+                    error!(
+                        "Failed to start indexing for workspace {:?}: {}",
+                        workspace_root_clone, e
+                    );
+                } else {
+                    info!(
+                        "IndexingManager successfully started indexing for workspace: {:?}",
+                        workspace_root_clone
+                    );
+
+                    // The indexing will work by:
+                    // 1. Discovering files in the workspace
+                    // 2. Using the existing server_manager to make LSP requests
+                    // 3. These requests go through universal_cache_layer.handle_request
+                    // 4. Results are automatically cached in the universal cache system
+                    // This provides the same functionality as the original indexing design
+                }
+            } else {
+                warn!("Failed to retrieve indexing manager for background task");
+            }
+        });
+
+        info!(
+            "Indexing started for workspace: {:?} with session ID: {}",
+            workspace_root, session_id
+        );
+        Ok(session_id)
     }
 
     async fn handle_stop_indexing(&self, force: bool) -> Result<bool> {
         let mut manager_guard = self.indexing_manager.lock().await;
         if let Some(manager) = manager_guard.as_ref() {
             manager.stop_indexing().await?;
-            if force {
-                *manager_guard = None;
-            }
+            // Always clear the manager when stopping, regardless of force flag
+            // This allows starting a new indexing session
+            *manager_guard = None;
             info!("Stopped indexing (force: {})", force);
             Ok(true)
         } else {
@@ -3719,6 +3794,158 @@ impl LspDaemon {
                 info!("Auto-indexing started successfully");
             }
         });
+    }
+
+    /// Start cache warming task in background
+    async fn start_cache_warming_task(&self) {
+        // Check if cache warming is enabled
+        let cache_warming_enabled = std::env::var("PROBE_CACHE_WARMING_ENABLED")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(true); // Default to enabled
+
+        if !cache_warming_enabled {
+            debug!("Cache warming is disabled via PROBE_CACHE_WARMING_ENABLED=false");
+            return;
+        }
+
+        let concurrency = std::env::var("PROBE_CACHE_WARMING_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4); // Default to 4 concurrent operations
+
+        info!("Starting cache warming task (concurrency: {})", concurrency);
+
+        let daemon_ref = self.clone_refs();
+        let cache_warming_handle = tokio::spawn(async move {
+            daemon_ref
+                .warm_cache_from_persistent_storage(concurrency)
+                .await
+        });
+
+        // Add to background tasks for proper cleanup
+        self.background_tasks
+            .lock()
+            .await
+            .push(cache_warming_handle);
+    }
+
+    /// Warm the cache by loading previously cached entries from persistent storage
+    async fn warm_cache_from_persistent_storage(&self, concurrency: usize) {
+        let start_time = std::time::Instant::now();
+        info!("Starting cache warming from persistent storage...");
+
+        // Get all workspace cache instances and warm them up
+        let workspace_cache_router = &self.workspace_cache_router;
+
+        // Use a semaphore to limit concurrent cache warming operations
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
+        let mut warming_tasks = Vec::new();
+
+        // Get all open caches from the workspace router
+        let open_caches = workspace_cache_router.get_all_open_caches().await;
+
+        if open_caches.is_empty() {
+            debug!("No open caches found for warming - will warm on first access");
+            return;
+        }
+
+        info!("Found {} workspace cache(s) to warm", open_caches.len());
+
+        for (workspace_id, persistent_cache) in open_caches {
+            let semaphore_clone = semaphore.clone();
+            let universal_cache = self.universal_cache_layer.clone();
+            let workspace_id_clone = workspace_id.clone();
+
+            let task = tokio::spawn(async move {
+                let _permit = semaphore_clone.acquire().await.unwrap();
+
+                match persistent_cache.iter_nodes().await {
+                    Ok(nodes) => {
+                        let node_count = nodes.len();
+                        if node_count == 0 {
+                            debug!(
+                                "No cached nodes found in workspace cache: {}",
+                                workspace_id_clone
+                            );
+                            return;
+                        }
+
+                        debug!(
+                            "Warming cache for workspace {} with {} nodes",
+                            workspace_id_clone, node_count
+                        );
+                        let mut loaded_count = 0;
+                        let mut error_count = 0;
+
+                        for (key, persisted_node) in nodes {
+                            // Build the universal cache key for call hierarchy
+                            let method = crate::universal_cache::LspMethod::CallHierarchy;
+                            let params = format!("{}:{}", key.symbol, key.content_md5);
+
+                            // Pre-load into universal cache using the set method
+                            match universal_cache
+                                .get_universal_cache()
+                                .set(method, &key.file, &params, &persisted_node.info)
+                                .await
+                            {
+                                Ok(_) => {
+                                    loaded_count += 1;
+                                    if loaded_count % 50 == 0 {
+                                        debug!(
+                                            "Cache warming progress for {}: {}/{} nodes loaded",
+                                            workspace_id_clone, loaded_count, node_count
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    error_count += 1;
+                                    if error_count < 5 {
+                                        // Only log first few errors to avoid spam
+                                        warn!(
+                                            "Failed to warm cache entry {}:{}: {}",
+                                            key.file.display(),
+                                            key.symbol,
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        info!(
+                            "Cache warming completed for workspace {}: loaded {} nodes ({} errors)",
+                            workspace_id_clone, loaded_count, error_count
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to iterate nodes for cache warming in workspace {}: {}",
+                            workspace_id_clone, e
+                        );
+                    }
+                }
+            });
+
+            warming_tasks.push(task);
+        }
+
+        // Wait for all warming tasks to complete
+        let results = futures::future::join_all(warming_tasks).await;
+        let completed_count = results.iter().filter(|r| r.is_ok()).count();
+        let failed_count = results.len() - completed_count;
+
+        let elapsed = start_time.elapsed();
+        if failed_count > 0 {
+            warn!(
+                "Cache warming completed in {:?}: {} workspace(s) succeeded, {} failed",
+                elapsed, completed_count, failed_count
+            );
+        } else {
+            info!(
+                "Cache warming completed successfully in {:?} for {} workspace(s)",
+                elapsed, completed_count
+            );
+        }
     }
 
     /// Handle call hierarchy at commit request (stub - git functionality removed)

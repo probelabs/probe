@@ -1300,16 +1300,23 @@ impl LspServer {
             self.ensure_document_ready(file_path).await?;
         }
 
-        // For rust-analyzer, ensure document is open and wait for indexing
+        // For rust-analyzer, ensure document is open and use readiness probe
         if self.is_rust_analyzer() {
             // Open the document if not already open
             if !self.is_document_open(file_path).await {
                 self.open_file_safely(file_path).await?;
-                // rust-analyzer needs significant time to index after opening a file
-                // especially when the project hasn't been fully indexed yet
-                info!("Waiting 10 seconds for rust-analyzer to index the document and build call hierarchy...");
-                tokio::time::sleep(Duration::from_secs(10)).await;
             }
+
+            // Instead of fixed delay, probe for actual readiness with this specific operation
+            debug!("Probing rust-analyzer readiness with call hierarchy request...");
+            let probe_result = self
+                .probe_call_hierarchy_readiness(file_path, line, column)
+                .await;
+            if let Ok(result) = probe_result {
+                debug!("rust-analyzer ready! Returning probe result immediately");
+                return Ok(result);
+            }
+            debug!("rust-analyzer not ready yet, will use retry logic below");
         }
 
         // Try call hierarchy with retry logic for gopls and rust-analyzer
@@ -1664,6 +1671,58 @@ impl LspServer {
         });
 
         Ok(result)
+    }
+
+    /// Probe rust-analyzer readiness by testing the actual call hierarchy operation
+    /// Uses exponential backoff and returns success result immediately if ready
+    async fn probe_call_hierarchy_readiness(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Value> {
+        let mut attempt: u32 = 0;
+        let max_attempts = 20; // Up to ~2 minutes with exponential backoff
+
+        loop {
+            attempt += 1;
+
+            // Try the actual call hierarchy operation
+            match self
+                .perform_call_hierarchy_request(file_path, line, column)
+                .await
+            {
+                Ok(result) => {
+                    // Check if we got a meaningful response (not null/empty)
+                    if let Some(obj) = result.as_object() {
+                        if (obj.contains_key("incoming") && obj.contains_key("outgoing"))
+                            || !result.is_null()
+                        {
+                            info!("rust-analyzer ready after {} probe attempts", attempt);
+                            return Ok(result);
+                        }
+                    }
+                    // Got a response but it's not meaningful yet, continue probing
+                }
+                Err(e) => {
+                    // LSP error, server not ready yet
+                    if attempt % 5 == 0 {
+                        debug!("rust-analyzer not ready (attempt {}): {}", attempt, e);
+                    }
+                }
+            }
+
+            if attempt >= max_attempts {
+                return Err(anyhow::anyhow!(
+                    "rust-analyzer not ready after {} attempts (~2 minutes)",
+                    max_attempts
+                ));
+            }
+
+            // Exponential backoff: 1s, 2s, 4s, 8s, max 15s
+            let delay = std::cmp::min(1 << (attempt.saturating_sub(1)), 15);
+            tokio::time::sleep(Duration::from_secs(delay)).await;
+        }
     }
 
     // Ensure a workspace folder exists for the given path's module root (for gopls).

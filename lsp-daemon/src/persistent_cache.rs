@@ -688,6 +688,30 @@ impl PersistentCallGraphCache {
 
         Ok(nodes)
     }
+
+    // ================= Universal Cache Support =================
+    // These methods provide a generic key-value interface for the Universal Cache
+    // to use this persistent storage layer, independent of CallGraph specifics
+
+    /// Get an entry from the universal cache tree
+    pub async fn get_universal_entry(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        match self.db.open_tree("universal_cache")?.get(key)? {
+            Some(data) => Ok(Some(data.to_vec())),
+            None => Ok(None),
+        }
+    }
+
+    /// Set an entry in the universal cache tree
+    pub async fn set_universal_entry(&self, key: &str, data: &[u8]) -> Result<()> {
+        self.db.open_tree("universal_cache")?.insert(key, data)?;
+        Ok(())
+    }
+
+    /// Remove an entry from the universal cache tree
+    pub async fn remove_universal_entry(&self, key: &str) -> Result<()> {
+        self.db.open_tree("universal_cache")?.remove(key)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use lsp_daemon::cache_types::LspOperation;
-use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
+use lsp_daemon::universal_cache::CacheLayer;
 use lsp_daemon::indexing::{
     IndexingManager, IndexingProgress, IndexingQueue, ManagerConfig, Priority, QueueItem,
 };

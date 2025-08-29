@@ -1,5 +1,4 @@
 #!/bin/sh
-
 #
 # Pre-commit hook to run tests and code quality checks
 # Installed by 'make install-hooks'

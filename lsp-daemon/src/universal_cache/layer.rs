@@ -337,6 +337,8 @@ impl CacheLayer {
         let method = lsp_method;
         let path = file_path.clone();
         let params_str = params.clone();
+        let request_info = self.extract_request_info(&request);
+        let request_for_closure = request.clone();
 
         // Execute with singleflight deduplication
         let result = self
@@ -346,6 +348,8 @@ impl CacheLayer {
                 let key = key.clone();
                 let path = path.clone();
                 let params_str = params_str.clone();
+                let request_info = request_info.clone();
+                let request_for_closure = request_for_closure.clone();
                 let start = start_time;
 
                 Box::pin(async move {
@@ -355,10 +359,15 @@ impl CacheLayer {
                         .await
                     {
                         Ok(Some(cached_value)) => {
-                            debug!("Cache hit for key: {}", key.to_storage_key());
+                            debug!(
+                                "Cache HIT for {:?} {} - key: {}",
+                                method,
+                                request_info,
+                                key.to_storage_key()
+                            );
 
                             // Convert cached value back to DaemonResponse
-                            match Self::deserialize_response(&request, cached_value) {
+                            match Self::deserialize_response(&request_for_closure, cached_value) {
                                 Ok(response) => {
                                     return Ok(SingleflightResult {
                                         data: response,
@@ -373,7 +382,12 @@ impl CacheLayer {
                             }
                         }
                         Ok(None) => {
-                            debug!("Cache miss for key: {}", key.to_storage_key());
+                            debug!(
+                                "Cache MISS for {:?} {} - key: {}",
+                                method,
+                                request_info,
+                                key.to_storage_key()
+                            );
                         }
                         Err(e) => {
                             warn!("Cache get error: {}", e);
@@ -382,7 +396,7 @@ impl CacheLayer {
                     }
 
                     // Cache miss or error, call upstream handler
-                    let response = upstream_handler(request).await;
+                    let response = upstream_handler(request_for_closure).await;
                     let elapsed = start.elapsed();
 
                     // Cache the response if it's successful
@@ -392,7 +406,12 @@ impl CacheLayer {
                             {
                                 warn!("Failed to cache response: {}", e);
                             } else {
-                                debug!("Cached response for key: {}", key.to_storage_key());
+                                debug!(
+                                    "Cached response for {:?} {} - key: {}",
+                                    method,
+                                    request_info,
+                                    key.to_storage_key()
+                                );
                             }
                         }
                     }
@@ -409,12 +428,21 @@ impl CacheLayer {
         // Log performance metrics if enabled
         if self.config.detailed_metrics {
             let cache_status = if result.from_cache { "HIT" } else { "MISS" };
+            let (has_data, request_info) =
+                self.analyze_request_and_response(&request, &result.data);
+
             info!(
-                "Cache {} for {:?} in {:?} (singleflight: {:?})",
+                "Cache {} for {:?} in {:?} (singleflight: {:?}) {} - {}",
                 cache_status,
                 lsp_method,
                 result.duration,
-                start_time.elapsed()
+                start_time.elapsed(),
+                if has_data {
+                    "✓ HAS_DATA"
+                } else {
+                    "✗ NO_DATA"
+                },
+                request_info
             );
         }
 
@@ -445,6 +473,35 @@ impl CacheLayer {
 
         debug!("Invalidated {} cache entries for file", invalidated);
         Ok(invalidated)
+    }
+
+    /// Clear cache entries for a specific symbol
+    pub async fn clear_symbol(
+        &self,
+        file_path: &Path,
+        symbol_name: &str,
+        line: Option<u32>,
+        column: Option<u32>,
+        methods: Option<Vec<String>>,
+        all_positions: bool,
+    ) -> Result<(usize, Vec<(u32, u32)>, Vec<String>, u64)> {
+        debug!(
+            "Clearing cache for symbol '{}' in file: {}",
+            symbol_name,
+            file_path.display()
+        );
+
+        let result = self
+            .cache
+            .store
+            .clear_symbol(file_path, symbol_name, line, column, methods, all_positions)
+            .await?;
+
+        debug!(
+            "Cleared {} cache entries for symbol '{}'",
+            result.0, symbol_name
+        );
+        Ok(result)
     }
 
     /// Warm cache for commonly accessed methods
@@ -554,6 +611,11 @@ impl CacheLayer {
             singleflight_active: 0, // Would need to track this
             cache_warming_enabled: self.config.cache_warming_enabled,
         })
+    }
+
+    /// Get direct access to the underlying universal cache for indexing operations
+    pub fn get_universal_cache(&self) -> &Arc<UniversalCache> {
+        &self.cache
     }
 
     // === Private Methods ===
@@ -756,6 +818,131 @@ impl CacheLayer {
         }
 
         Ok(response)
+    }
+
+    /// Analyze request and response to determine if meaningful data was returned
+    fn analyze_request_and_response(
+        &self,
+        request: &DaemonRequest,
+        response: &DaemonResponse,
+    ) -> (bool, String) {
+        let request_info = self.extract_request_info(request);
+        let has_meaningful_data = self.has_meaningful_response_data(response);
+
+        (has_meaningful_data, request_info)
+    }
+
+    /// Extract file/symbol/position information from request
+    fn extract_request_info(&self, request: &DaemonRequest) -> String {
+        match request {
+            DaemonRequest::CallHierarchy {
+                file_path,
+                line,
+                column,
+                ..
+            } => {
+                format!(
+                    "{}:{}:{}",
+                    file_path.file_name().unwrap_or_default().to_string_lossy(),
+                    line + 1,   // Convert to 1-based line numbers
+                    column + 1  // Convert to 1-based column numbers
+                )
+            }
+            DaemonRequest::Definition {
+                file_path,
+                line,
+                column,
+                ..
+            } => {
+                format!(
+                    "{}:{}:{}",
+                    file_path.file_name().unwrap_or_default().to_string_lossy(),
+                    line + 1,
+                    column + 1
+                )
+            }
+            DaemonRequest::References {
+                file_path,
+                line,
+                column,
+                ..
+            } => {
+                format!(
+                    "{}:{}:{}",
+                    file_path.file_name().unwrap_or_default().to_string_lossy(),
+                    line + 1,
+                    column + 1
+                )
+            }
+            DaemonRequest::Hover {
+                file_path,
+                line,
+                column,
+                ..
+            } => {
+                format!(
+                    "{}:{}:{}",
+                    file_path.file_name().unwrap_or_default().to_string_lossy(),
+                    line + 1,
+                    column + 1
+                )
+            }
+            DaemonRequest::TypeDefinition {
+                file_path,
+                line,
+                column,
+                ..
+            } => {
+                format!(
+                    "{}:{}:{}",
+                    file_path.file_name().unwrap_or_default().to_string_lossy(),
+                    line + 1,
+                    column + 1
+                )
+            }
+            DaemonRequest::Implementations {
+                file_path,
+                line,
+                column,
+                ..
+            } => {
+                format!(
+                    "{}:{}:{}",
+                    file_path.file_name().unwrap_or_default().to_string_lossy(),
+                    line + 1,
+                    column + 1
+                )
+            }
+            DaemonRequest::DocumentSymbols { file_path, .. } => {
+                format!(
+                    "{}",
+                    file_path.file_name().unwrap_or_default().to_string_lossy()
+                )
+            }
+            DaemonRequest::WorkspaceSymbols { query, .. } => {
+                format!("query:{query}")
+            }
+            _ => "unknown".to_string(),
+        }
+    }
+
+    /// Determine if response contains meaningful data
+    fn has_meaningful_response_data(&self, response: &DaemonResponse) -> bool {
+        match response {
+            DaemonResponse::CallHierarchy { result, .. } => {
+                // Check if call hierarchy has incoming or outgoing calls
+                !result.incoming.is_empty() || !result.outgoing.is_empty()
+            }
+            DaemonResponse::Definition { locations, .. } => !locations.is_empty(),
+            DaemonResponse::References { locations, .. } => !locations.is_empty(),
+            DaemonResponse::Hover { content, .. } => content.is_some(),
+            DaemonResponse::TypeDefinition { locations, .. } => !locations.is_empty(),
+            DaemonResponse::Implementations { locations, .. } => !locations.is_empty(),
+            DaemonResponse::DocumentSymbols { symbols, .. } => !symbols.is_empty(),
+            DaemonResponse::WorkspaceSymbols { symbols, .. } => !symbols.is_empty(),
+            DaemonResponse::Error { .. } => false,
+            _ => true, // Other response types are assumed to have data
+        }
     }
 
     /// Determine if a response should be cached

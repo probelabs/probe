@@ -188,6 +188,17 @@ pub enum DaemonRequest {
         workspace_path: Option<PathBuf>,
     },
 
+    // Symbol-specific cache clearing
+    ClearSymbolCache {
+        request_id: Uuid,
+        file_path: PathBuf,
+        symbol_name: String,
+        line: Option<u32>,
+        column: Option<u32>,
+        methods: Option<Vec<String>>,
+        all_positions: bool,
+    },
+
     // Git-aware requests
     GetCallHierarchyAtCommit {
         request_id: Uuid,
@@ -371,6 +382,12 @@ pub enum DaemonResponse {
     WorkspaceCacheCleared {
         request_id: Uuid,
         result: WorkspaceClearResult,
+    },
+
+    // Symbol cache clearing response
+    SymbolCacheCleared {
+        request_id: Uuid,
+        result: SymbolCacheClearResult,
     },
 
     // Git-aware responses
@@ -982,6 +999,18 @@ pub struct CacheStatistics {
     pub age_distribution: AgeDistribution,
     pub most_accessed: Vec<HotSpot>,
     pub memory_usage: MemoryUsage,
+}
+
+// Symbol cache clear result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolCacheClearResult {
+    pub symbol_name: String,
+    pub file_path: PathBuf,
+    pub entries_cleared: usize,
+    pub positions_cleared: Vec<(u32, u32)>, // (line, column) pairs
+    pub methods_cleared: Vec<String>,
+    pub cache_size_freed_bytes: u64,
+    pub duration_ms: u64,
 }
 
 // Generic cache operation results
