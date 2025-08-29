@@ -430,19 +430,24 @@ impl Default for IndexingConfig {
             memory_pressure_threshold: 0.8,
             max_queue_size: 10000,
             global_exclude_patterns: vec![
-                "*.git/*".to_string(),
+                // Only exclude version control and truly non-source directories
+                ".git/*".to_string(),
+                "*/.git/*".to_string(),
                 "*/node_modules/*".to_string(),
-                "*/target/*".to_string(),
-                "*/build/*".to_string(),
-                "*/dist/*".to_string(),
-                "*/.cargo/*".to_string(),
                 "*/__pycache__/*".to_string(),
                 "*.tmp".to_string(),
                 "*.log".to_string(),
+                "*.pyc".to_string(),
+                "*.pyo".to_string(),
+                "*.swp".to_string(),
+                "*.swo".to_string(),
+                "*~".to_string(),
+                // Note: We do NOT exclude target/build/dist directories as they may contain
+                // generated code that should be indexed for better code understanding
             ],
             global_include_patterns: vec![],
             max_file_size_bytes: 10 * 1024 * 1024, // 10MB - matches main config max_file_size_mb default
-            incremental_mode: true,
+            incremental_mode: true,                // Re-enabled with timestamp fix
             discovery_batch_size: 1000,
             status_update_interval_secs: 5,
             file_processing_timeout_ms: 30000, // 30 seconds

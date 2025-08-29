@@ -1,4 +1,3 @@
-use crate::health_monitor::HealthMonitor;
 use crate::language_detector::Language;
 use crate::lsp_registry::LspServerConfig;
 use crate::lsp_server::LspServer;
@@ -16,6 +15,50 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 use url::Url;
+
+/// Simple retry helper with exponential backoff
+async fn retry_with_backoff<T, F, Fut, E>(
+    mut operation: F,
+    operation_name: &str,
+    max_attempts: u32,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<T, E>>,
+    E: std::fmt::Display,
+    anyhow::Error: From<E>,
+{
+    let mut attempt = 1;
+    loop {
+        match operation().await {
+            Ok(result) => {
+                if attempt > 1 {
+                    debug!("{} succeeded on attempt {}", operation_name, attempt);
+                }
+                return Ok(result);
+            }
+            Err(e) => {
+                if attempt >= max_attempts {
+                    return Err(anyhow!(
+                        "{} failed after {} attempts: {}",
+                        operation_name,
+                        max_attempts,
+                        e
+                    ));
+                }
+
+                let delay_ms = (100 * (1 << (attempt - 1))).min(5000); // Cap at 5 seconds
+                debug!(
+                    "{} failed on attempt {} ({}), retrying in {}ms",
+                    operation_name, attempt, e, delay_ms
+                );
+
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                attempt += 1;
+            }
+        }
+    }
+}
 
 /// A single server instance that supports multiple workspaces
 #[derive(Debug)]
@@ -69,7 +112,6 @@ pub struct SingleServerManager {
     servers: Arc<DashMap<Language, Arc<Mutex<ServerInstance>>>>,
     registry: Arc<crate::lsp_registry::LspRegistry>,
     child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
-    health_monitor: Arc<HealthMonitor>,
     process_monitor: Arc<ProcessMonitor>,
 }
 
@@ -82,41 +124,13 @@ impl SingleServerManager {
         registry: Arc<crate::lsp_registry::LspRegistry>,
         child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
     ) -> Self {
-        let health_monitor = Arc::new(HealthMonitor::new());
         let process_monitor = Arc::new(ProcessMonitor::with_limits(95.0, 2048)); // 95% CPU, 2GB memory (TSServer-friendly)
         Self {
             servers: Arc::new(DashMap::new()),
             registry,
             child_processes,
-            health_monitor,
             process_monitor,
         }
-    }
-
-    pub fn new_with_health_monitor(
-        registry: Arc<crate::lsp_registry::LspRegistry>,
-        child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
-        health_monitor: Arc<HealthMonitor>,
-    ) -> Self {
-        let process_monitor = Arc::new(ProcessMonitor::with_limits(95.0, 2048)); // 95% CPU, 2GB memory (TSServer-friendly)
-        Self {
-            servers: Arc::new(DashMap::new()),
-            registry,
-            child_processes,
-            health_monitor,
-            process_monitor,
-        }
-    }
-
-    /// Start health monitoring for this server manager
-    pub fn start_health_monitoring(&self) -> tokio::task::JoinHandle<()> {
-        info!("Starting health monitoring for LSP servers");
-        self.health_monitor.start_monitoring(Arc::new(self.clone()))
-    }
-
-    /// Get the health monitor instance
-    pub fn health_monitor(&self) -> Arc<HealthMonitor> {
-        self.health_monitor.clone()
     }
 
     /// Get the process monitor instance
@@ -139,9 +153,6 @@ impl SingleServerManager {
         let unhealthy_pids = self.process_monitor.monitor_children(pids.clone()).await;
         // Track which unhealthy PIDs we are actually allowed to kill (outside warm-up grace)
         let mut kill_list: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        // Collect languages to mark unhealthy outside of DashMap iteration to avoid holding shard locks across await
-        let mut languages_to_mark_unhealthy: std::collections::HashSet<Language> =
-            std::collections::HashSet::new();
 
         if !unhealthy_pids.is_empty() {
             warn!(
@@ -178,8 +189,6 @@ impl SingleServerManager {
                                         unhealthy_pid, language
                                     );
 
-                                    // Collect language to mark unhealthy later (after releasing DashMap guards)
-                                    languages_to_mark_unhealthy.insert(language);
                                     // This PID is past grace; it is safe to terminate.
                                     kill_list.insert(unhealthy_pid);
                                     break;
@@ -217,10 +226,10 @@ impl SingleServerManager {
                 );
             }
 
-            // Now that we have released all DashMap guards, perform awaits safely
-            for lang in languages_to_mark_unhealthy {
-                self.health_monitor.mark_unhealthy(lang).await;
-            }
+            debug!(
+                "Process monitoring completed - {} processes terminated",
+                kill_list.len()
+            );
         } else {
             debug!("All {} child processes are healthy", pids.len());
         }
@@ -228,105 +237,66 @@ impl SingleServerManager {
         Ok(())
     }
 
-    /// Execute an operation with health monitoring
-    /// Marks the server as healthy if the operation succeeds, unhealthy if it fails
-    pub async fn execute_with_health_monitoring<T, F, Fut>(
-        &self,
-        language: Language,
-        operation: F,
-    ) -> Result<T>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<T>>,
-    {
-        match operation().await {
-            Ok(result) => {
-                self.health_monitor.mark_healthy(language).await;
-                Ok(result)
-            }
-            Err(e) => {
-                warn!("Operation failed for {:?}: {}", language, e);
-                self.health_monitor.mark_unhealthy(language).await;
-                Err(e)
-            }
-        }
-    }
+    /// Restart a server (simple restart without health checking)
+    pub async fn restart_server(&self, language: Language) -> Result<()> {
+        warn!("Restarting server for {:?}", language);
 
-    /// Restart a server if it's unhealthy
-    pub async fn restart_server_if_unhealthy(&self, language: Language) -> Result<()> {
-        if self.health_monitor.should_restart(language).await {
-            warn!("Restarting unhealthy server for {:?}", language);
-
-            // Remove the server from our map
-            let mut bootstrap_ws: Option<PathBuf> = None;
-            if let Some((_, server_instance)) = self.servers.remove(&language) {
-                // Try to shutdown gracefully and capture bootstrap workspace
-                match tokio::time::timeout(Duration::from_secs(2), server_instance.lock()).await {
-                    Ok(server) => {
-                        // Remember the workspace we bootstrapped with so we can respawn immediately.
-                        bootstrap_ws = server.bootstrap_workspace.clone();
-                        if let Err(e) = server.server.shutdown().await {
-                            warn!(
-                                "Error shutting down {:?} server during restart: {}",
-                                language, e
-                            );
-                        } else {
-                            info!("Successfully shut down {:?} server for restart", language);
-                        }
-                    }
-                    Err(_) => {
+        // Remove the server from our map
+        let mut bootstrap_ws: Option<PathBuf> = None;
+        if let Some((_, server_instance)) = self.servers.remove(&language) {
+            // Try to shutdown gracefully and capture bootstrap workspace
+            match tokio::time::timeout(Duration::from_secs(2), server_instance.lock()).await {
+                Ok(server) => {
+                    // Remember the workspace we bootstrapped with so we can respawn immediately.
+                    bootstrap_ws = server.bootstrap_workspace.clone();
+                    if let Err(e) = server.server.shutdown().await {
                         warn!(
-                            "Timeout acquiring lock for {:?} server during restart",
-                            language
+                            "Error shutting down {:?} server during restart: {}",
+                            language, e
                         );
+                    } else {
+                        info!("Successfully shut down {:?} server for restart", language);
                     }
                 }
-            } else {
-                info!(
-                    "No existing {:?} server instance found in manager; proceeding with clean spawn if possible",
-                    language
-                );
-            }
-
-            // Reset health status
-            self.health_monitor.reset_health_status(language).await;
-
-            // If we know a bootstrap workspace, spawn a fresh instance *now*.
-            if let Some(ws) = bootstrap_ws {
-                info!(
-                    "Spawning fresh {:?} server using bootstrap workspace {:?}",
-                    language, ws
-                );
-                // Note: ensure_workspace_registered bypasses the circuit breaker when
-                // there is no current instance, allowing resurrection even if CB is open.
-                if let Err(e) = self.ensure_workspace_registered(language, ws).await {
+                Err(_) => {
                     warn!(
-                        "Failed to spawn fresh {:?} server after restart: {}",
-                        language, e
+                        "Timeout acquiring lock for {:?} server during restart",
+                        language
                     );
                 }
-            } else {
-                info!(
-                    "No bootstrap workspace recorded for {:?}; will spawn on next client request",
-                    language
+            }
+        } else {
+            info!(
+                "No existing {:?} server instance found in manager; proceeding with clean spawn if possible",
+                language
+            );
+        }
+
+        // If we know a bootstrap workspace, spawn a fresh instance *now*.
+        if let Some(ws) = bootstrap_ws {
+            info!(
+                "Spawning fresh {:?} server using bootstrap workspace {:?}",
+                language, ws
+            );
+            if let Err(e) = self.ensure_workspace_registered(language, ws).await {
+                warn!(
+                    "Failed to spawn fresh {:?} server after restart: {}",
+                    language, e
                 );
             }
-
-            info!("Server restart sequence completed for {:?}", language);
+        } else {
+            info!(
+                "No bootstrap workspace recorded for {:?}; will spawn on next client request",
+                language
+            );
         }
+
+        info!("Server restart sequence completed for {:?}", language);
         Ok(())
     }
 
     /// Get or create a server for the specified language
     pub async fn get_server(&self, language: Language) -> Result<Arc<Mutex<ServerInstance>>> {
-        // Check circuit breaker first
-        if self.health_monitor.should_reject_request(language).await {
-            return Err(anyhow!(
-                "Circuit breaker is open for {:?} - server is unhealthy",
-                language
-            ));
-        }
-
         // Check if server already exists
         if let Some(entry) = self.servers.get(&language) {
             // IMPORTANT: clone Arc and drop DashMap guard before any .await or long operations
@@ -340,13 +310,9 @@ impl SingleServerManager {
                 // Server is responsive
                 return Ok(server_instance);
             } else {
-                // Server may be busy (e.g., indexing). Don't thrash by removing/recreating immediately.
-                warn!(
-                    "Server {:?} lock busy; marking unhealthy but not recreating immediately",
-                    language
-                );
-                self.health_monitor.mark_unhealthy(language).await;
-                // Return the existing instance and allow the health monitor to decide on restart later.
+                // Server may be busy (e.g., indexing). This is normal and not a failure.
+                debug!("Server {:?} lock busy, but returning instance anyway - this is normal during indexing", language);
+                // Return the existing instance - being busy is not a problem
                 return Ok(server_instance);
             }
         }
@@ -365,8 +331,7 @@ impl SingleServerManager {
         // Store the server
         self.servers.insert(language, instance.clone());
 
-        // Mark as healthy after successful creation
-        self.health_monitor.mark_healthy(language).await;
+        // Server created successfully
 
         info!("Created new LSP server for {:?}", language);
         Ok(instance)
@@ -384,17 +349,7 @@ impl SingleServerManager {
             workspace_root, language
         );
 
-        // If there is NO running instance, allow creation even if the circuit breaker is open.
-        // This prevents a dead server from blocking its own resurrection.
-        let has_instance = self.servers.contains_key(&language);
-
-        // Check circuit breaker only when we already have a running instance.
-        if has_instance && self.health_monitor.should_reject_request(language).await {
-            return Err(anyhow!(
-                "Circuit breaker is open for {:?} - server is unhealthy",
-                language
-            ));
-        }
+        // Server instances are managed without circuit breaker complexity
         // Check if server already exists
         if let Some(entry) = self.servers.get(&language) {
             // IMPORTANT: clone Arc and drop DashMap guard before any .await or long operations
@@ -432,7 +387,6 @@ impl SingleServerManager {
                         Ok(guard) => guard,
                         Err(_) => {
                             warn!("Failed to acquire lock for {:?} server workspace registration within 30s timeout", language);
-                            self.health_monitor.mark_unhealthy(language).await;
                             return Err(anyhow!(
                                 "Server lock acquisition timeout for {:?}",
                                 language
@@ -443,7 +397,6 @@ impl SingleServerManager {
                     let mut server = server_guard;
                     match self.register_workspace(&mut server, &workspace_root).await {
                         Ok(_) => {
-                            self.health_monitor.mark_healthy(language).await;
                             info!(
                                 "Successfully registered workspace {:?} with {:?} server",
                                 workspace_root, language
@@ -455,7 +408,6 @@ impl SingleServerManager {
                                 "Failed to register workspace {:?} with {:?} server: {}",
                                 workspace_root, language, e
                             );
-                            self.health_monitor.mark_unhealthy(language).await;
                             // Remove the failed server so it gets recreated on next attempt
                             drop(server);
                             self.servers.remove(&language);
@@ -481,7 +433,6 @@ impl SingleServerManager {
                         "Failed to acquire lock for {:?} server within 30s timeout - server may be stuck initializing",
                         language
                     );
-                    self.health_monitor.mark_unhealthy(language).await;
 
                     // Remove the stuck server to allow recreation
                     self.servers.remove(&language);
@@ -510,19 +461,10 @@ impl SingleServerManager {
                     .clone();
 
                 // Initialize with the actual workspace
-                match server
+                server
                     .server
                     .initialize_with_workspace(&config, &workspace_root)
-                    .await
-                {
-                    Ok(_) => {
-                        self.health_monitor.mark_healthy(language).await;
-                    }
-                    Err(e) => {
-                        self.health_monitor.mark_unhealthy(language).await;
-                        return Err(e);
-                    }
-                }
+                    .await?;
 
                 // Mark server as initialized immediately after LSP initialization
                 // Don't wait for indexing to complete to avoid blocking
@@ -558,7 +500,6 @@ impl SingleServerManager {
                 );
                 match self.register_workspace(&mut server, &workspace_root).await {
                     Ok(_) => {
-                        self.health_monitor.mark_healthy(language).await;
                         info!(
                             "Successfully registered workspace {:?} with {:?} server",
                             workspace_root, language
@@ -570,7 +511,6 @@ impl SingleServerManager {
                             "Failed to register workspace {:?} with {:?} server: {}",
                             workspace_root, language, e
                         );
-                        self.health_monitor.mark_unhealthy(language).await;
 
                         // Remove the failed server so it gets recreated on next attempt
                         drop(server);
@@ -600,21 +540,17 @@ impl SingleServerManager {
 
         // Spawn server with the workspace root so it starts in the correct directory
         // This is critical for gopls which needs to run in the Go module root
-        let mut server = LspServer::spawn_with_workspace(&config, &workspace_root)?;
+        let mut server = retry_with_backoff(
+            || async { LspServer::spawn_with_workspace(&config, &workspace_root) },
+            &format!("spawn {language:?} server with workspace"),
+            3, // max 3 attempts
+        )
+        .await?;
 
         // Initialize with the actual workspace from the start
-        match server
+        server
             .initialize_with_workspace(&config, &workspace_root)
-            .await
-        {
-            Ok(_) => {
-                self.health_monitor.mark_healthy(language).await;
-            }
-            Err(e) => {
-                self.health_monitor.mark_unhealthy(language).await;
-                return Err(e);
-            }
-        }
+            .await?;
 
         // Create instance with this workspace already registered and mark as initialized
         // Note: We don't wait for full indexing to complete to avoid blocking
@@ -643,8 +579,13 @@ impl SingleServerManager {
     async fn create_server(&self, config: &LspServerConfig) -> Result<LspServer> {
         debug!("Creating new LSP server for {:?}", config.language);
 
-        // Create server and track its PID
-        let mut server = LspServer::spawn(config)?;
+        // Create server with retry logic for transient failures
+        let mut server = retry_with_backoff(
+            || async { LspServer::spawn(config) },
+            &format!("spawn {:?} server", config.language),
+            3, // max 3 attempts
+        )
+        .await?;
 
         // Track the child process PID
         if let Some(pid) = server.get_pid() {
@@ -653,7 +594,7 @@ impl SingleServerManager {
             info!("Tracking LSP server process with PID: {}", pid);
         }
 
-        // Initialize with a default workspace (will be replaced with actual workspace on first use)
+        // Initialize with a default workspace (single attempt - failures indicate deeper issues)
         server.initialize_empty(config).await?;
 
         // Don't wait for indexing to complete - let it happen in background

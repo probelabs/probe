@@ -12,9 +12,7 @@ pub mod protocol;
 pub mod socket_path;
 
 // Cache modules
-pub mod cache_management;
 pub mod cache_types;
-pub mod call_graph_cache;
 pub mod hash_utils;
 pub mod lsp_cache;
 pub mod persistent_cache;
@@ -31,7 +29,6 @@ pub mod lsp_server;
 
 // Internal modules - exposed for embedded daemon use
 pub mod daemon;
-pub mod health_monitor;
 mod pool; // Keep for now but mark as deprecated
 pub mod server_manager;
 pub mod watchdog;
@@ -70,7 +67,6 @@ pub use protocol::{
     WorkspaceInfo,
 };
 
-pub use cache_management::CacheManager;
 pub use ipc::{IpcListener, IpcStream};
 pub use language_detector::{Language, LanguageDetector};
 pub use logging::{LogBuffer, MemoryLogLayer};
@@ -78,7 +74,6 @@ pub use socket_path::{get_default_socket_path, normalize_executable, remove_sock
 
 // Re-export daemon for binary and embedded use
 pub use daemon::{start_daemon_background, LspDaemon};
-pub use health_monitor::HealthMonitor;
 pub use lsp_registry::LspRegistry;
 pub use watchdog::{ProcessHealth, ProcessMonitor, ProcessStats, Watchdog};
 

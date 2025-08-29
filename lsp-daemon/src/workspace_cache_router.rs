@@ -1087,6 +1087,23 @@ impl WorkspaceCacheRouter {
             }
         }
     }
+
+    /// Get all currently open cache instances for cache warming
+    pub async fn get_all_open_caches(&self) -> Vec<(String, Arc<PersistentCallGraphCache>)> {
+        let mut caches = Vec::new();
+
+        for entry in self.open_caches.iter() {
+            let workspace_id = entry.key().clone();
+            let cache = entry.value().clone();
+            caches.push((workspace_id, cache));
+        }
+
+        debug!(
+            "Retrieved {} open cache instances for cache warming",
+            caches.len()
+        );
+        caches
+    }
 }
 
 /// Statistics for workspace cache router

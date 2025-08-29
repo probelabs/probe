@@ -54,7 +54,7 @@ impl Default for FileImportanceStrategy {
             base_priority: IndexingPriority::Medium,
             high_priority_patterns: vec![],
             low_priority_patterns: vec!["*test*".to_string(), "*spec*".to_string()],
-            include_tests: false,
+            include_tests: true, // FOR INDEXING: We want to index ALL source files including tests
             max_file_size: 10 * 1024 * 1024, // 10MB
             target_extensions: vec![],
         }
@@ -426,7 +426,7 @@ impl LanguageStrategyFactory {
                 "*/examples/*".to_string(),
             ],
             target_extensions: vec![".rs".to_string()],
-            include_tests: false,
+            include_tests: true, // FOR INDEXING: We want to index ALL Rust files including tests
             ..Default::default()
         };
 

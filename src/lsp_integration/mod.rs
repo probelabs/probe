@@ -285,60 +285,54 @@ pub enum IndexConfigSubcommands {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum CacheSubcommands {
-    /// Show cache statistics
+    /// Show cache statistics and configuration
     Stats {
-        /// Show detailed statistics
+        /// Show detailed per-method statistics
         #[clap(long)]
         detailed: bool,
 
-        /// Show git-aware statistics
+        /// Show per-workspace breakdown
         #[clap(long)]
-        git: bool,
+        per_workspace: bool,
+
+        /// Show layer-specific statistics (memory, disk, server)
+        #[clap(long)]
+        layers: bool,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
     },
 
-    /// Clear cache
+    /// Clear cache entries
     Clear {
-        /// Clear only entries older than N days
+        /// Clear entries for specific LSP method
         #[clap(long)]
-        older_than: Option<u64>,
+        method: Option<String>,
 
-        /// Clear only entries for specific file
+        /// Clear entries for specific workspace
+        #[clap(long)]
+        workspace: Option<std::path::PathBuf>,
+
+        /// Clear entries for specific file
         #[clap(long)]
         file: Option<std::path::PathBuf>,
 
-        /// Clear only entries for specific git commit
+        /// Clear entries older than N seconds
         #[clap(long)]
-        commit: Option<String>,
+        older_than: Option<u64>,
 
-        /// Clear everything (requires confirmation)
+        /// Clear all entries (requires confirmation)
         #[clap(long)]
         all: bool,
-    },
 
-    /// Export cache to file
-    Export {
-        /// Output file path
-        #[clap(required = true)]
-        output: std::path::PathBuf,
+        /// Force clear without confirmation
+        #[clap(short = 'f', long = "force")]
+        force: bool,
 
-        /// Include only entries from current branch
-        #[clap(long)]
-        current_branch: bool,
-
-        /// Compress the export
-        #[clap(long)]
-        compress: bool,
-    },
-
-    /// Import cache from file
-    Import {
-        /// Input file path
-        #[clap(required = true)]
-        input: std::path::PathBuf,
-
-        /// Merge with existing cache (default: replace)
-        #[clap(long)]
-        merge: bool,
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
     },
 
     /// Compact the cache database
@@ -387,61 +381,31 @@ pub enum CacheSubcommands {
         format: String,
     },
 
-    /// Universal cache management commands
-    Universal {
-        #[clap(subcommand)]
-        universal_command: UniversalCacheSubcommands,
-    },
-}
+    /// Clear cache for a specific symbol
+    ClearSymbol {
+        /// File path containing the symbol
+        #[clap(required = true)]
+        file: std::path::PathBuf,
 
-#[derive(Subcommand, Debug, Clone)]
-pub enum UniversalCacheSubcommands {
-    /// Show universal cache statistics and configuration
-    Stats {
-        /// Show detailed per-method statistics
-        #[clap(long)]
-        detailed: bool,
+        /// Symbol name to clear cache for
+        #[clap(required = true)]
+        symbol: String,
 
-        /// Show per-workspace breakdown
-        #[clap(long)]
-        per_workspace: bool,
+        /// Line number of the symbol (optional, will search if not provided)
+        #[clap(short = 'l', long = "line")]
+        line: Option<u32>,
 
-        /// Show layer-specific statistics (memory, disk, server)
-        #[clap(long)]
-        layers: bool,
+        /// Column number of the symbol (optional, will search if not provided)
+        #[clap(short = 'c', long = "column")]
+        column: Option<u32>,
 
-        /// Output format (terminal, json)
-        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
-        format: String,
-    },
+        /// Clear for specific LSP methods only (comma-separated: CallHierarchy,References,Hover,Definition)
+        #[clap(long = "methods")]
+        methods: Option<String>,
 
-    /// Configure universal cache settings
-    Config {
-        #[clap(subcommand)]
-        config_command: UniversalCacheConfigSubcommands,
-    },
-
-    /// Clear universal cache entries
-    Clear {
-        /// Clear entries for specific LSP method
-        #[clap(long)]
-        method: Option<String>,
-
-        /// Clear entries for specific workspace
-        #[clap(long)]
-        workspace: Option<std::path::PathBuf>,
-
-        /// Clear entries for specific file
-        #[clap(long)]
-        file: Option<std::path::PathBuf>,
-
-        /// Clear entries older than N seconds
-        #[clap(long)]
-        older_than: Option<u64>,
-
-        /// Clear all entries (requires confirmation)
-        #[clap(long)]
-        all: bool,
+        /// Include all positions in multi-position fallback (for rust-analyzer)
+        #[clap(long = "all-positions")]
+        all_positions: bool,
 
         /// Force clear without confirmation
         #[clap(short = 'f', long = "force")]
@@ -452,7 +416,13 @@ pub enum UniversalCacheSubcommands {
         format: String,
     },
 
-    /// Test universal cache functionality
+    /// Configure cache settings
+    Config {
+        #[clap(subcommand)]
+        config_command: CacheConfigSubcommands,
+    },
+
+    /// Test cache functionality
     Test {
         /// Workspace path to test (defaults to current directory)
         #[clap(short = 'w', long = "workspace")]
@@ -475,34 +445,7 @@ pub enum UniversalCacheSubcommands {
         format: String,
     },
 
-    /// Migrate from legacy cache to universal cache
-    Migrate {
-        /// Source cache type to migrate from
-        #[clap(long, value_parser = ["legacy", "workspace", "global"])]
-        from: String,
-
-        /// Workspace path to migrate (optional, migrates all if not specified)
-        #[clap(short = 'w', long = "workspace")]
-        workspace: Option<std::path::PathBuf>,
-
-        /// Dry run - show what would be migrated without making changes
-        #[clap(long)]
-        dry_run: bool,
-
-        /// Force migration even if data might be overwritten
-        #[clap(short = 'f', long = "force")]
-        force: bool,
-
-        /// Backup existing data before migration
-        #[clap(long, default_value = "true")]
-        backup: bool,
-
-        /// Output format (terminal, json)
-        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
-        format: String,
-    },
-
-    /// Validate universal cache integrity
+    /// Validate cache integrity
     Validate {
         /// Workspace path to validate (optional, validates all if not specified)
         #[clap(short = 'w', long = "workspace")]
@@ -522,8 +465,77 @@ pub enum UniversalCacheSubcommands {
     },
 }
 
+// UniversalCacheSubcommands removed - merged into CacheSubcommands
+
 #[derive(Subcommand, Debug, Clone)]
-pub enum UniversalCacheConfigSubcommands {
+pub enum CacheConfigSubcommands {
+    /// Show current cache configuration
+    Show {
+        /// Show only configuration for specific method
+        #[clap(long)]
+        method: Option<String>,
+
+        /// Show configuration for specific layer (memory, disk, server)
+        #[clap(long, value_parser = ["memory", "disk", "server"])]
+        layer: Option<String>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Enable cache globally
+    Enable {
+        /// Enable for specific methods only (comma-separated)
+        #[clap(long)]
+        methods: Option<String>,
+
+        /// Enable specific layers only (comma-separated: memory,disk,server)
+        #[clap(long)]
+        layers: Option<String>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Disable cache globally or selectively
+    Disable {
+        /// Disable for specific methods only (comma-separated)
+        #[clap(long)]
+        methods: Option<String>,
+
+        /// Disable specific layers only (comma-separated: memory,disk,server)
+        #[clap(long)]
+        layers: Option<String>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+
+    /// Set cache TTL (Time To Live) for methods
+    SetTtl {
+        /// LSP method to configure
+        method: String,
+
+        /// TTL in seconds (0 = no expiration)
+        ttl_seconds: u64,
+
+        /// Apply to specific layer only (memory, disk)
+        #[clap(long, value_parser = ["memory", "disk"])]
+        layer: Option<String>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
+}
+
+// Removed UniversalCacheConfigSubcommands - merged into CacheConfigSubcommands
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum LspCacheConfigSubcommands {
     /// Show current universal cache configuration
     Show {
         /// Show only configuration for specific method
