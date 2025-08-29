@@ -125,7 +125,7 @@ pub fn standalone_function() {
 
         if let Ok(search_result) = result {
             let output = &search_result.code;
-            println!("✅ Successfully extracted Calculator.new: {}", output);
+            println!("✅ Successfully extracted Calculator.new: {output}");
             assert!(
                 output.contains("pub fn new() -> Self"),
                 "Should extract new method"
@@ -145,14 +145,14 @@ pub fn standalone_function() {
             match simple_result {
                 Ok(search_result) => {
                     let output = &search_result.code;
-                    println!("✅ Successfully extracted with simple name: {}", output);
+                    println!("✅ Successfully extracted with simple name: {output}");
                     assert!(
                         output.contains("pub fn new() -> Self"),
                         "Should extract new method"
                     );
                 }
                 Err(e) => {
-                    println!("ℹ️  Complex symbol extraction not supported, but syntax conversion works: {}", e);
+                    println!("ℹ️  Complex symbol extraction not supported, but syntax conversion works: {e}");
                     // This is okay - the main test validates that syntax conversion works
                 }
             }
