@@ -341,8 +341,19 @@ pub fn build_combined_pattern(terms: &[String]) -> String {
         println!("DEBUG: Building combined pattern for {} terms", terms.len());
     }
 
+    // Limit the number of terms to prevent regex size explosion
+    const MAX_TERMS_IN_PATTERN: usize = 1000;
+    let limited_terms = if terms.len() > MAX_TERMS_IN_PATTERN {
+        if debug_mode {
+            println!("DEBUG: Limiting pattern to first {} terms (was {})", MAX_TERMS_IN_PATTERN, terms.len());
+        }
+        &terms[..MAX_TERMS_IN_PATTERN]
+    } else {
+        terms
+    };
+
     // Escape special characters in each term
-    let escaped_terms = terms.iter().map(|t| regex_escape(t)).collect::<Vec<_>>();
+    let escaped_terms = limited_terms.iter().map(|t| regex_escape(t)).collect::<Vec<_>>();
 
     // Join terms with | operator and add case-insensitive flag without word boundaries
     let pattern = format!("(?i)({terms})", terms = escaped_terms.join("|"));
@@ -350,9 +361,10 @@ pub fn build_combined_pattern(terms: &[String]) -> String {
     if debug_mode {
         let duration = start_time.elapsed();
         println!(
-            "DEBUG: Combined pattern built in {}: {}",
+            "DEBUG: Combined pattern built in {} with {} terms: {}",
             format_duration(duration),
-            pattern
+            limited_terms.len(),
+            if pattern.len() > 200 { format!("{}...", &pattern[..200]) } else { pattern.clone() }
         );
     }
 
@@ -372,6 +384,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
     }
 
     let mut results = Vec::new();
+    const MAX_PATTERNS: usize = 5000; // Limit total patterns to prevent regex size explosion
 
     if debug_mode {
         println!("DEBUG: Creating structured patterns with AST awareness");
@@ -497,50 +510,10 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                     println!("DEBUG: Processing OR expression");
                 }
 
-                // For OR, create combined patterns
-                let mut left_patterns = Vec::new();
-                let mut right_patterns = Vec::new();
-
-                collect_patterns(left, plan, &mut left_patterns, debug_mode);
-                collect_patterns(right, plan, &mut right_patterns, debug_mode);
-
-                if !left_patterns.is_empty() && !right_patterns.is_empty() {
-                    // Combine the patterns with OR
-                    let combined = format!(
-                        "({}|{})",
-                        left_patterns
-                            .iter()
-                            .map(|(p, _)| p.as_str())
-                            .collect::<Vec<_>>()
-                            .join("|"),
-                        right_patterns
-                            .iter()
-                            .map(|(p, _)| p.as_str())
-                            .collect::<Vec<_>>()
-                            .join("|")
-                    );
-
-                    // Merge the term indices
-                    let mut indices = HashSet::new();
-                    for (_, idx_set) in left_patterns.iter().chain(right_patterns.iter()) {
-                        indices.extend(idx_set.iter().cloned());
-                    }
-
-                    if debug_mode {
-                        println!("DEBUG: Created combined OR pattern: '{combined}'");
-                        println!("DEBUG: Combined indices: {indices:?}");
-                    }
-
-                    results.push((combined, indices));
-                }
-
-                // Also add individual patterns to ensure we catch all matches
-                // This is important for multi-keyword terms where we want to match any of the keywords
-                if debug_mode {
-                    println!("DEBUG: Adding individual patterns from OR expression");
-                }
-                results.extend(left_patterns);
-                results.extend(right_patterns);
+                // For OR, just collect patterns from both sides independently
+                // Don't create complex nested patterns that can explode in size
+                collect_patterns(left, plan, results, debug_mode);
+                collect_patterns(right, plan, results, debug_mode);
             }
         }
     }
@@ -644,8 +617,8 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
         println!("DEBUG: Starting pattern deduplication");
     }
 
-    // First, deduplicate by exact pattern match
-    let mut pattern_map: HashMap<String, HashSet<usize>> = HashMap::new();
+    // First, deduplicate by exact pattern match using BTreeMap for deterministic iteration
+    let mut pattern_map: std::collections::BTreeMap<String, HashSet<usize>> = std::collections::BTreeMap::new();
 
     for (pattern, indices) in results {
         pattern_map
@@ -654,10 +627,8 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
             .or_insert(indices);
     }
 
-    // Then, deduplicate patterns that match the same term
-    // For the test_pattern_deduplication test, we need to ensure we don't have
-    // multiple patterns for the same term with the same indices
-    let mut term_patterns: HashMap<String, Vec<(String, HashSet<usize>)>> = HashMap::new();
+    // Then, deduplicate patterns that match the same term using BTreeMap for deterministic iteration
+    let mut term_patterns: std::collections::BTreeMap<String, Vec<(String, HashSet<usize>)>> = std::collections::BTreeMap::new();
 
     // Group patterns by the terms they match
     for (pattern, indices) in pattern_map.iter() {
@@ -676,17 +647,20 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
             .push((pattern.clone(), indices.clone()));
     }
 
-    // Keep only the most specific pattern for each term group
+    // Keep only the most specific patterns for each term group, sorted deterministically
     let mut deduplicated_results = Vec::new();
 
-    for (_, patterns) in term_patterns {
+    for (_, mut patterns) in term_patterns {
         if patterns.len() <= 2 {
             // If there are 1 or 2 patterns, keep them all
             deduplicated_results.extend(patterns);
         } else {
-            // If there are more than 2 patterns, keep only the first 2
-            // This is a simplification - in a real implementation, you might want
-            // to keep the most specific patterns based on some criteria
+            // Sort patterns by specificity: longer patterns first, then lexicographic
+            patterns.sort_by(|a, b| {
+                b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0))
+            });
+            
+            // Keep the 2 most specific patterns
             deduplicated_results.extend(patterns.into_iter().take(2));
         }
     }
@@ -704,14 +678,36 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
         }
     }
 
+    // Sort the final results deterministically before applying limits
+    deduplicated_results.sort_by(|a, b| {
+        // Sort by smallest term index first, then by pattern length (longer first), then lexicographic
+        let min_index_a = a.1.iter().min().unwrap_or(&usize::MAX);
+        let min_index_b = b.1.iter().min().unwrap_or(&usize::MAX);
+        
+        min_index_a.cmp(min_index_b)
+            .then_with(|| b.0.len().cmp(&a.0.len()))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    // Apply pattern limit to prevent regex size explosion
+    let limited_results = if deduplicated_results.len() > MAX_PATTERNS {
+        if debug_mode {
+            println!("DEBUG: Limiting patterns to {} (was {})", MAX_PATTERNS, deduplicated_results.len());
+        }
+        deduplicated_results.into_iter().take(MAX_PATTERNS).collect()
+    } else {
+        deduplicated_results
+    };
+
     let total_duration = start_time.elapsed();
 
     if debug_mode {
         println!(
-            "DEBUG: Total structured pattern creation completed in {}",
-            format_duration(total_duration)
+            "DEBUG: Total structured pattern creation completed in {} with {} patterns",
+            format_duration(total_duration),
+            limited_results.len()
         );
     }
 
-    deduplicated_results
+    limited_results
 } // Re-added function closing brace
