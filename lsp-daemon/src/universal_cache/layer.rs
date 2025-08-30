@@ -622,6 +622,28 @@ impl CacheLayer {
         &self.cache
     }
 
+    /// List cache keys with filtering and pagination
+    pub async fn list_keys(
+        &self,
+        workspace_path: Option<&Path>,
+        operation_filter: Option<&str>,
+        file_pattern_filter: Option<&str>,
+        limit: usize,
+        offset: usize,
+        sort_by: Option<&str>,
+    ) -> Result<(Vec<crate::protocol::CacheKeyInfo>, usize)> {
+        self.cache
+            .list_keys(
+                workspace_path,
+                operation_filter,
+                file_pattern_filter,
+                limit,
+                offset,
+                sort_by,
+            )
+            .await
+    }
+
     // === Private Methods ===
 
     /// Extract LSP method from daemon request

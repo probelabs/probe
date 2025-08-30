@@ -258,6 +258,11 @@ impl WorkspaceCacheRouter {
         Ok(workspace_id)
     }
 
+    /// Get the base cache directory for workspace caches
+    pub fn get_base_cache_dir(&self) -> PathBuf {
+        self.config.base_cache_dir.clone()
+    }
+
     /// Get workspace root path from workspace ID
     ///
     /// This provides reverse lookup from workspace_id to workspace_root
@@ -644,6 +649,7 @@ impl WorkspaceCacheRouter {
 
         for (workspace_id, meta) in metadata.iter() {
             let cache_stats = if let Some(cache) = self.open_caches.get(workspace_id) {
+                // Get stats from open cache
                 match cache.get_stats().await {
                     Ok(stats) => Some(stats),
                     Err(e) => {
@@ -652,7 +658,9 @@ impl WorkspaceCacheRouter {
                     }
                 }
             } else {
-                None
+                // For closed caches, try to get stats from persistent storage
+                self.get_closed_cache_stats(workspace_id, &meta.workspace_root)
+                    .await
             };
 
             workspace_stats.push(WorkspaceStats {
@@ -673,6 +681,63 @@ impl WorkspaceCacheRouter {
             current_open_caches: self.open_caches.len(),
             total_workspaces_seen: metadata.len(),
             workspace_stats,
+        }
+    }
+
+    /// Get statistics from a closed workspace cache by reading from persistent storage
+    async fn get_closed_cache_stats(
+        &self,
+        workspace_id: &str,
+        _workspace_root: &Path,
+    ) -> Option<crate::persistent_cache::PersistentCacheStats> {
+        // Build the cache path for this workspace
+        let cache_path = self
+            .config
+            .base_cache_dir
+            .join("workspaces")
+            .join(workspace_id)
+            .join("call_graph.db");
+
+        // Check if persistent cache exists
+        if !cache_path.exists() {
+            debug!(
+                "No persistent cache found for workspace '{}' at {:?}",
+                workspace_id, cache_path
+            );
+            return None;
+        }
+
+        // Create a temporary persistent cache instance to read stats
+        let cache_config = crate::persistent_cache::PersistentCacheConfig {
+            cache_directory: Some(cache_path.parent().unwrap().to_path_buf()),
+            memory_only: false, // We want to read from disk
+            ..Default::default()
+        };
+
+        match crate::persistent_cache::PersistentCallGraphCache::new(cache_config).await {
+            Ok(cache) => match cache.get_stats().await {
+                Ok(stats) => {
+                    debug!(
+                        "Retrieved stats for closed workspace '{}': {} nodes, {} hits, {} misses",
+                        workspace_id, stats.total_nodes, stats.hit_count, stats.miss_count
+                    );
+                    Some(stats)
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to get stats for closed cache '{}': {}",
+                        workspace_id, e
+                    );
+                    None
+                }
+            },
+            Err(e) => {
+                warn!(
+                    "Failed to open closed cache '{}' for stats: {}",
+                    workspace_id, e
+                );
+                None
+            }
         }
     }
 
@@ -743,12 +808,15 @@ impl WorkspaceCacheRouter {
 
     /// Compute a hash of a normalized path string
     fn compute_path_hash(&self, normalized_path: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        // Use Blake3 for consistent workspace ID generation across restarts
+        // This matches the approach used in KeyBuilder::generate_workspace_id()
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"workspace_id:");
+        hasher.update(normalized_path.as_bytes());
+        let hash = hasher.finalize();
 
-        let mut hasher = DefaultHasher::new();
-        normalized_path.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        // Use first 8 characters to match the format used elsewhere
+        hash.to_hex().to_string()[..8].to_string()
     }
 
     /// Find the nearest workspace root for a given file path

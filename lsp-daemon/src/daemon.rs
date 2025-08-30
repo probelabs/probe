@@ -1174,8 +1174,143 @@ impl LspDaemon {
                 detailed: _detailed,
                 git: _git,
             } => {
-                // Get workspace cache router stats from open caches first
-                info!("Getting cache stats from workspace cache router (open caches)");
+                // First, try to get stats from universal cache layer which has the real activity
+                info!("Getting cache stats from universal cache layer");
+                match self.universal_cache_layer.get_stats().await {
+                    Ok(universal_layer_stats) => {
+                        info!(
+                            "Universal cache layer stats: hit_rate={:.2}%, {} active workspaces, {} total entries",
+                            universal_layer_stats.cache_stats.hit_rate * 100.0,
+                            universal_layer_stats.active_workspaces,
+                            universal_layer_stats.cache_stats.total_entries
+                        );
+
+                        // Always try to use universal cache statistics as the primary source
+                        // Universal cache includes both in-memory tracking and persistent cache data
+                        let has_universal_data = universal_layer_stats.cache_stats.total_entries
+                            > 0
+                            || universal_layer_stats
+                                .cache_stats
+                                .method_stats
+                                .values()
+                                .any(|s| s.hits + s.misses > 0)
+                            || universal_layer_stats.active_workspaces > 0;
+
+                        info!(
+                            "Universal cache evaluation: entries={}, active_workspaces={}, has_method_stats={}, will_use_universal={}",
+                            universal_layer_stats.cache_stats.total_entries,
+                            universal_layer_stats.active_workspaces,
+                            !universal_layer_stats.cache_stats.method_stats.is_empty(),
+                            has_universal_data
+                        );
+
+                        if has_universal_data {
+                            // Convert universal cache stats to legacy format
+                            info!("Using universal cache statistics as primary source");
+                            // Debug: log method stats details
+                            for (method, stats) in &universal_layer_stats.cache_stats.method_stats {
+                                info!(
+                                    "Universal cache method stats for {:?}: entries={}, hits={}, misses={}, size_bytes={}",
+                                    method, stats.entries, stats.hits, stats.misses, stats.size_bytes
+                                );
+                            }
+
+                            let total_ops: u64 = universal_layer_stats
+                                .cache_stats
+                                .method_stats
+                                .values()
+                                .map(|s| s.hits + s.misses)
+                                .sum();
+
+                            let total_hits: u64 = universal_layer_stats
+                                .cache_stats
+                                .method_stats
+                                .values()
+                                .map(|s| s.hits)
+                                .sum();
+
+                            let total_misses: u64 = universal_layer_stats
+                                .cache_stats
+                                .method_stats
+                                .values()
+                                .map(|s| s.misses)
+                                .sum();
+
+                            info!(
+                                "Universal cache totals: ops={}, hits={}, misses={}, entries={}",
+                                total_ops,
+                                total_hits,
+                                total_misses,
+                                universal_layer_stats.cache_stats.total_entries
+                            );
+
+                            let hit_rate = if total_ops > 0 {
+                                total_hits as f64 / total_ops as f64
+                            } else {
+                                0.0
+                            };
+
+                            let miss_rate = 1.0 - hit_rate;
+
+                            // Get disk size from workspace router as fallback
+                            let router_stats = self.workspace_cache_router.get_stats().await;
+                            let mut total_disk_size_bytes = 0u64;
+
+                            for workspace_stats in &router_stats.workspace_stats {
+                                if let Some(cache_stats) = &workspace_stats.cache_stats {
+                                    total_disk_size_bytes += cache_stats.disk_size_bytes;
+                                }
+                            }
+
+                            let legacy_stats = crate::protocol::CacheStatistics {
+                                hit_rate,
+                                miss_rate,
+                                total_entries: universal_layer_stats.cache_stats.total_entries,
+                                total_size_bytes: universal_layer_stats
+                                    .cache_stats
+                                    .total_size_bytes,
+                                disk_size_bytes: total_disk_size_bytes,
+                                entries_per_file: std::collections::HashMap::new(),
+                                entries_per_language: std::collections::HashMap::new(),
+                                age_distribution: crate::protocol::AgeDistribution {
+                                    entries_last_hour: 0,
+                                    entries_last_day: 0,
+                                    entries_last_week: 0,
+                                    entries_last_month: universal_layer_stats
+                                        .cache_stats
+                                        .total_entries,
+                                    entries_older: 0,
+                                },
+                                most_accessed: Vec::new(),
+                                memory_usage: crate::protocol::MemoryUsage {
+                                    in_memory_cache_bytes: universal_layer_stats
+                                        .cache_stats
+                                        .total_size_bytes
+                                        / 10, // Estimate 10% in memory
+                                    persistent_cache_bytes: total_disk_size_bytes,
+                                    metadata_bytes: total_disk_size_bytes / 100,
+                                    index_bytes: total_disk_size_bytes / 50,
+                                },
+                            };
+
+                            info!(
+                                "Returning universal cache stats: entries={}, hit_rate={:.2}%, disk_size={}",
+                                legacy_stats.total_entries, hit_rate * 100.0, legacy_stats.disk_size_bytes
+                            );
+
+                            return DaemonResponse::CacheStats {
+                                request_id,
+                                stats: legacy_stats,
+                            };
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to get universal cache layer stats, falling back to workspace router: {}", e);
+                    }
+                }
+
+                // Fallback: Use the old method with workspace cache router stats
+                info!("Falling back to workspace cache router stats");
                 let router_stats = self.workspace_cache_router.get_stats().await;
                 info!(
                     "Workspace cache router stats: {} workspaces seen, {} current open caches",
@@ -1263,7 +1398,7 @@ impl LspDaemon {
                 }
 
                 info!(
-                    "Aggregated stats: entries={}, size_bytes={}, disk_bytes={}",
+                    "Fallback aggregated stats: entries={}, size_bytes={}, disk_bytes={}",
                     total_entries, total_size_bytes, total_disk_size_bytes
                 );
 
@@ -1301,7 +1436,7 @@ impl LspDaemon {
                 };
 
                 info!(
-                    "Returning legacy stats: entries={}, disk_size={}",
+                    "Returning fallback stats: entries={}, disk_size={}",
                     legacy_stats.total_entries, legacy_stats.disk_size_bytes
                 );
 
@@ -1663,10 +1798,40 @@ impl LspDaemon {
                     "Received DaemonRequest::Definition for {:?} at {}:{} (request_id: {})",
                     file_path, line, column, request_id
                 );
-                match self
-                    .handle_definition(&file_path, line, column, workspace_hint)
-                    .await
-                {
+                // Handle definition request directly (universal cache middleware handles caching)
+                let absolute_file_path = safe_canonicalize(&file_path);
+
+                let result = async {
+                    let language = self.detector.detect(&absolute_file_path)?;
+                    if language == Language::Unknown {
+                        return Err(anyhow!(
+                            "Unknown language for file: {:?}",
+                            absolute_file_path
+                        ));
+                    }
+
+                    let workspace_root = {
+                        let mut resolver = self.workspace_resolver.lock().await;
+                        resolver.resolve_workspace(&absolute_file_path, workspace_hint)?
+                    };
+
+                    let server_instance = self
+                        .server_manager
+                        .ensure_workspace_registered(language, workspace_root)
+                        .await?;
+
+                    let server = server_instance.lock().await;
+                    let response_json = server
+                        .server
+                        .definition(&absolute_file_path, line, column)
+                        .await?;
+
+                    let locations = Self::parse_definition_response(&response_json)?;
+                    Ok(locations)
+                }
+                .await;
+
+                match result {
                     Ok(locations) => DaemonResponse::Definition {
                         request_id,
                         locations,
@@ -1690,16 +1855,40 @@ impl LspDaemon {
                     "Received DaemonRequest::References for {:?} at {}:{} include_decl={} (request_id: {})",
                     file_path, line, column, include_declaration, request_id
                 );
-                match self
-                    .handle_references(
-                        &file_path,
-                        line,
-                        column,
-                        include_declaration,
-                        workspace_hint,
-                    )
-                    .await
-                {
+                // Handle references request directly (universal cache middleware handles caching)
+                let absolute_file_path = safe_canonicalize(&file_path);
+
+                let result = async {
+                    let language = self.detector.detect(&absolute_file_path)?;
+                    if language == Language::Unknown {
+                        return Err(anyhow!(
+                            "Unknown language for file: {:?}",
+                            absolute_file_path
+                        ));
+                    }
+
+                    let workspace_root = {
+                        let mut resolver = self.workspace_resolver.lock().await;
+                        resolver.resolve_workspace(&absolute_file_path, workspace_hint)?
+                    };
+
+                    let server_instance = self
+                        .server_manager
+                        .ensure_workspace_registered(language, workspace_root)
+                        .await?;
+
+                    let server = server_instance.lock().await;
+                    let response_json = server
+                        .server
+                        .references(&absolute_file_path, line, column, include_declaration)
+                        .await?;
+
+                    let locations = Self::parse_references_response(&response_json)?;
+                    Ok(locations)
+                }
+                .await;
+
+                match result {
                     Ok(locations) => DaemonResponse::References {
                         request_id,
                         locations,
@@ -1722,10 +1911,40 @@ impl LspDaemon {
                     "Received DaemonRequest::Hover for {:?} at {}:{} (request_id: {})",
                     file_path, line, column, request_id
                 );
-                match self
-                    .handle_hover(&file_path, line, column, workspace_hint)
-                    .await
-                {
+                // Handle hover request directly (universal cache middleware handles caching)
+                let absolute_file_path = safe_canonicalize(&file_path);
+
+                let result = async {
+                    let language = self.detector.detect(&absolute_file_path)?;
+                    if language == Language::Unknown {
+                        return Err(anyhow!(
+                            "Unknown language for file: {:?}",
+                            absolute_file_path
+                        ));
+                    }
+
+                    let workspace_root = {
+                        let mut resolver = self.workspace_resolver.lock().await;
+                        resolver.resolve_workspace(&absolute_file_path, workspace_hint)?
+                    };
+
+                    let server_instance = self
+                        .server_manager
+                        .ensure_workspace_registered(language, workspace_root)
+                        .await?;
+
+                    let server = server_instance.lock().await;
+                    let response_json = server
+                        .server
+                        .hover(&absolute_file_path, line, column)
+                        .await?;
+
+                    let hover = Self::parse_hover_response(&response_json)?;
+                    Ok(hover)
+                }
+                .await;
+
+                match result {
                     Ok(content) => DaemonResponse::Hover {
                         request_id,
                         content,
@@ -1873,6 +2092,45 @@ impl LspDaemon {
                 DaemonResponse::Error {
                     request_id,
                     error: "Completion request type not implemented".to_string(),
+                }
+            }
+
+            // Handle cache key listing
+            DaemonRequest::CacheListKeys {
+                request_id,
+                workspace_path,
+                operation_filter,
+                file_pattern_filter,
+                limit,
+                offset,
+                sort_by,
+                sort_order: _,
+                detailed: _,
+            } => {
+                match self
+                    .universal_cache_layer
+                    .list_keys(
+                        workspace_path.as_deref(),
+                        operation_filter.as_deref(),
+                        file_pattern_filter.as_deref(),
+                        limit,
+                        offset,
+                        Some(sort_by.as_str()),
+                    )
+                    .await
+                {
+                    Ok((keys, total_count)) => DaemonResponse::CacheListKeys {
+                        request_id,
+                        keys,
+                        total_count,
+                        offset,
+                        limit,
+                        has_more: offset + limit < total_count,
+                    },
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: format!("Failed to list cache keys: {e}"),
+                    },
                 }
             }
         }
@@ -2692,120 +2950,7 @@ impl LspDaemon {
     // New LSP Operation Handler Methods
     // ========================================================================================
 
-    async fn handle_definition(
-        &self,
-        file_path: &Path,
-        line: u32,
-        column: u32,
-        workspace_hint: Option<PathBuf>,
-    ) -> Result<Vec<Location>> {
-        let absolute_file_path = safe_canonicalize(file_path);
-
-        // Call LSP server directly (caching handled by universal cache middleware)
-        let language = self.detector.detect(&absolute_file_path)?;
-        if language == Language::Unknown {
-            return Err(anyhow!(
-                "Unknown language for file: {:?}",
-                absolute_file_path
-            ));
-        }
-
-        let workspace_root = {
-            let mut resolver = self.workspace_resolver.lock().await;
-            resolver.resolve_workspace(&absolute_file_path, workspace_hint)?
-        };
-
-        let server_instance = self
-            .server_manager
-            .ensure_workspace_registered(language, workspace_root)
-            .await?;
-
-        let server = server_instance.lock().await;
-        let response_json = server
-            .server
-            .definition(&absolute_file_path, line, column)
-            .await?;
-
-        let locations = Self::parse_definition_response(&response_json)?;
-        Ok(locations)
-    }
-
-    async fn handle_references(
-        &self,
-        file_path: &Path,
-        line: u32,
-        column: u32,
-        include_declaration: bool,
-        workspace_hint: Option<PathBuf>,
-    ) -> Result<Vec<Location>> {
-        let absolute_file_path = safe_canonicalize(file_path);
-
-        // Call LSP server directly (caching handled by universal cache middleware)
-        let language = self.detector.detect(&absolute_file_path)?;
-        if language == Language::Unknown {
-            return Err(anyhow!(
-                "Unknown language for file: {:?}",
-                absolute_file_path
-            ));
-        }
-
-        let workspace_root = {
-            let mut resolver = self.workspace_resolver.lock().await;
-            resolver.resolve_workspace(&absolute_file_path, workspace_hint)?
-        };
-
-        let server_instance = self
-            .server_manager
-            .ensure_workspace_registered(language, workspace_root)
-            .await?;
-
-        let server = server_instance.lock().await;
-        let response_json = server
-            .server
-            .references(&absolute_file_path, line, column, include_declaration)
-            .await?;
-
-        let locations = Self::parse_references_response(&response_json)?;
-        Ok(locations)
-    }
-
-    async fn handle_hover(
-        &self,
-        file_path: &Path,
-        line: u32,
-        column: u32,
-        workspace_hint: Option<PathBuf>,
-    ) -> Result<Option<HoverContent>> {
-        let absolute_file_path = safe_canonicalize(file_path);
-
-        // Call LSP server directly (caching handled by universal cache middleware)
-        let language = self.detector.detect(&absolute_file_path)?;
-        if language == Language::Unknown {
-            return Err(anyhow!(
-                "Unknown language for file: {:?}",
-                absolute_file_path
-            ));
-        }
-
-        let workspace_root = {
-            let mut resolver = self.workspace_resolver.lock().await;
-            resolver.resolve_workspace(&absolute_file_path, workspace_hint)?
-        };
-
-        let server_instance = self
-            .server_manager
-            .ensure_workspace_registered(language, workspace_root)
-            .await?;
-
-        let server = server_instance.lock().await;
-        let response_json = server
-            .server
-            .hover(&absolute_file_path, line, column)
-            .await?;
-
-        let hover = Self::parse_hover_response(&response_json)?;
-        Ok(hover)
-    }
+    // Old handler methods removed - LSP requests now go through universal cache layer via handle_request_internal
 
     async fn handle_document_symbols(
         &self,

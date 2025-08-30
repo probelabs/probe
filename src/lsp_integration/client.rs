@@ -1929,6 +1929,14 @@ impl LspClient {
             _ => Err(anyhow!("Unexpected response type")),
         }
     }
+
+    /// Send cache list keys request
+    pub async fn send_cache_list_keys_request(
+        &mut self,
+        request: DaemonRequest,
+    ) -> Result<DaemonResponse> {
+        self.send_request(request).await
+    }
 }
 
 #[cfg(test)]

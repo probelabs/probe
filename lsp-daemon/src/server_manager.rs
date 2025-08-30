@@ -6,9 +6,10 @@ use crate::watchdog::ProcessMonitor;
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::{broadcast, RwLock};
 // Provide a grace period where health checks won't restart new, CPU-heavy servers
 const STARTUP_HEALTH_GRACE_SECS: u64 = 180;
 use tokio::sync::Mutex;
@@ -106,6 +107,114 @@ impl ServerInstance {
     }
 }
 
+/// Result of workspace initialization operation
+#[derive(Debug, Clone)]
+struct WorkspaceInitResult {
+    server_instance: Arc<Mutex<ServerInstance>>,
+}
+
+/// Result type for singleflight broadcast (must be cloneable)
+#[derive(Debug, Clone)]
+enum WorkspaceInitBroadcastResult {
+    Success(WorkspaceInitResult),
+    Error(String), // Use String instead of anyhow::Error for Clone
+}
+
+/// Singleflight group for workspace initialization deduplication
+#[derive(Debug)]
+struct WorkspaceInitSingleflight {
+    /// Active initialization requests: (language, workspace_path) -> broadcast channel
+    active: RwLock<HashMap<(Language, PathBuf), broadcast::Sender<WorkspaceInitBroadcastResult>>>,
+}
+
+impl WorkspaceInitSingleflight {
+    fn new() -> Self {
+        Self {
+            active: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Execute workspace initialization with singleflight deduplication
+    async fn call<F, Fut>(
+        &self,
+        language: Language,
+        workspace_root: PathBuf,
+        f: F,
+    ) -> Result<WorkspaceInitResult>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<WorkspaceInitResult>> + Send + 'static,
+    {
+        let key = (language, workspace_root.clone());
+
+        // Check if there's already an active initialization for this workspace
+        {
+            let active = self.active.read().await;
+            if let Some(sender) = active.get(&key) {
+                let mut receiver = sender.subscribe();
+                drop(active);
+
+                // Wait for the existing initialization to complete
+                match receiver.recv().await {
+                    Ok(WorkspaceInitBroadcastResult::Success(result)) => {
+                        debug!(
+                            "Workspace init singleflight: reused result for {:?} in {:?}",
+                            language, workspace_root
+                        );
+                        return Ok(result);
+                    }
+                    Ok(WorkspaceInitBroadcastResult::Error(err)) => {
+                        debug!(
+                            "Workspace init singleflight: reused error for {:?} in {:?}: {}",
+                            language, workspace_root, err
+                        );
+                        return Err(anyhow!(err));
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        debug!(
+                            "Workspace init singleflight: receiver lagged for {:?} in {:?}",
+                            language, workspace_root
+                        );
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        debug!(
+                            "Workspace init singleflight: channel closed for {:?} in {:?}",
+                            language, workspace_root
+                        );
+                    }
+                }
+            }
+        }
+
+        // Create a new broadcast channel for this initialization
+        let (sender, _) = broadcast::channel(16);
+        let sender_clone = sender.clone();
+
+        // Add to active initializations
+        {
+            let mut active = self.active.write().await;
+            active.insert(key.clone(), sender);
+        }
+
+        // Execute the initialization function
+        let result = f().await;
+
+        // Remove from active initializations and broadcast the result
+        {
+            let mut active = self.active.write().await;
+            active.remove(&key);
+        }
+
+        // Broadcast result to any waiting receivers
+        let broadcast_result = match &result {
+            Ok(success) => WorkspaceInitBroadcastResult::Success(success.clone()),
+            Err(err) => WorkspaceInitBroadcastResult::Error(err.to_string()),
+        };
+        let _ = sender_clone.send(broadcast_result);
+        result
+    }
+}
+
 /// Manages single server instances per language with multi-workspace support
 #[derive(Debug, Clone)]
 pub struct SingleServerManager {
@@ -113,6 +222,8 @@ pub struct SingleServerManager {
     registry: Arc<crate::lsp_registry::LspRegistry>,
     child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
     process_monitor: Arc<ProcessMonitor>,
+    /// Singleflight for workspace initialization to prevent race conditions
+    workspace_init_singleflight: Arc<WorkspaceInitSingleflight>,
 }
 
 impl SingleServerManager {
@@ -130,6 +241,7 @@ impl SingleServerManager {
             registry,
             child_processes,
             process_monitor,
+            workspace_init_singleflight: Arc::new(WorkspaceInitSingleflight::new()),
         }
     }
 
@@ -338,6 +450,7 @@ impl SingleServerManager {
     }
 
     /// Ensure a workspace is registered with the server for the given language
+    /// Uses singleflight to prevent race conditions during initialization
     pub async fn ensure_workspace_registered(
         &self,
         language: Language,
@@ -349,9 +462,49 @@ impl SingleServerManager {
             workspace_root, language
         );
 
+        // Use singleflight to prevent concurrent initializations of the same workspace
+        let singleflight = self.workspace_init_singleflight.clone();
+        let servers = self.servers.clone();
+        let registry = self.registry.clone();
+        let workspace_path = workspace_root.clone();
+
+        let result = singleflight
+            .call(language, workspace_root.clone(), move || {
+                let servers = servers.clone();
+                let registry = registry.clone();
+                let workspace_path = workspace_path.clone();
+
+                Box::pin(async move {
+                    Self::ensure_workspace_registered_internal(
+                        servers,
+                        registry,
+                        language,
+                        workspace_path,
+                    )
+                    .await
+                })
+            })
+            .await?;
+
+        Ok(result.server_instance)
+    }
+
+    /// Internal implementation of workspace registration without singleflight
+    async fn ensure_workspace_registered_internal(
+        servers: Arc<DashMap<Language, Arc<Mutex<ServerInstance>>>>,
+        registry: Arc<crate::lsp_registry::LspRegistry>,
+        language: Language,
+        workspace_root: PathBuf,
+    ) -> Result<WorkspaceInitResult> {
+        // Log the workspace registration attempt
+        info!(
+            "Internal workspace registration for {:?} in {:?}",
+            language, workspace_root
+        );
+
         // Server instances are managed without circuit breaker complexity
         // Check if server already exists
-        if let Some(entry) = self.servers.get(&language) {
+        if let Some(entry) = servers.get(&language) {
             // IMPORTANT: clone Arc and drop DashMap guard before any .await or long operations
             let server_instance = entry.clone();
             drop(entry);
@@ -365,7 +518,9 @@ impl SingleServerManager {
                         workspace_root, language
                     );
                     server.touch();
-                    return Ok(server_instance.clone());
+                    return Ok(WorkspaceInitResult {
+                        server_instance: server_instance.clone(),
+                    });
                 }
 
                 // If server is already initialized, try to add workspace without long operations
@@ -395,13 +550,15 @@ impl SingleServerManager {
                     };
 
                     let mut server = server_guard;
-                    match self.register_workspace(&mut server, &workspace_root).await {
+                    match Self::register_workspace_static(&mut server, &workspace_root).await {
                         Ok(_) => {
                             info!(
                                 "Successfully registered workspace {:?} with {:?} server",
                                 workspace_root, language
                             );
-                            return Ok(server_instance.clone());
+                            return Ok(WorkspaceInitResult {
+                                server_instance: server_instance.clone(),
+                            });
                         }
                         Err(e) => {
                             warn!(
@@ -410,7 +567,7 @@ impl SingleServerManager {
                             );
                             // Remove the failed server so it gets recreated on next attempt
                             drop(server);
-                            self.servers.remove(&language);
+                            servers.remove(&language);
                             return Err(anyhow!(
                                 "Failed to register workspace with existing server: {}. Server will be recreated on next attempt.",
                                 e
@@ -435,7 +592,7 @@ impl SingleServerManager {
                     );
 
                     // Remove the stuck server to allow recreation
-                    self.servers.remove(&language);
+                    servers.remove(&language);
 
                     return Err(anyhow!(
                         "Server lock acquisition timeout for {:?} - removed stuck server, will recreate",
@@ -454,8 +611,7 @@ impl SingleServerManager {
                 );
 
                 // Get config
-                let config = self
-                    .registry
+                let config = registry
                     .get(language)
                     .ok_or_else(|| anyhow!("No LSP server configured for {:?}", language))?
                     .clone();
@@ -479,7 +635,9 @@ impl SingleServerManager {
                     language, workspace_root
                 );
                 server.touch();
-                return Ok(server_instance.clone());
+                return Ok(WorkspaceInitResult {
+                    server_instance: server_instance.clone(),
+                });
             }
 
             // Double-check if workspace is already registered (in slow path)
@@ -489,7 +647,9 @@ impl SingleServerManager {
                     workspace_root, language
                 );
                 server.touch();
-                return Ok(server_instance.clone());
+                return Ok(WorkspaceInitResult {
+                    server_instance: server_instance.clone(),
+                });
             }
 
             // If we reach here in slow path, server exists but needs workspace registration
@@ -498,13 +658,15 @@ impl SingleServerManager {
                     "Adding new workspace {:?} to existing {:?} server (slow path)",
                     workspace_root, language
                 );
-                match self.register_workspace(&mut server, &workspace_root).await {
+                match Self::register_workspace_static(&mut server, &workspace_root).await {
                     Ok(_) => {
                         info!(
                             "Successfully registered workspace {:?} with {:?} server",
                             workspace_root, language
                         );
-                        return Ok(server_instance.clone());
+                        return Ok(WorkspaceInitResult {
+                            server_instance: server_instance.clone(),
+                        });
                     }
                     Err(e) => {
                         warn!(
@@ -514,7 +676,7 @@ impl SingleServerManager {
 
                         // Remove the failed server so it gets recreated on next attempt
                         drop(server);
-                        self.servers.remove(&language);
+                        servers.remove(&language);
 
                         return Err(anyhow!(
                             "Failed to register workspace with existing server: {}. Server will be recreated on next attempt.",
@@ -527,8 +689,7 @@ impl SingleServerManager {
         }
 
         // Create new server and initialize with this workspace
-        let config = self
-            .registry
+        let config = registry
             .get(language)
             .ok_or_else(|| anyhow!("No LSP server configured for {:?}", language))?
             .clone();
@@ -564,7 +725,7 @@ impl SingleServerManager {
         instance.reset_start_time();
 
         let server_instance = Arc::new(Mutex::new(instance));
-        self.servers.insert(language, server_instance.clone());
+        servers.insert(language, server_instance.clone());
 
         // The server is already initialized and ready for basic operations
         // Background indexing will continue automatically without blocking the daemon
@@ -573,7 +734,47 @@ impl SingleServerManager {
             "Created and initialized new {:?} server with workspace {:?}",
             language, workspace_root
         );
-        Ok(server_instance)
+        Ok(WorkspaceInitResult { server_instance })
+    }
+
+    /// Static version of register_workspace for use in static contexts
+    async fn register_workspace_static(
+        server: &mut ServerInstance,
+        workspace_root: &PathBuf,
+    ) -> Result<()> {
+        if server.is_workspace_registered(workspace_root) {
+            debug!("Workspace {:?} already registered", workspace_root);
+            return Ok(());
+        }
+
+        info!("Registering workspace: {:?}", workspace_root);
+
+        let workspace_folders = vec![serde_json::json!({
+            "uri": format!("file://{}", workspace_root.to_string_lossy()),
+            "name": workspace_root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("workspace")
+        })];
+
+        let params = serde_json::json!({
+            "event": {
+                "added": workspace_folders,
+                "removed": []
+            }
+        });
+
+        // Send workspace/didChangeWorkspaceFolders notification
+        server
+            .server
+            .send_notification("workspace/didChangeWorkspaceFolders", params)
+            .await?;
+
+        // Add to registered workspaces
+        server.add_workspace(workspace_root.clone());
+        server.touch();
+
+        Ok(())
     }
 
     async fn create_server(&self, config: &LspServerConfig) -> Result<LspServer> {
@@ -602,6 +803,7 @@ impl SingleServerManager {
         Ok(server)
     }
 
+    #[allow(dead_code)]
     async fn register_workspace(
         &self,
         server_instance: &mut ServerInstance,
