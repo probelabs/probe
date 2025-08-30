@@ -117,12 +117,24 @@ pub struct UniversalCache {
 }
 
 impl UniversalCache {
-    /// Create a new universal cache instance
+    /// Create a new universal cache instance without workspace resolver (for backward compatibility)
     pub async fn new(
         workspace_cache_router: Arc<crate::workspace_cache_router::WorkspaceCacheRouter>,
     ) -> Result<Self> {
+        Self::new_with_workspace_resolver(workspace_cache_router, None).await
+    }
+
+    /// Create a new universal cache instance with workspace resolver integration
+    pub async fn new_with_workspace_resolver(
+        workspace_cache_router: Arc<crate::workspace_cache_router::WorkspaceCacheRouter>,
+        workspace_resolver: Option<std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>>,
+    ) -> Result<Self> {
         let policy_registry = PolicyRegistry::default();
-        let key_builder = KeyBuilder::new();
+        let key_builder = if let Some(resolver) = workspace_resolver {
+            KeyBuilder::new_with_workspace_resolver(resolver)
+        } else {
+            KeyBuilder::new()
+        };
         let store = Arc::new(CacheStore::new(workspace_cache_router).await?);
 
         Ok(Self {

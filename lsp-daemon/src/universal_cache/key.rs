@@ -89,19 +89,35 @@ impl CacheKey {
 pub struct KeyBuilder {
     /// Hasher instance for key generation
     hasher_pool: std::sync::Mutex<Vec<Hasher>>,
+    /// Centralized workspace resolver for consistent workspace detection
+    workspace_resolver: Option<std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>>,
 }
 
 impl Clone for KeyBuilder {
     fn clone(&self) -> Self {
-        Self::new()
+        Self {
+            hasher_pool: std::sync::Mutex::new(Vec::new()),
+            workspace_resolver: self.workspace_resolver.clone(),
+        }
     }
 }
 
 impl KeyBuilder {
-    /// Create a new key builder
+    /// Create a new key builder without workspace resolver (for testing)
     pub fn new() -> Self {
         Self {
             hasher_pool: std::sync::Mutex::new(Vec::new()),
+            workspace_resolver: None,
+        }
+    }
+
+    /// Create a new key builder with workspace resolver integration
+    pub fn new_with_workspace_resolver(
+        workspace_resolver: std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>,
+    ) -> Self {
+        Self {
+            hasher_pool: std::sync::Mutex::new(Vec::new()),
+            workspace_resolver: Some(workspace_resolver),
         }
     }
 
@@ -216,16 +232,21 @@ impl KeyBuilder {
 
     /// Resolve workspace root and ID for a file
     async fn resolve_workspace(&self, file_path: &Path) -> Result<(PathBuf, String)> {
-        // Use a simple workspace detection algorithm
-        // In a real implementation, this would integrate with WorkspaceResolver
-        let workspace_root = self.find_workspace_root(file_path).await?;
+        let workspace_root = if let Some(ref resolver) = self.workspace_resolver {
+            // Use centralized workspace resolver for consistent detection
+            let mut resolver = resolver.lock().await;
+            resolver.resolve_workspace_for_file(file_path)?
+        } else {
+            // Fallback to local implementation for backward compatibility
+            self.find_workspace_root_fallback(file_path).await?
+        };
         let workspace_id = self.generate_workspace_id(&workspace_root).await?;
 
         Ok((workspace_root, workspace_id))
     }
 
-    /// Find workspace root by walking up directory tree
-    async fn find_workspace_root(&self, file_path: &Path) -> Result<PathBuf> {
+    /// Find workspace root by walking up directory tree (fallback implementation)
+    async fn find_workspace_root_fallback(&self, file_path: &Path) -> Result<PathBuf> {
         let start_dir = if file_path.is_file() {
             file_path.parent().unwrap_or(file_path)
         } else {

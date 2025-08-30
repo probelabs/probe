@@ -133,13 +133,29 @@ pub struct WorkspaceCacheRouter {
 
     /// Workspace root discovery cache: file_path -> nearest_workspace_root
     workspace_cache: Arc<RwLock<HashMap<PathBuf, Option<PathBuf>>>>,
+
+    /// Centralized workspace resolver for consistent workspace detection
+    workspace_resolver: Option<std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>>,
+
+    /// Dedicated reverse mapping: workspace_id -> workspace_root
+    /// This persistent mapping allows workspace_root_for() to work even after caches are evicted
+    workspace_id_to_root: Arc<RwLock<HashMap<String, PathBuf>>>,
 }
 
 impl WorkspaceCacheRouter {
-    /// Create a new workspace cache router
+    /// Create a new workspace cache router without workspace resolver (for backward compatibility)
     pub fn new(
+        config: WorkspaceCacheRouterConfig,
+        server_manager: Arc<SingleServerManager>,
+    ) -> Self {
+        Self::new_with_workspace_resolver(config, server_manager, None)
+    }
+
+    /// Create a new workspace cache router with workspace resolver integration
+    pub fn new_with_workspace_resolver(
         mut config: WorkspaceCacheRouterConfig,
         server_manager: Arc<SingleServerManager>,
+        workspace_resolver: Option<std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>>,
     ) -> Self {
         // CRITICAL: Initialize proper cache directory at runtime, not during static init
         if config.base_cache_dir == PathBuf::from(".probe-temp-cache") {
@@ -157,6 +173,8 @@ impl WorkspaceCacheRouter {
             access_metadata: Arc::new(RwLock::new(HashMap::new())),
             server_manager,
             workspace_cache: Arc::new(RwLock::new(HashMap::new())),
+            workspace_resolver,
+            workspace_id_to_root: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -198,14 +216,28 @@ impl WorkspaceCacheRouter {
         // Canonicalize path with fallback to original path for robustness
         let canonical_path = self.canonicalize_path(path);
 
+        // Check if the path is a file and handle it properly
+        let workspace_path = if canonical_path.is_file() {
+            warn!(
+                "workspace_id_for() received file path {:?} - using parent directory instead. \
+                This may indicate a bug in the caller.",
+                canonical_path
+            );
+            canonical_path.parent()
+                .unwrap_or(&canonical_path)
+                .to_path_buf()
+        } else {
+            canonical_path.clone()
+        };
+
         // Normalize path for consistent hashing across platforms
-        let normalized_path = self.normalize_path_for_hashing(&canonical_path);
+        let normalized_path = self.normalize_path_for_hashing(&workspace_path);
 
         // Compute hash of the normalized path
         let hash = self.compute_path_hash(&normalized_path);
 
-        // Extract folder name
-        let folder_name = canonical_path
+        // Extract folder name (now guaranteed to be from a directory)
+        let folder_name = workspace_path
             .file_name()
             .and_then(|n| n.to_str())
             .map(|s| s.to_string())
@@ -215,8 +247,8 @@ impl WorkspaceCacheRouter {
         let workspace_id = format!("{}_{}", &hash[..8], folder_name);
 
         debug!(
-            "Generated workspace ID '{}' for path {:?}",
-            workspace_id, canonical_path
+            "Generated workspace ID '{}' for path {:?} (original: {:?})",
+            workspace_id, workspace_path, canonical_path
         );
 
         Ok(workspace_id)
@@ -225,21 +257,40 @@ impl WorkspaceCacheRouter {
     /// Get workspace root path from workspace ID
     ///
     /// This provides reverse lookup from workspace_id to workspace_root
-    /// by checking the access metadata of open caches.
+    /// by checking the dedicated reverse mapping first, then fallback methods.
     pub async fn workspace_root_for(&self, workspace_id: &str) -> Result<PathBuf> {
-        // Check open cache metadata first
+        // Check the dedicated reverse mapping first (most reliable)
+        {
+            let workspace_mapping = self.workspace_id_to_root.read().await;
+            if let Some(workspace_root) = workspace_mapping.get(workspace_id) {
+                debug!(
+                    "Found workspace root {:?} for workspace_id {} via dedicated mapping",
+                    workspace_root, workspace_id
+                );
+                return Ok(workspace_root.clone());
+            }
+        }
+
+        // Fallback: check open cache metadata
         {
             let metadata = self.access_metadata.read().await;
             if let Some(meta) = metadata.get(workspace_id) {
                 debug!(
-                    "Found workspace root {:?} for workspace_id {}",
+                    "Found workspace root {:?} for workspace_id {} via access metadata",
                     meta.workspace_root, workspace_id
                 );
+                
+                // Update the dedicated mapping for future lookups
+                {
+                    let mut workspace_mapping = self.workspace_id_to_root.write().await;
+                    workspace_mapping.insert(workspace_id.to_string(), meta.workspace_root.clone());
+                }
+                
                 return Ok(meta.workspace_root.clone());
             }
         }
 
-        // If not found in metadata, try to reconstruct from the workspace ID format
+        // Final fallback: try to reconstruct from the workspace ID format
         // Format is: {8-char-hash}_{folder-name}
         if let Some((hash, _folder_name)) = workspace_id.split_once('_') {
             if hash.len() == 8 {
@@ -257,6 +308,13 @@ impl WorkspaceCacheRouter {
                             "Resolved workspace_id {} to current directory: {:?}",
                             workspace_id, current_dir
                         );
+                        
+                        // Update the dedicated mapping for future lookups
+                        {
+                            let mut workspace_mapping = self.workspace_id_to_root.write().await;
+                            workspace_mapping.insert(workspace_id.to_string(), current_dir.clone());
+                        }
+                        
                         return Ok(current_dir);
                     }
                 }
@@ -270,6 +328,13 @@ impl WorkspaceCacheRouter {
                                 "Resolved workspace_id {} to parent directory: {:?}",
                                 workspace_id, dir
                             );
+                            
+                            // Update the dedicated mapping for future lookups
+                            {
+                                let mut workspace_mapping = self.workspace_id_to_root.write().await;
+                                workspace_mapping.insert(workspace_id.to_string(), dir.to_path_buf());
+                            }
+                            
                             return Ok(dir.to_path_buf());
                         }
                     }
@@ -306,6 +371,12 @@ impl WorkspaceCacheRouter {
                 if let Some(meta) = metadata.get_mut(&workspace_id) {
                     meta.touch();
                 }
+            }
+
+            // Ensure the reverse mapping is present (might have been cleared)
+            {
+                let mut workspace_mapping = self.workspace_id_to_root.write().await;
+                workspace_mapping.insert(workspace_id.clone(), workspace_root.clone());
             }
 
             debug!(
@@ -357,6 +428,12 @@ impl WorkspaceCacheRouter {
                 workspace_id.clone(),
                 CacheAccessMetadata::new(workspace_root.clone(), workspace_id.clone()),
             );
+        }
+
+        // Maintain the dedicated reverse mapping
+        {
+            let mut workspace_mapping = self.workspace_id_to_root.write().await;
+            workspace_mapping.insert(workspace_id.clone(), workspace_root.clone());
         }
 
         info!(
@@ -625,6 +702,12 @@ impl WorkspaceCacheRouter {
             workspace_cache.clear();
         }
 
+        // Clear the dedicated reverse mapping
+        {
+            let mut workspace_mapping = self.workspace_id_to_root.write().await;
+            workspace_mapping.clear();
+        }
+
         info!("Cleared all workspace caches");
         Ok(())
     }
@@ -679,8 +762,15 @@ impl WorkspaceCacheRouter {
             }
         }
 
-        // Search for workspace root
-        let result = self.search_for_workspace_root(file_path).await;
+        // Search for workspace root using centralized resolver if available
+        let result = if let Some(ref resolver) = self.workspace_resolver {
+            // Use centralized workspace resolver for consistent detection
+            let mut resolver = resolver.lock().await;
+            resolver.resolve_workspace_for_file(file_path)
+        } else {
+            // Fallback to local implementation for backward compatibility
+            self.search_for_workspace_root_fallback(file_path).await
+        };
 
         // Cache the result
         {
@@ -691,8 +781,8 @@ impl WorkspaceCacheRouter {
         result
     }
 
-    /// Search for a workspace root starting from a file path and walking up the directory tree
-    async fn search_for_workspace_root(&self, file_path: &Path) -> Result<PathBuf> {
+    /// Search for a workspace root starting from a file path and walking up the directory tree (fallback implementation)
+    async fn search_for_workspace_root_fallback(&self, file_path: &Path) -> Result<PathBuf> {
         let start_path = if file_path.is_file() {
             file_path.parent().unwrap_or(file_path)
         } else {
@@ -1117,6 +1207,12 @@ impl WorkspaceCacheRouter {
         {
             let mut metadata = self.access_metadata.write().await;
             metadata.remove(&workspace_id);
+        }
+
+        // Remove from the dedicated reverse mapping
+        {
+            let mut workspace_mapping = self.workspace_id_to_root.write().await;
+            workspace_mapping.remove(&workspace_id);
         }
 
         // Remove the cache directory
