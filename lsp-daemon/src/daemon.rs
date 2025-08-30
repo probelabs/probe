@@ -205,9 +205,10 @@ impl LspDaemon {
                 ..Default::default()
             };
 
-        let workspace_cache_router = Arc::new(WorkspaceCacheRouter::new(
+        let workspace_cache_router = Arc::new(WorkspaceCacheRouter::new_with_workspace_resolver(
             workspace_cache_router_config,
             server_manager.clone(),
+            Some(workspace_resolver.clone()),
         ));
 
         // Load indexing configuration with updated defaults
@@ -242,9 +243,12 @@ impl LspDaemon {
             Some(workspace_resolver.clone()),
         ));
 
-        // Create universal cache using the workspace router
+        // Create universal cache using the workspace router with shared workspace resolver
         let universal_cache = Arc::new(
-            crate::universal_cache::UniversalCache::new(workspace_cache_router.clone())
+            crate::universal_cache::UniversalCache::new_with_workspace_resolver(
+                workspace_cache_router.clone(),
+                Some(workspace_resolver.clone()),
+            )
                 .await
                 .context("Failed to initialize universal cache")?,
         );

@@ -1207,12 +1207,12 @@ impl LspManager {
                 detailed: _,
                 per_workspace: _,
                 layers: _,
-                format: _,
+                format: stats_format,
             } => {
                 // Handle cache stats with fallback to disk reading
                 let stats = Self::get_cache_stats_with_fallback().await?;
 
-                match format {
+                match stats_format.as_str() {
                     "json" => {
                         println!("{}", serde_json::to_string_pretty(&stats)?);
                     }
@@ -1233,11 +1233,6 @@ impl LspManager {
                         println!("  {} {:.2}%", "Miss Rate:".bold(), stats.miss_rate * 100.0);
 
                         // Memory usage breakdown
-                        println!(
-                            "  {} {}",
-                            "In-Memory Cache:".bold(),
-                            format_bytes(stats.memory_usage.in_memory_cache_bytes as usize)
-                        );
                         println!(
                             "  {} {}",
                             "Persistent Cache:".bold(),
