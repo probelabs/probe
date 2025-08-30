@@ -90,7 +90,8 @@ pub struct KeyBuilder {
     /// Hasher instance for key generation
     hasher_pool: std::sync::Mutex<Vec<Hasher>>,
     /// Centralized workspace resolver for consistent workspace detection
-    workspace_resolver: Option<std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>>,
+    workspace_resolver:
+        Option<std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>>,
 }
 
 impl Clone for KeyBuilder {
@@ -113,7 +114,9 @@ impl KeyBuilder {
 
     /// Create a new key builder with workspace resolver integration
     pub fn new_with_workspace_resolver(
-        workspace_resolver: std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>,
+        workspace_resolver: std::sync::Arc<
+            tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>,
+        >,
     ) -> Self {
         Self {
             hasher_pool: std::sync::Mutex::new(Vec::new()),

@@ -135,7 +135,8 @@ pub struct WorkspaceCacheRouter {
     workspace_cache: Arc<RwLock<HashMap<PathBuf, Option<PathBuf>>>>,
 
     /// Centralized workspace resolver for consistent workspace detection
-    workspace_resolver: Option<std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>>,
+    workspace_resolver:
+        Option<std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>>,
 
     /// Dedicated reverse mapping: workspace_id -> workspace_root
     /// This persistent mapping allows workspace_root_for() to work even after caches are evicted
@@ -155,7 +156,9 @@ impl WorkspaceCacheRouter {
     pub fn new_with_workspace_resolver(
         mut config: WorkspaceCacheRouterConfig,
         server_manager: Arc<SingleServerManager>,
-        workspace_resolver: Option<std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>>,
+        workspace_resolver: Option<
+            std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>,
+        >,
     ) -> Self {
         // CRITICAL: Initialize proper cache directory at runtime, not during static init
         if config.base_cache_dir == PathBuf::from(".probe-temp-cache") {
@@ -223,7 +226,8 @@ impl WorkspaceCacheRouter {
                 This may indicate a bug in the caller.",
                 canonical_path
             );
-            canonical_path.parent()
+            canonical_path
+                .parent()
                 .unwrap_or(&canonical_path)
                 .to_path_buf()
         } else {
@@ -279,13 +283,13 @@ impl WorkspaceCacheRouter {
                     "Found workspace root {:?} for workspace_id {} via access metadata",
                     meta.workspace_root, workspace_id
                 );
-                
+
                 // Update the dedicated mapping for future lookups
                 {
                     let mut workspace_mapping = self.workspace_id_to_root.write().await;
                     workspace_mapping.insert(workspace_id.to_string(), meta.workspace_root.clone());
                 }
-                
+
                 return Ok(meta.workspace_root.clone());
             }
         }
@@ -308,13 +312,13 @@ impl WorkspaceCacheRouter {
                             "Resolved workspace_id {} to current directory: {:?}",
                             workspace_id, current_dir
                         );
-                        
+
                         // Update the dedicated mapping for future lookups
                         {
                             let mut workspace_mapping = self.workspace_id_to_root.write().await;
                             workspace_mapping.insert(workspace_id.to_string(), current_dir.clone());
                         }
-                        
+
                         return Ok(current_dir);
                     }
                 }
@@ -328,13 +332,14 @@ impl WorkspaceCacheRouter {
                                 "Resolved workspace_id {} to parent directory: {:?}",
                                 workspace_id, dir
                             );
-                            
+
                             // Update the dedicated mapping for future lookups
                             {
                                 let mut workspace_mapping = self.workspace_id_to_root.write().await;
-                                workspace_mapping.insert(workspace_id.to_string(), dir.to_path_buf());
+                                workspace_mapping
+                                    .insert(workspace_id.to_string(), dir.to_path_buf());
                             }
-                            
+
                             return Ok(dir.to_path_buf());
                         }
                     }

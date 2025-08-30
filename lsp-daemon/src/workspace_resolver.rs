@@ -35,7 +35,8 @@ impl WorkspaceResolver {
 
     /// Get the consolidated workspace marker priority list used across the entire system
     /// This is the single source of truth for workspace marker priorities
-    pub fn get_workspace_markers_with_priority() -> &'static [(/* marker */ &'static str, /* priority */ usize)] {
+    pub fn get_workspace_markers_with_priority(
+    ) -> &'static [(/* marker */ &'static str, /* priority */ usize)] {
         &[
             // High priority - language-specific project files
             ("go.mod", 100),
@@ -185,7 +186,7 @@ impl WorkspaceResolver {
         let result = best_match
             .map(|(path, _)| path)
             .unwrap_or_else(|| file_dir.to_path_buf());
-        
+
         Ok(result)
     }
 
@@ -220,13 +221,13 @@ impl WorkspaceResolver {
             // Simple cache eviction - remove oldest entries by cached_at time
             let mut entries: Vec<_> = self.workspace_cache.iter().collect();
             entries.sort_by_key(|(_, entry)| entry.cached_at);
-            
+
             let to_remove: Vec<_> = entries
                 .iter()
                 .take(self.max_cache_size / 4)
                 .map(|(key, _)| (*key).clone())
                 .collect();
-            
+
             for key in to_remove {
                 self.workspace_cache.remove(&key);
             }
@@ -243,10 +244,9 @@ impl WorkspaceResolver {
     fn cleanup_expired_cache_entries(&mut self) {
         let now = Instant::now();
         let ttl_duration = std::time::Duration::from_secs(self.cache_ttl_secs);
-        
-        self.workspace_cache.retain(|_, entry| {
-            now.duration_since(entry.cached_at) < ttl_duration
-        });
+
+        self.workspace_cache
+            .retain(|_, entry| now.duration_since(entry.cached_at) < ttl_duration);
     }
 
     /// Get language-specific project markers
@@ -297,15 +297,17 @@ impl WorkspaceResolver {
     pub fn cache_stats(&self) -> (usize, usize, u64, usize) {
         let now = Instant::now();
         let ttl_duration = std::time::Duration::from_secs(self.cache_ttl_secs);
-        let expired_count = self.workspace_cache.values()
+        let expired_count = self
+            .workspace_cache
+            .values()
             .filter(|entry| now.duration_since(entry.cached_at) >= ttl_duration)
             .count();
-            
+
         (
             self.workspace_cache.len(), // total entries
             self.max_cache_size,        // max cache size
             self.cache_ttl_secs,        // TTL in seconds
-            expired_count               // expired entries count
+            expired_count,              // expired entries count
         )
     }
 
@@ -443,18 +445,34 @@ mod tests {
     #[test]
     fn test_consolidated_marker_priorities() {
         let markers = WorkspaceResolver::get_workspace_markers_with_priority();
-        
+
         // Verify high-priority markers
-        assert!(markers.iter().any(|(marker, priority)| *marker == "Cargo.toml" && *priority == 100));
-        assert!(markers.iter().any(|(marker, priority)| *marker == "go.mod" && *priority == 100));
-        assert!(markers.iter().any(|(marker, priority)| *marker == "package.json" && *priority == 90));
-        
+        assert!(markers
+            .iter()
+            .any(|(marker, priority)| *marker == "Cargo.toml" && *priority == 100));
+        assert!(markers
+            .iter()
+            .any(|(marker, priority)| *marker == "go.mod" && *priority == 100));
+        assert!(markers
+            .iter()
+            .any(|(marker, priority)| *marker == "package.json" && *priority == 90));
+
         // Verify VCS markers have lower priority
-        assert!(markers.iter().any(|(marker, priority)| *marker == ".git" && *priority == 50));
-        
+        assert!(markers
+            .iter()
+            .any(|(marker, priority)| *marker == ".git" && *priority == 50));
+
         // Verify consistent ordering (high priority items should come first conceptually)
-        let cargo_priority = markers.iter().find(|(marker, _)| *marker == "Cargo.toml").unwrap().1;
-        let git_priority = markers.iter().find(|(marker, _)| *marker == ".git").unwrap().1;
+        let cargo_priority = markers
+            .iter()
+            .find(|(marker, _)| *marker == "Cargo.toml")
+            .unwrap()
+            .1;
+        let git_priority = markers
+            .iter()
+            .find(|(marker, _)| *marker == ".git")
+            .unwrap()
+            .1;
         assert!(cargo_priority > git_priority);
     }
 
@@ -463,7 +481,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let project_root = temp_dir.path().join("project");
         fs::create_dir_all(&project_root).unwrap();
-        fs::write(project_root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+        fs::write(
+            project_root.join("Cargo.toml"),
+            "[package]\nname = \"test\"",
+        )
+        .unwrap();
 
         let deep_file = project_root.join("src").join("main.rs");
         fs::create_dir_all(deep_file.parent().unwrap()).unwrap();
@@ -508,14 +530,18 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let project_root = temp_dir.path().join("shared-project");
         fs::create_dir_all(&project_root).unwrap();
-        fs::write(project_root.join("pyproject.toml"), "[project]\nname = \"shared\"").unwrap();
+        fs::write(
+            project_root.join("pyproject.toml"),
+            "[project]\nname = \"shared\"",
+        )
+        .unwrap();
 
         let file_path = project_root.join("main.py");
         fs::write(&file_path, "print('hello')").unwrap();
 
         // Test shared resolver creation and usage
         let resolver = WorkspaceResolver::new_shared(None);
-        
+
         let workspace1 = WorkspaceResolver::resolve_workspace_shared(&resolver, &file_path)
             .await
             .unwrap();
@@ -534,7 +560,7 @@ mod tests {
     #[test]
     fn test_priority_based_workspace_detection() {
         let temp_dir = TempDir::new().unwrap();
-        
+
         // Create nested structure with multiple markers
         let root_dir = temp_dir.path().join("root");
         let sub_dir = root_dir.join("sub");
@@ -542,12 +568,12 @@ mod tests {
 
         // Root has .git (priority 50)
         fs::create_dir_all(root_dir.join(".git")).unwrap();
-        
+
         // Sub has Cargo.toml (priority 100)
         fs::write(sub_dir.join("Cargo.toml"), "[package]\nname = \"sub\"").unwrap();
 
         let file_in_sub = sub_dir.join("main.rs");
-        
+
         let resolver = WorkspaceResolver::new(None);
         let workspace = resolver.detect_workspace(&file_in_sub).unwrap();
 
@@ -561,7 +587,7 @@ mod tests {
     #[test]
     fn test_cache_cleanup_and_eviction() {
         let temp_dir = TempDir::new().unwrap();
-        
+
         let mut resolver = WorkspaceResolver::new(None);
         resolver.max_cache_size = 3; // Small cache for testing
         resolver.cache_ttl_secs = 1; // Short TTL
