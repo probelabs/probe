@@ -455,6 +455,45 @@ pub enum CacheSubcommands {
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
         format: String,
     },
+
+    /// List all cache keys with pagination and filtering support
+    ListKeys {
+        /// Workspace path to list keys for (optional, lists all if not specified)
+        #[clap(short = 'w', long = "workspace")]
+        workspace: Option<std::path::PathBuf>,
+
+        /// Filter by LSP operation type (hover, references, definition, etc.)
+        #[clap(long)]
+        operation: Option<String>,
+
+        /// Filter by file path pattern
+        #[clap(long)]
+        file_pattern: Option<String>,
+
+        /// Number of results to return per page
+        #[clap(long, default_value = "20")]
+        limit: usize,
+
+        /// Number of results to skip (for pagination)
+        #[clap(long, default_value = "0")]
+        offset: usize,
+
+        /// Sort order (size, access-time, hit-count, created-time)
+        #[clap(long, default_value = "access-time", value_parser = ["size", "access-time", "hit-count", "created-time"])]
+        sort_by: String,
+
+        /// Sort direction (asc, desc)
+        #[clap(long, default_value = "desc", value_parser = ["asc", "desc"])]
+        sort_order: String,
+
+        /// Show detailed information for each key
+        #[clap(long)]
+        detailed: bool,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
+    },
 }
 
 // UniversalCacheSubcommands removed - merged into CacheSubcommands

@@ -230,6 +230,19 @@ pub enum DaemonRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         workspace_hint: Option<PathBuf>,
     },
+
+    // Cache key listing
+    CacheListKeys {
+        request_id: Uuid,
+        workspace_path: Option<PathBuf>,
+        operation_filter: Option<String>,
+        file_pattern_filter: Option<String>,
+        limit: usize,
+        offset: usize,
+        sort_by: String,
+        sort_order: String,
+        detailed: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -412,6 +425,17 @@ pub enum DaemonResponse {
         commit_hash: String,
         git_context: Option<GitContext>,
     },
+
+    // Cache key listing response
+    CacheListKeys {
+        request_id: Uuid,
+        keys: Vec<CacheKeyInfo>,
+        total_count: usize,
+        offset: usize,
+        limit: usize,
+        has_more: bool,
+    },
+
     Error {
         request_id: Uuid,
         error: String,
@@ -1043,6 +1067,35 @@ pub struct CompactResult {
     pub bytes_reclaimed: u64,
     pub fragmentation_reduced: f64,
     pub duration_ms: u64,
+}
+
+// Cache key information for listing operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheKeyInfo {
+    /// The cache key identifier
+    pub key: String,
+    /// Workspace relative file path
+    pub file_path: String,
+    /// LSP operation type
+    pub operation: String,
+    /// Position in file (line:column)
+    pub position: String,
+    /// Size of cached data in bytes
+    pub size_bytes: usize,
+    /// Number of times this key has been accessed
+    pub access_count: u64,
+    /// Last accessed time (ISO 8601 timestamp)
+    pub last_accessed: String,
+    /// Creation time (ISO 8601 timestamp)
+    pub created_at: String,
+    /// Content hash for cache invalidation
+    pub content_hash: String,
+    /// Workspace identifier
+    pub workspace_id: String,
+    /// Time-to-live in seconds (None means no expiration)
+    pub ttl_seconds: Option<u64>,
+    /// Whether the entry has expired
+    pub is_expired: bool,
 }
 
 pub struct MessageCodec;

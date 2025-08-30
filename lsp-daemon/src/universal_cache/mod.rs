@@ -217,6 +217,28 @@ impl UniversalCache {
     pub async fn get_stats(&self) -> Result<CacheStats> {
         self.store.get_stats().await
     }
+
+    /// List cache keys with filtering and pagination
+    pub async fn list_keys(
+        &self,
+        workspace_path: Option<&Path>,
+        operation_filter: Option<&str>,
+        file_pattern_filter: Option<&str>,
+        limit: usize,
+        offset: usize,
+        sort_by: Option<&str>,
+    ) -> Result<(Vec<crate::protocol::CacheKeyInfo>, usize)> {
+        self.store
+            .list_keys(
+                workspace_path,
+                operation_filter,
+                file_pattern_filter,
+                limit,
+                offset,
+                sort_by,
+            )
+            .await
+    }
 }
 
 /// Cache statistics

@@ -54,6 +54,10 @@ pub struct CacheMetadata {
     pub last_cleanup: SystemTime,
     /// Cache format version for future migrations
     pub version: u32,
+    /// Cache hit count (persisted across restarts)
+    pub hit_count: u64,
+    /// Cache miss count (persisted across restarts)
+    pub miss_count: u64,
 }
 
 impl Default for CacheMetadata {
@@ -63,6 +67,8 @@ impl Default for CacheMetadata {
             total_size_bytes: 0,
             last_cleanup: SystemTime::now(),
             version: 1,
+            hit_count: 0,
+            miss_count: 0,
         }
     }
 }
@@ -259,6 +265,10 @@ impl PersistentCallGraphCache {
             }
         }
 
+        // Store hit/miss counts before moving metadata into Arc
+        let initial_hit_count = metadata.hit_count;
+        let initial_miss_count = metadata.miss_count;
+
         let metadata = Arc::new(RwLock::new(metadata));
 
         let cache = Self {
@@ -268,8 +278,8 @@ impl PersistentCallGraphCache {
             file_index_tree,
             config,
             metadata,
-            hit_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            miss_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            hit_count: Arc::new(std::sync::atomic::AtomicU64::new(initial_hit_count)),
+            miss_count: Arc::new(std::sync::atomic::AtomicU64::new(initial_miss_count)),
         };
 
         info!(
@@ -360,6 +370,31 @@ impl PersistentCallGraphCache {
         Ok(())
     }
 
+    /// Update hit/miss counts in persistent metadata (incremental)
+    pub async fn update_hit_miss_counts(
+        &self,
+        hit_count: Option<u64>,
+        miss_count: Option<u64>,
+    ) -> Result<()> {
+        let mut metadata = self.metadata.write().await;
+
+        if let Some(hits) = hit_count {
+            metadata.hit_count += hits;
+        }
+        if let Some(misses) = miss_count {
+            metadata.miss_count += misses;
+        }
+
+        let data = bincode::serialize(&*metadata).context("Failed to serialize cache metadata")?;
+        self.metadata_tree
+            .set(b"cache_metadata", &data)
+            .await
+            .context("Failed to save hit/miss counts")
+            .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+
+        Ok(())
+    }
+
     /// Get a cached node by its key
     pub async fn get(&self, key: &NodeKey) -> Result<Option<PersistedNode>> {
         let key_bytes = bincode::serialize(key).context("Failed to serialize node key")?;
@@ -384,6 +419,9 @@ impl PersistentCallGraphCache {
                         );
                         self.hit_count
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                        // Update persistent metadata with increment of 1 (not total count)
+                        let _ = self.update_hit_miss_counts(Some(1), None).await;
                         Ok(Some(node))
                     }
                     Err(e) => {
@@ -408,6 +446,9 @@ impl PersistentCallGraphCache {
                 );
                 self.miss_count
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                // Update persistent metadata with increment of 1 (not total count)
+                let _ = self.update_hit_miss_counts(None, Some(1)).await;
                 Ok(None)
             }
             Err(e) => {
@@ -592,11 +633,17 @@ impl PersistentCallGraphCache {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to clear file index tree: {}", e))?;
 
-        // Reset metadata
+        // Reset metadata and atomic counters
         {
             let mut metadata = self.metadata.write().await;
             *metadata = CacheMetadata::default();
         }
+
+        // Reset atomic counters to match cleared metadata
+        self.hit_count
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.miss_count
+            .store(0, std::sync::atomic::Ordering::Relaxed);
 
         self.save_metadata().await?;
         self.db
@@ -781,6 +828,97 @@ impl PersistentCallGraphCache {
         Ok(nodes)
     }
 
+    /// Synchronous version of iter_nodes for use with spawn_blocking to prevent
+    /// blocking the async executor during cache key listing operations.
+    /// PERFORMANCE FIX: This method is designed to be called from spawn_blocking
+    /// to avoid blocking the main async executor thread.
+    pub fn try_iter_nodes_sync(&self) -> Result<Vec<(NodeKey, PersistedNode)>> {
+        use std::sync::Arc;
+
+        debug!("try_iter_nodes_sync called - attempting to return actual cache entries");
+
+        // Since we're in a spawn_blocking context, we can safely use blocking operations
+        // However, we need to be careful about timeout and resource usage
+
+        // Use the async runtime handle if available, or return a limited sample
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                // We're in an async context - use block_in_place for better performance
+                let nodes_tree = Arc::clone(&self.nodes_tree);
+
+                match handle.block_on(async {
+                    // Set a timeout to prevent indefinite blocking
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(2000), // 2 second timeout
+                        async {
+                            let mut nodes = Vec::new();
+
+                            // Use prefix scan to get all entries with a reasonable limit
+                            let all_entries = nodes_tree
+                                .scan_prefix(b"")
+                                .await
+                                .map_err(|e| anyhow::anyhow!("Failed to scan nodes: {}", e))?;
+
+                            let mut count = 0;
+                            const MAX_ENTRIES: usize = 1000; // Limit to prevent memory issues
+
+                            for (key_bytes, value_bytes) in all_entries {
+                                if count >= MAX_ENTRIES {
+                                    debug!(
+                                        "Reached maximum entry limit of {} for cache listing",
+                                        MAX_ENTRIES
+                                    );
+                                    break;
+                                }
+
+                                match (
+                                    bincode::deserialize::<NodeKey>(&key_bytes),
+                                    bincode::deserialize::<PersistedNode>(&value_bytes),
+                                ) {
+                                    (Ok(key), Ok(node)) => {
+                                        nodes.push((key, node));
+                                        count += 1;
+                                    }
+                                    (Err(e), _) => {
+                                        warn!(
+                                            "Failed to deserialize key during sync iteration: {}",
+                                            e
+                                        );
+                                    }
+                                    (_, Err(e)) => {
+                                        warn!(
+                                            "Failed to deserialize node during sync iteration: {}",
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+
+                            debug!("Successfully retrieved {} cache entries", nodes.len());
+                            Ok::<Vec<(NodeKey, PersistedNode)>, anyhow::Error>(nodes)
+                        },
+                    )
+                    .await
+                }) {
+                    Ok(Ok(nodes)) => Ok(nodes),
+                    Ok(Err(e)) => {
+                        warn!("Error during cache iteration: {}", e);
+                        Ok(Vec::new())
+                    }
+                    Err(_timeout) => {
+                        warn!("Cache iteration timed out after 2 seconds, returning empty results");
+                        Ok(Vec::new())
+                    }
+                }
+            }
+            Err(_) => {
+                // No async runtime available - return empty to be safe
+                warn!("No async runtime available for cache iteration, returning empty results");
+                Ok(Vec::new())
+            }
+        }
+    }
+
     // ================= Universal Cache Support =================
     // These methods provide a generic key-value interface for the Universal Cache
     // to use this persistent storage layer, independent of CallGraph specifics
@@ -855,6 +993,61 @@ impl PersistentCallGraphCache {
         }
 
         Ok(cleared_count)
+    }
+
+    /// Iterate over all universal cache entries
+    pub async fn iter_universal_entries(&self) -> Result<Vec<(String, Vec<u8>)>> {
+        let tree = self
+            .db
+            .open_tree("universal_cache")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open universal_cache tree: {}", e))?;
+
+        // Scan all entries (empty prefix means all entries)
+        let entries = tree
+            .scan_prefix(b"")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to scan universal cache: {}", e))?;
+
+        let mut result = Vec::new();
+        for (key_bytes, value_bytes) in entries {
+            let key = String::from_utf8_lossy(&key_bytes).to_string();
+            result.push((key, value_bytes));
+        }
+
+        debug!("Retrieved {} universal cache entries", result.len());
+        Ok(result)
+    }
+
+    /// Iterate over universal cache entries with a specific prefix
+    pub async fn iter_universal_entries_with_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, Vec<u8>)>> {
+        let tree = self
+            .db
+            .open_tree("universal_cache")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open universal_cache tree: {}", e))?;
+
+        // Scan entries with specific prefix
+        let entries = tree
+            .scan_prefix(prefix.as_bytes())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to scan universal cache: {}", e))?;
+
+        let mut result = Vec::new();
+        for (key_bytes, value_bytes) in entries {
+            let key = String::from_utf8_lossy(&key_bytes).to_string();
+            result.push((key, value_bytes));
+        }
+
+        debug!(
+            "Retrieved {} universal cache entries with prefix '{}'",
+            result.len(),
+            prefix
+        );
+        Ok(result)
     }
 }
 

@@ -8,7 +8,7 @@ use tokio::time::{self, MissedTickBehavior};
 use crate::lsp_integration::client::LspClient;
 use crate::lsp_integration::types::*;
 use crate::lsp_integration::{CacheSubcommands, IndexConfigSubcommands, LspSubcommands};
-use lsp_daemon::{LogEntry, LogLevel, LspDaemon};
+use lsp_daemon::{DaemonRequest, DaemonResponse, LogEntry, LogLevel, LspDaemon};
 
 // Follow-mode tuning: keep polling light to avoid hammering the daemon and the filesystem.
 const LOG_FOLLOW_POLL_MS: u64 = 500;
@@ -1229,8 +1229,26 @@ impl LspManager {
                             "Disk Size:".bold(),
                             format_bytes(stats.disk_size_bytes as usize)
                         );
-                        println!("  {} {:.2}%", "Hit Rate:".bold(), stats.hit_rate * 100.0);
-                        println!("  {} {:.2}%", "Miss Rate:".bold(), stats.miss_rate * 100.0);
+                        // Display hit rates with context about availability
+                        if stats.hit_rate == 0.0
+                            && stats.miss_rate == 0.0
+                            && stats.total_entries > 0
+                        {
+                            // When we have cache entries but zero rates, it means we're reading from disk only
+                            println!(
+                                "  {} {}",
+                                "Hit Rate:".bold(),
+                                "N/A (daemon not running)".dimmed()
+                            );
+                            println!(
+                                "  {} {}",
+                                "Miss Rate:".bold(),
+                                "N/A (daemon not running)".dimmed()
+                            );
+                        } else {
+                            println!("  {} {:.2}%", "Hit Rate:".bold(), stats.hit_rate * 100.0);
+                            println!("  {} {:.2}%", "Miss Rate:".bold(), stats.miss_rate * 100.0);
+                        }
 
                         // Memory usage breakdown
                         println!(
@@ -1282,59 +1300,42 @@ impl LspManager {
 
     /// Handle cache stats with fallback to disk reading
     async fn get_cache_stats_with_fallback() -> Result<lsp_daemon::protocol::CacheStatistics> {
-        eprintln!("[DEBUG] get_cache_stats_with_fallback called");
         // Check if daemon autostart is disabled
-        eprintln!(
-            "[DEBUG] Checking PROBE_LSP_DISABLE_AUTOSTART: {:?}",
-            std::env::var("PROBE_LSP_DISABLE_AUTOSTART")
-        );
         if std::env::var("PROBE_LSP_DISABLE_AUTOSTART").is_ok() {
-            eprintln!("[DEBUG] PROBE_LSP_DISABLE_AUTOSTART is set, calling read_disk_cache_stats_directly");
             return Self::read_disk_cache_stats_directly().await;
         }
 
-        // Try to get stats from daemon first
+        // Try to get stats from daemon first (this includes live hit/miss statistics)
         let config = LspConfig::default();
         match LspClient::new(config).await {
             Ok(mut client) => match client.cache_stats().await {
                 Ok(stats) => Ok(stats),
-                Err(e) => {
-                    eprintln!("[DEBUG] Failed to get stats from daemon: {e:?}, falling back to disk reading");
+                Err(_) => {
+                    // Daemon is running but cache stats failed, fall back to disk reading
                     Self::read_disk_cache_stats_directly().await
                 }
             },
-            Err(e) => {
-                eprintln!(
-                    "[DEBUG] Failed to connect to daemon: {e:?}, falling back to disk reading"
-                );
+            Err(_) => {
+                // Daemon not running, fall back to disk reading
                 Self::read_disk_cache_stats_directly().await
             }
         }
     }
 
     /// Read cache statistics directly from disk files (static version)
+    /// Note: This method can only provide disk-based statistics. Hit/miss rates
+    /// are only available when the daemon is running.
     async fn read_disk_cache_stats_directly() -> Result<lsp_daemon::protocol::CacheStatistics> {
-        eprintln!("[DEBUG] read_disk_cache_stats_directly called - reading from filesystem");
-
         // Get cache base directory (same logic as in client.rs)
         let cache_base_dir = if let Ok(cache_dir) = std::env::var("PROBE_LSP_CACHE_DIR") {
-            eprintln!("Using cache dir from env var PROBE_LSP_CACHE_DIR: {cache_dir}");
             std::path::PathBuf::from(cache_dir)
         } else if let Some(cache_dir) = dirs::cache_dir() {
-            let probe_lsp_dir = cache_dir.join("probe").join("lsp");
-            eprintln!("Using default cache dir: {probe_lsp_dir:?}");
-            probe_lsp_dir
+            cache_dir.join("probe").join("lsp")
         } else {
-            let tmp_dir = std::path::PathBuf::from("/tmp").join("probe-lsp-cache");
-            eprintln!("Using fallback tmp cache dir: {tmp_dir:?}");
-            tmp_dir
+            std::path::PathBuf::from("/tmp").join("probe-lsp-cache")
         };
 
-        eprintln!("Cache base directory: {cache_base_dir:?}");
-        eprintln!("Cache base directory exists: {}", cache_base_dir.exists());
-
         if !cache_base_dir.exists() {
-            eprintln!("Cache base directory does not exist, returning empty stats");
             return Ok(lsp_daemon::protocol::CacheStatistics {
                 total_entries: 0,
                 total_size_bytes: 0,
@@ -1851,6 +1852,182 @@ impl LspManager {
                     println!("  Detailed: {detailed}");
                 }
             },
+            CacheSubcommands::ListKeys {
+                workspace,
+                operation,
+                file_pattern,
+                limit,
+                offset,
+                sort_by,
+                sort_order,
+                detailed,
+                format: output_format,
+            } => {
+                // Send cache list keys request to daemon
+                let request = DaemonRequest::CacheListKeys {
+                    request_id: uuid::Uuid::new_v4(),
+                    workspace_path: workspace.clone(),
+                    operation_filter: operation.clone(),
+                    file_pattern_filter: file_pattern.clone(),
+                    limit: *limit,
+                    offset: *offset,
+                    sort_by: sort_by.clone(),
+                    sort_order: sort_order.clone(),
+                    detailed: *detailed,
+                };
+
+                match client.send_cache_list_keys_request(request).await? {
+                    DaemonResponse::CacheListKeys {
+                        keys,
+                        total_count,
+                        offset: response_offset,
+                        limit: response_limit,
+                        has_more,
+                        ..
+                    } => match output_format.as_str() {
+                        "json" => {
+                            let json_output = json!({
+                                "status": "success",
+                                "keys": keys,
+                                "total_count": total_count,
+                                "offset": response_offset,
+                                "limit": response_limit,
+                                "has_more": has_more,
+                                "pagination": {
+                                    "current_page": (response_offset / response_limit) + 1,
+                                    "total_pages": total_count.div_ceil(response_limit).max(1),
+                                    "items_per_page": response_limit
+                                }
+                            });
+                            println!("{}", serde_json::to_string_pretty(&json_output)?);
+                        }
+                        _ => {
+                            use colored::Colorize;
+
+                            println!("{}", "Cache Keys".bold().green());
+                            println!(
+                                "  {} {} keys found (showing {} - {})",
+                                "Total:".bold(),
+                                total_count,
+                                response_offset + 1,
+                                std::cmp::min(response_offset + response_limit, total_count)
+                            );
+
+                            if let Some(workspace) = workspace {
+                                println!("  {} {}", "Workspace:".bold(), workspace.display());
+                            }
+
+                            if let Some(operation) = operation {
+                                println!("  {} {}", "Operation filter:".bold(), operation.cyan());
+                            }
+
+                            if let Some(pattern) = file_pattern {
+                                println!("  {} {}", "File pattern:".bold(), pattern.cyan());
+                            }
+
+                            println!();
+
+                            if keys.is_empty() {
+                                println!(
+                                    "  {}",
+                                    "No cache keys found matching the criteria".dimmed()
+                                );
+                            } else {
+                                for (index, key) in keys.iter().enumerate() {
+                                    let item_number = response_offset + index + 1;
+                                    println!(
+                                        "{}. {}",
+                                        item_number.to_string().cyan(),
+                                        key.key.bold()
+                                    );
+
+                                    if *detailed {
+                                        println!("   {} {}", "File:".bold(), key.file_path);
+                                        println!(
+                                            "   {} {}",
+                                            "Operation:".bold(),
+                                            key.operation.green()
+                                        );
+                                        println!("   {} {}", "Position:".bold(), key.position);
+                                        println!("   {} {} bytes", "Size:".bold(), key.size_bytes);
+                                        println!(
+                                            "   {} {}",
+                                            "Access count:".bold(),
+                                            key.access_count
+                                        );
+                                        println!(
+                                            "   {} {}",
+                                            "Last accessed:".bold(),
+                                            key.last_accessed
+                                        );
+                                        println!("   {} {}", "Created:".bold(), key.created_at);
+                                        if key.is_expired {
+                                            println!("   {} {}", "Status:".bold(), "EXPIRED".red());
+                                        } else {
+                                            println!("   {} {}", "Status:".bold(), "VALID".green());
+                                        }
+                                        if let Some(ttl) = key.ttl_seconds {
+                                            println!("   {} {} seconds", "TTL:".bold(), ttl);
+                                        }
+                                        println!();
+                                    } else {
+                                        println!(
+                                            "   {} {} | {} | {} bytes | {} hits",
+                                            key.file_path.dimmed(),
+                                            key.operation.green(),
+                                            key.position.yellow(),
+                                            key.size_bytes,
+                                            key.access_count
+                                        );
+                                    }
+                                }
+
+                                // Show pagination info
+                                if has_more {
+                                    let next_offset = response_offset + response_limit;
+                                    println!(
+                                        "\n  {} Use --offset {} --limit {} to see more results",
+                                        "Pagination:".bold(),
+                                        next_offset,
+                                        response_limit
+                                    );
+                                }
+                            }
+                        }
+                    },
+                    DaemonResponse::Error { error, .. } => {
+                        match output_format.as_str() {
+                            "json" => {
+                                let json_output = json!({
+                                    "status": "error",
+                                    "error": error,
+                                    "parameters": {
+                                        "workspace": workspace,
+                                        "operation": operation,
+                                        "file_pattern": file_pattern,
+                                        "limit": limit,
+                                        "offset": offset,
+                                        "sort_by": sort_by,
+                                        "sort_order": sort_order,
+                                        "detailed": detailed
+                                    }
+                                });
+                                println!("{}", serde_json::to_string_pretty(&json_output)?);
+                            }
+                            _ => {
+                                use colored::Colorize;
+                                println!("{} {}", "❌ Error listing cache keys:".red(), error);
+                            }
+                        }
+                        std::process::exit(1);
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Unexpected response type for cache list keys"
+                        ));
+                    }
+                }
+            }
         }
 
         Ok(())

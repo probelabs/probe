@@ -131,11 +131,21 @@ impl CacheStore {
             config.max_entry_size
         );
 
-        Ok(Self {
+        let store = Self {
             workspace_router,
             workspace_stats,
             config,
-        })
+        };
+
+        // Preload persistent hit/miss statistics from existing workspace caches on startup
+        if let Err(e) = store.preload_persistent_statistics().await {
+            warn!(
+                "Failed to preload persistent cache statistics on startup: {}",
+                e
+            );
+        }
+
+        Ok(store)
     }
 
     /// Get a cached value
@@ -670,15 +680,46 @@ impl CacheStore {
             0.0
         };
 
+        // Debug: log individual workspace contributions
+        for workspace_stat in &workspace_router_stats.workspace_stats {
+            let workspace_id = &workspace_stat.workspace_id;
+            if let Some(cache_stats) = &workspace_stat.cache_stats {
+                debug!(
+                    "Workspace cache stats contribution from {}: entries={}, hits={}, misses={}, size_bytes={}",
+                    workspace_id, cache_stats.total_nodes, cache_stats.hit_count, cache_stats.miss_count, cache_stats.total_size_bytes
+                );
+            }
+            if let Some(memory_stats) = stats_map.get(workspace_id) {
+                debug!(
+                    "Workspace memory stats contribution from {}: entries={}, hits={}, misses={}, size_bytes={}",
+                    workspace_id, memory_stats.entries, memory_stats.hits, memory_stats.misses, memory_stats.size_bytes
+                );
+            }
+        }
+
         debug!(
-            "Cache stats calculation: total_hits={}, total_misses={}, total_requests={}, hit_rate={}, miss_rate={}",
-            total_hits, total_misses, total_requests, hit_rate, miss_rate
+            "Cache stats calculation: total_hits={}, total_misses={}, total_requests={}, hit_rate={:.2}%, miss_rate={:.2}%",
+            total_hits, total_misses, total_requests, hit_rate * 100.0, miss_rate * 100.0
         );
 
         debug!(
-            "Cache stats: {} entries total, {} workspace caches found",
-            total_entries, active_workspace_count
+            "Cache stats: {} entries total, {} workspace caches found, {} method stats entries",
+            total_entries,
+            active_workspace_count,
+            combined_method_stats.len()
         );
+
+        // Debug: log method stats
+        for (method, method_stats) in &combined_method_stats {
+            debug!(
+                "Method stats for {:?}: entries={}, hits={}, misses={}, size_bytes={}",
+                method,
+                method_stats.entries,
+                method_stats.hits,
+                method_stats.misses,
+                method_stats.size_bytes
+            );
+        }
 
         Ok(CacheStats {
             total_entries,
@@ -689,6 +730,248 @@ impl CacheStore {
             miss_rate,
             method_stats: combined_method_stats,
         })
+    }
+
+    /// List cache keys with filtering and pagination
+    pub async fn list_keys(
+        &self,
+        workspace_path: Option<&std::path::Path>,
+        operation_filter: Option<&str>,
+        file_pattern_filter: Option<&str>,
+        limit: usize,
+        offset: usize,
+        sort_by: Option<&str>,
+    ) -> Result<(Vec<crate::protocol::CacheKeyInfo>, usize)> {
+        let mut all_keys = Vec::new();
+
+        // Determine which workspaces to scan
+        let workspace_roots: Vec<std::path::PathBuf> = if let Some(workspace_path) = workspace_path
+        {
+            // Filter to specific workspace
+            vec![workspace_path.to_path_buf()]
+        } else {
+            // Get all active workspaces
+            let workspace_stats = self.workspace_router.get_stats().await;
+            workspace_stats
+                .workspace_stats
+                .into_iter()
+                .map(|ws| ws.workspace_root)
+                .collect()
+        };
+
+        debug!(
+            "Listing cache keys from {} workspaces with operation_filter={:?}, file_pattern_filter={:?}",
+            workspace_roots.len(),
+            operation_filter,
+            file_pattern_filter
+        );
+
+        // Scan each workspace cache
+        for workspace_root in workspace_roots {
+            match self
+                .list_keys_from_workspace(&workspace_root, operation_filter, file_pattern_filter)
+                .await
+            {
+                Ok((workspace_keys, _workspace_total)) => {
+                    all_keys.extend(workspace_keys);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to list keys from workspace {}: {}",
+                        workspace_root.display(),
+                        e
+                    );
+                    // Continue with other workspaces
+                }
+            }
+        }
+
+        // Apply sorting
+        self.sort_cache_keys(&mut all_keys, sort_by);
+
+        // Calculate total count before pagination
+        let total_keys = all_keys.len();
+
+        // Apply pagination
+        let paginated_keys: Vec<crate::protocol::CacheKeyInfo> =
+            all_keys.into_iter().skip(offset).take(limit).collect();
+
+        debug!(
+            "Cache key listing complete: {} total keys, returning {} with offset={}, limit={}",
+            total_keys,
+            paginated_keys.len(),
+            offset,
+            limit
+        );
+
+        Ok((paginated_keys, total_keys))
+    }
+
+    /// List cache keys from a specific workspace
+    async fn list_keys_from_workspace(
+        &self,
+        workspace_root: &std::path::Path,
+        operation_filter: Option<&str>,
+        file_pattern_filter: Option<&str>,
+    ) -> Result<(Vec<crate::protocol::CacheKeyInfo>, usize)> {
+        // Get workspace cache
+        let workspace_cache = self
+            .workspace_router
+            .cache_for_workspace(workspace_root)
+            .await?;
+
+        // Get workspace ID for this workspace
+        let workspace_id = self.workspace_router.workspace_id_for(workspace_root)?;
+
+        debug!(
+            "Listing Universal Cache keys for workspace {} (workspace_id: {})",
+            workspace_root.display(),
+            workspace_id
+        );
+
+        let mut keys = Vec::new();
+
+        // Query Universal Cache entries directly using the new method
+        match workspace_cache.iter_universal_entries().await {
+            Ok(universal_entries) => {
+                debug!(
+                    "Found {} Universal Cache entries for workspace",
+                    universal_entries.len()
+                );
+
+                for (storage_key, entry_data) in universal_entries {
+                    // Parse the cache key to extract components
+                    if let Some(cache_key) = CacheKey::from_storage_key(&storage_key) {
+                        // Filter by workspace_id if this entry belongs to our workspace
+                        if cache_key.workspace_id != workspace_id {
+                            continue;
+                        }
+
+                        // Deserialize the CacheEntry to get metadata
+                        let cache_entry = match bincode::deserialize::<CacheEntry>(&entry_data) {
+                            Ok(entry) => entry,
+                            Err(e) => {
+                                warn!(
+                                    "Failed to deserialize Universal Cache entry '{}': {}",
+                                    storage_key, e
+                                );
+                                continue;
+                            }
+                        };
+                        let size_bytes = cache_entry.data.len();
+
+                        // Skip expired entries
+                        if cache_entry.is_expired() {
+                            debug!("Skipping expired Universal Cache entry: {}", storage_key);
+                            continue;
+                        }
+
+                        // Convert LSP method to string
+                        let operation = cache_key.method.as_str().to_string();
+
+                        // Apply operation filter
+                        if let Some(op_filter) = operation_filter {
+                            if !operation.contains(op_filter) {
+                                continue;
+                            }
+                        }
+
+                        // Apply file pattern filter
+                        let file_path = cache_key
+                            .workspace_relative_path
+                            .to_string_lossy()
+                            .to_string();
+                        if let Some(file_filter) = file_pattern_filter {
+                            if !file_path.contains(file_filter) {
+                                continue;
+                            }
+                        }
+
+                        // Convert timestamps to strings
+                        let last_accessed = cache_entry
+                            .metadata
+                            .last_accessed
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                            .to_string();
+
+                        let created_at = cache_entry
+                            .metadata
+                            .created_at
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                            .to_string();
+
+                        // Create cache key info from Universal Cache entry
+                        let cache_key_info = crate::protocol::CacheKeyInfo {
+                            key: storage_key.clone(),
+                            file_path,
+                            operation,
+                            position: format!("content:{}", &cache_key.content_hash[..8]), // Show first 8 chars of hash
+                            size_bytes,
+                            access_count: cache_entry.metadata.access_count,
+                            last_accessed,
+                            created_at,
+                            content_hash: cache_key.content_hash,
+                            workspace_id: cache_key.workspace_id,
+                            ttl_seconds: cache_entry.metadata.ttl.map(|d| d.as_secs()),
+                            is_expired: false, // Already filtered out expired entries above
+                        };
+
+                        keys.push(cache_key_info);
+                    } else {
+                        debug!("Failed to parse Universal Cache key: {}", storage_key);
+                    }
+                }
+            }
+            Err(e) => {
+                debug!(
+                    "Failed to get Universal Cache entries for workspace {}: {}",
+                    workspace_root.display(),
+                    e
+                );
+                // Return empty results instead of propagating error to avoid breaking other operations
+                return Ok((Vec::new(), 0));
+            }
+        }
+
+        let total_count = keys.len();
+        debug!(
+            "Returning {} Universal Cache keys for workspace {}",
+            total_count,
+            workspace_root.display()
+        );
+        Ok((keys, total_count))
+    }
+
+    /// Sort cache keys based on the sort criteria
+    fn sort_cache_keys(&self, keys: &mut [crate::protocol::CacheKeyInfo], sort_by: Option<&str>) {
+        match sort_by {
+            Some("created_at") => {
+                keys.sort_by(|a, b| b.created_at.cmp(&a.created_at)); // Newest first
+            }
+            Some("last_accessed") => {
+                keys.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed)); // Most recently accessed first
+            }
+            Some("access_count") => {
+                keys.sort_by(|a, b| b.access_count.cmp(&a.access_count)); // Most accessed first
+            }
+            Some("size_bytes") => {
+                keys.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes)); // Largest first
+            }
+            Some("file_path") => {
+                keys.sort_by(|a, b| a.file_path.cmp(&b.file_path)); // Alphabetical by file path
+            }
+            Some("operation") => {
+                keys.sort_by(|a, b| a.operation.cmp(&b.operation)); // Alphabetical by operation
+            }
+            _ => {
+                // Default sort: by last_accessed (most recent first)
+                keys.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+            }
+        }
     }
 
     /// Count entries in a workspace cache database
@@ -824,6 +1107,248 @@ impl CacheStore {
             entries: total_entries,
             size_bytes: total_size,
         })
+    }
+
+    /// Preload persistent hit/miss statistics on daemon startup
+    ///
+    /// This method scans existing workspace cache directories and loads their persistent
+    /// hit/miss counts into memory, ensuring that statistics persist across daemon restarts.
+    async fn preload_persistent_statistics(&self) -> Result<()> {
+        info!("Preloading persistent cache statistics from existing workspace caches...");
+
+        let mut total_loaded_hits = 0u64;
+        let mut total_loaded_misses = 0u64;
+        let mut workspaces_loaded = 0;
+
+        // Get the base cache directory from the workspace router configuration
+        let base_cache_dir = self.workspace_router.get_base_cache_dir();
+
+        info!(
+            "Scanning workspace cache directory for existing caches: {}",
+            base_cache_dir.display()
+        );
+
+        // Check if the base cache directory exists
+        if tokio::fs::metadata(&base_cache_dir).await.is_err() {
+            info!("No workspace cache directory found - this is normal for a fresh daemon");
+            return Ok(());
+        }
+
+        // Scan the directory for workspace cache subdirectories
+        let mut dir_entries = tokio::fs::read_dir(&base_cache_dir).await.context(format!(
+            "Failed to read workspace cache directory: {}",
+            base_cache_dir.display()
+        ))?;
+
+        while let Some(entry) = dir_entries.next_entry().await? {
+            let path = entry.path();
+            if path.is_dir() {
+                let workspace_id = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                info!(
+                    "Found workspace cache directory: {} (workspace_id: {})",
+                    path.display(),
+                    workspace_id
+                );
+
+                // Try to load statistics from this workspace cache
+                match self.load_workspace_cache_stats(&workspace_id, &path).await {
+                    Ok((hits, misses, entries, size_bytes)) => {
+                        if hits > 0 || misses > 0 {
+                            // Initialize workspace stats with persistent hit/miss counts
+                            let mut stats_map = self.workspace_stats.write().await;
+                            let workspace_stats =
+                                stats_map.entry(workspace_id.clone()).or_default();
+
+                            // Set persistent hit/miss counts
+                            workspace_stats.hits = hits;
+                            workspace_stats.misses = misses;
+                            workspace_stats.entries = entries;
+                            workspace_stats.size_bytes = size_bytes;
+
+                            // Initialize method stats with the persistent counts
+                            // Since we don't have method-specific persistence yet, attribute all to CallHierarchy
+                            let method_stats = workspace_stats
+                                .method_stats
+                                .entry(crate::universal_cache::LspMethod::CallHierarchy)
+                                .or_insert(MethodStats {
+                                    entries: 0,
+                                    size_bytes: 0,
+                                    hits: 0,
+                                    misses: 0,
+                                });
+                            method_stats.hits = hits;
+                            method_stats.misses = misses;
+                            method_stats.entries = entries;
+                            method_stats.size_bytes = size_bytes;
+
+                            total_loaded_hits += hits;
+                            total_loaded_misses += misses;
+                            workspaces_loaded += 1;
+
+                            info!(
+                                "Loaded persistent stats for workspace '{}': {} hits, {} misses, {} entries, {} bytes",
+                                workspace_id, hits, misses, entries, size_bytes
+                            );
+                        } else {
+                            info!(
+                                "No persistent hit/miss stats to load for workspace '{}' (hits={}, misses={})",
+                                workspace_id, hits, misses
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to load statistics from workspace cache '{}': {}",
+                            workspace_id, e
+                        );
+                    }
+                }
+            }
+        }
+
+        if workspaces_loaded > 0 {
+            info!(
+                "Successfully preloaded persistent cache statistics: {} hits, {} misses from {} workspaces",
+                total_loaded_hits, total_loaded_misses, workspaces_loaded
+            );
+        } else {
+            debug!("No persistent cache statistics found to preload (this is normal for a fresh daemon)");
+        }
+
+        Ok(())
+    }
+
+    /// Load statistics from a specific workspace cache directory
+    async fn load_workspace_cache_stats(
+        &self,
+        workspace_id: &str,
+        _workspace_cache_dir: &Path,
+    ) -> Result<(u64, u64, u64, u64)> {
+        // Try to load the cache for this workspace and get its stats
+        // This will open the cache temporarily to read the persistent statistics
+
+        // Get the workspace root for this workspace ID
+        let workspace_root = match self.workspace_router.workspace_root_for(workspace_id).await {
+            Ok(root) => root,
+            Err(_) => {
+                // If we can't resolve the workspace root, use the cache directory name as a fallback
+                // This can happen if the workspace is not currently active
+                info!(
+                    "Could not resolve workspace root for '{}', skipping statistics load",
+                    workspace_id
+                );
+                return Ok((0, 0, 0, 0));
+            }
+        };
+
+        // Get the workspace cache and read its statistics
+        match self
+            .workspace_router
+            .cache_for_workspace(&workspace_root)
+            .await
+        {
+            Ok(workspace_cache) => match workspace_cache.get_stats().await {
+                Ok(stats) => {
+                    let hits = stats.hit_count;
+                    let misses = stats.miss_count;
+                    let entries = stats.total_nodes;
+                    let size_bytes = stats.total_size_bytes;
+
+                    Ok((hits, misses, entries, size_bytes))
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to get stats from workspace cache '{}': {}",
+                        workspace_id, e
+                    );
+                    Ok((0, 0, 0, 0))
+                }
+            },
+            Err(e) => {
+                warn!(
+                    "Failed to open workspace cache for '{}': {}",
+                    workspace_id, e
+                );
+                Ok((0, 0, 0, 0))
+            }
+        }
+    }
+
+    /// Update persistent cache hit count for a workspace
+    async fn update_persistent_hit_count(&self, workspace_id: &str) -> Result<()> {
+        // Get the workspace root for this workspace ID
+        let workspace_root = match self.workspace_router.workspace_root_for(workspace_id).await {
+            Ok(root) => root,
+            Err(e) => {
+                debug!(
+                    "Could not resolve workspace root for '{}' to update hit count: {}",
+                    workspace_id, e
+                );
+                return Ok(()); // Don't fail the operation for this
+            }
+        };
+
+        // Get the workspace cache and update its hit count
+        match self
+            .workspace_router
+            .cache_for_workspace(&workspace_root)
+            .await
+        {
+            Ok(workspace_cache) => {
+                workspace_cache
+                    .update_hit_miss_counts(Some(1), None)
+                    .await?;
+            }
+            Err(e) => {
+                debug!(
+                    "Could not get workspace cache for '{}' to update hit count: {}",
+                    workspace_id, e
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Update persistent cache miss count for a workspace
+    async fn update_persistent_miss_count(&self, workspace_id: &str) -> Result<()> {
+        // Get the workspace root for this workspace ID
+        let workspace_root = match self.workspace_router.workspace_root_for(workspace_id).await {
+            Ok(root) => root,
+            Err(e) => {
+                debug!(
+                    "Could not resolve workspace root for '{}' to update miss count: {}",
+                    workspace_id, e
+                );
+                return Ok(()); // Don't fail the operation for this
+            }
+        };
+
+        // Get the workspace cache and update its miss count
+        match self
+            .workspace_router
+            .cache_for_workspace(&workspace_root)
+            .await
+        {
+            Ok(workspace_cache) => {
+                workspace_cache
+                    .update_hit_miss_counts(None, Some(1))
+                    .await?;
+            }
+            Err(e) => {
+                debug!(
+                    "Could not get workspace cache for '{}' to update miss count: {}",
+                    workspace_id, e
+                );
+            }
+        }
+
+        Ok(())
     }
 
     // === Private Methods ===
@@ -1034,13 +1559,23 @@ impl CacheStore {
                             key.workspace_id
                         );
                     } else {
-                        // Only warn when we truly can't find a reasonable workspace
-                        warn!(
-                            "Workspace resolution fallback: workspace_id {} doesn't match current directory workspace_id {}, but using current directory: {}",
-                            key.workspace_id,
-                            current_workspace_id,
-                            current_dir.display()
-                        );
+                        // Check if this is a legacy cache entry with old hash algorithm
+                        // If so, log it for potential cleanup but don't warn excessively
+                        if self.is_likely_legacy_workspace_id(&key.workspace_id) {
+                            debug!(
+                                "Legacy workspace ID detected: {} (current would be {}). This entry may be from a previous daemon session with different hash algorithm.",
+                                key.workspace_id,
+                                current_workspace_id
+                            );
+                        } else {
+                            // Only warn when we truly can't find a reasonable workspace
+                            warn!(
+                                "Workspace resolution fallback: workspace_id {} doesn't match current directory workspace_id {}, but using current directory: {}",
+                                key.workspace_id,
+                                current_workspace_id,
+                                current_dir.display()
+                            );
+                        }
                     }
                 } else {
                     // Only warn if we can't even determine current directory's workspace
@@ -1059,6 +1594,7 @@ impl CacheStore {
 
     /// Record a cache hit
     async fn record_hit(&self, workspace_id: &str, method: crate::universal_cache::LspMethod) {
+        // Update in-memory statistics
         let mut stats_map = self.workspace_stats.write().await;
         let workspace_stats = stats_map.entry(workspace_id.to_string()).or_default();
 
@@ -1074,10 +1610,19 @@ impl CacheStore {
                 misses: 0,
             });
         method_stats.hits += 1;
+
+        // Also update persistent cache hit count
+        if let Err(e) = self.update_persistent_hit_count(workspace_id).await {
+            warn!(
+                "Failed to update persistent hit count for workspace '{}': {}",
+                workspace_id, e
+            );
+        }
     }
 
     /// Record a cache miss
     async fn record_miss(&self, workspace_id: &str, method: crate::universal_cache::LspMethod) {
+        // Update in-memory statistics
         let mut stats_map = self.workspace_stats.write().await;
         let workspace_stats = stats_map.entry(workspace_id.to_string()).or_default();
 
@@ -1093,6 +1638,14 @@ impl CacheStore {
                 misses: 0,
             });
         method_stats.misses += 1;
+
+        // Also update persistent cache miss count
+        if let Err(e) = self.update_persistent_miss_count(workspace_id).await {
+            warn!(
+                "Failed to update persistent miss count for workspace '{}': {}",
+                workspace_id, e
+            );
+        }
     }
 
     /// Record a cache set operation
@@ -1119,6 +1672,21 @@ impl CacheStore {
             });
         method_stats.entries += 1;
         method_stats.size_bytes += size_bytes as u64;
+    }
+
+    /// Check if a workspace ID is likely from a legacy cache entry
+    /// Legacy workspace IDs were generated using DefaultHasher, which produces 16-character hex strings
+    /// New workspace IDs use Blake3 and are 8-character hex strings
+    fn is_likely_legacy_workspace_id(&self, workspace_id: &str) -> bool {
+        if let Some((_hash_part, _folder_part)) = workspace_id.split_once('_') {
+            // Legacy workspace IDs from DefaultHasher had 16-character hex hashes
+            // New workspace IDs from Blake3 have 8-character hex hashes
+            if _hash_part.len() == 16 && _hash_part.chars().all(|c| c.is_ascii_hexdigit()) {
+                debug!("Detected legacy workspace ID format: {}", workspace_id);
+                return true;
+            }
+        }
+        false
     }
 }
 

@@ -19,10 +19,7 @@ pub mod lsp_cache;
 pub mod persistent_cache;
 pub mod universal_cache;
 
-// Handler modules
-pub mod definition_handler;
-pub mod hover_handler;
-pub mod references_handler;
+// Handler modules (removed - old cache system replaced by universal cache)
 
 // Internal modules - exposed for direct client use
 pub mod lsp_registry;

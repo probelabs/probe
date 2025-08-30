@@ -525,10 +525,8 @@ async fn main() -> Result<()> {
             use probe_code::lsp_integration::LspSubcommands;
             // Only these specific commands should disable autostart to prevent recursion
             // Note: Shutdown should NOT disable autostart as it needs to connect first
-            matches!(
-                subcommand,
-                LspSubcommands::Start { .. } | LspSubcommands::Restart { .. }
-            )
+            // Note: Restart should NOT disable autostart as it needs to start a new daemon
+            matches!(subcommand, LspSubcommands::Start { .. })
         }
         _ => false, // Never disable autostart for regular commands - let daemon handle lazy init
     } || config.lsp.disable_autostart; // Also check config setting
