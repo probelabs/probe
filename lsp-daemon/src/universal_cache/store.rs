@@ -937,23 +937,24 @@ impl CacheStore {
                 Ok(workspace_root)
             }
             Err(e) => {
-                // Fallback: try to reconstruct from current directory and relative path
+                // Intelligent fallback: try to reconstruct from file path in cache key
                 let current_dir =
                     std::env::current_dir().context("Failed to get current directory")?;
                 let relative_path = &key.workspace_relative_path;
                 let potential_file = current_dir.join(relative_path);
 
+                // First try: if file exists, find workspace root by traversing up
                 if potential_file.exists() {
-                    // Try to find the workspace root that would contain this file
                     let mut candidate_dir = potential_file.parent();
                     while let Some(dir) = candidate_dir {
                         if let Ok(workspace_id) = self.workspace_router.workspace_id_for(dir) {
                             if workspace_id == key.workspace_id {
                                 debug!(
-                                    "Found workspace root {} for workspace_id {} via file path reconstruction",
+                                    "Intelligently resolved workspace root {} for workspace_id {} via file path reconstruction",
                                     dir.display(),
                                     key.workspace_id
                                 );
+
                                 return Ok(dir.to_path_buf());
                             }
                         }
@@ -961,13 +962,96 @@ impl CacheStore {
                     }
                 }
 
+                // Second try: attempt to intelligently guess from relative path structure
+                // Look for common workspace indicators in the path
+                let path_components: Vec<_> = relative_path.components().collect();
+                if !path_components.is_empty() {
+                    // Try progressively shorter paths from current directory
+                    for depth in 0..=2 {
+                        // Try current dir, parent, grandparent
+                        let mut test_workspace = current_dir.clone();
+                        for _ in 0..depth {
+                            if let Some(parent) = test_workspace.parent() {
+                                test_workspace = parent.to_path_buf();
+                            } else {
+                                break;
+                            }
+                        }
+
+                        // Check if this could be the right workspace
+                        if let Ok(workspace_id) =
+                            self.workspace_router.workspace_id_for(&test_workspace)
+                        {
+                            if workspace_id == key.workspace_id {
+                                debug!(
+                                    "Intelligently resolved workspace root {} for workspace_id {} via directory traversal (depth {})",
+                                    test_workspace.display(),
+                                    key.workspace_id,
+                                    depth
+                                );
+
+                                return Ok(test_workspace);
+                            }
+                        }
+
+                        // Also check if the file would exist relative to this workspace
+                        let test_file = test_workspace.join(relative_path);
+                        if test_file.exists() {
+                            if let Ok(workspace_id) =
+                                self.workspace_router.workspace_id_for(&test_workspace)
+                            {
+                                if workspace_id == key.workspace_id {
+                                    debug!(
+                                        "Intelligently resolved workspace root {} for workspace_id {} via file existence check at depth {}",
+                                        test_workspace.display(),
+                                        key.workspace_id,
+                                        depth
+                                    );
+
+                                    return Ok(test_workspace);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Final fallback: use current directory
-                warn!(
-                    "Could not resolve workspace root for workspace_id {} ({}), using current directory: {}",
+                // Only use debug! since current directory is often a reasonable fallback
+                debug!(
+                    "Could not intelligently resolve workspace root for workspace_id {} ({}), using current directory as fallback: {}",
                     key.workspace_id,
                     e,
                     current_dir.display()
                 );
+
+                // Check if current directory happens to match the workspace_id
+                if let Ok(current_workspace_id) =
+                    self.workspace_router.workspace_id_for(&current_dir)
+                {
+                    if current_workspace_id == key.workspace_id {
+                        debug!(
+                            "Current directory fallback successfully matches workspace_id {} - this is a good fallback",
+                            key.workspace_id
+                        );
+                    } else {
+                        // Only warn when we truly can't find a reasonable workspace
+                        warn!(
+                            "Workspace resolution fallback: workspace_id {} doesn't match current directory workspace_id {}, but using current directory: {}",
+                            key.workspace_id,
+                            current_workspace_id,
+                            current_dir.display()
+                        );
+                    }
+                } else {
+                    // Only warn if we can't even determine current directory's workspace
+                    warn!(
+                        "Could not determine workspace for current directory {}, but using it as fallback for workspace_id {} (original error: {})",
+                        current_dir.display(),
+                        key.workspace_id,
+                        e
+                    );
+                }
+
                 Ok(current_dir)
             }
         }
