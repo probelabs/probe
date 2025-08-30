@@ -1440,3 +1440,4 @@ mod tests {
         assert!(stats.active_workspaces > 0); // Should have at least one workspace with stats
     }
 }
+// Test comment to verify pre-commit hooks
