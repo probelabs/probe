@@ -249,8 +249,8 @@ impl LspDaemon {
                 workspace_cache_router.clone(),
                 Some(workspace_resolver.clone()),
             )
-                .await
-                .context("Failed to initialize universal cache")?,
+            .await
+            .context("Failed to initialize universal cache")?,
         );
 
         // Configure cache layer with intelligent defaults
