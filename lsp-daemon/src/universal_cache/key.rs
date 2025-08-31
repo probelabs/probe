@@ -569,6 +569,8 @@ mod tests {
             content_hash: "abc123def456".to_string(),
             workspace_id: "12345678_my-project".to_string(),
             file_mtime: 1234567890,
+            symbol_name: None,
+            position: None,
         };
 
         let storage_key = original_key.to_storage_key();
