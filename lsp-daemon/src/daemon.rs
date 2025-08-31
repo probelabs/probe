@@ -1,4 +1,7 @@
 use crate::cache_types::{CallHierarchyInfo, CallInfo, LspOperation, NodeId, NodeKey};
+use crate::database_cache_adapter::{
+    DatabaseBackendType, DatabaseCacheConfig as PersistentCacheConfig,
+};
 use crate::hash_utils::md5_hex_file;
 use crate::indexing::{IndexingConfig, IndexingManager};
 use crate::ipc::{IpcListener, IpcStream};
@@ -6,7 +9,6 @@ use crate::language_detector::{Language, LanguageDetector};
 use crate::logging::{LogBuffer, MemoryLogLayer};
 use crate::lsp_registry::LspRegistry;
 use crate::path_safety::safe_canonicalize;
-use crate::persistent_cache::{DatabaseBackendType, PersistentCacheConfig};
 use crate::pid_lock::PidLock;
 #[cfg(unix)]
 use crate::process_group::ProcessGroup;
@@ -185,12 +187,15 @@ impl LspDaemon {
 
         // Initialize persistent cache store configuration
         let persistent_cache_config = PersistentCacheConfig {
-            cache_directory: None,         // Will use default location
-            max_size_bytes: 1_000_000_000, // 1GB
-            ttl_days: 30,
-            compress: true,
-            memory_only: false,                      // Default to persistent
-            backend_type: DatabaseBackendType::Sled, // Default to Sled backend
+            database_config: crate::database::DatabaseConfig {
+                path: None,       // Will use default location
+                temporary: false, // Persistent cache
+                compression: true,
+                cache_capacity: 1_000_000_000, // 1GB
+                ..Default::default()
+            },
+            memory_only: false,
+            backend_type: DatabaseBackendType::Sled,
         };
 
         // Initialize workspace cache router for universal cache
@@ -1262,6 +1267,25 @@ impl LspDaemon {
                                 }
                             }
 
+                            // Generate comprehensive statistics using list_keys functionality
+                            let (per_workspace_stats, per_operation_totals) = match self
+                                .generate_comprehensive_cache_stats()
+                                .await
+                            {
+                                Ok((ws_stats, op_stats)) => {
+                                    info!(
+                                        "Successfully generated comprehensive cache stats: {} workspaces, {} operations",
+                                        ws_stats.len(),
+                                        op_stats.len()
+                                    );
+                                    (ws_stats, op_stats)
+                                }
+                                Err(e) => {
+                                    warn!("Failed to generate comprehensive cache stats: {}", e);
+                                    (Vec::new(), Vec::new())
+                                }
+                            };
+
                             let legacy_stats = crate::protocol::CacheStatistics {
                                 hit_rate,
                                 miss_rate,
@@ -1291,6 +1315,8 @@ impl LspDaemon {
                                     metadata_bytes: total_disk_size_bytes / 100,
                                     index_bytes: total_disk_size_bytes / 50,
                                 },
+                                per_workspace_stats: Some(per_workspace_stats),
+                                per_operation_totals: Some(per_operation_totals),
                             };
 
                             info!(
@@ -1372,7 +1398,7 @@ impl LspDaemon {
 
                     if !already_counted {
                         info!("Processing disk workspace: {}", cache_entry.workspace_id);
-                        let call_graph_db_path = cache_entry.cache_path.join("call_graph.db");
+                        let call_graph_db_path = cache_entry.cache_path.join("cache.db");
 
                         if call_graph_db_path.exists() && call_graph_db_path.is_dir() {
                             match self
@@ -1433,6 +1459,8 @@ impl LspDaemon {
                         metadata_bytes: total_disk_size_bytes / 100, // Rough estimate (1% metadata)
                         index_bytes: total_disk_size_bytes / 50,     // Rough estimate (2% index)
                     },
+                    per_workspace_stats: None,
+                    per_operation_totals: None,
                 };
 
                 info!(
@@ -3981,15 +4009,15 @@ impl LspDaemon {
                         let mut loaded_count = 0;
                         let mut error_count = 0;
 
-                        for (key, persisted_node) in nodes {
+                        for node in nodes {
                             // Build the universal cache key for call hierarchy
                             let method = crate::universal_cache::LspMethod::CallHierarchy;
-                            let params = format!("{}:{}", key.symbol, key.content_md5);
+                            let params = "{}"; // Use empty params since we don't have detailed structure
 
                             // Pre-load into universal cache using the set method
                             match universal_cache
                                 .get_universal_cache()
-                                .set(method, &key.file, &params, &persisted_node.info)
+                                .set(method, &node.file_path, params, &node.data)
                                 .await
                             {
                                 Ok(_) => {
@@ -4005,12 +4033,7 @@ impl LspDaemon {
                                     error_count += 1;
                                     if error_count < 5 {
                                         // Only log first few errors to avoid spam
-                                        warn!(
-                                            "Failed to warm cache entry {}:{}: {}",
-                                            key.file.display(),
-                                            key.symbol,
-                                            e
-                                        );
+                                        warn!("Failed to warm cache entry {}: {}", node.key, e);
                                     }
                                 }
                             }
@@ -4389,6 +4412,201 @@ impl LspDaemon {
         }
 
         total_size
+    }
+
+    /// Generate comprehensive cache statistics using the universal cache's list_keys functionality
+    async fn generate_comprehensive_cache_stats(
+        &self,
+    ) -> Result<(
+        Vec<crate::protocol::WorkspaceCacheStats>,
+        Vec<crate::protocol::OperationCacheStats>,
+    )> {
+        use std::collections::HashMap;
+
+        // Get all cache keys using the universal cache's list_keys functionality
+        // Use a very large limit to ensure we get all keys (2952 is current count + buffer)
+        let (all_keys, total_count) = self
+            .universal_cache_layer
+            .get_universal_cache()
+            .list_keys(None, None, None, 50000, 0, Some("access-time"))
+            .await
+            .unwrap_or((Vec::new(), 0));
+
+        info!(
+            "Collected {} cache keys out of {} total for comprehensive statistics",
+            all_keys.len(),
+            total_count
+        );
+
+        // Group by workspace and operation
+        let mut workspace_stats: HashMap<String, crate::protocol::WorkspaceCacheStats> =
+            HashMap::new();
+        let mut operation_stats: HashMap<String, crate::protocol::OperationCacheStats> =
+            HashMap::new();
+
+        // Get hit/miss statistics from the universal cache
+        let cache_stats = self
+            .universal_cache_layer
+            .get_universal_cache()
+            .get_stats()
+            .await
+            .unwrap_or_else(|_| crate::universal_cache::CacheStats {
+                total_entries: 0,
+                total_size_bytes: 0,
+                active_workspaces: 0,
+                hit_rate: 0.0,
+                miss_rate: 0.0,
+                method_stats: HashMap::new(),
+            });
+
+        // Process each cache key
+        for key_info in &all_keys {
+            let workspace_id = key_info.workspace_id.clone();
+            let operation = key_info.operation.clone();
+
+            // Update workspace statistics
+            let workspace_stat = workspace_stats
+                .entry(workspace_id.clone())
+                .or_insert_with(|| {
+                    // Try to extract workspace path from workspace_id
+                    let workspace_path = if let Some(underscore_pos) = workspace_id.find('_') {
+                        std::path::PathBuf::from(&workspace_id[underscore_pos + 1..])
+                    } else {
+                        std::path::PathBuf::from(&workspace_id)
+                    };
+
+                    crate::protocol::WorkspaceCacheStats {
+                        workspace_id: workspace_id.clone(),
+                        workspace_path,
+                        entries: 0,
+                        size_bytes: 0,
+                        hit_rate: 0.0,
+                        miss_rate: 0.0,
+                        per_operation_stats: Vec::new(),
+                    }
+                });
+
+            workspace_stat.entries += 1;
+            workspace_stat.size_bytes += key_info.size_bytes as u64;
+
+            // Update operation statistics for this workspace
+            let mut found_operation = false;
+            for op_stat in &mut workspace_stat.per_operation_stats {
+                if op_stat.operation == operation {
+                    op_stat.entries += 1;
+                    op_stat.size_bytes += key_info.size_bytes as u64;
+                    found_operation = true;
+                    break;
+                }
+            }
+
+            if !found_operation {
+                workspace_stat
+                    .per_operation_stats
+                    .push(crate::protocol::OperationCacheStats {
+                        operation: operation.clone(),
+                        entries: 1,
+                        size_bytes: key_info.size_bytes as u64,
+                        hit_rate: 0.0,
+                        miss_rate: 0.0,
+                        avg_response_time_ms: None,
+                    });
+            }
+
+            // Update global operation statistics
+            let op_stat = operation_stats.entry(operation.clone()).or_insert_with(|| {
+                crate::protocol::OperationCacheStats {
+                    operation: operation.clone(),
+                    entries: 0,
+                    size_bytes: 0,
+                    hit_rate: 0.0,
+                    miss_rate: 0.0,
+                    avg_response_time_ms: None,
+                }
+            });
+
+            op_stat.entries += 1;
+            op_stat.size_bytes += key_info.size_bytes as u64;
+        }
+
+        // Apply hit/miss rates from universal cache statistics
+        for (method, method_stats) in &cache_stats.method_stats {
+            let operation_name = match method {
+                crate::universal_cache::LspMethod::CallHierarchy => "prepareCallHierarchy",
+                crate::universal_cache::LspMethod::Hover => "hover",
+                crate::universal_cache::LspMethod::Definition => "definition",
+                crate::universal_cache::LspMethod::References => "references",
+                crate::universal_cache::LspMethod::TypeDefinition => "typeDefinition",
+                crate::universal_cache::LspMethod::Implementation => "implementation",
+                crate::universal_cache::LspMethod::DocumentSymbols => "documentSymbol",
+                crate::universal_cache::LspMethod::WorkspaceSymbols => "workspaceSymbol",
+                _ => continue,
+            };
+
+            // Update global operation stats with hit/miss rates
+            if let Some(op_stat) = operation_stats.get_mut(operation_name) {
+                let total_ops = method_stats.hits + method_stats.misses;
+                if total_ops > 0 {
+                    op_stat.hit_rate = method_stats.hits as f64 / total_ops as f64;
+                    op_stat.miss_rate = method_stats.misses as f64 / total_ops as f64;
+                }
+            }
+        }
+
+        // Calculate workspace-level hit rates (average of operations)
+        for workspace_stat in workspace_stats.values_mut() {
+            let mut total_hit_rate = 0.0;
+            let mut operations_with_data = 0;
+
+            for op_stat in &mut workspace_stat.per_operation_stats {
+                // Apply global operation hit rates to workspace operations
+                if let Some(global_op_stat) = operation_stats.get(&op_stat.operation) {
+                    op_stat.hit_rate = global_op_stat.hit_rate;
+                    op_stat.miss_rate = global_op_stat.miss_rate;
+                    total_hit_rate += op_stat.hit_rate;
+                    operations_with_data += 1;
+                }
+            }
+
+            // Calculate workspace average hit rate
+            if operations_with_data > 0 {
+                workspace_stat.hit_rate = total_hit_rate / operations_with_data as f64;
+                workspace_stat.miss_rate = 1.0 - workspace_stat.hit_rate;
+            }
+        }
+
+        let per_workspace_stats: Vec<crate::protocol::WorkspaceCacheStats> =
+            workspace_stats.into_values().collect();
+        let per_operation_totals: Vec<crate::protocol::OperationCacheStats> =
+            operation_stats.into_values().collect();
+
+        info!(
+            "Generated comprehensive cache statistics: {} workspaces, {} operations",
+            per_workspace_stats.len(),
+            per_operation_totals.len()
+        );
+
+        // Debug log the statistics
+        for ws_stat in &per_workspace_stats {
+            info!(
+                "Workspace {}: {} entries, {:.1}% hit rate, {} operations",
+                ws_stat.workspace_id,
+                ws_stat.entries,
+                ws_stat.hit_rate * 100.0,
+                ws_stat.per_operation_stats.len()
+            );
+        }
+
+        for op_stat in &per_operation_totals {
+            info!(
+                "Operation {}: {} entries, {:.1}% hit rate",
+                op_stat.operation,
+                op_stat.entries,
+                op_stat.hit_rate * 100.0
+            );
+        }
+
+        Ok((per_workspace_stats, per_operation_totals))
     }
 }
 

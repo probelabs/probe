@@ -72,13 +72,13 @@ Revolutionary workspace-aware caching system:
 # Each workspace gets its own isolated cache
 ~/Library/Caches/probe/lsp/workspaces/
 ├── abc123_my-rust-project/
-│   ├── call_graph.db          # sled database
+│   ├── cache.db          # sled database
 │   └── metadata.json          # cache statistics
 ├── def456_backend-service/
-│   ├── call_graph.db
+│   ├── cache.db
 │   └── metadata.json
 └── ghi789_frontend-app/
-    ├── call_graph.db
+    ├── cache.db
     └── metadata.json
 ```
 
@@ -228,7 +228,7 @@ graph TB
 - **Sled Database**: Embedded key-value store for persistence
 - **Bincode Serialization**: Efficient binary encoding
 - **Optional Compression**: Reduces disk usage when enabled
-- **Location**: `~/Library/Caches/probe/lsp/workspaces/{workspace_id}/call_graph.db`
+- **Location**: `~/Library/Caches/probe/lsp/workspaces/{workspace_id}/cache.db`
 
 ### Performance Characteristics
 - **Memory Cache Hit**: <1ms response time

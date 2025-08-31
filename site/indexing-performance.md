@@ -761,7 +761,7 @@ probe lsp start --cache-size 1000 --memory-limit 1024
 ```bash
 # Production-optimized setup with persistent cache
 export PROBE_LSP_PERSISTENCE_ENABLED=true
-export PROBE_LSP_PERSISTENCE_PATH=/fast/ssd/probe-lsp/call_graph.db
+export PROBE_LSP_PERSISTENCE_PATH=/fast/ssd/probe-lsp/cache.db
 export PROBE_LSP_CACHE_SIZE_MB=2048
 export PROBE_LSP_PERSISTENCE_SIZE_MB=8192
 export PROBE_LSP_CACHE_TTL_DAYS=60
@@ -785,7 +785,7 @@ probe lsp start \
 ```bash
 # CI-optimized setup (fast startup, limited resources, shared cache)
 export PROBE_LSP_PERSISTENCE_ENABLED=true
-export PROBE_LSP_PERSISTENCE_PATH=/tmp/ci-cache/probe-lsp/call_graph.db
+export PROBE_LSP_PERSISTENCE_PATH=/tmp/ci-cache/probe-lsp/cache.db
 export PROBE_LSP_CACHE_SIZE_MB=256
 export PROBE_LSP_PERSISTENCE_SIZE_MB=1024
 export PROBE_LSP_CACHE_TTL_DAYS=7

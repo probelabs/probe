@@ -225,6 +225,8 @@ The LSP integration uses a daemon-based architecture:
 CLI Client → IPC Socket → LSP Daemon → Server Manager → Language Servers
                               ↓
                         In-Memory Log Buffer (1000 entries)
+                              ↓
+                        Universal Cache System (database-backed)
 ```
 
 **Key Components:**

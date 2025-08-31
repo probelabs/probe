@@ -176,8 +176,8 @@ Configure persistent cache behavior with these environment variables:
 # Enable persistent cache (default: disabled)
 export PROBE_LSP_PERSISTENCE_ENABLED=true
 
-# Cache directory (default: ~/.cache/probe/lsp/call_graph.db)
-export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/call_graph.db
+# Cache directory (default: ~/.cache/probe/lsp/cache.db)
+export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/cache.db
 
 # MD5-based invalidation works automatically
 # No git dependencies - works in CI, Docker, anywhere

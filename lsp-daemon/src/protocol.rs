@@ -1021,6 +1021,33 @@ pub struct CacheStatistics {
     pub age_distribution: AgeDistribution,
     pub most_accessed: Vec<HotSpot>,
     pub memory_usage: MemoryUsage,
+    // New hierarchical statistics
+    pub per_workspace_stats: Option<Vec<WorkspaceCacheStats>>,
+    pub per_operation_totals: Option<Vec<OperationCacheStats>>, // Global operation totals
+}
+
+/// Cache statistics for a specific workspace with per-operation breakdown
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceCacheStats {
+    pub workspace_id: String,
+    pub workspace_path: PathBuf,
+    pub entries: u64,
+    pub size_bytes: u64,
+    pub hit_rate: f64,
+    pub miss_rate: f64,
+    // Per-operation breakdown within this workspace
+    pub per_operation_stats: Vec<OperationCacheStats>,
+}
+
+/// Cache statistics for a specific operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationCacheStats {
+    pub operation: String, // "hover", "definition", "references", "call_hierarchy", etc.
+    pub entries: u64,
+    pub size_bytes: u64,
+    pub hit_rate: f64,
+    pub miss_rate: f64,
+    pub avg_response_time_ms: Option<f64>,
 }
 
 // Symbol cache clear result

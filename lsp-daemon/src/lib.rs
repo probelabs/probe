@@ -14,9 +14,9 @@ pub mod socket_path;
 // Cache modules
 pub mod cache_types;
 pub mod database;
+pub mod database_cache_adapter;
 pub mod hash_utils;
 pub mod lsp_cache;
-pub mod persistent_cache;
 pub mod universal_cache;
 
 // Handler modules (removed - old cache system replaced by universal cache)

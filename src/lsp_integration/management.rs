@@ -1283,6 +1283,64 @@ impl LspManager {
                                 );
                             }
                         }
+
+                        // Display per-operation totals
+                        if let Some(ref op_totals) = stats.per_operation_totals {
+                            println!("\n{}", "Global Operation Statistics:".bold().blue());
+                            for op_stats in op_totals {
+                                let hit_rate_str = if op_stats.hit_rate > 0.0 {
+                                    format!("{:.1}%", op_stats.hit_rate * 100.0)
+                                } else {
+                                    "N/A".to_string()
+                                };
+                                println!(
+                                    "  {} {}: {} entries, {} size, {} hit rate",
+                                    "•".cyan(),
+                                    op_stats.operation.bold(),
+                                    op_stats.entries.to_string().green(),
+                                    format_bytes(op_stats.size_bytes as usize),
+                                    hit_rate_str
+                                );
+                            }
+                        }
+
+                        // Display per-workspace statistics with operation breakdown
+                        if let Some(ref workspace_stats) = stats.per_workspace_stats {
+                            println!("\n{}", "Per-Workspace Statistics:".bold().magenta());
+                            for ws_stats in workspace_stats {
+                                let hit_rate_str = if ws_stats.hit_rate > 0.0 {
+                                    format!("{:.1}%", ws_stats.hit_rate * 100.0)
+                                } else {
+                                    "N/A".to_string()
+                                };
+                                println!(
+                                    "\n  {} {} ({})",
+                                    "►".yellow(),
+                                    ws_stats.workspace_path.display().to_string().bold(),
+                                    ws_stats.workspace_id.dimmed()
+                                );
+                                println!(
+                                    "    Total: {} entries, {}, {} hit rate",
+                                    ws_stats.entries.to_string().green(),
+                                    format_bytes(ws_stats.size_bytes as usize),
+                                    hit_rate_str
+                                );
+
+                                // Show operation breakdown for this workspace
+                                if !ws_stats.per_operation_stats.is_empty() {
+                                    println!("    Operations:");
+                                    for op_stats in &ws_stats.per_operation_stats {
+                                        println!(
+                                            "      {} {}: {} entries ({})",
+                                            "•".cyan(),
+                                            op_stats.operation,
+                                            op_stats.entries.to_string().green(),
+                                            format_bytes(op_stats.size_bytes as usize).dimmed()
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1358,36 +1416,17 @@ impl LspManager {
                     metadata_bytes: 0,
                     index_bytes: 0,
                 },
+                per_workspace_stats: None,
+                per_operation_totals: None,
             });
         }
 
         let mut total_entries = 0u64;
         let mut total_size_bytes = 0u64;
         let mut total_disk_size = 0u64;
+        let mut workspace_stats_vec = Vec::new();
 
-        // Check legacy global cache
-        let legacy_cache_path = cache_base_dir.join("call_graph.db");
-        eprintln!("Checking legacy cache at: {legacy_cache_path:?}");
-        eprintln!("Legacy cache exists: {}", legacy_cache_path.exists());
-        eprintln!("Legacy cache is_dir: {}", legacy_cache_path.is_dir());
-
-        if legacy_cache_path.exists() && legacy_cache_path.is_dir() {
-            eprintln!("Reading legacy cache stats");
-            match Self::read_sled_db_stats_static(&legacy_cache_path).await {
-                Ok(stats) => {
-                    eprintln!(
-                        "Legacy cache stats: entries={}, size={}, disk={}",
-                        stats.0, stats.1, stats.2
-                    );
-                    total_entries += stats.0;
-                    total_size_bytes += stats.1;
-                    total_disk_size += stats.2;
-                }
-                Err(e) => {
-                    eprintln!("Failed to read legacy cache stats: {e}");
-                }
-            }
-        }
+        // Legacy cache is no longer used - all caching is now done via universal cache
 
         // Check workspace caches
         let workspaces_dir = cache_base_dir.join("workspaces");
@@ -1405,28 +1444,57 @@ impl LspManager {
 
                         if entry.file_type().await.is_ok_and(|ft| ft.is_dir()) {
                             workspace_count += 1;
-                            let call_graph_db = entry.path().join("call_graph.db");
-                            eprintln!("Checking call_graph.db at: {call_graph_db:?}");
-                            eprintln!("call_graph.db exists: {}", call_graph_db.exists());
-                            eprintln!("call_graph.db is_dir: {}", call_graph_db.is_dir());
+                            let workspace_name = entry.file_name().to_string_lossy().to_string();
+                            // Check for both new (cache.db) and legacy (call_graph.db) locations
+                            let cache_db = entry.path().join("cache.db");
+                            let legacy_cache_db = entry.path().join("call_graph.db");
 
-                            if call_graph_db.exists() && call_graph_db.is_dir() {
-                                eprintln!("Reading workspace cache stats for: {call_graph_db:?}");
-                                match Self::read_sled_db_stats_static(&call_graph_db).await {
-                                    Ok(stats) => {
-                                        eprintln!(
-                                            "Workspace cache stats: entries={}, size={}, disk={}",
-                                            stats.0, stats.1, stats.2
+                            let db_path = if cache_db.exists() && cache_db.is_dir() {
+                                eprintln!("Using new cache.db at: {cache_db:?}");
+                                cache_db
+                            } else if legacy_cache_db.exists() && legacy_cache_db.is_dir() {
+                                eprintln!("Using legacy call_graph.db at: {legacy_cache_db:?}");
+                                legacy_cache_db
+                            } else {
+                                eprintln!("No cache database found for workspace");
+                                continue;
+                            };
+
+                            eprintln!("Reading workspace cache stats for: {db_path:?}");
+                            match Self::read_sled_db_stats_with_operations(&db_path).await {
+                                Ok((entries, size, disk_size, per_op_stats)) => {
+                                    eprintln!(
+                                            "Workspace cache stats: entries={entries}, size={size}, disk={disk_size}"
                                         );
-                                        total_entries += stats.0;
-                                        total_size_bytes += stats.1;
-                                        total_disk_size += stats.2;
-                                    }
-                                    Err(e) => {
-                                        eprintln!(
-                                            "Failed to read workspace cache stats for {call_graph_db:?}: {e}"
-                                        );
-                                    }
+                                    total_entries += entries;
+                                    total_size_bytes += size;
+                                    total_disk_size += disk_size;
+
+                                    // Extract workspace path from the workspace name (format: hash_name)
+                                    let workspace_path = if let Some((_hash, name)) =
+                                        workspace_name.split_once('_')
+                                    {
+                                        std::path::PathBuf::from(name)
+                                    } else {
+                                        std::path::PathBuf::from(&workspace_name)
+                                    };
+
+                                    workspace_stats_vec.push(
+                                        lsp_daemon::protocol::WorkspaceCacheStats {
+                                            workspace_id: workspace_name.clone(),
+                                            workspace_path,
+                                            entries,
+                                            size_bytes: size,
+                                            hit_rate: 0.0,  // Not available from disk
+                                            miss_rate: 0.0, // Not available from disk
+                                            per_operation_stats: per_op_stats,
+                                        },
+                                    );
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "Failed to read workspace cache stats for {db_path:?}: {e}"
+                                    );
                                 }
                             }
                         }
@@ -1438,6 +1506,39 @@ impl LspManager {
                 }
             }
         }
+
+        // Calculate global operation totals from all workspaces
+        let mut global_op_totals: std::collections::HashMap<String, (u64, u64)> =
+            std::collections::HashMap::new();
+        for ws_stats in &workspace_stats_vec {
+            for op_stats in &ws_stats.per_operation_stats {
+                let entry = global_op_totals
+                    .entry(op_stats.operation.clone())
+                    .or_insert((0, 0));
+                entry.0 += op_stats.entries;
+                entry.1 += op_stats.size_bytes;
+            }
+        }
+
+        let per_operation_totals = if !global_op_totals.is_empty() {
+            let mut totals: Vec<_> = global_op_totals
+                .into_iter()
+                .map(
+                    |(op, (entries, size))| lsp_daemon::protocol::OperationCacheStats {
+                        operation: op,
+                        entries,
+                        size_bytes: size,
+                        hit_rate: 0.0,
+                        miss_rate: 0.0,
+                        avg_response_time_ms: None,
+                    },
+                )
+                .collect();
+            totals.sort_by(|a, b| b.entries.cmp(&a.entries)); // Sort by entry count descending
+            Some(totals)
+        } else {
+            None
+        };
 
         Ok(lsp_daemon::protocol::CacheStatistics {
             total_entries,
@@ -1461,10 +1562,215 @@ impl LspManager {
                 metadata_bytes: 0,
                 index_bytes: 0,
             },
+            per_workspace_stats: if !workspace_stats_vec.is_empty() {
+                Some(workspace_stats_vec)
+            } else {
+                None
+            },
+            per_operation_totals,
         })
     }
 
+    /// Read sled database stats with per-operation breakdown
+    /// This handles both legacy and universal cache formats
+    async fn read_sled_db_stats_with_operations(
+        db_path: &std::path::Path,
+    ) -> Result<(
+        u64,
+        u64,
+        u64,
+        Vec<lsp_daemon::protocol::OperationCacheStats>,
+    )> {
+        let disk_size_bytes = Self::calculate_directory_size_static(db_path).await;
+
+        match sled::Config::default()
+            .path(db_path)
+            .cache_capacity(1024 * 1024)
+            .use_compression(true) // Match the compression setting used when creating
+            .open()
+        {
+            Ok(db) => {
+                let mut total_entries = 0u64;
+                let mut total_size_bytes = 0u64;
+                let mut operation_counts: std::collections::HashMap<String, (u64, u64)> =
+                    std::collections::HashMap::new();
+
+                // First, try to read from the universal cache tree if it exists
+                let universal_tree_result = db.open_tree("universal_cache");
+                if let Ok(universal_tree) = universal_tree_result {
+                    eprintln!(
+                        "Found universal_cache tree with {} entries",
+                        universal_tree.len()
+                    );
+                    for item in universal_tree.iter() {
+                        if let Ok((key, value)) = item {
+                            total_entries += 1;
+                            let entry_size = key.len() as u64 + value.len() as u64;
+                            total_size_bytes += entry_size;
+
+                            // Extract operation type from universal cache key format
+                            // Format: workspace_id:operation:file:hash
+                            if let Ok(key_str) = std::str::from_utf8(&key) {
+                                let operation = if let Some(parts) = key_str.split(':').nth(1) {
+                                    // Extract operation from key like "textDocument_prepareCallHierarchy"
+                                    if parts.starts_with("textDocument_") {
+                                        parts
+                                            .strip_prefix("textDocument_")
+                                            .unwrap_or(parts)
+                                            .replace('_', " ")
+                                    } else {
+                                        parts.to_string()
+                                    }
+                                } else {
+                                    Self::extract_operation_from_key(key_str)
+                                };
+
+                                let entry = operation_counts.entry(operation).or_insert((0, 0));
+                                entry.0 += 1;
+                                entry.1 += entry_size;
+                            }
+                        }
+                    }
+                }
+
+                // Count entries in the default tree (for legacy cache or other data)
+                let default_entries = db.len() as u64;
+                if default_entries > 0 && total_entries == 0 {
+                    eprintln!("Found {} entries in default tree", default_entries);
+                    for item in db.iter() {
+                        if let Ok((key, value)) = item {
+                            total_entries += 1;
+                            let entry_size = key.len() as u64 + value.len() as u64;
+                            total_size_bytes += entry_size;
+
+                            // Try to extract operation type from key
+                            if let Ok(key_str) = std::str::from_utf8(&key) {
+                                let operation = Self::extract_operation_from_key(key_str);
+                                let entry = operation_counts.entry(operation).or_insert((0, 0));
+                                entry.0 += 1;
+                                entry.1 += entry_size;
+                            }
+                        }
+                    }
+                }
+
+                // Check for other named trees and process them
+                for tree_name in db.tree_names() {
+                    if tree_name.is_empty() || tree_name == b"universal_cache" {
+                        continue; // Skip default tree and already-processed universal_cache tree
+                    }
+
+                    let tree_name_str = String::from_utf8_lossy(&tree_name);
+                    if let Ok(tree) = db.open_tree(&tree_name) {
+                        let tree_size = tree.len() as u64;
+                        if tree_size > 0 {
+                            eprintln!("Found {} entries in tree '{}'", tree_size, tree_name_str);
+                            for item in tree.iter() {
+                                if let Ok((key, value)) = item {
+                                    total_entries += 1;
+                                    let entry_size = key.len() as u64 + value.len() as u64;
+                                    total_size_bytes += entry_size;
+
+                                    // Try to extract operation type
+                                    if let Ok(key_str) = std::str::from_utf8(&key) {
+                                        let operation = Self::extract_operation_from_key(key_str);
+                                        let entry =
+                                            operation_counts.entry(operation).or_insert((0, 0));
+                                        entry.0 += 1;
+                                        entry.1 += entry_size;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                eprintln!(
+                    "Total entries found: {}, total size: {}",
+                    total_entries, total_size_bytes
+                );
+
+                // Convert to OperationCacheStats
+                let per_op_stats = operation_counts
+                    .into_iter()
+                    .map(
+                        |(op, (entries, size))| lsp_daemon::protocol::OperationCacheStats {
+                            operation: op,
+                            entries,
+                            size_bytes: size,
+                            hit_rate: 0.0,
+                            miss_rate: 0.0,
+                            avg_response_time_ms: None,
+                        },
+                    )
+                    .collect();
+
+                Ok((
+                    total_entries,
+                    total_size_bytes,
+                    disk_size_bytes,
+                    per_op_stats,
+                ))
+            }
+            Err(e) => {
+                eprintln!("Failed to open sled database at {:?}: {}", db_path, e);
+                Ok((0, disk_size_bytes, disk_size_bytes, Vec::new()))
+            }
+        }
+    }
+
+    /// Extract operation type from cache key
+    fn extract_operation_from_key(key: &str) -> String {
+        // Universal cache key format: workspace_id:operation:file:hash
+        // Legacy format might have operation names embedded
+
+        // First try to extract from universal cache format
+        if key.contains(':') {
+            let parts: Vec<&str> = key.split(':').collect();
+            if parts.len() >= 2 {
+                let op_part = parts[1];
+                // Handle textDocument_ prefix
+                if op_part.starts_with("textDocument_") {
+                    return op_part
+                        .strip_prefix("textDocument_")
+                        .unwrap_or(op_part)
+                        .replace('_', " ");
+                } else if op_part.starts_with("textDocument/") {
+                    return op_part
+                        .strip_prefix("textDocument/")
+                        .unwrap_or(op_part)
+                        .replace('/', " ");
+                }
+                return op_part.to_string();
+            }
+        }
+
+        // Fallback to searching for known operation patterns
+        let operations = [
+            ("prepareCallHierarchy", "call hierarchy"),
+            ("call_hierarchy", "call hierarchy"),
+            ("hover", "hover"),
+            ("definition", "definition"),
+            ("references", "references"),
+            ("type_definition", "type definition"),
+            ("implementations", "implementations"),
+            ("document_symbols", "document symbols"),
+            ("workspace_symbols", "workspace symbols"),
+            ("completion", "completion"),
+        ];
+
+        for (pattern, name) in operations {
+            if key.contains(pattern) {
+                return name.to_string();
+            }
+        }
+
+        // If no known operation found, return "unknown"
+        "unknown".to_string()
+    }
+
     /// Static version of sled database stats reading
+    #[allow(dead_code)]
     async fn read_sled_db_stats_static(db_path: &std::path::Path) -> Result<(u64, u64, u64)> {
         // Calculate directory size
         let disk_size_bytes = Self::calculate_directory_size_static(db_path).await;
@@ -1473,31 +1779,56 @@ impl LspManager {
         match sled::Config::default()
             .path(db_path)
             .cache_capacity(1024 * 1024)
+            .use_compression(true) // Match the compression setting used when creating
             .open()
         {
             Ok(db) => {
-                let mut entries = 0u64;
-                let mut size_bytes = 0u64;
+                let mut total_entries = 0u64;
+                let mut total_size_bytes = 0u64;
 
-                if let Ok(nodes_tree) = db.open_tree("nodes") {
-                    entries = nodes_tree.len() as u64;
+                // Count entries in the default tree (main database)
+                let default_entries = db.len() as u64;
+                total_entries += default_entries;
 
-                    // Sample some entries to estimate size
-                    let mut sample_count = 0;
-                    let mut sample_total_size = 0;
-
-                    for (key, value) in nodes_tree.iter().take(100).flatten() {
-                        sample_count += 1;
-                        sample_total_size += key.len() + value.len();
-                    }
-
-                    if sample_count > 0 {
-                        let avg_entry_size = sample_total_size / sample_count;
-                        size_bytes = entries * avg_entry_size as u64;
+                // Iterate through all entries in the default tree to get accurate count and size
+                for item in db.iter() {
+                    if let Ok((key, value)) = item {
+                        total_size_bytes += key.len() as u64 + value.len() as u64;
                     }
                 }
 
-                Ok((entries, size_bytes, disk_size_bytes))
+                // Check for the "nodes" tree (used by some cache implementations)
+                if let Ok(nodes_tree) = db.open_tree("nodes") {
+                    let nodes_entries = nodes_tree.len() as u64;
+                    total_entries += nodes_entries;
+
+                    // Add size from nodes tree
+                    for item in nodes_tree.iter() {
+                        if let Ok((key, value)) = item {
+                            total_size_bytes += key.len() as u64 + value.len() as u64;
+                        }
+                    }
+                }
+
+                // Check for other potential trees
+                for tree_name in db.tree_names() {
+                    if tree_name.is_empty() || tree_name == b"nodes" {
+                        continue; // Skip default tree and already-processed nodes tree
+                    }
+
+                    if let Ok(tree) = db.open_tree(&tree_name) {
+                        let tree_entries = tree.len() as u64;
+                        total_entries += tree_entries;
+
+                        for item in tree.iter() {
+                            if let Ok((key, value)) = item {
+                                total_size_bytes += key.len() as u64 + value.len() as u64;
+                            }
+                        }
+                    }
+                }
+
+                Ok((total_entries, total_size_bytes, disk_size_bytes))
             }
             Err(_) => {
                 // Return minimal stats based on file size
