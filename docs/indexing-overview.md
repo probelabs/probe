@@ -127,13 +127,13 @@ Probe implements sophisticated per-workspace caching with intelligent cache rout
 ```
 ~/Library/Caches/probe/lsp/workspaces/
 ├── abc123_backend-api/          # Backend service cache
-│   ├── call_graph.db
+│   ├── cache.db
 │   └── metadata.json
 ├── def456_frontend-app/         # Frontend app cache
-│   ├── call_graph.db
+│   ├── cache.db
 │   └── metadata.json  
 └── ghi789_shared-lib/          # Shared library cache
-    ├── call_graph.db
+    ├── cache.db
     └── metadata.json
 ```
 
@@ -273,7 +273,7 @@ probe lsp init-workspaces ./my-project
 
 # Enable persistent cache (survives daemon restarts)
 export PROBE_LSP_PERSISTENCE_ENABLED=true
-export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/call_graph.db
+export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/cache.db
 
 # Configure cache settings - works everywhere, no git dependency
 export PROBE_LSP_CACHE_SIZE_MB=512

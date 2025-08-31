@@ -19,7 +19,10 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::persistent_cache::PersistentCallGraphCache;
+use crate::database_cache_adapter::{
+    DatabaseBackendType, DatabaseCacheAdapter as PersistentCallGraphCache,
+    DatabaseCacheConfig as PersistentCacheConfig,
+};
 use crate::server_manager::SingleServerManager;
 
 /// Configuration for workspace cache router
@@ -35,7 +38,7 @@ pub struct WorkspaceCacheRouterConfig {
     pub max_parent_lookup_depth: usize,
 
     /// Cache configuration template for new workspace caches
-    pub cache_config_template: crate::persistent_cache::PersistentCacheConfig,
+    pub cache_config_template: PersistentCacheConfig,
     /// Force in-memory mode for all workspace caches
     pub force_memory_only: bool,
 }
@@ -48,14 +51,7 @@ impl Default for WorkspaceCacheRouterConfig {
             base_cache_dir: PathBuf::from(".probe-temp-cache"),
             max_open_caches: 8,
             max_parent_lookup_depth: 3,
-            cache_config_template: crate::persistent_cache::PersistentCacheConfig {
-                cache_directory: None,             // Will be set per workspace
-                max_size_bytes: 100 * 1024 * 1024, // 100MB per workspace
-                ttl_days: 30,
-                compress: true,
-                memory_only: false, // Per-workspace decision
-                backend_type: crate::persistent_cache::DatabaseBackendType::Sled,
-            },
+            cache_config_template: PersistentCacheConfig::default(),
             force_memory_only: false, // Don't force memory-only mode by default
         }
     }
@@ -187,8 +183,7 @@ impl WorkspaceCacheRouter {
         self.config.force_memory_only = memory_only;
         if memory_only {
             self.config.cache_config_template.memory_only = true;
-            self.config.cache_config_template.backend_type =
-                crate::persistent_cache::DatabaseBackendType::Memory;
+            self.config.cache_config_template.backend_type = DatabaseBackendType::Memory;
             info!("Workspace cache router configured for memory-only mode");
         } else {
             info!("Workspace cache router configured for persistent mode");
@@ -196,10 +191,7 @@ impl WorkspaceCacheRouter {
     }
 
     /// Update the database backend type for the cache template
-    pub fn set_database_backend(
-        &mut self,
-        backend_type: crate::persistent_cache::DatabaseBackendType,
-    ) {
+    pub fn set_database_backend(&mut self, backend_type: DatabaseBackendType) {
         info!(
             "Workspace cache router configured with backend: {:?}",
             backend_type
@@ -413,12 +405,12 @@ impl WorkspaceCacheRouter {
 
         // Create cache configuration for this workspace
         let mut cache_config = self.config.cache_config_template.clone();
-        cache_config.cache_directory = Some(cache_dir);
+        cache_config.database_config.path = Some(cache_dir.join("cache.db"));
 
         // Apply router-level memory-only setting if configured
         if self.config.force_memory_only {
             cache_config.memory_only = true;
-            cache_config.backend_type = crate::persistent_cache::DatabaseBackendType::Memory;
+            cache_config.backend_type = DatabaseBackendType::Memory;
             debug!(
                 "Force memory-only mode enabled for workspace '{}'",
                 workspace_id
@@ -689,7 +681,7 @@ impl WorkspaceCacheRouter {
         &self,
         workspace_id: &str,
         _workspace_root: &Path,
-    ) -> Option<crate::persistent_cache::PersistentCacheStats> {
+    ) -> Option<crate::database_cache_adapter::DatabaseCacheStats> {
         // Build the cache path for this workspace
         let cache_path = self
             .config
@@ -708,13 +700,12 @@ impl WorkspaceCacheRouter {
         }
 
         // Create a temporary persistent cache instance to read stats
-        let cache_config = crate::persistent_cache::PersistentCacheConfig {
-            cache_directory: Some(cache_path.parent().unwrap().to_path_buf()),
-            memory_only: false, // We want to read from disk
-            ..Default::default()
-        };
+        let mut cache_config = PersistentCacheConfig::default();
+        cache_config.database_config.path =
+            Some(cache_path.parent().unwrap().to_path_buf().join("cache.db"));
+        cache_config.database_config.temporary = false;
 
-        match crate::persistent_cache::PersistentCallGraphCache::new(cache_config).await {
+        match PersistentCallGraphCache::new(cache_config).await {
             Ok(cache) => match cache.get_stats().await {
                 Ok(stats) => {
                     debug!(
@@ -940,12 +931,7 @@ impl WorkspaceCacheRouter {
         // Remove each node
         for node in nodes {
             if let Err(e) = cache.remove(&node.key).await {
-                warn!(
-                    "Failed to remove cache entry {}:{}: {}",
-                    node.key.file.display(),
-                    node.key.symbol,
-                    e
-                );
+                warn!("Failed to remove cache entry {}: {}", node.key, e);
             }
         }
 
@@ -1223,6 +1209,9 @@ impl WorkspaceCacheRouter {
                         metadata_bytes: stats.total_size_bytes / 20, // Estimate
                         index_bytes: stats.total_size_bytes / 50,    // Estimate
                     },
+                    // New hierarchical statistics
+                    per_workspace_stats: None, // TODO: Implement per-workspace stats
+                    per_operation_totals: None, // TODO: Implement per-operation totals
                 }),
                 Err(_) => None,
             }
@@ -1517,7 +1506,7 @@ pub struct WorkspaceStats {
     pub opened_at: Instant,
     pub last_accessed: Instant,
     pub access_count: u64,
-    pub cache_stats: Option<crate::persistent_cache::PersistentCacheStats>,
+    pub cache_stats: Option<crate::database_cache_adapter::DatabaseCacheStats>,
 }
 
 #[cfg(test)]

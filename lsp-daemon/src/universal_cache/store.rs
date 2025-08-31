@@ -345,7 +345,7 @@ impl CacheStore {
         // === CLEAR FROM DATABASE CACHE ===
 
         // Database: Clear from workspace persistent cache (direct database storage)
-        let mut database_entries_cleared = 0;
+        let mut database_entries_cleared = 0u64;
 
         // Generate all possible cache keys for the symbol
         let mut cache_keys_to_clear = Vec::new();
@@ -509,8 +509,8 @@ impl CacheStore {
         }
 
         // Calculate totals
-        let entries_cleared = database_entries_cleared;
-        let size_freed = (database_entries_cleared * 1024) as u64; // Estimate 1KB per entry
+        let entries_cleared = database_entries_cleared as usize;
+        let size_freed = database_entries_cleared * 1024; // Estimate 1KB per entry
 
         info!(
             "Symbol '{}' cache clearing complete for file {:?}: {} database entries cleared, total={}",

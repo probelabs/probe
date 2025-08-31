@@ -373,13 +373,13 @@ Probe implements sophisticated per-workspace caching that isolates cache entries
 # Windows: %LOCALAPPDATA%/probe/lsp/workspaces/
 
 ├── abc123_my-rust-project/
-│   ├── call_graph.db          # sled database
+│   ├── cache.db          # sled database
 │   └── metadata.json          # cache statistics
 ├── def456_backend-service/
-│   ├── call_graph.db
+│   ├── cache.db
 │   └── metadata.json
 └── ghi789_frontend-app/
-    ├── call_graph.db
+    ├── cache.db
     └── metadata.json
 ```
 
@@ -516,7 +516,7 @@ Probe uses MD5 content hashing for intelligent cache invalidation:
 ```bash
 # Configure persistent cache
 export PROBE_LSP_PERSISTENCE_ENABLED=true
-export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/call_graph.db
+export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/cache.db
 
 # MD5-based cache management - works everywhere
 probe lsp cache stats                         # Show cache statistics
@@ -656,7 +656,7 @@ PROBE_LSP_SOCKET=/custom/socket probe lsp start
 export PROBE_LSP_PERSISTENCE_ENABLED=true
 
 # Cache storage location
-export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/call_graph.db
+export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe/lsp/cache.db
 
 # Cache behavior is now based on file content MD5 hashing
 # No git dependency - works in all environments (CI, Docker, non-git dirs)

@@ -51,7 +51,7 @@ probe extract src/main.rs#main --lsp
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `PROBE_LSP_PERSISTENCE_ENABLED` | Boolean | `false` | Enable persistent cache (survives restarts) |
-| `PROBE_LSP_PERSISTENCE_PATH` | String | `~/.cache/probe/lsp/call_graph.db` | Persistent cache database path |
+| `PROBE_LSP_PERSISTENCE_PATH` | String | `~/.cache/probe/lsp/cache.db` | Persistent cache database path |
 | `PROBE_LSP_CACHE_SIZE_MB` | Integer | `512` | Memory cache size limit in MB |
 | `PROBE_LSP_PERSISTENCE_SIZE_MB` | Integer | `2048` | Persistent cache size limit in MB |
 | `PROBE_LSP_CACHE_TTL_DAYS` | Integer | `30` | Auto-cleanup threshold in days |
@@ -68,7 +68,7 @@ probe extract src/main.rs#main --lsp
 ```bash
 # High-performance persistent cache configuration
 export PROBE_LSP_PERSISTENCE_ENABLED=true
-export PROBE_LSP_PERSISTENCE_PATH=/fast/ssd/probe-lsp/call_graph.db
+export PROBE_LSP_PERSISTENCE_PATH=/fast/ssd/probe-lsp/cache.db
 export PROBE_LSP_CACHE_SIZE_MB=1024
 export PROBE_LSP_PERSISTENCE_SIZE_MB=4096
 export PROBE_LSP_CACHE_TTL_DAYS=60
@@ -115,7 +115,7 @@ export PROBE_LSP_WORKSPACE_CACHE_TTL_DAYS=7      # Clean up more frequently
 **Cache Isolation**: Each workspace gets its own cache directory with format:
 ```
 {base_dir}/{workspace_hash}_{workspace_name}/
-├── call_graph.db        # sled database with call hierarchy data
+├── cache.db        # sled database with call hierarchy data
 ├── metadata.json        # cache statistics and metadata
 └── ...                  # other operation-specific caches
 ```
@@ -529,7 +529,7 @@ probe lsp check-env
 # .env file for development with persistent cache
 export PROBE_LSP_LOG_LEVEL=debug
 export PROBE_LSP_PERSISTENCE_ENABLED=true
-export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe-dev/call_graph.db
+export PROBE_LSP_PERSISTENCE_PATH=~/.cache/probe-dev/cache.db
 export PROBE_LSP_CACHE_SIZE_MB=128
 export PROBE_LSP_PERSISTENCE_SIZE_MB=512
 export PROBE_LSP_CACHE_TTL_DAYS=7
@@ -544,7 +544,7 @@ probe lsp start -f --log-level debug
 ```bash
 # Production environment with high-performance persistent cache
 export PROBE_LSP_PERSISTENCE_ENABLED=true
-export PROBE_LSP_PERSISTENCE_PATH=/fast/ssd/probe-lsp/call_graph.db
+export PROBE_LSP_PERSISTENCE_PATH=/fast/ssd/probe-lsp/cache.db
 export PROBE_LSP_CACHE_SIZE_MB=2048
 export PROBE_LSP_PERSISTENCE_SIZE_MB=8192
 export PROBE_LSP_CACHE_TTL_DAYS=60
@@ -568,7 +568,7 @@ probe lsp start --max-connections 500
 ```bash
 # CI-friendly configuration with cache sharing
 export PROBE_LSP_PERSISTENCE_ENABLED=true
-export PROBE_LSP_PERSISTENCE_PATH=/tmp/ci-cache/probe-lsp/call_graph.db
+export PROBE_LSP_PERSISTENCE_PATH=/tmp/ci-cache/probe-lsp/cache.db
 export PROBE_LSP_CACHE_SIZE_MB=256
 export PROBE_LSP_PERSISTENCE_SIZE_MB=1024
 export PROBE_LSP_CACHE_TTL_DAYS=7

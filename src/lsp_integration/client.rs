@@ -935,6 +935,8 @@ impl LspClient {
                     metadata_bytes: 0,
                     index_bytes: 0,
                 },
+                per_workspace_stats: None,
+                per_operation_totals: None,
             });
         }
 
@@ -977,20 +979,7 @@ impl LspClient {
             }
         }
 
-        // Also check for legacy global cache if it exists (sled stores as directory)
-        let legacy_cache_path = cache_base_dir.join("call_graph.db");
-        if legacy_cache_path.exists() && legacy_cache_path.is_dir() {
-            match self.read_legacy_cache_stats(&legacy_cache_path).await {
-                Ok(legacy_stats) => {
-                    total_entries += legacy_stats.entries;
-                    total_size_bytes += legacy_stats.size_bytes;
-                    total_disk_size += legacy_stats.disk_size_bytes;
-                }
-                Err(e) => {
-                    warn!("Failed to read legacy cache stats: {}", e);
-                }
-            }
-        }
+        // Legacy cache no longer used - all caching is done via universal cache
 
         debug!(
             "Read cache stats from disk: {} entries, {} bytes total",
@@ -1019,6 +1008,8 @@ impl LspClient {
                 metadata_bytes: 0, // Estimated, would need more detailed parsing
                 index_bytes: 0,    // Estimated, would need more detailed parsing
             },
+            per_workspace_stats: None,
+            per_operation_totals: None,
         })
     }
 
@@ -1046,20 +1037,17 @@ impl LspClient {
         let mut size_bytes = 0u64;
         let mut disk_size_bytes = 0u64;
 
-        // Check for call_graph.db directory (sled stores as directory)
-        let call_graph_db = workspace_path.join("call_graph.db");
-        if call_graph_db.exists() && call_graph_db.is_dir() {
-            match self.read_sled_db_stats(&call_graph_db).await {
+        // Check for cache.db file (new database format)
+        let cache_db = workspace_path.join("cache.db");
+        if cache_db.exists() {
+            match self.read_sled_db_stats(&cache_db).await {
                 Ok(stats) => {
                     entries += stats.entries;
                     size_bytes += stats.size_bytes;
                     disk_size_bytes += stats.disk_size_bytes;
                 }
                 Err(e) => {
-                    debug!(
-                        "Failed to read sled db stats from {:?}: {}",
-                        call_graph_db, e
-                    );
+                    debug!("Failed to read sled db stats from {:?}: {}", cache_db, e);
                 }
             }
         }
@@ -1072,12 +1060,8 @@ impl LspClient {
         })
     }
 
-    /// Read cache statistics from a legacy global cache file
-    async fn read_legacy_cache_stats(&self, cache_path: &Path) -> Result<WorkspaceCacheStats> {
-        self.read_sled_db_stats(cache_path).await
-    }
-
     /// Read statistics from a sled database file
+    #[allow(dead_code)]
     async fn read_sled_db_stats(&self, db_path: &Path) -> Result<WorkspaceCacheStats> {
         debug!("Reading sled database stats from: {:?}", db_path);
 
