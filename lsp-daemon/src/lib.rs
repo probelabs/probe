@@ -15,6 +15,8 @@ pub mod socket_path;
 pub mod cache_types;
 pub mod database;
 pub mod database_cache_adapter;
+#[cfg(test)]
+mod database_cache_adapter_tests;
 pub mod hash_utils;
 pub mod lsp_cache;
 pub mod universal_cache;

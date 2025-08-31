@@ -256,9 +256,9 @@ impl DatabaseCacheAdapter {
 
     /// Iterate over all universal cache entries
     pub async fn iter_universal_entries(&self) -> Result<Vec<(String, Vec<u8>)>> {
-        // Use the database's scan functionality to get all entries from universal tree
+        // Use the universal_tree's scan functionality to get all entries from universal cache tree
         let entries = self
-            .database
+            .universal_tree
             .scan_prefix(b"") // Empty prefix gets all entries
             .await
             .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
