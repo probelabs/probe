@@ -1218,7 +1218,30 @@ impl LspManager {
                     }
                     _ => {
                         println!("{}", "LSP Cache Statistics".bold().green());
-                        println!("  {} {}", "Total Entries:".bold(), stats.total_entries);
+
+                        println!(
+                            "  {} {}",
+                            "Total Database Entries:".bold(),
+                            stats.total_entries
+                        );
+
+                        // Add explanatory note about database entries vs cache keys
+                        println!(
+                            "\n{} {}",
+                            "ℹ️  Note:".cyan().bold(),
+                            "Database entries include cache data + performance metadata.".dimmed()
+                        );
+                        println!(
+                            "   {} {}",
+                            "Use".dimmed(),
+                            "`probe lsp cache list-keys`".yellow()
+                        );
+                        println!(
+                            "   {}",
+                            "to see actual cache keys (LSP response data only).".dimmed()
+                        );
+
+                        println!("\n{}", "Storage Information:".bold().blue());
                         println!(
                             "  {} {}",
                             "Total Size:".bold(),
