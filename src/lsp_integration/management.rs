@@ -1379,36 +1379,40 @@ impl LspManager {
         Ok(())
     }
 
-    /// Handle cache stats with fallback to disk reading
+    /// Handle cache stats with hierarchical fallback: daemon → snapshot → size estimation
     async fn get_cache_stats_with_fallback() -> Result<lsp_daemon::protocol::CacheStatistics> {
-        // Check if daemon autostart is disabled
-        if std::env::var("PROBE_LSP_DISABLE_AUTOSTART").is_ok() {
-            return Self::read_disk_cache_stats_directly().await;
-        }
+        let autostart_disabled = std::env::var("PROBE_LSP_DISABLE_AUTOSTART").is_ok();
 
-        // First, check if daemon is already running (quick check without autostart)
-        if Self::is_daemon_running_quick_check().await {
-            // Daemon is running, try to get stats from it
+        // 1. Daemon API (authoritative) - Always try daemon first unless autostart is disabled
+        if Self::is_daemon_running_quick_check().await || !autostart_disabled {
             let config = LspConfig::default();
             match LspClient::new(config).await {
                 Ok(mut client) => match client.cache_stats().await {
-                    Ok(stats) => return Ok(stats),
+                    Ok(stats) => {
+                        eprintln!("✓ Retrieved cache stats from daemon");
+                        return Ok(stats);
+                    }
                     Err(e) => {
-                        eprintln!("Warning: Failed to get stats from running daemon: {e}");
-                        eprintln!("Falling back to direct database access (read-only)");
-                        // Continue to fallback
+                        eprintln!("Warning: Failed to get stats from daemon: {e}");
+                        // Continue to snapshot fallback
                     }
                 },
                 Err(e) => {
-                    eprintln!("Warning: Failed to connect to daemon for stats: {e}");
-                    eprintln!("Falling back to direct database access (read-only)");
-                    // Continue to fallback
+                    eprintln!("Warning: Failed to connect to daemon: {e}");
+                    // Continue to snapshot fallback
                 }
             }
         }
 
-        // Daemon not running or stats request failed, fall back to disk reading
-        Self::read_disk_cache_stats_directly().await
+        // 2. JSON Snapshot (last-known-good) - Read persisted snapshot from daemon
+        if let Ok(stats) = Self::read_cache_stats_snapshot().await {
+            eprintln!("✓ Retrieved cache stats from snapshot");
+            return Ok(stats);
+        }
+
+        // 3. Directory Size Estimate (safe fallback) - Pure filesystem calculation
+        eprintln!("⚠ Falling back to directory size estimation");
+        Self::estimate_cache_stats_from_directory_size().await
     }
 
     /// Quick check if daemon is running without triggering autostart
@@ -1435,11 +1439,9 @@ impl LspManager {
         }
     }
 
-    /// Read cache statistics directly from disk files (static version)
-    /// Note: This method can only provide disk-based statistics. Hit/miss rates
-    /// are only available when the daemon is running.
-    async fn read_disk_cache_stats_directly() -> Result<lsp_daemon::protocol::CacheStatistics> {
-        // Get cache base directory (same logic as in client.rs)
+    /// Read cache statistics from JSON snapshot written by daemon
+    async fn read_cache_stats_snapshot() -> Result<lsp_daemon::protocol::CacheStatistics> {
+        // Get snapshot path from environment variable or use default
         let cache_base_dir = if let Ok(cache_dir) = std::env::var("PROBE_LSP_CACHE_DIR") {
             std::path::PathBuf::from(cache_dir)
         } else if let Some(cache_dir) = dirs::cache_dir() {
@@ -1448,7 +1450,42 @@ impl LspManager {
             std::path::PathBuf::from("/tmp").join("probe-lsp-cache")
         };
 
+        let snapshot_path = if let Ok(custom_path) = std::env::var("PROBE_LSP_STATS_SNAPSHOT_PATH")
+        {
+            std::path::PathBuf::from(custom_path)
+        } else {
+            cache_base_dir.join("cache_stats.json")
+        };
+
+        // Read and parse snapshot file
+        let snapshot_content = tokio::fs::read_to_string(&snapshot_path)
+            .await
+            .with_context(|| format!("Failed to read snapshot file: {snapshot_path:?}"))?;
+
+        let stats: lsp_daemon::protocol::CacheStatistics = serde_json::from_str(&snapshot_content)
+            .with_context(|| format!("Failed to parse snapshot JSON: {snapshot_path:?}"))?;
+
+        Ok(stats)
+    }
+
+    /// Estimate cache statistics from directory sizes using 256 bytes/entry heuristic
+    async fn estimate_cache_stats_from_directory_size(
+    ) -> Result<lsp_daemon::protocol::CacheStatistics> {
+        // Get workspace cache directory
+        let cache_base_dir = if let Ok(cache_dir) = std::env::var("PROBE_LSP_WORKSPACE_CACHE_DIR") {
+            std::path::PathBuf::from(cache_dir)
+        } else if let Ok(cache_dir) = std::env::var("PROBE_LSP_CACHE_DIR") {
+            std::path::PathBuf::from(cache_dir).join("workspaces")
+        } else if let Some(cache_dir) = dirs::cache_dir() {
+            cache_dir.join("probe").join("lsp").join("workspaces")
+        } else {
+            std::path::PathBuf::from("/tmp")
+                .join("probe-lsp-cache")
+                .join("workspaces")
+        };
+
         if !cache_base_dir.exists() {
+            // Return empty stats if no cache directory exists
             return Ok(lsp_daemon::protocol::CacheStatistics {
                 total_entries: 0,
                 total_size_bytes: 0,
@@ -1476,128 +1513,58 @@ impl LspManager {
             });
         }
 
-        let mut total_entries = 0u64;
-        let mut total_size_bytes = 0u64;
         let mut total_disk_size = 0u64;
         let mut workspace_stats_vec = Vec::new();
 
-        // Legacy cache is no longer used - all caching is now done via universal cache
+        // Scan workspace cache directories
+        let mut entries = tokio::fs::read_dir(&cache_base_dir)
+            .await
+            .with_context(|| {
+                format!("Failed to read workspace cache directory: {cache_base_dir:?}")
+            })?;
 
-        // Check workspace caches
-        let workspaces_dir = cache_base_dir.join("workspaces");
-        eprintln!("Checking workspaces dir at: {workspaces_dir:?}");
-        eprintln!("Workspaces dir exists: {}", workspaces_dir.exists());
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Ok(file_type) = entry.file_type().await {
+                if file_type.is_dir() {
+                    let workspace_name = entry.file_name().to_string_lossy().to_string();
+                    let workspace_path = entry.path();
 
-        if workspaces_dir.exists() {
-            eprintln!("Reading workspace directory entries");
-            match tokio::fs::read_dir(&workspaces_dir).await {
-                Ok(mut entries) => {
-                    let mut workspace_count = 0;
-                    while let Ok(Some(entry)) = entries.next_entry().await {
-                        let entry_path = entry.path();
-                        eprintln!("Found workspace entry: {entry_path:?}");
+                    // Calculate directory size
+                    let workspace_disk_size =
+                        Self::calculate_directory_size_static(&workspace_path).await;
+                    total_disk_size += workspace_disk_size;
 
-                        if entry.file_type().await.is_ok_and(|ft| ft.is_dir()) {
-                            workspace_count += 1;
-                            let workspace_name = entry.file_name().to_string_lossy().to_string();
-                            // Check for both new (cache.db) and legacy (call_graph.db) locations
-                            let cache_db = entry.path().join("cache.db");
-                            let legacy_cache_db = entry.path().join("call_graph.db");
+                    // Estimate entries using 256 bytes per entry heuristic (same as sled backend)
+                    let estimated_entries = workspace_disk_size / 256;
 
-                            let db_path = if cache_db.exists() && cache_db.is_dir() {
-                                eprintln!("Using new cache.db at: {cache_db:?}");
-                                cache_db
-                            } else if legacy_cache_db.exists() && legacy_cache_db.is_dir() {
-                                eprintln!("Using legacy call_graph.db at: {legacy_cache_db:?}");
-                                legacy_cache_db
+                    if estimated_entries > 0 {
+                        // Extract workspace path from the workspace name (format: hash_name)
+                        let extracted_workspace_path =
+                            if let Some((_hash, name)) = workspace_name.split_once('_') {
+                                std::path::PathBuf::from(name)
                             } else {
-                                eprintln!("No cache database found for workspace");
-                                continue;
+                                std::path::PathBuf::from(&workspace_name)
                             };
 
-                            eprintln!("Reading workspace cache stats for: {db_path:?}");
-                            match Self::read_sled_db_stats_with_operations(&db_path).await {
-                                Ok((entries, size, disk_size, per_op_stats)) => {
-                                    eprintln!(
-                                            "Workspace cache stats: entries={entries}, size={size}, disk={disk_size}"
-                                        );
-                                    total_entries += entries;
-                                    total_size_bytes += size;
-                                    total_disk_size += disk_size;
-
-                                    // Extract workspace path from the workspace name (format: hash_name)
-                                    let workspace_path = if let Some((_hash, name)) =
-                                        workspace_name.split_once('_')
-                                    {
-                                        std::path::PathBuf::from(name)
-                                    } else {
-                                        std::path::PathBuf::from(&workspace_name)
-                                    };
-
-                                    workspace_stats_vec.push(
-                                        lsp_daemon::protocol::WorkspaceCacheStats {
-                                            workspace_id: workspace_name.clone(),
-                                            workspace_path,
-                                            entries,
-                                            size_bytes: size,
-                                            hit_rate: 0.0,  // Not available from disk
-                                            miss_rate: 0.0, // Not available from disk
-                                            per_operation_stats: per_op_stats,
-                                        },
-                                    );
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "Failed to read workspace cache stats for {db_path:?}: {e}"
-                                    );
-                                }
-                            }
-                        }
+                        workspace_stats_vec.push(lsp_daemon::protocol::WorkspaceCacheStats {
+                            workspace_id: workspace_name,
+                            workspace_path: extracted_workspace_path,
+                            entries: estimated_entries,
+                            size_bytes: workspace_disk_size,
+                            hit_rate: 0.0,  // Not available from size estimation
+                            miss_rate: 0.0, // Not available from size estimation
+                            per_operation_stats: Vec::new(), // Cannot estimate per-operation stats
+                        });
                     }
-                    eprintln!("Processed {workspace_count} workspace directories");
-                }
-                Err(e) => {
-                    eprintln!("Failed to read workspaces directory: {e}");
                 }
             }
         }
 
-        // Calculate global operation totals from all workspaces
-        let mut global_op_totals: std::collections::HashMap<String, (u64, u64)> =
-            std::collections::HashMap::new();
-        for ws_stats in &workspace_stats_vec {
-            for op_stats in &ws_stats.per_operation_stats {
-                let entry = global_op_totals
-                    .entry(op_stats.operation.clone())
-                    .or_insert((0, 0));
-                entry.0 += op_stats.entries;
-                entry.1 += op_stats.size_bytes;
-            }
-        }
-
-        let per_operation_totals = if !global_op_totals.is_empty() {
-            let mut totals: Vec<_> = global_op_totals
-                .into_iter()
-                .map(
-                    |(op, (entries, size))| lsp_daemon::protocol::OperationCacheStats {
-                        operation: op,
-                        entries,
-                        size_bytes: size,
-                        hit_rate: 0.0,
-                        miss_rate: 0.0,
-                        avg_response_time_ms: None,
-                    },
-                )
-                .collect();
-            totals.sort_by(|a, b| b.entries.cmp(&a.entries)); // Sort by entry count descending
-            Some(totals)
-        } else {
-            None
-        };
+        let total_estimated_entries = total_disk_size / 256;
 
         Ok(lsp_daemon::protocol::CacheStatistics {
-            total_entries,
-            total_size_bytes,
+            total_entries: total_estimated_entries,
+            total_size_bytes: total_disk_size,
             disk_size_bytes: total_disk_size,
             entries_per_file: std::collections::HashMap::new(),
             entries_per_language: std::collections::HashMap::new(),
@@ -1607,27 +1574,28 @@ impl LspManager {
                 entries_last_hour: 0,
                 entries_last_day: 0,
                 entries_last_week: 0,
-                entries_last_month: 0,
-                entries_older: total_entries,
+                entries_last_month: total_estimated_entries,
+                entries_older: 0,
             },
             most_accessed: Vec::new(),
             memory_usage: lsp_daemon::protocol::MemoryUsage {
                 in_memory_cache_bytes: 0,
                 persistent_cache_bytes: total_disk_size,
-                metadata_bytes: 0,
-                index_bytes: 0,
+                metadata_bytes: total_disk_size / 100, // Rough estimate (1% metadata)
+                index_bytes: total_disk_size / 50,     // Rough estimate (2% index)
             },
             per_workspace_stats: if !workspace_stats_vec.is_empty() {
                 Some(workspace_stats_vec)
             } else {
                 None
             },
-            per_operation_totals,
+            per_operation_totals: None, // Cannot estimate per-operation stats from size alone
         })
     }
 
     /// Read sled database stats with per-operation breakdown
     /// This handles both legacy and universal cache formats
+    #[allow(dead_code)]
     async fn read_sled_db_stats_with_operations(
         db_path: &std::path::Path,
     ) -> Result<(
@@ -1765,6 +1733,7 @@ impl LspManager {
     }
 
     /// Extract operation type from cache key
+    #[allow(dead_code)]
     fn extract_operation_from_key(key: &str) -> String {
         // Universal cache key format: workspace_id:operation:file:hash
         // Legacy format might have operation names embedded
