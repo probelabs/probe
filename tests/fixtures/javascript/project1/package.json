@@ -7,5 +7,7 @@
     "start": "node src/main.js",
     "test": "jest"
   },
-  "dependencies": {}
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
 }
