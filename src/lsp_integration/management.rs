@@ -1391,14 +1391,16 @@ impl LspManager {
     /// Quick check if daemon is running without triggering autostart
     async fn is_daemon_running_quick_check() -> bool {
         let socket_path = lsp_daemon::get_default_socket_path();
-        
+
         // Very short timeout - just check if daemon is there
         let quick_timeout = std::time::Duration::from_millis(100);
-        
+
         match tokio::time::timeout(
             quick_timeout,
-            lsp_daemon::ipc::IpcStream::connect(&socket_path)
-        ).await {
+            lsp_daemon::ipc::IpcStream::connect(&socket_path),
+        )
+        .await
+        {
             Ok(Ok(_stream)) => {
                 // Daemon is running
                 true
@@ -1699,8 +1701,7 @@ impl LspManager {
                                 // Try to extract operation type
                                 if let Ok(key_str) = std::str::from_utf8(&key) {
                                     let operation = Self::extract_operation_from_key(key_str);
-                                    let entry =
-                                        operation_counts.entry(operation).or_insert((0, 0));
+                                    let entry = operation_counts.entry(operation).or_insert((0, 0));
                                     entry.0 += 1;
                                     entry.1 += entry_size;
                                 }
@@ -1709,9 +1710,7 @@ impl LspManager {
                     }
                 }
 
-                eprintln!(
-                    "Total entries found: {total_entries}, total size: {total_size_bytes}"
-                );
+                eprintln!("Total entries found: {total_entries}, total size: {total_size_bytes}");
 
                 // Convert to OperationCacheStats
                 let per_op_stats = operation_counts
