@@ -1363,19 +1363,49 @@ impl LspManager {
             return Self::read_disk_cache_stats_directly().await;
         }
 
-        // Try to get stats from daemon first (this includes live hit/miss statistics)
-        let config = LspConfig::default();
-        match LspClient::new(config).await {
-            Ok(mut client) => match client.cache_stats().await {
-                Ok(stats) => Ok(stats),
-                Err(_) => {
-                    // Daemon is running but cache stats failed, fall back to disk reading
-                    Self::read_disk_cache_stats_directly().await
+        // First, check if daemon is already running (quick check without autostart)
+        if Self::is_daemon_running_quick_check().await {
+            // Daemon is running, try to get stats from it
+            let config = LspConfig::default();
+            match LspClient::new(config).await {
+                Ok(mut client) => match client.cache_stats().await {
+                    Ok(stats) => return Ok(stats),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to get stats from running daemon: {e}");
+                        eprintln!("Falling back to direct database access (read-only)");
+                        // Continue to fallback
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Warning: Failed to connect to daemon for stats: {e}");
+                    eprintln!("Falling back to direct database access (read-only)");
+                    // Continue to fallback
                 }
-            },
-            Err(_) => {
-                // Daemon not running, fall back to disk reading
-                Self::read_disk_cache_stats_directly().await
+            }
+        }
+
+        // Daemon not running or stats request failed, fall back to disk reading
+        Self::read_disk_cache_stats_directly().await
+    }
+
+    /// Quick check if daemon is running without triggering autostart
+    async fn is_daemon_running_quick_check() -> bool {
+        let socket_path = lsp_daemon::get_default_socket_path();
+        
+        // Very short timeout - just check if daemon is there
+        let quick_timeout = std::time::Duration::from_millis(100);
+        
+        match tokio::time::timeout(
+            quick_timeout,
+            lsp_daemon::ipc::IpcStream::connect(&socket_path)
+        ).await {
+            Ok(Ok(_stream)) => {
+                // Daemon is running
+                true
+            }
+            Ok(Err(_)) | Err(_) => {
+                // Daemon not running or connection failed/timed out
+                false
             }
         }
     }
@@ -1602,33 +1632,31 @@ impl LspManager {
                         "Found universal_cache tree with {} entries",
                         universal_tree.len()
                     );
-                    for item in universal_tree.iter() {
-                        if let Ok((key, value)) = item {
-                            total_entries += 1;
-                            let entry_size = key.len() as u64 + value.len() as u64;
-                            total_size_bytes += entry_size;
+                    for (key, value) in universal_tree.iter().flatten() {
+                        total_entries += 1;
+                        let entry_size = key.len() as u64 + value.len() as u64;
+                        total_size_bytes += entry_size;
 
-                            // Extract operation type from universal cache key format
-                            // Format: workspace_id:operation:file:hash
-                            if let Ok(key_str) = std::str::from_utf8(&key) {
-                                let operation = if let Some(parts) = key_str.split(':').nth(1) {
-                                    // Extract operation from key like "textDocument_prepareCallHierarchy"
-                                    if parts.starts_with("textDocument_") {
-                                        parts
-                                            .strip_prefix("textDocument_")
-                                            .unwrap_or(parts)
-                                            .replace('_', " ")
-                                    } else {
-                                        parts.to_string()
-                                    }
+                        // Extract operation type from universal cache key format
+                        // Format: workspace_id:operation:file:hash
+                        if let Ok(key_str) = std::str::from_utf8(&key) {
+                            let operation = if let Some(parts) = key_str.split(':').nth(1) {
+                                // Extract operation from key like "textDocument_prepareCallHierarchy"
+                                if parts.starts_with("textDocument_") {
+                                    parts
+                                        .strip_prefix("textDocument_")
+                                        .unwrap_or(parts)
+                                        .replace('_', " ")
                                 } else {
-                                    Self::extract_operation_from_key(key_str)
-                                };
+                                    parts.to_string()
+                                }
+                            } else {
+                                Self::extract_operation_from_key(key_str)
+                            };
 
-                                let entry = operation_counts.entry(operation).or_insert((0, 0));
-                                entry.0 += 1;
-                                entry.1 += entry_size;
-                            }
+                            let entry = operation_counts.entry(operation).or_insert((0, 0));
+                            entry.0 += 1;
+                            entry.1 += entry_size;
                         }
                     }
                 }
@@ -1636,20 +1664,18 @@ impl LspManager {
                 // Count entries in the default tree (for legacy cache or other data)
                 let default_entries = db.len() as u64;
                 if default_entries > 0 && total_entries == 0 {
-                    eprintln!("Found {} entries in default tree", default_entries);
-                    for item in db.iter() {
-                        if let Ok((key, value)) = item {
-                            total_entries += 1;
-                            let entry_size = key.len() as u64 + value.len() as u64;
-                            total_size_bytes += entry_size;
+                    eprintln!("Found {default_entries} entries in default tree");
+                    for (key, value) in db.iter().flatten() {
+                        total_entries += 1;
+                        let entry_size = key.len() as u64 + value.len() as u64;
+                        total_size_bytes += entry_size;
 
-                            // Try to extract operation type from key
-                            if let Ok(key_str) = std::str::from_utf8(&key) {
-                                let operation = Self::extract_operation_from_key(key_str);
-                                let entry = operation_counts.entry(operation).or_insert((0, 0));
-                                entry.0 += 1;
-                                entry.1 += entry_size;
-                            }
+                        // Try to extract operation type from key
+                        if let Ok(key_str) = std::str::from_utf8(&key) {
+                            let operation = Self::extract_operation_from_key(key_str);
+                            let entry = operation_counts.entry(operation).or_insert((0, 0));
+                            entry.0 += 1;
+                            entry.1 += entry_size;
                         }
                     }
                 }
@@ -1664,21 +1690,19 @@ impl LspManager {
                     if let Ok(tree) = db.open_tree(&tree_name) {
                         let tree_size = tree.len() as u64;
                         if tree_size > 0 {
-                            eprintln!("Found {} entries in tree '{}'", tree_size, tree_name_str);
-                            for item in tree.iter() {
-                                if let Ok((key, value)) = item {
-                                    total_entries += 1;
-                                    let entry_size = key.len() as u64 + value.len() as u64;
-                                    total_size_bytes += entry_size;
+                            eprintln!("Found {tree_size} entries in tree '{tree_name_str}'");
+                            for (key, value) in tree.iter().flatten() {
+                                total_entries += 1;
+                                let entry_size = key.len() as u64 + value.len() as u64;
+                                total_size_bytes += entry_size;
 
-                                    // Try to extract operation type
-                                    if let Ok(key_str) = std::str::from_utf8(&key) {
-                                        let operation = Self::extract_operation_from_key(key_str);
-                                        let entry =
-                                            operation_counts.entry(operation).or_insert((0, 0));
-                                        entry.0 += 1;
-                                        entry.1 += entry_size;
-                                    }
+                                // Try to extract operation type
+                                if let Ok(key_str) = std::str::from_utf8(&key) {
+                                    let operation = Self::extract_operation_from_key(key_str);
+                                    let entry =
+                                        operation_counts.entry(operation).or_insert((0, 0));
+                                    entry.0 += 1;
+                                    entry.1 += entry_size;
                                 }
                             }
                         }
@@ -1686,8 +1710,7 @@ impl LspManager {
                 }
 
                 eprintln!(
-                    "Total entries found: {}, total size: {}",
-                    total_entries, total_size_bytes
+                    "Total entries found: {total_entries}, total size: {total_size_bytes}"
                 );
 
                 // Convert to OperationCacheStats
@@ -1713,7 +1736,7 @@ impl LspManager {
                 ))
             }
             Err(e) => {
-                eprintln!("Failed to open sled database at {:?}: {}", db_path, e);
+                eprintln!("Failed to open sled database at {db_path:?}: {e}");
                 Ok((0, disk_size_bytes, disk_size_bytes, Vec::new()))
             }
         }
@@ -1791,10 +1814,8 @@ impl LspManager {
                 total_entries += default_entries;
 
                 // Iterate through all entries in the default tree to get accurate count and size
-                for item in db.iter() {
-                    if let Ok((key, value)) = item {
-                        total_size_bytes += key.len() as u64 + value.len() as u64;
-                    }
+                for (key, value) in db.iter().flatten() {
+                    total_size_bytes += key.len() as u64 + value.len() as u64;
                 }
 
                 // Check for the "nodes" tree (used by some cache implementations)
@@ -1803,10 +1824,8 @@ impl LspManager {
                     total_entries += nodes_entries;
 
                     // Add size from nodes tree
-                    for item in nodes_tree.iter() {
-                        if let Ok((key, value)) = item {
-                            total_size_bytes += key.len() as u64 + value.len() as u64;
-                        }
+                    for (key, value) in nodes_tree.iter().flatten() {
+                        total_size_bytes += key.len() as u64 + value.len() as u64;
                     }
                 }
 
@@ -1820,10 +1839,8 @@ impl LspManager {
                         let tree_entries = tree.len() as u64;
                         total_entries += tree_entries;
 
-                        for item in tree.iter() {
-                            if let Ok((key, value)) = item {
-                                total_size_bytes += key.len() as u64 + value.len() as u64;
-                            }
+                        for (key, value) in tree.iter().flatten() {
+                            total_size_bytes += key.len() as u64 + value.len() as u64;
                         }
                     }
                 }
