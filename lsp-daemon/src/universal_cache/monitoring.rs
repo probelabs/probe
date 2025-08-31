@@ -101,7 +101,6 @@ fn convert_method_stats(
                 hit_rate,
                 avg_cache_response_time_us: 100, // Placeholder - would track actual timing
                 avg_lsp_response_time_us: 5000,  // Placeholder - would track actual timing
-                ttl_seconds: Some(3600),         // Placeholder - would get from policy
             };
 
             (method.as_str().to_string(), protocol_stats)

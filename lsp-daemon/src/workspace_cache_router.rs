@@ -1055,6 +1055,7 @@ impl WorkspaceCacheRouter {
     pub async fn clear_workspace_cache(
         &self,
         workspace_path: Option<PathBuf>,
+        older_than_seconds: Option<u64>,
     ) -> Result<crate::protocol::WorkspaceClearResult> {
         let mut cleared_workspaces = Vec::new();
         let mut total_size_freed_bytes = 0u64;
@@ -1063,7 +1064,9 @@ impl WorkspaceCacheRouter {
 
         if let Some(workspace_path) = workspace_path {
             // Clear specific workspace
-            let result = self.clear_single_workspace(&workspace_path).await;
+            let result = self
+                .clear_single_workspace(&workspace_path, older_than_seconds)
+                .await;
             match result {
                 Ok((entry, size_freed, files_removed)) => {
                     total_size_freed_bytes += size_freed;
@@ -1090,7 +1093,9 @@ impl WorkspaceCacheRouter {
             let entries = self.list_all_workspace_caches().await?;
 
             for entry in entries {
-                let result = self.clear_single_workspace(&entry.workspace_root).await;
+                let result = self
+                    .clear_single_workspace(&entry.workspace_root, older_than_seconds)
+                    .await;
                 match result {
                     Ok((clear_entry, size_freed, files_removed)) => {
                         total_size_freed_bytes += size_freed;
@@ -1245,6 +1250,7 @@ impl WorkspaceCacheRouter {
     async fn clear_single_workspace(
         &self,
         workspace_root: &Path,
+        older_than_seconds: Option<u64>,
     ) -> Result<(crate::protocol::WorkspaceClearEntry, u64, usize)> {
         let workspace_id = self.workspace_id_for(workspace_root)?;
         let cache_path = self.config.base_cache_dir.join(&workspace_id);
@@ -1264,32 +1270,55 @@ impl WorkspaceCacheRouter {
             ));
         }
 
-        // Calculate size before removal
-        let (size_freed_bytes, files_removed) = self.calculate_directory_size(&cache_path).await?;
+        let (size_freed_bytes, files_removed) = if let Some(age_seconds) = older_than_seconds {
+            // Age-based selective clearing
+            if let Some(cache_ref) = self.open_caches.get(&workspace_id) {
+                let cache = cache_ref.value();
+                // If cache is open, delegate to the cache store for age-based clearing
+                match cache.clear_entries_older_than(age_seconds).await {
+                    Ok((size_freed, files_count)) => (size_freed, files_count),
+                    Err(e) => {
+                        return Err(anyhow::anyhow!(
+                            "Failed to clear aged entries from open cache: {}",
+                            e
+                        ));
+                    }
+                }
+            } else {
+                // Cache is not open, need to handle selective file clearing
+                // For now, we'll implement a basic file-based age filtering
+                self.clear_old_files_from_directory(&cache_path, age_seconds)
+                    .await?
+            }
+        } else {
+            // Clear everything (original behavior)
+            let (total_size, total_files) = self.calculate_directory_size(&cache_path).await?;
 
-        // Close the cache if it's currently open
-        if let Some((_key, _cache)) = self.open_caches.remove(&workspace_id) {
-            // Cache will be automatically closed when Arc is dropped
-            info!(
-                "Closed open cache for workspace '{}' before clearing",
-                workspace_id
-            );
-        }
+            // Close the cache if it's currently open
+            if let Some((_key, _cache)) = self.open_caches.remove(&workspace_id) {
+                // Cache will be automatically closed when Arc is dropped
+                info!(
+                    "Closed open cache for workspace '{}' before clearing",
+                    workspace_id
+                );
+            }
 
-        // Remove from metadata tracking
-        {
-            let mut metadata = self.access_metadata.write().await;
-            metadata.remove(&workspace_id);
-        }
+            // Remove from metadata tracking
+            {
+                let mut metadata = self.access_metadata.write().await;
+                metadata.remove(&workspace_id);
+            }
 
-        // Remove from the dedicated reverse mapping
-        {
-            let mut workspace_mapping = self.workspace_id_to_root.write().await;
-            workspace_mapping.remove(&workspace_id);
-        }
+            // Remove from the dedicated reverse mapping
+            {
+                let mut workspace_mapping = self.workspace_id_to_root.write().await;
+                workspace_mapping.remove(&workspace_id);
+            }
 
-        // Remove the cache directory
-        self.remove_directory_safely(&cache_path).await?;
+            // Remove the cache directory
+            self.remove_directory_safely(&cache_path).await?;
+            (total_size, total_files)
+        };
 
         let entry = crate::protocol::WorkspaceClearEntry {
             workspace_id,
@@ -1326,6 +1355,99 @@ impl WorkspaceCacheRouter {
 
         debug!("Successfully removed cache directory: {:?}", dir_path);
         Ok(())
+    }
+
+    /// Clear files older than specified age from directory
+    async fn clear_old_files_from_directory(
+        &self,
+        dir_path: &Path,
+        older_than_seconds: u64,
+    ) -> Result<(u64, usize)> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        if !dir_path.exists() {
+            return Ok((0, 0));
+        }
+
+        let cutoff_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_secs()
+            .saturating_sub(older_than_seconds);
+
+        let mut size_freed = 0u64;
+        let mut files_removed = 0usize;
+
+        let mut stack = vec![dir_path.to_path_buf()];
+
+        while let Some(current_dir) = stack.pop() {
+            if let Ok(entries) = tokio::fs::read_dir(&current_dir).await {
+                let mut entries = entries;
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let path = entry.path();
+
+                    if let Ok(metadata) = entry.metadata().await {
+                        if metadata.is_dir() {
+                            stack.push(path);
+                        } else if let Ok(modified) = metadata.modified() {
+                            if let Ok(modified_secs) = modified.duration_since(UNIX_EPOCH) {
+                                if modified_secs.as_secs() < cutoff_time {
+                                    // File is older than cutoff, remove it
+                                    let size = metadata.len();
+                                    size_freed = size_freed.saturating_add(size);
+                                    if tokio::fs::remove_file(&path).await.is_ok() {
+                                        files_removed += 1;
+                                        debug!("Removed old cache file: {:?}", path);
+                                    } else {
+                                        warn!("Failed to remove old cache file: {:?}", path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clean up empty directories after removing files
+        self.cleanup_empty_directories(dir_path).await;
+
+        Ok((size_freed, files_removed))
+    }
+
+    /// Remove empty directories iteratively (to avoid async recursion)
+    async fn cleanup_empty_directories(&self, dir_path: &Path) {
+        let mut dirs_to_check = vec![dir_path.to_path_buf()];
+
+        // First pass: collect all directories
+        let mut all_dirs = Vec::new();
+        while let Some(current_dir) = dirs_to_check.pop() {
+            all_dirs.push(current_dir.clone());
+
+            if let Ok(entries) = tokio::fs::read_dir(&current_dir).await {
+                let mut entries = entries;
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let path = entry.path();
+                    if let Ok(metadata) = entry.metadata().await {
+                        if metadata.is_dir() {
+                            dirs_to_check.push(path);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Second pass: remove empty directories from deepest to shallowest
+        all_dirs.reverse();
+        for dir in all_dirs {
+            if dir != self.config.base_cache_dir {
+                if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+                    if entries.next_entry().await.unwrap_or(None).is_none() {
+                        let _ = tokio::fs::remove_dir(&dir).await;
+                        debug!("Removed empty directory: {:?}", dir);
+                    }
+                }
+            }
+        }
     }
 
     /// Format timestamp as ISO 8601 string
@@ -2059,7 +2181,7 @@ mod tests {
 
         // Clear specific workspace cache
         let clear_result = router
-            .clear_workspace_cache(Some(workspace.clone()))
+            .clear_workspace_cache(Some(workspace.clone()), None)
             .await
             .unwrap();
 
@@ -2082,7 +2204,7 @@ mod tests {
         fs::write(workspace2.join("package.json"), r#"{"name": "workspace2"}"#).unwrap();
         let _cache2 = router.cache_for_workspace(&workspace2).await.unwrap();
 
-        let clear_all_result = router.clear_workspace_cache(None).await.unwrap();
+        let clear_all_result = router.clear_workspace_cache(None, None).await.unwrap();
 
         // Should clear both workspaces successfully
         assert!(clear_all_result.cleared_workspaces.len() >= 1); // At least one workspace cleared

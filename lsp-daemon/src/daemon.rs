@@ -1458,7 +1458,7 @@ impl LspDaemon {
                     // Clear all workspace caches through the workspace router
                     match self
                         .workspace_cache_router
-                        .clear_workspace_cache(None)
+                        .clear_workspace_cache(None, None)
                         .await
                     {
                         Ok(result) => {
@@ -1538,7 +1538,6 @@ impl LspDaemon {
 
             DaemonRequest::CacheCompact {
                 request_id,
-                clean_expired: _clean_expired,
                 target_size_mb: _target_size_mb,
             } => {
                 // Universal cache compaction happens automatically at the workspace level
@@ -1746,17 +1745,28 @@ impl LspDaemon {
             DaemonRequest::WorkspaceCacheClear {
                 request_id,
                 workspace_path,
+                older_than_seconds,
             } => {
-                info!(
-                    "Workspace cache clear requested for: {:?}",
-                    workspace_path
-                        .as_deref()
-                        .unwrap_or("all workspaces".as_ref())
-                );
+                if let Some(age_seconds) = older_than_seconds {
+                    info!(
+                        "Workspace cache clear requested for: {:?} (older than {} seconds)",
+                        workspace_path
+                            .as_deref()
+                            .unwrap_or("all workspaces".as_ref()),
+                        age_seconds
+                    );
+                } else {
+                    info!(
+                        "Workspace cache clear requested for: {:?}",
+                        workspace_path
+                            .as_deref()
+                            .unwrap_or("all workspaces".as_ref())
+                    );
+                }
 
                 match self
                     .workspace_cache_router
-                    .clear_workspace_cache(workspace_path)
+                    .clear_workspace_cache(workspace_path, older_than_seconds)
                     .await
                 {
                     Ok(result) => {
@@ -2207,7 +2217,6 @@ impl LspDaemon {
                     hit_rate,
                     avg_cache_response_time_us: 100, // Placeholder - would track actual timing
                     avg_lsp_response_time_us: 5000,  // Placeholder - would track actual timing
-                    ttl_seconds: Some(3600),         // Placeholder - would get from policy
                 };
 
                 (method.as_str().to_string(), protocol_stats)

@@ -171,7 +171,6 @@ pub enum DaemonRequest {
     },
     CacheCompact {
         request_id: Uuid,
-        clean_expired: bool,
         target_size_mb: Option<usize>,
     },
 
@@ -186,6 +185,7 @@ pub enum DaemonRequest {
     WorkspaceCacheClear {
         request_id: Uuid,
         workspace_path: Option<PathBuf>,
+        older_than_seconds: Option<u64>,
     },
 
     // Symbol-specific cache clearing
@@ -764,8 +764,6 @@ pub struct UniversalCacheMethodStats {
     pub avg_cache_response_time_us: u64,
     /// Average response time from LSP server (microseconds)
     pub avg_lsp_response_time_us: u64,
-    /// TTL settings for this method (seconds)
-    pub ttl_seconds: Option<u64>,
 }
 
 /// Cache layer performance statistics
@@ -1060,7 +1058,6 @@ pub struct ImportResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactResult {
-    pub expired_entries_removed: u64,
     pub size_based_entries_removed: u64,
     pub size_before_bytes: u64,
     pub size_after_bytes: u64,
@@ -1080,6 +1077,8 @@ pub struct CacheKeyInfo {
     pub operation: String,
     /// Position in file (line:column)
     pub position: String,
+    /// Symbol name if available
+    pub symbol_name: Option<String>,
     /// Size of cached data in bytes
     pub size_bytes: usize,
     /// Number of times this key has been accessed
@@ -1092,8 +1091,6 @@ pub struct CacheKeyInfo {
     pub content_hash: String,
     /// Workspace identifier
     pub workspace_id: String,
-    /// Time-to-live in seconds (None means no expiration)
-    pub ttl_seconds: Option<u64>,
     /// Whether the entry has expired
     pub is_expired: bool,
 }
@@ -1577,7 +1574,6 @@ pub struct ExportOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactOptions {
-    pub clean_expired: bool,
     pub target_size_mb: Option<usize>,
 }
 

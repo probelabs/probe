@@ -200,7 +200,7 @@ impl UniversalCache {
             .await?;
 
         // Store in cache
-        self.store.set(&cache_key, value, policy.ttl_seconds).await
+        self.store.set(&cache_key, value).await
     }
 
     /// Invalidate cache entries for a file across all relevant workspaces

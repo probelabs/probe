@@ -337,10 +337,6 @@ pub enum CacheSubcommands {
 
     /// Compact the cache database
     Compact {
-        /// Remove expired entries
-        #[clap(long)]
-        clean_expired: bool,
-
         /// Target size in MB (removes oldest entries)
         #[clap(long)]
         target_size_mb: Option<usize>,
@@ -372,9 +368,17 @@ pub enum CacheSubcommands {
         /// Workspace path to clear (optional, clears all if not specified)
         workspace: Option<std::path::PathBuf>,
 
-        /// Force clear without confirmation
+        /// Only clear entries older than specified duration (e.g., "1h", "30m", "7d")
+        #[clap(long = "older-than")]
+        older_than: Option<String>,
+
+        /// Skip confirmation prompt (force clear without confirmation)
         #[clap(short = 'f', long = "force")]
         force: bool,
+
+        /// Skip confirmation prompt (same as --force for convenience)
+        #[clap(short = 'y', long = "yes")]
+        yes: bool,
 
         /// Output format (terminal, json)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
@@ -544,23 +548,6 @@ pub enum CacheConfigSubcommands {
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
         format: String,
     },
-
-    /// Set cache TTL (Time To Live) for methods
-    SetTtl {
-        /// LSP method to configure
-        method: String,
-
-        /// TTL in seconds (0 = no expiration)
-        ttl_seconds: u64,
-
-        /// Apply to specific layer only (memory, disk)
-        #[clap(long, value_parser = ["memory", "disk"])]
-        layer: Option<String>,
-
-        /// Output format (terminal, json)
-        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
-        format: String,
-    },
 }
 
 // Removed UniversalCacheConfigSubcommands - merged into CacheConfigSubcommands
@@ -606,19 +593,6 @@ pub enum LspCacheConfigSubcommands {
         /// Disable specific layers only (comma-separated: memory,disk,server)
         #[clap(long)]
         layers: Option<String>,
-
-        /// Output format (terminal, json)
-        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
-        format: String,
-    },
-
-    /// Set cache TTL (Time To Live) for methods
-    SetTtl {
-        /// LSP method to configure
-        method: String,
-
-        /// TTL in seconds
-        ttl_seconds: u64,
 
         /// Output format (terminal, json)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]

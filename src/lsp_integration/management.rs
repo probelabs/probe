@@ -1608,13 +1608,9 @@ impl LspManager {
                     }
                 }
             }
-            CacheSubcommands::Compact {
-                clean_expired,
-                target_size_mb,
-            } => {
+            CacheSubcommands::Compact { target_size_mb } => {
                 // TODO: Implement cache compaction
                 println!("Cache compact not yet implemented");
-                println!("Clean expired: {clean_expired}");
                 if let Some(size) = target_size_mb {
                     println!("Target size: {size} MB");
                 }
@@ -1627,11 +1623,20 @@ impl LspManager {
             }
             CacheSubcommands::ClearWorkspace {
                 workspace,
+                older_than,
                 force,
+                yes,
                 format,
             } => {
-                Self::handle_workspace_cache_clear(client, workspace.as_ref(), *force, format)
-                    .await?
+                Self::handle_workspace_cache_clear(
+                    client,
+                    workspace.as_ref(),
+                    older_than.as_ref().map(|s| s.as_str()),
+                    *force,
+                    *yes,
+                    format,
+                )
+                .await?
             }
             CacheSubcommands::ClearSymbol {
                 file,
@@ -1943,6 +1948,9 @@ impl LspManager {
 
                                     if *detailed {
                                         println!("   {} {}", "File:".bold(), key.file_path);
+                                        if let Some(ref symbol) = key.symbol_name {
+                                            println!("   {} {}", "Symbol:".bold(), symbol.yellow());
+                                        }
                                         println!(
                                             "   {} {}",
                                             "Operation:".bold(),
@@ -1966,14 +1974,17 @@ impl LspManager {
                                         } else {
                                             println!("   {} {}", "Status:".bold(), "VALID".green());
                                         }
-                                        if let Some(ttl) = key.ttl_seconds {
-                                            println!("   {} {} seconds", "TTL:".bold(), ttl);
-                                        }
                                         println!();
                                     } else {
+                                        let symbol_str = key
+                                            .symbol_name
+                                            .as_ref()
+                                            .map(|s| format!(" [{}]", s.yellow()))
+                                            .unwrap_or_default();
                                         println!(
-                                            "   {} {} | {} | {} bytes | {} hits",
+                                            "   {}{} | {} | {} | {} bytes | {} hits",
                                             key.file_path.dimmed(),
+                                            symbol_str,
                                             key.operation.green(),
                                             key.position.yellow(),
                                             key.size_bytes,
@@ -2137,38 +2148,6 @@ impl LspManager {
                     }
                     if let Some(layers) = layers {
                         println!("  Layers: {layers}");
-                    }
-                }
-            },
-            CacheConfigSubcommands::SetTtl {
-                method,
-                ttl_seconds,
-                layer,
-                format: output_format,
-            } => match output_format.as_str() {
-                "json" => {
-                    let json_output = json!({
-                        "status": "not_implemented",
-                        "message": "TTL configuration not yet implemented",
-                        "parameters": {
-                            "method": method,
-                            "ttl_seconds": ttl_seconds,
-                            "layer": layer
-                        }
-                    });
-                    println!("{}", serde_json::to_string_pretty(&json_output)?);
-                }
-                _ => {
-                    use colored::Colorize;
-
-                    println!("{}", "TTL configuration not yet implemented".yellow());
-                    println!("Parameters:");
-                    println!("  {} {}", "Method:".bold(), method.cyan());
-                    println!("  {} {} seconds", "TTL:".bold(), ttl_seconds);
-                    if let Some(layer) = layer {
-                        println!("  {} {}", "Layer:".bold(), layer.cyan());
-                    } else {
-                        println!("  {} all layers", "Layer:".bold());
                     }
                 }
             },
@@ -3093,18 +3072,78 @@ impl LspManager {
         Ok(())
     }
 
+    /// Parse duration string to seconds (e.g., "1h" -> 3600, "30m" -> 1800, "7d" -> 604800)
+    fn parse_duration_string(duration_str: &str) -> Result<u64> {
+        let duration_str = duration_str.trim();
+
+        if duration_str.is_empty() {
+            return Err(anyhow!("Empty duration string"));
+        }
+
+        // Extract number and unit
+        let (number_str, unit_str) = if let Some(pos) = duration_str.find(char::is_alphabetic) {
+            duration_str.split_at(pos)
+        } else {
+            return Err(anyhow!("Duration must include a unit (s, m, h, d, w)"));
+        };
+
+        let number: u64 = number_str
+            .parse()
+            .map_err(|_| anyhow!("Invalid number in duration string: '{}'", number_str))?;
+
+        if number == 0 {
+            return Err(anyhow!("Duration must be greater than 0"));
+        }
+
+        let unit = unit_str.to_lowercase();
+        let multiplier = match unit.as_str() {
+            "s" | "sec" | "secs" | "second" | "seconds" => 1,
+            "m" | "min" | "mins" | "minute" | "minutes" => 60,
+            "h" | "hr" | "hrs" | "hour" | "hours" => 60 * 60,
+            "d" | "day" | "days" => 60 * 60 * 24,
+            "w" | "week" | "weeks" => 60 * 60 * 24 * 7,
+            _ => {
+                return Err(anyhow!(
+                    "Invalid time unit '{}'. Supported: s, m, h, d, w",
+                    unit
+                ))
+            }
+        };
+
+        let seconds = number
+            .checked_mul(multiplier)
+            .ok_or_else(|| anyhow!("Duration too large: overflow occurred"))?;
+
+        Ok(seconds)
+    }
+
     /// Handle workspace cache clear command
     async fn handle_workspace_cache_clear(
         client: &mut LspClient,
         workspace_path: Option<&std::path::PathBuf>,
+        older_than: Option<&str>,
         force: bool,
+        yes: bool,
         format: &str,
     ) -> Result<()> {
+        // Parse older_than duration if provided
+        let older_than_seconds = if let Some(duration_str) = older_than {
+            Some(Self::parse_duration_string(duration_str)?)
+        } else {
+            None
+        };
+
         // Confirmation prompt for destructive operations
-        if !force && std::env::var("PROBE_BATCH").unwrap_or_default() != "1" {
+        if !force && !yes && std::env::var("PROBE_BATCH").unwrap_or_default() != "1" {
             use std::io::{self, Write};
 
-            if workspace_path.is_some() {
+            if let Some(age) = older_than {
+                if workspace_path.is_some() {
+                    print!("Are you sure you want to clear workspace cache entries older than {age}? [y/N]: ");
+                } else {
+                    print!("Are you sure you want to clear ALL workspace cache entries older than {age}? [y/N]: ");
+                }
+            } else if workspace_path.is_some() {
                 print!("Are you sure you want to clear the workspace cache? [y/N]: ");
             } else {
                 print!("Are you sure you want to clear ALL workspace caches? [y/N]: ");
@@ -3121,7 +3160,7 @@ impl LspManager {
         }
 
         let result = client
-            .clear_workspace_cache(workspace_path.cloned())
+            .clear_workspace_cache(workspace_path.cloned(), older_than_seconds)
             .await?;
 
         match format {
@@ -3917,5 +3956,40 @@ mod tests {
         assert!(workspace_root.is_absolute());
         assert!(workspace_root.exists());
         assert_eq!(workspace_root, absolute_path);
+    }
+
+    #[test]
+    fn test_parse_duration_string() {
+        // Test seconds
+        assert_eq!(LspManager::parse_duration_string("30s").unwrap(), 30);
+        assert_eq!(LspManager::parse_duration_string("5seconds").unwrap(), 5);
+
+        // Test minutes
+        assert_eq!(LspManager::parse_duration_string("5m").unwrap(), 300);
+        assert_eq!(LspManager::parse_duration_string("10mins").unwrap(), 600);
+        assert_eq!(LspManager::parse_duration_string("1minute").unwrap(), 60);
+
+        // Test hours
+        assert_eq!(LspManager::parse_duration_string("1h").unwrap(), 3600);
+        assert_eq!(LspManager::parse_duration_string("2hrs").unwrap(), 7200);
+        assert_eq!(LspManager::parse_duration_string("1hour").unwrap(), 3600);
+
+        // Test days
+        assert_eq!(LspManager::parse_duration_string("1d").unwrap(), 86400);
+        assert_eq!(LspManager::parse_duration_string("7days").unwrap(), 604800);
+
+        // Test weeks
+        assert_eq!(LspManager::parse_duration_string("1w").unwrap(), 604800);
+        assert_eq!(
+            LspManager::parse_duration_string("2weeks").unwrap(),
+            1209600
+        );
+
+        // Test error cases
+        assert!(LspManager::parse_duration_string("").is_err());
+        assert!(LspManager::parse_duration_string("abc").is_err());
+        assert!(LspManager::parse_duration_string("5").is_err());
+        assert!(LspManager::parse_duration_string("0h").is_err());
+        assert!(LspManager::parse_duration_string("5invalid").is_err());
     }
 }
