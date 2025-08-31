@@ -1745,10 +1745,12 @@ impl LspClient {
     pub async fn clear_workspace_cache(
         &mut self,
         workspace_path: Option<std::path::PathBuf>,
+        older_than_seconds: Option<u64>,
     ) -> Result<lsp_daemon::protocol::WorkspaceClearResult> {
         let request = DaemonRequest::WorkspaceCacheClear {
             request_id: Uuid::new_v4(),
             workspace_path,
+            older_than_seconds,
         };
 
         let response = self.send_request(request).await?;

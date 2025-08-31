@@ -219,10 +219,6 @@ pub struct MethodCacheConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
 
-    /// TTL in seconds for cached entries
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ttl_seconds: Option<u64>,
-
     /// Maximum number of entries to cache for this method
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_entries: Option<usize>,

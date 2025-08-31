@@ -1,7 +1,7 @@
 //! Cache Policy Management
 //!
 //! This module defines caching policies for different LSP methods, including
-//! scope rules, TTL values, and invalidation strategies.
+//! scope rules and invalidation strategies.
 
 use crate::universal_cache::LspMethod;
 use std::collections::HashMap;
@@ -39,9 +39,6 @@ pub struct CachePolicy {
     /// Cache scope determining invalidation rules
     pub scope: CacheScope,
 
-    /// Time-to-live in seconds (0 = no expiration)
-    pub ttl_seconds: u64,
-
     /// Maximum number of entries to cache for this method per workspace
     pub max_entries_per_workspace: Option<usize>,
 
@@ -57,7 +54,6 @@ impl Default for CachePolicy {
         Self {
             enabled: true,
             scope: CacheScope::FileContent,
-            ttl_seconds: 300, // 5 minutes
             max_entries_per_workspace: Some(1000),
             compress: true,
             priority: 5,
@@ -81,7 +77,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::FileContent,
-                ttl_seconds: 600, // 10 minutes
                 max_entries_per_workspace: Some(2000),
                 compress: true,
                 priority: 7,
@@ -94,7 +89,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::Workspace,
-                ttl_seconds: 1800, // 30 minutes
                 max_entries_per_workspace: Some(1500),
                 compress: true,
                 priority: 8,
@@ -107,7 +101,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::FileContent,
-                ttl_seconds: 300, // 5 minutes
                 max_entries_per_workspace: Some(5000),
                 compress: false, // Small values, compression overhead not worth it
                 priority: 9,     // High priority - frequently accessed
@@ -120,7 +113,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::FileContent,
-                ttl_seconds: 900, // 15 minutes
                 max_entries_per_workspace: Some(1000),
                 compress: true,
                 priority: 6,
@@ -133,7 +125,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::Workspace,
-                ttl_seconds: 3600, // 1 hour
                 max_entries_per_workspace: Some(500),
                 compress: true,
                 priority: 5,
@@ -146,7 +137,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::FileContent,
-                ttl_seconds: 600, // 10 minutes
                 max_entries_per_workspace: Some(1000),
                 compress: true,
                 priority: 6,
@@ -159,7 +149,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::Workspace,
-                ttl_seconds: 1200, // 20 minutes
                 max_entries_per_workspace: Some(1000),
                 compress: true,
                 priority: 7,
@@ -172,7 +161,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::Workspace,
-                ttl_seconds: 2400, // 40 minutes
                 max_entries_per_workspace: Some(800),
                 compress: true,
                 priority: 10, // Highest priority - very expensive to compute
@@ -185,7 +173,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::FileContent,
-                ttl_seconds: 180, // 3 minutes
                 max_entries_per_workspace: Some(2000),
                 compress: false,
                 priority: 4,
@@ -198,7 +185,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: false,
                 scope: CacheScope::FileContent,
-                ttl_seconds: 60, // 1 minute if enabled
                 max_entries_per_workspace: Some(100),
                 compress: false,
                 priority: 2,
@@ -211,7 +197,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: false,
                 scope: CacheScope::FileContent,
-                ttl_seconds: 120, // 2 minutes if enabled
                 max_entries_per_workspace: Some(500),
                 compress: true,
                 priority: 3,
@@ -224,7 +209,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: false,
                 scope: CacheScope::Workspace,
-                ttl_seconds: 0,
                 max_entries_per_workspace: None,
                 compress: true,
                 priority: 1,
@@ -237,7 +221,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::FileStructure,
-                ttl_seconds: 1800, // 30 minutes
                 max_entries_per_workspace: Some(1000),
                 compress: true,
                 priority: 4,
@@ -250,7 +233,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::FileStructure,
-                ttl_seconds: 1800, // 30 minutes
                 max_entries_per_workspace: Some(1000),
                 compress: true,
                 priority: 4,
@@ -263,7 +245,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::FileContent,
-                ttl_seconds: 600, // 10 minutes
                 max_entries_per_workspace: Some(800),
                 compress: true,
                 priority: 6,
@@ -276,7 +257,6 @@ impl PolicyRegistry {
             CachePolicy {
                 enabled: true,
                 scope: CacheScope::FileContent,
-                ttl_seconds: 300, // 5 minutes
                 max_entries_per_workspace: Some(1500),
                 compress: false,
                 priority: 5,
@@ -375,7 +355,6 @@ mod tests {
         let custom_policy = CachePolicy {
             enabled: true,
             scope: CacheScope::Session,
-            ttl_seconds: 60,
             max_entries_per_workspace: Some(10),
             compress: false,
             priority: 1,
@@ -384,7 +363,6 @@ mod tests {
         registry.set_policy(LspMethod::CodeAction, custom_policy.clone());
         let retrieved_policy = registry.get_policy(LspMethod::CodeAction);
         assert_eq!(retrieved_policy.scope, CacheScope::Session);
-        assert_eq!(retrieved_policy.ttl_seconds, 60);
     }
 
     #[test]

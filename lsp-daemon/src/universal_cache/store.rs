@@ -9,7 +9,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -32,8 +32,6 @@ struct CacheEntryMetadata {
     access_count: u64,
     /// Size of the entry in bytes
     size_bytes: usize,
-    /// TTL for this entry (None = no expiration)
-    ttl: Option<Duration>,
 }
 
 /// Cached value with metadata
@@ -46,18 +44,6 @@ struct CacheEntry {
 }
 
 impl CacheEntry {
-    /// Check if this entry has expired
-    fn is_expired(&self) -> bool {
-        if let Some(ttl) = self.metadata.ttl {
-            SystemTime::now()
-                .duration_since(self.metadata.created_at)
-                .map(|age| age > ttl)
-                .unwrap_or(true)
-        } else {
-            false
-        }
-    }
-
     /// Update access metadata
     fn touch(&mut self) {
         self.metadata.last_accessed = SystemTime::now();
@@ -155,22 +141,14 @@ impl CacheStore {
         // Direct database access only
         match self.get_from_persistent_cache(key).await {
             Ok(Some(entry)) => {
-                if entry.is_expired() {
-                    // Remove expired entry and return None
-                    let _ = self.remove_from_persistent_cache(key).await;
-                    self.record_miss(&key.workspace_id, key.method).await;
-                    debug!("Database cache miss (expired) for key: {}", storage_key);
-                    Ok(None)
-                } else {
-                    // Update access metadata and store back
-                    let mut updated_entry = entry.clone();
-                    updated_entry.touch();
-                    let _ = self.set_in_persistent_cache(key, &updated_entry).await;
+                // Update access metadata and store back
+                let mut updated_entry = entry.clone();
+                updated_entry.touch();
+                let _ = self.set_in_persistent_cache(key, &updated_entry).await;
 
-                    self.record_hit(&key.workspace_id, key.method).await;
-                    debug!("Database cache hit for key: {}", storage_key);
-                    Ok(Some(entry.deserialize()?))
-                }
+                self.record_hit(&key.workspace_id, key.method).await;
+                debug!("Database cache hit for key: {}", storage_key);
+                Ok(Some(entry.deserialize()?))
             }
             Ok(None) => {
                 self.record_miss(&key.workspace_id, key.method).await;
@@ -186,12 +164,7 @@ impl CacheStore {
     }
 
     /// Store a value in the cache
-    pub async fn set<T: Serialize>(
-        &self,
-        key: &CacheKey,
-        value: &T,
-        ttl_seconds: u64,
-    ) -> Result<()> {
+    pub async fn set<T: Serialize>(&self, key: &CacheKey, value: &T) -> Result<()> {
         // Serialize the value
         let data = serde_json::to_vec(value).context("Failed to serialize cache value")?;
 
@@ -206,19 +179,12 @@ impl CacheStore {
         }
 
         // Create cache entry
-        let ttl = if ttl_seconds > 0 {
-            Some(Duration::from_secs(ttl_seconds))
-        } else {
-            None
-        };
-
         let entry = CacheEntry {
             metadata: CacheEntryMetadata {
                 created_at: SystemTime::now(),
                 last_accessed: SystemTime::now(),
                 access_count: 1,
                 size_bytes: data.len(),
-                ttl,
             },
             data,
         };
@@ -860,12 +826,6 @@ impl CacheStore {
                         };
                         let size_bytes = cache_entry.data.len();
 
-                        // Skip expired entries
-                        if cache_entry.is_expired() {
-                            debug!("Skipping expired Universal Cache entry: {}", storage_key);
-                            continue;
-                        }
-
                         // Convert LSP method to string
                         let operation = cache_key.method.as_str().to_string();
 
@@ -904,20 +864,48 @@ impl CacheStore {
                             .as_secs()
                             .to_string();
 
+                        // Use position from cache key, fallback to hash for non-positional operations
+                        let position_display = cache_key
+                            .position
+                            .clone()
+                            .unwrap_or_else(|| format!("content:{}", &cache_key.content_hash[..8]));
+
+                        // Use symbol name from the cache key if available, otherwise try to extract from data
+                        let symbol_name = cache_key.symbol_name.clone().or_else(|| {
+                            // Fallback: try to extract symbol name from cached data
+                            if cache_key.method == crate::universal_cache::LspMethod::CallHierarchy
+                            {
+                                // Try to deserialize as CallHierarchyItem to get symbol name
+                                if let Ok(items) = serde_json::from_slice::<Vec<serde_json::Value>>(
+                                    &cache_entry.data,
+                                ) {
+                                    items
+                                        .first()
+                                        .and_then(|item| item.get("name"))
+                                        .and_then(|name| name.as_str())
+                                        .map(|s| s.to_string())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        });
+
                         // Create cache key info from Universal Cache entry
                         let cache_key_info = crate::protocol::CacheKeyInfo {
                             key: storage_key.clone(),
                             file_path,
                             operation,
-                            position: format!("content:{}", &cache_key.content_hash[..8]), // Show first 8 chars of hash
+                            position: position_display,
+                            symbol_name,
                             size_bytes,
                             access_count: cache_entry.metadata.access_count,
                             last_accessed,
                             created_at,
                             content_hash: cache_key.content_hash,
                             workspace_id: cache_key.workspace_id,
-                            ttl_seconds: cache_entry.metadata.ttl.map(|d| d.as_secs()),
-                            is_expired: false, // Already filtered out expired entries above
+                            is_expired: false,
                         };
 
                         keys.push(cache_key_info);
@@ -1421,30 +1409,6 @@ impl CacheStore {
         Ok(())
     }
 
-    /// Remove entry from persistent cache
-    async fn remove_from_persistent_cache(&self, key: &CacheKey) -> Result<()> {
-        // Get workspace root from the key's workspace_relative_path
-        let workspace_root = self.resolve_workspace_root(key).await?;
-
-        // Get workspace cache for this workspace
-        let workspace_cache = self
-            .workspace_router
-            .cache_for_workspace(&workspace_root)
-            .await?;
-
-        // Create storage key for the persistent cache
-        let storage_key = key.to_storage_key();
-
-        // Remove from the universal cache tree
-        workspace_cache.remove_universal_entry(&storage_key).await?;
-
-        debug!(
-            "Database cache removed entry for key: {} (workspace_id: {})",
-            storage_key, key.workspace_id
-        );
-        Ok(())
-    }
-
     /// Resolve workspace root from cache key
     async fn resolve_workspace_root(&self, key: &CacheKey) -> Result<PathBuf> {
         // Use the workspace router's reverse lookup capability
@@ -1759,7 +1723,7 @@ mod tests {
         };
 
         // Store value
-        store.set(&key, &test_value, 300).await.unwrap();
+        store.set(&key, &test_value).await.unwrap();
 
         // Retrieve value
         let retrieved: Option<TestValue> = store.get(&key).await.unwrap();
@@ -1795,49 +1759,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ttl_expiration() {
-        let (store, temp_dir) = create_test_store().await;
-
-        // Create test workspace and file
-        let workspace = temp_dir.path().join("ttl-workspace");
-        fs::create_dir_all(&workspace).unwrap();
-        fs::write(workspace.join("go.mod"), "module ttl").unwrap();
-
-        let test_file = workspace.join("main.go");
-        fs::write(&test_file, "package main\n\nfunc main() {}").unwrap();
-
-        // Create cache key
-        let key_builder = KeyBuilder::new();
-        let key = key_builder
-            .build_key(
-                LspMethod::References,
-                &test_file,
-                r#"{"includeDeclaration": true}"#,
-            )
-            .await
-            .unwrap();
-
-        // Store value with very short TTL
-        let test_value = TestValue {
-            content: "expiring content".to_string(),
-            number: 123,
-        };
-
-        store.set(&key, &test_value, 1).await.unwrap(); // 1 second TTL
-
-        // Should be available immediately
-        let result1: Option<TestValue> = store.get(&key).await.unwrap();
-        assert_eq!(result1, Some(test_value.clone()));
-
-        // Wait for expiration
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-        // Should be expired now when accessed next (with direct database implementation)
-        let result2: Option<TestValue> = store.get(&key).await.unwrap();
-        assert_eq!(result2, None); // Should be None due to expiration
-    }
-
-    #[tokio::test]
     async fn test_cache_statistics() {
         let (store, temp_dir) = create_test_store().await;
 
@@ -1866,7 +1787,7 @@ mod tests {
             content: "stats test".to_string(),
             number: 456,
         };
-        store.set(&key, &test_value, 300).await.unwrap();
+        store.set(&key, &test_value).await.unwrap();
 
         // Get the value (should record a hit)
         let _retrieved: Option<TestValue> = store.get(&key).await.unwrap();
@@ -1930,7 +1851,7 @@ mod tests {
         };
 
         // Should not fail but should skip storage
-        store.set(&key, &large_value, 300).await.unwrap();
+        store.set(&key, &large_value).await.unwrap();
 
         // Should not be retrievable (wasn't actually stored)
         let result: Option<TestValue> = store.get(&key).await.unwrap();
@@ -1993,8 +1914,8 @@ mod tests {
             number: 2,
         };
 
-        store.set(&key1, &value1, 300).await.unwrap();
-        store.set(&key2, &value2, 300).await.unwrap();
+        store.set(&key1, &value1).await.unwrap();
+        store.set(&key2, &value2).await.unwrap();
 
         // Each workspace should have its own cached value
         let retrieved1: Option<TestValue> = store.get(&key1).await.unwrap();

@@ -28,24 +28,44 @@ pub struct CacheKey {
 
     /// File modification time (for quick staleness checks)
     pub file_mtime: u64,
+
+    /// Optional symbol name extracted from response (for display purposes)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol_name: Option<String>,
+
+    /// Optional position info (line:column) for display
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
 }
 
 impl CacheKey {
     /// Create a cache key string representation for storage
     pub fn to_storage_key(&self) -> String {
-        format!(
-            "{}:{}:{}:{}",
-            self.workspace_id,
-            self.method.as_str().replace('/', "_"),
-            self.workspace_relative_path.to_string_lossy(),
-            self.content_hash
-        )
+        // Include symbol name in the key if available for easier debugging/display
+        if let Some(ref symbol_name) = self.symbol_name {
+            format!(
+                "{}:{}:{}:{}:{}",
+                self.workspace_id,
+                self.method.as_str().replace('/', "_"),
+                self.workspace_relative_path.to_string_lossy(),
+                self.content_hash,
+                symbol_name
+            )
+        } else {
+            format!(
+                "{}:{}:{}:{}",
+                self.workspace_id,
+                self.method.as_str().replace('/', "_"),
+                self.workspace_relative_path.to_string_lossy(),
+                self.content_hash
+            )
+        }
     }
 
     /// Parse a cache key from its storage representation
     pub fn from_storage_key(key: &str) -> Option<Self> {
-        let parts: Vec<&str> = key.splitn(4, ':').collect();
-        if parts.len() != 4 {
+        let parts: Vec<&str> = key.splitn(5, ':').collect();
+        if parts.len() < 4 {
             return None;
         }
 
@@ -53,6 +73,11 @@ impl CacheKey {
         let method_str = parts[1].replace('_', "/");
         let workspace_relative_path = PathBuf::from(parts[2]);
         let content_hash = parts[3].to_string();
+        let symbol_name = if parts.len() == 5 {
+            Some(parts[4].to_string())
+        } else {
+            None
+        };
 
         // Parse method from string
         let method = match method_str.as_str() {
@@ -81,6 +106,8 @@ impl CacheKey {
             content_hash,
             workspace_id,
             file_mtime: 0, // Will need to be populated separately
+            symbol_name,
+            position: None, // Will need to be populated separately
         })
     }
 }
@@ -158,12 +185,17 @@ impl KeyBuilder {
             )
             .await?;
 
+        // Extract position from params for display
+        let position = Self::extract_position_from_params(params);
+
         Ok(CacheKey {
             workspace_relative_path,
             method,
             content_hash,
             workspace_id,
             file_mtime,
+            symbol_name: None, // Will be populated when we have symbol info
+            position,
         })
     }
 
@@ -204,6 +236,22 @@ impl KeyBuilder {
 
         // If we get here, the key is still valid
         Ok(true)
+    }
+
+    /// Extract position information from LSP params for display
+    fn extract_position_from_params(params: &str) -> Option<String> {
+        // Try to parse JSON params and extract position
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(params) {
+            if let Some(position) = parsed.get("position") {
+                let line = position.get("line").and_then(|l| l.as_u64()).unwrap_or(0);
+                let character = position
+                    .get("character")
+                    .and_then(|c| c.as_u64())
+                    .unwrap_or(0);
+                return Some(format!("{}:{}", line + 1, character + 1)); // Convert to 1-based for display
+            }
+        }
+        None
     }
 
     // === Private Implementation ===

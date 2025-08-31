@@ -655,6 +655,70 @@ impl PersistentCallGraphCache {
         Ok(())
     }
 
+    /// Clear entries older than specified age in seconds
+    pub async fn clear_entries_older_than(&self, older_than_seconds: u64) -> Result<(u64, usize)> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        info!(
+            "Clearing persistent cache entries older than {} seconds",
+            older_than_seconds
+        );
+
+        let cutoff_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_secs()
+            .saturating_sub(older_than_seconds);
+
+        let mut size_freed = 0u64;
+        let mut files_removed = 0usize;
+
+        // For now, we'll implement a simple file-based age filtering
+        // In a more sophisticated implementation, we would track timestamps in the database
+        if let Some(ref cache_dir) = self.config.cache_directory {
+            if cache_dir.exists() {
+                let mut stack = vec![cache_dir.clone()];
+
+                while let Some(current_dir) = stack.pop() {
+                    if let Ok(entries) = tokio::fs::read_dir(&current_dir).await {
+                        let mut entries = entries;
+                        while let Ok(Some(entry)) = entries.next_entry().await {
+                            let path = entry.path();
+
+                            if let Ok(metadata) = entry.metadata().await {
+                                if metadata.is_dir() {
+                                    stack.push(path);
+                                } else if let Ok(modified) = metadata.modified() {
+                                    if let Ok(modified_secs) = modified.duration_since(UNIX_EPOCH) {
+                                        if modified_secs.as_secs() < cutoff_time {
+                                            // File is older than cutoff, remove it
+                                            let size = metadata.len();
+                                            size_freed = size_freed.saturating_add(size);
+                                            if tokio::fs::remove_file(&path).await.is_ok() {
+                                                files_removed += 1;
+                                                debug!("Removed old cache file: {:?}", path);
+                                            } else {
+                                                warn!(
+                                                    "Failed to remove old cache file: {:?}",
+                                                    path
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        info!(
+            "Cleared {} old cache entries, freed {} bytes",
+            files_removed, size_freed
+        );
+        Ok((size_freed, files_removed))
+    }
+
     /// Compact the database to reclaim space
     pub async fn compact(&self) -> Result<()> {
         info!("Compacting persistent cache database");
