@@ -150,14 +150,15 @@ impl DatabaseCacheAdapter {
                 // Batch read both current values
                 let current_hits_task = stats_tree.get(b"hits");
                 let current_misses_task = stats_tree.get(b"misses");
-                
-                let (hits_result, misses_result) = futures::join!(current_hits_task, current_misses_task);
-                
+
+                let (hits_result, misses_result) =
+                    futures::join!(current_hits_task, current_misses_task);
+
                 let current_hits = hits_result
                     .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
                     .and_then(|data| bincode::deserialize::<u64>(&data).ok())
                     .unwrap_or(0);
-                    
+
                 let current_misses = misses_result
                     .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
                     .and_then(|data| bincode::deserialize::<u64>(&data).ok())
@@ -166,7 +167,7 @@ impl DatabaseCacheAdapter {
                 // Batch write both new values
                 let new_hits = current_hits.saturating_add(hit_increment);
                 let new_misses = current_misses.saturating_add(miss_increment);
-                
+
                 let hits_data = bincode::serialize(&new_hits)
                     .map_err(|e| anyhow::anyhow!("Serialization error: {}", e))?;
                 let misses_data = bincode::serialize(&new_misses)
@@ -174,8 +175,9 @@ impl DatabaseCacheAdapter {
 
                 let hits_write = stats_tree.set(b"hits", &hits_data);
                 let misses_write = stats_tree.set(b"misses", &misses_data);
-                
-                let (hits_write_result, misses_write_result) = futures::join!(hits_write, misses_write);
+
+                let (hits_write_result, misses_write_result) =
+                    futures::join!(hits_write, misses_write);
                 hits_write_result.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
                 misses_write_result.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
             }
@@ -253,27 +255,26 @@ impl DatabaseCacheAdapter {
     pub async fn get_by_file(&self, file_path: &Path) -> Result<Vec<CacheNode>> {
         let mut results = Vec::new();
         let file_path_str = file_path.to_string_lossy();
-        
+
         // PERFORMANCE OPTIMIZATION: Try to use prefix scanning if possible
         // Since keys are in format: workspace_id:operation:file:hash
         // We can scan with different prefixes to reduce the search space
-        
+
         // First, try to get a reasonable prefix from the file path
         // This is more efficient than scanning all entries
-        let file_name = file_path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-        
+        let file_name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
         // For now, fall back to the full scan but with optimized string comparison
         let all_entries = self.iter_universal_entries().await?;
         let file_path_string = file_path_str.to_string(); // Convert once
-        
+
         results.reserve(8); // Reserve space for typical cache hit count
-        
+
         for (key, data) in all_entries {
             // PERFORMANCE: More efficient string matching
             // Check if this key contains our file path or filename
-            if key.contains(&file_path_string) || (!file_name.is_empty() && key.contains(file_name)) {
+            if key.contains(&file_path_string) || (!file_name.is_empty() && key.contains(file_name))
+            {
                 // Try to deserialize the data as a generic node
                 if let Ok(node) = serde_json::from_slice::<serde_json::Value>(&data) {
                     results.push(CacheNode {
@@ -297,7 +298,7 @@ impl DatabaseCacheAdapter {
     /// Performance optimized: uses database prefix scanning directly
     pub async fn clear_universal_entries_by_prefix(&self, prefix: &str) -> Result<u64> {
         let mut cleared_count = 0u64;
-        
+
         // PERFORMANCE OPTIMIZATION: Use database-level prefix scanning
         // This is much more efficient than scanning all entries in memory
         let matching_entries = self
