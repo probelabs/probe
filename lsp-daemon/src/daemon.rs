@@ -1278,7 +1278,7 @@ impl LspDaemon {
                                         ws_stats.len(),
                                         op_stats.len()
                                     );
-                                    
+
                                     // If we got empty results, fall back to disk-based enhanced stats
                                     if ws_stats.is_empty() && op_stats.is_empty() {
                                         info!("Universal cache list_keys returned empty results, falling back to enhanced disk-based stats");
@@ -1292,7 +1292,10 @@ impl LspDaemon {
                                                 (disk_ws_stats, disk_op_stats)
                                             }
                                             Err(e) => {
-                                                warn!("Failed to generate enhanced disk stats: {}", e);
+                                                warn!(
+                                                    "Failed to generate enhanced disk stats: {}",
+                                                    e
+                                                );
                                                 (Vec::new(), Vec::new())
                                             }
                                         }
@@ -4652,7 +4655,8 @@ impl LspDaemon {
     )> {
         info!("Generating enhanced cache statistics by reading directly from disk");
 
-        let mut global_operation_counts: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+        let mut global_operation_counts: std::collections::HashMap<String, (u64, u64)> =
+            std::collections::HashMap::new();
         let mut workspace_stats: Vec<crate::protocol::WorkspaceCacheStats> = Vec::new();
 
         // Check workspace cache directories
@@ -4661,12 +4665,14 @@ impl LspDaemon {
         } else {
             // Use default cache directory
             let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            std::path::PathBuf::from(home_dir)
-                .join("Library/Caches/probe/lsp/workspaces")
+            std::path::PathBuf::from(home_dir).join("Library/Caches/probe/lsp/workspaces")
         };
 
         if !base_cache_dir.exists() {
-            info!("Workspace cache directory does not exist: {:?}", base_cache_dir);
+            info!(
+                "Workspace cache directory does not exist: {:?}",
+                base_cache_dir
+            );
             return Ok((Vec::new(), Vec::new()));
         }
 
@@ -4694,24 +4700,31 @@ impl LspDaemon {
                 }
 
                 // Try to get basic stats from workspace router, but always try direct access for operation details
-                let (entries, size, _disk_size) = match self.read_stats_through_workspace_router(&workspace_name).await {
+                let (entries, size, _disk_size) = match self
+                    .read_stats_through_workspace_router(&workspace_name)
+                    .await
+                {
                     Ok((entries, size, disk_size, _per_op_stats)) => {
                         info!(
                             "Workspace {} (via router): {} entries, {} bytes",
-                            workspace_name,
-                            entries,
-                            size
+                            workspace_name, entries, size
                         );
                         (entries, size, disk_size)
                     }
                     Err(_) => {
-                        info!("Workspace {} not found in router, will use direct access only", workspace_name);
+                        info!(
+                            "Workspace {} not found in router, will use direct access only",
+                            workspace_name
+                        );
                         (0, 0, 0) // Will be overridden by direct access
                     }
                 };
 
                 // Always try direct database access for per-operation breakdown
-                match self.read_sled_db_stats_with_operations(&cache_db_path).await {
+                match self
+                    .read_sled_db_stats_with_operations(&cache_db_path)
+                    .await
+                {
                     Ok((direct_entries, direct_size, _disk_size, per_op_stats)) => {
                         info!(
                             "Workspace {} (direct): {} entries, {} bytes, {} operations",
@@ -4726,7 +4739,8 @@ impl LspDaemon {
                         let final_size = if size > 0 { size } else { direct_size };
 
                         // Extract workspace path from workspace_id
-                        let workspace_path = if let Some(underscore_pos) = workspace_name.find('_') {
+                        let workspace_path = if let Some(underscore_pos) = workspace_name.find('_')
+                        {
                             std::path::PathBuf::from(&workspace_name[underscore_pos + 1..])
                         } else {
                             std::path::PathBuf::from(&workspace_name)
@@ -4767,14 +4781,15 @@ impl LspDaemon {
                     }
                     Err(e) => {
                         warn!("Failed to read cache stats from {:?}: {}", cache_db_path, e);
-                        
+
                         // If direct access failed but router succeeded, still create entry without per-operation stats
                         if entries > 0 {
-                            let workspace_path = if let Some(underscore_pos) = workspace_name.find('_') {
-                                std::path::PathBuf::from(&workspace_name[underscore_pos + 1..])
-                            } else {
-                                std::path::PathBuf::from(&workspace_name)
-                            };
+                            let workspace_path =
+                                if let Some(underscore_pos) = workspace_name.find('_') {
+                                    std::path::PathBuf::from(&workspace_name[underscore_pos + 1..])
+                                } else {
+                                    std::path::PathBuf::from(&workspace_name)
+                                };
 
                             workspace_stats.push(crate::protocol::WorkspaceCacheStats {
                                 workspace_id: workspace_name,
@@ -4795,14 +4810,16 @@ impl LspDaemon {
         let per_operation_totals: Vec<crate::protocol::OperationCacheStats> =
             global_operation_counts
                 .into_iter()
-                .map(|(operation, (entries, size_bytes))| crate::protocol::OperationCacheStats {
-                    operation,
-                    entries,
-                    size_bytes,
-                    hit_rate: 0.0, // Could be enhanced with actual hit/miss data
-                    miss_rate: 0.0,
-                    avg_response_time_ms: None,
-                })
+                .map(
+                    |(operation, (entries, size_bytes))| crate::protocol::OperationCacheStats {
+                        operation,
+                        entries,
+                        size_bytes,
+                        hit_rate: 0.0, // Could be enhanced with actual hit/miss data
+                        miss_rate: 0.0,
+                        avg_response_time_ms: None,
+                    },
+                )
                 .collect();
 
         info!(
@@ -4818,12 +4835,7 @@ impl LspDaemon {
     async fn read_stats_through_workspace_router(
         &self,
         workspace_id: &str,
-    ) -> Result<(
-        u64,
-        u64,
-        u64,
-        Vec<crate::protocol::OperationCacheStats>,
-    )> {
+    ) -> Result<(u64, u64, u64, Vec<crate::protocol::OperationCacheStats>)> {
         // For now, let's try to extract workspace path from workspace_id and use direct access
         // This method could be enhanced to use the workspace router's existing connection
         let _workspace_path = if let Some(underscore_pos) = workspace_id.find('_') {
@@ -4834,22 +4846,22 @@ impl LspDaemon {
 
         // Try to get stats from workspace router
         let router_stats = self.workspace_cache_router.get_stats().await;
-        
+
         // Find matching workspace in router stats
         for ws_stat in router_stats.workspace_stats {
             if ws_stat.workspace_id == workspace_id {
                 if let Some(cache_stats) = ws_stat.cache_stats {
                     // Convert database cache stats to our expected format
                     return Ok((
-                        cache_stats.total_entries, 
+                        cache_stats.total_entries,
                         cache_stats.total_size_bytes,
                         cache_stats.disk_size_bytes,
-                        Vec::new() // No per-operation breakdown available from router
+                        Vec::new(), // No per-operation breakdown available from router
                     ));
                 }
             }
         }
-        
+
         Err(anyhow::anyhow!("Workspace not found in router stats"))
     }
 
@@ -4858,12 +4870,7 @@ impl LspDaemon {
     async fn read_sled_db_stats_with_operations(
         &self,
         db_path: &std::path::Path,
-    ) -> Result<(
-        u64,
-        u64,
-        u64,
-        Vec<crate::protocol::OperationCacheStats>,
-    )> {
+    ) -> Result<(u64, u64, u64, Vec<crate::protocol::OperationCacheStats>)> {
         let disk_size_bytes = self.calculate_directory_size_for_cache_stats(db_path).await;
 
         match sled::Config::default()
@@ -4875,12 +4882,16 @@ impl LspDaemon {
             Ok(db) => {
                 let mut total_entries = 0u64;
                 let mut total_size_bytes = 0u64;
-                let mut operation_counts: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+                let mut operation_counts: std::collections::HashMap<String, (u64, u64)> =
+                    std::collections::HashMap::new();
 
                 // Read from universal cache tree if it exists
                 let universal_tree_result = db.open_tree("universal_cache");
                 if let Ok(universal_tree) = universal_tree_result {
-                    info!("Found universal_cache tree with {} entries", universal_tree.len());
+                    info!(
+                        "Found universal_cache tree with {} entries",
+                        universal_tree.len()
+                    );
                     for (key, value) in universal_tree.iter().flatten() {
                         total_entries += 1;
                         let entry_size = key.len() as u64 + value.len() as u64;
@@ -4931,17 +4942,24 @@ impl LspDaemon {
                 // Convert to OperationCacheStats
                 let per_op_stats = operation_counts
                     .into_iter()
-                    .map(|(op, (entries, size))| crate::protocol::OperationCacheStats {
-                        operation: op,
-                        entries,
-                        size_bytes: size,
-                        hit_rate: 0.0,
-                        miss_rate: 0.0,
-                        avg_response_time_ms: None,
-                    })
+                    .map(
+                        |(op, (entries, size))| crate::protocol::OperationCacheStats {
+                            operation: op,
+                            entries,
+                            size_bytes: size,
+                            hit_rate: 0.0,
+                            miss_rate: 0.0,
+                            avg_response_time_ms: None,
+                        },
+                    )
                     .collect();
 
-                Ok((total_entries, total_size_bytes, disk_size_bytes, per_op_stats))
+                Ok((
+                    total_entries,
+                    total_size_bytes,
+                    disk_size_bytes,
+                    per_op_stats,
+                ))
             }
             Err(e) => {
                 warn!("Failed to open sled database at {:?}: {}", db_path, e);
