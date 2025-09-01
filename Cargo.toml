@@ -57,6 +57,7 @@ rand = "0.8.5"
 glob = "0.3.1"
 arboard = "3.4.1"
 md5 = "0.7.0"
+chrono = { version = "0.4", features = ["serde"] }
 lru = "0.12.5"
 env_logger = "0.10"
 sled = "0.34"  # Embedded database for cache statistics reading
@@ -87,6 +88,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "probe"
 path = "src/main.rs"
+
+[[bin]]
+name = "debug-tree-sitter"
+path = "src/debug_tree_sitter.rs"
+
+[[bin]]
+name = "position-analyzer"
+path = "src/position_analyzer_cli.rs"
 
 [build-dependencies]
 chrono = "0.4"

@@ -12,6 +12,7 @@ use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use crate::lsp_integration::position_analyzer::PositionAnalyzer;
 use crate::lsp_integration::types::*;
 
 /// Simple struct to hold workspace cache statistics when reading from disk
@@ -45,6 +46,7 @@ pub struct LspClient {
     stream: Option<IpcStream>,
     config: LspConfig,
     daemon_started_by_us: bool,
+    position_analyzer: PositionAnalyzer,
 }
 
 impl Drop for LspClient {
@@ -68,10 +70,14 @@ impl LspClient {
     /// Create a new LSP client with the given configuration
     pub async fn new(config: LspConfig) -> Result<Self> {
         let use_daemon = config.use_daemon;
+        let mut position_analyzer = PositionAnalyzer::new();
+        position_analyzer.load_patterns(None).await?;
+
         let mut client = Self {
             stream: None,
             config,
             daemon_started_by_us: false,
+            position_analyzer,
         };
 
         if use_daemon {
@@ -85,10 +91,14 @@ impl LspClient {
     /// Returns None if LSP is not available or still initializing
     pub async fn new_non_blocking(config: LspConfig) -> Option<Self> {
         let use_daemon = config.use_daemon;
+        let mut position_analyzer = PositionAnalyzer::new();
+        let _ = position_analyzer.load_patterns(None).await; // Ignore errors in non-blocking mode
+
         let mut client = Self {
             stream: None,
             config,
             daemon_started_by_us: false,
+            position_analyzer,
         };
 
         if use_daemon {
@@ -458,107 +468,157 @@ impl LspClient {
         Ok(response)
     }
 
-    /// Get call hierarchy with fallback position testing
-    /// rust-analyzer can be picky about cursor position, so this function tries multiple
-    /// positions within the symbol name until one returns call hierarchy data
-    async fn get_call_hierarchy_with_fallback(
+    /// Detect the LSP server type based on file path and language
+    fn detect_lsp_server(&self, file_path: &Path) -> Option<String> {
+        let extension = file_path.extension()?.to_str()?;
+
+        match extension {
+            "rs" => Some("rust-analyzer".to_string()),
+            "go" => Some("gopls".to_string()),
+            "py" => Some("pylsp".to_string()),
+            "js" | "jsx" | "ts" | "tsx" => Some("typescript-language-server".to_string()),
+            "c" | "h" => Some("clangd".to_string()),
+            "cpp" | "hpp" | "cc" | "cxx" => Some("clangd".to_string()),
+            "java" => Some("jdtls".to_string()),
+            _ => None,
+        }
+    }
+
+    /// Detect the programming language from file extension
+    fn detect_language(&self, file_path: &Path) -> Option<String> {
+        let extension = file_path.extension()?.to_str()?;
+
+        match extension {
+            "rs" => Some("rust".to_string()),
+            "go" => Some("go".to_string()),
+            "py" => Some("python".to_string()),
+            "js" | "jsx" => Some("javascript".to_string()),
+            "ts" | "tsx" => Some("typescript".to_string()),
+            "c" | "h" => Some("c".to_string()),
+            "cpp" | "hpp" | "cc" | "cxx" => Some("cpp".to_string()),
+            "java" => Some("java".to_string()),
+            _ => None,
+        }
+    }
+
+    /// Calculate the precise LSP position using position patterns
+    fn calculate_lsp_position(
+        &self,
+        symbol_name: &str,
+        tree_sitter_line: u32,
+        tree_sitter_column: u32,
+        file_path: &Path,
+    ) -> (u32, u32) {
+        let language = self.detect_language(file_path);
+        let lsp_server = self.detect_lsp_server(file_path);
+        let symbol_type = "function"; // For now, assume functions (could be enhanced)
+
+        // Get position offset from analyzer
+        let position_offset = if let Some(lang) = &language {
+            self.position_analyzer
+                .get_position_offset(lang, symbol_type, lsp_server.as_deref())
+        } else {
+            None
+        };
+
+        let identifier_len = symbol_name.len() as u32;
+
+        // Apply the position offset or use default (start position)
+        match position_offset {
+            Some(offset) => offset.apply(tree_sitter_line, tree_sitter_column, identifier_len),
+            None => {
+                // Default fallback: use start position
+                debug!("No position pattern found for language={:?} symbol_type={} server={:?}, using start position", 
+                       language, symbol_type, lsp_server);
+                (tree_sitter_line, tree_sitter_column)
+            }
+        }
+    }
+
+    /// Get call hierarchy with precise positioning using deterministic algorithm
+    /// Uses the position analyzer's learned patterns to make a single, accurate LSP request
+    async fn get_call_hierarchy_precise(
         &mut self,
         file_path: &Path,
         symbol_name: &str,
-        line: u32,
-        start_column: u32,
+        tree_sitter_line: u32,
+        tree_sitter_column: u32,
     ) -> Result<CallHierarchyInfo> {
         let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
         if debug_mode {
             println!(
-                "[DEBUG] Trying call hierarchy for symbol '{symbol_name}' at {line}:{start_column}"
+                "[DEBUG] Computing precise position for symbol '{symbol_name}' at tree-sitter position {tree_sitter_line}:{tree_sitter_column}"
             );
         }
 
-        // Calculate the estimated length of the symbol
-        let symbol_length = symbol_name.len() as u32;
-
-        // Generate candidate positions within the symbol
-        // Try start, quarter, half, three-quarters, and near-end positions
-        let mut candidates = vec![start_column]; // Start with the given position
-
-        if symbol_length > 4 {
-            candidates.push(start_column + symbol_length / 4);
-            candidates.push(start_column + symbol_length / 2);
-            candidates.push(start_column + 3 * symbol_length / 4);
-            candidates.push(start_column + symbol_length - 2); // Near the end
-        } else if symbol_length > 1 {
-            candidates.push(start_column + symbol_length / 2);
-        }
-
-        // Also try some additional offsets that empirically work well with rust-analyzer
-        for offset in [1, 2, 3, 6, 8] {
-            if offset < symbol_length {
-                candidates.push(start_column + offset);
-            }
-        }
-
-        // Remove duplicates and sort
-        candidates.sort();
-        candidates.dedup();
+        // Calculate the precise LSP position using learned patterns
+        let (lsp_line, lsp_column) = self.calculate_lsp_position(
+            symbol_name,
+            tree_sitter_line,
+            tree_sitter_column,
+            file_path,
+        );
 
         if debug_mode {
+            let language = self.detect_language(file_path);
+            let lsp_server = self.detect_lsp_server(file_path);
             println!(
-                "[DEBUG] Trying {} candidate positions: {candidates:?}",
-                candidates.len()
+                "[DEBUG] Calculated LSP position: {lsp_line}:{lsp_column} (language={language:?}, server={lsp_server:?})"
             );
         }
 
-        // Try each candidate position
-        for (attempt, &column) in candidates.iter().enumerate() {
-            if debug_mode {
-                println!(
-                    "[DEBUG] Attempt {}: trying position {line}:{column}",
-                    attempt + 1
-                );
-            }
+        // Make single LSP request with precise position
+        match self
+            .get_call_hierarchy(file_path, lsp_line, lsp_column)
+            .await
+        {
+            Ok(hierarchy) => {
+                let has_data =
+                    !hierarchy.incoming_calls.is_empty() || !hierarchy.outgoing_calls.is_empty();
 
-            match self.get_call_hierarchy(file_path, line, column).await {
-                Ok(hierarchy) => {
-                    // Check if we got meaningful call hierarchy data
-                    let has_data = !hierarchy.incoming_calls.is_empty()
-                        || !hierarchy.outgoing_calls.is_empty();
+                if debug_mode {
+                    println!(
+                        "[DEBUG] LSP request at {}:{} returned {} incoming, {} outgoing calls",
+                        lsp_line,
+                        lsp_column,
+                        hierarchy.incoming_calls.len(),
+                        hierarchy.outgoing_calls.len()
+                    );
+                }
 
+                if has_data {
                     if debug_mode {
                         println!(
-                            "[DEBUG] Position {line}:{column} returned {} incoming, {} outgoing calls",
-                            hierarchy.incoming_calls.len(),
-                            hierarchy.outgoing_calls.len()
+                            "[DEBUG] Success! Found call hierarchy data at precise position {lsp_line}:{lsp_column}"
                         );
                     }
-
-                    if has_data {
-                        if debug_mode {
-                            println!(
-                                "[DEBUG] Success! Found call hierarchy data at position {line}:{column}"
-                            );
-                        }
-                        return Ok(hierarchy);
-                    }
-                }
-                Err(e) => {
+                    Ok(hierarchy)
+                } else {
+                    // Even with precise positioning, sometimes symbols don't have call hierarchy
                     if debug_mode {
-                        println!("[DEBUG] Position {line}:{column} failed: {e}");
+                        println!("[DEBUG] Symbol has no call hierarchy data (this is normal for some symbols)");
                     }
+                    Ok(CallHierarchyInfo {
+                        incoming_calls: Vec::new(),
+                        outgoing_calls: Vec::new(),
+                    })
                 }
             }
-        }
+            Err(e) => {
+                if debug_mode {
+                    println!("[DEBUG] LSP request failed at {lsp_line}:{lsp_column}: {e}");
+                    println!("[DEBUG] This might indicate the position is not on a symbol or the LSP server is not ready");
+                }
 
-        if debug_mode {
-            println!("[DEBUG] No position returned call hierarchy data, using empty result");
+                // Return empty result rather than propagating error
+                // This maintains compatibility with existing code
+                Ok(CallHierarchyInfo {
+                    incoming_calls: Vec::new(),
+                    outgoing_calls: Vec::new(),
+                })
+            }
         }
-
-        // If none of the positions worked, return an empty result
-        Ok(CallHierarchyInfo {
-            incoming_calls: Vec::new(),
-            outgoing_calls: Vec::new(),
-        })
     }
 
     /// Get enhanced symbol information including call hierarchy and references
@@ -581,10 +641,9 @@ impl LspClient {
             }
         }
 
-        // Get call hierarchy information
-        // rust-analyzer can be picky about cursor position, so try multiple positions
+        // Get call hierarchy information using precise positioning
         let call_hierarchy = match self
-            .get_call_hierarchy_with_fallback(file_path, symbol_name, line, column)
+            .get_call_hierarchy_precise(file_path, symbol_name, line, column)
             .await
         {
             Ok(mut hierarchy) => {
@@ -1926,6 +1985,7 @@ mod tests {
             stream: None,
             config,
             daemon_started_by_us: false,
+            position_analyzer: PositionAnalyzer::new(),
         };
 
         // Test supported file types
