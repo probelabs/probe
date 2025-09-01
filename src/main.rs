@@ -520,7 +520,7 @@ async fn main() -> Result<()> {
 
     // Set/clear global autostart guard to prevent unwanted LSP daemon spawning
     // Only disable autostart for specific LSP subcommands that could cause recursion
-    let should_disable_autostart = match &args.command {
+    let _should_disable_autostart = match &args.command {
         Some(Commands::Lsp { subcommand }) => {
             use probe_code::lsp_integration::LspSubcommands;
             // Only these specific commands should disable autostart to prevent recursion
@@ -530,14 +530,6 @@ async fn main() -> Result<()> {
         }
         _ => false, // Never disable autostart for regular commands - let daemon handle lazy init
     } || config.lsp.disable_autostart; // Also check config setting
-
-    if should_disable_autostart {
-        // Set the autostart disable flag to prevent implicit LSP daemon spawning
-        std::env::set_var("PROBE_LSP_DISABLE_AUTOSTART", "1");
-    } else {
-        // Clear the autostart disable flag when autostart is allowed
-        std::env::remove_var("PROBE_LSP_DISABLE_AUTOSTART");
-    }
 
     // No more eager LSP initialization - let the daemon handle cache-first approach
     // The daemon will:
@@ -835,14 +827,6 @@ fn handle_config_command(subcommand: &cli::ConfigSubcommands) -> Result<()> {
                     if let Some(ref path) = config.lsp.socket_path {
                         println!("export PROBE_LSP_SOCKET_PATH={path}");
                     }
-                    println!(
-                        "export PROBE_LSP_DISABLE_AUTOSTART={}",
-                        if config.lsp.disable_autostart {
-                            "1"
-                        } else {
-                            "0"
-                        }
-                    );
                     println!(
                         "export PROBE_LSP_WORKSPACE_CACHE_MAX={}",
                         config.lsp.workspace_cache.max_open_caches

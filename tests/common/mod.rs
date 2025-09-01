@@ -301,7 +301,6 @@ fn probe_cmd_base(socket_path: Option<&Path>) -> Command {
     // Set stable test environment variables to match cli_tests.rs behavior
     // This ensures consistent behavior across all test invocations
     cmd.env("CI", "1");
-    cmd.env("PROBE_LSP_DISABLE_AUTOSTART", "1");
     cmd.stdin(Stdio::null()); // Prevent hanging on interactive prompts
 
     cmd

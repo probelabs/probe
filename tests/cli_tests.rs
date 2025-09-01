@@ -274,7 +274,6 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
 
     // Set test environment variables
     cmd.env("CI", "1");
-    cmd.env("PROBE_LSP_DISABLE_AUTOSTART", "1");
 
     // Helpful for diagnosing any remaining issues
     #[cfg(target_os = "windows")]
