@@ -1098,9 +1098,6 @@ impl ProbeConfig {
         if let Ok(val) = env::var("PROBE_LSP_SOCKET_PATH") {
             lsp.socket_path = Some(val);
         }
-        if let Ok(val) = env::var("PROBE_LSP_DISABLE_AUTOSTART") {
-            lsp.disable_autostart = Some(val == "1" || val.to_lowercase() == "true");
-        }
 
         // LSP Workspace Cache
         let cache = lsp

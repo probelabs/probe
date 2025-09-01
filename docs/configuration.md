@@ -81,7 +81,6 @@ cp settings.example.json ./.probe/settings.local.json
 |---------|------|---------|---------------------|-------------|
 | `include_stdlib` | boolean | `false` | `PROBE_LSP_INCLUDE_STDLIB` | Include standard library references in LSP results |
 | `socket_path` | string\|null | `null` | `PROBE_LSP_SOCKET_PATH` | Custom path for LSP daemon socket (null = auto-detect) |
-| `disable_autostart` | boolean | `false` | `PROBE_LSP_DISABLE_AUTOSTART` | Disable automatic LSP daemon startup |
 
 ### LSP Workspace Cache Settings (`lsp.workspace_cache`)
 

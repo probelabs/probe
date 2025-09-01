@@ -31,7 +31,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLock, Semaphore};
 use tokio::time::{timeout, Duration};
 
@@ -1361,11 +1360,6 @@ impl LspDaemon {
                                 legacy_stats.total_entries, hit_rate * 100.0, legacy_stats.disk_size_bytes
                             );
 
-                            // Persist cache stats snapshot for CLI fallback
-                            if let Err(e) = self.persist_cache_stats_snapshot(&legacy_stats).await {
-                                warn!("Failed to persist cache stats snapshot: {}", e);
-                            }
-
                             return DaemonResponse::CacheStats {
                                 request_id,
                                 stats: legacy_stats,
@@ -1509,11 +1503,6 @@ impl LspDaemon {
                     "Returning fallback stats: entries={}, disk_size={}",
                     legacy_stats.total_entries, legacy_stats.disk_size_bytes
                 );
-
-                // Persist cache stats snapshot for CLI fallback
-                if let Err(e) = self.persist_cache_stats_snapshot(&legacy_stats).await {
-                    warn!("Failed to persist cache stats snapshot: {}", e);
-                }
 
                 DaemonResponse::CacheStats {
                     request_id,
@@ -4459,66 +4448,6 @@ impl LspDaemon {
         }
 
         total_size
-    }
-
-    /// Persist cache statistics snapshot to disk for CLI fallback
-    async fn persist_cache_stats_snapshot(
-        &self,
-        stats: &crate::protocol::CacheStatistics,
-    ) -> Result<()> {
-        // Get snapshot path from environment variable or use default
-        let cache_base_dir = if let Ok(cache_dir) = std::env::var("PROBE_LSP_CACHE_DIR") {
-            std::path::PathBuf::from(cache_dir)
-        } else if let Some(cache_dir) = dirs::cache_dir() {
-            cache_dir.join("probe").join("lsp")
-        } else {
-            std::path::PathBuf::from("/tmp").join("probe-lsp-cache")
-        };
-
-        let snapshot_path = if let Ok(custom_path) = std::env::var("PROBE_LSP_STATS_SNAPSHOT_PATH")
-        {
-            std::path::PathBuf::from(custom_path)
-        } else {
-            cache_base_dir.join("cache_stats.json")
-        };
-
-        // Ensure parent directory exists
-        if let Some(parent) = snapshot_path.parent() {
-            if !parent.exists() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .context("Failed to create snapshot directory")?;
-            }
-        }
-
-        // Serialize stats to JSON
-        let data = serde_json::to_vec_pretty(stats).context("Failed to serialize cache stats")?;
-
-        // Atomic write: temp file + rename pattern
-        let temp_path = snapshot_path.with_extension("json.tmp");
-
-        let mut file = tokio::fs::File::create(&temp_path)
-            .await
-            .context("Failed to create temporary snapshot file")?;
-
-        file.write_all(&data)
-            .await
-            .context("Failed to write snapshot data")?;
-
-        file.flush()
-            .await
-            .context("Failed to flush snapshot data")?;
-
-        // Atomically rename temp file to final location
-        tokio::fs::rename(&temp_path, &snapshot_path)
-            .await
-            .context("Failed to rename temporary snapshot file")?;
-
-        debug!(
-            "Successfully persisted cache stats snapshot to: {:?}",
-            snapshot_path
-        );
-        Ok(())
     }
 
     /// Generate comprehensive cache statistics using the universal cache's list_keys functionality
