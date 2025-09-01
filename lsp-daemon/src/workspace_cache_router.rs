@@ -19,10 +19,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::database_cache_adapter::{
-    DatabaseBackendType, DatabaseCacheAdapter as PersistentCallGraphCache,
-    DatabaseCacheConfig as PersistentCacheConfig,
-};
+use crate::database_cache_adapter::{DatabaseCacheAdapter, DatabaseCacheConfig};
 use crate::server_manager::SingleServerManager;
 
 /// Configuration for workspace cache router
@@ -38,7 +35,7 @@ pub struct WorkspaceCacheRouterConfig {
     pub max_parent_lookup_depth: usize,
 
     /// Cache configuration template for new workspace caches
-    pub cache_config_template: PersistentCacheConfig,
+    pub cache_config_template: DatabaseCacheConfig,
     /// Force in-memory mode for all workspace caches
     pub force_memory_only: bool,
 }
@@ -51,7 +48,7 @@ impl Default for WorkspaceCacheRouterConfig {
             base_cache_dir: PathBuf::from(".probe-temp-cache"),
             max_open_caches: 8,
             max_parent_lookup_depth: 3,
-            cache_config_template: PersistentCacheConfig::default(),
+            cache_config_template: DatabaseCacheConfig::default(),
             force_memory_only: false, // Don't force memory-only mode by default
         }
     }
@@ -118,7 +115,7 @@ pub struct WorkspaceCacheRouter {
     config: WorkspaceCacheRouterConfig,
 
     /// Open cache instances: workspace_id -> cache
-    open_caches: Arc<DashMap<String, Arc<PersistentCallGraphCache>>>,
+    open_caches: Arc<DashMap<String, Arc<DatabaseCacheAdapter>>>,
 
     /// Access metadata for LRU management: workspace_id -> metadata
     access_metadata: Arc<RwLock<HashMap<String, CacheAccessMetadata>>>,
@@ -182,22 +179,15 @@ impl WorkspaceCacheRouter {
     pub fn set_memory_only_mode(&mut self, memory_only: bool) {
         self.config.force_memory_only = memory_only;
         if memory_only {
-            self.config.cache_config_template.memory_only = true;
-            self.config.cache_config_template.backend_type = DatabaseBackendType::Memory;
+            self.config.cache_config_template.database_config.temporary = true;
             info!("Workspace cache router configured for memory-only mode");
         } else {
+            self.config.cache_config_template.database_config.temporary = false;
             info!("Workspace cache router configured for persistent mode");
         }
     }
 
-    /// Update the database backend type for the cache template
-    pub fn set_database_backend(&mut self, backend_type: DatabaseBackendType) {
-        info!(
-            "Workspace cache router configured with backend: {:?}",
-            backend_type
-        );
-        self.config.cache_config_template.backend_type = backend_type;
-    }
+    // set_database_backend method removed - use set_memory_only_mode instead
 
     /// Generate a stable workspace ID from a workspace root path
     ///
@@ -361,7 +351,7 @@ impl WorkspaceCacheRouter {
     pub async fn cache_for_workspace<P: AsRef<Path>>(
         &self,
         workspace_root: P,
-    ) -> Result<Arc<PersistentCallGraphCache>> {
+    ) -> Result<Arc<DatabaseCacheAdapter>> {
         let workspace_root = workspace_root.as_ref().to_path_buf();
         let workspace_id = self.workspace_id_for(&workspace_root)?;
 
@@ -409,8 +399,7 @@ impl WorkspaceCacheRouter {
 
         // Apply router-level memory-only setting if configured
         if self.config.force_memory_only {
-            cache_config.memory_only = true;
-            cache_config.backend_type = DatabaseBackendType::Memory;
+            cache_config.database_config.temporary = true;
             debug!(
                 "Force memory-only mode enabled for workspace '{}'",
                 workspace_id
@@ -418,9 +407,13 @@ impl WorkspaceCacheRouter {
         }
 
         // Create the cache instance
-        let cache = Arc::new(PersistentCallGraphCache::new(cache_config).await.context(
-            format!("Failed to create cache for workspace '{workspace_id}'"),
-        )?);
+        let cache = Arc::new(
+            DatabaseCacheAdapter::new(cache_config)
+                .await
+                .context(format!(
+                    "Failed to create cache for workspace '{workspace_id}'"
+                ))?,
+        );
 
         // Store cache and metadata
         self.open_caches.insert(workspace_id.clone(), cache.clone());
@@ -455,7 +448,7 @@ impl WorkspaceCacheRouter {
     pub async fn pick_write_target<P: AsRef<Path>>(
         &self,
         file_path: P,
-    ) -> Result<Arc<PersistentCallGraphCache>> {
+    ) -> Result<Arc<DatabaseCacheAdapter>> {
         let file_path = file_path.as_ref();
 
         // Find the nearest workspace for this file
@@ -474,7 +467,7 @@ impl WorkspaceCacheRouter {
     pub async fn pick_read_path<P: AsRef<Path>>(
         &self,
         file_path: P,
-    ) -> Result<Vec<Arc<PersistentCallGraphCache>>> {
+    ) -> Result<Vec<Arc<DatabaseCacheAdapter>>> {
         let file_path = file_path.as_ref();
         let mut caches = Vec::new();
         let mut seen_workspaces = HashSet::new();
@@ -700,12 +693,12 @@ impl WorkspaceCacheRouter {
         }
 
         // Create a temporary persistent cache instance to read stats
-        let mut cache_config = PersistentCacheConfig::default();
+        let mut cache_config = DatabaseCacheConfig::default();
         cache_config.database_config.path =
             Some(cache_path.parent().unwrap().to_path_buf().join("cache.db"));
         cache_config.database_config.temporary = false;
 
-        match PersistentCallGraphCache::new(cache_config).await {
+        match DatabaseCacheAdapter::new(cache_config).await {
             Ok(cache) => match cache.get_stats().await {
                 Ok(stats) => {
                     debug!(
@@ -921,7 +914,7 @@ impl WorkspaceCacheRouter {
     /// Invalidate a file in a specific cache and return the number of entries removed
     async fn invalidate_file_in_cache(
         &self,
-        cache: &Arc<PersistentCallGraphCache>,
+        cache: &Arc<DatabaseCacheAdapter>,
         file_path: &Path,
     ) -> Result<usize> {
         // Get all nodes for this file
@@ -1472,7 +1465,7 @@ impl WorkspaceCacheRouter {
     }
 
     /// Get all currently open cache instances for cache warming
-    pub async fn get_all_open_caches(&self) -> Vec<(String, Arc<PersistentCallGraphCache>)> {
+    pub async fn get_all_open_caches(&self) -> Vec<(String, Arc<DatabaseCacheAdapter>)> {
         let mut caches = Vec::new();
 
         for entry in self.open_caches.iter() {

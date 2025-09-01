@@ -826,10 +826,7 @@ pub struct UniversalCacheWorkspaceSummary {
 /// Configuration summary for universal cache
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UniversalCacheConfigSummary {
-    /// Whether gradual migration is enabled
-    pub gradual_migration_enabled: bool,
-    /// Whether rollback is enabled
-    pub rollback_enabled: bool,
+    // Migration and rollback fields removed - no longer needed
     /// Memory layer configuration
     pub memory_config: CacheLayerConfigSummary,
     /// Disk layer configuration

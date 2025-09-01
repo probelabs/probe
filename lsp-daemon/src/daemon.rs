@@ -1,7 +1,5 @@
 use crate::cache_types::{CallHierarchyInfo, CallInfo, LspOperation, NodeId, NodeKey};
-use crate::database_cache_adapter::{
-    DatabaseBackendType, DatabaseCacheConfig as PersistentCacheConfig,
-};
+use crate::database_cache_adapter::DatabaseCacheConfig;
 use crate::hash_utils::md5_hex_file;
 use crate::indexing::{IndexingConfig, IndexingManager};
 use crate::ipc::{IpcListener, IpcStream};
@@ -186,7 +184,7 @@ impl LspDaemon {
             .unwrap_or(30); // Default 30 seconds for language server indexing
 
         // Initialize persistent cache store configuration
-        let persistent_cache_config = PersistentCacheConfig {
+        let persistent_cache_config = DatabaseCacheConfig {
             database_config: crate::database::DatabaseConfig {
                 path: None,       // Will use default location
                 temporary: false, // Persistent cache
@@ -194,8 +192,6 @@ impl LspDaemon {
                 cache_capacity: 1_000_000_000, // 1GB
                 ..Default::default()
             },
-            memory_only: false,
-            backend_type: DatabaseBackendType::Sled,
         };
 
         // Initialize workspace cache router for universal cache
@@ -2397,8 +2393,7 @@ impl LspDaemon {
 
         // Configuration summary
         let config_summary = crate::protocol::UniversalCacheConfigSummary {
-            gradual_migration_enabled: false,
-            rollback_enabled: false,
+            // Migration and rollback fields removed
             memory_config: crate::protocol::CacheLayerConfigSummary {
                 enabled: true,
                 max_size_mb: Some(10),

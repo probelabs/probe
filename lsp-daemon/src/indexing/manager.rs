@@ -1726,10 +1726,9 @@ impl IndexingManager {
                         worker_id, symbol.name, line, column
                     );
 
-                    // Store in legacy caches for backward compatibility if needed
+                    // Store in universal cache
                     if let crate::protocol::DaemonResponse::CallHierarchy { .. } = cached_response {
-                        // Note: Previously converted to CallHierarchyInfo and NodeKey for legacy cache
-                        // These variables are no longer needed with universal cache only
+                        // Universal cache handles all caching automatically
 
                         // Legacy cache calls removed - now using universal cache only
                     }
@@ -2094,9 +2093,7 @@ impl IndexingManager {
                             worker_id, symbol.name, line, column
                         );
 
-                        // Also maintain backward compatibility by storing in legacy caches
-                        // Note: Previously created NodeKey for legacy cache
-                        // No longer needed with universal cache only
+                        // Universal cache handles all storage automatically
                     }
                     Err(e) => {
                         debug!(

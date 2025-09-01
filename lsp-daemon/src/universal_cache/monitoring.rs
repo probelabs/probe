@@ -164,8 +164,7 @@ fn get_config_summary() -> UniversalCacheConfigSummary {
     // Placeholder implementation
     // In reality, this would read from actual configuration
     UniversalCacheConfigSummary {
-        gradual_migration_enabled: true,
-        rollback_enabled: true,
+        // Migration and rollback fields removed
         memory_config: CacheLayerConfigSummary {
             enabled: true,
             max_size_mb: Some(10),
@@ -300,8 +299,7 @@ pub fn get_disabled_cache_stats() -> UniversalCacheStats {
         },
         workspace_summaries: Vec::new(),
         config_summary: UniversalCacheConfigSummary {
-            gradual_migration_enabled: false,
-            rollback_enabled: false,
+            // Migration and rollback fields removed
             memory_config: CacheLayerConfigSummary {
                 enabled: false,
                 max_size_mb: None,

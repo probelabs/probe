@@ -2,7 +2,7 @@
 //!
 //! This module provides a minimal adapter that implements the interface needed
 //! by the WorkspaceCacheRouter and universal cache while using the new database
-//! abstraction layer instead of the legacy PersistentCallGraphCache.
+//! abstraction layer for the universal cache system.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -15,10 +15,7 @@ use crate::database::{DatabaseBackend, DatabaseConfig, DatabaseTree, SledBackend
 pub struct DatabaseCacheConfig {
     /// Database configuration
     pub database_config: DatabaseConfig,
-
-    /// Legacy fields for backward compatibility
-    pub memory_only: bool,
-    pub backend_type: DatabaseBackendType,
+    // Legacy fields removed - use database_config.temporary instead of memory_only
 }
 
 impl Default for DatabaseCacheConfig {
@@ -30,8 +27,6 @@ impl Default for DatabaseCacheConfig {
                 cache_capacity: 100 * 1024 * 1024, // 100MB
                 ..Default::default()
             },
-            memory_only: false,
-            backend_type: DatabaseBackendType::Sled,
         }
     }
 }
@@ -48,11 +43,8 @@ pub struct DatabaseCacheAdapter {
 impl DatabaseCacheAdapter {
     /// Create a new database cache adapter
     pub async fn new(config: DatabaseCacheConfig) -> Result<Self> {
-        // Apply legacy settings to database config
-        let mut database_config = config.database_config;
-        if config.memory_only {
-            database_config.temporary = true;
-        }
+        // Use database config directly - legacy fields removed
+        let database_config = config.database_config;
 
         let database = Arc::new(
             SledBackend::new(database_config)
@@ -385,20 +377,4 @@ pub struct DatabaseCacheStats {
     pub miss_count: u64,  // Cache miss count
 }
 
-/// Legacy type aliases for backward compatibility
-pub type PersistentCallGraphCache = DatabaseCacheAdapter;
-pub type PersistentCacheConfig = DatabaseCacheConfig;
-pub type PersistentCacheStats = DatabaseCacheStats;
-
-/// Legacy enum for backward compatibility
-#[derive(Debug, Clone)]
-pub enum DatabaseBackendType {
-    Sled,
-    Memory,
-}
-
-impl Default for DatabaseBackendType {
-    fn default() -> Self {
-        Self::Sled
-    }
-}
+// Legacy type aliases and enums removed - use actual types directly

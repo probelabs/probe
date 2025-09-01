@@ -21,7 +21,7 @@ pub mod hash_utils;
 pub mod lsp_cache;
 pub mod universal_cache;
 
-// Handler modules (removed - old cache system replaced by universal cache)
+// Handler modules removed
 
 // Internal modules - exposed for direct client use
 pub mod lsp_registry;
