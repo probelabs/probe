@@ -701,14 +701,24 @@ fn test_cli_custom_ignores() {
 }
 
 #[test]
-#[ignore] // Temporarily disabled due to issues with limits display
+// Test limits display format
 fn test_cli_max_results() {
     let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
     // Add many more files with search terms to ensure we have enough results to trigger limits
-    for i in 1..20 {
-        let content = format!("// File {i} with search term\n");
+    for i in 1..50 {
+        let content = format!(
+            r#"
+// File {i} with search term and more content
+fn search_function_{i}() {{
+    // This file contains the search term multiple times
+    println!("searching in file {i}");
+    let search_result = perform_search();
+    return search_result;
+}}
+"#
+        );
         create_test_file(&temp_dir, &format!("src/extra{i}.rs"), &content);
     }
 
@@ -719,7 +729,7 @@ fn test_cli_max_results() {
         temp_dir.path().to_str().unwrap(),
         "--max-results",
         "1",
-        "--files-only", // Use files-only mode to simplify results
+        // Don't use files-only mode so we get actual content results that will trigger limits
     ]);
 
     // Check that the command succeeded

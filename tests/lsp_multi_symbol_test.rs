@@ -69,7 +69,7 @@ fn test_file_path() -> String {
 }
 
 #[test]
-#[ignore] // Ignore by default as it requires LSP daemon to be running
+#[ignore] // Requires LSP daemon + gopls for Go symbols, use: cargo test test_multi_symbol_lsp_extraction -- --ignored
 fn test_multi_symbol_lsp_extraction() -> Result<()> {
     // Create a merged block containing multiple functions
     let mut results = vec![create_merged_block_result()];

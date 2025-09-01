@@ -6,12 +6,12 @@
 
 use anyhow::Result;
 use lsp_daemon::cache_types::LspOperation;
-use lsp_daemon::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use lsp_daemon::indexing::{IndexingManager, ManagerConfig, ManagerStatus};
 use lsp_daemon::lsp_cache::{LspCache, LspCacheConfig};
 use lsp_daemon::lsp_registry::LspRegistry;
 use lsp_daemon::server_manager::SingleServerManager;
 use lsp_daemon::LanguageDetector;
+use probe_code::lsp_integration::call_graph_cache::{CallGraphCache, CallGraphCacheConfig};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -601,11 +601,10 @@ async fn test_end_to_end_indexing_workflow() -> Result<()> {
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
-        eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
         ..Default::default()
     };
-    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    let _call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
@@ -616,27 +615,41 @@ async fn test_end_to_end_indexing_workflow() -> Result<()> {
     };
     let definition_cache = Arc::new(
         LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .await
             .expect("Failed to create definition cache"),
     );
 
-    // Create persistent cache for testing
-    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
-        cache_directory: Some(project.root_path().join("persistent_cache")),
+    // Create universal cache layer
+    let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+        base_cache_dir: temp_cache_dir.path().to_path_buf(),
+        max_open_caches: 3,
+        max_parent_lookup_depth: 2,
         ..Default::default()
     };
-    let persistent_store = Arc::new(
-        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
-            .await
-            .expect("Failed to create persistent cache"),
+    let workspace_router = Arc::new(
+        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config,
+            server_manager.clone(),
+        ),
     );
+    let universal_cache = Arc::new(
+        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
+            .await
+            .expect("Failed to create universal cache"),
+    );
+    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
+        universal_cache,
+        None,
+        None,
+    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
-        call_graph_cache,
         definition_cache,
-        persistent_store,
+        universal_cache_layer,
     );
 
     // Start indexing
@@ -758,11 +771,10 @@ async fn test_incremental_indexing() -> Result<()> {
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
-        eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
         ..Default::default()
     };
-    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    let _call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
@@ -773,27 +785,41 @@ async fn test_incremental_indexing() -> Result<()> {
     };
     let definition_cache = Arc::new(
         LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .await
             .expect("Failed to create definition cache"),
     );
 
-    // Create persistent cache for testing
-    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
-        cache_directory: Some(project.root_path().join("persistent_cache")),
+    // Create universal cache layer
+    let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+        base_cache_dir: temp_cache_dir.path().to_path_buf(),
+        max_open_caches: 3,
+        max_parent_lookup_depth: 2,
         ..Default::default()
     };
-    let persistent_store = Arc::new(
-        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
-            .await
-            .expect("Failed to create persistent cache"),
+    let workspace_router = Arc::new(
+        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config,
+            server_manager.clone(),
+        ),
     );
+    let universal_cache = Arc::new(
+        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
+            .await
+            .expect("Failed to create universal cache"),
+    );
+    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
+        universal_cache,
+        None,
+        None,
+    ));
 
     let manager = IndexingManager::new(
         config.clone(),
         language_detector,
         server_manager,
-        call_graph_cache,
         definition_cache,
-        persistent_store,
+        universal_cache_layer,
     );
 
     // First indexing run
@@ -850,11 +876,10 @@ impl Calculator {
     let cache_config2 = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
-        eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
         ..Default::default()
     };
-    let call_graph_cache2 = Arc::new(CallGraphCache::new(cache_config2));
+    let _call_graph_cache2 = Arc::new(CallGraphCache::new(cache_config2));
 
     let lsp_cache_config2 = LspCacheConfig {
         capacity_per_operation: 100,
@@ -865,27 +890,41 @@ impl Calculator {
     };
     let definition_cache2 = Arc::new(
         LspCache::new(LspOperation::Definition, lsp_cache_config2)
+            .await
             .expect("Failed to create definition cache"),
     );
 
-    // Create persistent cache for second manager
-    let persistent_config2 = lsp_daemon::persistent_cache::PersistentCacheConfig {
-        cache_directory: Some(project.root_path().join("persistent_cache2")),
+    // Create universal cache layer for second manager
+    let temp_cache_dir2 = tempfile::tempdir().expect("Failed to create temp dir");
+    let workspace_config2 = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+        base_cache_dir: temp_cache_dir2.path().to_path_buf(),
+        max_open_caches: 3,
+        max_parent_lookup_depth: 2,
         ..Default::default()
     };
-    let persistent_store2 = Arc::new(
-        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config2)
-            .await
-            .expect("Failed to create persistent cache"),
+    let workspace_router2 = Arc::new(
+        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config2,
+            server_manager2.clone(),
+        ),
     );
+    let universal_cache2 = Arc::new(
+        lsp_daemon::universal_cache::UniversalCache::new(workspace_router2)
+            .await
+            .expect("Failed to create universal cache"),
+    );
+    let universal_cache_layer2 = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
+        universal_cache2,
+        None,
+        None,
+    ));
 
     let manager2 = IndexingManager::new(
         config.clone(),
         Arc::new(LanguageDetector::new()),
         server_manager2,
-        call_graph_cache2,
         definition_cache2,
-        persistent_store2,
+        universal_cache_layer2,
     );
     manager2
         .start_indexing(project.root_path().to_path_buf())
@@ -940,11 +979,10 @@ async fn test_memory_pressure_handling() -> Result<()> {
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
-        eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
         ..Default::default()
     };
-    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    let _call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
@@ -955,27 +993,41 @@ async fn test_memory_pressure_handling() -> Result<()> {
     };
     let definition_cache = Arc::new(
         LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .await
             .expect("Failed to create definition cache"),
     );
 
-    // Create persistent cache for testing
-    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
-        cache_directory: Some(project.root_path().join("persistent_cache")),
+    // Create universal cache layer
+    let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+        base_cache_dir: temp_cache_dir.path().to_path_buf(),
+        max_open_caches: 3,
+        max_parent_lookup_depth: 2,
         ..Default::default()
     };
-    let persistent_store = Arc::new(
-        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
-            .await
-            .expect("Failed to create persistent cache"),
+    let workspace_router = Arc::new(
+        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config,
+            server_manager.clone(),
+        ),
     );
+    let universal_cache = Arc::new(
+        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
+            .await
+            .expect("Failed to create universal cache"),
+    );
+    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
+        universal_cache,
+        None,
+        None,
+    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
-        call_graph_cache,
         definition_cache,
-        persistent_store,
+        universal_cache_layer,
     );
 
     // Start indexing
@@ -1034,11 +1086,10 @@ async fn test_pause_and_resume_functionality() -> Result<()> {
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
-        eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
         ..Default::default()
     };
-    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    let _call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
@@ -1049,27 +1100,41 @@ async fn test_pause_and_resume_functionality() -> Result<()> {
     };
     let definition_cache = Arc::new(
         LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .await
             .expect("Failed to create definition cache"),
     );
 
-    // Create persistent cache for testing
-    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
-        cache_directory: Some(project.root_path().join("persistent_cache")),
+    // Create universal cache layer
+    let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+        base_cache_dir: temp_cache_dir.path().to_path_buf(),
+        max_open_caches: 3,
+        max_parent_lookup_depth: 2,
         ..Default::default()
     };
-    let persistent_store = Arc::new(
-        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
-            .await
-            .expect("Failed to create persistent cache"),
+    let workspace_router = Arc::new(
+        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config,
+            server_manager.clone(),
+        ),
     );
+    let universal_cache = Arc::new(
+        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
+            .await
+            .expect("Failed to create universal cache"),
+    );
+    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
+        universal_cache,
+        None,
+        None,
+    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
-        call_graph_cache,
         definition_cache,
-        persistent_store,
+        universal_cache_layer,
     );
 
     // Start indexing
@@ -1133,11 +1198,10 @@ async fn test_worker_statistics_tracking() -> Result<()> {
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
-        eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
         ..Default::default()
     };
-    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    let _call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
@@ -1148,27 +1212,41 @@ async fn test_worker_statistics_tracking() -> Result<()> {
     };
     let definition_cache = Arc::new(
         LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .await
             .expect("Failed to create definition cache"),
     );
 
-    // Create persistent cache for testing
-    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
-        cache_directory: Some(project.root_path().join("persistent_cache")),
+    // Create universal cache layer
+    let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+        base_cache_dir: temp_cache_dir.path().to_path_buf(),
+        max_open_caches: 3,
+        max_parent_lookup_depth: 2,
         ..Default::default()
     };
-    let persistent_store = Arc::new(
-        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
-            .await
-            .expect("Failed to create persistent cache"),
+    let workspace_router = Arc::new(
+        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config,
+            server_manager.clone(),
+        ),
     );
+    let universal_cache = Arc::new(
+        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
+            .await
+            .expect("Failed to create universal cache"),
+    );
+    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
+        universal_cache,
+        None,
+        None,
+    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
-        call_graph_cache,
         definition_cache,
-        persistent_store,
+        universal_cache_layer,
     );
 
     // Start indexing
@@ -1226,11 +1304,10 @@ async fn test_language_specific_processing() -> Result<()> {
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
-        eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
         ..Default::default()
     };
-    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    let _call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
@@ -1241,27 +1318,41 @@ async fn test_language_specific_processing() -> Result<()> {
     };
     let definition_cache = Arc::new(
         LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .await
             .expect("Failed to create definition cache"),
     );
 
-    // Create persistent cache for testing
-    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
-        cache_directory: Some(project.root_path().join("persistent_cache")),
+    // Create universal cache layer
+    let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+        base_cache_dir: temp_cache_dir.path().to_path_buf(),
+        max_open_caches: 3,
+        max_parent_lookup_depth: 2,
         ..Default::default()
     };
-    let persistent_store = Arc::new(
-        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
-            .await
-            .expect("Failed to create persistent cache"),
+    let workspace_router = Arc::new(
+        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config,
+            server_manager.clone(),
+        ),
     );
+    let universal_cache = Arc::new(
+        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
+            .await
+            .expect("Failed to create universal cache"),
+    );
+    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
+        universal_cache,
+        None,
+        None,
+    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
-        call_graph_cache,
         definition_cache,
-        persistent_store,
+        universal_cache_layer,
     );
 
     // Start indexing
@@ -1319,11 +1410,10 @@ async fn test_file_exclusion_patterns() -> Result<()> {
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
-        eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
         ..Default::default()
     };
-    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    let _call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
@@ -1334,27 +1424,41 @@ async fn test_file_exclusion_patterns() -> Result<()> {
     };
     let definition_cache = Arc::new(
         LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .await
             .expect("Failed to create definition cache"),
     );
 
-    // Create persistent cache for testing
-    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
-        cache_directory: Some(project.root_path().join("persistent_cache")),
+    // Create universal cache layer
+    let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+        base_cache_dir: temp_cache_dir.path().to_path_buf(),
+        max_open_caches: 3,
+        max_parent_lookup_depth: 2,
         ..Default::default()
     };
-    let persistent_store = Arc::new(
-        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
-            .await
-            .expect("Failed to create persistent cache"),
+    let workspace_router = Arc::new(
+        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config,
+            server_manager.clone(),
+        ),
     );
+    let universal_cache = Arc::new(
+        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
+            .await
+            .expect("Failed to create universal cache"),
+    );
+    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
+        universal_cache,
+        None,
+        None,
+    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
-        call_graph_cache,
         definition_cache,
-        persistent_store,
+        universal_cache_layer,
     );
 
     // Start indexing
@@ -1410,11 +1514,10 @@ async fn test_queue_operations() -> Result<()> {
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
-        eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
         ..Default::default()
     };
-    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    let _call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
@@ -1425,27 +1528,41 @@ async fn test_queue_operations() -> Result<()> {
     };
     let definition_cache = Arc::new(
         LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .await
             .expect("Failed to create definition cache"),
     );
 
-    // Create persistent cache for testing
-    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
-        cache_directory: Some(project.root_path().join("persistent_cache")),
+    // Create universal cache layer
+    let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+        base_cache_dir: temp_cache_dir.path().to_path_buf(),
+        max_open_caches: 3,
+        max_parent_lookup_depth: 2,
         ..Default::default()
     };
-    let persistent_store = Arc::new(
-        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
-            .await
-            .expect("Failed to create persistent cache"),
+    let workspace_router = Arc::new(
+        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config,
+            server_manager.clone(),
+        ),
     );
+    let universal_cache = Arc::new(
+        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
+            .await
+            .expect("Failed to create universal cache"),
+    );
+    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
+        universal_cache,
+        None,
+        None,
+    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
-        call_graph_cache,
         definition_cache,
-        persistent_store,
+        universal_cache_layer,
     );
 
     // Start indexing
@@ -1513,11 +1630,10 @@ async fn test_error_recovery() -> Result<()> {
     let cache_config = CallGraphCacheConfig {
         capacity: 100,
         ttl: Duration::from_secs(300),
-        eviction_check_interval: Duration::from_secs(30),
         invalidation_depth: 1,
         ..Default::default()
     };
-    let call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
+    let _call_graph_cache = Arc::new(CallGraphCache::new(cache_config));
 
     let lsp_cache_config = LspCacheConfig {
         capacity_per_operation: 100,
@@ -1528,27 +1644,41 @@ async fn test_error_recovery() -> Result<()> {
     };
     let definition_cache = Arc::new(
         LspCache::new(LspOperation::Definition, lsp_cache_config)
+            .await
             .expect("Failed to create definition cache"),
     );
 
-    // Create persistent cache for testing
-    let persistent_config = lsp_daemon::persistent_cache::PersistentCacheConfig {
-        cache_directory: Some(project.root_path().join("persistent_cache")),
+    // Create universal cache layer
+    let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+        base_cache_dir: temp_cache_dir.path().to_path_buf(),
+        max_open_caches: 3,
+        max_parent_lookup_depth: 2,
         ..Default::default()
     };
-    let persistent_store = Arc::new(
-        lsp_daemon::persistent_cache::PersistentCallGraphCache::new(persistent_config)
-            .await
-            .expect("Failed to create persistent cache"),
+    let workspace_router = Arc::new(
+        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+            workspace_config,
+            server_manager.clone(),
+        ),
     );
+    let universal_cache = Arc::new(
+        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
+            .await
+            .expect("Failed to create universal cache"),
+    );
+    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
+        universal_cache,
+        None,
+        None,
+    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
-        call_graph_cache,
         definition_cache,
-        persistent_store,
+        universal_cache_layer,
     );
 
     // Start indexing

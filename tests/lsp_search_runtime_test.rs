@@ -135,7 +135,7 @@ fn create_test_search_result() -> SearchResult {
 /// Integration test that runs the actual search command with LSP
 /// This is the most realistic test - it runs the full pipeline
 #[test]
-#[ignore] // Ignore by default as it requires LSP daemon
+#[ignore] // Requires LSP daemon + rust-analyzer indexing (10-15s), use: cargo test test_search_command_with_lsp_integration -- --ignored
 fn test_search_command_with_lsp_integration() -> Result<()> {
     let _guard = LspTestGuard::new("test_search_command_with_lsp_integration");
 
