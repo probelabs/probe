@@ -1,5 +1,5 @@
 use crate::cache_types::{AllCacheStats, CachedLspNode, LspCacheKey, LspCacheStats, LspOperation};
-use crate::database::{DatabaseBackend, DatabaseConfig, SledBackend};
+// Database imports removed - persistent storage no longer used
 use anyhow::Result;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex as AsyncMutex;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Configuration for generic LSP cache
 #[derive(Debug, Clone)]
@@ -56,77 +56,22 @@ pub struct LspCache<T> {
     eviction_count: Arc<AsyncMutex<u64>>,
     /// Last eviction check time
     last_eviction: Arc<AsyncMutex<Instant>>,
-    /// Persistent storage backend
-    persistent_store: Option<Arc<SledBackend>>,
+    // Persistent storage removed - memory-only cache
 }
 
 impl<T> LspCache<T>
 where
     T: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static,
 {
-    /// Determine if in-memory mode should be used based on environment variables
-    /// Priority order: PROBE_MEMORY_ONLY_CACHE > PROBE_DISABLE_PERSISTENCE
-    fn should_use_memory_mode(config: &LspCacheConfig) -> bool {
-        // 1. Check PROBE_MEMORY_ONLY_CACHE environment variable
-        if let Ok(val) = std::env::var("PROBE_MEMORY_ONLY_CACHE") {
-            if val == "1" || val.eq_ignore_ascii_case("true") {
-                debug!("LSP cache in-memory mode: PROBE_MEMORY_ONLY_CACHE={}", val);
-                return true;
-            }
-        }
-
-        // 2. Check legacy PROBE_DISABLE_PERSISTENCE for backwards compatibility
-        if let Ok(val) = std::env::var("PROBE_DISABLE_PERSISTENCE") {
-            if val == "1" || val.eq_ignore_ascii_case("true") {
-                debug!(
-                    "LSP cache in-memory mode: PROBE_DISABLE_PERSISTENCE={} (legacy)",
-                    val
-                );
-                return true;
-            }
-        }
-
-        // 3. If persistence is disabled in config, use memory mode
-        if !config.persistent {
-            debug!("LSP cache in-memory mode: config.persistent=false");
-            return true;
-        }
-
-        false
-    }
+    // should_use_memory_mode method removed - cache is always memory-only now
 
     pub async fn new(operation: LspOperation, config: LspCacheConfig) -> Result<Self> {
-        // Check environment variables for in-memory mode
-        let should_disable_persistence = Self::should_use_memory_mode(&config);
-
-        if should_disable_persistence && config.persistent {
-            info!("LSP cache {:?}: Persistence disabled by environment variables, using in-memory mode only", operation);
-        }
-
-        let persistent_store = if config.persistent && !should_disable_persistence {
-            let cache_dir = config.cache_directory.clone().unwrap_or_else(|| {
-                dirs::cache_dir()
-                    .unwrap_or_else(|| PathBuf::from("/tmp"))
-                    .join("probe-lsp-cache")
-            });
-
-            std::fs::create_dir_all(&cache_dir)?;
-            let db_path = cache_dir.join(format!("{operation:?}.db"));
-
-            let db_config = DatabaseConfig {
-                path: Some(db_path),
-                temporary: false,
-                compression: true,
-                cache_capacity: 64 * 1024 * 1024, // 64MB cache
-                compression_factor: 5,
-                flush_every_ms: Some(1000),
-            };
-
-            let db = SledBackend::new(db_config).await?;
-            Some(Arc::new(db))
-        } else {
-            None
-        };
+        // Legacy per-operation database persistence has been removed to avoid conflicts
+        // with the new per-workspace universal cache system. This cache is now memory-only.
+        info!(
+            "LSP cache {:?}: Using in-memory mode only (per-operation persistence removed)",
+            operation
+        );
 
         Ok(Self {
             operation,
@@ -138,7 +83,7 @@ where
             miss_count: Arc::new(AsyncMutex::new(0)),
             eviction_count: Arc::new(AsyncMutex::new(0)),
             last_eviction: Arc::new(AsyncMutex::new(Instant::now())),
-            persistent_store,
+            // persistent_store field removed
         })
     }
 
@@ -159,31 +104,7 @@ where
             return Some(entry.data.clone());
         }
 
-        // Check persistent storage if enabled
-        if let Some(ref db) = self.persistent_store {
-            let key_bytes = bincode::serialize(key).ok()?;
-            if let Ok(Some(value_bytes)) = db.get(&key_bytes).await {
-                if let Ok(node) = bincode::deserialize::<CachedLspNode<T>>(&value_bytes) {
-                    // Verify TTL
-                    if node.created_at.elapsed() < self.config.ttl {
-                        // Load into memory cache
-                        let arc_node = Arc::new(node.clone());
-                        self.entries.insert(key.clone(), arc_node);
-
-                        // Update file index
-                        self.file_index
-                            .entry(key.file.clone())
-                            .or_default()
-                            .insert(key.clone());
-
-                        let mut hit_count = self.hit_count.lock().await;
-                        *hit_count += 1;
-
-                        return Some(node.data);
-                    }
-                }
-            }
-        }
+        // Persistent storage removed - memory-only cache
 
         let mut miss_count = self.miss_count.lock().await;
         *miss_count += 1;
@@ -205,15 +126,7 @@ where
             .or_default()
             .insert(key.clone());
 
-        // Save to persistent storage if enabled
-        if let Some(ref db) = self.persistent_store {
-            let key_bytes = bincode::serialize(&key).ok();
-            let value_bytes = bincode::serialize(&node).ok();
-
-            if let (Some(kb), Some(vb)) = (key_bytes, value_bytes) {
-                let _ = db.set(&kb, &vb).await;
-            }
-        }
+        // Persistent storage removed - memory-only cache
 
         // Trigger eviction check if needed
         self.check_eviction().await;
@@ -256,12 +169,7 @@ where
                 file_keys.remove(&key);
             }
 
-            // Remove from persistent storage
-            if let Some(ref db) = self.persistent_store {
-                if let Ok(key_bytes) = bincode::serialize(&key) {
-                    let _ = db.remove(&key_bytes).await;
-                }
-            }
+            // Persistent storage removed - memory-only cache
         }
 
         *self.eviction_count.lock().await += to_evict as u64;
@@ -283,15 +191,7 @@ where
             return Ok(node);
         }
 
-        // Check persistent storage if enabled
-        if let Some(ref store) = self.persistent_store {
-            if let Some(node) = self.get_from_persistent(store, &key).await? {
-                // Store back in memory cache
-                self.insert_in_memory(node.clone());
-                *self.hit_count.lock().await += 1;
-                return Ok(node);
-            }
-        }
+        // Persistent storage removed - memory-only cache
 
         *self.miss_count.lock().await += 1;
 
@@ -325,12 +225,7 @@ where
         // Insert into memory cache
         self.insert_in_memory(node.clone());
 
-        // Insert into persistent storage if enabled
-        if let Some(ref store) = self.persistent_store {
-            if let Err(e) = self.insert_in_persistent(store, &node).await {
-                warn!("Failed to store in persistent cache: {}", e);
-            }
-        }
+        // Persistent storage removed - memory-only cache
 
         // Clean up in-flight tracker
         self.inflight.remove(&key);
@@ -344,36 +239,6 @@ where
     /// Get entry from memory cache
     async fn get_from_memory(&self, key: &LspCacheKey) -> Option<Arc<CachedLspNode<T>>> {
         self.entries.get(key).map(|entry| entry.clone())
-    }
-
-    /// Get entry from persistent storage
-    async fn get_from_persistent(
-        &self,
-        store: &SledBackend,
-        key: &LspCacheKey,
-    ) -> Result<Option<Arc<CachedLspNode<T>>>> {
-        let key_bytes = bincode::serialize(key)?;
-
-        if let Some(value_bytes) = store.get(&key_bytes).await? {
-            match bincode::deserialize::<CachedLspNode<T>>(&value_bytes) {
-                Ok(node) => {
-                    // Check if entry is still valid (not expired)
-                    if node.created_at.elapsed() <= self.config.ttl {
-                        return Ok(Some(Arc::new(node)));
-                    } else {
-                        // Remove expired entry
-                        let _ = store.remove(&key_bytes).await;
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to deserialize persistent cache entry: {}", e);
-                    // Remove corrupted entry
-                    let _ = store.remove(&key_bytes).await;
-                }
-            }
-        }
-
-        Ok(None)
     }
 
     /// Insert entry into memory cache
@@ -390,18 +255,6 @@ where
             .insert(key);
     }
 
-    /// Insert entry into persistent storage
-    async fn insert_in_persistent(
-        &self,
-        store: &SledBackend,
-        node: &CachedLspNode<T>,
-    ) -> Result<()> {
-        let key_bytes = bincode::serialize(&node.key)?;
-        let value_bytes = bincode::serialize(node)?;
-        store.set(&key_bytes, &value_bytes).await?;
-        Ok(())
-    }
-
     /// Invalidate entries for a specific file
     pub async fn invalidate_file(&self, file: &Path) {
         if let Some((_, keys)) = self.file_index.remove(file) {
@@ -411,12 +264,7 @@ where
                 // Remove from memory cache
                 self.entries.remove(&key);
 
-                // Remove from persistent storage if enabled
-                if let Some(ref store) = self.persistent_store {
-                    if let Ok(key_bytes) = bincode::serialize(&key) {
-                        let _ = store.remove(&key_bytes).await;
-                    }
-                }
+                // Persistent storage removed - memory-only cache
             }
 
             if count > 0 {
@@ -439,10 +287,7 @@ where
         self.file_index.clear();
         self.inflight.clear();
 
-        // Clear persistent storage if enabled
-        if let Some(ref store) = self.persistent_store {
-            let _ = store.clear().await;
-        }
+        // Persistent storage removed - memory-only cache
 
         *self.eviction_count.lock().await += count as u64;
         info!("Cleared {} {:?} cache entries", count, self.operation);
@@ -513,12 +358,7 @@ where
                 }
             }
 
-            // Remove from persistent storage if enabled
-            if let Some(ref store) = self.persistent_store {
-                if let Ok(key_bytes) = bincode::serialize(key) {
-                    let _ = store.remove(&key_bytes).await;
-                }
-            }
+            // Persistent storage removed - memory-only cache
 
             *self.eviction_count.lock().await += 1;
         }
@@ -549,9 +389,9 @@ where
         self.operation
     }
 
-    /// Check if persistent storage is enabled
+    /// Check if persistent storage is enabled (always false now)
     pub fn is_persistent(&self) -> bool {
-        self.persistent_store.is_some()
+        false // Persistent storage removed
     }
 
     /// Get cache directory if persistent storage is enabled
@@ -559,15 +399,9 @@ where
         self.config.cache_directory.as_deref()
     }
 
-    /// Compact persistent storage (if enabled)
+    /// Compact persistent storage (removed - now no-op)
     pub async fn compact_persistent_storage(&self) -> Result<()> {
-        if let Some(ref store) = self.persistent_store {
-            store.flush().await?;
-            info!(
-                "Compacted persistent storage for {:?} cache",
-                self.operation
-            );
-        }
+        // Persistent storage removed - no operation needed
         Ok(())
     }
 

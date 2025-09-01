@@ -162,10 +162,7 @@ pub struct LspUniversalCacheConfig {
     /// Server layer configuration (network/shared cache)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server: Option<UniversalCacheServerConfig>,
-
-    /// Migration and rollback settings
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub migration: Option<UniversalCacheMigrationConfig>,
+    // Migration settings removed - no migration needed
 }
 
 /// Configuration for individual LSP methods in universal cache
@@ -297,28 +294,7 @@ pub struct UniversalCacheServerConfig {
 }
 
 /// Migration and rollback configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct UniversalCacheMigrationConfig {
-    /// Enable gradual migration from legacy cache
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gradual_migration: Option<bool>,
-
-    /// Migration batch size
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub batch_size: Option<usize>,
-
-    /// Enable rollback to legacy cache if issues occur
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enable_rollback: Option<bool>,
-
-    /// Rollback trigger threshold (error rate 0.0-1.0)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rollback_threshold: Option<f64>,
-
-    /// Import existing cache data on first run
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub import_existing: Option<bool>,
-}
+// UniversalCacheMigrationConfig removed - no migration needed anymore
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PerformanceConfig {
