@@ -157,11 +157,11 @@ impl DatabaseCacheAdapter {
     /// Get statistics from the database (workspace-specific)
     pub async fn get_stats(&self) -> Result<DatabaseCacheStats> {
         // Get tree-specific stats (not global database stats) for workspace isolation
-        let tree_entry_count =
-            self.universal_tree
-                .len()
-                .await
-                .map_err(|e| anyhow::anyhow!("Database error: {}", e))? as u64;
+        let tree_entry_count = self
+            .universal_tree
+            .len()
+            .await
+            .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
 
         // WORKAROUND: If tree.len() returns 0, manually count entries by scanning all keys
         let actual_entry_count = if tree_entry_count == 0 {
@@ -484,11 +484,11 @@ impl DatabaseCacheAdapter {
 
                                 // Delete all matching entries (avoid duplicates)
                                 for (key_bytes, _) in entries {
-                                    if !deleted_keys.contains(&key_bytes) {
-                                        if tree.remove(&key_bytes).await.is_ok() {
-                                            deleted_keys.insert(key_bytes.clone());
-                                            cleared_count += 1;
-                                        }
+                                    if !deleted_keys.contains(&key_bytes)
+                                        && tree.remove(&key_bytes).await.is_ok()
+                                    {
+                                        deleted_keys.insert(key_bytes.clone());
+                                        cleared_count += 1;
                                     }
                                 }
                             } else {
@@ -527,17 +527,16 @@ impl DatabaseCacheAdapter {
                         );
                         for (key_bytes, _) in all_entries {
                             // In-memory prefix matching
-                            if key_bytes.starts_with(prefix.as_bytes()) {
-                                if !deleted_keys.contains(&key_bytes) {
-                                    if tree.remove(&key_bytes).await.is_ok() {
-                                        deleted_keys.insert(key_bytes.clone());
-                                        cleared_count += 1;
-                                        eprintln!(
-                                            "DEBUG: Fallback deleted key: {}",
-                                            String::from_utf8_lossy(&key_bytes)
-                                        );
-                                    }
-                                }
+                            if key_bytes.starts_with(prefix.as_bytes())
+                                && !deleted_keys.contains(&key_bytes)
+                                && tree.remove(&key_bytes).await.is_ok()
+                            {
+                                deleted_keys.insert(key_bytes.clone());
+                                cleared_count += 1;
+                                eprintln!(
+                                    "DEBUG: Fallback deleted key: {}",
+                                    String::from_utf8_lossy(&key_bytes)
+                                );
                             }
                         }
 
