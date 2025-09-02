@@ -608,9 +608,7 @@ impl CacheStore {
                 0
             });
 
-        eprintln!(
-            "DEBUG: Cleared {cleared_entries} entries using universal cache clearing"
-        );
+        eprintln!("DEBUG: Cleared {cleared_entries} entries using universal cache clearing");
 
         // Clear workspace statistics from our in-memory tracking
         {
