@@ -87,7 +87,7 @@ impl DatabaseCacheAdapter {
         let database_config = config.database_config;
 
         let database = match config.backend_type.as_str() {
-            "duckdb" | _ => {
+            _ => {
                 let db = Arc::new(
                     DuckDBBackend::new(database_config)
                         .await
