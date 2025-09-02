@@ -86,15 +86,13 @@ impl DatabaseCacheAdapter {
         // Use database config directly - legacy fields removed
         let database_config = config.database_config;
 
-        let database = match config.backend_type.as_str() {
-            _ => {
-                let db = Arc::new(
-                    DuckDBBackend::new(database_config)
-                        .await
-                        .context("Failed to create DuckDB backend")?,
-                );
-                BackendType::DuckDB(db)
-            }
+        let database = {
+            let db = Arc::new(
+                DuckDBBackend::new(database_config)
+                    .await
+                    .context("Failed to create DuckDB backend")?,
+            );
+            BackendType::DuckDB(db)
         };
 
         // Create workspace-specific tree name to ensure workspace isolation
