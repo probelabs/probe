@@ -1,7 +1,7 @@
 //! Database abstraction layer for LSP daemon
 //!
-//! This module provides a clean database abstraction interface that allows easy migration
-//! from Sled to other databases like DuckDB or SQLite. It supports both persistent and
+//! This module provides a clean database abstraction interface using DuckDB for advanced
+//! graph analytics and git-aware versioning. It supports both persistent and
 //! in-memory modes, with comprehensive error handling and async support.
 //!
 //! ## Architecture
@@ -11,14 +11,14 @@
 //!
 //! - **Key-value operations**: get, set, remove
 //! - **Prefix scanning**: for efficient cache clearing operations
-//! - **Tree operations**: hierarchical data organization (like sled trees)
+//! - **Tree operations**: hierarchical data organization
 //! - **Maintenance operations**: clear, flush, size reporting
 //! - **Storage modes**: persistent disk storage or temporary in-memory
 //!
 //! ## Usage
 //!
 //! ```rust
-//! use database::{DatabaseBackend, SledBackend, DatabaseConfig};
+//! use database::{DatabaseBackend, DuckDBBackend, DatabaseConfig};
 //!
 //! // Create a persistent database
 //! let config = DatabaseConfig {
@@ -27,7 +27,7 @@
 //!     compression: true,
 //!     cache_capacity: 64 * 1024 * 1024,
 //! };
-//! let db = SledBackend::new(config).await?;
+//! let db = DuckDBBackend::new(config).await?;
 //!
 //! // Basic operations
 //! db.set(b"key", b"value").await?;
@@ -44,11 +44,12 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[cfg(test)]
-pub mod examples;
-pub mod sled_backend;
-
-pub use sled_backend::SledBackend;
+pub mod duckdb_backend;
+pub mod duckdb_bootstrap;
+pub mod duckdb_queries;
+pub use duckdb_backend::DuckDBBackend;
+pub use duckdb_bootstrap::bootstrap_database;
+// Migration utilities are deprecated and no longer exported since sled support is removed
 
 /// Database error types specific to database operations
 #[derive(Debug, thiserror::Error)]
@@ -83,7 +84,7 @@ pub struct DatabaseConfig {
     pub compression: bool,
     /// Cache capacity in bytes
     pub cache_capacity: u64,
-    /// Compression factor (1-22 for sled, higher = more compression)
+    /// Compression factor (higher = more compression)
     pub compression_factor: i32,
     /// Flush interval in milliseconds (None to disable periodic flushes)
     pub flush_every_ms: Option<u64>,

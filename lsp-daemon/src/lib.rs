@@ -2,6 +2,9 @@
 // Exports public interfaces for client implementations
 
 // Core modules
+pub mod git_service;
+#[cfg(test)]
+mod git_service_test;
 pub mod ipc;
 pub mod language_detector;
 pub mod logging;
@@ -77,6 +80,8 @@ pub use daemon::{start_daemon_background, LspDaemon};
 pub use lsp_registry::LspRegistry;
 pub use watchdog::{ProcessHealth, ProcessMonitor, ProcessStats, Watchdog};
 
+pub use git_service::GitService;
+
 // Re-export indexing types for external use
 pub use indexing::{
     CacheStrategy, EffectiveConfig, IndexingConfig, IndexingFeatures, IndexingManager,
@@ -104,7 +109,7 @@ pub use universal_cache::{
 // Re-export database types for external use
 pub use database::{
     DatabaseBackend, DatabaseBackendExt, DatabaseConfig, DatabaseError, DatabaseStats,
-    DatabaseTree, DatabaseTreeExt, SledBackend,
+    DatabaseTree, DatabaseTreeExt,
 };
 
 // Re-export pipeline-specific types

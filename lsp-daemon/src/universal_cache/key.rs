@@ -6,10 +6,17 @@
 use crate::universal_cache::LspMethod;
 use anyhow::{Context, Result};
 use blake3::Hasher;
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::fs;
+
+/// Global workspace resolution cache to eliminate race conditions
+/// Key: Canonical file path, Value: (workspace_root, workspace_id)
+static WORKSPACE_RESOLUTION_CACHE: Lazy<DashMap<PathBuf, (PathBuf, String)>> =
+    Lazy::new(|| DashMap::new());
 
 /// A content-addressed cache key
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -139,6 +146,27 @@ impl KeyBuilder {
         }
     }
 
+    /// Build a synchronous singleflight key for immediate deduplication (no async I/O)
+    pub fn build_singleflight_key(
+        &self,
+        method: LspMethod,
+        file_path: &Path,
+        params: &str,
+    ) -> String {
+        // Use synchronous operations only for immediate deduplication
+        let canonical_path = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
+
+        // Create a simple hash without file I/O
+        format!(
+            "sf_{}:{}:{}",
+            method.as_str().replace('/', "_"),
+            canonical_path.display(),
+            blake3::hash(params.as_bytes()).to_hex()
+        )
+    }
+
     /// Create a new key builder with workspace resolver integration
     pub fn new_with_workspace_resolver(
         workspace_resolver: std::sync::Arc<
@@ -164,39 +192,49 @@ impl KeyBuilder {
         // Get file modification time
         let file_mtime = self.get_file_mtime(&canonical_file_path).await?;
 
-        // Resolve workspace for this file
-        let (workspace_root, workspace_id) = self.resolve_workspace(&canonical_file_path).await?;
+        // Resolve workspace for this file deterministically
+        let (workspace_root, workspace_id) = self
+            .resolve_workspace_deterministic(&canonical_file_path)
+            .await?;
 
         // Calculate workspace-relative path
         let workspace_relative_path =
             self.get_workspace_relative_path(&canonical_file_path, &workspace_root)?;
 
-        // Read file content for content hashing
-        let file_content = self.read_file_content(&canonical_file_path).await?;
-
-        // Generate content hash
+        // Generate content hash based on file metadata (no file content reading)
+        // This makes cache key generation much faster for singleflight deduplication
         let content_hash = self
-            .generate_content_hash(
+            .generate_fast_content_hash(
                 method,
                 &workspace_relative_path,
-                &file_content,
                 params,
                 file_mtime,
+                &canonical_file_path,
             )
             .await?;
 
         // Extract position from params for display
         let position = Self::extract_position_from_params(params);
 
-        Ok(CacheKey {
+        let cache_key = CacheKey {
             workspace_relative_path,
             method,
-            content_hash,
-            workspace_id,
+            content_hash: content_hash.clone(),
+            workspace_id: workspace_id.clone(),
             file_mtime,
             symbol_name: None, // Will be populated when we have symbol info
             position,
-        })
+        };
+
+        eprintln!(
+            "DEBUG: Generated cache key for {}: storage_key={}, content_hash={}, mtime={}",
+            file_path.display(),
+            cache_key.to_storage_key(),
+            content_hash,
+            file_mtime
+        );
+
+        Ok(cache_key)
     }
 
     /// Generate server fingerprint for LSP server state
@@ -214,6 +252,18 @@ impl KeyBuilder {
         hasher.update(server_version.as_bytes());
         hasher.update(b":");
         hasher.update(workspace_root.to_string_lossy().as_bytes());
+
+        // Make fingerprint commit-aware if this is a Git workspace.
+        // This keeps the same signature but yields better isolation between commits.
+        // Non-git workspaces will simply skip this and produce the same value as before.
+        if let Ok(svc) =
+            crate::git_service::GitService::discover_repo(workspace_root, workspace_root)
+        {
+            if let Ok(Some(head)) = svc.head_commit() {
+                hasher.update(b":");
+                hasher.update(head.as_bytes());
+            }
+        }
 
         let hash = hasher.finalize();
         self.return_hasher(hasher).await;
@@ -278,7 +328,8 @@ impl KeyBuilder {
             .duration_since(SystemTime::UNIX_EPOCH)
             .context("Invalid file modification time")?;
 
-        Ok(duration.as_secs())
+        // Use nanosecond precision to detect rapid file changes
+        Ok(duration.as_nanos() as u64)
     }
 
     /// Resolve workspace root and ID for a file
@@ -294,6 +345,35 @@ impl KeyBuilder {
         let workspace_id = self.generate_workspace_id(&workspace_root).await?;
 
         Ok((workspace_root, workspace_id))
+    }
+
+    /// Resolve workspace deterministically with caching to eliminate race conditions
+    async fn resolve_workspace_deterministic(&self, file_path: &Path) -> Result<(PathBuf, String)> {
+        // Check cache first to avoid async races
+        if let Some(cached) = WORKSPACE_RESOLUTION_CACHE.get(file_path) {
+            eprintln!(
+                "DEBUG: Workspace cache HIT for {}: {:?}",
+                file_path.display(),
+                cached.value()
+            );
+            return Ok(cached.clone());
+        }
+
+        eprintln!("DEBUG: Workspace cache MISS for {}", file_path.display());
+
+        // Resolve workspace using existing logic
+        let result = self.resolve_workspace(file_path).await?;
+
+        eprintln!(
+            "DEBUG: Resolved workspace for {}: {:?}",
+            file_path.display(),
+            result
+        );
+
+        // Cache the result for future requests
+        WORKSPACE_RESOLUTION_CACHE.insert(file_path.to_path_buf(), result.clone());
+
+        Ok(result)
     }
 
     /// Find workspace root by walking up directory tree (fallback implementation)
@@ -372,13 +452,15 @@ impl KeyBuilder {
     }
 
     /// Read file content with error handling
+    #[allow(dead_code)]
     async fn read_file_content(&self, file_path: &Path) -> Result<String> {
         fs::read_to_string(file_path)
             .await
             .context("Failed to read file content")
     }
 
-    /// Generate content-addressed hash
+    /// Generate content-addressed hash (with file content)
+    #[allow(dead_code)]
     async fn generate_content_hash(
         &self,
         method: LspMethod,
@@ -400,6 +482,39 @@ impl KeyBuilder {
         hasher.update(params.as_bytes());
         hasher.update(b":");
         hasher.update(&file_mtime.to_le_bytes());
+
+        let hash = hasher.finalize();
+        self.return_hasher(hasher).await;
+
+        Ok(hash.to_hex().to_string())
+    }
+
+    /// Generate fast content hash (without reading file content) for singleflight deduplication
+    async fn generate_fast_content_hash(
+        &self,
+        method: LspMethod,
+        workspace_relative_path: &Path,
+        params: &str,
+        file_mtime: u64,
+        file_path: &Path,
+    ) -> Result<String> {
+        let mut hasher = self.get_hasher().await;
+
+        // Hash components without reading file content (much faster)
+        hasher.update(b"fast_cache_key:");
+        hasher.update(method.as_str().as_bytes());
+        hasher.update(b":");
+        hasher.update(workspace_relative_path.to_string_lossy().as_bytes());
+        hasher.update(b":");
+        hasher.update(params.as_bytes());
+        hasher.update(b":");
+        hasher.update(&file_mtime.to_le_bytes());
+
+        // Add file size as additional distinguisher (fast to get)
+        if let Ok(metadata) = tokio::fs::metadata(file_path).await {
+            hasher.update(b":");
+            hasher.update(&metadata.len().to_le_bytes());
+        }
 
         let hash = hasher.finalize();
         self.return_hasher(hasher).await;
@@ -513,13 +628,16 @@ mod tests {
             .await
             .unwrap();
 
-        // Modify file
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await; // Ensure different mtime
+        // Modify file with robust timing
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await; // Ensure different mtime
         fs::write(
             &test_file,
             "package main\n\nfunc main() {\n    // Modified\n}",
         )
         .unwrap();
+
+        // Additional sleep to ensure filesystem timestamp resolution
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         // Generate new key
         let key2 = key_builder
@@ -635,9 +753,12 @@ mod tests {
         // Key should be valid initially
         assert!(key_builder.is_key_valid(&key, &test_file).await.unwrap());
 
-        // Modify file
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // Modify file with robust timing
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         fs::write(&test_file, "modified content").unwrap();
+
+        // Additional sleep to ensure filesystem timestamp resolution
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         // Key should now be invalid
         assert!(!key_builder.is_key_valid(&key, &test_file).await.unwrap());

@@ -602,3 +602,4 @@ This guide includes:
 # Test change for consent mechanism
 # Another test change for consent mechanism
 # Test change for consent mechanism
+- Always run Bash command with 10 minute timeout

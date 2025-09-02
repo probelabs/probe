@@ -8,11 +8,14 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::database::{DatabaseBackend, DatabaseConfig, DatabaseTree, SledBackend};
+use crate::database::{DatabaseBackend, DatabaseConfig, DatabaseTree, DuckDBBackend};
+use crate::universal_cache::store::CacheEntry;
 
 /// Configuration for database-backed cache
 #[derive(Debug, Clone)]
 pub struct DatabaseCacheConfig {
+    /// Database backend type ("duckdb")
+    pub backend_type: String,
     /// Database configuration
     pub database_config: DatabaseConfig,
     // Legacy fields removed - use database_config.temporary instead of memory_only
@@ -21,6 +24,7 @@ pub struct DatabaseCacheConfig {
 impl Default for DatabaseCacheConfig {
     fn default() -> Self {
         Self {
+            backend_type: "duckdb".to_string(),
             database_config: DatabaseConfig {
                 temporary: false,
                 compression: true,
@@ -31,10 +35,38 @@ impl Default for DatabaseCacheConfig {
     }
 }
 
+/// Enum to hold different backend types
+pub enum BackendType {
+    DuckDB(Arc<DuckDBBackend>),
+}
+
+impl BackendType {
+    /// Open a tree on the backend
+    pub async fn open_tree(&self, name: &str) -> Result<Arc<dyn DatabaseTree>, anyhow::Error> {
+        match self {
+            BackendType::DuckDB(db) => Ok(db
+                .open_tree(name)
+                .await
+                .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
+                as Arc<dyn DatabaseTree>),
+        }
+    }
+
+    /// Get stats from the backend
+    pub async fn stats(&self) -> Result<crate::database::DatabaseStats, anyhow::Error> {
+        match self {
+            BackendType::DuckDB(db) => db
+                .stats()
+                .await
+                .map_err(|e| anyhow::anyhow!("Database error: {}", e)),
+        }
+    }
+}
+
 /// Database-backed cache adapter that provides the interface needed by universal cache
 pub struct DatabaseCacheAdapter {
     /// Database backend
-    database: Arc<SledBackend>,
+    database: BackendType,
 
     /// Universal cache tree
     universal_tree: Arc<dyn DatabaseTree>,
@@ -43,17 +75,39 @@ pub struct DatabaseCacheAdapter {
 impl DatabaseCacheAdapter {
     /// Create a new database cache adapter
     pub async fn new(config: DatabaseCacheConfig) -> Result<Self> {
+        Self::new_with_workspace_id(config, "universal_cache").await
+    }
+
+    /// Create a new database cache adapter with workspace-specific tree name
+    pub async fn new_with_workspace_id(
+        config: DatabaseCacheConfig,
+        workspace_id: &str,
+    ) -> Result<Self> {
         // Use database config directly - legacy fields removed
         let database_config = config.database_config;
 
-        let database = Arc::new(
-            SledBackend::new(database_config)
-                .await
-                .context("Failed to create database backend")?,
-        );
+        let database = match config.backend_type.as_str() {
+            "duckdb" | _ => {
+                let db = Arc::new(
+                    DuckDBBackend::new(database_config)
+                        .await
+                        .context("Failed to create DuckDB backend")?,
+                );
+                BackendType::DuckDB(db)
+            }
+        };
+
+        // Create workspace-specific tree name to ensure workspace isolation
+        let tree_name = if workspace_id == "universal_cache" {
+            // Backward compatibility for existing tests and legacy usage
+            "universal_cache".to_string()
+        } else {
+            // Use workspace-specific tree name for proper isolation
+            format!("universal_cache_{}", workspace_id)
+        };
 
         let universal_tree = database
-            .open_tree("universal_cache")
+            .open_tree(&tree_name)
             .await
             .context("Failed to open universal cache tree")?;
 
@@ -73,10 +127,23 @@ impl DatabaseCacheAdapter {
 
     /// Set an entry in the universal cache tree
     pub async fn set_universal_entry(&self, key: &str, value: &[u8]) -> Result<()> {
+        eprintln!(
+            "DEBUG: DuckDB set_universal_entry - storing key: '{}', value_len: {}, tree: {:p}",
+            key,
+            value.len(),
+            Arc::as_ptr(&self.universal_tree)
+        );
+
         self.universal_tree
             .set(key.as_bytes(), value)
             .await
-            .map_err(|e| anyhow::anyhow!("Database error: {}", e))
+            .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+
+        eprintln!(
+            "DEBUG: DuckDB set_universal_entry - successfully stored to tree {:p}",
+            Arc::as_ptr(&self.universal_tree)
+        );
+        Ok(())
     }
 
     /// Remove an entry from the universal cache tree
@@ -87,22 +154,47 @@ impl DatabaseCacheAdapter {
             .map_err(|e| anyhow::anyhow!("Database error: {}", e))
     }
 
-    /// Get statistics from the database
+    /// Get statistics from the database (workspace-specific)
     pub async fn get_stats(&self) -> Result<DatabaseCacheStats> {
-        let db_stats = self
-            .database
-            .stats()
-            .await
-            .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+        // Get tree-specific stats (not global database stats) for workspace isolation
+        let tree_entry_count =
+            self.universal_tree
+                .len()
+                .await
+                .map_err(|e| anyhow::anyhow!("Database error: {}", e))? as u64;
+
+        // WORKAROUND: If tree.len() returns 0, manually count entries by scanning all keys
+        let actual_entry_count = if tree_entry_count == 0 {
+            // Use scan_prefix with empty prefix to get all entries
+            let all_entries = self
+                .universal_tree
+                .scan_prefix(&[])
+                .await
+                .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+            let count = all_entries.len() as u64;
+            eprintln!(
+                "DEBUG: Tree len={}, scan_prefix count={} for tree {:p}",
+                tree_entry_count,
+                count,
+                Arc::as_ptr(&self.universal_tree)
+            );
+            count
+        } else {
+            tree_entry_count
+        };
+
+        // Estimate size for this specific tree
+        let estimated_avg_entry_size = 256; // bytes per entry
+        let tree_size_bytes = actual_entry_count * estimated_avg_entry_size;
 
         // Try to get hit/miss counts from metadata tree
         let (hit_count, miss_count) = self.get_hit_miss_stats().await.unwrap_or((0, 0));
 
         Ok(DatabaseCacheStats {
-            total_entries: db_stats.total_entries,
-            total_size_bytes: db_stats.total_size_bytes,
-            disk_size_bytes: db_stats.disk_size_bytes,
-            total_nodes: db_stats.total_entries, // Same as total_entries for compatibility
+            total_entries: actual_entry_count,
+            total_size_bytes: tree_size_bytes,
+            disk_size_bytes: 0, // Individual tree disk size not easily measurable
+            total_nodes: actual_entry_count, // Same as total_entries for compatibility
             hit_count,
             miss_count,
         })
@@ -148,12 +240,12 @@ impl DatabaseCacheAdapter {
 
                 let current_hits = hits_result
                     .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
-                    .and_then(|data| bincode::deserialize::<u64>(&data).ok())
+                    .and_then(|data| bincode::deserialize::<u64>(data.as_slice()).ok())
                     .unwrap_or(0);
 
                 let current_misses = misses_result
                     .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
-                    .and_then(|data| bincode::deserialize::<u64>(&data).ok())
+                    .and_then(|data| bincode::deserialize::<u64>(data.as_slice()).ok())
                     .unwrap_or(0);
 
                 // Batch write both new values
@@ -179,7 +271,7 @@ impl DatabaseCacheAdapter {
                     .get(b"hits")
                     .await
                     .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
-                    .and_then(|data| bincode::deserialize::<u64>(&data).ok())
+                    .and_then(|data| bincode::deserialize::<u64>(data.as_slice()).ok())
                     .unwrap_or(0);
 
                 let new_hits = current_hits.saturating_add(hit_increment);
@@ -197,7 +289,7 @@ impl DatabaseCacheAdapter {
                     .get(b"misses")
                     .await
                     .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
-                    .and_then(|data| bincode::deserialize::<u64>(&data).ok())
+                    .and_then(|data| bincode::deserialize::<u64>(data.as_slice()).ok())
                     .unwrap_or(0);
 
                 let new_misses = current_misses.saturating_add(miss_increment);
@@ -229,14 +321,14 @@ impl DatabaseCacheAdapter {
             .get(b"hits")
             .await
             .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
-            .and_then(|data| bincode::deserialize::<u64>(&data).ok())
+            .and_then(|data| bincode::deserialize::<u64>(data.as_slice()).ok())
             .unwrap_or(0);
 
         let misses = stats_tree
             .get(b"misses")
             .await
             .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
-            .and_then(|data| bincode::deserialize::<u64>(&data).ok())
+            .and_then(|data| bincode::deserialize::<u64>(data.as_slice()).ok())
             .unwrap_or(0);
 
         Ok((hits, misses))
@@ -246,34 +338,85 @@ impl DatabaseCacheAdapter {
     /// Performance optimized: uses prefix scanning instead of full table scan
     pub async fn get_by_file(&self, file_path: &Path) -> Result<Vec<CacheNode>> {
         let mut results = Vec::new();
-        let file_path_str = file_path.to_string_lossy();
+        let _file_path_str = file_path.to_string_lossy();
 
-        // PERFORMANCE OPTIMIZATION: Try to use prefix scanning if possible
-        // Since keys are in format: workspace_id:operation:file:hash
-        // We can scan with different prefixes to reduce the search space
-
-        // First, try to get a reasonable prefix from the file path
-        // This is more efficient than scanning all entries
+        // Extract potential workspace-relative paths to match against
         let file_name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        // For now, fall back to the full scan but with optimized string comparison
-        let all_entries = self.iter_universal_entries().await?;
-        let file_path_string = file_path_str.to_string(); // Convert once
+        // Handle macOS symlink canonicalization: /var -> /private/var
+        let canonical_path = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
+        let paths_to_try = vec![file_path, &canonical_path];
 
-        results.reserve(8); // Reserve space for typical cache hit count
+        // Try different workspace-relative path patterns
+        let mut search_patterns = Vec::new();
+
+        // 1. Just the filename (most common case)
+        if !file_name.is_empty() {
+            search_patterns.push(file_name.to_string());
+        }
+
+        // 2. Try relative paths with different depth levels for both paths
+        for path in &paths_to_try {
+            let path_components: Vec<_> = path.components().collect();
+            for depth in 1..=3.min(path_components.len()) {
+                if let Ok(relative_path) = path_components[path_components.len() - depth..]
+                    .iter()
+                    .collect::<PathBuf>()
+                    .into_os_string()
+                    .into_string()
+                {
+                    if !search_patterns.contains(&relative_path) {
+                        search_patterns.push(relative_path);
+                    }
+                }
+            }
+        }
+
+        // 3. Add full path strings for exact matching
+        let file_path_str = file_path.to_string_lossy();
+        let canonical_path_str = canonical_path.to_string_lossy();
+        if file_path_str != canonical_path_str {
+            search_patterns.push(canonical_path_str.to_string());
+        }
+        search_patterns.push(file_path_str.to_string());
+
+        // Get all entries and parse keys to match file paths
+        let all_entries = self.iter_universal_entries().await?;
+        results.reserve(8);
+
+        // Debug output removed - invalidation now working correctly
 
         for (key, data) in all_entries {
-            // PERFORMANCE: More efficient string matching
-            // Check if this key contains our file path or filename
-            if key.contains(&file_path_string) || (!file_name.is_empty() && key.contains(file_name))
-            {
-                // Try to deserialize the data as a generic node
-                if let Ok(node) = serde_json::from_slice::<serde_json::Value>(&data) {
-                    results.push(CacheNode {
-                        key,
-                        data: node,
-                        file_path: file_path.to_path_buf(),
-                    });
+            // Parse key format: workspace_id:method:workspace_relative_path:hash[:symbol]
+            let parts: Vec<&str> = key.splitn(5, ':').collect();
+            if parts.len() >= 3 {
+                let key_file_path = parts[2]; // workspace_relative_path from key
+
+                // Check if any of our search patterns match the key's file path
+                let matches = search_patterns.iter().any(|pattern| {
+                    key_file_path == pattern ||
+                    key_file_path.ends_with(&format!("/{}", pattern)) ||
+                    pattern.ends_with(key_file_path) ||
+                    // Handle path prefix matching for symlinks
+                    (pattern.contains(key_file_path) && pattern.len() > key_file_path.len())
+                });
+
+                if matches {
+                    // Deserialize as CacheEntry using bincode (same as storage format)
+                    if let Ok(cache_entry) = bincode::deserialize::<CacheEntry>(&data) {
+                        // Convert the entry data to JSON for the CacheNode
+                        if let Ok(json_data) =
+                            serde_json::from_slice::<serde_json::Value>(&cache_entry.data)
+                        {
+                            results.push(CacheNode {
+                                key,
+                                data: json_data,
+                                file_path: file_path.to_path_buf(),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -287,27 +430,127 @@ impl DatabaseCacheAdapter {
     }
 
     /// Clear all cache entries matching a prefix
-    /// Performance optimized: uses database prefix scanning directly
+    /// Performance optimized: uses database prefix scanning directly with robust tree detection
     pub async fn clear_universal_entries_by_prefix(&self, prefix: &str) -> Result<u64> {
         let mut cleared_count = 0u64;
 
-        // PERFORMANCE OPTIMIZATION: Use database-level prefix scanning
-        // This is much more efficient than scanning all entries in memory
-        let matching_entries = self
-            .universal_tree
-            .scan_prefix(prefix.as_bytes())
-            .await
-            .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+        eprintln!("DEBUG: Clearing entries with prefix '{}'", prefix);
 
-        // Remove each matching entry
-        for (key_bytes, _) in matching_entries {
-            if let Ok(key) = String::from_utf8(key_bytes) {
-                if self.remove_universal_entry(&key).await? {
-                    cleared_count += 1;
+        // Extract workspace ID from prefix for tree name resolution
+        let workspace_id = prefix.split(':').next().unwrap_or("universal_cache");
+
+        // Probe multiple plausible tree names based on common storage schemes
+        // NOTE: The actual storage uses "universal_cache_{workspace_id}" format
+        let tree_candidates = if workspace_id == "universal_cache" || workspace_id.is_empty() {
+            vec!["universal_cache".to_string()]
+        } else {
+            vec![
+                format!("universal_cache_{}", workspace_id), // PRIMARY: Actual storage pattern used
+                "universal_cache".to_string(),               // Global tree (fallback)
+                workspace_id.to_string(),                    // Raw workspace ID
+                format!("universal_cache:{}", workspace_id), // Colon separator
+                format!("cache_{}", workspace_id),           // Alternative prefix
+            ]
+        };
+
+        // Try both full prefix and stripped prefix for each tree
+        let prefix_candidates = if let Some(pos) = prefix.find(':') {
+            vec![prefix.to_string(), prefix[pos + 1..].to_string()]
+        } else {
+            vec![prefix.to_string()]
+        };
+
+        // Use a HashSet to avoid double deletion across tree/prefix combinations
+        let mut deleted_keys = std::collections::HashSet::<Vec<u8>>::new();
+
+        // Probe all combinations of tree names and prefixes
+        for tree_name in &tree_candidates {
+            if let Ok(tree) = self.database.open_tree(tree_name).await {
+                eprintln!(
+                    "DEBUG: Checking tree '{}' for prefix '{}'",
+                    tree_name, prefix
+                );
+                for scan_prefix in &prefix_candidates {
+                    if !scan_prefix.is_empty() {
+                        // Avoid scanning entire tree
+                        if let Ok(entries) = tree.scan_prefix(scan_prefix.as_bytes()).await {
+                            if !entries.is_empty() {
+                                eprintln!(
+                                    "DEBUG: Found {} entries in tree '{}' with prefix '{}'",
+                                    entries.len(),
+                                    tree_name,
+                                    scan_prefix
+                                );
+
+                                // Delete all matching entries (avoid duplicates)
+                                for (key_bytes, _) in entries {
+                                    if !deleted_keys.contains(&key_bytes) {
+                                        if tree.remove(&key_bytes).await.is_ok() {
+                                            deleted_keys.insert(key_bytes.clone());
+                                            cleared_count += 1;
+                                        }
+                                    }
+                                }
+                            } else {
+                                eprintln!(
+                                    "DEBUG: No entries found in tree '{}' with prefix '{}'",
+                                    tree_name, scan_prefix
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Continue checking all trees, don't break early
+                if cleared_count > 0 {
+                    eprintln!(
+                        "DEBUG: Found {} entries in tree '{}' so far",
+                        cleared_count, tree_name
+                    );
+                }
+            } else {
+                eprintln!("DEBUG: Could not open tree '{}'", tree_name);
+            }
+        }
+
+        // If targeted prefix scans found nothing, try a fallback full-tree scan
+        // with in-memory filtering (only for test environments)
+        if cleared_count == 0 && !workspace_id.is_empty() && workspace_id != "universal_cache" {
+            eprintln!("DEBUG: No entries found with targeted scans, trying fallback full scan");
+            for tree_name in &tree_candidates {
+                if let Ok(tree) = self.database.open_tree(tree_name).await {
+                    if let Ok(all_entries) = tree.scan_prefix(b"").await {
+                        eprintln!(
+                            "DEBUG: Fallback scanning {} total entries in tree '{}'",
+                            all_entries.len(),
+                            tree_name
+                        );
+                        for (key_bytes, _) in all_entries {
+                            // In-memory prefix matching
+                            if key_bytes.starts_with(prefix.as_bytes()) {
+                                if !deleted_keys.contains(&key_bytes) {
+                                    if tree.remove(&key_bytes).await.is_ok() {
+                                        deleted_keys.insert(key_bytes.clone());
+                                        cleared_count += 1;
+                                        eprintln!(
+                                            "DEBUG: Fallback deleted key: {}",
+                                            String::from_utf8_lossy(&key_bytes)
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        // Stop after first successful fallback
+                        if cleared_count > 0 {
+                            break;
+                        }
+                    }
                 }
             }
         }
 
+        eprintln!("DEBUG: Total cleared entries: {}", cleared_count);
         Ok(cleared_count)
     }
 

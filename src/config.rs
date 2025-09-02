@@ -109,35 +109,35 @@ pub struct LspWorkspaceCacheConfig {
 /// Database configuration for cache storage
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CacheDatabaseConfig {
-    /// Database backend type ("sled", "memory")
+    /// Database backend type ("duckdb", "memory")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend_type: Option<String>,
     /// Force in-memory mode (overrides environment variables)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_only: Option<bool>,
-    /// Sled-specific configuration
+    /// DuckDB-specific configuration
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sled_config: Option<SledDatabaseConfig>,
-    // Future: DuckDB configuration
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // pub duckdb_config: Option<DuckDbDatabaseConfig>,
+    pub duckdb_config: Option<DuckDBDatabaseConfig>,
 }
 
-/// Sled database specific configuration
+/// DuckDB database specific configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SledDatabaseConfig {
-    /// Enable compression
+pub struct DuckDBDatabaseConfig {
+    /// Connection pool size (number of concurrent connections)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub compression: Option<bool>,
-    /// Compression factor (1-22)
+    pub connection_pool_size: Option<usize>,
+    /// Memory limit in GB for DuckDB query execution
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub compression_factor: Option<i32>,
-    /// Cache capacity in MB
+    pub memory_limit_gb: Option<f64>,
+    /// Number of threads for parallel execution
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_capacity_mb: Option<u64>,
-    /// Flush interval in milliseconds
+    pub threads: Option<usize>,
+    /// Enable query result caching
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub flush_every_ms: Option<u64>,
+    pub enable_query_cache: Option<bool>,
+    /// Database file path (optional, defaults to in-memory if None)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_path: Option<String>,
 }
 
 /// Universal cache configuration providing unified caching for all LSP operations
@@ -489,16 +489,17 @@ pub struct ResolvedLspWorkspaceCacheConfig {
 pub struct ResolvedCacheDatabaseConfig {
     pub backend_type: String,
     pub memory_only: bool,
-    pub sled_config: ResolvedSledDatabaseConfig,
+    pub duckdb_config: ResolvedDuckDBDatabaseConfig,
 }
 
-/// Resolved Sled configuration with all defaults applied
+/// Resolved DuckDB configuration with all defaults applied
 #[derive(Debug, Clone)]
-pub struct ResolvedSledDatabaseConfig {
-    pub compression: bool,
-    pub compression_factor: i32,
-    pub cache_capacity_mb: u64,
-    pub flush_every_ms: Option<u64>,
+pub struct ResolvedDuckDBDatabaseConfig {
+    pub connection_pool_size: usize,
+    pub memory_limit_gb: f64,
+    pub threads: usize,
+    pub enable_query_cache: bool,
+    pub database_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -825,21 +826,24 @@ impl ProbeConfig {
                     if other_db.memory_only.is_some() {
                         base_db.memory_only = other_db.memory_only;
                     }
-                    if let Some(other_sled) = other_db.sled_config {
-                        let base_sled = base_db
-                            .sled_config
-                            .get_or_insert(SledDatabaseConfig::default());
-                        if other_sled.compression.is_some() {
-                            base_sled.compression = other_sled.compression;
+                    if let Some(other_duckdb) = other_db.duckdb_config {
+                        let base_duckdb = base_db
+                            .duckdb_config
+                            .get_or_insert(DuckDBDatabaseConfig::default());
+                        if other_duckdb.connection_pool_size.is_some() {
+                            base_duckdb.connection_pool_size = other_duckdb.connection_pool_size;
                         }
-                        if other_sled.compression_factor.is_some() {
-                            base_sled.compression_factor = other_sled.compression_factor;
+                        if other_duckdb.memory_limit_gb.is_some() {
+                            base_duckdb.memory_limit_gb = other_duckdb.memory_limit_gb;
                         }
-                        if other_sled.cache_capacity_mb.is_some() {
-                            base_sled.cache_capacity_mb = other_sled.cache_capacity_mb;
+                        if other_duckdb.threads.is_some() {
+                            base_duckdb.threads = other_duckdb.threads;
                         }
-                        if other_sled.flush_every_ms.is_some() {
-                            base_sled.flush_every_ms = other_sled.flush_every_ms;
+                        if other_duckdb.enable_query_cache.is_some() {
+                            base_duckdb.enable_query_cache = other_duckdb.enable_query_cache;
+                        }
+                        if other_duckdb.database_path.is_some() {
+                            base_duckdb.database_path = other_duckdb.database_path;
                         }
                     }
                 }
@@ -1107,27 +1111,30 @@ impl ProbeConfig {
             db_config.memory_only = Some(val == "1" || val.to_lowercase() == "true");
         }
 
-        // Sled-specific configuration
-        let sled_config = db_config
-            .sled_config
-            .get_or_insert(SledDatabaseConfig::default());
-        if let Ok(val) = env::var("PROBE_LSP_CACHE_SLED_COMPRESSION") {
-            sled_config.compression = Some(val == "1" || val.to_lowercase() == "true");
-        }
-        if let Ok(val) = env::var("PROBE_LSP_CACHE_SLED_COMPRESSION_FACTOR") {
-            if let Ok(factor) = val.parse() {
-                sled_config.compression_factor = Some(factor);
+        // DuckDB-specific configuration
+        let duckdb_config = db_config
+            .duckdb_config
+            .get_or_insert(DuckDBDatabaseConfig::default());
+        if let Ok(val) = env::var("PROBE_LSP_CACHE_DUCKDB_POOL_SIZE") {
+            if let Ok(size) = val.parse() {
+                duckdb_config.connection_pool_size = Some(size);
             }
         }
-        if let Ok(val) = env::var("PROBE_LSP_CACHE_SLED_CAPACITY_MB") {
-            if let Ok(capacity) = val.parse() {
-                sled_config.cache_capacity_mb = Some(capacity);
+        if let Ok(val) = env::var("PROBE_LSP_CACHE_DUCKDB_MEMORY_GB") {
+            if let Ok(memory) = val.parse() {
+                duckdb_config.memory_limit_gb = Some(memory);
             }
         }
-        if let Ok(val) = env::var("PROBE_LSP_CACHE_SLED_FLUSH_MS") {
-            if let Ok(flush) = val.parse() {
-                sled_config.flush_every_ms = Some(flush);
+        if let Ok(val) = env::var("PROBE_LSP_CACHE_DUCKDB_THREADS") {
+            if let Ok(threads) = val.parse() {
+                duckdb_config.threads = Some(threads);
             }
+        }
+        if let Ok(val) = env::var("PROBE_LSP_CACHE_DUCKDB_QUERY_CACHE") {
+            duckdb_config.enable_query_cache = Some(val == "1" || val.to_lowercase() == "true");
+        }
+        if let Ok(val) = env::var("PROBE_LSP_CACHE_DUCKDB_PATH") {
+            duckdb_config.database_path = Some(val);
         }
 
         // Performance
@@ -1313,15 +1320,26 @@ impl ProbeConfig {
                         database: {
                             let db = cache.database.unwrap_or_default();
                             ResolvedCacheDatabaseConfig {
-                                backend_type: db.backend_type.unwrap_or_else(|| "sled".to_string()),
+                                backend_type: db
+                                    .backend_type
+                                    .unwrap_or_else(|| "duckdb".to_string()),
                                 memory_only: db.memory_only.unwrap_or(false),
-                                sled_config: {
-                                    let sled = db.sled_config.unwrap_or_default();
-                                    ResolvedSledDatabaseConfig {
-                                        compression: sled.compression.unwrap_or(true),
-                                        compression_factor: sled.compression_factor.unwrap_or(5),
-                                        cache_capacity_mb: sled.cache_capacity_mb.unwrap_or(64),
-                                        flush_every_ms: sled.flush_every_ms,
+                                duckdb_config: {
+                                    let duckdb = db.duckdb_config.unwrap_or_default();
+                                    ResolvedDuckDBDatabaseConfig {
+                                        connection_pool_size: duckdb
+                                            .connection_pool_size
+                                            .unwrap_or(8),
+                                        memory_limit_gb: duckdb.memory_limit_gb.unwrap_or(2.0),
+                                        threads: duckdb.threads.unwrap_or_else(|| {
+                                            std::thread::available_parallelism()
+                                                .map(|p| p.get())
+                                                .unwrap_or(4)
+                                        }),
+                                        enable_query_cache: duckdb
+                                            .enable_query_cache
+                                            .unwrap_or(true),
+                                        database_path: duckdb.database_path,
                                     }
                                 },
                             }
@@ -1498,30 +1516,36 @@ impl ResolvedConfig {
                     database: Some(CacheDatabaseConfig {
                         backend_type: Some(self.lsp.workspace_cache.database.backend_type.clone()),
                         memory_only: Some(self.lsp.workspace_cache.database.memory_only),
-                        sled_config: Some(SledDatabaseConfig {
-                            compression: Some(
-                                self.lsp.workspace_cache.database.sled_config.compression,
-                            ),
-                            compression_factor: Some(
+                        duckdb_config: Some(DuckDBDatabaseConfig {
+                            connection_pool_size: Some(
                                 self.lsp
                                     .workspace_cache
                                     .database
-                                    .sled_config
-                                    .compression_factor,
+                                    .duckdb_config
+                                    .connection_pool_size,
                             ),
-                            cache_capacity_mb: Some(
+                            memory_limit_gb: Some(
                                 self.lsp
                                     .workspace_cache
                                     .database
-                                    .sled_config
-                                    .cache_capacity_mb,
+                                    .duckdb_config
+                                    .memory_limit_gb,
                             ),
-                            flush_every_ms: self
+                            threads: Some(self.lsp.workspace_cache.database.duckdb_config.threads),
+                            enable_query_cache: Some(
+                                self.lsp
+                                    .workspace_cache
+                                    .database
+                                    .duckdb_config
+                                    .enable_query_cache,
+                            ),
+                            database_path: self
                                 .lsp
                                 .workspace_cache
                                 .database
-                                .sled_config
-                                .flush_every_ms,
+                                .duckdb_config
+                                .database_path
+                                .clone(),
                         }),
                     }),
                 }),
