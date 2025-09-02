@@ -1567,7 +1567,7 @@ impl DuckDBBackend {
                     &context.workspace_id,
                     context.current_commit.as_deref().unwrap_or(""),
                 ],
-                |row| Ok(row.get::<_, String>(0)?),
+                |row| row.get::<_, String>(0),
             )
             .map_err(|e| DatabaseError::OperationFailed {
                 message: format!("Failed to execute unused symbols query: {}", e),
@@ -1760,6 +1760,7 @@ impl DuckDBBackend {
     }
 
     /// Create file and file version entries for migration
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_file_metadata(
         &self,
         file_id: &str,

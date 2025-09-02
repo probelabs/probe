@@ -16,7 +16,7 @@ use tokio::fs;
 /// Global workspace resolution cache to eliminate race conditions
 /// Key: Canonical file path, Value: (workspace_root, workspace_id)
 static WORKSPACE_RESOLUTION_CACHE: Lazy<DashMap<PathBuf, (PathBuf, String)>> =
-    Lazy::new(|| DashMap::new());
+    Lazy::new(DashMap::new);
 
 /// A content-addressed cache key
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
