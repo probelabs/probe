@@ -812,15 +812,9 @@ impl CacheLayer {
             DaemonRequest::Hover { line, column, .. } => Some(format!("{line}:{column}")),
             DaemonRequest::Definition { line, column, .. } => Some(format!("{line}:{column}")),
             DaemonRequest::References { line, column, .. } => Some(format!("{line}:{column}")),
-            DaemonRequest::TypeDefinition { line, column, .. } => {
-                Some(format!("{line}:{column}"))
-            }
-            DaemonRequest::Implementations { line, column, .. } => {
-                Some(format!("{line}:{column}"))
-            }
-            DaemonRequest::CallHierarchy { line, column, .. } => {
-                Some(format!("{line}:{column}"))
-            }
+            DaemonRequest::TypeDefinition { line, column, .. } => Some(format!("{line}:{column}")),
+            DaemonRequest::Implementations { line, column, .. } => Some(format!("{line}:{column}")),
+            DaemonRequest::CallHierarchy { line, column, .. } => Some(format!("{line}:{column}")),
             DaemonRequest::Completion { line, column, .. } => Some(format!("{line}:{column}")),
             _ => None,
         }
