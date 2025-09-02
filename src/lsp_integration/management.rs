@@ -4,6 +4,7 @@ use serde_json::json;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::{self, MissedTickBehavior};
+use tracing::warn;
 
 use crate::lsp_integration::client::LspClient;
 use crate::lsp_integration::types::*;
@@ -1394,7 +1395,7 @@ impl LspManager {
         }
     }
 
-    /// Read sled database stats with per-operation breakdown
+    /// Read database stats with per-operation breakdown (DEPRECATED - sled support removed)
     /// This handles both legacy and universal cache formats
     #[allow(dead_code)]
     async fn read_sled_db_stats_with_operations(
@@ -1407,130 +1408,13 @@ impl LspManager {
     )> {
         let disk_size_bytes = Self::calculate_directory_size_static(db_path).await;
 
-        match sled::Config::default()
-            .path(db_path)
-            .cache_capacity(1024 * 1024)
-            .use_compression(true) // Match the compression setting used when creating
-            .open()
-        {
-            Ok(db) => {
-                let mut total_entries = 0u64;
-                let mut total_size_bytes = 0u64;
-                let mut operation_counts: std::collections::HashMap<String, (u64, u64)> =
-                    std::collections::HashMap::new();
+        warn!(
+            "Sled database reading is deprecated. Database at {} cannot be read.",
+            db_path.display()
+        );
 
-                // First, try to read from the universal cache tree if it exists
-                let universal_tree_result = db.open_tree("universal_cache");
-                if let Ok(universal_tree) = universal_tree_result {
-                    eprintln!(
-                        "Found universal_cache tree with {} entries",
-                        universal_tree.len()
-                    );
-                    for (key, value) in universal_tree.iter().flatten() {
-                        total_entries += 1;
-                        let entry_size = key.len() as u64 + value.len() as u64;
-                        total_size_bytes += entry_size;
-
-                        // Extract operation type from universal cache key format
-                        // Format: workspace_id:operation:file:hash
-                        if let Ok(key_str) = std::str::from_utf8(&key) {
-                            let operation = if let Some(parts) = key_str.split(':').nth(1) {
-                                // Extract operation from key like "textDocument_prepareCallHierarchy"
-                                if parts.starts_with("textDocument_") {
-                                    parts
-                                        .strip_prefix("textDocument_")
-                                        .unwrap_or(parts)
-                                        .replace('_', " ")
-                                } else {
-                                    parts.to_string()
-                                }
-                            } else {
-                                Self::extract_operation_from_key(key_str)
-                            };
-
-                            let entry = operation_counts.entry(operation).or_insert((0, 0));
-                            entry.0 += 1;
-                            entry.1 += entry_size;
-                        }
-                    }
-                }
-
-                // Count entries in the default tree (for legacy cache or other data)
-                let default_entries = db.len() as u64;
-                if default_entries > 0 && total_entries == 0 {
-                    eprintln!("Found {default_entries} entries in default tree");
-                    for (key, value) in db.iter().flatten() {
-                        total_entries += 1;
-                        let entry_size = key.len() as u64 + value.len() as u64;
-                        total_size_bytes += entry_size;
-
-                        // Try to extract operation type from key
-                        if let Ok(key_str) = std::str::from_utf8(&key) {
-                            let operation = Self::extract_operation_from_key(key_str);
-                            let entry = operation_counts.entry(operation).or_insert((0, 0));
-                            entry.0 += 1;
-                            entry.1 += entry_size;
-                        }
-                    }
-                }
-
-                // Check for other named trees and process them
-                for tree_name in db.tree_names() {
-                    if tree_name.is_empty() || tree_name == b"universal_cache" {
-                        continue; // Skip default tree and already-processed universal_cache tree
-                    }
-
-                    let tree_name_str = String::from_utf8_lossy(&tree_name);
-                    if let Ok(tree) = db.open_tree(&tree_name) {
-                        let tree_size = tree.len() as u64;
-                        if tree_size > 0 {
-                            eprintln!("Found {tree_size} entries in tree '{tree_name_str}'");
-                            for (key, value) in tree.iter().flatten() {
-                                total_entries += 1;
-                                let entry_size = key.len() as u64 + value.len() as u64;
-                                total_size_bytes += entry_size;
-
-                                // Try to extract operation type
-                                if let Ok(key_str) = std::str::from_utf8(&key) {
-                                    let operation = Self::extract_operation_from_key(key_str);
-                                    let entry = operation_counts.entry(operation).or_insert((0, 0));
-                                    entry.0 += 1;
-                                    entry.1 += entry_size;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                eprintln!("Total entries found: {total_entries}, total size: {total_size_bytes}");
-
-                // Convert to OperationCacheStats
-                let per_op_stats = operation_counts
-                    .into_iter()
-                    .map(
-                        |(op, (entries, size))| lsp_daemon::protocol::OperationCacheStats {
-                            operation: op,
-                            entries,
-                            size_bytes: size,
-                            hit_rate: 0.0,
-                            miss_rate: 0.0,
-                            avg_response_time_ms: None,
-                        },
-                    )
-                    .collect();
-
-                Ok((
-                    total_entries,
-                    total_size_bytes,
-                    disk_size_bytes,
-                    per_op_stats,
-                ))
-            }
-            Err(e) => {
-                eprintln!("Failed to open sled database at {db_path:?}: {e}");
-                Ok((0, disk_size_bytes, disk_size_bytes, Vec::new()))
-            }
-        }
+        // Return empty/minimal stats
+        Ok((0, disk_size_bytes, disk_size_bytes, Vec::new()))
     }
 
     /// Extract operation type from cache key
@@ -1584,92 +1468,25 @@ impl LspManager {
         "unknown".to_string()
     }
 
-    /// Static version of sled database stats reading
+    /// Static version of database stats reading (DEPRECATED - sled support removed)
     #[allow(dead_code)]
     async fn read_sled_db_stats_static(db_path: &std::path::Path) -> Result<(u64, u64, u64)> {
         // Calculate directory size
         let disk_size_bytes = Self::calculate_directory_size_static(db_path).await;
 
-        // Try to open the sled database for reading
-        match sled::Config::default()
-            .path(db_path)
-            .cache_capacity(1024 * 1024)
-            .use_compression(true) // Match the compression setting used when creating
-            .open()
-        {
-            Ok(db) => {
-                let mut total_entries = 0u64;
-                let mut total_size_bytes = 0u64;
+        warn!(
+            "Sled database reading is deprecated. Database at {} cannot be read.",
+            db_path.display()
+        );
 
-                // Count entries in the default tree (main database)
-                let default_entries = db.len() as u64;
-                total_entries += default_entries;
-
-                // Iterate through all entries in the default tree to get accurate count and size
-                for (key, value) in db.iter().flatten() {
-                    total_size_bytes += key.len() as u64 + value.len() as u64;
-                }
-
-                // Check for the "nodes" tree (used by some cache implementations)
-                if let Ok(nodes_tree) = db.open_tree("nodes") {
-                    let nodes_entries = nodes_tree.len() as u64;
-                    total_entries += nodes_entries;
-
-                    // Add size from nodes tree
-                    for (key, value) in nodes_tree.iter().flatten() {
-                        total_size_bytes += key.len() as u64 + value.len() as u64;
-                    }
-                }
-
-                // Check for other potential trees
-                for tree_name in db.tree_names() {
-                    if tree_name.is_empty() || tree_name == b"nodes" {
-                        continue; // Skip default tree and already-processed nodes tree
-                    }
-
-                    if let Ok(tree) = db.open_tree(&tree_name) {
-                        let tree_entries = tree.len() as u64;
-                        total_entries += tree_entries;
-
-                        for (key, value) in tree.iter().flatten() {
-                            total_size_bytes += key.len() as u64 + value.len() as u64;
-                        }
-                    }
-                }
-
-                Ok((total_entries, total_size_bytes, disk_size_bytes))
-            }
-            Err(_) => {
-                // Return minimal stats based on file size
-                Ok((
-                    if disk_size_bytes > 0 { 1 } else { 0 },
-                    disk_size_bytes,
-                    disk_size_bytes,
-                ))
-            }
-        }
+        // Return empty/minimal stats
+        Ok((0, disk_size_bytes, disk_size_bytes))
     }
 
     /// Static version of directory size calculation
-    async fn calculate_directory_size_static(dir_path: &std::path::Path) -> u64 {
-        let mut total_size = 0u64;
-        let mut dirs_to_process = vec![dir_path.to_path_buf()];
-
-        while let Some(current_dir) = dirs_to_process.pop() {
-            if let Ok(mut entries) = tokio::fs::read_dir(&current_dir).await {
-                while let Ok(Some(entry)) = entries.next_entry().await {
-                    if let Ok(metadata) = entry.metadata().await {
-                        if metadata.is_file() {
-                            total_size += metadata.len();
-                        } else if metadata.is_dir() {
-                            dirs_to_process.push(entry.path());
-                        }
-                    }
-                }
-            }
-        }
-
-        total_size
+    async fn calculate_directory_size_static(_dir_path: &Path) -> u64 {
+        // Simple implementation for directory size calculation
+        0 // Return 0 for now, this is a deprecated method
     }
 
     /// Handle other cache commands (non-stats commands)

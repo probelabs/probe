@@ -1101,7 +1101,7 @@ impl LspClient {
                     disk_size_bytes += stats.disk_size_bytes;
                 }
                 Err(e) => {
-                    debug!("Failed to read sled db stats from {:?}: {}", cache_db, e);
+                    debug!("Failed to read db stats from {:?}: {}", cache_db, e);
                 }
             }
         }
@@ -1114,73 +1114,26 @@ impl LspClient {
         })
     }
 
-    /// Read statistics from a sled database file
+    /// Read statistics from a database file (DEPRECATED - sled support removed)
     #[allow(dead_code)]
     async fn read_sled_db_stats(&self, db_path: &Path) -> Result<WorkspaceCacheStats> {
-        debug!("Reading sled database stats from: {:?}", db_path);
+        debug!("Database reading is deprecated: {:?}", db_path);
 
-        // Get directory size as disk size (for sled database directory)
+        // Get directory size as disk size
         let disk_size_bytes = self.calculate_directory_size(db_path).await;
 
-        // Try to open the sled database for reading
-        match sled::Config::default()
-            .path(db_path)
-            .cache_capacity(1024 * 1024) // 1MB cache for reading
-            .open()
-        {
-            Ok(db) => {
-                let mut entries = 0u64;
-                let mut size_bytes = 0u64;
+        warn!(
+            "Sled database reading is deprecated. Database at {} cannot be read.",
+            db_path.display()
+        );
 
-                // Open the nodes tree to count entries
-                match db.open_tree("nodes") {
-                    Ok(nodes_tree) => {
-                        entries = nodes_tree.len() as u64;
-
-                        // Estimate size by sampling some entries
-                        let mut sample_count = 0;
-                        let mut sample_total_size = 0;
-
-                        for (key, value) in nodes_tree.iter().take(100).flatten() {
-                            // Sample first 100 entries
-                            sample_count += 1;
-                            sample_total_size += key.len() + value.len();
-                        }
-
-                        if sample_count > 0 {
-                            // Estimate total size based on sample
-                            let avg_entry_size = sample_total_size / sample_count;
-                            size_bytes = entries * avg_entry_size as u64;
-                        }
-                    }
-                    Err(e) => {
-                        debug!("Failed to open nodes tree: {}", e);
-                    }
-                }
-
-                debug!(
-                    "Read sled db stats: {} entries, {} bytes estimated, {} bytes on disk",
-                    entries, size_bytes, disk_size_bytes
-                );
-
-                Ok(WorkspaceCacheStats {
-                    entries,
-                    size_bytes,
-                    disk_size_bytes,
-                    files: 0, // Would need more complex parsing to get file count
-                })
-            }
-            Err(e) => {
-                debug!("Failed to open sled database at {:?}: {}", db_path, e);
-                // Return minimal stats based on file size
-                Ok(WorkspaceCacheStats {
-                    entries: if disk_size_bytes > 0 { 1 } else { 0 }, // Assume at least 1 entry if file exists
-                    size_bytes: disk_size_bytes,                      // Rough estimate
-                    disk_size_bytes,
-                    files: 0,
-                })
-            }
-        }
+        // Return minimal stats based on file size
+        Ok(WorkspaceCacheStats {
+            entries: if disk_size_bytes > 0 { 1 } else { 0 },
+            size_bytes: disk_size_bytes,
+            disk_size_bytes,
+            files: 0,
+        })
     }
 
     /// Calculate the total size of a directory and its contents (iterative to avoid recursion issues)

@@ -2726,18 +2726,17 @@ mod tests {
         // Wait for completion
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let progress1 = manager1.get_progress().await;
         manager1.stop_indexing().await.unwrap();
+        let progress1 = manager1.get_progress().await;
 
         // Second run - incremental (should detect no changes if file hasn't changed)
-        let universal_cache_layer2 =
-            create_test_universal_cache_layer(server_manager.clone()).await;
+        // Reuse the same cache layer so incremental detection can work
         let manager2 = IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer2,
+            universal_cache_layer.clone(),
         );
         manager2
             .start_indexing(temp_dir.path().to_path_buf())
@@ -2746,8 +2745,8 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let progress2 = manager2.get_progress().await;
         manager2.stop_indexing().await.unwrap();
+        let progress2 = manager2.get_progress().await;
 
         // In incremental mode, second run might process fewer or equal files
         assert!(progress2.processed_files <= progress1.processed_files);
@@ -2825,12 +2824,13 @@ mod tests {
         // Wait for processing
         tokio::time::sleep(Duration::from_millis(1000)).await;
 
-        let progress = manager.get_progress().await;
         manager.stop_indexing().await.unwrap();
 
+        let final_progress = manager.get_progress().await;
+
         // Should have processed at least one file and possibly failed on others
-        assert!(progress.processed_files > 0 || progress.failed_files > 0);
-        assert!(progress.total_files >= 2);
+        assert!(final_progress.processed_files > 0 || final_progress.failed_files > 0);
+        assert!(final_progress.total_files >= 2);
     }
 
     #[tokio::test]
@@ -2873,11 +2873,12 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let progress = manager.get_progress().await;
         manager.stop_indexing().await.unwrap();
 
+        let final_progress = manager.get_progress().await;
+
         // Should have processed only Rust files, so fewer than total files created
-        assert!(progress.processed_files > 0);
+        assert!(final_progress.processed_files > 0);
         // The exact count depends on language detection and filtering implementation
     }
 

@@ -11,15 +11,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{OnceCell, RwLock};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 /// Singleflight group for deduplicating concurrent requests
 #[derive(Debug)]
 struct SingleflightGroup {
-    /// Active requests and their broadcast channels
-    active: RwLock<HashMap<String, broadcast::Sender<SingleflightResult>>>,
+    /// Active requests mapped to their result cells
+    active: RwLock<HashMap<String, std::sync::Arc<OnceCell<SingleflightResult>>>>,
 }
 
 /// Result of a singleflight operation
@@ -47,62 +47,78 @@ impl SingleflightGroup {
         Fut: std::future::Future<Output = Result<SingleflightResult>> + Send + 'static,
     {
         let start = Instant::now();
+        eprintln!("DEBUG: Singleflight call for key '{}'", key);
 
-        // Check if there's already an active request for this key
+        // Get or create a OnceCell for this key
+        let cell = {
+            let mut active = self.active.write().await;
+            eprintln!("DEBUG: Singleflight active count: {}", active.len());
+
+            use std::collections::hash_map::Entry;
+            match active.entry(key.to_string()) {
+                Entry::Occupied(entry) => {
+                    eprintln!(
+                        "DEBUG: Found existing cell for key '{}', will await result",
+                        key
+                    );
+                    entry.get().clone()
+                }
+                Entry::Vacant(entry) => {
+                    eprintln!(
+                        "DEBUG: Creating new cell for key '{}', will become leader",
+                        key
+                    );
+                    let cell = std::sync::Arc::new(OnceCell::new());
+                    entry.insert(cell.clone());
+                    eprintln!("DEBUG: Inserted new cell, active count: {}", active.len());
+                    cell
+                }
+            }
+        };
+
+        // Use OnceCell to ensure only one initializer runs
+        let result = cell
+            .get_or_try_init(|| {
+                eprintln!("DEBUG: Leader executing function for key '{}'", key);
+                async move {
+                    let result = f().await;
+                    eprintln!("DEBUG: Leader function completed for key '{}'", key);
+                    result
+                }
+            })
+            .await;
+
+        // Best-effort cleanup: remove the cell if it's the same one we inserted
         {
-            let active = self.active.read().await;
-            if let Some(sender) = active.get(key) {
-                let mut receiver = sender.subscribe();
-                drop(active);
-
-                // Wait for the existing request to complete
-                match receiver.recv().await {
-                    Ok(result) => {
-                        debug!(
-                            "Singleflight: reused result for key '{}' after {:?}",
-                            key,
-                            start.elapsed()
-                        );
-                        return Ok(result);
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        // Receiver lagged, fall through to make new request
-                        debug!("Singleflight: receiver lagged for key '{}'", key);
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        // Channel closed, fall through to make new request
-                        debug!("Singleflight: channel closed for key '{}'", key);
-                    }
+            let mut active = self.active.write().await;
+            if let Some(existing_cell) = active.get(key) {
+                if std::sync::Arc::ptr_eq(existing_cell, &cell) {
+                    active.remove(key);
+                    eprintln!(
+                        "DEBUG: Cleaned up cell for key '{}', active count: {}",
+                        key,
+                        active.len()
+                    );
+                } else {
+                    eprintln!(
+                        "DEBUG: Cell for key '{}' was replaced, skipping cleanup",
+                        key
+                    );
                 }
             }
         }
 
-        // Create a new broadcast channel for this request
-        let (sender, _) = broadcast::channel(16);
-        let sender_clone = sender.clone();
-
-        // Add to active requests
-        {
-            let mut active = self.active.write().await;
-            active.insert(key.to_string(), sender);
-        }
-
-        // Execute the function
-        let result = f().await;
-
-        // Remove from active requests and broadcast the result
-        {
-            let mut active = self.active.write().await;
-            active.remove(key);
-        }
-
         match result {
             Ok(result) => {
-                let _ = sender_clone.send(result.clone());
-                Ok(result)
+                eprintln!(
+                    "DEBUG: Singleflight completed for key '{}' after {:?}",
+                    key,
+                    start.elapsed()
+                );
+                Ok(result.clone())
             }
             Err(e) => {
-                // For errors, we don't broadcast to avoid poisoning other waiters
+                eprintln!("DEBUG: Singleflight failed for key '{}': {}", key, e);
                 Err(e)
             }
         }
@@ -214,7 +230,7 @@ pub struct CacheLayer {
     document_provider: Arc<dyn DocumentProvider>,
 
     /// Singleflight group for deduplication
-    singleflight: SingleflightGroup,
+    singleflight: Arc<SingleflightGroup>,
 
     /// Configuration
     config: CacheLayerConfig,
@@ -230,7 +246,7 @@ impl Clone for CacheLayer {
             key_builder: self.key_builder.clone(),
             policy_registry: PolicyRegistry::new(), // Create new instance with default policies
             document_provider: self.document_provider.clone(),
-            singleflight: SingleflightGroup::new(), // Create new singleflight group
+            singleflight: self.singleflight.clone(), // Share the same singleflight group via Arc
             config: self.config.clone(),
             workspace_revisions: self.workspace_revisions.clone(),
         }
@@ -254,7 +270,7 @@ impl CacheLayer {
             key_builder: KeyBuilder::new(),
             policy_registry: PolicyRegistry::new(),
             document_provider,
-            singleflight: SingleflightGroup::new(),
+            singleflight: Arc::new(SingleflightGroup::new()),
             config,
             workspace_revisions: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -315,44 +331,98 @@ impl CacheLayer {
             return Ok(upstream_handler(request).await);
         }
 
-        // Build cache key
-        let cache_key = match self
+        // Create synchronous singleflight key for immediate deduplication
+        let singleflight_key = self
             .key_builder
-            .build_key(lsp_method, &file_path, &params)
-            .await
-        {
-            Ok(key) => key,
-            Err(e) => {
-                warn!("Failed to build cache key: {}", e);
-                return Ok(upstream_handler(request).await);
-            }
-        };
+            .build_singleflight_key(lsp_method, &file_path, &params);
 
-        // Create singleflight key
-        let singleflight_key = cache_key.to_storage_key();
+        eprintln!(
+            "DEBUG: Synchronous singleflight key: '{}'",
+            singleflight_key
+        );
+
+        // Debug: Log the singleflight key for debugging identical requests
+        debug!(
+            "Singleflight key generated: '{}' for request {:?} at {}:{}",
+            singleflight_key,
+            std::mem::discriminant(&request),
+            file_path.display(),
+            Self::extract_position_from_request(&request).unwrap_or_else(|| "unknown".to_string())
+        );
 
         // Clone necessary data before the async closure
         let cache = self.cache.clone();
-        let key = cache_key.clone();
+        let key_builder = self.key_builder.clone();
         let method = lsp_method;
         let path = file_path.clone();
         let params_str = params.clone();
         let request_info = self.extract_request_info(&request);
         let request_for_closure = request.clone();
+        let upstream_handler_opt =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(upstream_handler)));
 
         // Execute with singleflight deduplication
+        debug!(
+            "Singleflight: executing request with key '{}'",
+            singleflight_key
+        );
         let result = self
             .singleflight
             .call(&singleflight_key, move || {
                 let cache = cache.clone();
-                let key = key.clone();
+                let key_builder = key_builder.clone();
                 let path = path.clone();
                 let params_str = params_str.clone();
                 let request_info = request_info.clone();
                 let request_for_closure = request_for_closure.clone();
+                let upstream_handler_opt = upstream_handler_opt.clone();
                 let start = start_time;
 
                 Box::pin(async move {
+                    eprintln!("DEBUG: Inside singleflight closure, building full cache key...");
+
+                    // Build full cache key (with proper content addressing)
+                    let cache_key = match key_builder.build_key(method, &path, &params_str).await {
+                        Ok(key) => key,
+                        Err(e) => {
+                            eprintln!("DEBUG: Failed to build cache key in singleflight: {}", e);
+                            // Skip cache, go directly to upstream handler
+                            let upstream_handler = match upstream_handler_opt.lock().unwrap().take()
+                            {
+                                Some(handler) => handler,
+                                None => {
+                                    eprintln!(
+                                        "ERROR: Upstream handler already taken in error case!"
+                                    );
+                                    return Ok(SingleflightResult {
+                                        data: DaemonResponse::Hover {
+                                            request_id: match &request_for_closure {
+                                                DaemonRequest::Hover { request_id, .. } => {
+                                                    *request_id
+                                                }
+                                                _ => uuid::Uuid::new_v4(),
+                                            },
+                                            content: None,
+                                        },
+                                        from_cache: false,
+                                        duration: start.elapsed(),
+                                    });
+                                }
+                            };
+                            let response = upstream_handler(request_for_closure).await;
+                            return Ok(SingleflightResult {
+                                data: response,
+                                from_cache: false,
+                                duration: start.elapsed(),
+                            });
+                        }
+                    };
+
+                    eprintln!(
+                        "DEBUG: Built full cache key in singleflight: {}",
+                        cache_key.to_storage_key()
+                    );
+
                     // Try cache first
                     match cache
                         .get::<serde_json::Value>(method, &path, &params_str)
@@ -363,7 +433,7 @@ impl CacheLayer {
                                 "Cache HIT for {:?} {} - key: {}",
                                 method,
                                 request_info,
-                                key.to_storage_key()
+                                cache_key.to_storage_key()
                             );
 
                             // Convert cached value back to DaemonResponse
@@ -386,7 +456,7 @@ impl CacheLayer {
                                 "Cache MISS for {:?} {} - key: {}",
                                 method,
                                 request_info,
-                                key.to_storage_key()
+                                cache_key.to_storage_key()
                             );
                         }
                         Err(e) => {
@@ -396,6 +466,24 @@ impl CacheLayer {
                     }
 
                     // Cache miss or error, call upstream handler
+                    let upstream_handler = match upstream_handler_opt.lock().unwrap().take() {
+                        Some(handler) => handler,
+                        None => {
+                            // This shouldn't happen in a proper singleflight - only one closure should execute
+                            eprintln!("ERROR: Upstream handler already taken!");
+                            return Ok(SingleflightResult {
+                                data: DaemonResponse::Hover {
+                                    request_id: match &request_for_closure {
+                                        DaemonRequest::Hover { request_id, .. } => *request_id,
+                                        _ => uuid::Uuid::new_v4(),
+                                    },
+                                    content: None,
+                                },
+                                from_cache: false,
+                                duration: start.elapsed(),
+                            });
+                        }
+                    };
                     let response = upstream_handler(request_for_closure).await;
                     let elapsed = start.elapsed();
 
@@ -410,7 +498,7 @@ impl CacheLayer {
                                     "Cached response for {:?} {} - key: {}",
                                     method,
                                     request_info,
-                                    key.to_storage_key()
+                                    cache_key.to_storage_key()
                                 );
                             }
                         }
@@ -432,7 +520,7 @@ impl CacheLayer {
                 self.analyze_request_and_response(&request, &result.data);
 
             info!(
-                "Cache {} for {:?} in {:?} (singleflight: {:?}) {} - {} | Key: ws={}, method={}, file={}, params={}",
+                "Cache {} for {:?} in {:?} (singleflight: {:?}) {} - {} | File={}, params={}",
                 cache_status,
                 lsp_method,
                 result.duration,
@@ -443,14 +531,86 @@ impl CacheLayer {
                     "✗ NO_DATA"
                 },
                 request_info,
-                cache_key.workspace_id,
-                cache_key.method.as_str(),
-                cache_key.workspace_relative_path.display(),
+                file_path.display(),
                 params.chars().take(80).collect::<String>()
             );
         }
 
-        Ok(result.data)
+        // Adapt the response to use this caller's request_id instead of the shared one
+        let adapted_response = Self::adapt_response_request_id(result.data, &request);
+        Ok(adapted_response)
+    }
+
+    /// Adapt a response to use the correct request_id for each caller
+    /// This is essential for singleflight deduplication where multiple callers
+    /// get the same response content but need their own request_ids
+    fn adapt_response_request_id(
+        response: DaemonResponse,
+        request: &DaemonRequest,
+    ) -> DaemonResponse {
+        let caller_request_id = Self::extract_request_id(request);
+
+        match response {
+            DaemonResponse::Hover { content, .. } => DaemonResponse::Hover {
+                request_id: caller_request_id,
+                content,
+            },
+            DaemonResponse::Definition { locations, .. } => DaemonResponse::Definition {
+                request_id: caller_request_id,
+                locations,
+            },
+            DaemonResponse::References { locations, .. } => DaemonResponse::References {
+                request_id: caller_request_id,
+                locations,
+            },
+            DaemonResponse::DocumentSymbols { symbols, .. } => DaemonResponse::DocumentSymbols {
+                request_id: caller_request_id,
+                symbols,
+            },
+            DaemonResponse::Completion { items, .. } => DaemonResponse::Completion {
+                request_id: caller_request_id,
+                items,
+            },
+            DaemonResponse::CallHierarchy { result, .. } => DaemonResponse::CallHierarchy {
+                request_id: caller_request_id,
+                result,
+            },
+            DaemonResponse::WorkspaceSymbols { symbols, .. } => DaemonResponse::WorkspaceSymbols {
+                request_id: caller_request_id,
+                symbols,
+            },
+            DaemonResponse::Implementations { locations, .. } => DaemonResponse::Implementations {
+                request_id: caller_request_id,
+                locations,
+            },
+            DaemonResponse::TypeDefinition { locations, .. } => DaemonResponse::TypeDefinition {
+                request_id: caller_request_id,
+                locations,
+            },
+            DaemonResponse::Error { error, .. } => DaemonResponse::Error {
+                request_id: caller_request_id,
+                error,
+            },
+            // For other variants, just return as-is (they might not be cacheable)
+            other => other,
+        }
+    }
+
+    /// Extract request_id from any DaemonRequest
+    fn extract_request_id(request: &DaemonRequest) -> Uuid {
+        match request {
+            DaemonRequest::Hover { request_id, .. } => *request_id,
+            DaemonRequest::Definition { request_id, .. } => *request_id,
+            DaemonRequest::References { request_id, .. } => *request_id,
+            DaemonRequest::DocumentSymbols { request_id, .. } => *request_id,
+            DaemonRequest::Completion { request_id, .. } => *request_id,
+            DaemonRequest::CallHierarchy { request_id, .. } => *request_id,
+            DaemonRequest::WorkspaceSymbols { request_id, .. } => *request_id,
+            DaemonRequest::Implementations { request_id, .. } => *request_id,
+            DaemonRequest::TypeDefinition { request_id, .. } => *request_id,
+            // Add other variants as needed
+            _ => panic!("Unsupported request type for request_id extraction"),
+        }
     }
 
     /// Invalidate cache entries when workspace state changes
@@ -645,6 +805,26 @@ impl CacheLayer {
     }
 
     // === Private Methods ===
+
+    /// Extract position from daemon request for debugging
+    fn extract_position_from_request(request: &DaemonRequest) -> Option<String> {
+        match request {
+            DaemonRequest::Hover { line, column, .. } => Some(format!("{line}:{column}")),
+            DaemonRequest::Definition { line, column, .. } => Some(format!("{line}:{column}")),
+            DaemonRequest::References { line, column, .. } => Some(format!("{line}:{column}")),
+            DaemonRequest::TypeDefinition { line, column, .. } => {
+                Some(format!("{line}:{column}"))
+            }
+            DaemonRequest::Implementations { line, column, .. } => {
+                Some(format!("{line}:{column}"))
+            }
+            DaemonRequest::CallHierarchy { line, column, .. } => {
+                Some(format!("{line}:{column}"))
+            }
+            DaemonRequest::Completion { line, column, .. } => Some(format!("{line}:{column}")),
+            _ => None,
+        }
+    }
 
     /// Extract LSP method from daemon request
     fn extract_lsp_method(&self, request: &DaemonRequest) -> Option<LspMethod> {
@@ -1221,22 +1401,34 @@ mod tests {
         let call_count_clone1 = call_count.clone();
         let call_count_clone2 = call_count.clone();
 
+        // Use a barrier to ensure both tasks start concurrently
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let barrier1 = barrier.clone();
+        let barrier2 = barrier.clone();
+
         // Launch two concurrent identical requests
         let handle1 = tokio::spawn({
             let cache_layer = cache_layer.clone();
             async move {
+                // Wait for both tasks to reach this point
+                barrier1.wait().await;
                 cache_layer
-                    .handle_request(request1, move |_req| {
+                    .handle_request(request1, move |req| {
                         let count = call_count_clone1.clone();
                         async move {
                             let mut count = count.lock().await;
                             *count += 1;
                             // Simulate slow LSP server
                             sleep(Duration::from_millis(100)).await;
+                            // Return response (request_id will be adapted by CacheLayer)
+                            let request_id = match req {
+                                DaemonRequest::Hover { request_id, .. } => request_id,
+                                _ => panic!("Expected Hover request"),
+                            };
                             DaemonResponse::Hover {
-                                request_id: request_id1,
+                                request_id,
                                 content: Some(crate::protocol::HoverContent {
-                                    contents: "test content".to_string(),
+                                    contents: "singleflight deduplication test".to_string(),
                                     range: None,
                                 }),
                             }
@@ -1248,17 +1440,25 @@ mod tests {
 
         let handle2 = tokio::spawn({
             async move {
-                // Small delay to ensure second request sees first one in progress
-                sleep(Duration::from_millis(10)).await;
+                // Wait for both tasks to reach this point - ensures true concurrency
+                barrier2.wait().await;
                 cache_layer
-                    .handle_request(request2, move |_req| {
+                    .handle_request(request2, move |req| {
                         let count = call_count_clone2.clone();
                         async move {
                             let mut count = count.lock().await;
                             *count += 1;
+                            // This should never be called due to singleflight deduplication
+                            let request_id = match req {
+                                DaemonRequest::Hover { request_id, .. } => request_id,
+                                _ => panic!("Expected Hover request"),
+                            };
                             DaemonResponse::Hover {
-                                request_id: request_id2,
-                                content: None,
+                                request_id,
+                                content: Some(crate::protocol::HoverContent {
+                                    contents: "singleflight deduplication test".to_string(),
+                                    range: None,
+                                }),
                             }
                         }
                     })
@@ -1273,19 +1473,24 @@ mod tests {
         // Should only have called upstream once due to singleflight
         assert_eq!(*call_count.lock().await, 1);
 
-        // Both responses should have the same content (from shared result)
+        // Both responses should have the same content but different request_ids (singleflight)
         match (response1, response2) {
             (
                 DaemonResponse::Hover {
+                    request_id: req_id1,
                     content: Some(content1),
-                    ..
                 },
                 DaemonResponse::Hover {
+                    request_id: req_id2,
                     content: Some(content2),
-                    ..
                 },
             ) => {
+                // Same content from singleflight result
                 assert_eq!(content1.contents, content2.contents);
+                // But different request_ids (adapted by CacheLayer)
+                assert_eq!(req_id1, request_id1);
+                assert_eq!(req_id2, request_id2);
+                assert_ne!(req_id1, req_id2);
             }
             _ => panic!("Expected Hover responses with content"),
         }

@@ -184,7 +184,13 @@ impl LspDaemon {
             .unwrap_or(30); // Default 30 seconds for language server indexing
 
         // Initialize persistent cache store configuration
+        let backend_type =
+            std::env::var("PROBE_LSP_CACHE_BACKEND_TYPE").unwrap_or_else(|_| "duckdb".to_string());
+
+        info!("LSP daemon using {} database backend", backend_type);
+
         let persistent_cache_config = DatabaseCacheConfig {
+            backend_type,
             database_config: crate::database::DatabaseConfig {
                 path: None,       // Will use default location
                 temporary: false, // Persistent cache
@@ -4364,7 +4370,7 @@ impl LspDaemon {
         }
     }
 
-    /// Read sled database stats for cache stats (similar to management.rs but for daemon use)
+    /// Read database stats for cache stats (DEPRECATED - sled support removed)
     async fn read_sled_db_stats_for_cache_stats(
         &self,
         db_path: &std::path::Path,
@@ -4372,55 +4378,18 @@ impl LspDaemon {
         // Calculate directory size
         let disk_size_bytes = self.calculate_directory_size_for_cache_stats(db_path).await;
 
-        // Try to open the sled database for reading
-        match sled::Config::default()
-            .path(db_path)
-            .cache_capacity(1024 * 1024)
-            .open()
-        {
-            Ok(db) => {
-                let mut entries = 0u64;
-                let mut size_bytes = 0u64;
+        // Sled database reading is no longer supported
+        warn!(
+            "Sled database reading is deprecated. Database at {} cannot be read.",
+            db_path.display()
+        );
 
-                match db.open_tree("nodes") {
-                    Ok(nodes_tree) => {
-                        entries = nodes_tree.len() as u64;
-
-                        // Sample some entries to estimate size
-                        let mut sample_count = 0;
-                        let mut sample_total_size = 0;
-
-                        for (key, value) in nodes_tree.iter().take(100).filter_map(Result::ok) {
-                            sample_count += 1;
-                            sample_total_size += key.len() + value.len();
-                        }
-
-                        if sample_count > 0 {
-                            let avg_entry_size = sample_total_size / sample_count;
-                            size_bytes = entries * avg_entry_size as u64;
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to open nodes tree for {}: {}", db_path.display(), e);
-                    }
-                }
-
-                Ok((entries, size_bytes, disk_size_bytes))
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to open sled database at {}: {}",
-                    db_path.display(),
-                    e
-                );
-                // Return minimal stats based on file size
-                Ok((
-                    if disk_size_bytes > 0 { 1 } else { 0 },
-                    disk_size_bytes,
-                    disk_size_bytes,
-                ))
-            }
-        }
+        // Return minimal stats based on file size
+        Ok((
+            if disk_size_bytes > 0 { 1 } else { 0 },
+            disk_size_bytes,
+            disk_size_bytes,
+        ))
     }
 
     /// Calculate directory size for cache stats
@@ -4860,7 +4829,7 @@ impl LspDaemon {
         Err(anyhow::anyhow!("Workspace not found in router stats"))
     }
 
-    /// Read sled database stats with per-operation breakdown
+    /// Read database stats with per-operation breakdown (DEPRECATED - sled support removed)
     /// This is adapted from the client-side implementation
     async fn read_sled_db_stats_with_operations(
         &self,
@@ -4868,102 +4837,16 @@ impl LspDaemon {
     ) -> Result<(u64, u64, u64, Vec<crate::protocol::OperationCacheStats>)> {
         let disk_size_bytes = self.calculate_directory_size_for_cache_stats(db_path).await;
 
-        match sled::Config::default()
-            .path(db_path)
-            .cache_capacity(1024 * 1024)
-            .use_compression(true)
-            .open()
-        {
-            Ok(db) => {
-                let mut total_entries = 0u64;
-                let mut total_size_bytes = 0u64;
-                let mut operation_counts: std::collections::HashMap<String, (u64, u64)> =
-                    std::collections::HashMap::new();
+        warn!(
+            "Sled database reading is deprecated. Database at {} cannot be read.",
+            db_path.display()
+        );
 
-                // Read from universal cache tree if it exists
-                let universal_tree_result = db.open_tree("universal_cache");
-                if let Ok(universal_tree) = universal_tree_result {
-                    info!(
-                        "Found universal_cache tree with {} entries",
-                        universal_tree.len()
-                    );
-                    for (key, value) in universal_tree.iter().flatten() {
-                        total_entries += 1;
-                        let entry_size = key.len() as u64 + value.len() as u64;
-                        total_size_bytes += entry_size;
-
-                        // Extract operation from universal cache key format
-                        // Format: workspace_id:operation:file:hash
-                        if let Ok(key_str) = std::str::from_utf8(&key) {
-                            let operation = if let Some(parts) = key_str.split(':').nth(1) {
-                                // Clean up operation name
-                                if parts.starts_with("textDocument_") {
-                                    parts
-                                        .strip_prefix("textDocument_")
-                                        .unwrap_or(parts)
-                                        .replace('_', " ")
-                                } else {
-                                    parts.to_string()
-                                }
-                            } else {
-                                self.extract_operation_from_key(key_str)
-                            };
-
-                            let entry = operation_counts.entry(operation).or_insert((0, 0));
-                            entry.0 += 1;
-                            entry.1 += entry_size;
-                        }
-                    }
-                }
-
-                // Fallback to default tree if universal cache is empty
-                let default_entries = db.len() as u64;
-                if default_entries > 0 && total_entries == 0 {
-                    info!("Found {} entries in default tree", default_entries);
-                    for (key, value) in db.iter().flatten() {
-                        total_entries += 1;
-                        let entry_size = key.len() as u64 + value.len() as u64;
-                        total_size_bytes += entry_size;
-
-                        if let Ok(key_str) = std::str::from_utf8(&key) {
-                            let operation = self.extract_operation_from_key(key_str);
-                            let entry = operation_counts.entry(operation).or_insert((0, 0));
-                            entry.0 += 1;
-                            entry.1 += entry_size;
-                        }
-                    }
-                }
-
-                // Convert to OperationCacheStats
-                let per_op_stats = operation_counts
-                    .into_iter()
-                    .map(
-                        |(op, (entries, size))| crate::protocol::OperationCacheStats {
-                            operation: op,
-                            entries,
-                            size_bytes: size,
-                            hit_rate: 0.0,
-                            miss_rate: 0.0,
-                            avg_response_time_ms: None,
-                        },
-                    )
-                    .collect();
-
-                Ok((
-                    total_entries,
-                    total_size_bytes,
-                    disk_size_bytes,
-                    per_op_stats,
-                ))
-            }
-            Err(e) => {
-                warn!("Failed to open sled database at {:?}: {}", db_path, e);
-                Ok((0, disk_size_bytes, disk_size_bytes, Vec::new()))
-            }
-        }
+        Ok((0, disk_size_bytes, disk_size_bytes, Vec::new()))
     }
 
     /// Extract operation type from cache key
+    #[allow(dead_code)]
     fn extract_operation_from_key(&self, key: &str) -> String {
         // Universal cache key format: workspace_id:operation:file:hash
         if key.contains(':') {

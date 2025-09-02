@@ -355,6 +355,12 @@ impl WorkspaceCacheRouter {
         let workspace_root = workspace_root.as_ref().to_path_buf();
         let workspace_id = self.workspace_id_for(&workspace_root)?;
 
+        eprintln!(
+            "DEBUG: cache_for_workspace - workspace_root: {}, workspace_id: {}",
+            workspace_root.display(),
+            workspace_id
+        );
+
         // Check if cache is already open
         if let Some(cache) = self.open_caches.get(&workspace_id) {
             // Update access metadata
@@ -387,11 +393,24 @@ impl WorkspaceCacheRouter {
 
         // Check if we need to evict before opening a new cache
         if self.open_caches.len() >= self.config.max_open_caches {
+            debug!(
+                "LRU eviction needed: {} >= {} (max_open_caches)",
+                self.open_caches.len(),
+                self.config.max_open_caches
+            );
             self.trim_lru().await?;
+            debug!("After LRU eviction: {} open caches", self.open_caches.len());
         }
 
         // Create cache directory path for this workspace
         let cache_dir = self.config.base_cache_dir.join(&workspace_id);
+
+        // Ensure the cache directory exists
+        if !cache_dir.exists() {
+            std::fs::create_dir_all(&cache_dir).context(format!(
+                "Failed to create cache directory for workspace '{workspace_id}': {cache_dir:?}"
+            ))?;
+        }
 
         // Create cache configuration for this workspace
         let mut cache_config = self.config.cache_config_template.clone();
@@ -406,9 +425,9 @@ impl WorkspaceCacheRouter {
             );
         }
 
-        // Create the cache instance
+        // Create the cache instance with workspace-specific tree name for proper isolation
         let cache = Arc::new(
-            DatabaseCacheAdapter::new(cache_config)
+            DatabaseCacheAdapter::new_with_workspace_id(cache_config, &workspace_id)
                 .await
                 .context(format!(
                     "Failed to create cache for workspace '{workspace_id}'"
@@ -419,10 +438,11 @@ impl WorkspaceCacheRouter {
         self.open_caches.insert(workspace_id.clone(), cache.clone());
         {
             let mut metadata = self.access_metadata.write().await;
-            metadata.insert(
-                workspace_id.clone(),
-                CacheAccessMetadata::new(workspace_root.clone(), workspace_id.clone()),
-            );
+            let mut cache_metadata =
+                CacheAccessMetadata::new(workspace_root.clone(), workspace_id.clone());
+            // Mark initial access since creating the cache counts as the first access
+            cache_metadata.touch();
+            metadata.insert(workspace_id.clone(), cache_metadata);
         }
 
         // Maintain the dedicated reverse mapping
@@ -559,6 +579,15 @@ impl WorkspaceCacheRouter {
         Ok(total_invalidated)
     }
 
+    /// Get all currently active workspace caches
+    /// Used for comprehensive cache operations like invalidation
+    pub async fn get_all_active_caches(&self) -> Vec<Arc<DatabaseCacheAdapter>> {
+        self.open_caches
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect()
+    }
+
     /// Evict least recently used caches when at capacity
     ///
     /// This method implements LRU eviction:
@@ -580,33 +609,47 @@ impl WorkspaceCacheRouter {
             current_count, target_count, to_evict
         );
 
-        // Get metadata and sort by LRU
-        let sorted_metadata: Vec<(String, CacheAccessMetadata)> = {
+        // Get all open caches and their metadata for sorting
+        let mut caches_to_sort: Vec<(String, CacheAccessMetadata)> = Vec::new();
+        {
             let metadata = self.access_metadata.read().await;
-            let mut sorted_metadata: Vec<_> = metadata
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
+            for key in self.open_caches.iter() {
+                let workspace_id = key.key().clone();
+                if let Some(meta) = metadata.get(&workspace_id) {
+                    caches_to_sort.push((workspace_id, meta.clone()));
+                } else {
+                    // If no metadata exists, create a default one for sorting purposes
+                    warn!(
+                        "No metadata found for open cache '{}', using default for LRU",
+                        workspace_id
+                    );
+                    caches_to_sort.push((
+                        workspace_id.clone(),
+                        CacheAccessMetadata::new(PathBuf::from("unknown"), workspace_id),
+                    ));
+                }
+            }
+        }
 
-            // Sort by last accessed time (oldest first), then by access count
-            sorted_metadata.sort_by(|a, b| {
-                a.1.last_accessed
-                    .cmp(&b.1.last_accessed)
-                    .then_with(|| a.1.access_count.cmp(&b.1.access_count))
-            });
+        // Sort by last accessed time (oldest first), then by access count
+        caches_to_sort.sort_by(|a, b| {
+            a.1.last_accessed
+                .cmp(&b.1.last_accessed)
+                .then_with(|| a.1.access_count.cmp(&b.1.access_count))
+        });
 
-            sorted_metadata
-        };
+        debug!(
+            "Found {} caches for LRU eviction, need to evict {}",
+            caches_to_sort.len(),
+            to_evict
+        );
 
         // Evict the oldest caches
         let mut evicted_count = 0;
-        for (workspace_id, meta) in sorted_metadata.iter().take(to_evict) {
+        for (workspace_id, meta) in caches_to_sort.iter().take(to_evict) {
             if let Some((_key, cache)) = self.open_caches.remove(workspace_id) {
-                // Remove from metadata tracking
-                {
-                    let mut metadata = self.access_metadata.write().await;
-                    metadata.remove(workspace_id);
-                }
+                // Note: We keep the metadata for statistics tracking even after evicting the cache
+                // The cache will be closed when the Arc is dropped, but metadata remains for stats
 
                 info!(
                     "Evicted LRU cache '{}' (workspace: {}, {} accesses, idle for {:?})",
@@ -620,6 +663,11 @@ impl WorkspaceCacheRouter {
 
                 // Cache will be automatically flushed and closed when Arc is dropped
                 drop(cache);
+            } else {
+                warn!(
+                    "Cache '{}' was not found in open_caches during eviction",
+                    workspace_id
+                );
             }
         }
 
@@ -698,7 +746,7 @@ impl WorkspaceCacheRouter {
             Some(cache_path.parent().unwrap().to_path_buf().join("cache.db"));
         cache_config.database_config.temporary = false;
 
-        match DatabaseCacheAdapter::new(cache_config).await {
+        match DatabaseCacheAdapter::new_with_workspace_id(cache_config, workspace_id).await {
             Ok(cache) => match cache.get_stats().await {
                 Ok(stats) => {
                     debug!(

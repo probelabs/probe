@@ -60,7 +60,6 @@ md5 = "0.7.0"
 chrono = { version = "0.4", features = ["serde"] }
 lru = "0.12.5"
 env_logger = "0.10"
-sled = "0.34"  # Embedded database for cache statistics reading
 simsimd = "6.1.0"  # SIMD-accelerated similarity metrics for vector operations
 memchr = "2.7"  # SIMD-accelerated string searching and processing
 aho-corasick = "1.1"  # SIMD-accelerated multi-pattern string matching
@@ -134,3 +133,8 @@ strip = true     # Strip symbols automatically
 lto = true       # Link-time optimization
 codegen-units = 1 # Slower compile, smaller binary
 panic = "abort"  # Ditch unwinding code
+
+[workspace.dependencies]
+# Git integration dependencies
+git2 = "0.19.0"
+pathdiff = "0.2.1"

@@ -199,8 +199,10 @@ impl UniversalCache {
             .build_key(method, file_path, params)
             .await?;
 
-        // Store in cache
-        self.store.set(&cache_key, value).await
+        // Store in cache with original file path to avoid workspace resolution issues
+        self.store
+            .set_with_file_path(&cache_key, value, Some(file_path))
+            .await
     }
 
     /// Invalidate cache entries for a file across all relevant workspaces
