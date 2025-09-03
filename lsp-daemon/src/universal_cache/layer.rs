@@ -1525,18 +1525,16 @@ mod tests {
         assert!(stats_before.cache_stats.total_entries > 0);
 
         // Invalidate file cache
-        let invalidated = cache_layer.invalidate_file(&test_file).await.unwrap();
-        assert!(invalidated >= 0); // May be 0 if persistent cache not fully implemented
+        let _invalidated = cache_layer.invalidate_file(&test_file).await.unwrap();
+        // Note: invalidated count may be 0 if persistent cache not fully implemented
 
         // Invalidate workspace cache
-        let invalidated_workspace = cache_layer.invalidate_workspace(&workspace).await.unwrap();
-        assert!(invalidated_workspace >= 0);
+        let _invalidated_workspace = cache_layer.invalidate_workspace(&workspace).await.unwrap();
 
         // Statistics should show cache was cleared
-        let stats_after = cache_layer.get_stats().await.unwrap();
+        let _stats_after = cache_layer.get_stats().await.unwrap();
         // Note: In current implementation, memory cache may still have entries due to TTL
         // This test mainly verifies the invalidation methods work without errors
-        assert!(stats_after.active_workspaces >= 0);
     }
 
     #[tokio::test]
@@ -1584,10 +1582,10 @@ mod tests {
 
         // Warm cache
         let files = vec![file1.clone(), file2.clone()];
-        let warmed = cache_layer.warm_cache(&workspace, files).await.unwrap();
+        let _warmed = cache_layer.warm_cache(&workspace, files).await.unwrap();
 
         // Should have attempted to warm cache (actual warming depends on cache implementation)
-        assert!(warmed >= 0);
+        // Note: warmed count is always >= 0 for unsigned integers
 
         // Verify warming doesn't crash
         let stats = cache_layer.get_stats().await.unwrap();

@@ -21,7 +21,6 @@ use tokio::time::timeout;
 /// Test fixture providing common test setup
 struct UniversalCacheTestFixture {
     pub universal_cache: Arc<UniversalCache>,
-    pub workspace_router: Arc<WorkspaceCacheRouter>,
     pub temp_dir: TempDir,
     pub test_workspace_root: PathBuf,
 }
@@ -54,7 +53,6 @@ impl UniversalCacheTestFixture {
 
         Ok(Self {
             universal_cache,
-            workspace_router,
             temp_dir,
             test_workspace_root,
         })
