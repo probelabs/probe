@@ -11,7 +11,6 @@ mod tests {
     use super::super::universal_cache::key::CacheKey;
     use super::super::universal_cache::LspMethod;
     use tempfile::tempdir;
-    use tokio;
 
     /// Test that iter_universal_entries correctly reads from the universal_tree
     #[tokio::test]
@@ -92,8 +91,7 @@ mod tests {
             let parsed_key = CacheKey::from_storage_key(storage_key);
             assert!(
                 parsed_key.is_some(),
-                "Should successfully parse key: {}",
-                storage_key
+                "Should successfully parse key: {storage_key}"
             );
 
             let key = parsed_key.unwrap();
@@ -121,11 +119,7 @@ mod tests {
 
         for invalid_key in invalid_keys {
             let parsed = CacheKey::from_storage_key(invalid_key);
-            assert!(
-                parsed.is_none(),
-                "Should reject invalid key: {}",
-                invalid_key
-            );
+            assert!(parsed.is_none(), "Should reject invalid key: {invalid_key}");
         }
     }
 
@@ -263,7 +257,7 @@ mod tests {
         // Verify each entry can be parsed and contains expected data
         for (storage_key, value) in &all_entries {
             let parsed_key = CacheKey::from_storage_key(storage_key);
-            assert!(parsed_key.is_some(), "Key should parse: {}", storage_key);
+            assert!(parsed_key.is_some(), "Key should parse: {storage_key}");
 
             // Find the original entry
             let original = test_entries.iter().find(|(k, _)| k == storage_key).unwrap();
@@ -273,11 +267,7 @@ mod tests {
         // Test retrieval of specific entries
         for (key, expected_value) in &test_entries {
             let retrieved = adapter.get_universal_entry(key).await.unwrap();
-            assert!(
-                retrieved.is_some(),
-                "Should retrieve entry for key: {}",
-                key
-            );
+            assert!(retrieved.is_some(), "Should retrieve entry for key: {key}");
             assert_eq!(retrieved.unwrap(), *expected_value);
         }
     }

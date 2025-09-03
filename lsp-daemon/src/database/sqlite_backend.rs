@@ -68,14 +68,14 @@ impl ConnectionPool {
         .build()
         .await
         .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create database: {}", e),
+            message: format!("Failed to create database: {e}"),
         })?;
 
         // Initialize the database with our schema
         let conn = database
             .connect()
             .map_err(|e| DatabaseError::Configuration {
-                message: format!("Failed to get initial connection: {}", e),
+                message: format!("Failed to get initial connection: {e}"),
             })?;
 
         Self::initialize_schema(&conn, &config).await?;
@@ -107,7 +107,7 @@ impl ConnectionPool {
         // Note: WAL mode is not fully supported in Turso, so we skip it
         if config.enable_wal && config.path != ":memory:" {
             // Try to enable WAL mode, but don't fail if it's not supported
-            if let Err(_) = conn.execute("PRAGMA journal_mode = WAL", ()).await {
+            if conn.execute("PRAGMA journal_mode = WAL", ()).await.is_err() {
                 eprintln!("Warning: WAL mode not supported, continuing with default journal mode");
             }
         }
@@ -129,7 +129,7 @@ impl ConnectionPool {
         )
         .await
         .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create kv_store table: {}", e),
+            message: format!("Failed to create kv_store table: {e}"),
         })?;
 
         // Create metadata table for tracking trees
@@ -144,7 +144,7 @@ impl ConnectionPool {
         )
         .await
         .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create tree_metadata table: {}", e),
+            message: format!("Failed to create tree_metadata table: {e}"),
         })?;
 
         Ok(())
@@ -170,7 +170,7 @@ impl ConnectionPool {
                 .database
                 .connect()
                 .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to create new connection: {}", e),
+                    message: format!("Failed to create new connection: {e}"),
                 })?;
             Self::configure_connection(&conn, &self.config).await?;
             Ok(conn)
@@ -202,7 +202,7 @@ impl DatabaseTree for SQLiteTree {
         let conn = pool.get_connection().await?;
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
-        let sql = format!("SELECT value FROM {} WHERE key = ?", table_name);
+        let sql = format!("SELECT value FROM {table_name} WHERE key = ?");
 
         let mut rows = conn
             .query(&sql, [turso::Value::Text(key_str.to_string())])
@@ -237,12 +237,10 @@ impl DatabaseTree for SQLiteTree {
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         // Use UPDATE/INSERT pattern since Turso doesn't support OR REPLACE
         let update_sql = format!(
-            "UPDATE {} SET value = ?, updated_at = strftime('%s','now') WHERE key = ?",
-            table_name
+            "UPDATE {table_name} SET value = ?, updated_at = strftime('%s','now') WHERE key = ?"
         );
         let insert_sql = format!(
-            "INSERT INTO {} (key, value, created_at, updated_at) VALUES (?, ?, strftime('%s','now'), strftime('%s','now'))",
-            table_name
+            "INSERT INTO {table_name} (key, value, created_at, updated_at) VALUES (?, ?, strftime('%s','now'), strftime('%s','now'))"
         );
 
         // Try update first
@@ -284,7 +282,7 @@ impl DatabaseTree for SQLiteTree {
         let conn = pool.get_connection().await?;
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
-        let sql = format!("DELETE FROM {} WHERE key = ?", table_name);
+        let sql = format!("DELETE FROM {table_name} WHERE key = ?");
 
         let rows_affected = conn
             .execute(&sql, [turso::Value::Text(key_str.to_string())])
@@ -304,12 +302,9 @@ impl DatabaseTree for SQLiteTree {
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         let sql = if prefix.is_empty() {
-            format!("SELECT key, value FROM {} ORDER BY key", table_name)
+            format!("SELECT key, value FROM {table_name} ORDER BY key")
         } else {
-            format!(
-                "SELECT key, value FROM {} WHERE key GLOB ? || '*' ORDER BY key",
-                table_name
-            )
+            format!("SELECT key, value FROM {table_name} WHERE key GLOB ? || '*' ORDER BY key")
         };
 
         let params = if prefix.is_empty() {
@@ -333,12 +328,12 @@ impl DatabaseTree for SQLiteTree {
                 message: format!("Failed to iterate rows in tree '{}': {}", self.name, e),
             })?
         {
-            match (row.get_value(0), row.get_value(1)) {
-                (Ok(turso::Value::Text(key)), Ok(turso::Value::Blob(value))) => {
-                    results.push((key.as_bytes().to_vec(), value));
-                }
-                _ => {} // Skip malformed rows
+            if let (Ok(turso::Value::Text(key)), Ok(turso::Value::Blob(value))) =
+                (row.get_value(0), row.get_value(1))
+            {
+                results.push((key.as_bytes().to_vec(), value));
             }
+            // Skip malformed rows
         }
 
         pool.return_connection(conn);
@@ -350,7 +345,7 @@ impl DatabaseTree for SQLiteTree {
         let conn = pool.get_connection().await?;
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
-        let sql = format!("DELETE FROM {}", table_name);
+        let sql = format!("DELETE FROM {table_name}");
 
         conn.execute(&sql, ())
             .await
@@ -367,7 +362,7 @@ impl DatabaseTree for SQLiteTree {
         let conn = pool.get_connection().await?;
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
-        let sql = format!("SELECT COUNT(*) FROM {}", table_name);
+        let sql = format!("SELECT COUNT(*) FROM {table_name}");
 
         let mut rows = conn
             .query(&sql, ())
@@ -437,23 +432,22 @@ impl SQLiteBackend {
         let mut pool = self.pool.lock().await;
         let conn = pool.get_connection().await?;
 
-        let table_name = format!("tree_{}", sanitized_name);
+        let table_name = format!("tree_{sanitized_name}");
         let sql = format!(
             r#"
-            CREATE TABLE IF NOT EXISTS {} (
+            CREATE TABLE IF NOT EXISTS {table_name} (
                 key TEXT PRIMARY KEY,
                 value BLOB NOT NULL,
                 created_at INTEGER DEFAULT (strftime('%s','now')),
                 updated_at INTEGER DEFAULT (strftime('%s','now'))
             )
-            "#,
-            table_name
+            "#
         );
 
         conn.execute(&sql, ())
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to create tree table '{}': {}", tree_name, e),
+                message: format!("Failed to create tree table '{tree_name}': {e}"),
             })?;
 
         // Create index for the tree with unique suffix to avoid conflicts
@@ -468,16 +462,13 @@ impl SQLiteBackend {
             .hash(&mut hasher);
         let unique_suffix = hasher.finish();
 
-        let index_name = format!("idx_{}_{:x}_key", sanitized_name, unique_suffix);
-        let index_sql = format!(
-            "CREATE INDEX IF NOT EXISTS {} ON {}(key)",
-            index_name, table_name
-        );
+        let index_name = format!("idx_{sanitized_name}_{unique_suffix:x}_key");
+        let index_sql = format!("CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}(key)");
 
         conn.execute(&index_sql, ())
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to create index for tree '{}': {}", tree_name, e),
+                message: format!("Failed to create index for tree '{tree_name}': {e}"),
             })?;
 
         // Update metadata - check if exists first, then insert if needed
@@ -488,17 +479,14 @@ impl SQLiteBackend {
             )
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to check tree metadata for '{}': {}", tree_name, e),
+                message: format!("Failed to check tree metadata for '{tree_name}': {e}"),
             })?;
 
         if rows
             .next()
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!(
-                    "Failed to iterate metadata check for '{}': {}",
-                    tree_name, e
-                ),
+                message: format!("Failed to iterate metadata check for '{tree_name}': {e}"),
             })?
             .is_none()
         {
@@ -509,7 +497,7 @@ impl SQLiteBackend {
             )
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to insert tree metadata for '{}': {}", tree_name, e),
+                message: format!("Failed to insert tree metadata for '{tree_name}': {e}"),
             })?;
         }
 
@@ -557,14 +545,14 @@ impl DatabaseBackend for SQLiteBackend {
             )
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to get key from default store: {}", e),
+                message: format!("Failed to get key from default store: {e}"),
             })?;
 
         let value = if let Some(row) =
             rows.next()
                 .await
                 .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to iterate rows in default store: {}", e),
+                    message: format!("Failed to iterate rows in default store: {e}"),
                 })? {
             match row.get_value(0) {
                 Ok(turso::Value::Blob(blob)) => Some(blob),
@@ -594,7 +582,7 @@ impl DatabaseBackend for SQLiteBackend {
             )
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to update key in default store: {}", e),
+                message: format!("Failed to update key in default store: {e}"),
             })?;
 
         // If no rows were updated, insert new record
@@ -608,7 +596,7 @@ impl DatabaseBackend for SQLiteBackend {
             )
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to insert key in default store: {}", e),
+                message: format!("Failed to insert key in default store: {e}"),
             })?;
         }
 
@@ -628,7 +616,7 @@ impl DatabaseBackend for SQLiteBackend {
             )
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to remove key from default store: {}", e),
+                message: format!("Failed to remove key from default store: {e}"),
             })?;
 
         pool.return_connection(conn);
@@ -656,7 +644,7 @@ impl DatabaseBackend for SQLiteBackend {
             conn.query(&sql, params)
                 .await
                 .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to scan prefix in default store: {}", e),
+                    message: format!("Failed to scan prefix in default store: {e}"),
                 })?;
 
         let mut results = Vec::new();
@@ -664,15 +652,15 @@ impl DatabaseBackend for SQLiteBackend {
             .next()
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to iterate rows in default store: {}", e),
+                message: format!("Failed to iterate rows in default store: {e}"),
             })?
         {
-            match (row.get_value(0), row.get_value(1)) {
-                (Ok(turso::Value::Text(key)), Ok(turso::Value::Blob(value))) => {
-                    results.push((key.as_bytes().to_vec(), value));
-                }
-                _ => {} // Skip malformed rows
+            if let (Ok(turso::Value::Text(key)), Ok(turso::Value::Blob(value))) =
+                (row.get_value(0), row.get_value(1))
+            {
+                results.push((key.as_bytes().to_vec(), value));
             }
+            // Skip malformed rows
         }
 
         pool.return_connection(conn);
@@ -714,7 +702,7 @@ impl DatabaseBackend for SQLiteBackend {
             .query("SELECT tree_name FROM tree_metadata ORDER BY tree_name", ())
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to get tree names: {}", e),
+                message: format!("Failed to get tree names: {e}"),
             })?;
 
         let mut names = Vec::new();
@@ -722,13 +710,13 @@ impl DatabaseBackend for SQLiteBackend {
             .next()
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to iterate tree names: {}", e),
+                message: format!("Failed to iterate tree names: {e}"),
             })?
         {
-            match row.get_value(0) {
-                Ok(turso::Value::Text(name)) => names.push(name),
-                _ => {} // Skip malformed rows
+            if let Ok(turso::Value::Text(name)) = row.get_value(0) {
+                names.push(name);
             }
+            // Skip malformed rows
         }
 
         pool.return_connection(conn);
@@ -743,7 +731,7 @@ impl DatabaseBackend for SQLiteBackend {
         conn.execute("DELETE FROM kv_store", ())
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to clear default store: {}", e),
+                message: format!("Failed to clear default store: {e}"),
             })?;
 
         // Clear all tree tables
@@ -754,12 +742,12 @@ impl DatabaseBackend for SQLiteBackend {
 
         for tree_name in &tree_names {
             let sanitized_name = sanitize_table_name(tree_name);
-            let table_name = format!("tree_{}", sanitized_name);
-            let sql = format!("DELETE FROM {}", table_name);
+            let table_name = format!("tree_{sanitized_name}");
+            let sql = format!("DELETE FROM {table_name}");
             conn.execute(&sql, ())
                 .await
                 .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to clear tree '{}': {}", tree_name, e),
+                    message: format!("Failed to clear tree '{tree_name}': {e}"),
                 })?;
         }
 
@@ -785,14 +773,14 @@ impl DatabaseBackend for SQLiteBackend {
             .query("SELECT COUNT(*) FROM kv_store", ())
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to count default store entries: {}", e),
+                message: format!("Failed to count default store entries: {e}"),
             })?;
 
         let default_count = if let Some(row) =
             rows.next()
                 .await
                 .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to iterate count result: {}", e),
+                    message: format!("Failed to iterate count result: {e}"),
                 })? {
             match row.get_value(0) {
                 Ok(turso::Value::Integer(n)) => n as u64,
@@ -811,24 +799,21 @@ impl DatabaseBackend for SQLiteBackend {
         let mut total_entries = default_count;
         for tree_name in &tree_names {
             let sanitized_name = sanitize_table_name(tree_name);
-            let table_name = format!("tree_{}", sanitized_name);
-            let sql = format!("SELECT COUNT(*) FROM {}", table_name);
+            let table_name = format!("tree_{sanitized_name}");
+            let sql = format!("SELECT COUNT(*) FROM {table_name}");
 
             let mut rows =
                 conn.query(&sql, ())
                     .await
                     .map_err(|e| DatabaseError::OperationFailed {
-                        message: format!("Failed to count entries in tree '{}': {}", tree_name, e),
+                        message: format!("Failed to count entries in tree '{tree_name}': {e}"),
                     })?;
 
             if let Some(row) = rows
                 .next()
                 .await
                 .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!(
-                        "Failed to iterate count result for tree '{}': {}",
-                        tree_name, e
-                    ),
+                    message: format!("Failed to iterate count result for tree '{tree_name}': {e}"),
                 })?
             {
                 if let Ok(turso::Value::Integer(n)) = row.get_value(0) {
@@ -868,7 +853,7 @@ impl DatabaseBackend for SQLiteBackend {
             std::fs::metadata(&path)
                 .map(|metadata| metadata.len())
                 .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to get database file size: {}", e),
+                    message: format!("Failed to get database file size: {e}"),
                 })
         } else {
             Ok(0)

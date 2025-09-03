@@ -419,9 +419,7 @@ mod invalidation {
         if had_entries_def || had_entries_ref {
             assert!(
                 invalidated_count > 0,
-                "Expected to invalidate entries but got 0. Had def: {}, Had ref: {}",
-                had_entries_def,
-                had_entries_ref
+                "Expected to invalidate entries but got 0. Had def: {had_entries_def}, Had ref: {had_entries_ref}"
             );
         } else {
             // If no entries were found, it might be a backend issue but test should not fail
@@ -600,8 +598,8 @@ mod performance_tests {
         for i in 0..10 {
             let file = fixture
                 .create_test_file(
-                    &format!("concurrent_{}.rs", i),
-                    &format!("fn test_{}() {{}}", i),
+                    &format!("concurrent_{i}.rs"),
+                    &format!("fn test_{i}() {{}}"),
                 )
                 .await
                 .unwrap();
@@ -618,7 +616,7 @@ mod performance_tests {
             let file_clone = file.clone();
 
             let handle = tokio::spawn(async move {
-                let params = format!("{{\"index\": {}}}", i);
+                let params = format!("{{\"index\": {i}}}");
                 let data = json!({"concurrent_test": i, "file": format!("file_{}", i)});
 
                 // Set data
@@ -645,7 +643,7 @@ mod performance_tests {
         }
 
         let duration = start.elapsed();
-        println!("Concurrent operations completed in {:?}", duration);
+        println!("Concurrent operations completed in {duration:?}");
 
         // Verify final cache state
         let stats = cache.get_stats().await.unwrap();
@@ -665,7 +663,7 @@ mod performance_tests {
 
         // Perform many cache operations
         for i in 0..operations_count {
-            let params = format!("{{\"operation\": {}}}", i);
+            let params = format!("{{\"operation\": {i}}}");
             let data = json!({"load_test": i, "timestamp": chrono::Utc::now().timestamp()});
 
             fixture
@@ -689,15 +687,13 @@ mod performance_tests {
         let ops_per_second = operations_count as f64 / duration.as_secs_f64();
 
         println!(
-            "Performed {} operations in {:?} ({:.2} ops/sec)",
-            operations_count, duration, ops_per_second
+            "Performed {operations_count} operations in {duration:?} ({ops_per_second:.2} ops/sec)"
         );
 
         // Performance assertion - should handle at least 100 ops/second
         assert!(
             ops_per_second > 100.0,
-            "Cache performance below threshold: {} ops/sec",
-            ops_per_second
+            "Cache performance below threshold: {ops_per_second} ops/sec"
         );
     }
 
@@ -715,7 +711,7 @@ mod performance_tests {
 
         // Add many cache entries
         for i in 0..5000 {
-            let params = format!("{{\"memory_test\": {}}}", i);
+            let params = format!("{{\"memory_test\": {i}}}");
             let data = json!({"test_data": vec![i; 100]}); // Larger data to test memory handling
 
             fixture

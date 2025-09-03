@@ -116,7 +116,7 @@ mod tests {
                 .unwrap();
 
         let modified = service.modified_files().unwrap();
-        println!("Modified files: {:?}", modified);
+        println!("Modified files: {modified:?}");
 
         // Since our simplified implementation doesn't actually implement file tracking,
         // and modified_files() returns empty, we'll test that it doesn't crash
@@ -168,7 +168,7 @@ mod tests {
         // Since our simplified implementation doesn't track modifications,
         // we just test that it doesn't crash
         let modified_files = service.modified_files().unwrap();
-        println!("Modified files: {:?}", modified_files);
+        println!("Modified files: {modified_files:?}");
         assert!(
             modified_files.is_empty(),
             "Simplified implementation returns empty list"

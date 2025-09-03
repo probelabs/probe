@@ -762,7 +762,7 @@ mod tests {
             let queue_clone = Arc::clone(&queue);
             let handle = tokio::spawn(async move {
                 for j in 0..10 {
-                    let path = format!("/test/{}_{}.rs", i, j);
+                    let path = format!("/test/{i}_{j}.rs");
                     let item = if j % 3 == 0 {
                         QueueItem::high_priority(PathBuf::from(path))
                     } else if j % 3 == 1 {
@@ -947,7 +947,7 @@ mod tests {
         for i in 0..ITEM_COUNT {
             let queue_clone = Arc::new(queue.clone());
             let task = tokio::spawn(async move {
-                let path = format!("/stress/file_{}.rs", i);
+                let path = format!("/stress/file_{i}.rs");
                 let priority = match i % 4 {
                     0 => Priority::Critical,
                     1 => Priority::High,
@@ -1073,7 +1073,7 @@ mod tests {
             tokio::spawn(async move {
                 let mut enqueued = 0;
                 for i in 0..100 {
-                    let item = QueueItem::low_priority(PathBuf::from(format!("/file_{}.rs", i)));
+                    let item = QueueItem::low_priority(PathBuf::from(format!("/file_{i}.rs")));
                     if queue.enqueue(item).await.unwrap() {
                         enqueued += 1;
                     }

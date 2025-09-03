@@ -1948,8 +1948,8 @@ mod tests {
 
         // Test round-trip conversion
         let restored_config = IndexingConfig::from_protocol_config(&protocol_config);
-        assert_eq!(restored_config.lsp_caching.cache_definitions, true);
-        assert_eq!(restored_config.lsp_caching.cache_call_hierarchy, false);
+        assert!(restored_config.lsp_caching.cache_definitions);
+        assert!(!restored_config.lsp_caching.cache_call_hierarchy);
         assert_eq!(
             restored_config.lsp_caching.max_cache_entries_per_operation,
             2000

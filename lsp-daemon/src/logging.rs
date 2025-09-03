@@ -461,7 +461,7 @@ mod tests {
         let entries = buffer.get_since_sequence(5, 100);
         assert_eq!(entries.len(), 4);
 
-        let expected_sequences = vec![6, 7, 8, 9];
+        let expected_sequences = [6, 7, 8, 9];
         for (entry, expected_seq) in entries.iter().zip(expected_sequences.iter()) {
             assert_eq!(entry.sequence, *expected_seq);
         }
@@ -534,7 +534,7 @@ mod tests {
                             timestamp: format!("2024-01-01 12:00:{i:02}.000 UTC"),
                             level: LogLevel::Info,
                             target: "test".to_string(),
-                            message: format!("Thread {} Message {}", thread_id, i),
+                            message: format!("Thread {thread_id} Message {i}"),
                             file: None,
                             line: None,
                         };

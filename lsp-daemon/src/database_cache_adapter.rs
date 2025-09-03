@@ -101,7 +101,7 @@ impl DatabaseCacheAdapter {
             "universal_cache".to_string()
         } else {
             // Use workspace-specific tree name for proper isolation
-            format!("universal_cache_{}", workspace_id)
+            format!("universal_cache_{workspace_id}")
         };
 
         let universal_tree = database
@@ -395,7 +395,7 @@ impl DatabaseCacheAdapter {
                 // Check if any of our search patterns match the key's file path
                 let matches = search_patterns.iter().any(|pattern| {
                     key_file_path == pattern ||
-                    key_file_path.ends_with(&format!("/{}", pattern)) ||
+                    key_file_path.ends_with(&format!("/{pattern}")) ||
                     pattern.ends_with(key_file_path) ||
                     // Handle path prefix matching for symlinks
                     (pattern.contains(key_file_path) && pattern.len() > key_file_path.len())
@@ -432,7 +432,7 @@ impl DatabaseCacheAdapter {
     pub async fn clear_universal_entries_by_prefix(&self, prefix: &str) -> Result<u64> {
         let mut cleared_count = 0u64;
 
-        eprintln!("DEBUG: Clearing entries with prefix '{}'", prefix);
+        eprintln!("DEBUG: Clearing entries with prefix '{prefix}'");
 
         // Extract workspace ID from prefix for tree name resolution
         let workspace_id = prefix.split(':').next().unwrap_or("universal_cache");
@@ -464,10 +464,7 @@ impl DatabaseCacheAdapter {
         // Probe all combinations of tree names and prefixes
         for tree_name in &tree_candidates {
             if let Ok(tree) = self.database.open_tree(tree_name).await {
-                eprintln!(
-                    "DEBUG: Checking tree '{}' for prefix '{}'",
-                    tree_name, prefix
-                );
+                eprintln!("DEBUG: Checking tree '{tree_name}' for prefix '{prefix}'");
                 for scan_prefix in &prefix_candidates {
                     if !scan_prefix.is_empty() {
                         // Avoid scanning entire tree
@@ -491,8 +488,7 @@ impl DatabaseCacheAdapter {
                                 }
                             } else {
                                 eprintln!(
-                                    "DEBUG: No entries found in tree '{}' with prefix '{}'",
-                                    tree_name, scan_prefix
+                                    "DEBUG: No entries found in tree '{tree_name}' with prefix '{scan_prefix}'"
                                 );
                             }
                         }
@@ -501,13 +497,10 @@ impl DatabaseCacheAdapter {
 
                 // Continue checking all trees, don't break early
                 if cleared_count > 0 {
-                    eprintln!(
-                        "DEBUG: Found {} entries in tree '{}' so far",
-                        cleared_count, tree_name
-                    );
+                    eprintln!("DEBUG: Found {cleared_count} entries in tree '{tree_name}' so far");
                 }
             } else {
-                eprintln!("DEBUG: Could not open tree '{}'", tree_name);
+                eprintln!("DEBUG: Could not open tree '{tree_name}'");
             }
         }
 
@@ -547,7 +540,7 @@ impl DatabaseCacheAdapter {
             }
         }
 
-        eprintln!("DEBUG: Total cleared entries: {}", cleared_count);
+        eprintln!("DEBUG: Total cleared entries: {cleared_count}");
         Ok(cleared_count)
     }
 

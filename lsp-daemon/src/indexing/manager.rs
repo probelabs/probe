@@ -2555,11 +2555,7 @@ mod tests {
 
         let temp_dir = tempdir().unwrap();
         for i in 0..5 {
-            fs::write(
-                temp_dir.path().join(format!("lib_{}.rs", i)),
-                "fn main() {}",
-            )
-            .unwrap();
+            fs::write(temp_dir.path().join(format!("lib_{i}.rs")), "fn main() {}").unwrap();
         }
 
         // Start indexing
@@ -2619,8 +2615,8 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         for i in 0..3 {
             fs::write(
-                temp_dir.path().join(format!("file_{}.rs", i)),
-                format!("fn func_{}() {{}}", i),
+                temp_dir.path().join(format!("file_{i}.rs")),
+                format!("fn func_{i}() {{}}"),
             )
             .unwrap();
         }

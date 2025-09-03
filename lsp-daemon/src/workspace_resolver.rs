@@ -594,7 +594,7 @@ mod tests {
 
         // Fill cache beyond capacity
         for i in 0..5 {
-            let file_path = temp_dir.path().join(format!("file_{}.rs", i));
+            let file_path = temp_dir.path().join(format!("file_{i}.rs"));
             let _ = resolver.resolve_workspace_for_file(&file_path);
         }
 

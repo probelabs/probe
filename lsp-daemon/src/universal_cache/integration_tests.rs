@@ -27,6 +27,12 @@ pub struct MockLspServer {
     failure_rate: Arc<Mutex<f64>>,
 }
 
+impl Default for MockLspServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockLspServer {
     /// Create a new mock LSP server
     pub fn new() -> Self {
@@ -435,8 +441,7 @@ mod cache_integration_tests {
         // Use backend-agnostic timing validation - should take at least some time due to LSP delay
         assert!(
             first_request_time >= Duration::from_millis(100),
-            "First request should show LSP delay, took {:?}",
-            first_request_time
+            "First request should show LSP delay, took {first_request_time:?}"
         );
 
         // Second request (cache hit)
@@ -470,17 +475,10 @@ mod cache_integration_tests {
 
         assert!(
             speedup_ratio >= min_speedup,
-            "Cache should provide at least {}x speedup, got {}x (first: {:?}, second: {:?})",
-            min_speedup,
-            speedup_ratio,
-            first_request_time,
-            second_request_time
+            "Cache should provide at least {min_speedup}x speedup, got {speedup_ratio}x (first: {first_request_time:?}, second: {second_request_time:?})"
         );
 
-        println!(
-            "Performance improvement: {:.1}x speedup with cache",
-            speedup_ratio
-        );
+        println!("Performance improvement: {speedup_ratio:.1}x speedup with cache");
     }
 
     #[tokio::test]
@@ -585,8 +583,7 @@ mod cache_integration_tests {
                 // If the operation succeeded, the response should be None (indicating LSP failure)
                 assert!(
                     response_opt.is_none(),
-                    "LSP failure should result in None response, got: {:?}",
-                    response_opt
+                    "LSP failure should result in None response, got: {response_opt:?}"
                 );
             }
             Err(_error) => {
@@ -689,10 +686,7 @@ mod concurrent_integration_tests {
         let total_hits = cache_hits.load(Ordering::Relaxed);
         let total_misses = cache_misses.load(Ordering::Relaxed);
 
-        println!(
-            "Concurrent cache access: {} hits, {} misses",
-            total_hits, total_misses
-        );
+        println!("Concurrent cache access: {total_hits} hits, {total_misses} misses");
 
         // Should have some cache hits (due to parameter overlap) and some misses
         assert!(total_misses > 0); // First requests should miss
@@ -729,11 +723,11 @@ mod concurrent_integration_tests {
                 // Clone Arc references for the task to avoid lifetime issues
                 let fixture = fixture.clone();
                 let test_file = test_file.clone();
-                let params = format!(r#"{{"position":{{"line":{},"character":{}}}}}"#, batch, i);
+                let params = format!(r#"{{"position":{{"line":{batch},"character":{i}}}}}"#);
 
                 join_set.spawn(async move {
                     fixture
-                        .simulate_lsp_request_with_cache(LspMethod::Hover, &*test_file, &params)
+                        .simulate_lsp_request_with_cache(LspMethod::Hover, &test_file, &params)
                         .await
                 });
             }
@@ -762,8 +756,7 @@ mod concurrent_integration_tests {
         let requests_per_second = successful_requests as f64 / total_time.as_secs_f64();
 
         println!(
-            "Load test: {} successful requests in {:?} ({:.1} req/s), {} cache hits, {} cache misses",
-            successful_requests, total_time, requests_per_second, cache_hits, cache_misses
+            "Load test: {successful_requests} successful requests in {total_time:?} ({requests_per_second:.1} req/s), {cache_hits} cache hits, {cache_misses} cache misses"
         );
 
         // Performance assertions

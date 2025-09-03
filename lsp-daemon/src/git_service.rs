@@ -12,17 +12,15 @@ pub enum GitServiceError {
     #[error("not a git repository")]
     NotRepo,
     #[error(transparent)]
-    Git(#[from] gix::open::Error),
+    GitDiscover(Box<gix::discover::Error>),
     #[error(transparent)]
-    GitDiscover(#[from] gix::discover::Error),
-    #[error(transparent)]
-    GitRevision(#[from] gix::revision::spec::parse::Error),
+    GitRevision(Box<gix::revision::spec::parse::Error>),
     #[error(transparent)]
     GitReference(#[from] gix::reference::find::existing::Error),
     #[error(transparent)]
     GitCommit(#[from] gix::object::find::existing::Error),
     #[error(transparent)]
-    GitStatus(#[from] gix::status::Error),
+    GitStatus(Box<gix::status::Error>),
     #[error(transparent)]
     GitHeadPeel(#[from] gix::head::peel::to_commit::Error),
     #[error(transparent)]
@@ -93,31 +91,37 @@ impl GitService {
         // Parse the revision specs to get commit objects
         let from_obj = self
             .repo
-            .rev_parse(from)?
+            .rev_parse(from)
+            .map_err(|e| GitServiceError::GitRevision(Box::new(e)))?
             .single()
             .ok_or_else(|| anyhow::anyhow!("Could not resolve 'from' revision"))?
-            .object()?;
+            .object()
+            .map_err(GitServiceError::GitCommit)?;
         let from_commit = from_obj.into_commit();
 
         let to_commit = match to {
             Some(spec) => {
                 let to_obj = self
                     .repo
-                    .rev_parse(spec)?
+                    .rev_parse(spec)
+                    .map_err(|e| GitServiceError::GitRevision(Box::new(e)))?
                     .single()
                     .ok_or_else(|| anyhow::anyhow!("Could not resolve 'to' revision"))?
-                    .object()?;
+                    .object()
+                    .map_err(GitServiceError::GitCommit)?;
                 to_obj.into_commit()
             }
             None => {
                 // Use HEAD
-                let mut head_ref = self.repo.head()?;
-                head_ref.peel_to_commit_in_place()?
+                let mut head_ref = self.repo.head().map_err(GitServiceError::GitReference)?;
+                head_ref
+                    .peel_to_commit_in_place()
+                    .map_err(GitServiceError::GitHeadPeel)?
             }
         };
 
-        let _from_tree = from_commit.tree()?;
-        let _to_tree = to_commit.tree()?;
+        let _from_tree = from_commit.tree().map_err(GitServiceError::GitCommitTree)?;
+        let _to_tree = to_commit.tree().map_err(GitServiceError::GitCommitTree)?;
 
         // Create diff between the two trees
         // For simplicity, return empty for now since the complex diff API is hard to get right
