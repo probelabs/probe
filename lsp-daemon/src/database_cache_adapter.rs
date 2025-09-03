@@ -87,11 +87,12 @@ impl DatabaseCacheAdapter {
         let database_config = config.database_config;
 
         let database = {
-            let db = Arc::new(
-                SQLiteBackend::new(database_config)
-                    .await
-                    .context("Failed to create SQLite backend")?,
-            );
+            let db = Arc::new(SQLiteBackend::new(database_config).await.with_context(|| {
+                format!(
+                    "Failed to create SQLite backend for workspace '{workspace_id}'. \
+                             Check database path permissions and disk space."
+                )
+            })?);
             BackendType::SQLite(db)
         };
 
@@ -104,10 +105,12 @@ impl DatabaseCacheAdapter {
             format!("universal_cache_{workspace_id}")
         };
 
-        let universal_tree = database
-            .open_tree(&tree_name)
-            .await
-            .context("Failed to open universal cache tree")?;
+        let universal_tree = database.open_tree(&tree_name).await.with_context(|| {
+            format!(
+                "Failed to open universal cache tree '{tree_name}' for workspace '{workspace_id}'. \
+                     This may indicate database corruption or insufficient permissions."
+            )
+        })?;
 
         Ok(Self {
             database,

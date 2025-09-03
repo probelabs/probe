@@ -429,9 +429,11 @@ impl WorkspaceCacheRouter {
         let cache = Arc::new(
             DatabaseCacheAdapter::new_with_workspace_id(cache_config, &workspace_id)
                 .await
-                .context(format!(
-                    "Failed to create cache for workspace '{workspace_id}'"
-                ))?,
+                .with_context(|| {
+                    format!(
+                        "Failed to create cache for workspace '{workspace_id}' at path: {cache_dir:?}"
+                    )
+                })?,
         );
 
         // Store cache and metadata
