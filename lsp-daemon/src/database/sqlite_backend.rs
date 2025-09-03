@@ -68,14 +68,22 @@ impl ConnectionPool {
         .build()
         .await
         .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create database: {e}"),
+            message: format!(
+                "Failed to create Turso/SQLite database at '{}': {}. \
+                 Error details: {:?}. Check database path, permissions, and disk space.",
+                config.path, e, e
+            ),
         })?;
 
         // Initialize the database with our schema
         let conn = database
             .connect()
             .map_err(|e| DatabaseError::Configuration {
-                message: format!("Failed to get initial connection: {e}"),
+                message: format!(
+                    "Failed to get initial connection to Turso/SQLite database at '{}': {}. \
+                     Error details: {:?}. This may indicate database file corruption or access issues.",
+                    config.path, e, e
+                ),
             })?;
 
         Self::initialize_schema(&conn, &config).await?;
@@ -129,7 +137,10 @@ impl ConnectionPool {
         )
         .await
         .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create kv_store table: {e}"),
+            message: format!(
+                "Failed to create kv_store table in Turso/SQLite database: {e}. \
+                 Error details: {e:?}. This may indicate schema conflicts or insufficient permissions."
+            ),
         })?;
 
         // Create metadata table for tracking trees
@@ -144,7 +155,10 @@ impl ConnectionPool {
         )
         .await
         .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create tree_metadata table: {e}"),
+            message: format!(
+                "Failed to create tree_metadata table in Turso/SQLite database: {e}. \
+                 Error details: {e:?}. This may indicate schema conflicts or insufficient permissions."
+            ),
         })?;
 
         Ok(())

@@ -43,12 +43,8 @@ use tracing::{debug, error, info, warn};
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
-// Keep the PID lock file distinct from the Unix socket path to avoid collisions with stale sockets
-// or removing the lock when cleaning up the socket file.
-#[inline]
-fn pid_lock_path(socket_path: &str) -> String {
-    format!("{socket_path}.lock")
-}
+// PID lock path is now handled directly by PidLock::new(socket_path)
+// which creates socket_path.pid internally
 
 pub struct LspDaemon {
     socket_path: String,
@@ -327,17 +323,13 @@ impl LspDaemon {
 
     pub async fn run(mut self) -> Result<()> {
         // Acquire PID lock to ensure only one daemon runs
-        // IMPORTANT: use a separate file from the Unix socket to avoid collisions with stale sockets.
-        let lock_path = pid_lock_path(&self.socket_path);
-        let mut pid_lock = PidLock::new(&lock_path);
+        // IMPORTANT: PidLock::new takes the socket path directly and creates the .pid file internally
+        let mut pid_lock = PidLock::new(&self.socket_path);
         pid_lock
             .try_lock()
             .map_err(|e| anyhow!("Failed to acquire daemon lock: {}", e))?;
         self.pid_lock = Some(pid_lock);
-        debug!(
-            "Acquired daemon PID lock at {} (socket: {})",
-            lock_path, self.socket_path
-        );
+        debug!("Acquired daemon PID lock for socket: {}", self.socket_path);
 
         // Set up process group for child management
         #[cfg(unix)]

@@ -65,29 +65,36 @@ impl PidLock {
                     file.read_to_string(&mut contents)
                         .context("Failed to read PID file")?;
 
-                    let existing_pid: u32 = contents
-                        .trim()
-                        .parse()
-                        .context("Invalid PID in lock file")?;
+                    let trimmed_contents = contents.trim();
+                    if trimmed_contents.is_empty() {
+                        warn!("Found empty PID file, removing stale file: {:?}", self.path);
+                        drop(file); // Close the file before removing
+                        fs::remove_file(&self.path).context("Failed to remove empty PID file")?;
+                        // Continue to create a new lock file
+                    } else {
+                        let existing_pid: u32 = trimmed_contents
+                            .parse()
+                            .context("Invalid PID in lock file")?;
 
-                    if is_process_running(existing_pid) {
-                        // Try to lock the existing file to verify it's really in use
-                        if file.try_lock_exclusive().is_err() {
-                            return Err(anyhow!(
-                                "Another daemon instance is already running (PID: {})",
-                                existing_pid
-                            ));
+                        if is_process_running(existing_pid) {
+                            // Try to lock the existing file to verify it's really in use
+                            if file.try_lock_exclusive().is_err() {
+                                return Err(anyhow!(
+                                    "Another daemon instance is already running (PID: {})",
+                                    existing_pid
+                                ));
+                            }
+                            // If we can lock it, the process might be dead but file wasn't cleaned up
+                            let _ = FileExt::unlock(&file);
                         }
-                        // If we can lock it, the process might be dead but file wasn't cleaned up
-                        let _ = FileExt::unlock(&file);
-                    }
 
-                    warn!(
-                        "Found stale PID file for non-running process {}, removing",
-                        existing_pid
-                    );
-                    drop(file); // Close the file before removing
-                    fs::remove_file(&self.path).context("Failed to remove stale PID file")?;
+                        warn!(
+                            "Found stale PID file for non-running process {}, removing",
+                            existing_pid
+                        );
+                        drop(file); // Close the file before removing
+                        fs::remove_file(&self.path).context("Failed to remove stale PID file")?;
+                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     // File was removed between exists() check and open(), continue

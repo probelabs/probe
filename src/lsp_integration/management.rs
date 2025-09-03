@@ -903,17 +903,32 @@ impl LspManager {
             println!("   Use 'probe lsp status' to check daemon status");
             println!("   Use 'probe lsp logs' to view daemon logs");
 
-            // Wait a moment to ensure daemon starts
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            // Verify daemon is running with retry logic (up to 10 seconds)
+            let mut connection_verified = false;
+            for attempt in 1..=20 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-            // Verify daemon is running
-            match lsp_daemon::ipc::IpcStream::connect(&socket_path).await {
-                Ok(_) => {
-                    // Daemon is running successfully
+                match lsp_daemon::ipc::IpcStream::connect(&socket_path).await {
+                    Ok(_) => {
+                        connection_verified = true;
+                        break;
+                    }
+                    Err(_) => {
+                        // Continue retrying
+                        if attempt == 20 {
+                            // Last attempt failed
+                            eprintln!(
+                                "⚠️  Warning: Could not verify daemon started after {} seconds",
+                                attempt as f32 * 0.5
+                            );
+                            eprintln!("   The daemon may still be starting. Use 'probe lsp status' to check.");
+                        }
+                    }
                 }
-                Err(e) => {
-                    eprintln!("⚠️  Warning: Could not verify daemon started: {e}");
-                }
+            }
+
+            if connection_verified {
+                println!("✓ Daemon connection verified successfully");
             }
         }
 
