@@ -47,7 +47,7 @@ impl SingleflightGroup {
         Fut: std::future::Future<Output = Result<SingleflightResult>> + Send + 'static,
     {
         let start = Instant::now();
-        eprintln!("DEBUG: Singleflight call for key '{}'", key);
+        eprintln!("DEBUG: Singleflight call for key '{key}'");
 
         // Get or create a OnceCell for this key
         let cell = {
@@ -57,17 +57,11 @@ impl SingleflightGroup {
             use std::collections::hash_map::Entry;
             match active.entry(key.to_string()) {
                 Entry::Occupied(entry) => {
-                    eprintln!(
-                        "DEBUG: Found existing cell for key '{}', will await result",
-                        key
-                    );
+                    eprintln!("DEBUG: Found existing cell for key '{key}', will await result");
                     entry.get().clone()
                 }
                 Entry::Vacant(entry) => {
-                    eprintln!(
-                        "DEBUG: Creating new cell for key '{}', will become leader",
-                        key
-                    );
+                    eprintln!("DEBUG: Creating new cell for key '{key}', will become leader");
                     let cell = std::sync::Arc::new(OnceCell::new());
                     entry.insert(cell.clone());
                     eprintln!("DEBUG: Inserted new cell, active count: {}", active.len());
@@ -79,10 +73,10 @@ impl SingleflightGroup {
         // Use OnceCell to ensure only one initializer runs
         let result = cell
             .get_or_try_init(|| {
-                eprintln!("DEBUG: Leader executing function for key '{}'", key);
+                eprintln!("DEBUG: Leader executing function for key '{key}'");
                 async move {
                     let result = f().await;
-                    eprintln!("DEBUG: Leader function completed for key '{}'", key);
+                    eprintln!("DEBUG: Leader function completed for key '{key}'");
                     result
                 }
             })
@@ -100,10 +94,7 @@ impl SingleflightGroup {
                         active.len()
                     );
                 } else {
-                    eprintln!(
-                        "DEBUG: Cell for key '{}' was replaced, skipping cleanup",
-                        key
-                    );
+                    eprintln!("DEBUG: Cell for key '{key}' was replaced, skipping cleanup");
                 }
             }
         }
@@ -118,7 +109,7 @@ impl SingleflightGroup {
                 Ok(result.clone())
             }
             Err(e) => {
-                eprintln!("DEBUG: Singleflight failed for key '{}': {}", key, e);
+                eprintln!("DEBUG: Singleflight failed for key '{key}': {e}");
                 Err(e)
             }
         }
@@ -336,10 +327,7 @@ impl CacheLayer {
             .key_builder
             .build_singleflight_key(lsp_method, &file_path, &params);
 
-        eprintln!(
-            "DEBUG: Synchronous singleflight key: '{}'",
-            singleflight_key
-        );
+        eprintln!("DEBUG: Synchronous singleflight key: '{singleflight_key}'");
 
         // Debug: Log the singleflight key for debugging identical requests
         debug!(
@@ -385,7 +373,7 @@ impl CacheLayer {
                     let cache_key = match key_builder.build_key(method, &path, &params_str).await {
                         Ok(key) => key,
                         Err(e) => {
-                            eprintln!("DEBUG: Failed to build cache key in singleflight: {}", e);
+                            eprintln!("DEBUG: Failed to build cache key in singleflight: {e}");
                             // Skip cache, go directly to upstream handler
                             let upstream_handler = match upstream_handler_opt.lock().unwrap().take()
                             {

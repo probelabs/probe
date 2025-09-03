@@ -1617,7 +1617,7 @@ mod tests {
         // Create more workspaces than max_open_caches (3)
         let mut workspaces = Vec::new();
         for i in 0..5 {
-            let workspace = temp_dir.path().join(format!("workspace-{}", i));
+            let workspace = temp_dir.path().join(format!("workspace-{i}"));
             fs::create_dir_all(&workspace).unwrap();
             workspaces.push(workspace);
         }
@@ -1870,7 +1870,7 @@ mod tests {
 
         // Test read path for submodule file should include both caches
         let read_caches = router.pick_read_path(&submodule_file).await.unwrap();
-        assert!(read_caches.len() >= 1); // At least submodule cache
+        assert!(!read_caches.is_empty()); // At least submodule cache
 
         // Verify that read path includes parent workspace within lookup depth
         let submodule_cache = router.cache_for_workspace(&submodule_dir).await.unwrap();
@@ -1945,29 +1945,29 @@ mod tests {
         let mut workspaces = Vec::new();
 
         for i in 0..workspace_count {
-            let workspace = temp_dir.path().join(format!("workspace-{:02}", i));
+            let workspace = temp_dir.path().join(format!("workspace-{i:02}"));
             fs::create_dir_all(&workspace).unwrap();
 
             // Alternate between different workspace types for variety
             match i % 4 {
                 0 => fs::write(
                     workspace.join("Cargo.toml"),
-                    format!(r#"[package]\nname = "workspace-{}""#, i),
+                    format!(r#"[package]\nname = "workspace-{i}""#),
                 )
                 .unwrap(),
                 1 => fs::write(
                     workspace.join("package.json"),
-                    format!(r#"{{"name": "workspace-{}"}}"#, i),
+                    format!(r#"{{"name": "workspace-{i}"}}"#),
                 )
                 .unwrap(),
                 2 => fs::write(
                     workspace.join("go.mod"),
-                    format!("module workspace-{}\n\ngo 1.19", i),
+                    format!("module workspace-{i}\n\ngo 1.19"),
                 )
                 .unwrap(),
                 3 => fs::write(
                     workspace.join("pyproject.toml"),
-                    format!(r#"[project]\nname = "workspace-{}""#, i),
+                    format!(r#"[project]\nname = "workspace-{i}""#),
                 )
                 .unwrap(),
                 _ => unreachable!(),
@@ -2137,7 +2137,7 @@ mod tests {
 
         // Should include parent workspaces up to max_parent_lookup_depth (2)
         // But exact count depends on workspace discovery for parents
-        assert!(read_caches.len() >= 1); // At least the primary workspace
+        assert!(!read_caches.is_empty()); // At least the primary workspace
 
         // Test that write target picks the nearest workspace
         let _write_cache = router.pick_write_target(&test_file).await.unwrap();
@@ -2157,7 +2157,7 @@ mod tests {
             fs::create_dir_all(&ws_path).unwrap();
             fs::write(
                 ws_path.join("package.json"),
-                format!(r#"{{"name": "{}"}}"#, ws_name),
+                format!(r#"{{"name": "{ws_name}"}}"#),
             )
             .unwrap();
 
@@ -2237,7 +2237,7 @@ mod tests {
         let clear_all_result = router.clear_workspace_cache(None, None).await.unwrap();
 
         // Should clear both workspaces successfully
-        assert!(clear_all_result.cleared_workspaces.len() >= 1); // At least one workspace cleared
+        assert!(!clear_all_result.cleared_workspaces.is_empty()); // At least one workspace cleared
         assert!(clear_all_result
             .cleared_workspaces
             .iter()
@@ -2317,7 +2317,7 @@ mod tests {
             fs::create_dir_all(&workspace_path).unwrap();
             fs::write(
                 workspace_path.join("package.json"),
-                format!(r#"{{"name": "{}"}}"#, name),
+                format!(r#"{{"name": "{name}"}}"#),
             )
             .unwrap();
 
@@ -2339,7 +2339,7 @@ mod tests {
         // Create very deep nested structure
         let mut deep_path = temp_dir.path().to_path_buf();
         for i in 0..20 {
-            deep_path = deep_path.join(format!("level-{:02}", i));
+            deep_path = deep_path.join(format!("level-{i:02}"));
         }
         deep_path = deep_path.join("deep-workspace");
 
@@ -2576,11 +2576,11 @@ mod tests {
             }}"#,
             "x".repeat(1000), // Large description
             (0..100)
-                .map(|i| format!(r#""keyword-{}""#, i))
+                .map(|i| format!(r#""keyword-{i}""#))
                 .collect::<Vec<_>>()
                 .join(", "), // Many keywords
             (0..50)
-                .map(|i| format!(r#""dep-{}": "1.0.0""#, i))
+                .map(|i| format!(r#""dep-{i}": "1.0.0""#))
                 .collect::<Vec<_>>()
                 .join(", ")  // Many deps
         );
@@ -2608,11 +2608,11 @@ mod tests {
         let mut workspaces = Vec::new();
 
         for i in 0..workspace_count {
-            let workspace = temp_dir.path().join(format!("memory-pressure-{:03}", i));
+            let workspace = temp_dir.path().join(format!("memory-pressure-{i:03}"));
             fs::create_dir_all(&workspace).unwrap();
             fs::write(
                 workspace.join("Cargo.toml"),
-                format!(r#"[package]\nname = "memory-pressure-{}""#, i),
+                format!(r#"[package]\nname = "memory-pressure-{i}""#),
             )
             .unwrap();
             workspaces.push(workspace);
