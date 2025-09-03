@@ -537,6 +537,166 @@ probe lsp cache stats --detailed
 
 Remember: **Quality > Speed**. Write tests, handle errors properly, and maintain code standards.
 
+## Critical Development Patterns
+
+### Database & Async Operations
+
+**Database Initialization Best Practices:**
+```rust
+// For concurrent database initialization, use idempotent DDL
+CREATE TABLE IF NOT EXISTS table_name (
+    // Never use global PRAGMAs in schema files
+    // Use process-local guards with file locking
+);
+```
+
+**Async Database Operations:**
+```rust
+// CRITICAL: Wrap blocking database I/O in spawn_blocking
+pub async fn query_database(&self) -> Result<Vec<Data>> {
+    let db = self.database.clone();
+    tokio::task::spawn_blocking(move || {
+        db.iter_entries() // Blocking operation
+    }).await?
+}
+```
+
+**Key Rules:**
+- Each `:memory:` DuckDB connection creates isolated database - apply schema per connection
+- Use file locking for cross-process database safety
+- Never use `.unwrap()` on database operations in production
+- For in-memory databases, apply schema directly in connection creation method
+
+### Cache System Architecture
+
+**Multi-Layer Cache Design:**
+- **L1**: In-memory cache (fastest, limited size)  
+- **L2**: Persistent workspace cache (per-project isolation)
+- **L3**: Universal cache (cross-workspace shared data)
+
+**Cache Key Generation:**
+```rust
+// CRITICAL: Use consistent hash algorithms across all components
+let cache_key = format!("{}:{}:{}:{}", 
+    workspace_id,    // Blake3 hash, NOT DefaultHasher
+    method_name, 
+    file_path,
+    content_hash     // For cache invalidation
+);
+```
+
+**Cache Clearing Strategy:**
+- Use prefix matching: `workspace:method:file:*` to handle content variations
+- Never use exact key matching for content-addressed caches
+- Clear across ALL cache layers (L1, L2, L3) systematically
+
+### Testing & Build Practices
+
+**Rust Build Lock Avoidance:**
+```bash
+# WRONG - causes build lock conflicts:
+cargo run -- lsp start -f &
+cargo run -- lsp status
+
+# CORRECT - build once, use binary:
+cargo build
+./target/debug/probe lsp start -f &
+./target/debug/probe lsp status
+```
+
+**Test Data Requirements:**
+- CLI limit tests need sufficient data to actually trigger limits
+- Multi-term search tests need content containing all search terms
+- Performance tests should include realistic data sizes
+
+**Critical Testing Rules:**
+- NEVER bypass pre-commit hooks with `--no-verify`
+- NEVER disable tests to hide compilation errors - fix root causes
+- Run `cargo fmt`, `cargo clippy`, `cargo check` separately when debugging
+- Always use 10-minute timeouts for Rust compilation operations
+
+### Workspace Resolution & LSP
+
+**Symbol Position Finding:**
+```rust
+// ALWAYS use tree-sitter for deterministic positions
+pub fn find_symbol_position(file: &Path, symbol: &str) -> Result<Position> {
+    let tree = parse_with_tree_sitter(file)?;
+    find_node_by_name(&tree, symbol)  // Deterministic AST-based lookup
+    // NEVER use hardcoded position tables or text search
+}
+```
+
+**LSP Debugging:**
+- Check daemon status before direct database access
+- Restart daemon after code changes to avoid source/binary mismatches  
+- Add detailed cache key logging for debugging invisible mismatches
+- Use `probe lsp logs --follow` for real-time debugging
+
+### Git & Version Control
+
+**Git Operations:**
+- ALWAYS use `git2` crate instead of shell commands when requested
+- Handle git workspaces and modified file detection properly
+- Use commit hash + timestamp for git-aware versioning
+
+**Commit Process:**
+```bash
+# Run individually to fix issues systematically:
+cargo fmt              # Fix formatting
+cargo clippy --fix     # Fix linting issues  
+cargo check           # Verify compilation
+make test             # Run full test suite
+git commit            # With 10-minute timeout
+```
+
+## Architecture Guidelines
+
+### Agent Usage Patterns
+
+**When to use @agent-architect:**
+- Complex multi-file refactoring (>5 files)
+- Database migrations or backend changes
+- System architecture modifications
+- Any task requiring systematic analysis across modules
+
+**Agent Session Structure:**
+- Break complex work into separate @agent-architect sessions per phase
+- Provide comprehensive detailed instructions including file paths
+- Define specific success criteria and scope for each session
+
+### Error Prevention Patterns
+
+**Database Deadlocks:**
+- Use transactional DDL with `IF NOT EXISTS` clauses
+- Implement process-local guards with path-based keys  
+- Add file locking for cross-process safety
+- Use connection customizers for per-connection settings
+
+**Cache Inconsistencies:**
+- Ensure storage and retrieval use identical serialization (bincode vs JSON)
+- Verify workspace ID generation uses same algorithm everywhere
+- Check field ordering in JSON parameters for cache keys
+- Test persistence across daemon restarts early
+
+**LSP Timeouts:**  
+- Use `spawn_blocking` for database operations in async contexts
+- Check for blocking I/O operations in async handlers
+- Implement proper timeout handling for language server communication
+
+### Performance Optimization
+
+**Build Performance:**
+- Avoid bundled compilation features in development builds
+- Use conditional features for dev vs release builds  
+- Profile CI build times when adding native dependencies
+
+**Cache Performance:**
+- Implement LRU eviction for memory management
+- Use prefix-based clearing for content-addressed caches
+- Monitor hit rates (should achieve 90-95% for workspace caches)
+- Measure performance improvements (expect 10-100x speedup)
+
 ## LSP Client Implementation
 
 For detailed information on implementing an LSP client that communicates with the probe daemon, see:

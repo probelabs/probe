@@ -17,6 +17,9 @@ path = "src/main.rs"
 name = "lsp_daemon"
 path = "src/lib.rs"
 
+[features]
+default = []
+
 [dependencies]
 anyhow = "1"
 tokio = { version = "1", features = ["full", "net"] }
@@ -37,18 +40,18 @@ tempfile = "3"
 chrono = "0.4"
 fs2 = "0.4"
 md5 = "0.7"
-duckdb = { version = "1.3", features = ["bundled", "json"] }  # JSON support for advanced LSP response caching
 bincode = "1.3"
 ignore = "0.4"
-git2 = "0.19"
+gix = "0.66"
 pathdiff = "0.2"
 futures = "0.3"
-num_cpus = "1"  # Auto-detect optimal thread count for DuckDB connection pool
+num_cpus = "1"  # Auto-detect optimal thread count for connection pool
 flate2 = "1.0"
 blake3 = "1.5"
 moka = { version = "0.12", features = ["future"] }
 thiserror = "1"
 once_cell = "1.19"
+turso = "0.1.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

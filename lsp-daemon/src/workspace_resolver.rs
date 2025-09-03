@@ -608,10 +608,9 @@ mod tests {
         let new_file = temp_dir.path().join("new_file.rs");
         let _ = resolver.resolve_workspace_for_file(&new_file);
 
-        let (total, max_size, ttl, expired) = resolver.cache_stats();
+        let (total, max_size, ttl, _expired) = resolver.cache_stats();
         assert!(total <= max_size);
         assert_eq!(ttl, 1);
-        // Expired count might be 0 if cleanup already happened
-        assert!(expired >= 0);
+        // Note: expired count is always >= 0 for unsigned integers
     }
 }

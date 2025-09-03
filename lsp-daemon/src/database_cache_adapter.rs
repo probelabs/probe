@@ -8,13 +8,13 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::database::{DatabaseBackend, DatabaseConfig, DatabaseTree, DuckDBBackend};
+use crate::database::{DatabaseBackend, DatabaseConfig, DatabaseTree, SQLiteBackend};
 use crate::universal_cache::store::CacheEntry;
 
 /// Configuration for database-backed cache
 #[derive(Debug, Clone)]
 pub struct DatabaseCacheConfig {
-    /// Database backend type ("duckdb")
+    /// Database backend type ("sqlite")
     pub backend_type: String,
     /// Database configuration
     pub database_config: DatabaseConfig,
@@ -24,7 +24,7 @@ pub struct DatabaseCacheConfig {
 impl Default for DatabaseCacheConfig {
     fn default() -> Self {
         Self {
-            backend_type: "duckdb".to_string(),
+            backend_type: "sqlite".to_string(),
             database_config: DatabaseConfig {
                 temporary: false,
                 compression: true,
@@ -37,14 +37,14 @@ impl Default for DatabaseCacheConfig {
 
 /// Enum to hold different backend types
 pub enum BackendType {
-    DuckDB(Arc<DuckDBBackend>),
+    SQLite(Arc<SQLiteBackend>),
 }
 
 impl BackendType {
     /// Open a tree on the backend
     pub async fn open_tree(&self, name: &str) -> Result<Arc<dyn DatabaseTree>, anyhow::Error> {
         match self {
-            BackendType::DuckDB(db) => Ok(db
+            BackendType::SQLite(db) => Ok(db
                 .open_tree(name)
                 .await
                 .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
@@ -55,7 +55,7 @@ impl BackendType {
     /// Get stats from the backend
     pub async fn stats(&self) -> Result<crate::database::DatabaseStats, anyhow::Error> {
         match self {
-            BackendType::DuckDB(db) => db
+            BackendType::SQLite(db) => db
                 .stats()
                 .await
                 .map_err(|e| anyhow::anyhow!("Database error: {}", e)),
@@ -88,11 +88,11 @@ impl DatabaseCacheAdapter {
 
         let database = {
             let db = Arc::new(
-                DuckDBBackend::new(database_config)
+                SQLiteBackend::new(database_config)
                     .await
-                    .context("Failed to create DuckDB backend")?,
+                    .context("Failed to create SQLite backend")?,
             );
-            BackendType::DuckDB(db)
+            BackendType::SQLite(db)
         };
 
         // Create workspace-specific tree name to ensure workspace isolation
@@ -126,7 +126,7 @@ impl DatabaseCacheAdapter {
     /// Set an entry in the universal cache tree
     pub async fn set_universal_entry(&self, key: &str, value: &[u8]) -> Result<()> {
         eprintln!(
-            "DEBUG: DuckDB set_universal_entry - storing key: '{}', value_len: {}, tree: {:p}",
+            "DEBUG: SQLite set_universal_entry - storing key: '{}', value_len: {}, tree: {:p}",
             key,
             value.len(),
             Arc::as_ptr(&self.universal_tree)
@@ -138,7 +138,7 @@ impl DatabaseCacheAdapter {
             .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
 
         eprintln!(
-            "DEBUG: DuckDB set_universal_entry - successfully stored to tree {:p}",
+            "DEBUG: SQLite set_universal_entry - successfully stored to tree {:p}",
             Arc::as_ptr(&self.universal_tree)
         );
         Ok(())

@@ -1,7 +1,7 @@
 //! Database abstraction layer for LSP daemon
 //!
-//! This module provides a clean database abstraction interface using DuckDB for advanced
-//! graph analytics and git-aware versioning. It supports both persistent and
+//! This module provides a clean database abstraction interface using SQLite (via libSQL) for fast,
+//! local storage with minimal compilation overhead. It supports both persistent and
 //! in-memory modes, with comprehensive error handling and async support.
 //!
 //! ## Architecture
@@ -18,7 +18,7 @@
 //! ## Usage
 //!
 //! ```rust
-//! use database::{DatabaseBackend, DuckDBBackend, DatabaseConfig};
+//! use database::{DatabaseBackend, SQLiteBackend, DatabaseConfig};
 //!
 //! // Create a persistent database
 //! let config = DatabaseConfig {
@@ -27,7 +27,7 @@
 //!     compression: true,
 //!     cache_capacity: 64 * 1024 * 1024,
 //! };
-//! let db = DuckDBBackend::new(config).await?;
+//! let db = SQLiteBackend::new(config).await?;
 //!
 //! // Basic operations
 //! db.set(b"key", b"value").await?;
@@ -44,12 +44,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub mod duckdb_backend;
-pub mod duckdb_bootstrap;
-pub mod duckdb_queries;
-pub use duckdb_backend::DuckDBBackend;
-pub use duckdb_bootstrap::bootstrap_database;
-// Migration utilities are deprecated and no longer exported since sled support is removed
+pub mod sqlite_backend;
+pub use sqlite_backend::SQLiteBackend;
+// Legacy DuckDB exports removed - SQLite is now the primary backend
 
 /// Database error types specific to database operations
 #[derive(Debug, thiserror::Error)]
@@ -251,25 +248,6 @@ impl<T: DatabaseTree> DatabaseTreeExt for T {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
-
-    /// Test helper to create a temporary database configuration
-    pub fn temp_db_config() -> DatabaseConfig {
-        DatabaseConfig {
-            temporary: true,
-            ..Default::default()
-        }
-    }
-
-    /// Test helper to create a persistent database configuration in a temp directory
-    pub fn persistent_db_config() -> DatabaseConfig {
-        let dir = tempdir().expect("Failed to create temp dir");
-        DatabaseConfig {
-            path: Some(dir.path().join("test.db")),
-            temporary: false,
-            ..Default::default()
-        }
-    }
 
     #[tokio::test]
     async fn test_database_config_default() {

@@ -99,10 +99,10 @@ jobs:
             mkdir -p .cargo
             echo '[target.x86_64-pc-windows-msvc]' > .cargo/config.toml
             echo 'rustflags = ["-C", "target-feature=+crt-static", "-C", "link-args=/DEBUG:NONE", "-C", "link-args=/NOLOGO"]' >> .cargo/config.toml
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release --target ${{ matrix.target }} --features duckdb-bundled
           else
             # For other platforms, use the default build
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release --target ${{ matrix.target }} --features duckdb-bundled
           fi
 
       # Install zip on Windows
