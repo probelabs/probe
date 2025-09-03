@@ -1038,6 +1038,19 @@ impl LspDaemon {
                     "Received DaemonRequest::CallHierarchy for {:?} at {}:{} (request_id: {})",
                     file_path, line, column, request_id
                 );
+
+                // Check if file should be excluded from LSP processing
+                if should_exclude_from_lsp(&file_path) {
+                    warn!(
+                        "Ignoring CallHierarchy request for excluded file: {:?} (build artifact/generated code)",
+                        file_path
+                    );
+                    return DaemonResponse::Error {
+                        request_id,
+                        error: "File is excluded from LSP processing (build artifact or generated code)".to_string(),
+                    };
+                }
+
                 match self
                     .handle_call_hierarchy(&file_path, line, column, workspace_hint)
                     .await
@@ -1866,6 +1879,19 @@ impl LspDaemon {
                     "Received DaemonRequest::Definition for {:?} at {}:{} (request_id: {})",
                     file_path, line, column, request_id
                 );
+
+                // Check if file should be excluded from LSP processing
+                if should_exclude_from_lsp(&file_path) {
+                    warn!(
+                        "Ignoring Definition request for excluded file: {:?} (build artifact/generated code)",
+                        file_path
+                    );
+                    return DaemonResponse::Error {
+                        request_id,
+                        error: "File is excluded from LSP processing (build artifact or generated code)".to_string(),
+                    };
+                }
+
                 // Handle definition request directly (universal cache middleware handles caching)
                 let absolute_file_path = safe_canonicalize(&file_path);
 
@@ -1923,6 +1949,19 @@ impl LspDaemon {
                     "Received DaemonRequest::References for {:?} at {}:{} include_decl={} (request_id: {})",
                     file_path, line, column, include_declaration, request_id
                 );
+
+                // Check if file should be excluded from LSP processing
+                if should_exclude_from_lsp(&file_path) {
+                    warn!(
+                        "Ignoring References request for excluded file: {:?} (build artifact/generated code)",
+                        file_path
+                    );
+                    return DaemonResponse::Error {
+                        request_id,
+                        error: "File is excluded from LSP processing (build artifact or generated code)".to_string(),
+                    };
+                }
+
                 // Handle references request directly (universal cache middleware handles caching)
                 let absolute_file_path = safe_canonicalize(&file_path);
 
@@ -1979,6 +2018,19 @@ impl LspDaemon {
                     "Received DaemonRequest::Hover for {:?} at {}:{} (request_id: {})",
                     file_path, line, column, request_id
                 );
+
+                // Check if file should be excluded from LSP processing
+                if should_exclude_from_lsp(&file_path) {
+                    warn!(
+                        "Ignoring Hover request for excluded file: {:?} (build artifact/generated code)",
+                        file_path
+                    );
+                    return DaemonResponse::Error {
+                        request_id,
+                        error: "File is excluded from LSP processing (build artifact or generated code)".to_string(),
+                    };
+                }
+
                 // Handle hover request directly (universal cache middleware handles caching)
                 let absolute_file_path = safe_canonicalize(&file_path);
 
@@ -4979,4 +5031,52 @@ pub async fn start_daemon_background() -> Result<()> {
 
     info!("Started daemon in background");
     Ok(())
+}
+
+/// Check if a file path should be excluded from LSP processing
+///
+/// This filters out build artifacts, generated code, and temporary files that
+/// shouldn't be processed by language servers as they can cause performance issues
+/// and provide unhelpful results to users.
+fn should_exclude_from_lsp(file_path: &Path) -> bool {
+    let path_str = file_path.to_string_lossy().to_lowercase();
+
+    // Exclude common build and generated code directories
+    let excluded_patterns = [
+        // Rust build artifacts
+        "/target/debug/build/",
+        "/target/release/build/",
+        "/target/debug/deps/",
+        "/target/release/deps/",
+        // Generated binding files
+        "bindgen.rs",
+        "build.rs", // Build scripts themselves are fine, but their generated output isn't
+        // Temporary and cache files
+        "/.git/",
+        "/tmp/",
+        "/temp/",
+        "/.cache/",
+        // Node.js build artifacts
+        "/node_modules/",
+        "/dist/",
+        "/.next/",
+        // Other common build directories
+        "/build/",
+        "/out/",
+        "/.output/",
+        // IDE and editor files
+        "/.vscode/",
+        "/.idea/",
+        "*.tmp",
+        "*.bak",
+        "*~",
+    ];
+
+    for pattern in &excluded_patterns {
+        if path_str.contains(pattern) {
+            return true;
+        }
+    }
+
+    false
 }
