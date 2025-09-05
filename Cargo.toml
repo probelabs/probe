@@ -8,6 +8,7 @@ version = "0.6.0"
 edition = "2021"
 authors = ["Leonid Bugaev <leonsbox@gmail.com>"]
 description = "AI-friendly, fully local, semantic code search tool for large codebases"
+default-run = "probe"
 license = "MIT"
 repository = "https://github.com/buger/probe"
 readme = "README.md"

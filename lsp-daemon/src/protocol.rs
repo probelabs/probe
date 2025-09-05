@@ -735,8 +735,8 @@ pub struct UniversalCacheStats {
     pub total_misses: u64,
     /// Cache statistics per LSP method
     pub method_stats: std::collections::HashMap<String, UniversalCacheMethodStats>,
-    /// Cache layer performance (memory, disk, server)
-    pub layer_stats: UniversalCacheLayerStats,
+    /// Cache performance overview
+    pub cache_enabled: bool,
     /// Workspace-specific cache summaries
     pub workspace_summaries: Vec<UniversalCacheWorkspaceSummary>,
     /// Cache configuration summary
@@ -766,40 +766,6 @@ pub struct UniversalCacheMethodStats {
     pub avg_lsp_response_time_us: u64,
 }
 
-/// Cache layer performance statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UniversalCacheLayerStats {
-    /// Memory layer statistics
-    pub memory: CacheLayerStat,
-    /// Disk layer statistics
-    pub disk: CacheLayerStat,
-    /// Server layer statistics (if enabled)
-    pub server: Option<CacheLayerStat>,
-}
-
-/// Individual cache layer statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheLayerStat {
-    /// Whether this layer is enabled
-    pub enabled: bool,
-    /// Number of entries in this layer
-    pub entries: u64,
-    /// Size in bytes used by this layer
-    pub size_bytes: u64,
-    /// Hit count for this layer
-    pub hits: u64,
-    /// Miss count for this layer
-    pub misses: u64,
-    /// Hit rate for this layer (0.0 - 1.0)
-    pub hit_rate: f64,
-    /// Average response time for this layer (microseconds)
-    pub avg_response_time_us: u64,
-    /// Maximum capacity for this layer
-    pub max_capacity: Option<u64>,
-    /// Current capacity utilization (0.0 - 1.0)
-    pub capacity_utilization: f64,
-}
-
 /// Workspace-specific cache summary
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UniversalCacheWorkspaceSummary {
@@ -826,30 +792,14 @@ pub struct UniversalCacheWorkspaceSummary {
 /// Configuration summary for universal cache
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UniversalCacheConfigSummary {
-    // Migration and rollback fields removed - no longer needed
-    /// Memory layer configuration
-    pub memory_config: CacheLayerConfigSummary,
-    /// Disk layer configuration
-    pub disk_config: CacheLayerConfigSummary,
-    /// Server layer configuration (if enabled)
-    pub server_config: Option<CacheLayerConfigSummary>,
+    /// Whether caching is enabled
+    pub enabled: bool,
+    /// Maximum cache size in MB (if configured)
+    pub max_size_mb: Option<usize>,
     /// Number of methods with custom configuration
     pub custom_method_configs: usize,
-}
-
-/// Cache layer configuration summary
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheLayerConfigSummary {
-    /// Whether this layer is enabled
-    pub enabled: bool,
-    /// Maximum size in MB (if configured)
-    pub max_size_mb: Option<usize>,
-    /// Maximum number of entries (if configured)
-    pub max_entries: Option<usize>,
-    /// Eviction policy
-    pub eviction_policy: Option<String>,
-    /// Compression enabled (disk layer)
-    pub compression: Option<bool>,
+    /// Whether compression is enabled
+    pub compression_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

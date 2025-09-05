@@ -1,5 +1,6 @@
 // LSP Daemon Library
 // Exports public interfaces for client implementations
+#![allow(dead_code, clippy::all)]
 
 // Core modules
 pub mod git_service;
@@ -36,13 +37,23 @@ mod pool; // Keep for now but mark as deprecated
 pub mod server_manager;
 pub mod watchdog;
 pub mod workspace_cache_router;
-mod workspace_resolver;
+pub mod workspace_resolver;
 
 // Indexing subsystem
 pub mod indexing;
 
 // File watching subsystem
 pub mod file_watcher;
+
+// Workspace management subsystem
+pub mod workspace;
+
+// Symbol UID generation subsystem
+pub mod symbol;
+
+// Multi-language analyzer framework
+pub mod analyzer;
+pub mod relationship;
 
 // Re-export commonly used types
 pub use protocol::{
@@ -113,4 +124,26 @@ pub use database::{
 };
 
 // Re-export pipeline-specific types
-pub use indexing::pipelines::SymbolInfo;
+pub use indexing::pipelines::SymbolInfo as IndexingSymbolInfo;
+
+// Re-export workspace management types for external use
+pub use workspace::{
+    BranchSwitchResult, ComprehensiveBranchSwitchResult, FileChange, FileChangeType,
+    IndexingResult, WorkspaceConfig, WorkspaceError, WorkspaceEvent, WorkspaceIndexingResult,
+    WorkspaceManagementError, WorkspaceManager, WorkspaceMetrics,
+};
+
+// Re-export symbol UID generation types for external use
+pub use symbol::{
+    HashAlgorithm, LanguageRules, LanguageRulesFactory, Normalizer, SignatureNormalization,
+    SymbolContext, SymbolInfo as UIDSymbolInfo, SymbolKind, SymbolLocation, SymbolUIDGenerator,
+    UIDError, UIDResult, Visibility,
+};
+
+// Re-export analyzer framework types for external use
+pub use analyzer::{
+    AnalysisContext, AnalysisError, AnalysisResult, AnalyzerCapabilities, AnalyzerConfig,
+    AnalyzerManager, CodeAnalyzer, ExtractedRelationship, ExtractedSymbol, GenericAnalyzer,
+    HybridAnalyzer, LanguageAnalyzerConfig, LanguageSpecificAnalyzer, LspAnalyzer, PythonAnalyzer,
+    RelationType, RustAnalyzer, TreeSitterAnalyzer, TypeScriptAnalyzer,
+};

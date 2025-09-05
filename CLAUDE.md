@@ -216,6 +216,40 @@ make install-hooks
 - Use `RUST_BACKTRACE=1` for stack traces
 - Profile with `cargo flamegraph` for performance
 
+### Tree-sitter Debugging
+
+#### Debugging Tree-sitter Parsing Issues
+
+When encountering issues with tree-sitter language parsing or AST analysis, use the standalone debugging script:
+
+**Using the Tree-sitter Debug Script:**
+```bash
+# Run the standalone tree-sitter debug script
+./test_tree_sitter_standalone.rs
+
+# Or with rust-script if installed
+rust-script test_tree_sitter_standalone.rs
+```
+
+**What the script does:**
+- Tests parsing for Rust, Python, TypeScript, and JavaScript
+- Shows parsed AST in S-expression format
+- Verifies language parser availability
+- Helpful for debugging pattern matching issues
+
+**Example output:**
+```
+Testing Rust parser...
+✓ Rust parser works! Root node: "source_file"
+  Tree: (source_file (function_item name: (identifier) ...))
+```
+
+**When to use:**
+- Debugging tree-sitter pattern extraction failures
+- Verifying AST structure for new language patterns
+- Testing parser compatibility after upgrades
+- Understanding tree-sitter node structure for pattern writing
+
 ### LSP Architecture & Debugging
 
 #### Architecture Overview
@@ -569,10 +603,10 @@ pub async fn query_database(&self) -> Result<Vec<Data>> {
 
 ### Cache System Architecture
 
-**Multi-Layer Cache Design:**
-- **L1**: In-memory cache (fastest, limited size)  
-- **L2**: Persistent workspace cache (per-project isolation)
-- **L3**: Universal cache (cross-workspace shared data)
+**Universal Cache Design:**
+- Single unified cache layer for all LSP operations
+- Persistent workspace-based storage with per-project isolation  
+- Direct database access for optimal performance
 
 **Cache Key Generation:**
 ```rust
@@ -588,7 +622,7 @@ let cache_key = format!("{}:{}:{}:{}",
 **Cache Clearing Strategy:**
 - Use prefix matching: `workspace:method:file:*` to handle content variations
 - Never use exact key matching for content-addressed caches
-- Clear across ALL cache layers (L1, L2, L3) systematically
+- Clear systematically from the universal cache system
 
 ### Testing & Build Practices
 

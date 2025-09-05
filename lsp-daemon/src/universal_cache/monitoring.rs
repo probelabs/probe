@@ -5,8 +5,8 @@
 
 use super::{CacheStats, LspMethod, MethodStats, UniversalCache};
 use crate::protocol::{
-    CacheLayerConfigSummary, CacheLayerStat, UniversalCacheConfigSummary, UniversalCacheLayerStats,
-    UniversalCacheMethodStats, UniversalCacheStats, UniversalCacheWorkspaceSummary,
+    UniversalCacheConfigSummary, UniversalCacheMethodStats, UniversalCacheStats,
+    UniversalCacheWorkspaceSummary,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -20,8 +20,15 @@ impl UniversalCache {
         // Convert method stats
         let method_stats = convert_method_stats(&cache_stats.method_stats);
 
-        // Get layer stats (would be expanded with actual layer implementation)
-        let layer_stats = get_layer_stats().await;
+        // Calculate total operations from method stats
+        let total_operations = cache_stats
+            .method_stats
+            .values()
+            .map(|s| s.hits + s.misses)
+            .sum::<u64>();
+
+        // Cache is enabled if we have any data
+        let cache_enabled = cache_stats.total_entries > 0 || total_operations > 0;
 
         // Get workspace summaries
         let workspace_summaries = get_workspace_summaries(&cache_stats).await?;
@@ -29,12 +36,7 @@ impl UniversalCache {
         // Get configuration summary
         let config_summary = get_config_summary();
 
-        // Calculate rates
-        let total_operations = cache_stats
-            .method_stats
-            .values()
-            .map(|s| s.hits + s.misses)
-            .sum::<u64>();
+        // Calculate rates (total_operations already calculated above)
 
         let total_hits = cache_stats
             .method_stats
@@ -70,7 +72,7 @@ impl UniversalCache {
             total_hits,
             total_misses,
             method_stats,
-            layer_stats,
+            cache_enabled,
             workspace_summaries,
             config_summary,
         })
@@ -108,36 +110,6 @@ fn convert_method_stats(
         .collect()
 }
 
-/// Get cache layer statistics (placeholder implementation)
-async fn get_layer_stats() -> UniversalCacheLayerStats {
-    // In a real implementation, this would collect actual layer statistics
-    UniversalCacheLayerStats {
-        memory: CacheLayerStat {
-            enabled: true,
-            entries: 1000,
-            size_bytes: 1024 * 1024, // 1MB
-            hits: 5000,
-            misses: 500,
-            hit_rate: 0.91,
-            avg_response_time_us: 10,
-            max_capacity: Some(10 * 1024 * 1024), // 10MB
-            capacity_utilization: 0.1,
-        },
-        disk: CacheLayerStat {
-            enabled: true,
-            entries: 10000,
-            size_bytes: 100 * 1024 * 1024, // 100MB
-            hits: 2000,
-            misses: 8000,
-            hit_rate: 0.2,
-            avg_response_time_us: 1000,             // 1ms
-            max_capacity: Some(1024 * 1024 * 1024), // 1GB
-            capacity_utilization: 0.1,
-        },
-        server: None, // Not implemented yet
-    }
-}
-
 /// Get workspace-specific cache summaries
 async fn get_workspace_summaries(
     _cache_stats: &CacheStats,
@@ -164,23 +136,10 @@ fn get_config_summary() -> UniversalCacheConfigSummary {
     // Placeholder implementation
     // In reality, this would read from actual configuration
     UniversalCacheConfigSummary {
-        // Migration and rollback fields removed
-        memory_config: CacheLayerConfigSummary {
-            enabled: true,
-            max_size_mb: Some(10),
-            max_entries: Some(1000),
-            eviction_policy: Some("lru".to_string()),
-            compression: None,
-        },
-        disk_config: CacheLayerConfigSummary {
-            enabled: true,
-            max_size_mb: Some(1000),
-            max_entries: Some(100000),
-            eviction_policy: Some("lru".to_string()),
-            compression: Some(true),
-        },
-        server_config: None,
+        enabled: true,
+        max_size_mb: Some(1024),
         custom_method_configs: 3,
+        compression_enabled: true,
     }
 }
 
@@ -220,18 +179,10 @@ pub fn format_cache_stats_summary(stats: &UniversalCacheStats) -> String {
             }
         }
 
-        summary.push_str("\n  Layer Performance:\n");
+        // Simplified cache overview - no layer details
         summary.push_str(&format!(
-            "    Memory: {} entries, {:.1}% hit rate, {}μs avg\n",
-            stats.layer_stats.memory.entries,
-            stats.layer_stats.memory.hit_rate * 100.0,
-            stats.layer_stats.memory.avg_response_time_us
-        ));
-        summary.push_str(&format!(
-            "    Disk: {} entries, {:.1}% hit rate, {}μs avg\n",
-            stats.layer_stats.disk.entries,
-            stats.layer_stats.disk.hit_rate * 100.0,
-            stats.layer_stats.disk.avg_response_time_us
+            "  Cache enabled: {}\n",
+            if stats.cache_enabled { "Yes" } else { "No" }
         ));
 
         if !stats.workspace_summaries.is_empty() {
@@ -272,50 +223,13 @@ pub fn get_disabled_cache_stats() -> UniversalCacheStats {
         total_hits: 0,
         total_misses: 0,
         method_stats: HashMap::new(),
-        layer_stats: UniversalCacheLayerStats {
-            memory: CacheLayerStat {
-                enabled: false,
-                entries: 0,
-                size_bytes: 0,
-                hits: 0,
-                misses: 0,
-                hit_rate: 0.0,
-                avg_response_time_us: 0,
-                max_capacity: None,
-                capacity_utilization: 0.0,
-            },
-            disk: CacheLayerStat {
-                enabled: false,
-                entries: 0,
-                size_bytes: 0,
-                hits: 0,
-                misses: 0,
-                hit_rate: 0.0,
-                avg_response_time_us: 0,
-                max_capacity: None,
-                capacity_utilization: 0.0,
-            },
-            server: None,
-        },
+        cache_enabled: false,
         workspace_summaries: Vec::new(),
         config_summary: UniversalCacheConfigSummary {
-            // Migration and rollback fields removed
-            memory_config: CacheLayerConfigSummary {
-                enabled: false,
-                max_size_mb: None,
-                max_entries: None,
-                eviction_policy: None,
-                compression: None,
-            },
-            disk_config: CacheLayerConfigSummary {
-                enabled: false,
-                max_size_mb: None,
-                max_entries: None,
-                eviction_policy: None,
-                compression: None,
-            },
-            server_config: None,
+            enabled: false,
+            max_size_mb: None,
             custom_method_configs: 0,
+            compression_enabled: false,
         },
     }
 }

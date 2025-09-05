@@ -1195,6 +1195,75 @@ impl SingleServerManager {
         // Delegate to the underlying LspServer
         server.server.hover(file_path, line, column).await
     }
+
+    /// Execute call hierarchy request for the given file and position
+    /// This combines prepareCallHierarchy, incomingCalls, and outgoingCalls
+    pub async fn call_hierarchy(
+        &self,
+        language: Language,
+        workspace_root: PathBuf,
+        file_path: &std::path::Path,
+        line: u32,
+        column: u32,
+    ) -> Result<crate::protocol::CallHierarchyResult> {
+        // Unused imports removed: CallHierarchyResult, CallHierarchyItem, Position, Range
+
+        // Get or create server for this language and workspace
+        let server_instance = self
+            .ensure_workspace_registered(language, workspace_root)
+            .await?;
+
+        let server = server_instance.lock().await;
+
+        // Delegate to the underlying LspServer's call_hierarchy method
+        let lsp_result = server
+            .server
+            .call_hierarchy(file_path, line, column)
+            .await?;
+
+        // Parse the call hierarchy result using the existing protocol parser
+        crate::protocol::parse_call_hierarchy_from_lsp(&lsp_result)
+    }
+
+    /// Execute textDocument/implementation request for the given file and position
+    pub async fn implementation(
+        &self,
+        language: Language,
+        workspace_root: PathBuf,
+        file_path: &std::path::Path,
+        line: u32,
+        column: u32,
+    ) -> Result<serde_json::Value> {
+        // Get or create server for this language and workspace
+        let server_instance = self
+            .ensure_workspace_registered(language, workspace_root)
+            .await?;
+
+        let server = server_instance.lock().await;
+
+        // Delegate to the underlying LspServer's implementation method
+        server.server.implementation(file_path, line, column).await
+    }
+
+    /// Execute textDocument/typeDefinition request for the given file and position
+    pub async fn type_definition(
+        &self,
+        language: Language,
+        workspace_root: PathBuf,
+        file_path: &std::path::Path,
+        line: u32,
+        column: u32,
+    ) -> Result<serde_json::Value> {
+        // Get or create server for this language and workspace
+        let server_instance = self
+            .ensure_workspace_registered(language, workspace_root)
+            .await?;
+
+        let server = server_instance.lock().await;
+
+        // Delegate to the underlying LspServer's type_definition method
+        server.server.type_definition(file_path, line, column).await
+    }
 }
 
 #[derive(Debug, Clone)]
