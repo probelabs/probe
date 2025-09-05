@@ -10,7 +10,7 @@ This PR implements a comprehensive LSP integration with persistent caching, tran
 - **🏢 Per-Workspace Persistent Cache**: Isolated caches for each workspace with smart routing  
 - **⚡ Zero-Configuration LSP Integration**: Auto-initialization with `--lsp` flag
 - **🗄️ Content-Addressed Caching**: MD5-based cache keys for consistency across file changes
-- **🏗️ Three-Layer Cache Architecture**: Memory (L1), Persistent Disk (L2), LSP Server (L3)
+- **🏗️ Universal Cache Architecture**: Persistent per-workspace caching with intelligent routing
 - **🔄 Enterprise-Grade Indexing**: Complete workspace analysis with real-time progress tracking
 - **👁️ Real-Time File Monitoring**: Incremental updates with intelligent file watching
 - **🛠️ Comprehensive Management CLI**: Full cache, index, and daemon control per workspace
@@ -123,31 +123,31 @@ monorepo/
 
 ## Technical Implementation
 
-### 1. Per-Workspace Three-Layer Cache Architecture
+### 1. Per-Workspace Universal Cache Architecture
 
-The system implements a three-layer cache with per-workspace isolation:
+The system implements a unified cache with per-workspace isolation:
 
 ```bash
 # Workspace A: /projects/frontend  
 probe lsp call definition frontend/src/App.tsx#render
 # First call: ~2000ms (language server initialization + computation)
-# Subsequent calls: <1ms (L1 memory cache hit)
+# Subsequent calls: <1ms (cache hit)
 
 # Workspace B: /projects/backend (separate cache)
 probe lsp call references backend/src/main.rs#process
 # First call: ~2000ms (different workspace, different cache)
-# Subsequent calls: <1ms (L1 memory cache hit)
+# Subsequent calls: <1ms (cache hit)
 
 # After daemon restart - both workspaces preserved:
 probe lsp restart
-probe lsp call definition frontend/src/App.tsx#render  # ~5ms (L2 persistent cache hit)
-probe lsp call references backend/src/main.rs#process  # ~5ms (L2 persistent cache hit)
+probe lsp call definition frontend/src/App.tsx#render  # ~5ms (persistent cache hit)
+probe lsp call references backend/src/main.rs#process  # ~5ms (persistent cache hit)
 ```
 
-**Cache Layers:**
-- **L1 - Memory Cache**: <1ms access, DashMap-based concurrent hashmap
-- **L2 - Persistent Cache**: 1-5ms access, sled embedded database  
-- **L3 - LSP Server**: 100ms-10s computation on cache miss
+**Cache Architecture:**
+- **Universal Cache**: Direct persistent storage with per-workspace isolation
+- **Content-Addressed Keys**: MD5-based cache keys with workspace routing
+- **LSP Fallback**: Language server computation only on cache miss (100ms-10s)
 
 ### 2. Content-Addressed Caching System
 
@@ -221,7 +221,7 @@ graph TB
 - **`lsp-daemon/`**: Complete LSP daemon infrastructure (57 files)
 - **`lsp-daemon/src/workspace_cache_router.rs`**: Per-workspace cache routing (1,100+ lines)
 - **`lsp-daemon/src/persistent_cache.rs`**: Sled-based persistent storage
-- **`lsp-daemon/src/call_graph_cache.rs`**: Three-layer cache implementation
+- **`lsp-daemon/src/universal_cache/`**: Universal cache implementation with per-workspace routing
 - **`src/lsp_integration/`**: Client integration and IPC communication
 
 ### Cache Storage

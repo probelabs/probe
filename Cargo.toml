@@ -9,6 +9,7 @@ edition = "2021"
 rust-version = "1.88.0"
 authors = ["Leonid Bugaev <leonsbox@gmail.com>"]
 description = "AI-friendly, fully local, semantic code search tool for large codebases"
+default-run = "probe"
 license = "MIT"
 repository = "https://github.com/probelabs/probe"
 readme = "README.md"

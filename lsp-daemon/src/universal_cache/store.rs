@@ -496,7 +496,7 @@ impl CacheStore {
                             );
 
                             info!(
-                    "Clearing L2 cache entries with prefix: {} for method={:?}, position={:?}",
+                    "Clearing cache entries with prefix: {} for method={:?}, position={:?}",
                     prefix, method, position
                 );
 
@@ -552,7 +552,7 @@ impl CacheStore {
             }
         } else {
             warn!(
-                "No cache keys available for L2 clearing of symbol '{}'",
+                "No cache keys available for clearing of symbol '{}'",
                 symbol_name
             );
         }
@@ -1296,7 +1296,7 @@ impl CacheStore {
                 // Deserialize the CacheEntry from the stored data
                 match bincode::deserialize::<CacheEntry>(&data) {
                     Ok(entry) => {
-                        debug!("L2 cache hit for key: {}", storage_key);
+                        debug!("Cache hit for key: {}", storage_key);
                         Ok(Some(entry))
                     }
                     Err(e) => {
@@ -1308,7 +1308,7 @@ impl CacheStore {
                 }
             }
             None => {
-                debug!("L2 cache miss for key: {}", storage_key);
+                debug!("Cache miss for key: {}", storage_key);
                 Ok(None)
             }
         }

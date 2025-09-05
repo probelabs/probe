@@ -18,6 +18,12 @@ use serde_json;
 #[cfg(feature = "bert-reranker")]
 use std::path::Path;
 #[cfg(feature = "bert-reranker")]
+#[allow(unused_imports)]
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+#[cfg(feature = "bert-reranker")]
+#[allow(unused_imports)]
+use std::sync::Arc;
+#[cfg(feature = "bert-reranker")]
 use tokenizers::Tokenizer;
 
 use crate::models::SearchResult;

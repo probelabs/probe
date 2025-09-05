@@ -1,6 +1,7 @@
 //! # Probe
 //!
 //! Probe is an AI-friendly, fully local, semantic code search tool for large codebases.
+#![allow(dead_code, clippy::all)]
 //!
 //! This crate provides both a command-line interface and a library that can be used
 //! programmatically in other Rust applications.

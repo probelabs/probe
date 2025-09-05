@@ -1,8 +1,8 @@
-//! Cache Layer Middleware
+//! Cache Middleware
 //!
 //! This module provides the caching middleware that wraps LSP request handling
-//! with transparent cache layer functionality. It implements the memory → disk → LSP server
-//! flow with singleflight deduplication for concurrent requests.
+//! with transparent caching functionality using the universal cache system
+//! with singleflight deduplication for concurrent requests.
 
 use crate::protocol::{DaemonRequest, DaemonResponse};
 use crate::universal_cache::{KeyBuilder, LspMethod, PolicyRegistry, UniversalCache};

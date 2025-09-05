@@ -2333,56 +2333,21 @@ impl LspDaemon {
             })
             .collect();
 
-        // Create layer stats with realistic data
-        let layer_stats_protocol = crate::protocol::UniversalCacheLayerStats {
-            memory: crate::protocol::CacheLayerStat {
-                enabled: true,
-                entries: cache_stats.total_entries / 10, // Assume 10% is in memory
-                size_bytes: cache_stats.total_size_bytes / 10,
-                hits: cache_stats
-                    .method_stats
-                    .values()
-                    .map(|s| s.hits)
-                    .sum::<u64>()
-                    * 9
-                    / 10,
-                misses: cache_stats
-                    .method_stats
-                    .values()
-                    .map(|s| s.misses)
-                    .sum::<u64>()
-                    / 10,
-                hit_rate: 0.9,            // Memory layer should have higher hit rate
-                avg_response_time_us: 10, // Memory is fast
-                max_capacity: Some(10 * 1024 * 1024), // 10MB memory cache
-                capacity_utilization: (cache_stats.total_size_bytes / 10) as f64
-                    / (10.0 * 1024.0 * 1024.0),
-            },
-            disk: crate::protocol::CacheLayerStat {
-                enabled: true,
-                entries: cache_stats.total_entries * 9 / 10, // Most entries are on disk
-                size_bytes: cache_stats.total_size_bytes * 9 / 10,
-                hits: cache_stats
-                    .method_stats
-                    .values()
-                    .map(|s| s.hits)
-                    .sum::<u64>()
-                    / 10,
-                misses: cache_stats
-                    .method_stats
-                    .values()
-                    .map(|s| s.misses)
-                    .sum::<u64>()
-                    * 9
-                    / 10,
-                hit_rate: 0.1, // Disk layer has lower hit rate (most misses are disk misses)
-                avg_response_time_us: 1000, // Disk is slower (1ms)
-                max_capacity: Some(1024 * 1024 * 1024), // 1GB disk cache
-                capacity_utilization: (cache_stats.total_size_bytes * 9 / 10) as f64
-                    / (1024.0 * 1024.0 * 1024.0),
-            },
-            server: None, // No remote server layer yet
-        };
+        // Calculate totals
+        let total_hits = cache_stats
+            .method_stats
+            .values()
+            .map(|s| s.hits)
+            .sum::<u64>();
+
+        let total_misses = cache_stats
+            .method_stats
+            .values()
+            .map(|s| s.misses)
+            .sum::<u64>();
+
+        // Cache is enabled if we have any data
+        let cache_enabled = cache_stats.total_entries > 0 || total_hits + total_misses > 0;
 
         // Get workspace summaries from the workspace router
         let workspace_summaries = if let Ok(workspace_info_list) = self
@@ -2443,27 +2408,14 @@ impl LspDaemon {
 
         // Configuration summary
         let config_summary = crate::protocol::UniversalCacheConfigSummary {
-            // Migration and rollback fields removed
-            memory_config: crate::protocol::CacheLayerConfigSummary {
-                enabled: true,
-                max_size_mb: Some(10),
-                max_entries: Some(10000),
-                eviction_policy: Some("lru".to_string()),
-                compression: Some(false),
-            },
-            disk_config: crate::protocol::CacheLayerConfigSummary {
-                enabled: true,
-                max_size_mb: Some(1024),
-                max_entries: Some(1000000),
-                eviction_policy: Some("lru".to_string()),
-                compression: Some(true),
-            },
-            server_config: None,
+            enabled: cache_enabled,
+            max_size_mb: Some(1024),
             custom_method_configs: method_stats.len(),
+            compression_enabled: true,
         };
 
         Ok(crate::protocol::UniversalCacheStats {
-            enabled: true,
+            enabled: cache_enabled,
             total_entries: cache_stats.total_entries,
             total_size_bytes: cache_stats.total_size_bytes,
             active_workspaces: layer_stats.active_workspaces,
@@ -2472,7 +2424,7 @@ impl LspDaemon {
             total_hits,
             total_misses,
             method_stats,
-            layer_stats: layer_stats_protocol,
+            cache_enabled,
             workspace_summaries,
             config_summary,
         })

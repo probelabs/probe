@@ -44,7 +44,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub mod migrations;
 pub mod sqlite_backend;
+pub use migrations::{Migration, MigrationError, MigrationRunner};
 pub use sqlite_backend::SQLiteBackend;
 // Legacy DuckDB exports removed - SQLite is now the primary backend
 
@@ -113,6 +115,145 @@ pub struct DatabaseStats {
     pub tree_count: usize,
     /// Whether the database is in-memory/temporary
     pub is_temporary: bool,
+}
+
+/// Workspace representation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Workspace {
+    pub workspace_id: i64,
+    pub project_id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub branch_hint: Option<String>,
+    pub is_active: bool,
+    pub created_at: String,
+}
+
+/// File version representation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FileVersion {
+    pub file_version_id: i64,
+    pub file_id: i64,
+    pub content_digest: String,
+    pub git_blob_oid: Option<String>,
+    pub size_bytes: u64,
+    pub line_count: Option<u32>,
+    pub detected_language: Option<String>,
+    pub mtime: Option<i64>,
+}
+
+/// Symbol state representation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SymbolState {
+    pub symbol_uid: String,
+    pub file_version_id: i64,
+    pub language: String, // Language for direct language-based detection
+    pub name: String,
+    pub fqn: Option<String>,
+    pub kind: String,
+    pub signature: Option<String>,
+    pub visibility: Option<String>,
+    pub def_start_line: u32,
+    pub def_start_char: u32,
+    pub def_end_line: u32,
+    pub def_end_char: u32,
+    pub is_definition: bool,
+    pub documentation: Option<String>,
+    pub metadata: Option<String>,
+}
+
+/// Edge relationship types
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum EdgeRelation {
+    HasChild,
+    InheritsFrom,
+    Implements,
+    Overrides,
+    References,
+    Calls,
+    Instantiates,
+    Imports,
+    Includes,
+    DependsOn,
+}
+
+impl EdgeRelation {
+    /// Convert to string for database storage
+    pub fn to_string(&self) -> &'static str {
+        match self {
+            EdgeRelation::HasChild => "has_child",
+            EdgeRelation::InheritsFrom => "inherits_from",
+            EdgeRelation::Implements => "implements",
+            EdgeRelation::Overrides => "overrides",
+            EdgeRelation::References => "references",
+            EdgeRelation::Calls => "calls",
+            EdgeRelation::Instantiates => "instantiates",
+            EdgeRelation::Imports => "imports",
+            EdgeRelation::Includes => "includes",
+            EdgeRelation::DependsOn => "depends_on",
+        }
+    }
+
+    /// Parse from database string
+    pub fn from_string(s: &str) -> Result<Self, DatabaseError> {
+        match s {
+            "has_child" => Ok(EdgeRelation::HasChild),
+            "inherits_from" => Ok(EdgeRelation::InheritsFrom),
+            "implements" => Ok(EdgeRelation::Implements),
+            "overrides" => Ok(EdgeRelation::Overrides),
+            "references" => Ok(EdgeRelation::References),
+            "calls" => Ok(EdgeRelation::Calls),
+            "instantiates" => Ok(EdgeRelation::Instantiates),
+            "imports" => Ok(EdgeRelation::Imports),
+            "includes" => Ok(EdgeRelation::Includes),
+            "depends_on" => Ok(EdgeRelation::DependsOn),
+            _ => Err(DatabaseError::OperationFailed {
+                message: format!("Unknown edge relation: {}", s),
+            }),
+        }
+    }
+}
+
+/// Call direction for graph traversal
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum CallDirection {
+    Incoming,
+    Outgoing,
+    Both,
+}
+
+/// Edge representation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Edge {
+    pub relation: EdgeRelation,
+    pub source_symbol_uid: String,
+    pub target_symbol_uid: String,
+    pub anchor_file_version_id: i64,
+    pub start_line: Option<u32>,
+    pub start_char: Option<u32>,
+    pub confidence: f32,
+    pub language: String,         // Language for direct language-based detection
+    pub metadata: Option<String>, // Additional metadata
+}
+
+/// Graph path for traversal results
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GraphPath {
+    pub symbol_uid: String,
+    pub depth: u32,
+    pub path: Vec<String>,
+    pub relation_chain: Vec<EdgeRelation>,
+}
+
+/// Analysis progress information
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AnalysisProgress {
+    pub workspace_id: i64,
+    pub total_files: u64,
+    pub analyzed_files: u64,
+    pub failed_files: u64,
+    pub pending_files: u64,
+    pub completion_percentage: f32,
 }
 
 /// Represents a database tree (hierarchical namespace for keys)
@@ -185,6 +326,146 @@ pub trait DatabaseBackend: Send + Sync {
 
     /// Check if this database is temporary/in-memory
     fn is_temporary(&self) -> bool;
+
+    // ===================
+    // Workspace Management
+    // ===================
+
+    /// Create a new workspace
+    async fn create_workspace(
+        &self,
+        name: &str,
+        project_id: i64,
+        branch_hint: Option<&str>,
+    ) -> Result<i64, DatabaseError>;
+
+    /// Get workspace by ID
+    async fn get_workspace(&self, workspace_id: i64) -> Result<Option<Workspace>, DatabaseError>;
+
+    /// List workspaces, optionally filtered by project
+    async fn list_workspaces(
+        &self,
+        project_id: Option<i64>,
+    ) -> Result<Vec<Workspace>, DatabaseError>;
+
+    /// Update workspace branch hint
+    async fn update_workspace_branch(
+        &self,
+        workspace_id: i64,
+        branch: &str,
+    ) -> Result<(), DatabaseError>;
+
+    // ===================
+    // File Version Management
+    // ===================
+
+    /// Create a new file version
+    async fn create_file_version(
+        &self,
+        file_id: i64,
+        content_digest: &str,
+        size_bytes: u64,
+        mtime: Option<i64>,
+    ) -> Result<i64, DatabaseError>;
+
+    /// Get file version by content digest
+    async fn get_file_version_by_digest(
+        &self,
+        content_digest: &str,
+    ) -> Result<Option<FileVersion>, DatabaseError>;
+
+    /// Link file to workspace (add to workspace)
+    async fn link_file_to_workspace(
+        &self,
+        workspace_id: i64,
+        file_id: i64,
+        file_version_id: i64,
+    ) -> Result<(), DatabaseError>;
+
+    // ===================
+    // Symbol Storage & Retrieval
+    // ===================
+
+    /// Store multiple symbols from analysis
+    async fn store_symbols(&self, symbols: &[SymbolState]) -> Result<(), DatabaseError>;
+
+    /// Get symbols by file version and language
+    async fn get_symbols_by_file(
+        &self,
+        file_version_id: i64,
+        language: &str,
+    ) -> Result<Vec<SymbolState>, DatabaseError>;
+
+    /// Find symbols by name within workspace
+    async fn find_symbol_by_name(
+        &self,
+        workspace_id: i64,
+        name: &str,
+    ) -> Result<Vec<SymbolState>, DatabaseError>;
+
+    /// Find symbol by fully qualified name
+    async fn find_symbol_by_fqn(
+        &self,
+        workspace_id: i64,
+        fqn: &str,
+    ) -> Result<Option<SymbolState>, DatabaseError>;
+
+    // ===================
+    // Relationship Storage & Querying
+    // ===================
+
+    /// Store multiple edges (relationships) from analysis
+    async fn store_edges(&self, edges: &[Edge]) -> Result<(), DatabaseError>;
+
+    /// Get all references to a symbol (incoming edges)
+    async fn get_symbol_references(
+        &self,
+        workspace_id: i64,
+        symbol_uid: &str,
+    ) -> Result<Vec<Edge>, DatabaseError>;
+
+    /// Get call relationships for a symbol (incoming/outgoing/both)
+    async fn get_symbol_calls(
+        &self,
+        workspace_id: i64,
+        symbol_uid: &str,
+        direction: CallDirection,
+    ) -> Result<Vec<Edge>, DatabaseError>;
+
+    /// Traverse graph starting from symbol with maximum depth and relation filters
+    async fn traverse_graph(
+        &self,
+        start_symbol: &str,
+        max_depth: u32,
+        relations: &[EdgeRelation],
+    ) -> Result<Vec<GraphPath>, DatabaseError>;
+
+    // ===================
+    // Analysis Management
+    // ===================
+
+    /// Create new analysis run
+    async fn create_analysis_run(
+        &self,
+        analyzer_name: &str,
+        analyzer_version: &str,
+        language: &str,
+        config: &str,
+    ) -> Result<i64, DatabaseError>;
+
+    /// Get analysis progress for workspace
+    async fn get_analysis_progress(
+        &self,
+        workspace_id: i64,
+    ) -> Result<AnalysisProgress, DatabaseError>;
+
+    /// Queue file for analysis
+    async fn queue_file_analysis(
+        &self,
+        file_version_id: i64,
+        language: &str,
+        priority: i32,
+    ) -> Result<(), DatabaseError>;
 }
 
 /// Convenience functions for serializable types
