@@ -29,7 +29,6 @@ probe/
 ├── tests/                  # Integration tests
 │   ├── mocks/              # Mock files for testing
 │   └── ...                 # Various test files
-└── mcp/                    # MCP server for probe
 ```
 
 ## Code Style Guide
@@ -138,7 +137,7 @@ DEBUG=1 cargo run -- search "query" path/to/search
 Start the MCP server:
 
 ```bash
-cd mcp && npm run build && node build/index.js
+probe mcp
 ```
 
 ## Dependency Management

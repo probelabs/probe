@@ -13,6 +13,22 @@ By integrating Probe with your AI code editor, you enable your AI assistant to:
 - Extract complete code blocks with proper context
 - Understand the relationships between different parts of your code
 
+## Migrating from @buger/probe-mcp
+
+If you're currently using the standalone `@buger/probe-mcp` package, `probe mcp` is a **drop-in replacement**. Simply change your MCP configuration from:
+
+```json
+"args": ["-y", "@buger/probe-mcp"]
+```
+
+to:
+
+```json
+"args": ["-y", "@buger/probe", "mcp"]
+```
+
+All the same tools, parameters, and functionality - just with the integrated command!
+
 ## Integration Options
 
 ### 1. MCP Server Integration (Recommended)
@@ -32,7 +48,8 @@ The Model Context Protocol (MCP) server integration is the most powerful way to 
          "command": "npx",
          "args": [
            "-y",
-           "@buger/probe-mcp"
+           "@buger/probe",
+           "mcp"
          ]
        }
      }
@@ -120,7 +137,8 @@ You can configure the MCP server to search specific directories by default:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp"
+        "@buger/probe",
+        "mcp"
       ],
       "env": {
         "PROBE_DEFAULT_PATHS": "/path/to/project1,/path/to/project2"
@@ -141,7 +159,8 @@ For large codebases, you can limit the amount of code returned:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp"
+        "@buger/probe",
+        "mcp"
       ],
       "env": {
         "PROBE_MAX_TOKENS": "20000"

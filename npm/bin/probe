@@ -7,9 +7,20 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const isWindows = process.platform === 'win32';
-const binaryName = isWindows ? 'probe.exe' : 'probe';
-const binaryPath = join(__dirname, binaryName);
-
-const child = spawn(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
-child.on('exit', (code) => process.exit(code));
+// Check if first argument is 'mcp'
+if (process.argv[2] === 'mcp') {
+  // Launch MCP server instead of binary
+  const mcpPath = join(__dirname, '..', 'build', 'mcp', 'index.js');
+  const mcpArgs = process.argv.slice(3); // Remove 'node', 'probe', and 'mcp'
+  
+  const child = spawn('node', [mcpPath, ...mcpArgs], { stdio: 'inherit' });
+  child.on('exit', (code) => process.exit(code || 0));
+} else {
+  // Normal probe binary execution
+  const isWindows = process.platform === 'win32';
+  const binaryName = isWindows ? 'probe.exe' : 'probe-binary';
+  const binaryPath = join(__dirname, binaryName);
+  
+  const child = spawn(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
+  child.on('exit', (code) => process.exit(code || 0));
+}

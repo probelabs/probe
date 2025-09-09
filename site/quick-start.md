@@ -190,7 +190,8 @@ Integrate with any AI editor by adding this to your MCP configuration:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp"
+        "@buger/probe",
+        "mcp"
       ]
     }
   }

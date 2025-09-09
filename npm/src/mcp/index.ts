@@ -13,9 +13,8 @@ import path from 'path';
 import fs from 'fs-extra';
 import { fileURLToPath } from 'url';
 
-// Import the probe package with type declarations
-// @ts-ignore - Ignore missing type declarations for @buger/probe
-import { search, query, extract, getBinaryPath, setBinaryPath } from '@buger/probe';
+// Import from parent package
+import { search, query, extract, getBinaryPath, setBinaryPath } from '../index.js';
 
 // Parse command-line arguments
 function parseArgs(): { timeout?: number } {
@@ -37,7 +36,7 @@ function parseArgs(): { timeout?: number } {
 Probe MCP Server
 
 Usage:
-  probe-mcp [options]
+  probe mcp [options]
 
 Options:
   --timeout, -t <seconds>  Set timeout for search operations (default: 30)
@@ -85,10 +84,10 @@ for (const packageJsonPath of possiblePaths) {
 if (packageVersion === '0.0.0') {
   try {
     // Try to get version from the package name itself
-    const result = await execAsync('npm list -g @buger/probe-mcp --json');
+    const result = await execAsync('npm list -g @buger/probe --json');
     const npmList = JSON.parse(result.stdout);
-    if (npmList.dependencies && npmList.dependencies['@buger/probe-mcp']) {
-      packageVersion = npmList.dependencies['@buger/probe-mcp'].version;
+    if (npmList.dependencies && npmList.dependencies['@buger/probe']) {
+      packageVersion = npmList.dependencies['@buger/probe'].version;
       console.log(`Using version from npm list: ${packageVersion}`);
     }
   } catch (error) {
@@ -150,7 +149,7 @@ class ProbeServer {
     this.defaultTimeout = timeout;
     this.server = new Server(
       {
-        name: '@buger/probe-mcp',
+        name: '@buger/probe',
         version: packageVersion,
       },
       {

@@ -142,11 +142,12 @@ Integrate with any AI editor:
   ~~~json
   {
     "mcpServers": {
-      "memory": {
+      "probe": {
         "command": "npx",
         "args": [
           "-y",
-          "@buger/probe-mcp"
+          "@buger/probe",
+          "mcp"
         ]
       }
     }
@@ -469,21 +470,47 @@ grep -r "error" ./logs/ | probe extract
 
 ### MCP Server
 
+Run Probe as an MCP (Model Context Protocol) server to integrate with AI assistants like Claude Desktop:
+
+~~~bash
+probe mcp
+~~~
+
 Add the following to your AI editor's MCP configuration file:
   
   ~~~json
   {
     "mcpServers": {
-      "memory": {
+      "probe": {
         "command": "npx",
         "args": [
           "-y",
-          "@buger/probe-mcp"
+          "@buger/probe",
+          "mcp"
         ]
       }
     }
   }
   ~~~
+
+To use a custom timeout (e.g., 60 seconds):
+
+~~~json
+{
+  "mcpServers": {
+    "probe": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@buger/probe",
+        "mcp",
+        "--timeout",
+        "60"
+      ]
+    }
+  }
+}
+~~~
   
 - **Example Usage in AI Editors**:
   

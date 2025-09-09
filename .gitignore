@@ -36,6 +36,7 @@ package-lock.json
 # Build outputs
 /dist/
 /build/
+npm/build/
 /out/
 /.next/
 /.nuxt/
@@ -103,7 +104,6 @@ rust-project.json
 *.pb.h
 *.pb.*
 
-mcp/bin/probe
 
 .vitepress
 .aider*
