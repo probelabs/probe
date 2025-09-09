@@ -284,19 +284,31 @@ jobs:
         echo "Testing MCP server functionality..."
         
         # Test that probe mcp command starts without errors
-        timeout 3s probe mcp --help || echo "MCP help command completed"
-        
-        # Test MCP server with tools/list request via echo and timeout
-        # This tests that the MCP server can start and respond to JSON-RPC requests
-        echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | timeout 3s probe mcp > mcp_tools.json 2>/dev/null || echo "MCP tools test completed"
-        
-        # Check if MCP server produced any output (means it started successfully)
-        if [ -f mcp_tools.json ] && [ -s mcp_tools.json ]; then
-          echo "✅ MCP server responded successfully"
-          echo "MCP response preview:"
-          head -3 mcp_tools.json
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          # Windows doesn't have timeout command, use a different approach
+          echo "Testing MCP help on Windows..."
+          probe mcp --help || echo "MCP help command completed"
         else
-          echo "⚠️ MCP server test completed (expected for basic functionality test)"
+          # Unix systems can use timeout
+          timeout 3s probe mcp --help || echo "MCP help command completed"
+        fi
+        
+        # Test basic MCP functionality
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          echo "Skipping MCP JSON-RPC test on Windows (timeout command not available)"
+          echo "⚠️ MCP server basic test completed on Windows"
+        else
+          # Test MCP server with tools/list request via echo and timeout
+          echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | timeout 3s probe mcp > mcp_tools.json 2>/dev/null || echo "MCP tools test completed"
+          
+          # Check if MCP server produced any output (means it started successfully)
+          if [ -f mcp_tools.json ] && [ -s mcp_tools.json ]; then
+            echo "✅ MCP server responded successfully"
+            echo "MCP response preview:"
+            head -3 mcp_tools.json
+          else
+            echo "⚠️ MCP server test completed (expected for basic functionality test)"
+          fi
         fi
 
     - name: Upload test artifacts on failure
