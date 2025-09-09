@@ -37,6 +37,7 @@ function parseArgs() {
     path: null,
     prompt: null,
     systemPrompt: null,
+    schema: null,
     provider: null,
     model: null,
     allowEdit: false,
@@ -62,6 +63,8 @@ function parseArgs() {
       config.prompt = args[++i];
     } else if (arg === '--system-prompt' && i + 1 < args.length) {
       config.systemPrompt = args[++i];
+    } else if (arg === '--schema' && i + 1 < args.length) {
+      config.schema = args[++i];
     } else if (arg === '--provider' && i + 1 < args.length) {
       config.provider = args[++i];
     } else if (arg === '--model' && i + 1 < args.length) {
@@ -91,6 +94,7 @@ Options:
   --path <dir>                     Search directory (default: current)
   --prompt <type>                  Persona: code-explorer, engineer, code-review, support, architect
   --system-prompt <text|file>      Custom system prompt (text or file path)
+  --schema <schema|file>           Output schema (JSON, XML, any format - text or file path)
   --provider <name>                Force AI provider: anthropic, openai, google
   --model <name>                   Override model name
   --allow-edit                     Enable code modification capabilities
@@ -112,6 +116,8 @@ Examples:
   probe agent question.txt        # Read question from file
   probe agent "Find all database queries" --path ./src --prompt engineer
   probe agent "Review this code for bugs" --prompt code-review --system-prompt custom-prompt.txt
+  probe agent "List all functions" --schema '{"functions": [{"name": "string", "file": "string"}]}'
+  probe agent "Analyze codebase" --schema schema.json  # Schema from file
   probe agent --mcp               # Start MCP server mode
 
 Personas:
@@ -186,6 +192,10 @@ class ProbeAgentMcpServer {
               max_iterations: {
                 type: 'number',
                 description: 'Maximum number of tool iterations (default: 30).',
+              },
+              schema: {
+                type: 'string',
+                description: 'Optional output schema (JSON, XML, or any format - text or file path).',
               }
             },
             required: ['query']
@@ -230,6 +240,15 @@ class ProbeAgentMcpServer {
           throw new Error('Query is required and could not be read');
         }
 
+        // Process schema if provided (could be file or literal string)
+        let schema = null;
+        if (args.schema) {
+          schema = readInputContent(args.schema);
+          if (!schema) {
+            throw new Error('Schema could not be read');
+          }
+        }
+
         // Create agent with configuration
         const agentConfig = {
           path: args.path || process.cwd(),
@@ -242,7 +261,18 @@ class ProbeAgentMcpServer {
         };
 
         const agent = new ProbeAgent(agentConfig);
-        const result = await agent.answer(query);
+        let result = await agent.answer(query);
+
+        // If schema is provided, make a follow-up request to format the output
+        if (schema) {
+          const schemaPrompt = `Now you need to respond according to this schema:\n\n${schema}\n\nPlease reformat your previous response to match this schema exactly. Only return the formatted response, no additional text.`;
+          
+          try {
+            result = await agent.answer(schemaPrompt);
+          } catch (error) {
+            // If schema formatting fails, use original result
+          }
+        }
 
         // Get token usage for debugging
         const tokenUsage = agent.getTokenUsage();
@@ -331,6 +361,16 @@ async function main() {
       }
     }
 
+    // Process schema if provided (could be file or literal string)
+    let schema = null;
+    if (config.schema) {
+      schema = readInputContent(config.schema);
+      if (!schema) {
+        console.error('Error: Schema could not be read');
+        process.exit(1);
+      }
+    }
+
     // Create and configure agent
     const agentConfig = {
       path: config.path,
@@ -341,7 +381,25 @@ async function main() {
     };
 
     const agent = new ProbeAgent(agentConfig);
-    const result = await agent.answer(question);
+    let result = await agent.answer(question);
+
+    // If schema is provided, make a follow-up request to format the output
+    if (schema) {
+      if (config.verbose) {
+        console.error('[DEBUG] Schema provided, making follow-up request to format output...');
+      }
+      
+      const schemaPrompt = `Now you need to respond according to this schema:\n\n${schema}\n\nPlease reformat your previous response to match this schema exactly. Only return the formatted response, no additional text.`;
+      
+      try {
+        result = await agent.answer(schemaPrompt);
+      } catch (error) {
+        if (config.verbose) {
+          console.error('[DEBUG] Schema formatting failed, using original result');
+        }
+        // If schema formatting fails, use original result
+      }
+    }
 
     // Output the result
     console.log(result);
