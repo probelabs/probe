@@ -17,7 +17,9 @@ if (process.argv[2] === 'mcp') {
   child.on('exit', (code) => process.exit(code || 0));
 } else {
   // Normal probe binary execution
-  const binaryPath = join(__dirname, 'probe-binary');
+  const isWindows = process.platform === 'win32';
+  const binaryName = isWindows ? 'probe.exe' : 'probe-binary';
+  const binaryPath = join(__dirname, binaryName);
   
   const child = spawn(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
   child.on('exit', (code) => process.exit(code || 0));
