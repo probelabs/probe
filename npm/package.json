@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
-    "build:mcp": "node scripts/build-mcp.js",
+    "build:mcp": "node scripts/build-mcp.cjs",
     "build": "npm run build:mcp",
     "prepack": "npm run build"
   },
