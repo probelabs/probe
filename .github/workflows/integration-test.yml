@@ -78,14 +78,15 @@ jobs:
           chmod +x npm/bin/probe
         fi
         
-        # Install npm package dependencies
-        cd npm && npm install
-        
-        # Build MCP TypeScript code
-        cd npm && npm run build:mcp
+        # Install npm package dependencies and build MCP TypeScript code
+        cd npm && npm install && npm run build:mcp
 
     - name: Install Probe locally
-      run: cd npm && npm install -g .
+      run: |
+        pwd
+        ls -la
+        ls -la npm/ || echo "npm directory not found"
+        cd npm && npm install -g .
 
     - name: Verify Probe installation
       run: probe --version
