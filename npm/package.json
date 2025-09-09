@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
-    "build:mcp": "mkdir -p build && cp -r src/* build/ && tsc src/mcp/index.ts --outDir build/mcp --module esnext --target es2020 --moduleResolution node --esModuleInterop --allowSyntheticDefaultImports --skipLibCheck",
+    "build:mcp": "node scripts/build-mcp.js",
     "build": "npm run build:mcp",
     "prepack": "npm run build"
   },
@@ -42,7 +42,8 @@
   "devDependencies": {
     "typescript": "^5.9.2",
     "@types/node": "^20.17.19",
-    "@types/fs-extra": "^11.0.4"
+    "@types/fs-extra": "^11.0.4",
+    "cross-env": "^7.0.3"
   },
   "peerDependencies": {
     "ai": "^4.1.60"
