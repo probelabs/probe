@@ -83,9 +83,6 @@ jobs:
 
     - name: Install Probe locally
       run: |
-        pwd
-        ls -la
-        ls -la npm/ || echo "npm directory not found"
         cd npm && npm install -g .
 
     - name: Verify Probe installation
