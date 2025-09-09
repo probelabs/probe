@@ -7,6 +7,26 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
+import { readFileSync, existsSync } from 'fs';
+import { resolve } from 'path';
+
+// Helper function to detect if input is a file path and read it
+function readInputContent(input) {
+  if (!input) return null;
+  
+  // Check if the input looks like a file path and exists
+  try {
+    const resolvedPath = resolve(input);
+    if (existsSync(resolvedPath)) {
+      return readFileSync(resolvedPath, 'utf-8').trim();
+    }
+  } catch (error) {
+    // If file reading fails, treat as literal string
+  }
+  
+  // Return as literal string if not a valid file
+  return input;
+}
 
 // Parse command line arguments
 function parseArgs() {
@@ -16,6 +36,7 @@ function parseArgs() {
     question: null,
     path: null,
     prompt: null,
+    systemPrompt: null,
     provider: null,
     model: null,
     allowEdit: false,
@@ -39,6 +60,8 @@ function parseArgs() {
       config.path = args[++i];
     } else if (arg === '--prompt' && i + 1 < args.length) {
       config.prompt = args[++i];
+    } else if (arg === '--system-prompt' && i + 1 < args.length) {
+      config.systemPrompt = args[++i];
     } else if (arg === '--provider' && i + 1 < args.length) {
       config.provider = args[++i];
     } else if (arg === '--model' && i + 1 < args.length) {
@@ -61,11 +84,13 @@ probe agent - AI-powered code exploration tool
 
 Usage:
   probe agent <question>           Answer a question about the codebase
+  probe agent <file>               Read question from file
   probe agent --mcp                Start as MCP server
 
 Options:
   --path <dir>                     Search directory (default: current)
   --prompt <type>                  Persona: code-explorer, engineer, code-review, support, architect
+  --system-prompt <text|file>      Custom system prompt (text or file path)
   --provider <name>                Force AI provider: anthropic, openai, google
   --model <name>                   Override model name
   --allow-edit                     Enable code modification capabilities
@@ -84,8 +109,9 @@ Environment Variables:
 
 Examples:
   probe agent "How does authentication work?"
+  probe agent question.txt        # Read question from file
   probe agent "Find all database queries" --path ./src --prompt engineer
-  probe agent "Review this code for bugs" --prompt code-review
+  probe agent "Review this code for bugs" --prompt code-review --system-prompt custom-prompt.txt
   probe agent --mcp               # Start MCP server mode
 
 Personas:
@@ -141,6 +167,10 @@ class ProbeAgentMcpServer {
                 type: 'string',
                 description: 'Optional persona type: code-explorer, engineer, code-review, support, architect.',
               },
+              system_prompt: {
+                type: 'string',
+                description: 'Optional custom system prompt (text or file path).',
+              },
               provider: {
                 type: 'string',
                 description: 'Optional AI provider to force: anthropic, openai, google.',
@@ -185,10 +215,26 @@ class ProbeAgentMcpServer {
           process.env.MAX_TOOL_ITERATIONS = args.max_iterations.toString();
         }
 
+        // Process system prompt if provided (could be file or literal string)
+        let systemPrompt = null;
+        if (args.system_prompt) {
+          systemPrompt = readInputContent(args.system_prompt);
+          if (!systemPrompt) {
+            throw new Error('System prompt could not be read');
+          }
+        }
+
+        // Process query input (could be file or literal string)
+        const query = readInputContent(args.query);
+        if (!query) {
+          throw new Error('Query is required and could not be read');
+        }
+
         // Create agent with configuration
         const agentConfig = {
           path: args.path || process.cwd(),
           promptType: args.prompt || 'code-explorer',
+          customPrompt: systemPrompt,
           provider: args.provider,
           model: args.model,
           allowEdit: !!args.allow_edit,
@@ -196,7 +242,7 @@ class ProbeAgentMcpServer {
         };
 
         const agent = new ProbeAgent(agentConfig);
-        const result = await agent.answer(args.query);
+        const result = await agent.answer(query);
 
         // Get token usage for debugging
         const tokenUsage = agent.getTokenUsage();
@@ -268,16 +314,34 @@ async function main() {
       process.env.MAX_TOOL_ITERATIONS = config.maxIterations.toString();
     }
 
+    // Process question input (could be file or literal string)
+    const question = readInputContent(config.question);
+    if (!question) {
+      console.error('Error: Question is required and could not be read');
+      process.exit(1);
+    }
+
+    // Process system prompt if provided (could be file or literal string)
+    let systemPrompt = null;
+    if (config.systemPrompt) {
+      systemPrompt = readInputContent(config.systemPrompt);
+      if (!systemPrompt) {
+        console.error('Error: System prompt could not be read');
+        process.exit(1);
+      }
+    }
+
     // Create and configure agent
     const agentConfig = {
       path: config.path,
       promptType: config.prompt,
+      customPrompt: systemPrompt,
       allowEdit: config.allowEdit,
       debug: config.verbose
     };
 
     const agent = new ProbeAgent(agentConfig);
-    const result = await agent.answer(config.question);
+    const result = await agent.answer(question);
 
     // Output the result
     console.log(result);
