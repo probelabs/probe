@@ -28,6 +28,7 @@ During installation, the package will automatically download the appropriate pro
 - **Cross-Platform**: Works on Windows, macOS, and Linux
 - **Automatic Binary Management**: Automatically downloads and manages the probe binary
 - **Direct CLI Access**: Use the probe binary directly from the command line when installed globally
+- **MCP Server**: Built-in Model Context Protocol server for AI assistant integration
 
 ## Usage
 
@@ -69,9 +70,37 @@ probe query "function $NAME($$$PARAMS) $$$BODY" /path/to/your/project
 
 # Extract code blocks
 probe extract /path/to/your/project/src/main.js:42
+
+# Run MCP server for AI assistant integration
+probe mcp
 ```
 
 The package installs the actual probe binary, not a JavaScript wrapper, so you get the full native performance and all features of the original probe CLI.
+
+### Using as an MCP Server
+
+Probe includes a built-in MCP (Model Context Protocol) server for integration with AI assistants:
+
+```bash
+# Start the MCP server
+probe mcp
+
+# With custom timeout
+probe mcp --timeout 60
+```
+
+Add to your AI assistant's MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "probe": {
+      "command": "npx",
+      "args": ["-y", "@buger/probe", "mcp"]
+    }
+  }
+}
+```
 
 ## API Reference
 
@@ -453,7 +482,47 @@ The default system message provides instructions for AI assistants on how to use
 
 ISC
 
+## Migration from @buger/probe-mcp
+
+If you're migrating from the standalone `@buger/probe-mcp` package, `probe mcp` is a drop-in replacement:
+
+**Old usage:**
+```bash
+npx @buger/probe-mcp
+# or
+probe-mcp --timeout 60
+```
+
+**New usage (drop-in replacement):**
+```bash
+probe mcp
+# or  
+probe mcp --timeout 60
+```
+
+**MCP Configuration:**
+```json
+// Old configuration
+{
+  "mcpServers": {
+    "probe": {
+      "command": "npx",
+      "args": ["-y", "@buger/probe-mcp"]
+    }
+  }
+}
+
+// New configuration (drop-in replacement)
+{
+  "mcpServers": {
+    "probe": {
+      "command": "npx", 
+      "args": ["-y", "@buger/probe", "mcp"]
+    }
+  }
+}
+```
+
 ## Related Projects
 
 - [probe](https://github.com/buger/probe) - The core probe code search tool
-- [probe-mcp](https://github.com/buger/probe/tree/main/mcp) - MCP server for probe

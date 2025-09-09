@@ -46,7 +46,6 @@ examples/
 !examples/chat/
 
 # MCP directories
-mcp/
 mcp-agent/
 
 # NPM package directory

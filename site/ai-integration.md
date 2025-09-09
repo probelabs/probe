@@ -333,7 +333,7 @@ The easiest way to use Probe's MCP server is through NPX:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp@latest"
+        "@buger/probe@latest"
       ]
     }
   }
@@ -351,7 +351,7 @@ If you prefer to install the MCP server manually:
 
 1. Install the NPM package globally:
    ```bash
-   npm install -g @buger/probe-mcp@latest
+   npm install -g @buger/probe@latest
    ```
 
 2. Configure your AI editor to use the installed package:
@@ -359,7 +359,7 @@ If you prefer to install the MCP server manually:
    {
      "mcpServers": {
        "probe": {
-         "command": "probe-mcp"
+         "command": "probe", "args": ["mcp"]
        }
      }
    }
@@ -476,7 +476,7 @@ You can configure the MCP server to search specific directories by default:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp@latest"
+        "@buger/probe@latest"
       ],
       "env": {
         "PROBE_DEFAULT_PATHS": "/path/to/project1,/path/to/project2"
@@ -497,7 +497,7 @@ You can set default limits for search results:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp@latest"
+        "@buger/probe@latest"
       ],
       "env": {
         "PROBE_MAX_TOKENS": "20000"
@@ -518,7 +518,7 @@ If you have a custom build of the Probe binary, you can specify its path:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp@latest"
+        "@buger/probe@latest"
       ],
       "env": {
         "PROBE_PATH": "/path/to/custom/probe"
@@ -539,7 +539,7 @@ Enable debug mode for detailed logging:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp@latest"
+        "@buger/probe@latest"
       ],
       "env": {
         "DEBUG": "1"
@@ -557,8 +557,8 @@ If you encounter issues with the MCP server:
 2. **Verify Configuration**: Double-check your MCP configuration file for errors
 3. **Check Permissions**: Make sure the AI editor has permission to execute the MCP server
 4. **Check Logs**: Look for error messages in your AI editor's logs
-5. **Update Packages**: Ensure you're using the latest version of the `@buger/probe-mcp@latest` package
-6. **Manual Binary Download**: If the automatic download failed, you can manually download the binary from [GitHub Releases](https://github.com/buger/probe/releases) and place it in the `node_modules/@buger/probe-mcp/bin` directory
+5. **Update Packages**: Ensure you're using the latest version of the `@buger/probe@latest` package
+6. **Manual Binary Download**: If the automatic download failed, you can manually download the binary from [GitHub Releases](https://github.com/buger/probe/releases) and place it in the `node_modules/@buger/probe/bin` directory
 
 #### Common Issues and Solutions
 

@@ -103,7 +103,6 @@ rust-project.json
 *.pb.h
 *.pb.*
 
-mcp/bin/probe
 
 .vitepress
 .aider*
