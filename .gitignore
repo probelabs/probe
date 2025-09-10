@@ -116,3 +116,4 @@ examples/reranker/models/*/pytorch_model.bin
 examples/reranker/models/*/model.safetensors
 examples/reranker/models/*/vocab.txt
 examples/reranker/cross_encoder_test_results.json
+*.tgz
