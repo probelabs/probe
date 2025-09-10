@@ -108,18 +108,18 @@ You can download the binary from: https://github.com/probelabs/probe/releases
 				console.log(`Successfully downloaded probe binary to: ${binaryPath}`);
 			}
 
-			// Get the path to the placeholder binary
+			// Get the path to the target binary (preserve the Node.js wrapper script)
 			const isWindows = process.platform === 'win32';
-			const placeholderBinaryName = 'probe' + (isWindows ? '.exe' : '');
-			const placeholderBinaryPath = path.join(binDir, placeholderBinaryName);
+			const targetBinaryName = isWindows ? 'probe.exe' : 'probe-binary';
+			const targetBinaryPath = path.join(binDir, targetBinaryName);
 
-			// Replace the placeholder binary with the actual binary
-			if (binaryPath !== placeholderBinaryPath) {
+			// Copy the downloaded binary to the correct location
+			if (binaryPath !== targetBinaryPath) {
 				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-					console.log(`Replacing placeholder binary at ${placeholderBinaryPath} with actual binary from ${binaryPath}`);
+					console.log(`Copying binary to ${targetBinaryPath} from ${binaryPath}`);
 				}
-				await fs.copyFile(binaryPath, placeholderBinaryPath);
-				await fs.chmod(placeholderBinaryPath, 0o755); // Make it executable
+				await fs.copyFile(binaryPath, targetBinaryPath);
+				await fs.chmod(targetBinaryPath, 0o755); // Make it executable
 			}
 
 			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
