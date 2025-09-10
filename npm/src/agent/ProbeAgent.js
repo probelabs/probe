@@ -170,7 +170,7 @@ export class ProbeAgent {
       apiKey: apiKey,
       ...(apiUrl && { baseURL: apiUrl }),
     });
-    this.model = modelName || 'claude-3-7-sonnet-20250219';
+    this.model = modelName || 'claude-opus-4-1-20250805';
     this.apiType = 'anthropic';
     
     if (this.debug) {
@@ -187,7 +187,7 @@ export class ProbeAgent {
       apiKey: apiKey,
       ...(apiUrl && { baseURL: apiUrl }),
     });
-    this.model = modelName || 'gpt-4o';
+    this.model = modelName || 'gpt-5-thinking';
     this.apiType = 'openai';
     
     if (this.debug) {
