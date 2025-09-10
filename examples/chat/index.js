@@ -58,6 +58,7 @@ export function main() {
     .option('-p, --port <port>', 'Port to run web server on (default: 8080)')
     .option('-m, --message <message>', 'Send a single message and exit (non-interactive mode)')
     .option('-s, --session-id <sessionId>', 'Specify a session ID for the chat (optional)')
+    .option('--images <urls>', 'Comma-separated list of image URLs to include in the message')
     .option('--json', 'Output the response as JSON in non-interactive mode')
     .option('--max-iterations <number>', 'Maximum number of tool iterations allowed (default: 30)')
     .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, support, path to a file, or arbitrary string)')
@@ -75,6 +76,13 @@ export function main() {
 
   const options = program.opts();
   const pathArg = program.args[0];
+
+  // Parse image URLs if provided
+  let imageUrls = [];
+  if (options.images) {
+    imageUrls = options.images.split(',').map(url => url.trim()).filter(url => url.length > 0);
+    console.log(`Using ${imageUrls.length} image(s):`, imageUrls);
+  }
 
   // --- Logging Configuration ---
   const isPipedInput = process.env.PROBE_STDIN_PIPED === '1';
@@ -315,6 +323,27 @@ export function main() {
   const googleApiKey = process.env.GOOGLE_API_KEY;
   const hasApiKeys = !!(anthropicApiKey || openaiApiKey || googleApiKey);
 
+  // --- Web Mode (check before non-interactive to override) ---
+  if (options.web) {
+    if (!hasApiKeys) {
+      // Use logWarn for web mode warning
+      logWarn(chalk.yellow('Warning: No API key provided. The web interface will show instructions on how to set up API keys.'));
+    }
+    // Import and start web server
+    import('./webServer.js')
+      .then(async module => {
+        const { startWebServer } = module;
+        logInfo(`Starting web server on port ${process.env.PORT || 8080}...`);
+        await startWebServer(version, hasApiKeys, { allowEdit: options.allowEdit });
+      })
+      .catch(error => {
+        logError(chalk.red(`Error starting web server: ${error.message}`));
+        process.exit(1);
+      });
+    return; // Exit main function
+  }
+  // --- End Web Mode ---
+
   // --- Non-Interactive Mode ---
   if (isNonInteractive) {
     if (!hasApiKeys) {
@@ -370,7 +399,7 @@ export function main() {
         }
 
         logInfo('Sending message...'); // Log only if debug
-        const result = await chat.chat(message, chat.getSessionId()); // Use the chat's current session ID
+        const result = await chat.chat(message, chat.getSessionId(), null, imageUrls); // Use the chat's current session ID and pass images
 
         if (result && typeof result === 'object' && result.response !== undefined) {
           if (options.json) {
@@ -415,28 +444,6 @@ export function main() {
     return; // Exit main function, prevent interactive/web mode
   }
   // --- End Non-Interactive Mode ---
-
-
-  // --- Web Mode ---
-  if (options.web) {
-    if (!hasApiKeys) {
-      // Use logWarn for web mode warning
-      logWarn(chalk.yellow('Warning: No API key provided. The web interface will show instructions on how to set up API keys.'));
-    }
-    // Import and start web server
-    import('./webServer.js')
-      .then(module => {
-        const { startWebServer } = module;
-        logInfo(`Starting web server on port ${process.env.PORT || 8080}...`);
-        startWebServer(version, hasApiKeys, { allowEdit: options.allowEdit });
-      })
-      .catch(error => {
-        logError(chalk.red(`Error starting web server: ${error.message}`));
-        process.exit(1);
-      });
-    return; // Exit main function
-  }
-  // --- End Web Mode ---
 
 
   // --- Interactive CLI Mode ---
@@ -544,7 +551,7 @@ export function main() {
 
       const spinner = ora('Thinking...').start(); // Spinner is ok for interactive mode
       try {
-        const result = await chat.chat(message); // Uses internal session ID
+        const result = await chat.chat(message, null, null, imageUrls); // Uses internal session ID and pass images
         spinner.stop();
 
         logInfo(chalk.green('Assistant:'));

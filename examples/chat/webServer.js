@@ -102,7 +102,7 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
  * @param {Object} options - Additional options
  * @param {boolean} options.allowEdit - Whether to allow editing files via the implement tool
  */
-export function startWebServer(version, hasApiKeys = true, options = {}) {
+export async function startWebServer(version, hasApiKeys = true, options = {}) {
 	const allowEdit = options?.allowEdit || false;
 	
 	if (allowEdit) {
@@ -125,16 +125,14 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 		verbose: process.env.DEBUG_CHAT === '1' 
 	});
 	
-	// Initialize storage asynchronously
-	(async () => {
-		try {
-			await globalStorage.initialize();
-			const stats = await globalStorage.getStats();
-			console.log(`Chat history storage: ${stats.storage_type} (${stats.session_count} sessions, ${stats.visible_message_count} messages)`);
-		} catch (error) {
-			console.warn('Failed to initialize chat history storage:', error.message);
-		}
-	})();
+	// Initialize storage synchronously before server starts
+	try {
+		await globalStorage.initialize();
+		const stats = await globalStorage.getStats();
+		console.log(`Chat history storage: ${stats.storage_type} (${stats.session_count} sessions, ${stats.visible_message_count} messages)`);
+	} catch (error) {
+		console.warn('Failed to initialize chat history storage:', error.message);
+	}
 
 	// Map to store SSE clients by session ID
 	const sseClients = new Map();
@@ -758,9 +756,9 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 					// The loop is inside chatInstance.chat now.
 					// We expect the *final* result string back.
 					try {
-						// Pass API credentials to the chat method if provided
-						const apiCredentials = apiKey ? { apiProvider, apiKey, apiUrl } : null;
-						const result = await chatInstance.chat(message, chatSessionId, apiCredentials, images); // Pass session ID, API credentials, and images
+						// ChatSessionManager handles session ID and API credentials internally
+						// Only pass the message and images
+						const result = await chatInstance.chat(message, images);
 
 						// Check if cancelled *during* the chat call (ProbeChat throws error)
 						// Error handled in catch block

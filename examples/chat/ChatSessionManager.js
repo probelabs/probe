@@ -113,7 +113,7 @@ export class ChatSessionManager {
       });
       
       // Call ProbeAgent to get response (ProbeAgent manages its own history internally)
-      const response = await this.agent.answer(message);
+      const response = await this.agent.answer(message, images);
       
       this.lastActivity = Date.now();
       

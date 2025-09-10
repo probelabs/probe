@@ -418,9 +418,10 @@ When troubleshooting:
   /**
    * Answer a question using the agentic flow
    * @param {string} message - The user's question
+   * @param {Array} [images] - Optional array of image data (base64 strings or URLs)
    * @returns {Promise<string>} - The final answer
    */
-  async answer(message) {
+  async answer(message, images = []) {
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       throw new Error('Message is required and must be a non-empty string');
     }
@@ -429,11 +430,25 @@ When troubleshooting:
       // Generate system message
       const systemMessage = await this.getSystemMessage();
 
+      // Create user message with optional image support
+      let userMessage = { role: 'user', content: message.trim() };
+      
+      // If images are provided, use multi-modal message format
+      if (images && images.length > 0) {
+        userMessage.content = [
+          { type: 'text', text: message.trim() },
+          ...images.map(image => ({
+            type: 'image',
+            image: image
+          }))
+        ];
+      }
+
       // Initialize conversation with existing history + new user message
       let currentMessages = [
         { role: 'system', content: systemMessage },
         ...this.history, // Include previous conversation history
-        { role: 'user', content: message.trim() }
+        userMessage
       ];
 
       let currentIteration = 0;

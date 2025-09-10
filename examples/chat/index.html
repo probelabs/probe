@@ -1735,15 +1735,67 @@
 				const response = await fetch(`/api/session/${sessionId}/history`);
 				const data = await response.json();
 				
+				console.log(`[DEBUG] Session restoration data:`, {
+					exists: data.exists,
+					historyLength: data.history ? data.history.length : 'null/undefined',
+					condition: data.exists && data.history && data.history.length > 0
+				});
+				
 				if (data.exists && data.history && data.history.length > 0) {
 					console.log(`Restored ${data.history.length} messages for session: ${sessionId}`);
 					
+					// Count message types for debugging
+					const messageTypes = {};
+					data.history.forEach(msg => {
+						messageTypes[msg.role] = (messageTypes[msg.role] || 0) + 1;
+					});
+					console.log(`[DEBUG] Message types to restore:`, messageTypes);
+					
 					// Render restored messages
-					data.history.forEach(message => {
+					let currentAiMessage = null;
+					data.history.forEach((message, index) => {
+						console.log(`[DEBUG] Processing message ${index + 1}/${data.history.length}: role=${message.role}`);
 						if (message.role === 'user') {
-							addUserMessage(message.content, message.images || []);
+							// Ensure images is always an array
+							const images = Array.isArray(message.images) ? message.images : [];
+							addUserMessage(message.content, images);
+							currentAiMessage = null; // Reset for new conversation turn
 						} else if (message.role === 'assistant') {
 							addAssistantMessage(message.content);
+							// Get the most recent AI message for tool call rendering
+							const messagesDiv = document.getElementById('messages');
+							const aiMessages = messagesDiv.querySelectorAll('.ai-message');
+							currentAiMessage = aiMessages[aiMessages.length - 1];
+						} else if (message.role === 'toolCall') {
+							console.log(`[DEBUG] Rendering toolCall message`);
+							// Handle tool call messages during restoration
+							try {
+								// Parse the tool call from the stored message
+								const toolCall = {
+									name: message.metadata?.name || 'unknown',
+									args: message.metadata?.args || {},
+									timestamp: message.timestamp,
+									status: 'completed'
+								};
+								
+								// If we have a current AI message, add the tool call to it
+								if (currentAiMessage) {
+									addToolCallToMessage(currentAiMessage, toolCall);
+								} else {
+									console.log(`[DEBUG] No current AI message for tool call, creating temporary message`);
+									// Create a temporary AI message for the tool call
+									const tempDiv = document.createElement('div');
+									tempDiv.className = 'ai-message';
+									const messagesDiv = document.getElementById('messages');
+									messagesDiv.appendChild(tempDiv);
+									addToolCallToMessage(tempDiv, toolCall);
+									currentAiMessage = tempDiv;
+								}
+							} catch (error) {
+								console.error('[DEBUG] Error rendering tool call:', error, message);
+							}
+						} else {
+							console.log(`[DEBUG] Skipping message with role: ${message.role}`);
 						}
 					});
 					
@@ -1778,12 +1830,17 @@
 						}
 					}, 100); // Small delay to ensure DOM is fully updated
 				} else {
-					console.log(`No history found for session: ${sessionId}`);
+					console.log(`[DEBUG] No history found for session: ${sessionId}`, {
+						exists: data.exists,
+						historyExists: !!data.history,
+						historyLength: data.history ? data.history.length : 'N/A'
+					});
 					// Show user-friendly message for session not found
 					showSessionNotFoundMessage(sessionId);
 				}
 			} catch (error) {
-				console.error('Error restoring session history:', error);
+				console.error('[DEBUG] Error restoring session history:', error);
+				console.error('[DEBUG] Error stack:', error.stack);
 				// Show error message for network or other errors
 				showSessionNotFoundMessage(sessionId);
 			}
@@ -2571,6 +2628,14 @@
 					}
 
 					toolDescription = `Extracting code from ${filePath}${lineInfo}`;
+				} else if (toolCall.name === 'searchFiles') {
+					const pattern = toolCall.args.pattern || '';
+					const directory = toolCall.args.directory || '.';
+					toolDescription = `Searching for files matching "${pattern}"${directory !== '.' ? ` in ${directory}` : ''}`;
+				} else if (toolCall.name === 'listFiles') {
+					const directory = toolCall.args.directory || '.';
+					const pattern = toolCall.args.pattern || '';
+					toolDescription = `Listing files${pattern ? ` matching "${pattern}"` : ''}${directory !== '.' ? ` in ${directory}` : ''}`;
 				} else {
 					toolDescription = `Using ${toolCall.name} tool`;
 				}
