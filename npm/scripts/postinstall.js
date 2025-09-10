@@ -88,21 +88,9 @@ You can download the binary from: https://github.com/probelabs/probe/releases
 				}
 			}
 
-			// Download the binary
+			// Download the binary (it will be placed at the correct location automatically)
 			const binaryPath = await downloadProbeBinary(packageVersion);
 			console.log(`Successfully downloaded probe binary to: ${binaryPath}`);
-
-			// Get the path to the placeholder binary
-			const isWindows = process.platform === 'win32';
-			const placeholderBinaryName = 'probe' + (isWindows ? '.exe' : '');
-			const placeholderBinaryPath = path.join(binDir, placeholderBinaryName);
-
-			// Replace the placeholder binary with the actual binary
-			if (binaryPath !== placeholderBinaryPath) {
-				console.log(`Replacing placeholder binary at ${placeholderBinaryPath} with actual binary from ${binaryPath}`);
-				await fs.copyFile(binaryPath, placeholderBinaryPath);
-				await fs.chmod(placeholderBinaryPath, 0o755); // Make it executable
-			}
 
 			console.log('\nProbe binary was successfully downloaded and installed during installation.');
 			console.log('You can now use the probe command directly from the command line.');
