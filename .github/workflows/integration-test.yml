@@ -81,9 +81,9 @@ jobs:
         # Install npm package dependencies and build MCP TypeScript code
         cd npm && npm install && npm run build:mcp
 
-    - name: Install Probe locally
+    - name: Link Probe package locally
       run: |
-        cd npm && npm install -g .
+        cd npm && npm link
 
     - name: Verify Probe installation
       run: probe --version
@@ -93,15 +93,27 @@ jobs:
       run: |
         echo "Current directory: $(pwd)"
         echo "Probe version:"
+        echo "Debugging npm link setup:"
+        which probe || echo "probe command not found in PATH"
+        ls -la "$(which probe)" || echo "probe symlink not found"
+        
         if [[ "${{ runner.os }}" == "Windows" ]]; then
-          echo "Checking npm global installation:"
-          npm list -g @probelabs/probe || echo "Package listing failed"
-          echo "Checking probe command availability:"
-          which probe || echo "probe command not found in PATH"
-          echo "Checking npm package structure:"
-          ls -la "$(npm root -g)/@probelabs/probe/bin/" || echo "npm package bin directory not found"
+          echo "Windows-specific checks:"
+          npm list -g @probelabs/probe || echo "Package listing failed"  
+        else
+          echo "Unix-specific checks:"
+          readlink -f "$(which probe)" || echo "Cannot resolve probe symlink"
         fi
-        echo "Testing probe command (using npm shim):"
+        
+        echo "Checking package structure:"
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          ls -la "$(npm root -g)/@probelabs/probe/bin/" || echo "npm package bin directory not found"
+        else
+          # For npm link, the package might be in a different location
+          npm list -g @probelabs/probe --depth=0 || echo "Linked package not found"
+        fi
+        
+        echo "Testing probe command (using npm link):"
         npm --version
         probe --version
         echo "Running search command..."
@@ -268,11 +280,27 @@ jobs:
     - name: Test MCP server functionality
       shell: bash
       run: |
-        echo "Testing MCP server functionality using npm shim..."
+        echo "Testing MCP server functionality using npm link..."
+        
+        # Debug: Check what probe command is actually being executed
+        echo "Debugging probe command resolution:"
+        which probe
+        ls -la "$(which probe)" || echo "Cannot stat probe command"
+        
+        # Check if it's our Node.js shim
+        echo "Checking if probe command is our Node.js shim:"
+        head -3 "$(readlink -f "$(which probe)" 2>/dev/null || which probe)" || echo "Cannot read probe file content"
         
         # Test that probe mcp --help works (this tests our shim routing)
         echo "Testing MCP help command:"
-        probe mcp --help > mcp_help.txt 2>&1 || echo "MCP help command completed"
+        probe mcp --help > mcp_help.txt 2>&1
+        mcp_exit_code=$?
+        if [ $mcp_exit_code -ne 0 ]; then
+          echo "MCP help command completed with exit code: $mcp_exit_code"
+        fi
+        
+        echo "Debug - Command that was actually executed for 'probe mcp --help':"
+        echo "Exit code: $mcp_exit_code"
         
         # Verify the help output contains MCP-specific content
         if grep -q "Probe MCP Server" mcp_help.txt; then
@@ -281,8 +309,19 @@ jobs:
           head -5 mcp_help.txt
         else
           echo "❌ MCP help output doesn't contain expected content"
+          echo "Expected: 'Probe MCP Server'"
           echo "Full output:"
           cat mcp_help.txt
+          echo "--- End of output ---"
+          
+          # Debug: Let's check if the MCP build files exist
+          echo "Checking MCP build files:"
+          ls -la npm/build/mcp/ || echo "MCP build directory not found"
+          
+          # Check if we can run the MCP server directly
+          echo "Testing direct MCP server execution:"
+          node npm/build/mcp/index.js --help 2>&1 | head -5 || echo "Direct MCP execution failed"
+          
           exit 1
         fi
         
