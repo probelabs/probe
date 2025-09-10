@@ -83,7 +83,8 @@ jobs:
         ls -la npm/bin/
         
         # Install npm package dependencies and build MCP TypeScript code
-        cd npm && npm install && npm run build:mcp
+        # Note: We skip postinstall to avoid overwriting our test binary setup
+        cd npm && npm install --ignore-scripts && npm run build:mcp
         
         # Debug: Check what files are in npm/bin after npm install/build
         echo "Debug: Files in npm/bin after build:"
