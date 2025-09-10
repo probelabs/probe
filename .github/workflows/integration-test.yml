@@ -78,8 +78,16 @@ jobs:
           chmod +x npm/bin/probe-binary
         fi
         
+        # Debug: Check what files are actually in npm/bin before npm link
+        echo "Debug: Files in npm/bin before npm link:"
+        ls -la npm/bin/
+        
         # Install npm package dependencies and build MCP TypeScript code
         cd npm && npm install && npm run build:mcp
+        
+        # Debug: Check what files are in npm/bin after npm install/build
+        echo "Debug: Files in npm/bin after build:"
+        ls -la bin/
 
     - name: Link Probe package locally
       run: |
