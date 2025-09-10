@@ -54,7 +54,7 @@ const positionComponent = {
 
     // Many of the expected outputs have stopped working since meriging latest code from main.
     // Suspect changes in e788c83, but haven't understoof this yet:
-    // https://github.com/buger/probe/commit/e788c837bd63813fb2e4fba9d64604e0c9755c4a
+    // https://github.com/probelabs/probe/commit/e788c837bd63813fb2e4fba9d64604e0c9755c4a
     let expected_outputs = vec![
         (0, 1, 1), // before start of file
         (1, 1, 1), // initial blank line

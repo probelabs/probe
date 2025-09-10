@@ -1,19 +1,19 @@
-# @buger/probe
+# @probelabs/probe
 
-A Node.js wrapper for the [probe](https://github.com/buger/probe) code search tool.
+A Node.js wrapper for the [probe](https://github.com/probelabs/probe) code search tool.
 
 ## Installation
 
 ### Local Installation
 
 ```bash
-npm install @buger/probe
+npm install @probelabs/probe
 ```
 
 ### Global Installation
 
 ```bash
-npm install -g @buger/probe
+npm install -g @probelabs/probe
 ```
 
 During installation, the package will automatically download the appropriate probe binary for your platform.
@@ -35,7 +35,7 @@ During installation, the package will automatically download the appropriate pro
 ### Using as a Node.js Library
 
 ```javascript
-import { search, query, extract } from '@buger/probe';
+import { search, query, extract } from '@probelabs/probe';
 
 // Search for code
 const searchResults = await search({
@@ -151,7 +151,7 @@ Add to your AI assistant's MCP configuration:
   "mcpServers": {
     "probe": {
       "command": "npx",
-      "args": ["-y", "@buger/probe", "mcp"]
+      "args": ["-y", "@probelabs/probe", "mcp"]
     }
   }
 }
@@ -162,7 +162,7 @@ Add to your AI assistant's MCP configuration:
 ### Search
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 const results = await search({
   path: '/path/to/your/project',
@@ -210,7 +210,7 @@ const results = await search({
 ### Query
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@probelabs/probe';
 
 const results = await query({
   path: '/path/to/your/project',
@@ -246,7 +246,7 @@ const results = await query({
 ### Extract
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 const results = await extract({
   files: [
@@ -279,7 +279,7 @@ const results = await extract({
 ### Binary Management
 
 ```javascript
-import { getBinaryPath, setBinaryPath } from '@buger/probe';
+import { getBinaryPath, setBinaryPath } from '@probelabs/probe';
 
 // Get the path to the probe binary
 const binaryPath = await getBinaryPath({
@@ -294,7 +294,7 @@ setBinaryPath('/path/to/probe/binary');
 ### AI Tools
 
 ```javascript
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Vercel AI SDK tools
 const { searchTool, queryTool, extractTool } = tools;
@@ -338,7 +338,7 @@ const systemMessage = tools.DEFAULT_SYSTEM_MESSAGE;
 ### Basic Search Example
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 async function basicSearchExample() {
   try {
@@ -359,7 +359,7 @@ async function basicSearchExample() {
 ### Advanced Search with Multiple Options
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 async function advancedSearchExample() {
   try {
@@ -385,7 +385,7 @@ async function advancedSearchExample() {
 ### Query for Specific Code Structures
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@probelabs/probe';
 
 async function queryExample() {
   try {
@@ -419,7 +419,7 @@ async function queryExample() {
 ### Extract Code Blocks
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 async function extractExample() {
   try {
@@ -459,7 +459,7 @@ The package provides built-in tools for integrating with AI SDKs like Vercel AI 
 
 ```javascript
 import { generateText } from 'ai';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Use the pre-built tools with Vercel AI SDK
 async function chatWithAI(userMessage) {
@@ -484,7 +484,7 @@ async function chatWithAI(userMessage) {
 
 ```javascript
 import { ChatOpenAI } from '@langchain/openai';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Create the LangChain tools
 const searchTool = tools.createSearchTool();
@@ -513,7 +513,7 @@ async function chatWithAI(userMessage) {
 The package provides a default system message that you can use with your AI assistants:
 
 ```javascript
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Use the default system message in your AI application
 const systemMessage = tools.DEFAULT_SYSTEM_MESSAGE;
@@ -537,13 +537,13 @@ The default system message provides instructions for AI assistants on how to use
 
 ISC
 
-## Migration from @buger/probe-mcp
+## Migration from @probelabs/probe-mcp
 
-If you're migrating from the standalone `@buger/probe-mcp` package, `probe mcp` is a drop-in replacement:
+If you're migrating from the standalone `@probelabs/probe-mcp` package, `probe mcp` is a drop-in replacement:
 
 **Old usage:**
 ```bash
-npx @buger/probe-mcp
+npx @probelabs/probe-mcp
 # or
 probe-mcp --timeout 60
 ```
@@ -562,7 +562,7 @@ probe mcp --timeout 60
   "mcpServers": {
     "probe": {
       "command": "npx",
-      "args": ["-y", "@buger/probe-mcp"]
+      "args": ["-y", "@probelabs/probe-mcp"]
     }
   }
 }
@@ -572,7 +572,7 @@ probe mcp --timeout 60
   "mcpServers": {
     "probe": {
       "command": "npx", 
-      "args": ["-y", "@buger/probe", "mcp"]
+      "args": ["-y", "@probelabs/probe", "mcp"]
     }
   }
 }
@@ -580,4 +580,4 @@ probe mcp --timeout 60
 
 ## Related Projects
 
-- [probe](https://github.com/buger/probe) - The core probe code search tool
+- [probe](https://github.com/probelabs/probe) - The core probe code search tool

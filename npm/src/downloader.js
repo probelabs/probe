@@ -382,7 +382,8 @@ async function extractBinary(assetPath, outputDir) {
 
 	const assetName = path.basename(assetPath);
 	const isWindows = os.platform() === 'win32';
-	const binaryName = isWindows ? `${BINARY_NAME}.exe` : BINARY_NAME;
+	// Use the correct binary name: probe.exe for Windows, probe-binary for Unix
+	const binaryName = isWindows ? `${BINARY_NAME}.exe` : `${BINARY_NAME}-binary`;
 	const binaryPath = path.join(outputDir, binaryName);
 
 	try {
@@ -577,7 +578,8 @@ export async function downloadProbeBinary(version) {
 		}
 
 		const isWindows = os.platform() === 'win32';
-		const binaryName = isWindows ? `${BINARY_NAME}.exe` : BINARY_NAME;
+		// Use the correct binary name: probe.exe for Windows, probe-binary for Unix
+		const binaryName = isWindows ? `${BINARY_NAME}.exe` : `${BINARY_NAME}-binary`;
 		const binaryPath = path.join(LOCAL_DIR, binaryName);
 
 		// Check if the binary already exists and version matches

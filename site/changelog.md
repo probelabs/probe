@@ -179,7 +179,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0] - Previous Release
 
-For changes in version 0.5.0 and earlier, please refer to the [GitHub Releases](https://github.com/buger/probe/releases) page.
+For changes in version 0.5.0 and earlier, please refer to the [GitHub Releases](https://github.com/probelabs/probe/releases) page.
 
 ---
 
@@ -187,14 +187,14 @@ For changes in version 0.5.0 and earlier, please refer to the [GitHub Releases](
 
 When contributing to Probe, please:
 
-1. Follow the [Contributing Guidelines](https://github.com/buger/probe/blob/main/CONTRIBUTING.md)
+1. Follow the [Contributing Guidelines](https://github.com/probelabs/probe/blob/main/CONTRIBUTING.md)
 2. Update this changelog for any user-facing changes
 3. Use conventional commit messages for automatic changelog generation
 4. Test your changes across supported platforms
 
 ## Links
 
-- [GitHub Repository](https://github.com/buger/probe)
-- [Release Downloads](https://github.com/buger/probe/releases)
-- [NPM Package](https://www.npmjs.com/package/@buger/probe)
+- [GitHub Repository](https://github.com/probelabs/probe)
+- [Release Downloads](https://github.com/probelabs/probe/releases)
+- [NPM Package](https://www.npmjs.com/package/@probelabs/probe)
 - [Crates.io Package](https://crates.io/crates/probe)

@@ -1,6 +1,6 @@
 // Example of using the probe npm package in Node.js
 
-import { search, query, extract, tools } from '@buger/probe';
+import { search, query, extract, tools } from '@probelabs/probe';
 
 // Basic search example
 async function basicSearchExample() {

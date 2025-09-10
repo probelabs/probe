@@ -12,7 +12,7 @@ import { TelemetryConfig } from './telemetry.js';
 import { trace } from '@opentelemetry/api';
 import { appTracer } from './appTracer.js';
 // Import the tools that emit events and the listFilesByLevel utility
-import { listFilesByLevel } from '@buger/probe';
+import { listFilesByLevel } from '@probelabs/probe';
 // Import schemas and parser from common (assuming tools.js)
 import {
   searchSchema, querySchema, extractSchema, attemptCompletionSchema,

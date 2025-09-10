@@ -15,7 +15,7 @@ hero:
       link: /quick-start
     - theme: alt
       text: GitHub Repo
-      link: https://github.com/buger/probe
+      link: https://github.com/probelabs/probe
 
 features:
   - icon: 🔬
@@ -84,7 +84,7 @@ features:
   </template>
   <template #code>
     <div class="language-typescript"><pre><code>// Example of using Probe's Node.js SDK
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 const results = await search({
   query: "user authentication",
@@ -111,9 +111,9 @@ console.log(`Found ${results.length} matches`);</code></pre></div>
     </ul>
   </template>
   <template #code>
-    <div class="language-typescript"><pre><code>import { search } from '@buger/probe';
+    <div class="language-typescript"><pre><code>import { search } from '@probelabs/probe';
 import { ChatOpenAI } from '@langchain/openai';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Create AI assistant with code search
 const searchTool = tools.createSearchTool();

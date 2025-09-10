@@ -24,7 +24,7 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { ProbeChat } from './probeChat.js';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
-import { DEFAULT_SYSTEM_MESSAGE } from '@buger/probe';
+import { DEFAULT_SYSTEM_MESSAGE } from '@probelabs/probe';
 
 /**
  * Main function that runs the Probe Chat CLI or web interface

@@ -459,4 +459,4 @@ Once you've implemented support for a new language:
 2. **Update Documentation**: Add your language to the supported languages list.
 3. **Submit a Pull Request**: Contribute your implementation to the Probe project.
 
-For more detailed guidance, check the [CONTRIBUTING.md](https://github.com/buger/probe/blob/main/CONTRIBUTING.md) file in the Probe repository.
+For more detailed guidance, check the [CONTRIBUTING.md](https://github.com/probelabs/probe/blob/main/CONTRIBUTING.md) file in the Probe repository.

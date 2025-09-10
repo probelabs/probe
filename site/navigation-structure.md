@@ -73,4 +73,4 @@ The documentation includes a search feature that allows you to quickly find info
 
 ## Feedback and Improvements
 
-This documentation structure is designed to evolve based on user feedback. If you have suggestions for improving the organization or content of the documentation, please [open an issue](https://github.com/buger/probe/issues) on GitHub.
+This documentation structure is designed to evolve based on user feedback. If you have suggestions for improving the organization or content of the documentation, please [open an issue](https://github.com/probelabs/probe/issues) on GitHub.

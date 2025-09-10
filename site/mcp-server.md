@@ -8,9 +8,9 @@ The Model Context Protocol (MCP) server mode allows Probe to integrate seamlessl
 
 MCP (Model Context Protocol) is a protocol that enables AI assistants to access external tools and resources. By running Probe as an MCP server, AI assistants can use Probe's search capabilities to find and understand code in your projects.
 
-## Migrating from @buger/probe-mcp
+## Migrating from @probelabs/probe-mcp
 
-If you're currently using the standalone `@buger/probe-mcp` package, `probe mcp` is a **drop-in replacement**:
+If you're currently using the standalone `@probelabs/probe-mcp` package, `probe mcp` is a **drop-in replacement**:
 
 ### Quick Migration
 
@@ -20,7 +20,7 @@ If you're currently using the standalone `@buger/probe-mcp` package, `probe mcp`
   "mcpServers": {
     "probe": {
       "command": "npx",
-      "args": ["-y", "@buger/probe-mcp"]
+      "args": ["-y", "@probelabs/probe-mcp"]
     }
   }
 }
@@ -32,7 +32,7 @@ If you're currently using the standalone `@buger/probe-mcp` package, `probe mcp`
   "mcpServers": {
     "probe": {
       "command": "npx",
-      "args": ["-y", "@buger/probe", "mcp"]
+      "args": ["-y", "@probelabs/probe", "mcp"]
     }
   }
 }
@@ -53,7 +53,7 @@ The easiest way to use Probe's MCP server is through NPX:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest",
+        "@probelabs/probe@latest",
         "mcp"
       ]
     }
@@ -72,7 +72,7 @@ If you prefer to install the MCP server manually:
 
 1. Install the NPM package globally:
    ```bash
-   npm install -g @buger/probe@latest
+   npm install -g @probelabs/probe@latest
    ```
 
 2. Configure your AI editor to use the installed package:
@@ -98,7 +98,7 @@ For large codebases, you may need to increase the timeout for search operations.
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest",
+        "@probelabs/probe@latest",
         "mcp",
         "--timeout",
         "60"
@@ -231,7 +231,7 @@ You can configure the MCP server to search specific directories by default:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_DEFAULT_PATHS": "/path/to/project1,/path/to/project2"
@@ -252,7 +252,7 @@ You can set default limits for search results:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_MAX_TOKENS": "20000"
@@ -273,7 +273,7 @@ If you have a custom build of the Probe binary, you can specify its path:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_PATH": "/path/to/custom/probe"
@@ -291,8 +291,8 @@ If you encounter issues with the MCP server:
 2. **Verify Configuration**: Double-check your MCP configuration file for errors
 3. **Check Permissions**: Make sure the AI editor has permission to execute the MCP server
 4. **Check Logs**: Look for error messages in your AI editor's logs
-5. **Update Packages**: Ensure you're using the latest version of the `@buger/probe@latest` package
-6. **Manual Binary Download**: If the automatic download failed, you can manually download the binary from [GitHub Releases](https://github.com/buger/probe/releases) and place it in the `node_modules/@buger/probe/bin` directory
+5. **Update Packages**: Ensure you're using the latest version of the `@probelabs/probe@latest` package
+6. **Manual Binary Download**: If the automatic download failed, you can manually download the binary from [GitHub Releases](https://github.com/probelabs/probe/releases) and place it in the `node_modules/@probelabs/probe/bin` directory
 
 ## Best Practices
 

@@ -118,8 +118,8 @@ probe-chat --trace-console
 
 ### NPM Integration
 
-- **Global Installation**: Simple `npm install -g @buger/probe@latest` for system-wide access
-- **NPX Execution**: Run without installation via `npx -y @buger/probe-chat@latest`
+- **Global Installation**: Simple `npm install -g @probelabs/probe@latest` for system-wide access
+- **NPX Execution**: Run without installation via `npx -y @probelabs/probe-chat@latest`
 - **Node.js API**: Programmatic access via JavaScript
 - **Vercel AI SDK**: Streaming AI responses in web applications
 

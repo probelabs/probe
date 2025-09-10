@@ -26,7 +26,7 @@ The easiest way to use Probe's MCP server is through NPX:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ]
     }
   }
@@ -44,7 +44,7 @@ If you prefer to install the MCP server manually:
 
 1. Install the NPM package globally:
    ```bash
-   npm install -g @buger/probe@latest
+   npm install -g @probelabs/probe@latest
    ```
 
 2. Configure your AI editor to use the installed package:
@@ -69,7 +69,7 @@ For large codebases, you may need to increase the timeout for search operations.
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest",
+        "@probelabs/probe@latest",
         "--timeout",
         "60"
       ]
@@ -263,7 +263,7 @@ You can configure the MCP server to search specific directories by default:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_DEFAULT_PATHS": "/path/to/project1,/path/to/project2"
@@ -284,7 +284,7 @@ You can set default limits for search results:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_MAX_TOKENS": "20000"
@@ -305,7 +305,7 @@ If you have a custom build of the Probe binary, you can specify its path:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_PATH": "/path/to/custom/probe"
@@ -326,7 +326,7 @@ Enable debug mode for detailed logging:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "DEBUG": "1"
@@ -391,7 +391,7 @@ To integrate Probe with Cline:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ]
     }
   }
@@ -427,7 +427,7 @@ If you encounter a "Binary not found" error:
 
 1. Check if the Probe binary exists in the expected location
 2. Set the PROBE_PATH environment variable to the location of your Probe binary
-3. Try reinstalling the @buger/probe@latest package
+3. Try reinstalling the @probelabs/probe@latest package
 
 #### Permission Denied
 
@@ -535,7 +535,7 @@ You can configure multiple AI assistants to use the same Probe MCP server:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_DEFAULT_PATHS": "/path/to/project"
@@ -551,7 +551,7 @@ Then, configure each AI assistant to use the "probe" MCP server.
 
 You can extend the MCP server with additional tools:
 
-1. Fork the @buger/probe repository
+1. Fork the @probelabs/probe repository
 2. Add new tool implementations
 3. Build and publish your custom version
 4. Configure your AI editor to use your custom MCP server
@@ -581,7 +581,7 @@ When using the Probe MCP server, consider the following security and privacy imp
 
 ## Related Resources
 
-- [Probe GitHub Repository](https://github.com/buger/probe)
+- [Probe GitHub Repository](https://github.com/probelabs/probe)
 - [Model Context Protocol Specification](https://github.com/modelcontextprotocol/mcp)
-- [Probe Node.js SDK](https://github.com/buger/probe/tree/main/npm)
-- [Probe AI Chat](https://github.com/buger/probe/tree/main/examples/chat)
+- [Probe Node.js SDK](https://github.com/probelabs/probe/tree/main/npm)
+- [Probe AI Chat](https://github.com/probelabs/probe/tree/main/examples/chat)

@@ -99,7 +99,7 @@ class ProbeAgentServer {
 		// Initialize the MCP server
 		this.server = new Server(
 			{
-				name: '@buger/probe-mcp-agent',
+				name: '@probelabs/probe-mcp-agent',
 				version: packageVersion,
 			},
 			{
