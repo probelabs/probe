@@ -4,6 +4,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { streamText } from 'ai';
 import { randomUUID } from 'crypto';
+import { EventEmitter } from 'events';
 import { TokenCounter } from './tokenCounter.js';
 import { 
   createTools,
@@ -53,6 +54,7 @@ export class ProbeAgent {
     this.allowEdit = !!options.allowEdit;
     this.debug = options.debug || process.env.DEBUG === '1';
     this.cancelled = false;
+    this.tracer = options.tracer || null;
 
     // Search configuration
     this.allowedFolders = options.path ? [options.path] : [process.cwd()];
@@ -79,6 +81,9 @@ export class ProbeAgent {
 
     // Initialize chat history
     this.history = [];
+    
+    // Initialize event emitter for tool execution updates
+    this.events = new EventEmitter();
   }
 
   /**
@@ -424,9 +429,10 @@ When troubleshooting:
       // Generate system message
       const systemMessage = await this.getSystemMessage();
 
-      // Initialize conversation with user message
+      // Initialize conversation with existing history + new user message
       let currentMessages = [
         { role: 'system', content: systemMessage },
+        ...this.history, // Include previous conversation history
         { role: 'user', content: message.trim() }
       ];
 
@@ -448,6 +454,15 @@ When troubleshooting:
           console.log(`[DEBUG] Current messages count for AI call: ${currentMessages.length}`);
         }
 
+        // Add iteration tracing event
+        if (this.tracer) {
+          this.tracer.addEvent('iteration.start', {
+            'iteration': currentIteration,
+            'max_iterations': MAX_TOOL_ITERATIONS,
+            'message_count': currentMessages.length
+          });
+        }
+
         // Calculate context size
         this.tokenCounter.calculateContextSize(currentMessages);
         if (this.debug) {
@@ -464,22 +479,40 @@ When troubleshooting:
         // Make AI request
         let assistantResponseContent = '';
         try {
-          const result = await streamText({
-            model: this.provider(this.model),
-            messages: currentMessages,
-            maxTokens: maxResponseTokens,
-            temperature: 0.3,
-          });
+          // Wrap AI request with tracing if available
+          const executeAIRequest = async () => {
+            const result = await streamText({
+              model: this.provider(this.model),
+              messages: currentMessages,
+              maxTokens: maxResponseTokens,
+              temperature: 0.3,
+            });
 
-          // Collect the streamed response
-          for await (const delta of result.textStream) {
-            assistantResponseContent += delta;
-          }
+            // Collect the streamed response
+            for await (const delta of result.textStream) {
+              assistantResponseContent += delta;
+            }
 
-          // Record token usage
-          const usage = await result.usage;
-          if (usage) {
-            this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
+            // Record token usage
+            const usage = await result.usage;
+            if (usage) {
+              this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
+            }
+
+            return result;
+          };
+
+          if (this.tracer) {
+            await this.tracer.withSpan('ai.request', executeAIRequest, {
+              'ai.model': this.model,
+              'ai.provider': this.clientApiProvider || 'auto',
+              'iteration': currentIteration,
+              'max_tokens': maxResponseTokens,
+              'temperature': 0.3,
+              'message_count': currentMessages.length
+            });
+          } else {
+            await executeAIRequest();
           }
 
         } catch (error) {
@@ -511,7 +544,54 @@ When troubleshooting:
               try {
                 // Add sessionId to params for tool execution
                 const toolParams = { ...params, sessionId: this.sessionId };
-                const toolResult = await this.toolImplementations[toolName].execute(toolParams);
+                
+                // Emit tool start event
+                this.events.emit('toolCall', {
+                  timestamp: new Date().toISOString(),
+                  name: toolName,
+                  args: toolParams,
+                  status: 'started'
+                });
+                
+                // Execute tool with tracing if available
+                const executeToolCall = async () => {
+                  return await this.toolImplementations[toolName].execute(toolParams);
+                };
+
+                let toolResult;
+                try {
+                  if (this.tracer) {
+                    toolResult = await this.tracer.withSpan('tool.call', executeToolCall, {
+                      'tool.name': toolName,
+                      'tool.params': JSON.stringify(toolParams).substring(0, 500),
+                      'iteration': currentIteration
+                    });
+                  } else {
+                    toolResult = await executeToolCall();
+                  }
+                  
+                  // Emit tool success event
+                  this.events.emit('toolCall', {
+                    timestamp: new Date().toISOString(),
+                    name: toolName,
+                    args: toolParams,
+                    resultPreview: typeof toolResult === 'string'
+                      ? (toolResult.length > 200 ? toolResult.substring(0, 200) + '...' : toolResult)
+                      : (toolResult ? JSON.stringify(toolResult).substring(0, 200) + '...' : 'No Result'),
+                    status: 'completed'
+                  });
+                  
+                } catch (toolError) {
+                  // Emit tool error event
+                  this.events.emit('toolCall', {
+                    timestamp: new Date().toISOString(),
+                    name: toolName,
+                    args: toolParams,
+                    error: toolError.message || 'Unknown error',
+                    status: 'error'
+                  });
+                  throw toolError; // Re-throw to be handled by outer catch
+                }
                 
                 // Add assistant response and tool result to conversation
                 currentMessages.push({ role: 'assistant', content: assistantResponseContent });

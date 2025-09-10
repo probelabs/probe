@@ -9,6 +9,9 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
+import { initializeSimpleTelemetryFromOptions, SimpleAppTracer } from './simpleTelemetry.js';
+import { cleanSchemaResponse, processSchemaResponse } from './schemaUtils.js';
+import { ACPServer } from './acp/index.js';
 
 // Helper function to detect if input is a file path and read it
 function readInputContent(input) {
@@ -33,6 +36,7 @@ function parseArgs() {
   const args = process.argv.slice(2);
   const config = {
     mcp: false,
+    acp: false,
     question: null,
     path: null,
     prompt: null,
@@ -43,7 +47,10 @@ function parseArgs() {
     allowEdit: false,
     verbose: false,
     help: false,
-    maxIterations: null
+    maxIterations: null,
+    traceFile: undefined,
+    traceRemote: undefined,
+    traceConsole: false
   };
   
   for (let i = 0; i < args.length; i++) {
@@ -51,6 +58,8 @@ function parseArgs() {
     
     if (arg === '--mcp') {
       config.mcp = true;
+    } else if (arg === '--acp') {
+      config.acp = true;
     } else if (arg === '--help' || arg === '-h') {
       config.help = true;
     } else if (arg === '--verbose') {
@@ -71,6 +80,12 @@ function parseArgs() {
       config.model = args[++i];
     } else if (arg === '--max-iterations' && i + 1 < args.length) {
       config.maxIterations = parseInt(args[++i], 10);
+    } else if (arg === '--trace-file' && i + 1 < args.length) {
+      config.traceFile = args[++i];
+    } else if (arg === '--trace-remote' && i + 1 < args.length) {
+      config.traceRemote = args[++i];
+    } else if (arg === '--trace-console') {
+      config.traceConsole = true;
     } else if (!arg.startsWith('--') && !config.question) {
       // First non-flag argument is the question
       config.question = arg;
@@ -89,6 +104,7 @@ Usage:
   probe agent <question>           Answer a question about the codebase
   probe agent <file>               Read question from file
   probe agent --mcp                Start as MCP server
+  probe agent --acp                Start as ACP server
 
 Options:
   --path <dir>                     Search directory (default: current)
@@ -100,7 +116,11 @@ Options:
   --allow-edit                     Enable code modification capabilities
   --verbose                        Enable verbose output
   --mcp                           Run as MCP server
+  --acp                           Run as ACP server (Agent Client Protocol)
   --max-iterations <number>        Max tool iterations (default: 30)
+  --trace-file <path>              Enable tracing to file (JSONL format)
+  --trace-remote <endpoint>        Enable tracing to remote OTLP endpoint
+  --trace-console                  Enable tracing to console output
   --help, -h                      Show this help message
 
 Environment Variables:
@@ -118,7 +138,10 @@ Examples:
   probe agent "Review this code for bugs" --prompt code-review --system-prompt custom-prompt.txt
   probe agent "List all functions" --schema '{"functions": [{"name": "string", "file": "string"}]}'
   probe agent "Analyze codebase" --schema schema.json  # Schema from file
+  probe agent "Debug issue" --trace-file ./debug.jsonl --verbose
+  probe agent "Analyze code" --trace-remote http://localhost:4318/v1/traces
   probe agent --mcp               # Start MCP server mode
+  probe agent --acp               # Start ACP server mode
 
 Personas:
   code-explorer    Default. Explores and explains code structure and functionality
@@ -269,6 +292,8 @@ class ProbeAgentMcpServer {
           
           try {
             result = await agent.answer(schemaPrompt);
+            // Clean the schema response to remove code blocks and formatting
+            result = cleanSchemaResponse(result);
           } catch (error) {
             // If schema formatting fails, use original result
           }
@@ -324,12 +349,42 @@ async function main() {
     return;
   }
 
+  if (config.acp) {
+    // Start as ACP server
+    const server = new ACPServer({
+      provider: config.provider,
+      model: config.model,
+      path: config.path,
+      allowEdit: config.allowEdit,
+      debug: config.verbose
+    });
+    await server.start();
+    return;
+  }
+
   if (!config.question) {
     showHelp();
     process.exit(1);
   }
 
   try {
+    // Initialize tracing if any tracing options are provided
+    let telemetryConfig = null;
+    let appTracer = null;
+    if (config.traceFile !== undefined || config.traceRemote !== undefined || config.traceConsole) {
+      try {
+        telemetryConfig = initializeSimpleTelemetryFromOptions(config);
+        appTracer = new SimpleAppTracer(telemetryConfig);
+        if (config.verbose) {
+          console.error('[DEBUG] Simple tracing initialized');
+        }
+      } catch (error) {
+        if (config.verbose) {
+          console.error(`[DEBUG] Failed to initialize tracing: ${error.message}`);
+        }
+      }
+    }
+
     // Set environment variables if provided via flags
     if (config.verbose) {
       process.env.DEBUG = '1';
@@ -377,11 +432,34 @@ async function main() {
       promptType: config.prompt,
       customPrompt: systemPrompt,
       allowEdit: config.allowEdit,
-      debug: config.verbose
+      debug: config.verbose,
+      tracer: appTracer
     };
 
     const agent = new ProbeAgent(agentConfig);
-    let result = await agent.answer(question);
+    
+    // Execute with tracing if available
+    let result;
+    if (appTracer) {
+      const sessionSpan = appTracer.createSessionSpan({
+        'question': question.substring(0, 100) + (question.length > 100 ? '...' : ''),
+        'path': config.path || process.cwd(),
+        'prompt_type': config.prompt || 'code-explorer'
+      });
+      
+      try {
+        result = await appTracer.withSpan('agent.answer', 
+          () => agent.answer(question),
+          { 'question.length': question.length }
+        );
+      } finally {
+        if (sessionSpan) {
+          sessionSpan.end();
+        }
+      }
+    } else {
+      result = await agent.answer(question);
+    }
 
     // If schema is provided, make a follow-up request to format the output
     if (schema) {
@@ -392,7 +470,26 @@ async function main() {
       const schemaPrompt = `Now you need to respond according to this schema:\n\n${schema}\n\nPlease reformat your previous response to match this schema exactly. Only return the formatted response, no additional text.`;
       
       try {
-        result = await agent.answer(schemaPrompt);
+        if (appTracer) {
+          result = await appTracer.withSpan('agent.schema_formatting',
+            () => agent.answer(schemaPrompt),
+            { 'schema.length': schema.length }
+          );
+        } else {
+          result = await agent.answer(schemaPrompt);
+        }
+        
+        // Clean the schema response to remove code blocks and formatting
+        const cleaningResult = processSchemaResponse(result, schema, { 
+          debug: config.verbose 
+        });
+        result = cleaningResult.cleaned;
+        
+        if (config.verbose && cleaningResult.debug && cleaningResult.debug.wasModified) {
+          console.error('[DEBUG] Schema response was cleaned:');
+          console.error(`  Original length: ${cleaningResult.debug.originalLength}`);
+          console.error(`  Cleaned length: ${cleaningResult.debug.cleanedLength}`);
+        }
       } catch (error) {
         if (config.verbose) {
           console.error('[DEBUG] Schema formatting failed, using original result');
@@ -408,6 +505,20 @@ async function main() {
     if (config.verbose) {
       const tokenUsage = agent.getTokenUsage();
       console.error(`\n[DEBUG] Token usage: ${JSON.stringify(tokenUsage, null, 2)}`);
+    }
+
+    // Flush and shutdown tracing
+    if (appTracer) {
+      try {
+        await appTracer.flush();
+        if (config.verbose) {
+          console.error('[DEBUG] Tracing flushed');
+        }
+      } catch (error) {
+        if (config.verbose) {
+          console.error(`[DEBUG] Failed to flush tracing: ${error.message}`);
+        }
+      }
     }
 
   } catch (error) {

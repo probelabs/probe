@@ -26,6 +26,7 @@ import {
 	parseXmlToolCall
 } from './tools/common.js';
 import { searchTool, queryTool, extractTool } from './tools/vercel.js';
+import { ProbeAgent } from './agent/ProbeAgent.js';
 
 export {
 	search,
@@ -36,6 +37,8 @@ export {
 	listFilesByLevel,
 	tools,
 	DEFAULT_SYSTEM_MESSAGE,
+	// Export AI Agent (NEW!)
+	ProbeAgent,
 	// Export tool generators directly
 	searchTool,
 	queryTool,

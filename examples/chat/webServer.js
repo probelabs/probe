@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { ProbeChat } from './probeChat.js';
+import { ChatSessionManager } from './ChatSessionManager.js';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
 import { authMiddleware, withAuth } from './auth.js';
 import {
@@ -32,7 +32,7 @@ let globalStorage = null;
 const chatSessions = new Map();
 
 /**
- * Retrieve or create a ProbeChat instance keyed by sessionId.
+ * Retrieve or create a ChatSessionManager instance keyed by sessionId.
  */
 function getOrCreateChat(sessionId, apiCredentials = null) {
 	if (!sessionId) {
@@ -54,24 +54,19 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
 	}
 
 	// Create options object with sessionId and API credentials if provided
-	const options = { sessionId };
+	const options = { 
+		sessionId,
+		storage: globalStorage,
+		debug: process.env.DEBUG_CHAT === '1'
+	};
+	
 	if (apiCredentials) {
 		options.apiProvider = apiCredentials.apiProvider;
 		options.apiKey = apiCredentials.apiKey;
 		options.apiUrl = apiCredentials.apiUrl;
 	}
-	
-	// Pass storage instance for persistent storage
-	if (globalStorage) {
-		options.storage = globalStorage;
-	}
 
-	const newChat = new ProbeChat(options);
-	
-	// Add timestamps for session tracking
-	const now = Date.now();
-	newChat.createdAt = now;
-	newChat.lastActivity = now;
+	const newChat = new ChatSessionManager(options);
 	
 	// Store in memory cache
 	chatSessions.set(sessionId, newChat);
@@ -80,8 +75,8 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
 	if (globalStorage) {
 		globalStorage.saveSession({
 			id: sessionId,
-			createdAt: now,
-			lastActivity: now,
+			createdAt: newChat.createdAt,
+			lastActivity: newChat.lastActivity,
 			firstMessagePreview: null, // Will be updated when first message is sent
 			metadata: {
 				apiProvider: apiCredentials?.apiProvider || null
@@ -92,7 +87,7 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
 	}
 	
 	if (process.env.DEBUG_CHAT === '1') {
-		console.log(`[DEBUG] Created and stored new chat instance for session: ${sessionId}. Total sessions: ${chatSessions.size}`);
+		console.log(`[DEBUG] Created and stored new ChatSessionManager instance for session: ${sessionId}. Total sessions: ${chatSessions.size}`);
 		if (apiCredentials && apiCredentials.apiKey) {
 			console.log(`[DEBUG] Chat instance created with client-provided API credentials (provider: ${apiCredentials.apiProvider})`);
 		}
