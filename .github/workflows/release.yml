@@ -43,7 +43,7 @@ jobs:
 
       # Install Rust toolchain
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.84.0
+        uses: dtolnay/rust-toolchain@1.85.0
         with:
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
