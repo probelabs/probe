@@ -4,7 +4,7 @@ Probe includes a web-based chat interface that provides a user-friendly way to i
 
 ## Unified Interface
 
-Probe now features a unified interface that combines both CLI and web functionality in a single package. This change merges the previously separate `@buger/probe-web` and `@buger/probe-chat` packages into a single `@buger/probe-chat` package that supports both modes of operation.
+Probe now features a unified interface that combines both CLI and web functionality in a single package. This change merges the previously separate `@probelabs/probe-web` and `@probelabs/probe-chat` packages into a single `@probelabs/probe-chat` package that supports both modes of operation.
 
 ### Benefits of the Unified Interface
 
@@ -14,7 +14,7 @@ Probe now features a unified interface that combines both CLI and web functional
 - **Simplified Installation**: One package to install for all Probe chat functionality
 - **Unified Configuration**: Same environment variables and settings for both modes
 
-> **Note**: The `@buger/probe-web` package is now deprecated. Its functionality is included in the `@buger/probe-chat` package.
+> **Note**: The `@probelabs/probe-web` package is now deprecated. Its functionality is included in the `@probelabs/probe-chat` package.
 
 ## Quick Start with npx
 
@@ -22,10 +22,10 @@ The easiest way to use Probe's interface is through npx:
 
 ```bash
 # Run in CLI mode (default)
-npx -y @buger/probe-chat@latest
+npx -y @probelabs/probe-chat@latest
 
 # Run in web interface mode
-npx -y @buger/probe-chat@latest --web
+npx -y @probelabs/probe-chat@latest --web
 
 # Set your API key first (either Anthropic or OpenAI)
 export ANTHROPIC_API_KEY=your_api_key
@@ -42,7 +42,7 @@ export ALLOWED_FOLDERS=/path/to/folder1,/path/to/folder2
 
 ```bash
 # Install globally
-npm install -g @buger/probe-chat@latest
+npm install -g @probelabs/probe-chat@latest
 
 # Run in CLI mode
 probe-chat
@@ -55,7 +55,7 @@ probe-chat --web
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/buger/probe.git
+   git clone https://github.com/probelabs/probe.git
    cd probe/examples/chat
    ```
 

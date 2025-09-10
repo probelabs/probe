@@ -1,5 +1,5 @@
 {
-  "name": "@buger/probe",
+  "name": "@probelabs/probe",
   "version": "1.0.0",
   "description": "Node.js wrapper for the probe code search tool",
   "main": "src/index.js",
@@ -30,7 +30,7 @@
     "llm",
     "tools"
   ],
-  "author": "buger",
+  "author": "probelabs",
   "license": "ISC",
   "dependencies": {
     "axios": "^1.8.3",
@@ -53,10 +53,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/buger/probe.git"
+    "url": "git+https://github.com/probelabs/probe.git"
   },
   "bugs": {
-    "url": "https://github.com/buger/probe/issues"
+    "url": "https://github.com/probelabs/probe/issues"
   },
-  "homepage": "https://github.com/buger/probe#readme"
+  "homepage": "https://github.com/probelabs/probe#readme"
 }

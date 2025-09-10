@@ -41,8 +41,8 @@ This section provides comprehensive reference for all commands, flags, APIs, etc
 
 ### Contributing
 
-- [Contributing Guide](https://github.com/buger/probe/blob/main/CONTRIBUTING.md) - How to contribute to Probe
-- [Code of Conduct](https://github.com/buger/probe/blob/main/CODE_OF_CONDUCT.md) - Community guidelines
+- [Contributing Guide](https://github.com/probelabs/probe/blob/main/CONTRIBUTING.md) - How to contribute to Probe
+- [Code of Conduct](https://github.com/probelabs/probe/blob/main/CODE_OF_CONDUCT.md) - Community guidelines
 
 ## How to Use This Documentation
 
@@ -121,12 +121,12 @@ This is a tip that provides helpful advice or best practices.
 
 We welcome contributions to the Probe documentation. If you find errors, omissions, or have suggestions for improvements, please consider contributing:
 
-1. Fork the [Probe repository](https://github.com/buger/probe) on GitHub
+1. Fork the [Probe repository](https://github.com/probelabs/probe) on GitHub
 2. Make your changes to the documentation files in the `site` directory
 3. Submit a pull request with your changes
 
-For more information on contributing, see the [Contributing Guide](https://github.com/buger/probe/blob/main/CONTRIBUTING.md).
+For more information on contributing, see the [Contributing Guide](https://github.com/probelabs/probe/blob/main/CONTRIBUTING.md).
 
 ## Feedback
 
-If you have feedback on the documentation, please [open an issue](https://github.com/buger/probe/issues) on GitHub or reach out to the maintainers.
+If you have feedback on the documentation, please [open an issue](https://github.com/probelabs/probe/issues) on GitHub or reach out to the maintainers.

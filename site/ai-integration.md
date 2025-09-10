@@ -64,7 +64,7 @@ The AI chat functionality is available as a standalone npm package that can be r
 
 ```bash
 # Run directly with npx (no installation needed)
-npx -y @buger/probe-chat@latest
+npx -y @probelabs/probe-chat@latest
 
 # Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
@@ -74,14 +74,14 @@ export ANTHROPIC_API_KEY=your_api_key
 # export GOOGLE_API_KEY=your_api_key
 
 # Or specify a directory to search
-npx -y @buger/probe-chat@latest /path/to/your/project
+npx -y @probelabs/probe-chat@latest /path/to/your/project
 ```
 
 #### Using the npm package
 
 ```bash
 # Install globally
-npm install -g @buger/probe-chat@latest
+npm install -g @probelabs/probe-chat@latest
 
 # Start the chat interface
 probe-chat
@@ -231,7 +231,7 @@ probe-chat
 You can also use the AI Chat functionality programmatically in your Node.js applications:
 
 ```javascript
-import { ProbeChat } from '@buger/probe-chat';
+import { ProbeChat } from '@probelabs/probe-chat';
 import { StreamingTextResponse } from 'ai';
 
 // Create a chat instance
@@ -333,7 +333,7 @@ The easiest way to use Probe's MCP server is through NPX:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ]
     }
   }
@@ -351,7 +351,7 @@ If you prefer to install the MCP server manually:
 
 1. Install the NPM package globally:
    ```bash
-   npm install -g @buger/probe@latest
+   npm install -g @probelabs/probe@latest
    ```
 
 2. Configure your AI editor to use the installed package:
@@ -476,7 +476,7 @@ You can configure the MCP server to search specific directories by default:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_DEFAULT_PATHS": "/path/to/project1,/path/to/project2"
@@ -497,7 +497,7 @@ You can set default limits for search results:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_MAX_TOKENS": "20000"
@@ -518,7 +518,7 @@ If you have a custom build of the Probe binary, you can specify its path:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_PATH": "/path/to/custom/probe"
@@ -539,7 +539,7 @@ Enable debug mode for detailed logging:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "DEBUG": "1"
@@ -557,8 +557,8 @@ If you encounter issues with the MCP server:
 2. **Verify Configuration**: Double-check your MCP configuration file for errors
 3. **Check Permissions**: Make sure the AI editor has permission to execute the MCP server
 4. **Check Logs**: Look for error messages in your AI editor's logs
-5. **Update Packages**: Ensure you're using the latest version of the `@buger/probe@latest` package
-6. **Manual Binary Download**: If the automatic download failed, you can manually download the binary from [GitHub Releases](https://github.com/buger/probe/releases) and place it in the `node_modules/@buger/probe/bin` directory
+5. **Update Packages**: Ensure you're using the latest version of the `@probelabs/probe@latest` package
+6. **Manual Binary Download**: If the automatic download failed, you can manually download the binary from [GitHub Releases](https://github.com/probelabs/probe/releases) and place it in the `node_modules/@probelabs/probe/bin` directory
 
 #### Common Issues and Solutions
 
@@ -589,13 +589,13 @@ Key benefits:
 #### Local Installation
 
 ```bash
-npm install @buger/probe@latest
+npm install @probelabs/probe@latest
 ```
 
 #### Global Installation
 
 ```bash
-npm install -g @buger/probe@latest
+npm install -g @probelabs/probe@latest
 ```
 
 During installation, the package will automatically download the appropriate probe binary for your platform.
@@ -609,7 +609,7 @@ The SDK provides three main functions:
 Search for patterns in your codebase using Elasticsearch-like query syntax.
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 const searchResults = await search({
   path: '/path/to/your/project',
@@ -623,7 +623,7 @@ const searchResults = await search({
 Find specific code structures using tree-sitter patterns.
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@probelabs/probe';
 
 const queryResults = await query({
   path: '/path/to/your/project',
@@ -637,7 +637,7 @@ const queryResults = await query({
 Extract code blocks from files based on file paths and line numbers.
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 const extractResults = await extract({
   files: ['/path/to/your/project/src/main.js:42']
@@ -652,7 +652,7 @@ The SDK provides built-in tools for integrating with AI frameworks:
 
 ```javascript
 import { generateText } from 'ai';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Use the pre-built tools with Vercel AI SDK
 async function chatWithAI(userMessage) {
@@ -677,7 +677,7 @@ async function chatWithAI(userMessage) {
 
 ```javascript
 import { ChatOpenAI } from '@langchain/openai';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Create the LangChain tools
 const searchTool = tools.createSearchTool();
@@ -706,7 +706,7 @@ async function chatWithAI(userMessage) {
 The package provides a default system message that you can use with your AI assistants:
 
 ```javascript
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Use the default system message in your AI application
 const systemMessage = tools.DEFAULT_SYSTEM_MESSAGE;
@@ -729,7 +729,7 @@ const result = await generateText({
 #### Basic Search Example
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 async function basicSearchExample() {
   try {
@@ -750,7 +750,7 @@ async function basicSearchExample() {
 #### Advanced Search with Multiple Options
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 async function advancedSearchExample() {
   try {
@@ -776,7 +776,7 @@ async function advancedSearchExample() {
 #### Query for Specific Code Structures
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@probelabs/probe';
 
 async function queryExample() {
   try {
@@ -810,7 +810,7 @@ async function queryExample() {
 #### Extract Code Blocks
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 async function extractExample() {
   try {
@@ -834,7 +834,7 @@ async function extractExample() {
 #### Building a Custom AI Assistant
 
 ```javascript
-import { search, query, extract } from '@buger/probe';
+import { search, query, extract } from '@probelabs/probe';
 import { ChatOpenAI } from '@langchain/openai';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
@@ -901,7 +901,7 @@ console.log(answer);
 #### Search
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 const results = await search({
   path: '/path/to/your/project',
@@ -951,7 +951,7 @@ const results = await search({
 #### Query
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@probelabs/probe';
 
 const results = await query({
   path: '/path/to/your/project',
@@ -987,7 +987,7 @@ const results = await query({
 #### Extract
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 const results = await extract({
   files: [
@@ -1022,7 +1022,7 @@ const results = await extract({
 #### LLM Integration with Extract
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 // Extract code with engineer prompt template
 const results = await extract({
@@ -1054,7 +1054,7 @@ The `prompt` and `instructions` parameters are particularly useful for AI integr
 #### Binary Management
 
 ```javascript
-import { getBinaryPath, setBinaryPath } from '@buger/probe';
+import { getBinaryPath, setBinaryPath } from '@probelabs/probe';
 
 // Get the path to the probe binary
 const binaryPath = await getBinaryPath({
@@ -1069,7 +1069,7 @@ setBinaryPath('/path/to/probe/binary');
 #### AI Tools
 
 ```javascript
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Vercel AI SDK tools
 const { searchTool, queryTool, extractTool } = tools;

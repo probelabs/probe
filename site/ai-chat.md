@@ -6,7 +6,7 @@ Probe's AI Chat mode provides an interactive interface where you can ask questio
 
 ## Unified Interface
 
-Probe now features a unified interface that combines both CLI and web functionality in a single package. The `@buger/probe-chat` package supports both CLI mode (default) and web mode (with the `--web` flag).
+Probe now features a unified interface that combines both CLI and web functionality in a single package. The `@probelabs/probe-chat` package supports both CLI mode (default) and web mode (with the `--web` flag).
 
 For detailed information about the web interface mode, see the [Web Interface](./web-interface.md) documentation.
 
@@ -18,10 +18,10 @@ The AI chat functionality is available as a standalone npm package that can be r
 
 ```bash
 # Run directly with npx in CLI mode (no installation needed)
-npx -y @buger/probe-chat@latest
+npx -y @probelabs/probe-chat@latest
 
 # Run in web interface mode
-npx -y @buger/probe-chat@latest --web
+npx -y @probelabs/probe-chat@latest --web
 
 # Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
@@ -31,14 +31,14 @@ export ANTHROPIC_API_KEY=your_api_key
 # export GOOGLE_API_KEY=your_api_key
 
 # Or specify a directory to search
-npx -y @buger/probe-chat@latest /path/to/your/project
+npx -y @probelabs/probe-chat@latest /path/to/your/project
 ```
 
 ### Using the npm package
 
 ```bash
 # Install globally
-npm install -g @buger/probe-chat@latest
+npm install -g @probelabs/probe-chat@latest
 
 # Start the chat interface in CLI mode
 probe-chat

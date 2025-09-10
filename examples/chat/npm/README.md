@@ -1,19 +1,19 @@
-# @buger/probe-chat
+# @probelabs/probe-chat
 
-A CLI chat interface for the [probe](https://github.com/buger/probe) code search tool.
+A CLI chat interface for the [probe](https://github.com/probelabs/probe) code search tool.
 
 ## Installation
 
 ### Global Installation (Recommended)
 
 ```bash
-npm install -g @buger/probe-chat
+npm install -g @probelabs/probe-chat
 ```
 
 ### Local Installation
 
 ```bash
-npm install @buger/probe-chat
+npm install @probelabs/probe-chat
 ```
 
 ## Features
@@ -69,7 +69,7 @@ While in the chat, you can use the following commands:
 You can also use the package programmatically in your Node.js applications:
 
 ```javascript
-import { ProbeChat, tools } from '@buger/probe-chat';
+import { ProbeChat, tools } from '@probelabs/probe-chat';
 
 // Create a new chat instance
 const chat = new ProbeChat({
@@ -98,7 +98,7 @@ chat.clearHistory();
 ### ProbeChat Class
 
 ```javascript
-import { ProbeChat } from '@buger/probe-chat';
+import { ProbeChat } from '@probelabs/probe-chat';
 
 // Create a new chat instance
 const chat = new ProbeChat(options);
@@ -123,10 +123,10 @@ const chat = new ProbeChat(options);
 
 ### Tools
 
-The package also exports the tools from `@buger/probe` for convenience:
+The package also exports the tools from `@probelabs/probe` for convenience:
 
 ```javascript
-import { tools } from '@buger/probe-chat';
+import { tools } from '@probelabs/probe-chat';
 
 // Access the tools
 const { searchTool, queryTool, extractTool } = tools;
@@ -163,6 +163,6 @@ ISC
 
 ## Related Projects
 
-- [probe](https://github.com/buger/probe) - The core probe code search tool
-- [@buger/probe](https://www.npmjs.com/package/@buger/probe) - Node.js wrapper for the probe tool
+- [probe](https://github.com/probelabs/probe) - The core probe code search tool
+- [@probelabs/probe](https://www.npmjs.com/package/@probelabs/probe) - Node.js wrapper for the probe tool
 - [Vercel AI SDK](https://sdk.vercel.ai/) - The AI SDK used for model integration 

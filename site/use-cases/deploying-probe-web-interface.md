@@ -26,7 +26,7 @@ export AUTH_USERNAME=team
 export AUTH_PASSWORD=secure_password
 
 # Run the web interface
-npx -y @buger/probe-chat@latest --web
+npx -y @probelabs/probe-chat@latest --web
 ```
 
 ### Access the Web Interface
@@ -40,7 +40,7 @@ http://your-server-ip:8080
 You can customize the port using the `--port` option:
 
 ```bash
-npx -y @buger/probe-chat@latest --web --port 3000
+npx -y @probelabs/probe-chat@latest --web --port 3000
 ```
 
 ## Setting Allowed Folders (Security & Privacy)
@@ -133,19 +133,19 @@ The web interface supports the following command-line options:
 
 ```bash
 # Show help
-npx -y @buger/probe-chat@latest --help
+npx -y @probelabs/probe-chat@latest --help
 
 # Run in web mode on a specific port
-npx -y @buger/probe-chat@latest --web --port 3000
+npx -y @probelabs/probe-chat@latest --web --port 3000
 
 # Specify a model
-npx -y @buger/probe-chat@latest --web --model claude-3-7-sonnet-latest
+npx -y @probelabs/probe-chat@latest --web --model claude-3-7-sonnet-latest
 
 # Enable debug mode
-npx -y @buger/probe-chat@latest --web --debug
+npx -y @probelabs/probe-chat@latest --web --debug
 
 # Specify a directory to search
-npx -y @buger/probe-chat@latest --web /path/to/your/project
+npx -y @probelabs/probe-chat@latest --web /path/to/your/project
 ```
 
 ### Using the npm package (Alternative)
@@ -154,7 +154,7 @@ If you prefer, you can install the package globally:
 
 ```bash
 # Install globally
-npm install -g @buger/probe-chat@latest
+npm install -g @probelabs/probe-chat@latest
 
 # Start the web interface
 probe-chat --web --port 3000
@@ -227,7 +227,7 @@ For production deployments, use a process manager like PM2:
 npm install -g pm2
 
 # Start the web interface with PM2
-pm2 start "npx -y @buger/probe-chat@latest --web" --name "probe-web" --env "ANTHROPIC_API_KEY=your_key" "ALLOWED_FOLDERS=/path/to/repos"
+pm2 start "npx -y @probelabs/probe-chat@latest --web" --name "probe-web" --env "ANTHROPIC_API_KEY=your_key" "ALLOWED_FOLDERS=/path/to/repos"
 
 # Ensure it starts on system boot
 pm2 startup
@@ -244,7 +244,7 @@ pm2 save
 
 ### Regular Updates
 
-1. **Update Package**: Regularly update to the latest version with `npm update -g @buger/probe-chat`
+1. **Update Package**: Regularly update to the latest version with `npm update -g @probelabs/probe-chat`
 2. **Update Node.js**: Keep Node.js updated to the latest LTS version
 3. **Rotate Credentials**: Change API keys and passwords periodically
 

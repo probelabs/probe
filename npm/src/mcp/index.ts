@@ -84,10 +84,10 @@ for (const packageJsonPath of possiblePaths) {
 if (packageVersion === '0.0.0') {
   try {
     // Try to get version from the package name itself
-    const result = await execAsync('npm list -g @buger/probe --json');
+    const result = await execAsync('npm list -g @probelabs/probe --json');
     const npmList = JSON.parse(result.stdout);
-    if (npmList.dependencies && npmList.dependencies['@buger/probe']) {
-      packageVersion = npmList.dependencies['@buger/probe'].version;
+    if (npmList.dependencies && npmList.dependencies['@probelabs/probe']) {
+      packageVersion = npmList.dependencies['@probelabs/probe'].version;
       console.log(`Using version from npm list: ${packageVersion}`);
     }
   } catch (error) {
@@ -101,7 +101,7 @@ import { existsSync } from 'fs';
 const binDir = path.resolve(__dirname, '..', 'bin');
 console.log(`Bin directory: ${binDir}`);
 
-// The @buger/probe package now handles binary path management internally
+// The @probelabs/probe package now handles binary path management internally
 // We don't need to manage the binary path in the MCP server anymore
 
 interface SearchCodeArgs {
@@ -149,7 +149,7 @@ class ProbeServer {
     this.defaultTimeout = timeout;
     this.server = new Server(
       {
-        name: '@buger/probe',
+        name: '@probelabs/probe',
         version: packageVersion,
       },
       {
@@ -579,7 +579,7 @@ class ProbeServer {
   }
 
   async run() {
-    // The @buger/probe package now handles binary path management internally
+    // The @probelabs/probe package now handles binary path management internally
     // We don't need to verify or download the binary in the MCP server anymore
     
     // Just connect the server to the transport

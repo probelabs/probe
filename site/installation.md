@@ -31,7 +31,7 @@ docker pull buger/probe-chat:latest
 ### Using npm (Recommended for Node.js users)
 
 ```bash
-npm install -g @buger/probe@latest
+npm install -g @probelabs/probe@latest
 ```
 
 ### Using curl (For macOS and Linux)
@@ -93,7 +93,7 @@ iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -
 
 If you prefer to install manually or the quick installation script doesn't work for your system:
 
-1. Download the appropriate binary for your platform from the [GitHub Releases](https://github.com/buger/probe/releases) page:
+1. Download the appropriate binary for your platform from the [GitHub Releases](https://github.com/probelabs/probe/releases) page:
    - `probe-x86_64-linux.tar.gz` for Linux (x86_64)
    - `probe-x86_64-darwin.tar.gz` for macOS (Intel)
    - `probe-aarch64-darwin.tar.gz` for macOS (Apple Silicon)
@@ -147,7 +147,7 @@ For developers who want to build Probe from source:
 
 2. Clone the repository:
    ```bash
-   git clone https://github.com/buger/probe.git
+   git clone https://github.com/probelabs/probe.git
    cd probe
    ```
 
@@ -200,7 +200,7 @@ If you get a "command not found" error on Windows, make sure the installation di
   - For Windows: Restart your terminal after adding the installation directory to PATH
   - For macOS/Linux: Verify that `/usr/local/bin` is in your PATH
 - **Manual Install**: If the quick install script fails, try the manual installation method
-- **GitHub Issues**: Report issues on the [GitHub repository](https://github.com/buger/probe/issues)
+- **GitHub Issues**: Report issues on the [GitHub repository](https://github.com/probelabs/probe/issues)
 
 ## Uninstalling
 
@@ -208,7 +208,7 @@ To uninstall Probe:
 
 ```bash
 # If installed via npm
-npm uninstall -g @buger/probe@latest
+npm uninstall -g @probelabs/probe@latest
 
 # If installed via curl script or manually on macOS/Linux
 sudo rm /usr/local/bin/probe

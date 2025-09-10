@@ -5,7 +5,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText } from 'ai';
 import { randomUUID } from 'crypto';
 import { get_encoding } from 'tiktoken';
-import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE, listFilesByLevel } from '@buger/probe';
+import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE, listFilesByLevel } from '@probelabs/probe';
 import config from './config.js';
 
 // Initialize tokenizer
@@ -407,7 +407,7 @@ Examples:
 				// Use the extract tool from the probe package with the input-file option
 				try {
 					// Use the extract function from the probe package
-					const { extract } = await import('@buger/probe');
+					const { extract } = await import('@probelabs/probe');
 
 					// Call the extract function with the input file
 					extractedCode = await extract({

@@ -1,5 +1,5 @@
-// Import tool generators from @buger/probe package
-import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE, listFilesByLevel } from '@buger/probe';
+// Import tool generators from @probelabs/probe package
+import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE, listFilesByLevel } from '@probelabs/probe';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';

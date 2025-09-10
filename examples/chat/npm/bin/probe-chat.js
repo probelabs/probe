@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * @buger/probe-chat CLI
+ * @probelabs/probe-chat CLI
  * Command-line interface for Probe code search chat
  */
 

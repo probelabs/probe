@@ -6,16 +6,16 @@ This guide explains how to use Probe's Node.js SDK to build custom AI-powered co
 
 Probe's Node.js SDK provides programmatic access to its powerful code search capabilities, allowing you to build custom tools, integrate with AI frameworks, and create specialized workflows for your development team.
 
-## Installing @buger/probe as a Dependency
+## Installing @probelabs/probe as a Dependency
 
 Start by adding Probe to your Node.js project:
 
 ```bash
 # Add to your project
-npm install @buger/probe@latest
+npm install @probelabs/probe@latest
 
 # Or install globally
-npm install -g @buger/probe@latest
+npm install -g @probelabs/probe@latest
 ```
 
 During installation, the package will automatically download the appropriate Probe binary for your platform (Windows, macOS, or Linux).
@@ -27,7 +27,7 @@ The SDK provides three main functions:
 ### Search: Find Code Patterns
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 // Search for code patterns
 const results = await search({
@@ -42,7 +42,7 @@ console.log(results);
 ### Query: Find Specific Code Structures
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@probelabs/probe';
 
 // Find JavaScript functions
 const functions = await query({
@@ -57,7 +57,7 @@ console.log(functions);
 ### Extract: Get Code from Specific Files
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 // Extract code from specific files
 const code = await extract({
@@ -92,7 +92,7 @@ LangChain is a popular framework for building AI applications. Here's how to int
 
 ```javascript
 import { ChatOpenAI } from '@langchain/openai';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Create LangChain tools from Probe
 const searchTool = tools.createSearchTool();
@@ -129,7 +129,7 @@ console.log(response);
 ### Building a Code Explanation Chain
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 import { ChatOpenAI } from '@langchain/openai';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
@@ -197,7 +197,7 @@ The Vercel AI SDK is another popular framework for building AI applications. The
 
 ```javascript
 import { generateText } from 'ai';
-import { searchTool, queryTool, extractTool } from '@buger/probe';
+import { searchTool, queryTool, extractTool } from '@probelabs/probe';
 import { randomUUID } from 'crypto';
 
 // Generate a session ID for tool isolation
@@ -251,7 +251,7 @@ The new tool generator approach provides several advantages:
 If you prefer the previous approach, you can still use the pre-configured tools:
 
 ```javascript
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Use the pre-configured tools
 const result = await generateText({
@@ -272,7 +272,7 @@ Create a REST API for code search:
 
 ```javascript
 import express from 'express';
-import { search, query, extract } from '@buger/probe';
+import { search, query, extract } from '@probelabs/probe';
 
 const app = express();
 app.use(express.json());
@@ -336,7 +336,7 @@ For production applications, you'll want to handle concurrency and implement cac
 ### Implementing a Cache Layer
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 import NodeCache from 'node-cache';
 
 // Create a cache with 1 hour TTL
@@ -375,7 +375,7 @@ const results = await cachedSearch({
 ### Managing Concurrency
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 import pLimit from 'p-limit';
 
 // Limit concurrency to 5 simultaneous searches
@@ -420,7 +420,7 @@ const results = await searchMultipleRepos(
 ### Error Handling
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 async function robustSearch(params) {
   try {
@@ -450,7 +450,7 @@ async function robustSearch(params) {
 ### Performance Optimization
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 // Optimize search for performance
 async function optimizedSearch(query, path) {
@@ -485,7 +485,7 @@ async function optimizedSearch(query, path) {
 ### Memory Management
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 // Search with memory constraints
 async function memoryEfficientSearch(query, path) {

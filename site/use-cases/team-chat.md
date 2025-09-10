@@ -64,7 +64,7 @@ export AUTH_ENABLED=true
 export AUTH_USERNAME=team
 export AUTH_PASSWORD=secure_password
 
-npx -y @buger/probe-chat@latest --web
+npx -y @probelabs/probe-chat@latest --web
 ```
 
 Then share the local IP address with your team (e.g., `http://192.168.1.100:8080`).
@@ -101,7 +101,7 @@ Example using a cloud VM:
 
 ```bash
 # On your cloud server
-git clone https://github.com/buger/probe.git
+git clone https://github.com/probelabs/probe.git
 cd probe/examples/web
 npm install
 
@@ -340,7 +340,7 @@ If you encounter issues with your team deployment:
 
 1. Check the [Web Interface Reference](/web-interface) for detailed configuration options
 2. Review the [AI Integration Reference](/ai-integration) for model-specific information
-3. Visit the [Probe GitHub repository](https://github.com/buger/probe) for the latest updates
+3. Visit the [Probe GitHub repository](https://github.com/probelabs/probe) for the latest updates
 4. Open an issue if you encounter a bug or have a feature request
 
 ## Next Steps

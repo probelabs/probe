@@ -42,7 +42,7 @@ Binary name should be:
 - \`probe\` (on Linux/macOS)
 - \`probe.exe\` (on Windows)
 
-You can download the binary from: https://github.com/buger/probe/releases
+You can download the binary from: https://github.com/probelabs/probe/releases
 `;
 
 		await fs.writeFile(readmePath, readmeContent);
@@ -110,7 +110,7 @@ You can download the binary from: https://github.com/buger/probe/releases
 			console.error('Error downloading probe binary:', error);
 			console.error('\nNote: The probe binary will need to be downloaded when you first use the package.');
 			console.error('If you encounter any issues, you can manually place the binary in the bin directory.');
-			console.error('You can download it from: https://github.com/buger/probe/releases');
+			console.error('You can download it from: https://github.com/probelabs/probe/releases');
 
 			// Don't fail the installation, just warn the user
 			return;
