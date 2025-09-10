@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { ProbeChat } from './probeChat.js';
+import { ChatSessionManager } from './ChatSessionManager.js';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
 import { authMiddleware, withAuth } from './auth.js';
 import {
@@ -32,7 +32,7 @@ let globalStorage = null;
 const chatSessions = new Map();
 
 /**
- * Retrieve or create a ProbeChat instance keyed by sessionId.
+ * Retrieve or create a ChatSessionManager instance keyed by sessionId.
  */
 function getOrCreateChat(sessionId, apiCredentials = null) {
 	if (!sessionId) {
@@ -54,24 +54,19 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
 	}
 
 	// Create options object with sessionId and API credentials if provided
-	const options = { sessionId };
+	const options = { 
+		sessionId,
+		storage: globalStorage,
+		debug: process.env.DEBUG_CHAT === '1'
+	};
+	
 	if (apiCredentials) {
 		options.apiProvider = apiCredentials.apiProvider;
 		options.apiKey = apiCredentials.apiKey;
 		options.apiUrl = apiCredentials.apiUrl;
 	}
-	
-	// Pass storage instance for persistent storage
-	if (globalStorage) {
-		options.storage = globalStorage;
-	}
 
-	const newChat = new ProbeChat(options);
-	
-	// Add timestamps for session tracking
-	const now = Date.now();
-	newChat.createdAt = now;
-	newChat.lastActivity = now;
+	const newChat = new ChatSessionManager(options);
 	
 	// Store in memory cache
 	chatSessions.set(sessionId, newChat);
@@ -80,8 +75,8 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
 	if (globalStorage) {
 		globalStorage.saveSession({
 			id: sessionId,
-			createdAt: now,
-			lastActivity: now,
+			createdAt: newChat.createdAt,
+			lastActivity: newChat.lastActivity,
 			firstMessagePreview: null, // Will be updated when first message is sent
 			metadata: {
 				apiProvider: apiCredentials?.apiProvider || null
@@ -92,7 +87,7 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
 	}
 	
 	if (process.env.DEBUG_CHAT === '1') {
-		console.log(`[DEBUG] Created and stored new chat instance for session: ${sessionId}. Total sessions: ${chatSessions.size}`);
+		console.log(`[DEBUG] Created and stored new ChatSessionManager instance for session: ${sessionId}. Total sessions: ${chatSessions.size}`);
 		if (apiCredentials && apiCredentials.apiKey) {
 			console.log(`[DEBUG] Chat instance created with client-provided API credentials (provider: ${apiCredentials.apiProvider})`);
 		}
@@ -107,7 +102,7 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
  * @param {Object} options - Additional options
  * @param {boolean} options.allowEdit - Whether to allow editing files via the implement tool
  */
-export function startWebServer(version, hasApiKeys = true, options = {}) {
+export async function startWebServer(version, hasApiKeys = true, options = {}) {
 	const allowEdit = options?.allowEdit || false;
 	
 	if (allowEdit) {
@@ -130,16 +125,14 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 		verbose: process.env.DEBUG_CHAT === '1' 
 	});
 	
-	// Initialize storage asynchronously
-	(async () => {
-		try {
-			await globalStorage.initialize();
-			const stats = await globalStorage.getStats();
-			console.log(`Chat history storage: ${stats.storage_type} (${stats.session_count} sessions, ${stats.visible_message_count} messages)`);
-		} catch (error) {
-			console.warn('Failed to initialize chat history storage:', error.message);
-		}
-	})();
+	// Initialize storage synchronously before server starts
+	try {
+		await globalStorage.initialize();
+		const stats = await globalStorage.getStats();
+		console.log(`Chat history storage: ${stats.storage_type} (${stats.session_count} sessions, ${stats.visible_message_count} messages)`);
+	} catch (error) {
+		console.warn('Failed to initialize chat history storage:', error.message);
+	}
 
 	// Map to store SSE clients by session ID
 	const sseClients = new Map();
@@ -763,9 +756,9 @@ export function startWebServer(version, hasApiKeys = true, options = {}) {
 					// The loop is inside chatInstance.chat now.
 					// We expect the *final* result string back.
 					try {
-						// Pass API credentials to the chat method if provided
-						const apiCredentials = apiKey ? { apiProvider, apiKey, apiUrl } : null;
-						const result = await chatInstance.chat(message, chatSessionId, apiCredentials, images); // Pass session ID, API credentials, and images
+						// ChatSessionManager handles session ID and API credentials internally
+						// Only pass the message and images
+						const result = await chatInstance.chat(message, images);
 
 						// Check if cancelled *during* the chat call (ProbeChat throws error)
 						// Error handled in catch block

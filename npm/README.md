@@ -77,6 +77,61 @@ probe mcp
 
 The package installs the actual probe binary, not a JavaScript wrapper, so you get the full native performance and all features of the original probe CLI.
 
+### Using ProbeAgent (AI-Powered Code Assistant)
+
+ProbeAgent provides a high-level AI-powered interface for interacting with your codebase:
+
+```javascript
+import { ProbeAgent } from '@buger/probe';
+
+// Create an AI agent for your project
+const agent = new ProbeAgent({
+  sessionId: 'my-session',  // Optional: for conversation continuity  
+  path: '/path/to/your/project',
+  provider: 'anthropic',   // or 'openai', 'google'
+  model: 'claude-3-5-sonnet-20241022',  // Optional: override model
+  allowEdit: false,        // Optional: enable code modification
+  debug: true             // Optional: enable debug logging
+});
+
+// Ask questions about your codebase
+const answer = await agent.answer("How does authentication work in this codebase?");
+console.log(answer);
+
+// The agent maintains conversation history automatically
+const followUp = await agent.answer("Can you show me the login implementation?");
+console.log(followUp);
+
+// Get token usage statistics
+const usage = agent.getTokenUsage();
+console.log(`Used ${usage.total} tokens total`);
+
+// Clear conversation history if needed
+agent.history = [];
+```
+
+**Environment Variables:**
+```bash
+# Set your API key for the chosen provider
+export ANTHROPIC_API_KEY=your_anthropic_key
+export OPENAI_API_KEY=your_openai_key  
+export GOOGLE_API_KEY=your_google_key
+
+# Optional: Force a specific provider
+export FORCE_PROVIDER=anthropic
+
+# Optional: Override model name
+export MODEL_NAME=claude-3-5-sonnet-20241022
+```
+
+**ProbeAgent Features:**
+- **Multi-turn conversations** with automatic history management
+- **Code search integration** - Uses probe's search capabilities transparently
+- **Multiple AI providers** - Supports Anthropic Claude, OpenAI GPT, Google Gemini
+- **Session management** - Maintain conversation context across calls
+- **Token tracking** - Monitor usage and costs
+- **Configurable personas** - Engineer, architect, code-review, and more
+
 ### Using as an MCP Server
 
 Probe includes a built-in MCP (Model Context Protocol) server for integration with AI assistants:

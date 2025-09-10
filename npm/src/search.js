@@ -115,16 +115,18 @@ export async function search(options) {
 	// Add query and path as positional arguments
 	const queries = Array.isArray(options.query) ? options.query : [options.query];
 
-	// Create a single log record with all search parameters (commented out for less verbose output)
-	let logMessage = `\nSearch: query="${queries[0]}" path="${options.path}"`;
-	if (options.maxResults) logMessage += ` maxResults=${options.maxResults}`;
-	logMessage += ` maxTokens=${options.maxTokens}`;
-	logMessage += ` timeout=${options.timeout}`;
-	if (options.allowTests) logMessage += " allowTests=true";
-	if (options.language) logMessage += ` language=${options.language}`;
-	if (options.exact) logMessage += " exact=true";
-	if (options.session) logMessage += ` session=${options.session}`;
-	console.error(logMessage);
+	// Create a single log record with all search parameters (only in debug mode)
+	if (process.env.DEBUG === '1') {
+		let logMessage = `\nSearch: query="${queries[0]}" path="${options.path}"`;
+		if (options.maxResults) logMessage += ` maxResults=${options.maxResults}`;
+		logMessage += ` maxTokens=${options.maxTokens}`;
+		logMessage += ` timeout=${options.timeout}`;
+		if (options.allowTests) logMessage += " allowTests=true";
+		if (options.language) logMessage += ` language=${options.language}`;
+		if (options.exact) logMessage += " exact=true";
+		if (options.session) logMessage += ` session=${options.session}`;
+		console.error(logMessage);
+	}
 	// Create positional arguments array separate from flags
 	const positionalArgs = [];
 
@@ -202,12 +204,14 @@ export async function search(options) {
 			}
 		}
 
-		// Log the results count, token count, and bytes count (commented out for less verbose output)
-		let resultsMessage = `\nSearch results: ${resultCount} matches, ${tokenCount} tokens`;
-		if (bytesCount > 0) {
-			resultsMessage += `, ${bytesCount} bytes`;
+		// Log the results count, token count, and bytes count (only in debug mode)
+		if (process.env.DEBUG === '1') {
+			let resultsMessage = `\nSearch results: ${resultCount} matches, ${tokenCount} tokens`;
+			if (bytesCount > 0) {
+				resultsMessage += `, ${bytesCount} bytes`;
+			}
+			console.error(resultsMessage);
 		}
-		console.error(resultsMessage);
 
 		// Parse JSON if requested
 		if (options.json) {
