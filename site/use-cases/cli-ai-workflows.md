@@ -27,10 +27,10 @@ export ANTHROPIC_API_KEY=your_api_key
 # export OPENAI_API_KEY=your_api_key
 
 # Run directly with npx (no installation needed)
-npx -y @buger/probe-chat@latest
+npx -y @probelabs/probe-chat@latest
 
 # Or specify a directory to search
-npx -y @buger/probe-chat@latest /path/to/your/project
+npx -y @probelabs/probe-chat@latest /path/to/your/project
 ```
 
 ### Global Installation
@@ -39,7 +39,7 @@ For regular use, you might prefer a global installation:
 
 ```bash
 # Install globally
-npm install -g @buger/probe-chat@latest
+npm install -g @probelabs/probe-chat@latest
 
 # Start the chat interface
 probe-chat

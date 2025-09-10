@@ -13,18 +13,18 @@ By integrating Probe with your AI code editor, you enable your AI assistant to:
 - Extract complete code blocks with proper context
 - Understand the relationships between different parts of your code
 
-## Migrating from @buger/probe-mcp
+## Migrating from @probelabs/probe-mcp
 
-If you're currently using the standalone `@buger/probe-mcp` package, `probe mcp` is a **drop-in replacement**. Simply change your MCP configuration from:
+If you're currently using the standalone `@probelabs/probe-mcp` package, `probe mcp` is a **drop-in replacement**. Simply change your MCP configuration from:
 
 ```json
-"args": ["-y", "@buger/probe-mcp"]
+"args": ["-y", "@probelabs/probe-mcp"]
 ```
 
 to:
 
 ```json
-"args": ["-y", "@buger/probe", "mcp"]
+"args": ["-y", "@probelabs/probe", "mcp"]
 ```
 
 All the same tools, parameters, and functionality - just with the integrated command!
@@ -48,7 +48,7 @@ The Model Context Protocol (MCP) server integration is the most powerful way to 
          "command": "npx",
          "args": [
            "-y",
-           "@buger/probe",
+           "@probelabs/probe",
            "mcp"
          ]
        }
@@ -137,7 +137,7 @@ You can configure the MCP server to search specific directories by default:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe",
+        "@probelabs/probe",
         "mcp"
       ],
       "env": {
@@ -159,7 +159,7 @@ For large codebases, you can limit the amount of code returned:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe",
+        "@probelabs/probe",
         "mcp"
       ],
       "env": {
@@ -229,7 +229,7 @@ This configuration instructs the AI to:
 If you encounter issues with the MCP integration:
 
 1. Check the [MCP Server Reference](/mcp-server) for detailed information
-2. Visit the [Probe GitHub repository](https://github.com/buger/probe) for the latest updates
+2. Visit the [Probe GitHub repository](https://github.com/probelabs/probe) for the latest updates
 3. Open an issue if you encounter a bug or have a feature request
 
 ## Next Steps

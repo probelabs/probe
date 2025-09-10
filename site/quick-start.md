@@ -7,7 +7,7 @@ This guide will help you get up and running with Probe quickly. For more detaile
 The easiest way to install Probe is via npm:
 
 ```bash
-npm install -g @buger/probe@latest
+npm install -g @probelabs/probe@latest
 ```
 
 Or using curl (for macOS and Linux):
@@ -63,7 +63,7 @@ probe search "login" --session "a1b2"
 In Node.js applications:
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 // First search with empty session string (generates a session ID)
 const results1 = await search({
@@ -160,8 +160,8 @@ Use the built-in AI assistant with web interface for the best code search experi
 
 ```bash
 # Run directly with npx (no installation needed)
-npx -y @buger/probe-chat@latest --web
-npx -y @buger/probe-chat@latest
+npx -y @probelabs/probe-chat@latest --web
+npx -y @probelabs/probe-chat@latest
 
 # Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
@@ -169,7 +169,7 @@ export ANTHROPIC_API_KEY=your_api_key
 # export OPENAI_API_KEY=your_api_key
 
 # Specify a directory to search (optional)
-npx -y @buger/probe-chat@latest /path/to/your/project
+npx -y @probelabs/probe-chat@latest /path/to/your/project
 ```
 
 Example questions you might ask:
@@ -190,7 +190,7 @@ Integrate with any AI editor by adding this to your MCP configuration:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe",
+        "@probelabs/probe",
         "mcp"
       ]
     }
@@ -209,7 +209,7 @@ For more information on MCP integration, see the [MCP Integration](/mcp-integrat
 Use Probe programmatically in your Node.js applications:
 
 ```javascript
-import { search, query, extract } from '@buger/probe';
+import { search, query, extract } from '@probelabs/probe';
 
 // Search for code
 const searchResults = await search({

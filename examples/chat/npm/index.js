@@ -1,5 +1,5 @@
 /**
- * @buger/probe-chat
+ * @probelabs/probe-chat
  * CLI chat interface for Probe code search
  */
 
@@ -8,7 +8,7 @@ import { generateText } from 'ai';
 import { anthropic } from '@ai-sdk/anthropic';
 import { openai } from '@ai-sdk/openai';
 import { existsSync } from 'fs';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 /**
  * ProbeChat class to handle chat interactions with AI models
@@ -255,5 +255,5 @@ export class ProbeChat {
 // Export the ProbeChat class
 export default ProbeChat;
 
-// Export the tools from @buger/probe for convenience
+// Export the tools from @probelabs/probe for convenience
 export { tools }; 

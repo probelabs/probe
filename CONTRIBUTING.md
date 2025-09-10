@@ -39,7 +39,7 @@ By participating in this project, you are expected to uphold our Code of Conduct
    ```
 4. Add the original repository as a remote to keep your fork updated:
    ```bash
-   git remote add upstream https://github.com/buger/probe.git
+   git remote add upstream https://github.com/probelabs/probe.git
    ```
 
 ### Building the Project

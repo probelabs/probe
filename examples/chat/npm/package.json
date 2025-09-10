@@ -1,5 +1,5 @@
 {
-  "name": "@buger/probe-chat",
+  "name": "@probelabs/probe-chat",
   "version": "1.0.0",
   "description": "CLI chat interface for Probe code search",
   "main": "index.js",
@@ -23,7 +23,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^0.0.9",
     "@ai-sdk/openai": "^0.0.9",
-    "@buger/probe": "*",
+    "@probelabs/probe": "*",
     "ai": "^4.1.41",
     "chalk": "^5.3.0",
     "commander": "^11.1.0",
@@ -36,12 +36,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/buger/probe.git"
+    "url": "git+https://github.com/probelabs/probe.git"
   },
   "bugs": {
-    "url": "https://github.com/buger/probe/issues"
+    "url": "https://github.com/probelabs/probe/issues"
   },
-  "homepage": "https://github.com/buger/probe#readme",
+  "homepage": "https://github.com/probelabs/probe#readme",
   "publishConfig": {
     "access": "public"
   },

@@ -1,5 +1,5 @@
 {
-  "name": "@buger/probe-mcp-agent",
+  "name": "@probelabs/probe-mcp-agent",
   "version": "1.0.0",
   "description": "MCP server for Probe with agentic capabilities",
   "main": "build/index.js",
@@ -21,7 +21,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/buger/probe.git"
+    "url": "git+https://github.com/probelabs/probe.git"
   },
   "keywords": [
     "mcp",
@@ -29,13 +29,13 @@
     "code-search",
     "ai"
   ],
-  "author": "buger",
+  "author": "probelabs",
   "license": "ISC",
   "dependencies": {
     "@ai-sdk/anthropic": "^1.1.15",
     "@ai-sdk/google": "^1.2.0",
     "@ai-sdk/openai": "^1.1.15",
-    "@buger/probe": "*",
+    "@probelabs/probe": "*",
     "@modelcontextprotocol/sdk": "^1.6.0",
     "ai": "^4.1.54",
     "axios": "^1.6.0",

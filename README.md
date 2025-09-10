@@ -38,7 +38,7 @@ Probe is an **AI-friendly, fully local, semantic code search** tool designed to 
 The easiest way to install Probe is via npm, which also installs the binary:
 
 ~~~bash
-npm install -g @buger/probe
+npm install -g @probelabs/probe
 ~~~
 
 **Basic Search Example**
@@ -93,7 +93,7 @@ Use the AI assistant to ask questions about your codebase:
 
 ~~~bash
 # Run directly with npx (no installation needed)
-npx -y @buger/probe-chat
+npx -y @probelabs/probe-chat
 
 # Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
@@ -101,14 +101,14 @@ export ANTHROPIC_API_KEY=your_api_key
 # export OPENAI_API_KEY=your_api_key
 
 # Specify a directory to search (optional)
-npx -y @buger/probe-chat /path/to/your/project
+npx -y @probelabs/probe-chat /path/to/your/project
 ~~~
 
 **Node.js SDK Usage**
 Use Probe programmatically in your Node.js applications with the Vercel AI SDK:
 
 ~~~javascript
-import { ProbeChat } from '@buger/probe-chat';
+import { ProbeChat } from '@probelabs/probe-chat';
 import { StreamingTextResponse } from 'ai';
 
 // Create a chat instance
@@ -146,7 +146,7 @@ Integrate with any AI editor:
         "command": "npx",
         "args": [
           "-y",
-          "@buger/probe",
+          "@probelabs/probe",
           "mcp"
         ]
       }
@@ -183,7 +183,7 @@ You can install Probe with a single command using npm, curl, or PowerShell:
 
 **Using npm (Recommended for Node.js users)**
 ~~~bash
-npm install -g @buger/probe
+npm install -g @probelabs/probe
 ~~~
 
 **Using curl (For macOS and Linux)**
@@ -241,7 +241,7 @@ iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -
 
 ### Manual Installation
 
-1. Download the appropriate binary for your platform from the [GitHub Releases](https://github.com/buger/probe/releases) page:
+1. Download the appropriate binary for your platform from the [GitHub Releases](https://github.com/probelabs/probe/releases) page:
    - `probe-x86_64-linux.tar.gz` for Linux (x86_64)
    - `probe-x86_64-darwin.tar.gz` for macOS (Intel)
    - `probe-aarch64-darwin.tar.gz` for macOS (Apple Silicon)
@@ -291,7 +291,7 @@ iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -
 
 2. Clone this repository:
    ~~~bash
-   git clone https://github.com/buger/probe.git
+   git clone https://github.com/probelabs/probe.git
    cd code-search
    ~~~
 3. Build the project:
@@ -338,14 +338,14 @@ If you get a "command not found" error on Windows, make sure the installation di
   - For Windows: Restart your terminal after adding the installation directory to PATH
   - For macOS/Linux: Verify that `/usr/local/bin` is in your PATH
 - **Manual Install**: If the quick install script fails, try [Manual Installation](#manual-installation)
-- **GitHub Issues**: Report issues on the [GitHub repository](https://github.com/buger/probe/issues)
+- **GitHub Issues**: Report issues on the [GitHub repository](https://github.com/probelabs/probe/issues)
 
 ### Uninstalling
 
 For macOS/Linux:
 ~~~bash
 # If installed via npm
-npm uninstall -g @buger/probe
+npm uninstall -g @probelabs/probe
 
 # If installed via curl script or manually
 sudo rm /usr/local/bin/probe
@@ -485,7 +485,7 @@ Add the following to your AI editor's MCP configuration file:
         "command": "npx",
         "args": [
           "-y",
-          "@buger/probe",
+          "@probelabs/probe",
           "mcp"
         ]
       }
@@ -502,7 +502,7 @@ To use a custom timeout (e.g., 60 seconds):
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe",
+        "@probelabs/probe",
         "mcp",
         "--timeout",
         "60"
@@ -528,7 +528,7 @@ The AI chat functionality is available as a standalone npm package that can be r
 
 ~~~bash
 # Run directly with npx (no installation needed)
-npx -y @buger/probe-chat
+npx -y @probelabs/probe-chat
 
 # Set your API key
 export ANTHROPIC_API_KEY=your_api_key
@@ -536,14 +536,14 @@ export ANTHROPIC_API_KEY=your_api_key
 # export OPENAI_API_KEY=your_api_key
 
 # Or specify a directory to search
-npx -y @buger/probe-chat /path/to/your/project
+npx -y @probelabs/probe-chat /path/to/your/project
 ~~~
 
 #### Using the npm package
 
 ~~~bash
 # Install globally
-npm install -g @buger/probe-chat
+npm install -g @probelabs/probe-chat
 
 # Start the chat interface
 probe-chat
@@ -658,7 +658,7 @@ Probe includes a web-based chat interface that provides a user-friendly way to i
 
 ~~~bash
 # Run directly with npx (no installation needed)
-npx -y @buger/probe-web
+npx -y @probelabs/probe-web
 
 # Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
@@ -776,4 +776,4 @@ Each release includes:
 
 We believe that **local, privacy-focused, semantic code search** is essential for the future of AI-assisted development. Probe is built to empower developers and AI alike to navigate and comprehend large codebases more effectively.
 
-For questions or contributions, please open an issue on [GitHub](https://github.com/buger/probe/issues) or join our [Discord community](https://discord.gg/hBN4UsTZ) for discussions and support. Happy coding—and searching!
+For questions or contributions, please open an issue on [GitHub](https://github.com/probelabs/probe/issues) or join our [Discord community](https://discord.gg/hBN4UsTZ) for discussions and support. Happy coding—and searching!
