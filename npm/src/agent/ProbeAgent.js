@@ -203,7 +203,7 @@ export class ProbeAgent {
       apiKey: apiKey,
       ...(apiUrl && { baseURL: apiUrl }),
     });
-    this.model = modelName || 'gemini-2.0-flash';
+    this.model = modelName || 'gemini-2.5-pro';
     this.apiType = 'google';
     
     if (this.debug) {
