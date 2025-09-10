@@ -11,6 +11,7 @@
     "src/**/*",
     "bin/probe",
     "bin/probe-binary",
+    "bin/probe.exe",
     "bin/.gitkeep",
     "scripts/postinstall.js",
     "build/mcp/**/*"

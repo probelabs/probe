@@ -70,12 +70,12 @@ jobs:
         # Create bin directory in npm package
         mkdir -p npm/bin
         
-        # Copy the built binary to npm package bin directory
+        # Copy the built binary to npm package bin directory with correct naming
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           cp target/release/probe.exe npm/bin/probe.exe
         else
-          cp target/release/probe npm/bin/probe
-          chmod +x npm/bin/probe
+          cp target/release/probe npm/bin/probe-binary
+          chmod +x npm/bin/probe-binary
         fi
         
         # Install npm package dependencies and build MCP TypeScript code
@@ -95,10 +95,10 @@ jobs:
         echo "Probe version:"
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           echo "Checking npm global installation:"
-          npm list -g @buger/probe
+          npm list -g @probelabs/probe
           echo "Checking probe binary permissions:"
           ls -la "$(which probe)" || echo "probe command not found in PATH"
-          ls -la "$(npm root -g)/@buger/probe/bin/" || echo "npm package bin directory not found"
+          ls -la "$(npm root -g)/@probelabs/probe/bin/" || echo "npm package bin directory not found"
           probe --version
         else
           npm --version
@@ -107,7 +107,7 @@ jobs:
         echo "Running search command..."
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           # Try direct binary execution if npm wrapper fails
-          "$(npm root -g)/@buger/probe/bin/probe.exe" search "semantic code search" README.md --format json > search_results.json || \
+          "$(npm root -g)/@probelabs/probe/bin/probe.exe" search "semantic code search" README.md --format json > search_results.json || \
           probe search "semantic code search" README.md --format json > search_results.json
         else
           probe search "semantic code search" README.md --format json > search_results.json
@@ -211,7 +211,7 @@ jobs:
         echo "Running extract command..."
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           # Try direct binary execution if npm wrapper fails
-          "$(npm root -g)/@buger/probe/bin/probe.exe" extract README.md:1 --format json > extract_results.json || \
+          "$(npm root -g)/@probelabs/probe/bin/probe.exe" extract README.md:1 --format json > extract_results.json || \
           probe extract README.md:1 --format json > extract_results.json
         else
           probe extract README.md:1 --format json > extract_results.json
