@@ -1,5 +1,5 @@
 // ChatSessionManager - Bridge between web server and ProbeAgent
-import { ProbeAgent } from '../../npm/src/agent/ProbeAgent.js';
+import { ProbeAgent } from '@probelabs/probe';
 import { toolCallEmitter } from './probeTool.js';
 import { randomUUID } from 'crypto';
 

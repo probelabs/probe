@@ -326,7 +326,7 @@ jobs:
 
   publish-docker-images:
     name: Publish Docker Images
-    needs: build-and-release
+    needs: [build-and-release, publish-npm-package]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
