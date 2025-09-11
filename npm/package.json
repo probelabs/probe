@@ -14,8 +14,7 @@
     "bin/probe.exe",
     "bin/.gitkeep",
     "scripts/postinstall.js",
-    "build/mcp/**/*",
-    "build/agent/**/*"
+    "build/**/*"
   ],
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
