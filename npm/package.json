@@ -22,10 +22,10 @@
     "build:agent": "node scripts/build-agent.cjs",
     "build": "npm run build:mcp && npm run build:agent",
     "prepack": "npm run build",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
-    "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
-    "test:coverage": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
-    "test:verbose": "NODE_OPTIONS=--experimental-vm-modules jest --verbose"
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch",
+    "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage",
+    "test:verbose": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --verbose"
   },
   "keywords": [
     "probe",
@@ -60,13 +60,13 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@jest/globals": "^29.7.0",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.17.19",
     "cross-env": "^7.0.3",
-    "esbuild": "^0.21.5",
-    "typescript": "^5.9.2",
+    "esbuild": "^0.25.9",
     "jest": "^29.7.0",
-    "@jest/globals": "^29.7.0"
+    "typescript": "^5.9.2"
   },
   "peerDependencies": {
     "ai": "^4.1.60"
