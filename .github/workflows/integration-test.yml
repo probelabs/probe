@@ -353,6 +353,21 @@ jobs:
           fi
         fi
 
+    - name: Run npm agent tests
+      shell: bash
+      run: |
+        echo "Running npm agent validation tests..."
+        cd npm
+        
+        # Install dependencies if not already installed
+        npm install
+        
+        # Run the test suite with timeout
+        echo "Starting test execution..."
+        npm test
+        
+        echo "✅ All npm agent tests passed successfully"
+
     - name: Upload test artifacts on failure
       if: failure()
       uses: actions/upload-artifact@v4
@@ -361,6 +376,7 @@ jobs:
         path: |
           search_results.json
           extract_results.json
+          npm/coverage/
         retention-days: 7
 
   chat-integration-test:

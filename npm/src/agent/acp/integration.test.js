@@ -5,8 +5,7 @@ import { ACPServer } from './server.js';
 import { ACPConnection } from './connection.js';
 import { ACP_PROTOCOL_VERSION, RequestMethod } from './types.js';
 
-// Mock ProbeAgent
-jest.mock('../ProbeAgent.js');
+// Mock manually handled below
 
 // Mock streams for testing
 class MockStream extends EventEmitter {

@@ -10,7 +10,16 @@ import {
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { initializeSimpleTelemetryFromOptions, SimpleAppTracer } from './simpleTelemetry.js';
-import { cleanSchemaResponse, processSchemaResponse } from './schemaUtils.js';
+import { 
+  cleanSchemaResponse, 
+  processSchemaResponse, 
+  isJsonSchema, 
+  validateJsonResponse, 
+  createJsonCorrectionPrompt,
+  isMermaidSchema,
+  validateMermaidResponse,
+  createMermaidCorrectionPrompt
+} from './schemaUtils.js';
 import { ACPServer } from './acp/index.js';
 
 // Helper function to detect if input is a file path and read it
@@ -284,16 +293,76 @@ class ProbeAgentMcpServer {
         };
 
         const agent = new ProbeAgent(agentConfig);
-        let result = await agent.answer(query);
+        let result = await agent.answer(query, [], { schema });
 
         // If schema is provided, make a follow-up request to format the output
         if (schema) {
           const schemaPrompt = `Now you need to respond according to this schema:\n\n${schema}\n\nPlease reformat your previous response to match this schema exactly. Only return the formatted response, no additional text.`;
           
           try {
-            result = await agent.answer(schemaPrompt);
+            result = await agent.answer(schemaPrompt, [], { schema });
             // Clean the schema response to remove code blocks and formatting
             result = cleanSchemaResponse(result);
+
+            // First, check if schema expects Mermaid diagrams and validate
+            if (isMermaidSchema(schema)) {
+              const MAX_MERMAID_RETRIES = 2;
+              let mermaidRetries = 0;
+              let mermaidValidation = await validateMermaidResponse(result);
+              
+              while (!mermaidValidation.isValid && mermaidRetries < MAX_MERMAID_RETRIES) {
+                if (args.debug) {
+                  console.error(`[DEBUG] Mermaid validation failed (attempt ${mermaidRetries + 1}): ${mermaidValidation.errors?.join(', ')}`);
+                }
+                
+                const correctionPrompt = createMermaidCorrectionPrompt(
+                  result, 
+                  schema, 
+                  mermaidValidation.errors, 
+                  mermaidValidation.diagrams
+                );
+                
+                try {
+                  result = await agent.answer(correctionPrompt, [], { schema });
+                  result = cleanSchemaResponse(result);
+                  mermaidValidation = await validateMermaidResponse(result);
+                  mermaidRetries++;
+                } catch (retryError) {
+                  if (args.debug) {
+                    console.error(`[DEBUG] Mermaid correction retry ${mermaidRetries + 1} failed: ${retryError.message}`);
+                  }
+                  break;
+                }
+              }
+              
+              if (!mermaidValidation.isValid && args.debug) {
+                console.error(`[DEBUG] Mermaid validation failed after ${mermaidRetries} retries`);
+              }
+            }
+
+            // Then, if schema expects JSON, validate and retry if invalid
+            if (isJsonSchema(schema)) {
+              const validation = validateJsonResponse(result);
+              if (!validation.isValid) {
+                // Retry once with correction prompt
+                const correctionPrompt = createJsonCorrectionPrompt(result, schema, validation.error);
+                try {
+                  result = await agent.answer(correctionPrompt, [], { schema });
+                  result = cleanSchemaResponse(result);
+                  
+                  // Validate again after correction
+                  const finalValidation = validateJsonResponse(result);
+                  if (!finalValidation.isValid && args.debug) {
+                    console.error(`[DEBUG] JSON validation failed after retry: ${finalValidation.error}`);
+                  }
+                } catch (retryError) {
+                  // If retry fails, keep the original result
+                  if (args.debug) {
+                    console.error(`[DEBUG] JSON correction retry failed: ${retryError.message}`);
+                  }
+                }
+              }
+            }
           } catch (error) {
             // If schema formatting fails, use original result
           }
@@ -449,7 +518,7 @@ async function main() {
       
       try {
         result = await appTracer.withSpan('agent.answer', 
-          () => agent.answer(question),
+          () => agent.answer(question, [], { schema }),
           { 'question.length': question.length }
         );
       } finally {
@@ -458,7 +527,7 @@ async function main() {
         }
       }
     } else {
-      result = await agent.answer(question);
+      result = await agent.answer(question, [], { schema });
     }
 
     // If schema is provided, make a follow-up request to format the output
@@ -472,11 +541,11 @@ async function main() {
       try {
         if (appTracer) {
           result = await appTracer.withSpan('agent.schema_formatting',
-            () => agent.answer(schemaPrompt),
+            () => agent.answer(schemaPrompt, [], { schema }),
             { 'schema.length': schema.length }
           );
         } else {
-          result = await agent.answer(schemaPrompt);
+          result = await agent.answer(schemaPrompt, [], { schema });
         }
         
         // Clean the schema response to remove code blocks and formatting
@@ -489,6 +558,98 @@ async function main() {
           console.error('[DEBUG] Schema response was cleaned:');
           console.error(`  Original length: ${cleaningResult.debug.originalLength}`);
           console.error(`  Cleaned length: ${cleaningResult.debug.cleanedLength}`);
+        }
+
+        // First, check if schema expects Mermaid diagrams and validate
+        if (isMermaidSchema(schema)) {
+          const MAX_MERMAID_RETRIES = 2;
+          let mermaidRetries = 0;
+          let mermaidValidation = await validateMermaidResponse(result);
+          
+          while (!mermaidValidation.isValid && mermaidRetries < MAX_MERMAID_RETRIES) {
+            if (config.verbose) {
+              console.error(`[DEBUG] Mermaid validation failed (attempt ${mermaidRetries + 1}): ${mermaidValidation.errors?.join(', ')}`);
+              console.error('[DEBUG] Attempting to correct Mermaid diagrams...');
+            }
+            
+            const correctionPrompt = createMermaidCorrectionPrompt(
+              result, 
+              schema, 
+              mermaidValidation.errors, 
+              mermaidValidation.diagrams
+            );
+            
+            try {
+              if (appTracer) {
+                result = await appTracer.withSpan('agent.mermaid_correction',
+                  () => agent.answer(correctionPrompt, [], { schema }),
+                  { 'retry_attempt': mermaidRetries + 1, 'errors': mermaidValidation.errors?.join(', ') }
+                );
+              } else {
+                result = await agent.answer(correctionPrompt, [], { schema });
+              }
+              result = cleanSchemaResponse(result);
+              mermaidValidation = await validateMermaidResponse(result);
+              mermaidRetries++;
+              
+              if (config.verbose) {
+                if (mermaidValidation.isValid) {
+                  console.error(`[DEBUG] Mermaid correction successful after ${mermaidRetries} attempts`);
+                }
+              }
+            } catch (retryError) {
+              if (config.verbose) {
+                console.error(`[DEBUG] Mermaid correction retry ${mermaidRetries + 1} failed: ${retryError.message}`);
+              }
+              break;
+            }
+          }
+          
+          if (!mermaidValidation.isValid && config.verbose) {
+            console.error(`[DEBUG] Mermaid validation failed after ${mermaidRetries} retries`);
+          }
+        }
+
+        // Then, if schema expects JSON, validate and retry if invalid
+        if (isJsonSchema(schema)) {
+          const validation = validateJsonResponse(result);
+          if (!validation.isValid) {
+            if (config.verbose) {
+              console.error(`[DEBUG] JSON validation failed: ${validation.error}`);
+              console.error('[DEBUG] Attempting to correct JSON...');
+            }
+            
+            // Retry once with correction prompt
+            const correctionPrompt = createJsonCorrectionPrompt(result, schema, validation.error);
+            try {
+              if (appTracer) {
+                result = await appTracer.withSpan('agent.json_correction',
+                  () => agent.answer(correctionPrompt, [], { schema }),
+                  { 'original_error': validation.error }
+                );
+              } else {
+                result = await agent.answer(correctionPrompt, [], { schema });
+              }
+              result = cleanSchemaResponse(result);
+              
+              // Validate again after correction
+              const finalValidation = validateJsonResponse(result);
+              if (config.verbose) {
+                if (finalValidation.isValid) {
+                  console.error('[DEBUG] JSON correction successful');
+                } else {
+                  console.error(`[DEBUG] JSON validation failed after retry: ${finalValidation.error}`);
+                }
+              }
+            } catch (retryError) {
+              // If retry fails, keep the original result
+              if (config.verbose) {
+                console.error(`[DEBUG] JSON correction retry failed: ${retryError.message}`);
+              }
+            }
+          } else if (config.verbose) {
+            console.error('[DEBUG] JSON validation passed');
+          }
         }
       } catch (error) {
         if (config.verbose) {

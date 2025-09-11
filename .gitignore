@@ -82,6 +82,13 @@ $RECYCLE.BIN/
 # Testing
 /coverage
 .nyc_output
+npm/coverage/
+**/coverage/
+.jest-cache/
+**/.jest-cache/
+test-results/
+junit.xml
+*.lcov
 
 # Temporary files
 *.tmp

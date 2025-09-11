@@ -51,7 +51,7 @@ describe('ACP Types', () => {
     });
     
     test('should have tool call kinds', () => {
-      expect(ToolCallKind.read).toBe('read');
+      expect(ToolCallKind.READ).toBe('read');
       expect(ToolCallKind.edit).toBe('edit');
       expect(ToolCallKind.search).toBe('search');
       expect(ToolCallKind.query).toBe('query');
