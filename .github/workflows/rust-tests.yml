@@ -90,14 +90,14 @@ jobs:
           path: |
             npm/node_modules
             ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('npm/package-lock.json', 'npm/package.json') }}
+          key: ${{ runner.os }}-node-${{ hashFiles('npm/package.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
 
       - name: Install npm dependencies
         run: |
           cd npm
-          npm ci
+          npm install
 
       - name: Run npm agent tests
         run: |
