@@ -4,9 +4,7 @@ import { ACPServer } from './server.js';
 import { ACPConnection } from './connection.js';
 import { ACP_PROTOCOL_VERSION, RequestMethod, SessionMode, ErrorCode } from './types.js';
 
-// Mock the ACPConnection
-jest.mock('./connection.js');
-jest.mock('../ProbeAgent.js');
+// Mock manually handled below
 
 describe('ACPServer', () => {
   let server;

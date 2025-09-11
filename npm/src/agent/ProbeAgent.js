@@ -419,9 +419,11 @@ When troubleshooting:
    * Answer a question using the agentic flow
    * @param {string} message - The user's question
    * @param {Array} [images] - Optional array of image data (base64 strings or URLs)
+   * @param {Object} [options] - Additional options
+   * @param {string} [options.schema] - Output schema (if provided, adds extra iterations for formatting/validation)
    * @returns {Promise<string>} - The final answer
    */
-  async answer(message, images = []) {
+  async answer(message, images = [], options = {}) {
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       throw new Error('Message is required and must be a non-empty string');
     }
@@ -455,17 +457,26 @@ When troubleshooting:
       let completionAttempted = false;
       let finalResult = 'I was unable to complete your request due to reaching the maximum number of tool iterations.';
 
+      // Adjust max iterations if schema is provided
+      // +1 for schema formatting
+      // +2 for potential Mermaid validation retries (can be multiple diagrams)
+      // +1 for potential JSON correction
+      const maxIterations = options.schema ? MAX_TOOL_ITERATIONS + 4 : MAX_TOOL_ITERATIONS;
+
       if (this.debug) {
         console.log(`[DEBUG] Starting agentic flow for question: ${message.substring(0, 100)}...`);
+        if (options.schema) {
+          console.log(`[DEBUG] Schema provided, using extended iteration limit: ${maxIterations} (base: ${MAX_TOOL_ITERATIONS})`);
+        }
       }
 
       // Tool iteration loop
-      while (currentIteration < MAX_TOOL_ITERATIONS && !completionAttempted) {
+      while (currentIteration < maxIterations && !completionAttempted) {
         currentIteration++;
         if (this.cancelled) throw new Error('Request was cancelled by the user');
 
         if (this.debug) {
-          console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${MAX_TOOL_ITERATIONS} ---`);
+          console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${maxIterations} ---`);
           console.log(`[DEBUG] Current messages count for AI call: ${currentMessages.length}`);
         }
 
@@ -473,7 +484,7 @@ When troubleshooting:
         if (this.tracer) {
           this.tracer.addEvent('iteration.start', {
             'iteration': currentIteration,
-            'max_iterations': MAX_TOOL_ITERATIONS,
+            'max_iterations': maxIterations,
             'message_count': currentMessages.length
           });
         }
@@ -660,8 +671,8 @@ When troubleshooting:
         }
       }
 
-      if (currentIteration >= MAX_TOOL_ITERATIONS && !completionAttempted) {
-        console.warn(`[WARN] Max tool iterations (${MAX_TOOL_ITERATIONS}) reached for session ${this.sessionId}. Returning current error state.`);
+      if (currentIteration >= maxIterations && !completionAttempted) {
+        console.warn(`[WARN] Max tool iterations (${maxIterations}) reached for session ${this.sessionId}. Returning current error state.`);
       }
 
       // Store final history

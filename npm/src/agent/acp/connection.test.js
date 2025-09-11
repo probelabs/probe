@@ -32,6 +32,10 @@ describe('ACPConnection', () => {
   });
   
   afterEach(() => {
+    // Clean up fake timers if they were used
+    if (jest.isMockFunction(setTimeout)) {
+      jest.useRealTimers();
+    }
     connection.close();
   });
   
@@ -213,13 +217,13 @@ describe('ACPConnection', () => {
     });
     
     test('should timeout requests', async () => {
+      // Set up fake timers before creating the promise
+      jest.useFakeTimers();
+      
       const requestPromise = connection.sendRequest('testMethod');
       
-      // Fast-forward time
-      jest.useFakeTimers();
-      setTimeout(() => {
-        jest.advanceTimersByTime(30000);
-      }, 0);
+      // Fast-forward time past the timeout
+      jest.advanceTimersByTime(30000);
       
       await expect(requestPromise).rejects.toThrow('Request timeout');
       

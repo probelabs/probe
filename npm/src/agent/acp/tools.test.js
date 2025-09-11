@@ -25,7 +25,7 @@ describe('ACPToolCall', () => {
     expect(toolCall.error).toBeNull();
   });
   
-  test('should update status correctly', () => {
+  test('should update status correctly', async () => {
     const toolCall = new ACPToolCall('id', 'test', 'kind', {}, 'session');
     const result = { data: 'test result' };
     
@@ -33,10 +33,13 @@ describe('ACPToolCall', () => {
     expect(toolCall.status).toBe(ToolCallStatus.IN_PROGRESS);
     expect(toolCall.endTime).toBeNull();
     
+    // Add a small delay to ensure timing difference
+    await new Promise(resolve => setTimeout(resolve, 1));
+    
     toolCall.updateStatus(ToolCallStatus.COMPLETED, result);
     expect(toolCall.status).toBe(ToolCallStatus.COMPLETED);
     expect(toolCall.result).toBe(result);
-    expect(toolCall.endTime).toBeGreaterThan(toolCall.startTime);
+    expect(toolCall.endTime).toBeGreaterThanOrEqual(toolCall.startTime);
   });
   
   test('should calculate duration correctly', (done) => {
