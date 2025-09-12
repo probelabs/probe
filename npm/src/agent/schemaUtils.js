@@ -725,9 +725,12 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     // Re-validate the fixed response
     const finalValidation = await validateMermaidResponse(fixedResponse);
 
+    // Check if any diagrams were actually fixed
+    const wasActuallyFixed = fixingResults.some(result => result.wasFixed);
+
     return {
       ...finalValidation,
-      wasFixed: true,
+      wasFixed: wasActuallyFixed,
       originalResponse: response,
       fixedResponse: fixedResponse,
       fixingResults: fixingResults,

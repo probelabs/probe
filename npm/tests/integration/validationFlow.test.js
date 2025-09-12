@@ -250,7 +250,7 @@ sequenceDiagram
 
       const { diagrams } = extractMermaidFromMarkdown(malformedResponse);
       expect(diagrams).toHaveLength(1);
-      expect(diagrams[0]).toContain('graph TD');
+      expect(diagrams[0].content).toContain('graph TD');
     });
 
     test('should handle nested code blocks', async () => {
@@ -274,8 +274,8 @@ sequenceDiagram
 
       const { diagrams } = extractMermaidFromMarkdown(response);
       expect(diagrams).toHaveLength(2); // Both embedded and real diagrams are extracted
-      expect(diagrams[0]).toContain('graph TD');
-      expect(diagrams[1]).toContain('sequenceDiagram');
+      expect(diagrams[0].content).toContain('graph TD');
+      expect(diagrams[1].content).toContain('sequenceDiagram');
     });
 
     test('should handle very large diagrams', async () => {
