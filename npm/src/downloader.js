@@ -17,7 +17,7 @@ import { ensureBinDirectory } from './utils.js';
 const exec = promisify(execCallback);
 
 // GitHub repository information
-const REPO_OWNER = "buger";
+const REPO_OWNER = "probelabs";
 const REPO_NAME = "probe";
 const BINARY_NAME = "probe";
 
@@ -91,6 +91,54 @@ function detectOsArch() {
 }
 
 /**
+ * Constructs the asset name and download URL directly based on version and platform
+ * @param {string} version - The version to download (e.g., "0.6.0-rc60")
+ * @param {Object} osInfo - OS information from detectOsArch()
+ * @param {Object} archInfo - Architecture information from detectOsArch()
+ * @returns {Object} Asset information with name and url
+ */
+function constructAssetInfo(version, osInfo, archInfo) {
+	let platform;
+	let extension;
+	
+	// Map OS and arch to the expected format in release names
+	switch (osInfo.type) {
+		case 'linux':
+			platform = `${archInfo.type}-unknown-linux-gnu`;
+			extension = 'tar.gz';
+			break;
+		case 'darwin':
+			platform = `${archInfo.type}-apple-darwin`;
+			extension = 'tar.gz';
+			break;
+		case 'windows':
+			platform = `${archInfo.type}-pc-windows-msvc`;
+			extension = 'zip';
+			break;
+		default:
+			throw new Error(`Unsupported OS type: ${osInfo.type}`);
+	}
+	
+	const assetName = `probe-v${version}-${platform}.${extension}`;
+	const checksumName = `${assetName}.sha256`;
+	
+	const baseUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${version}`;
+	const assetUrl = `${baseUrl}/${assetName}`;
+	const checksumUrl = `${baseUrl}/${checksumName}`;
+	
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Constructed asset URL: ${assetUrl}`);
+	}
+	
+	return {
+		name: assetName,
+		url: assetUrl,
+		checksumName: checksumName,
+		checksumUrl: checksumUrl
+	};
+}
+
+/**
  * Gets the latest release information from GitHub
  * @param {string} [version] - Specific version to get
  * @returns {Promise<Object>} Release information
@@ -106,8 +154,8 @@ async function getLatestRelease(version) {
 			// Always use the specified version
 			releaseUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/tags/v${version}`;
 		} else {
-			// Use the latest release only if no version is specified
-			releaseUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
+			// Get all releases to find the most recent one (including prereleases)
+			releaseUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases`;
 		}
 
 		const response = await axios.get(releaseUrl);
@@ -116,8 +164,20 @@ async function getLatestRelease(version) {
 			throw new Error(`Failed to fetch release information: ${response.statusText}`);
 		}
 
-		const tag = response.data.tag_name;
-		const assets = response.data.assets.map(asset => ({
+		let releaseData;
+		if (version) {
+			// Single release for specific version
+			releaseData = response.data;
+		} else {
+			// Array of releases, pick the most recent one (first in the array)
+			if (!Array.isArray(response.data) || response.data.length === 0) {
+				throw new Error('No releases found');
+			}
+			releaseData = response.data[0];
+		}
+
+		const tag = releaseData.tag_name;
+		const assets = releaseData.assets.map(asset => ({
 			name: asset.name,
 			url: asset.browser_download_url
 		}));
@@ -139,28 +199,51 @@ async function getLatestRelease(version) {
 				throw new Error('No releases found');
 			}
 
-			// Try to find a release that matches the version prefix
-			let bestRelease = response.data[0]; // Default to first release
+			// Try to find a release that matches the version
+			let bestRelease = response.data[0]; // Default to latest release
 
 			if (version && version !== '0.0.0') {
-				// Try to find a release that starts with the same version prefix
-				const versionParts = version.split('.');
-				const versionPrefix = versionParts.slice(0, 2).join('.'); // e.g., "0.2" from "0.2.2-rc7"
-
 				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-					console.log(`Looking for releases matching prefix: ${versionPrefix}`);
+					console.log(`Looking for releases matching version: ${version}`);
+					console.log(`Available releases: ${response.data.slice(0, 5).map(r => r.tag_name).join(', ')}...`);
 				}
 
+				// Try to find exact match first
 				for (const release of response.data) {
 					const releaseTag = release.tag_name.startsWith('v') ?
 						release.tag_name.substring(1) : release.tag_name;
 
-					if (releaseTag.startsWith(versionPrefix)) {
+					if (releaseTag === version) {
 						if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-						console.log(`Found matching release: ${release.tag_name}`);
-					}
+							console.log(`Found exact matching release: ${release.tag_name}`);
+						}
 						bestRelease = release;
 						break;
+					}
+				}
+
+				// If no exact match, try to find a release with matching major.minor version
+				if (bestRelease === response.data[0]) {
+					const versionParts = version.split(/[\.-]/);
+					const majorMinor = versionParts.slice(0, 2).join('.');
+
+					if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+						console.log(`Looking for releases matching major.minor: ${majorMinor}`);
+					}
+
+					for (const release of response.data) {
+						const releaseTag = release.tag_name.startsWith('v') ?
+							release.tag_name.substring(1) : release.tag_name;
+						const releaseVersionParts = releaseTag.split(/[\.-]/);
+						const releaseMajorMinor = releaseVersionParts.slice(0, 2).join('.');
+
+						if (releaseMajorMinor === majorMinor) {
+							if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+								console.log(`Found matching major.minor release: ${release.tag_name}`);
+							}
+							bestRelease = release;
+							break;
+						}
 					}
 				}
 			}
@@ -172,8 +255,8 @@ async function getLatestRelease(version) {
 			}));
 
 			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-			console.log(`Using release: ${tag} with ${assets.length} assets`);
-		}
+				console.log(`Using release: ${tag} with ${assets.length} assets`);
+			}
 			return { tag, assets };
 		}
 
@@ -314,7 +397,8 @@ async function downloadAsset(asset, outputDir) {
 	await fs.writeFile(assetPath, Buffer.from(assetResponse.data));
 
 	// Try to download the checksum
-	const checksumUrl = `${asset.url}.sha256`;
+	const checksumUrl = asset.checksumUrl || `${asset.url}.sha256`;
+	const checksumFileName = asset.checksumName || `${asset.name}.sha256`;
 	let checksumPath = null;
 
 	try {
@@ -322,7 +406,7 @@ async function downloadAsset(asset, outputDir) {
 			console.log(`Downloading checksum...`);
 		}
 		const checksumResponse = await axios.get(checksumUrl);
-		checksumPath = path.join(outputDir, `${asset.name}.sha256`);
+		checksumPath = path.join(outputDir, checksumFileName);
 		await fs.writeFile(checksumPath, checksumResponse.data);
 	} catch (error) {
 		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
@@ -604,26 +688,29 @@ export async function downloadProbeBinary(version) {
 
 		// Determine which version to download
 		let versionToUse = version;
+		let bestAsset;
+		let tagVersion;
+
 		if (!versionToUse || versionToUse === '0.0.0') {
+			// No specific version - use GitHub API to get the latest release
 			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
 				console.log('No specific version requested, will use the latest release');
 			}
-			versionToUse = undefined;
-		} else {
+			const { tag, assets } = await getLatestRelease(undefined);
+			tagVersion = tag.startsWith('v') ? tag.substring(1) : tag;
+			bestAsset = findBestAsset(assets, osInfo, archInfo);
+			
 			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-				console.log(`Looking for release with version: ${versionToUse}`);
+				console.log(`Found release version: ${tagVersion}`);
 			}
+		} else {
+			// Specific version requested - construct download URL directly
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Direct download for version: ${versionToUse}`);
+			}
+			tagVersion = versionToUse;
+			bestAsset = constructAssetInfo(versionToUse, osInfo, archInfo);
 		}
-
-		// Get release information
-		const { tag, assets } = await getLatestRelease(versionToUse);
-		const tagVersion = tag.startsWith('v') ? tag.substring(1) : tag;
-		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-			console.log(`Found release version: ${tagVersion}`);
-		}
-
-		// Find and download the appropriate asset
-		const bestAsset = findBestAsset(assets, osInfo, archInfo);
 		const { assetPath, checksumPath } = await downloadAsset(bestAsset, LOCAL_DIR);
 
 		// Verify checksum if available
