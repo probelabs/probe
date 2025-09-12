@@ -61,7 +61,7 @@ export function main() {
     .option('--images <urls>', 'Comma-separated list of image URLs to include in the message')
     .option('--json', 'Output the response as JSON in non-interactive mode')
     .option('--max-iterations <number>', 'Maximum number of tool iterations allowed (default: 30)')
-    .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, support, path to a file, or arbitrary string)')
+    .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, code-review-template, support, path to a file, or arbitrary string)')
     .option('--allow-edit', 'Enable the implement tool for editing files')
     .option('--implement-tool-backend <backend>', 'Choose implementation tool backend (aider, claude-code)')
     .option('--implement-tool-timeout <ms>', 'Implementation tool timeout in milliseconds')
@@ -250,7 +250,7 @@ export function main() {
   let customPrompt = null;
   if (options.prompt) {
     // Check if it's one of the predefined prompts
-    const predefinedPrompts = ['architect', 'code-review', 'support', 'engineer'];
+    const predefinedPrompts = ['architect', 'code-review', 'code-review-template', 'support', 'engineer'];
     if (predefinedPrompts.includes(options.prompt)) {
       process.env.PROMPT_TYPE = options.prompt;
       logInfo(chalk.blue(`Using predefined prompt: ${options.prompt}`));
@@ -358,7 +358,7 @@ export function main() {
         sessionId: options.sessionId,
         isNonInteractive: true,
         customPrompt: customPrompt,
-        promptType: options.prompt && ['architect', 'code-review', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
+        promptType: options.prompt && ['architect', 'code-review', 'code-review-template', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
         allowEdit: options.allowEdit
       });
       // Model/Provider info is logged via logInfo above if debug enabled
@@ -467,7 +467,7 @@ export function main() {
       sessionId: options.sessionId,
       isNonInteractive: false,
       customPrompt: customPrompt,
-      promptType: options.prompt && ['architect', 'code-review', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
+      promptType: options.prompt && ['architect', 'code-review', 'code-review-template', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
       allowEdit: options.allowEdit
     });
 

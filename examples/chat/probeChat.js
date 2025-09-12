@@ -625,6 +625,8 @@ If you detect critical issues that should prevent the code from being merged, in
 
 The <fail> tag will cause the GitHub check to fail, drawing immediate attention to these critical issues.`,
 
+      'code-review-template': `You are going to perform code review according to provided user rules. Ensure to review only code provided in diff and latest commit, if provided. However you still need to fully understand how modified code works, and read dependencies if something is not clear.`,
+
       'engineer': `You are senior engineer focused on software architecture and design.
 Before jumping on the task you first, in details analyse user request, and try to provide elegant and concise solution.
 If solution is clear, you can jump to implementation right away, if not, you can ask user a clarification question, by calling attempt_completion tool, with required details.
@@ -1105,6 +1107,20 @@ When troubleshooting:
             const contentPreview = (typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)).substring(0, 80).replace(/\n/g, ' ');
             console.log(`[DEBUG]   Msg[${currentMessages.length - 3 + idx}]: ${msg.role}: ${contentPreview}...`);
           });
+        }
+
+        // Add warning message when reaching the last iteration
+        if (currentIteration === MAX_TOOL_ITERATIONS) {
+          const warningMessage = `⚠️ WARNING: You have reached the maximum tool iterations limit (${MAX_TOOL_ITERATIONS}). This is your final message. Please respond with the data you have so far. If something was not completed, honestly state what was not done and provide any partial results or recommendations you can offer.`;
+          
+          currentMessages.push({
+            role: 'user',
+            content: warningMessage
+          });
+          
+          if (this.debug) {
+            console.log(`[DEBUG] Added max iterations warning message at iteration ${currentIteration}`);
+          }
         }
 
         this.tokenCounter.calculateContextSize(currentMessages);
