@@ -195,26 +195,72 @@ export function isMermaidSchema(schema) {
 }
 
 /**
- * Extract Mermaid diagrams from markdown code blocks
+ * Extract Mermaid diagrams from markdown code blocks with position tracking
  * @param {string} response - Response that may contain markdown with mermaid blocks
- * @returns {Object} - {diagrams: string[], cleanedResponse: string}
+ * @returns {Object} - {diagrams: Array<{content: string, fullMatch: string, startIndex: number, endIndex: number}>, cleanedResponse: string}
  */
 export function extractMermaidFromMarkdown(response) {
   if (!response || typeof response !== 'string') {
     return { diagrams: [], cleanedResponse: response };
   }
 
-  // Find all mermaid code blocks
-  const mermaidBlockRegex = /```mermaid\s*\n([\s\S]*?)\n```/gi;
+  // Find all mermaid code blocks with enhanced regex to capture more variations
+  // This regex captures optional attributes on same line as ```mermaid, and all diagram content
+  const mermaidBlockRegex = /```mermaid([^\n]*)\n([\s\S]*?)```/gi;
   const diagrams = [];
   let match;
 
   while ((match = mermaidBlockRegex.exec(response)) !== null) {
-    diagrams.push(match[1].trim());
+    const attributes = match[1] ? match[1].trim() : '';
+    const fullContent = match[2].trim();
+    
+    // If attributes exist, they were captured separately, so fullContent is just the diagram
+    // If no attributes, the first line of fullContent might be diagram type or actual content
+    diagrams.push({
+      content: fullContent,
+      fullMatch: match[0],
+      startIndex: match.index,
+      endIndex: match.index + match[0].length,
+      attributes: attributes
+    });
   }
 
   // Return cleaned response (original for now, could be modified if needed)
   return { diagrams, cleanedResponse: response };
+}
+
+/**
+ * Replace mermaid diagrams in original markdown with corrected versions
+ * @param {string} originalResponse - Original response with markdown
+ * @param {Array} correctedDiagrams - Array of corrected diagram objects
+ * @returns {string} - Response with corrected diagrams in original format
+ */
+export function replaceMermaidDiagramsInMarkdown(originalResponse, correctedDiagrams) {
+  if (!originalResponse || typeof originalResponse !== 'string') {
+    return originalResponse;
+  }
+
+  if (!correctedDiagrams || correctedDiagrams.length === 0) {
+    return originalResponse;
+  }
+
+  let modifiedResponse = originalResponse;
+  
+  // Sort diagrams by start index in reverse order to preserve indices during replacement
+  const sortedDiagrams = [...correctedDiagrams].sort((a, b) => b.startIndex - a.startIndex);
+  
+  for (const diagram of sortedDiagrams) {
+    // Reconstruct the code block with original attributes if they existed
+    const attributesStr = diagram.attributes ? ` ${diagram.attributes}` : '';
+    const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${diagram.content}\n\`\`\``;
+    
+    // Replace the original code block
+    modifiedResponse = modifiedResponse.slice(0, diagram.startIndex) + 
+                     newCodeBlock + 
+                     modifiedResponse.slice(diagram.endIndex);
+  }
+  
+  return modifiedResponse;
 }
 
 /**
@@ -334,9 +380,10 @@ export async function validateMermaidResponse(response) {
   const errors = [];
 
   for (let i = 0; i < diagrams.length; i++) {
-    const validation = await validateMermaidDiagram(diagrams[i]);
+    const diagramObj = diagrams[i];
+    const validation = await validateMermaidDiagram(diagramObj.content);
     results.push({
-      diagram: diagrams[i],
+      ...diagramObj,
       ...validation
     });
 
@@ -378,7 +425,8 @@ Validation Errors:`;
     diagrams.forEach((diagramResult, index) => {
       if (!diagramResult.isValid) {
         prompt += `\n\nDiagram ${index + 1}:`;
-        prompt += `\n- Content: ${diagramResult.diagram.substring(0, 100)}${diagramResult.diagram.length > 100 ? '...' : ''}`;
+        const diagramContent = diagramResult.content || diagramResult.diagram || '';
+        prompt += `\n- Content: ${diagramContent.substring(0, 100)}${diagramContent.length > 100 ? '...' : ''}`;
         prompt += `\n- Error: ${diagramResult.error}`;
         if (diagramResult.detailedError && diagramResult.detailedError !== diagramResult.error) {
           prompt += `\n- Details: ${diagramResult.detailedError}`;
@@ -393,4 +441,311 @@ ${schema}
 Ensure all Mermaid diagrams are properly formatted within \`\`\`mermaid code blocks and follow correct Mermaid syntax.`;
 
   return prompt;
+}
+
+/**
+ * Specialized Mermaid diagram fixing agent
+ * Uses a separate ProbeAgent instance optimized for Mermaid syntax correction
+ */
+export class MermaidFixingAgent {
+  constructor(options = {}) {
+    // Import ProbeAgent dynamically to avoid circular dependencies
+    this.ProbeAgent = null;
+    this.options = {
+      sessionId: options.sessionId || `mermaid-fixer-${Date.now()}`,
+      path: options.path || process.cwd(),
+      provider: options.provider,
+      model: options.model,
+      debug: options.debug,
+      tracer: options.tracer,
+      // Set to false since we're only fixing syntax, not implementing code
+      allowEdit: false
+    };
+  }
+
+  /**
+   * Get the specialized prompt for mermaid diagram fixing
+   */
+  getMermaidFixingPrompt() {
+    return `You are a world-class Mermaid diagram syntax correction specialist. Your expertise lies in analyzing and fixing Mermaid diagram syntax errors while preserving the original intent, structure, and semantic meaning.
+
+CORE RESPONSIBILITIES:
+- Analyze Mermaid diagrams for syntax errors and structural issues  
+- Fix syntax errors while maintaining the original diagram's logical flow
+- Ensure diagrams follow proper Mermaid syntax rules and best practices
+- Handle all diagram types: flowchart, sequence, gantt, pie, state, class, er, journey, gitgraph, requirement, c4
+
+MERMAID DIAGRAM TYPES & SYNTAX RULES:
+1. **Flowchart/Graph**: Start with 'graph' or 'flowchart', use proper node definitions and arrows
+2. **Sequence**: Start with 'sequenceDiagram', use proper participant and message syntax
+3. **Gantt**: Start with 'gantt', use proper date formats and task definitions
+4. **State**: Start with 'stateDiagram-v2', use proper state transitions
+5. **Class**: Start with 'classDiagram', use proper class and relationship syntax
+6. **Entity-Relationship**: Start with 'erDiagram', use proper entity and relationship syntax
+
+FIXING METHODOLOGY:
+1. **Identify diagram type** from the first line or content analysis
+2. **Validate syntax** against Mermaid specification for that diagram type
+3. **Fix errors systematically**:
+   - Unclosed brackets, parentheses, or quotes
+   - Missing or incorrect arrows and connectors
+   - Invalid node IDs or labels
+   - Incorrect formatting for diagram-specific elements
+4. **Preserve semantic meaning** - never change the intended flow or relationships
+5. **Use proper escaping** for special characters and spaces
+6. **Ensure consistency** in naming conventions and formatting
+
+CRITICAL RULES:
+- ALWAYS output only the corrected Mermaid code within a \`\`\`mermaid code block
+- NEVER add explanations, comments, or additional text outside the code block
+- PRESERVE the original diagram's intended meaning and flow
+- FIX syntax errors without changing the logical structure
+- ENSURE the output is valid, parseable Mermaid syntax
+
+When presented with a broken Mermaid diagram, analyze it thoroughly and provide the corrected version that maintains the original intent while fixing all syntax issues.`;
+  }
+
+  /**
+   * Initialize the ProbeAgent if not already done
+   */
+  async initializeAgent() {
+    if (!this.ProbeAgent) {
+      // Dynamic import to avoid circular dependency
+      const { ProbeAgent } = await import('./ProbeAgent.js');
+      this.ProbeAgent = ProbeAgent;
+    }
+
+    if (!this.agent) {
+      this.agent = new this.ProbeAgent({
+        sessionId: this.options.sessionId,
+        customPrompt: this.getMermaidFixingPrompt(),
+        path: this.options.path,
+        provider: this.options.provider,
+        model: this.options.model,
+        debug: this.options.debug,
+        tracer: this.options.tracer,
+        allowEdit: this.options.allowEdit
+      });
+    }
+
+    return this.agent;
+  }
+
+  /**
+   * Fix a single Mermaid diagram using the specialized agent
+   * @param {string} diagramContent - The broken Mermaid diagram content
+   * @param {Array} originalErrors - Array of errors detected in the original diagram
+   * @param {Object} diagramInfo - Additional context about the diagram (type, position, etc.)
+   * @returns {Promise<string>} - The corrected Mermaid diagram
+   */
+  async fixMermaidDiagram(diagramContent, originalErrors = [], diagramInfo = {}) {
+    await this.initializeAgent();
+
+    const errorContext = originalErrors.length > 0 
+      ? `\n\nDetected errors: ${originalErrors.join(', ')}` 
+      : '';
+
+    const diagramTypeHint = diagramInfo.diagramType 
+      ? `\n\nExpected diagram type: ${diagramInfo.diagramType}` 
+      : '';
+
+    const prompt = `Analyze and fix the following Mermaid diagram.${errorContext}${diagramTypeHint}
+
+Broken Mermaid diagram:
+\`\`\`mermaid
+${diagramContent}
+\`\`\`
+
+Provide only the corrected Mermaid diagram within a mermaid code block. Do not add any explanations or additional text.`;
+
+    try {
+      const result = await this.agent.answer(prompt, [], { 
+        schema: 'Return only valid Mermaid diagram code within ```mermaid code block' 
+      });
+      
+      // Extract the mermaid code from the response
+      const extractedDiagram = this.extractCorrectedDiagram(result);
+      return extractedDiagram || result;
+    } catch (error) {
+      if (this.options.debug) {
+        console.error(`[DEBUG] Mermaid fixing failed: ${error.message}`);
+      }
+      throw new Error(`Failed to fix Mermaid diagram: ${error.message}`);
+    }
+  }
+
+  /**
+   * Extract the corrected diagram from the agent's response
+   * @param {string} response - The agent's response
+   * @returns {string} - The extracted mermaid diagram
+   */
+  extractCorrectedDiagram(response) {
+    // Try to extract mermaid code block
+    const mermaidMatch = response.match(/```mermaid\s*\n([\s\S]*?)\n```/);
+    if (mermaidMatch) {
+      return mermaidMatch[1].trim();
+    }
+
+    // Fallback: try to extract any code block
+    const codeMatch = response.match(/```\s*\n([\s\S]*?)\n```/);
+    if (codeMatch) {
+      return codeMatch[1].trim();
+    }
+
+    // If no code blocks found, return the response as-is (cleaned)
+    return response.replace(/```\w*\n?/g, '').replace(/\n?```/g, '').trim();
+  }
+
+  /**
+   * Get token usage information from the specialized agent
+   * @returns {Object} - Token usage statistics
+   */
+  getTokenUsage() {
+    return this.agent ? this.agent.getTokenUsage() : null;
+  }
+
+  /**
+   * Cancel any ongoing operations
+   */
+  cancel() {
+    if (this.agent) {
+      this.agent.cancel();
+    }
+  }
+}
+
+/**
+ * Enhanced Mermaid validation with specialized agent fixing
+ * @param {string} response - Response that may contain mermaid diagrams
+ * @param {Object} options - Options for validation and fixing
+ * @returns {Promise<Object>} - Enhanced validation result with fixing capability
+ */
+export async function validateAndFixMermaidResponse(response, options = {}) {
+  const { schema, debug, path, provider, model, tracer } = options;
+  
+  // First, run standard validation
+  const validation = await validateMermaidResponse(response);
+  
+  if (validation.isValid) {
+    // All diagrams are valid, no fixing needed
+    return {
+      ...validation,
+      wasFixed: false,
+      originalResponse: response,
+      fixedResponse: response
+    };
+  }
+
+  // If no diagrams found at all, return without attempting to fix
+  if (!validation.diagrams || validation.diagrams.length === 0) {
+    return {
+      ...validation,
+      wasFixed: false,
+      originalResponse: response,
+      fixedResponse: response
+    };
+  }
+
+  // Some diagrams are invalid, try to fix them with specialized agent
+  if (debug) {
+    console.error('[DEBUG] Invalid Mermaid diagrams detected, starting specialized fixing agent...');
+  }
+
+  try {
+    // Create specialized fixing agent
+    const mermaidFixer = new MermaidFixingAgent({
+      path, provider, model, debug, tracer
+    });
+
+    let fixedResponse = response;
+    const fixingResults = [];
+    
+    // Extract diagrams with position information for replacement
+    const { diagrams } = extractMermaidFromMarkdown(response);
+    
+    // Fix invalid diagrams in reverse order to preserve indices
+    const invalidDiagrams = validation.diagrams
+      .map((result, index) => ({ ...result, originalIndex: index }))
+      .filter(result => !result.isValid)
+      .reverse();
+
+    for (const invalidDiagram of invalidDiagrams) {
+      try {
+        const fixedContent = await mermaidFixer.fixMermaidDiagram(
+          invalidDiagram.content,
+          [invalidDiagram.error],
+          { diagramType: invalidDiagram.diagramType }
+        );
+
+        if (fixedContent && fixedContent !== invalidDiagram.content) {
+          // Replace the diagram in the response
+          const originalDiagram = diagrams[invalidDiagram.originalIndex];
+          const attributesStr = originalDiagram.attributes ? ` ${originalDiagram.attributes}` : '';
+          const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${fixedContent}\n\`\`\``;
+          
+          fixedResponse = fixedResponse.slice(0, originalDiagram.startIndex) + 
+                         newCodeBlock + 
+                         fixedResponse.slice(originalDiagram.endIndex);
+          
+          fixingResults.push({
+            diagramIndex: invalidDiagram.originalIndex,
+            wasFixed: true,
+            originalContent: invalidDiagram.content,
+            fixedContent: fixedContent,
+            originalError: invalidDiagram.error
+          });
+
+          if (debug) {
+            console.error(`[DEBUG] Fixed diagram ${invalidDiagram.originalIndex + 1}: ${invalidDiagram.error}`);
+          }
+        } else {
+          fixingResults.push({
+            diagramIndex: invalidDiagram.originalIndex,
+            wasFixed: false,
+            originalContent: invalidDiagram.content,
+            originalError: invalidDiagram.error,
+            fixingError: 'No valid fix generated'
+          });
+        }
+      } catch (error) {
+        fixingResults.push({
+          diagramIndex: invalidDiagram.originalIndex,
+          wasFixed: false,
+          originalContent: invalidDiagram.content,
+          originalError: invalidDiagram.error,
+          fixingError: error.message
+        });
+
+        if (debug) {
+          console.error(`[DEBUG] Failed to fix diagram ${invalidDiagram.originalIndex + 1}: ${error.message}`);
+        }
+      }
+    }
+
+    // Re-validate the fixed response
+    const finalValidation = await validateMermaidResponse(fixedResponse);
+
+    return {
+      ...finalValidation,
+      wasFixed: true,
+      originalResponse: response,
+      fixedResponse: fixedResponse,
+      fixingResults: fixingResults,
+      tokenUsage: mermaidFixer.getTokenUsage()
+    };
+
+  } catch (error) {
+    if (debug) {
+      console.error(`[DEBUG] Mermaid fixing agent failed: ${error.message}`);
+    }
+
+    // Return original validation with fixing error
+    return {
+      ...validation,
+      wasFixed: false,
+      originalResponse: response,
+      fixedResponse: response,
+      fixingError: error.message
+    };
+  }
 }

@@ -18,7 +18,8 @@ import {
   createJsonCorrectionPrompt,
   isMermaidSchema,
   validateMermaidResponse,
-  createMermaidCorrectionPrompt
+  createMermaidCorrectionPrompt,
+  validateAndFixMermaidResponse
 } from './schemaUtils.js';
 import { ACPServer } from './acp/index.js';
 
@@ -379,39 +380,31 @@ class ProbeAgentMcpServer {
             // Clean the schema response to remove code blocks and formatting
             result = cleanSchemaResponse(result);
 
-            // First, check if schema expects Mermaid diagrams and validate
-            if (isMermaidSchema(schema)) {
-              const MAX_MERMAID_RETRIES = 2;
-              let mermaidRetries = 0;
-              let mermaidValidation = await validateMermaidResponse(result);
-              
-              while (!mermaidValidation.isValid && mermaidRetries < MAX_MERMAID_RETRIES) {
+            // Check for mermaid diagrams in response and validate/fix them regardless of schema
+            try {
+              const mermaidValidation = await validateAndFixMermaidResponse(result, {
+                debug: args.debug,
+                path: agentConfig.path,
+                provider: args.provider,
+                model: args.model
+              });
+
+              if (mermaidValidation.wasFixed) {
+                result = mermaidValidation.fixedResponse;
                 if (args.debug) {
-                  console.error(`[DEBUG] Mermaid validation failed (attempt ${mermaidRetries + 1}): ${mermaidValidation.errors?.join(', ')}`);
+                  console.error(`[DEBUG] Mermaid diagrams fixed using specialized agent`);
+                  mermaidValidation.fixingResults.forEach((fixResult, index) => {
+                    if (fixResult.wasFixed) {
+                      console.error(`[DEBUG] Fixed diagram ${index + 1}: ${fixResult.originalError}`);
+                    }
+                  });
                 }
-                
-                const correctionPrompt = createMermaidCorrectionPrompt(
-                  result, 
-                  schema, 
-                  mermaidValidation.errors, 
-                  mermaidValidation.diagrams
-                );
-                
-                try {
-                  result = await agent.answer(correctionPrompt, [], { schema });
-                  result = cleanSchemaResponse(result);
-                  mermaidValidation = await validateMermaidResponse(result);
-                  mermaidRetries++;
-                } catch (retryError) {
-                  if (args.debug) {
-                    console.error(`[DEBUG] Mermaid correction retry ${mermaidRetries + 1} failed: ${retryError.message}`);
-                  }
-                  break;
-                }
+              } else if (!mermaidValidation.isValid && mermaidValidation.diagrams && mermaidValidation.diagrams.length > 0 && args.debug) {
+                console.error(`[DEBUG] Mermaid validation failed: ${mermaidValidation.errors?.join(', ')}`);
               }
-              
-              if (!mermaidValidation.isValid && args.debug) {
-                console.error(`[DEBUG] Mermaid validation failed after ${mermaidRetries} retries`);
+            } catch (error) {
+              if (args.debug) {
+                console.error(`[DEBUG] Enhanced mermaid validation failed: ${error.message}`);
               }
             }
 
@@ -658,53 +651,32 @@ async function main() {
           console.error(`  Cleaned length: ${cleaningResult.debug.cleanedLength}`);
         }
 
-        // First, check if schema expects Mermaid diagrams and validate
-        if (isMermaidSchema(schema)) {
-          const MAX_MERMAID_RETRIES = 2;
-          let mermaidRetries = 0;
-          let mermaidValidation = await validateMermaidResponse(result);
-          
-          while (!mermaidValidation.isValid && mermaidRetries < MAX_MERMAID_RETRIES) {
+        // Check for mermaid diagrams in response and validate/fix them regardless of schema
+        try {
+          const mermaidValidationResult = await validateAndFixMermaidResponse(result, {
+            debug: config.verbose,
+            path: config.path,
+            provider: config.provider,
+            model: config.model,
+            tracer: appTracer
+          });
+
+          if (mermaidValidationResult.wasFixed) {
+            result = mermaidValidationResult.fixedResponse;
             if (config.verbose) {
-              console.error(`[DEBUG] Mermaid validation failed (attempt ${mermaidRetries + 1}): ${mermaidValidation.errors?.join(', ')}`);
-              console.error('[DEBUG] Attempting to correct Mermaid diagrams...');
-            }
-            
-            const correctionPrompt = createMermaidCorrectionPrompt(
-              result, 
-              schema, 
-              mermaidValidation.errors, 
-              mermaidValidation.diagrams
-            );
-            
-            try {
-              if (appTracer) {
-                result = await appTracer.withSpan('agent.mermaid_correction',
-                  () => agent.answer(correctionPrompt, [], { schema }),
-                  { 'retry_attempt': mermaidRetries + 1, 'errors': mermaidValidation.errors?.join(', ') }
-                );
-              } else {
-                result = await agent.answer(correctionPrompt, [], { schema });
-              }
-              result = cleanSchemaResponse(result);
-              mermaidValidation = await validateMermaidResponse(result);
-              mermaidRetries++;
-              
-              if (config.verbose) {
-                if (mermaidValidation.isValid) {
-                  console.error(`[DEBUG] Mermaid correction successful after ${mermaidRetries} attempts`);
+              console.error(`[DEBUG] Mermaid diagrams fixed using specialized agent`);
+              mermaidValidationResult.fixingResults.forEach((fixResult, index) => {
+                if (fixResult.wasFixed) {
+                  console.error(`[DEBUG] Fixed diagram ${index + 1}: ${fixResult.originalError}`);
                 }
-              }
-            } catch (retryError) {
-              if (config.verbose) {
-                console.error(`[DEBUG] Mermaid correction retry ${mermaidRetries + 1} failed: ${retryError.message}`);
-              }
-              break;
+              });
             }
+          } else if (!mermaidValidationResult.isValid && mermaidValidationResult.diagrams && mermaidValidationResult.diagrams.length > 0 && config.verbose) {
+            console.error(`[DEBUG] Mermaid validation failed: ${mermaidValidationResult.errors?.join(', ')}`);
           }
-          
-          if (!mermaidValidation.isValid && config.verbose) {
-            console.error(`[DEBUG] Mermaid validation failed after ${mermaidRetries} retries`);
+        } catch (error) {
+          if (config.verbose) {
+            console.error(`[DEBUG] Enhanced mermaid validation failed: ${error.message}`);
           }
         }
 
