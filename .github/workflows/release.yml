@@ -273,8 +273,8 @@ jobs:
           npm version "$VERSION" --no-git-tag-version
           echo "Updated npm package.json to version $VERSION"
 
-      - name: Build MCP TypeScript
-        run: cd npm && npm run build:mcp
+      - name: Build all npm packages
+        run: cd npm && npm run build
 
       - name: Publish to npm
         run: cd npm && npm publish --access public

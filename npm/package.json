@@ -3,12 +3,29 @@
   "version": "1.0.0",
   "description": "Node.js wrapper for the probe code search tool",
   "main": "src/index.js",
+  "module": "src/index.js",
+  "types": "index.d.ts",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./src/index.js",
+      "require": "./cjs/index.cjs"
+    },
+    "./agent": {
+      "types": "./src/agent/ProbeAgent.d.ts",
+      "import": "./src/agent/ProbeAgent.js",
+      "require": "./cjs/agent/ProbeAgent.cjs"
+    }
+  },
   "bin": {
     "probe": "bin/probe"
   },
   "files": [
     "src/**/*",
+    "cjs/**/*",
+    "*.d.ts",
+    "src/**/*.d.ts",
     "bin/probe",
     "bin/probe-binary",
     "bin/probe.exe",
@@ -20,7 +37,9 @@
     "postinstall": "node scripts/postinstall.js",
     "build:mcp": "node scripts/build-mcp.cjs",
     "build:agent": "node scripts/build-agent.cjs",
-    "build": "npm run build:mcp && npm run build:agent",
+    "build:types": "echo 'TypeScript definitions already manually created'",
+    "build:cjs": "node scripts/build-cjs.js",
+    "build": "npm run build:types && npm run build:cjs && npm run build:mcp && npm run build:agent",
     "prepack": "npm run build",
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
     "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch",
