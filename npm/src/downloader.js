@@ -13,6 +13,7 @@ import tar from 'tar';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { ensureBinDirectory } from './utils.js';
+import { getPackageBinDir } from './directory-resolver.js';
 
 const exec = promisify(execCallback);
 
@@ -25,11 +26,8 @@ const BINARY_NAME = "probe";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Local storage directory for downloaded binaries
-const LOCAL_DIR = path.resolve(__dirname, '..', 'bin');
-
-// Version info file path
-const VERSION_INFO_PATH = path.join(LOCAL_DIR, 'version-info.json');
+// Note: LOCAL_DIR and VERSION_INFO_PATH are now resolved dynamically
+// using getPackageBinDir() to handle different installation environments
 
 /**
  * Detects the current OS and architecture
@@ -573,10 +571,11 @@ async function extractBinary(assetPath, outputDir) {
  * Gets version info from the version file
  * @returns {Promise<Object|null>} Version information
  */
-async function getVersionInfo() {
+async function getVersionInfo(binDir) {
 	try {
-		if (await fs.pathExists(VERSION_INFO_PATH)) {
-			const content = await fs.readFile(VERSION_INFO_PATH, 'utf-8');
+		const versionInfoPath = path.join(binDir, 'version-info.json');
+		if (await fs.pathExists(versionInfoPath)) {
+			const content = await fs.readFile(versionInfoPath, 'utf-8');
 			return JSON.parse(content);
 		}
 		return null;
@@ -589,17 +588,19 @@ async function getVersionInfo() {
 /**
  * Saves version info to the version file
  * @param {string} version - Version to save
+ * @param {string} binDir - Directory where version info should be saved
  * @returns {Promise<void>}
  */
-async function saveVersionInfo(version) {
+async function saveVersionInfo(version, binDir) {
 	const versionInfo = {
 		version,
 		lastUpdated: new Date().toISOString()
 	};
 
-	await fs.writeFile(VERSION_INFO_PATH, JSON.stringify(versionInfo, null, 2));
+	const versionInfoPath = path.join(binDir, 'version-info.json');
+	await fs.writeFile(versionInfoPath, JSON.stringify(versionInfo, null, 2));
 	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-		console.log(`Version info saved: ${version}`);
+		console.log(`Version info saved: ${version} at ${versionInfoPath}`);
 	}
 }
 
@@ -649,8 +650,8 @@ async function getPackageVersion() {
  */
 export async function downloadProbeBinary(version) {
 	try {
-		// Create the bin directory if it doesn't exist
-		await ensureBinDirectory();
+		// Get writable directory for binary storage (handles CI, npx, Docker scenarios)
+		const localDir = await getPackageBinDir();
 
 		// If no version is specified, use the package version
 		if (!version || version === '0.0.0') {
@@ -659,16 +660,17 @@ export async function downloadProbeBinary(version) {
 
 		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
 			console.log(`Downloading probe binary (version: ${version || 'latest'})...`);
+			console.log(`Using binary directory: ${localDir}`);
 		}
 
 		const isWindows = os.platform() === 'win32';
 		// Use the correct binary name: probe.exe for Windows, probe-binary for Unix
 		const binaryName = isWindows ? `${BINARY_NAME}.exe` : `${BINARY_NAME}-binary`;
-		const binaryPath = path.join(LOCAL_DIR, binaryName);
+		const binaryPath = path.join(localDir, binaryName);
 
 		// Check if the binary already exists and version matches
 		if (await fs.pathExists(binaryPath)) {
-			const versionInfo = await getVersionInfo();
+			const versionInfo = await getVersionInfo(localDir);
 
 			// If versions match, use existing binary
 			if (versionInfo && versionInfo.version === version) {
@@ -711,7 +713,7 @@ export async function downloadProbeBinary(version) {
 			tagVersion = versionToUse;
 			bestAsset = constructAssetInfo(versionToUse, osInfo, archInfo);
 		}
-		const { assetPath, checksumPath } = await downloadAsset(bestAsset, LOCAL_DIR);
+		const { assetPath, checksumPath } = await downloadAsset(bestAsset, localDir);
 
 		// Verify checksum if available
 		const checksumValid = await verifyChecksum(assetPath, checksumPath);
@@ -720,10 +722,10 @@ export async function downloadProbeBinary(version) {
 		}
 
 		// Extract the binary
-		const extractedBinaryPath = await extractBinary(assetPath, LOCAL_DIR);
+		const extractedBinaryPath = await extractBinary(assetPath, localDir);
 
 		// Save the version information
-		await saveVersionInfo(tagVersion);
+		await saveVersionInfo(tagVersion, localDir);
 
 		// Clean up the downloaded archive
 		try {

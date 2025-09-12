@@ -7,10 +7,12 @@ import path from 'path';
 import fs from 'fs-extra';
 import { fileURLToPath } from 'url';
 import { downloadProbeBinary } from './downloader.js';
+import { getPackageBinDir } from './directory-resolver.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const binDir = path.resolve(__dirname, '..', 'bin');
+
+// Note: binDir is now resolved dynamically using getPackageBinDir()
 
 // Store the binary path
 let probeBinaryPath = '';
@@ -36,6 +38,9 @@ export async function getBinaryPath(options = {}) {
 		return probeBinaryPath;
 	}
 
+	// Get dynamic bin directory (handles CI, npx, Docker scenarios)
+	const binDir = await getPackageBinDir();
+	
 	// Check bin directory
 	const isWindows = process.platform === 'win32';
 	const binaryName = isWindows ? 'probe.exe' : 'probe';
@@ -70,6 +75,9 @@ export function setBinaryPath(binaryPath) {
  * @returns {Promise<void>}
  */
 export async function ensureBinDirectory() {
+	// This function is now handled by getPackageBinDir() which ensures directory exists
+	// Keeping for backward compatibility but it's no longer needed
+	const binDir = await getPackageBinDir();
 	await fs.ensureDir(binDir);
 }
 
