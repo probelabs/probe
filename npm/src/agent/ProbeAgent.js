@@ -327,6 +327,8 @@ When reviewing code:
 - Evaluate code style and consistency
 - Provide specific, actionable suggestions with code examples where appropriate`,
 
+      'code-review-template': `You are going to perform code review according to provided user rules. Ensure to review only code provided in diff and latest commit, if provided. However you still need to fully understand how modified code works, and read dependencies if something is not clear.`,
+
       'engineer': `You are senior engineer focused on software architecture and design.
 Before jumping on the task you first, in details analyse user request, and try to provide elegant and concise solution.
 If solution is clear, you can jump to implementation right away, if not, you can ask user a clarification question, by calling attempt_completion tool, with required details.
@@ -487,6 +489,20 @@ When troubleshooting:
             'max_iterations': maxIterations,
             'message_count': currentMessages.length
           });
+        }
+
+        // Add warning message when reaching the last iteration
+        if (currentIteration === maxIterations) {
+          const warningMessage = `⚠️ WARNING: You have reached the maximum tool iterations limit (${maxIterations}). This is your final message. Please respond with the data you have so far. If something was not completed, honestly state what was not done and provide any partial results or recommendations you can offer.`;
+          
+          currentMessages.push({
+            role: 'user',
+            content: warningMessage
+          });
+          
+          if (this.debug) {
+            console.log(`[DEBUG] Added max iterations warning message at iteration ${currentIteration}`);
+          }
         }
 
         // Calculate context size

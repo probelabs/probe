@@ -260,7 +260,7 @@ pub enum Commands {
         #[arg(short = 'k', long = "keep-input")]
         keep_input: bool,
 
-        /// System prompt template for LLM models (engineer, architect, or path to file)
+        /// System prompt template for LLM models (engineer, architect, code-review, code-review-template, or path to file)
         #[arg(long = "prompt")]
         prompt: Option<String>,
 
