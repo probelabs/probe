@@ -368,23 +368,51 @@ console.log(response);
 | `provider` | `string` | auto-detect | AI provider: 'anthropic', 'openai', 'google' |
 | `model` | `string` | provider default | Model name override |
 | `allowEdit` | `boolean` | `false` | Enable code modification capabilities |
-| `promptType` | `string` | `'code-explorer'` | Persona: 'code-explorer', 'architect', 'code-review', 'engineer', 'support' |
+| `promptType` | `string` | `'code-explorer'` | Persona: 'code-explorer', 'architect', 'code-review', 'engineer', 'support', 'code-review-template' |
 | `customPrompt` | `string` | `null` | Custom system prompt (overrides promptType) |
 | `debug` | `boolean` | `false` | Enable debug logging |
+| `maxIterations` | `number` | `30` | Maximum tool iterations (configurable via MAX_TOOL_ITERATIONS env var) |
 
 #### Methods
 
-**`agent.answer(message, images?, options?)`**
+**`agent.answer(message, images?, schemaOrOptions?)`**
 
-Main method for asking questions about your codebase.
+Main method for asking questions about your codebase. Supports automatic schema validation and formatting.
 
 ```javascript
+// Basic usage
+const response = await agent.answer('Explain the database connection logic');
+
+// With images (multimodal)
 const response = await agent.answer(
-  'Explain the database connection logic', 
-  [], // optional image array for multimodal
-  { schema: 'JSON schema for structured output' } // optional
+  'Analyze this architecture diagram', 
+  [imageBase64OrUrl]
+);
+
+// With schema for structured output (string format - backwards compatible)
+const response = await agent.answer(
+  'List all functions',
+  [],
+  '{"functions": [{"name": "string", "file": "string"}]}'
+);
+
+// With schema in options object (recommended)
+const response = await agent.answer(
+  'List all functions', 
+  [], 
+  { 
+    schema: '{"functions": [{"name": "string", "file": "string"}]}',
+    // Other options can be added here
+  }
 );
 ```
+
+**Schema Validation Features:**
+- Automatic response formatting according to provided schema
+- JSON schema validation with automatic error correction
+- Mermaid diagram validation and fixing
+- Clean response output (removes code blocks and formatting artifacts)
+- Backwards compatible with string schema parameter
 
 **`agent.getTokenUsage()`**
 
@@ -468,7 +496,28 @@ const functions = await agent.answer(
   }
 );
 
+// Response is automatically validated and corrected if needed
 const functionList = JSON.parse(functions);
+
+// Example with automatic JSON error correction
+const apiEndpoints = await agent.answer(
+  'List all API endpoints with their methods',
+  [],
+  {
+    schema: JSON.stringify({
+      endpoints: [
+        {
+          path: 'string',
+          method: 'string',
+          handler: 'string',
+          file: 'string'
+        }
+      ]
+    })
+  }
+);
+// ProbeAgent will automatically fix any JSON formatting issues
+const endpoints = JSON.parse(apiEndpoints);
 ```
 
 #### Multi-turn Conversations
@@ -556,20 +605,48 @@ const usage = analyzer.getUsage();
 
 ### Advanced Features {#probeagent-advanced}
 
-#### Mermaid Diagram Generation
+#### Mermaid Diagram Generation and Validation
 
-ProbeAgent automatically validates and fixes Mermaid diagrams:
+ProbeAgent includes comprehensive Mermaid diagram validation and automatic fixing capabilities:
 
 ```javascript
 const agent = new ProbeAgent({ path: './my-project' });
 
+// Generate a Mermaid diagram with automatic validation
 const diagram = await agent.answer(
   'Create a mermaid diagram showing the system architecture',
   [],
   { schema: 'Generate response with mermaid diagram in code blocks' }
 );
-// Automatically validates and fixes mermaid syntax!
+// Automatically validates and fixes mermaid syntax errors!
+
+// Example: Architecture diagram with automatic fixing
+const architectureDiagram = await agent.answer(
+  'Create a detailed mermaid flowchart of the authentication flow',
+  [],
+  {
+    schema: JSON.stringify({
+      diagram: 'string', // Mermaid diagram code
+      description: 'string'
+    })
+  }
+);
+
+// Example: Class diagram with validation
+const classDiagram = await agent.answer(
+  'Generate a mermaid class diagram for the User model and its relationships',
+  [],
+  { schema: 'Provide the response with a valid mermaid class diagram' }
+);
 ```
+
+**Mermaid Validation Features:**
+- **Automatic Syntax Validation**: Validates Mermaid diagram syntax using the official Mermaid CLI
+- **Error Detection**: Identifies syntax errors, missing nodes, invalid relationships
+- **Automatic Fixing**: Uses AI to automatically correct syntax errors
+- **Multiple Diagram Support**: Can validate and fix multiple diagrams in a single response
+- **Diagram Types Supported**: flowchart, sequence, class, state, entity-relationship, gantt, pie, git, journey, and more
+- **Preserves Content**: Maintains the original diagram intent while fixing syntax issues
 
 #### Integration with Web Frameworks
 
@@ -621,13 +698,16 @@ export DEBUG=1
 | **Purpose** | Full SDK for building AI apps | Simple chat interface |
 | **Session Management** | Advanced with persistent history | Basic conversation |
 | **Code Modification** | Supports `allowEdit` flag | Read-only |
-| **Custom Personas** | 5+ predefined personas | Limited customization |
-| **Structured Output** | Full JSON schema validation | Basic responses |
+| **Custom Personas** | 6+ predefined personas (including code-review-template) | Limited customization |
+| **Structured Output** | Full JSON schema validation with auto-correction | Basic responses |
 | **Event System** | Real-time tool monitoring | None |
-| **Mermaid Validation** | Advanced validation & fixing | Basic support |
-| **Use Case** | Building AI applications | Interactive exploration |
+| **Mermaid Validation** | Advanced validation & automatic fixing | Basic support |
+| **Schema Handling** | Automatic formatting, validation, and error correction | None |
+| **JSON Validation** | Automatic detection and correction of malformed JSON | None |
+| **Max Iterations** | Configurable (default 30, via MAX_TOOL_ITERATIONS env) | Fixed |
+| **Use Case** | Building AI applications with structured outputs | Interactive exploration |
 
-Use **ProbeAgent** when you want to build sophisticated AI-powered code analysis tools, and **ProbeChat** when you need a simple chat interface for code exploration.
+Use **ProbeAgent** when you want to build sophisticated AI-powered code analysis tools with structured outputs, and **ProbeChat** when you need a simple chat interface for code exploration.
 
 ## MCP Server Integration {#mcp-server-integration}
 
