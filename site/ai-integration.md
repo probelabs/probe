@@ -1,6 +1,6 @@
 # Probe AI Integration
 
-Probe offers powerful AI integration capabilities that allow you to leverage large language models (LLMs) to understand and navigate your codebase more effectively. This document provides comprehensive information about Probe's AI features, including the AI chat mode, MCP server integration, and Node.js SDK for programmatic access.
+Probe offers powerful AI integration capabilities that allow you to leverage large language models (LLMs) to understand and navigate your codebase more effectively. This document provides comprehensive information about Probe's AI features, including the AI chat mode, ProbeAgent SDK for building AI applications, MCP server integration, and Node.js SDK for programmatic access.
 
 ## Table of Contents
 
@@ -12,6 +12,14 @@ Probe offers powerful AI integration capabilities that allow you to leverage lar
   - [Configuration Options](#configuration-options)
   - [Advanced Usage](#advanced-usage)
   - [Best Practices](#best-practices)
+- [ProbeAgent SDK](#probeagent-sdk)
+  - [Overview](#probeagent-overview)
+  - [Installation](#probeagent-installation)
+  - [Quick Start](#probeagent-quick-start)
+  - [API Reference](#probeagent-api)
+  - [Usage Examples](#probeagent-examples)
+  - [Advanced Features](#probeagent-advanced)
+  - [Comparison with ProbeChat](#probeagent-vs-probechat)
 - [MCP Server Integration](#mcp-server-integration)
   - [Overview](#mcp-overview)
   - [Setting Up the MCP Server](#setting-up-the-mcp-server)
@@ -306,6 +314,320 @@ const chat = new ProbeChat({
 6. **Request Examples**: Ask for examples if you're trying to understand how to use a particular feature or API
 7. **Use Multiple Queries**: If you don't find what you're looking for, try reformulating your question
 8. **Combine with CLI**: Use the AI chat for exploration and understanding, then switch to the CLI for specific searches
+
+## ProbeAgent SDK {#probeagent-sdk}
+
+### Overview {#probeagent-overview}
+
+The ProbeAgent SDK provides a powerful programmatic interface for building AI-powered code analysis applications. Unlike the basic Node.js SDK which focuses on search/query/extract operations, ProbeAgent offers a complete AI conversation system with persistent sessions, advanced mermaid diagram validation, and intelligent code understanding.
+
+Key Features:
+
+- **Full AI Conversation System**: Multi-turn conversations with persistent history
+- **Session Management**: Isolated conversation sessions with unique IDs
+- **Multiple AI Providers**: Support for Anthropic, OpenAI, and Google models
+- **Code Modification**: Optional edit capabilities with `allowEdit` flag
+- **Structured Output**: JSON schema validation and automatic mermaid diagram fixing
+- **Event System**: Real-time monitoring of tool execution
+- **Custom Personas**: Predefined expert roles (architect, code-review, engineer, support)
+- **Token Usage Tracking**: Monitor API usage and costs
+
+### Installation {#probeagent-installation}
+
+```bash
+npm install @probelabs/probe
+```
+
+### Quick Start {#probeagent-quick-start}
+
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+// Create agent instance
+const agent = new ProbeAgent({
+  path: '/path/to/your/codebase',
+  provider: 'anthropic', // or 'openai', 'google'
+  promptType: 'code-explorer', // or 'architect', 'code-review', 'engineer', 'support'
+  allowEdit: false, // set to true for code modification
+  debug: true
+});
+
+// Ask questions about your code
+const response = await agent.answer('How does the authentication system work?');
+console.log(response);
+```
+
+### API Reference {#probeagent-api}
+
+#### Constructor Options
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `sessionId` | `string` | `randomUUID()` | Unique session identifier |
+| `path` | `string` | `process.cwd()` | Search directory path |
+| `provider` | `string` | auto-detect | AI provider: 'anthropic', 'openai', 'google' |
+| `model` | `string` | provider default | Model name override |
+| `allowEdit` | `boolean` | `false` | Enable code modification capabilities |
+| `promptType` | `string` | `'code-explorer'` | Persona: 'code-explorer', 'architect', 'code-review', 'engineer', 'support' |
+| `customPrompt` | `string` | `null` | Custom system prompt (overrides promptType) |
+| `debug` | `boolean` | `false` | Enable debug logging |
+
+#### Methods
+
+**`agent.answer(message, images?, options?)`**
+
+Main method for asking questions about your codebase.
+
+```javascript
+const response = await agent.answer(
+  'Explain the database connection logic', 
+  [], // optional image array for multimodal
+  { schema: 'JSON schema for structured output' } // optional
+);
+```
+
+**`agent.getTokenUsage()`**
+
+Get token usage statistics for the current session.
+
+```javascript
+const usage = agent.getTokenUsage();
+console.log(`Total tokens: ${usage.totalTokens}`);
+```
+
+**`agent.cancel()`**
+
+Cancel any ongoing operations.
+
+```javascript
+agent.cancel();
+```
+
+### Usage Examples {#probeagent-examples}
+
+#### Basic Code Analysis
+
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+const agent = new ProbeAgent({
+  path: './my-project',
+  provider: 'anthropic'
+});
+
+// Ask about architecture
+const architecture = await agent.answer('Describe the overall architecture of this codebase');
+
+// Find specific functionality
+const auth = await agent.answer('How is user authentication implemented?');
+
+// Code review
+const issues = await agent.answer('Are there any potential security issues?');
+```
+
+#### Using Different Personas
+
+```javascript
+// Code review specialist
+const reviewer = new ProbeAgent({
+  path: './my-project',
+  promptType: 'code-review'
+});
+
+const review = await reviewer.answer('Review this codebase for bugs and improvements');
+
+// Software architect
+const architect = new ProbeAgent({
+  path: './my-project', 
+  promptType: 'architect'
+});
+
+const design = await architect.answer('Suggest improvements to the system architecture');
+```
+
+#### Structured Output with Schemas
+
+```javascript
+const agent = new ProbeAgent({ path: './my-project' });
+
+// Get structured JSON response
+const functions = await agent.answer(
+  'List all public functions in the codebase',
+  [],
+  { 
+    schema: JSON.stringify({
+      functions: [
+        {
+          name: 'string',
+          file: 'string', 
+          parameters: ['string'],
+          description: 'string'
+        }
+      ]
+    })
+  }
+);
+
+const functionList = JSON.parse(functions);
+```
+
+#### Multi-turn Conversations
+
+```javascript
+const agent = new ProbeAgent({ path: './my-project' });
+
+// First question
+await agent.answer('What does the User model look like?');
+
+// Follow-up (agent remembers context)
+await agent.answer('How is the User model used in the authentication system?');
+
+// Another follow-up
+await agent.answer('Are there any potential issues with this approach?');
+
+// Check conversation history
+console.log(`Conversation has ${agent.history.length} messages`);
+```
+
+#### Event Monitoring
+
+```javascript
+const agent = new ProbeAgent({ 
+  path: './my-project',
+  debug: true
+});
+
+// Listen to tool call events
+agent.events.on('toolCall', (event) => {
+  console.log(`Tool ${event.name} ${event.status}: ${event.description}`);
+});
+
+await agent.answer('Search for all API endpoints');
+```
+
+#### Code Modification (Advanced)
+
+```javascript
+const agent = new ProbeAgent({
+  path: './my-project',
+  allowEdit: true, // Enable code modification
+  promptType: 'engineer'
+});
+
+// Agent can now modify code files
+await agent.answer('Add input validation to the user registration endpoint');
+await agent.answer('Refactor the database connection code to use connection pooling');
+```
+
+#### Session Management
+
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+class CodeAnalyzer {
+  constructor(projectPath) {
+    this.agent = new ProbeAgent({
+      sessionId: `analyzer-${Date.now()}`,
+      path: projectPath,
+      promptType: 'architect',
+      debug: process.env.NODE_ENV === 'development'
+    });
+  }
+  
+  async analyzeFeature(featureName) {
+    return await this.agent.answer(`Analyze the ${featureName} feature implementation`);
+  }
+  
+  async suggestImprovements() {
+    return await this.agent.answer('What improvements would you suggest for this codebase?');
+  }
+  
+  getUsage() {
+    return this.agent.getTokenUsage();
+  }
+}
+
+// Usage
+const analyzer = new CodeAnalyzer('./my-project');
+const analysis = await analyzer.analyzeFeature('authentication');
+const improvements = await analyzer.suggestImprovements();
+const usage = analyzer.getUsage();
+```
+
+### Advanced Features {#probeagent-advanced}
+
+#### Mermaid Diagram Generation
+
+ProbeAgent automatically validates and fixes Mermaid diagrams:
+
+```javascript
+const agent = new ProbeAgent({ path: './my-project' });
+
+const diagram = await agent.answer(
+  'Create a mermaid diagram showing the system architecture',
+  [],
+  { schema: 'Generate response with mermaid diagram in code blocks' }
+);
+// Automatically validates and fixes mermaid syntax!
+```
+
+#### Integration with Web Frameworks
+
+```javascript
+// Express.js integration example
+app.post('/analyze', async (req, res) => {
+  const agent = new ProbeAgent({
+    path: req.body.projectPath,
+    sessionId: req.session.id
+  });
+  
+  try {
+    const result = await agent.answer(req.body.question);
+    res.json({ response: result, usage: agent.getTokenUsage() });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+```
+
+#### Environment Variables
+
+Set these environment variables for API access:
+
+```bash
+# Anthropic Claude (recommended)
+export ANTHROPIC_API_KEY="your-key-here"
+
+# OpenAI GPT
+export OPENAI_API_KEY="your-key-here" 
+
+# Google Gemini
+export GOOGLE_API_KEY="your-key-here"
+
+# Force specific provider (optional)
+export FORCE_PROVIDER="anthropic"
+
+# Override model (optional)  
+export MODEL_NAME="claude-3-opus-20240229"
+
+# Enable debug mode (optional)
+export DEBUG=1
+```
+
+### Comparison with ProbeChat {#probeagent-vs-probechat}
+
+| Feature | ProbeAgent | ProbeChat |
+|---------|------------|-----------|
+| **Purpose** | Full SDK for building AI apps | Simple chat interface |
+| **Session Management** | Advanced with persistent history | Basic conversation |
+| **Code Modification** | Supports `allowEdit` flag | Read-only |
+| **Custom Personas** | 5+ predefined personas | Limited customization |
+| **Structured Output** | Full JSON schema validation | Basic responses |
+| **Event System** | Real-time tool monitoring | None |
+| **Mermaid Validation** | Advanced validation & fixing | Basic support |
+| **Use Case** | Building AI applications | Interactive exploration |
+
+Use **ProbeAgent** when you want to build sophisticated AI-powered code analysis tools, and **ProbeChat** when you need a simple chat interface for code exploration.
 
 ## MCP Server Integration {#mcp-server-integration}
 

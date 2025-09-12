@@ -71,8 +71,8 @@ That's the diagram.`;
 
       const result = extractMermaidFromMarkdown(response);
       expect(result.diagrams).toHaveLength(1);
-      expect(result.diagrams[0]).toContain('graph TD');
-      expect(result.diagrams[0]).toContain('A[Start] --> B[Process]');
+      expect(result.diagrams[0].content).toContain('graph TD');
+      expect(result.diagrams[0].content).toContain('A[Start] --> B[Process]');
     });
 
     test('should extract multiple diagrams', () => {
@@ -93,8 +93,8 @@ sequenceDiagram
 
       const result = extractMermaidFromMarkdown(response);
       expect(result.diagrams).toHaveLength(2);
-      expect(result.diagrams[0]).toContain('graph TD');
-      expect(result.diagrams[1]).toContain('sequenceDiagram');
+      expect(result.diagrams[0].content).toContain('graph TD');
+      expect(result.diagrams[1].content).toContain('sequenceDiagram');
     });
 
     test('should handle diagrams with extra whitespace', () => {
@@ -109,7 +109,7 @@ graph TD
 
       const result = extractMermaidFromMarkdown(response);
       expect(result.diagrams).toHaveLength(1);
-      expect(result.diagrams[0]).toBe('graph TD\n    A --> B');
+      expect(result.diagrams[0].content).toBe('graph TD\n    A --> B');
     });
 
     test('should return empty array for no diagrams', () => {
@@ -131,8 +131,8 @@ sequenceDiagram
 
       const result = extractMermaidFromMarkdown(response);
       expect(result.diagrams).toHaveLength(2);
-      expect(result.diagrams[0]).toContain('graph TD');
-      expect(result.diagrams[1]).toContain('sequenceDiagram');
+      expect(result.diagrams[0].content).toContain('graph TD');
+      expect(result.diagrams[1].content).toContain('sequenceDiagram');
     });
 
     test('should handle null/undefined input', () => {

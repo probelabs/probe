@@ -18,7 +18,8 @@ import {
   createJsonCorrectionPrompt,
   isMermaidSchema,
   validateMermaidResponse,
-  createMermaidCorrectionPrompt
+  createMermaidCorrectionPrompt,
+  validateAndFixMermaidResponse
 } from './schemaUtils.js';
 import { ACPServer } from './acp/index.js';
 
@@ -40,6 +41,68 @@ function readInputContent(input) {
   return input;
 }
 
+// Function to check if stdin has data available
+function isStdinAvailable() {
+  // Check if stdin is not a TTY (indicates piped input)
+  // Also ensure we're not in an interactive terminal session
+  return !process.stdin.isTTY && process.stdin.readable;
+}
+
+// Function to read from stdin with timeout detection for interactive vs piped usage
+function readFromStdin() {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    let hasReceivedData = false;
+    let dataChunks = [];
+    
+    // Short timeout to detect if this is interactive usage (no immediate data)
+    const timeout = setTimeout(() => {
+      if (!hasReceivedData) {
+        reject(new Error('INTERACTIVE_MODE'));
+      }
+    }, 100); // Very short timeout - piped input should arrive immediately
+    
+    process.stdin.setEncoding('utf8');
+    
+    // Try to read immediately to see if data is available
+    process.stdin.on('readable', () => {
+      let chunk;
+      while ((chunk = process.stdin.read()) !== null) {
+        hasReceivedData = true;
+        clearTimeout(timeout);
+        dataChunks.push(chunk);
+        data += chunk;
+      }
+    });
+    
+    process.stdin.on('end', () => {
+      clearTimeout(timeout);
+      const trimmed = data.trim();
+      if (!trimmed && dataChunks.length === 0) {
+        reject(new Error('No input received from stdin'));
+      } else {
+        resolve(trimmed);
+      }
+    });
+    
+    process.stdin.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    
+    // Force a read attempt to trigger readable event if data is available
+    process.nextTick(() => {
+      const chunk = process.stdin.read();
+      if (chunk !== null) {
+        hasReceivedData = true;
+        clearTimeout(timeout);
+        data += chunk;
+        dataChunks.push(chunk);
+      }
+    });
+  });
+}
+
 // Parse command line arguments
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -59,7 +122,8 @@ function parseArgs() {
     maxIterations: null,
     traceFile: undefined,
     traceRemote: undefined,
-    traceConsole: false
+    traceConsole: false,
+    useStdin: false // New flag to indicate stdin should be used
   };
   
   for (let i = 0; i < args.length; i++) {
@@ -101,6 +165,15 @@ function parseArgs() {
     }
   }
   
+  // Auto-detect stdin usage if no question provided and stdin appears to be piped
+  // For simplicity, let's use a more practical approach:
+  // If user provides no arguments at all, we try to read from stdin with a short timeout
+  // This works better across different environments
+  if (!config.question && !config.mcp && !config.acp && !config.help) {
+    // We'll check for stdin in the main function with a timeout approach
+    config.useStdin = true;
+  }
+  
   return config;
 }
 
@@ -112,6 +185,7 @@ probe agent - AI-powered code exploration tool
 Usage:
   probe agent <question>           Answer a question about the codebase
   probe agent <file>               Read question from file
+  echo "question" | probe agent    Read question from stdin (pipe input)
   probe agent --mcp                Start as MCP server
   probe agent --acp                Start as ACP server
 
@@ -143,6 +217,8 @@ Environment Variables:
 Examples:
   probe agent "How does authentication work?"
   probe agent question.txt        # Read question from file
+  echo "How does the search algorithm work?" | probe agent  # Read from stdin
+  cat requirements.txt | probe agent --prompt architect     # Pipe file content
   probe agent "Find all database queries" --path ./src --prompt engineer
   probe agent "Review this code for bugs" --prompt code-review --system-prompt custom-prompt.txt
   probe agent "List all functions" --schema '{"functions": [{"name": "string", "file": "string"}]}'
@@ -304,39 +380,31 @@ class ProbeAgentMcpServer {
             // Clean the schema response to remove code blocks and formatting
             result = cleanSchemaResponse(result);
 
-            // First, check if schema expects Mermaid diagrams and validate
-            if (isMermaidSchema(schema)) {
-              const MAX_MERMAID_RETRIES = 2;
-              let mermaidRetries = 0;
-              let mermaidValidation = await validateMermaidResponse(result);
-              
-              while (!mermaidValidation.isValid && mermaidRetries < MAX_MERMAID_RETRIES) {
+            // Check for mermaid diagrams in response and validate/fix them regardless of schema
+            try {
+              const mermaidValidation = await validateAndFixMermaidResponse(result, {
+                debug: args.debug,
+                path: agentConfig.path,
+                provider: args.provider,
+                model: args.model
+              });
+
+              if (mermaidValidation.wasFixed) {
+                result = mermaidValidation.fixedResponse;
                 if (args.debug) {
-                  console.error(`[DEBUG] Mermaid validation failed (attempt ${mermaidRetries + 1}): ${mermaidValidation.errors?.join(', ')}`);
+                  console.error(`[DEBUG] Mermaid diagrams fixed using specialized agent`);
+                  mermaidValidation.fixingResults.forEach((fixResult, index) => {
+                    if (fixResult.wasFixed) {
+                      console.error(`[DEBUG] Fixed diagram ${index + 1}: ${fixResult.originalError}`);
+                    }
+                  });
                 }
-                
-                const correctionPrompt = createMermaidCorrectionPrompt(
-                  result, 
-                  schema, 
-                  mermaidValidation.errors, 
-                  mermaidValidation.diagrams
-                );
-                
-                try {
-                  result = await agent.answer(correctionPrompt, [], { schema });
-                  result = cleanSchemaResponse(result);
-                  mermaidValidation = await validateMermaidResponse(result);
-                  mermaidRetries++;
-                } catch (retryError) {
-                  if (args.debug) {
-                    console.error(`[DEBUG] Mermaid correction retry ${mermaidRetries + 1} failed: ${retryError.message}`);
-                  }
-                  break;
-                }
+              } else if (!mermaidValidation.isValid && mermaidValidation.diagrams && mermaidValidation.diagrams.length > 0 && args.debug) {
+                console.error(`[DEBUG] Mermaid validation failed: ${mermaidValidation.errors?.join(', ')}`);
               }
-              
-              if (!mermaidValidation.isValid && args.debug) {
-                console.error(`[DEBUG] Mermaid validation failed after ${mermaidRetries} retries`);
+            } catch (error) {
+              if (args.debug) {
+                console.error(`[DEBUG] Enhanced mermaid validation failed: ${error.message}`);
               }
             }
 
@@ -429,6 +497,29 @@ async function main() {
     });
     await server.start();
     return;
+  }
+
+  // Handle stdin input if detected
+  if (config.useStdin) {
+    try {
+      if (config.verbose) {
+        console.error('[DEBUG] Reading question from stdin...');
+      }
+      config.question = await readFromStdin();
+      if (!config.question) {
+        console.error('Error: No input received from stdin');
+        process.exit(1);
+      }
+    } catch (error) {
+      // If this is interactive mode (no piped input), show help
+      if (error.message === 'INTERACTIVE_MODE') {
+        showHelp();
+        process.exit(0);
+      } else {
+        console.error(`Error reading from stdin: ${error.message}`);
+        process.exit(1);
+      }
+    }
   }
 
   if (!config.question) {
@@ -560,53 +651,32 @@ async function main() {
           console.error(`  Cleaned length: ${cleaningResult.debug.cleanedLength}`);
         }
 
-        // First, check if schema expects Mermaid diagrams and validate
-        if (isMermaidSchema(schema)) {
-          const MAX_MERMAID_RETRIES = 2;
-          let mermaidRetries = 0;
-          let mermaidValidation = await validateMermaidResponse(result);
-          
-          while (!mermaidValidation.isValid && mermaidRetries < MAX_MERMAID_RETRIES) {
+        // Check for mermaid diagrams in response and validate/fix them regardless of schema
+        try {
+          const mermaidValidationResult = await validateAndFixMermaidResponse(result, {
+            debug: config.verbose,
+            path: config.path,
+            provider: config.provider,
+            model: config.model,
+            tracer: appTracer
+          });
+
+          if (mermaidValidationResult.wasFixed) {
+            result = mermaidValidationResult.fixedResponse;
             if (config.verbose) {
-              console.error(`[DEBUG] Mermaid validation failed (attempt ${mermaidRetries + 1}): ${mermaidValidation.errors?.join(', ')}`);
-              console.error('[DEBUG] Attempting to correct Mermaid diagrams...');
-            }
-            
-            const correctionPrompt = createMermaidCorrectionPrompt(
-              result, 
-              schema, 
-              mermaidValidation.errors, 
-              mermaidValidation.diagrams
-            );
-            
-            try {
-              if (appTracer) {
-                result = await appTracer.withSpan('agent.mermaid_correction',
-                  () => agent.answer(correctionPrompt, [], { schema }),
-                  { 'retry_attempt': mermaidRetries + 1, 'errors': mermaidValidation.errors?.join(', ') }
-                );
-              } else {
-                result = await agent.answer(correctionPrompt, [], { schema });
-              }
-              result = cleanSchemaResponse(result);
-              mermaidValidation = await validateMermaidResponse(result);
-              mermaidRetries++;
-              
-              if (config.verbose) {
-                if (mermaidValidation.isValid) {
-                  console.error(`[DEBUG] Mermaid correction successful after ${mermaidRetries} attempts`);
+              console.error(`[DEBUG] Mermaid diagrams fixed using specialized agent`);
+              mermaidValidationResult.fixingResults.forEach((fixResult, index) => {
+                if (fixResult.wasFixed) {
+                  console.error(`[DEBUG] Fixed diagram ${index + 1}: ${fixResult.originalError}`);
                 }
-              }
-            } catch (retryError) {
-              if (config.verbose) {
-                console.error(`[DEBUG] Mermaid correction retry ${mermaidRetries + 1} failed: ${retryError.message}`);
-              }
-              break;
+              });
             }
+          } else if (!mermaidValidationResult.isValid && mermaidValidationResult.diagrams && mermaidValidationResult.diagrams.length > 0 && config.verbose) {
+            console.error(`[DEBUG] Mermaid validation failed: ${mermaidValidationResult.errors?.join(', ')}`);
           }
-          
-          if (!mermaidValidation.isValid && config.verbose) {
-            console.error(`[DEBUG] Mermaid validation failed after ${mermaidRetries} retries`);
+        } catch (error) {
+          if (config.verbose) {
+            console.error(`[DEBUG] Enhanced mermaid validation failed: ${error.message}`);
           }
         }
 
