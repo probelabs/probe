@@ -25,6 +25,13 @@ import {
   clearToolExecutionData 
 } from './probeTool.js';
 import { listFilesByLevel } from '../index.js';
+import { 
+  cleanSchemaResponse,
+  isJsonSchema,
+  validateJsonResponse,
+  createJsonCorrectionPrompt,
+  validateAndFixMermaidResponse
+} from './schemaUtils.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
@@ -421,13 +428,23 @@ When troubleshooting:
    * Answer a question using the agentic flow
    * @param {string} message - The user's question
    * @param {Array} [images] - Optional array of image data (base64 strings or URLs)
-   * @param {Object} [options] - Additional options
-   * @param {string} [options.schema] - Output schema (if provided, adds extra iterations for formatting/validation)
+   * @param {Object|string} [schemaOrOptions] - Can be either:
+   *   - A string: JSON schema for structured output (backwards compatible)
+   *   - An object: Options object with schema and other options
+   * @param {string} [schemaOrOptions.schema] - JSON schema string for structured output
    * @returns {Promise<string>} - The final answer
    */
-  async answer(message, images = [], options = {}) {
+  async answer(message, images = [], schemaOrOptions = {}) {
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       throw new Error('Message is required and must be a non-empty string');
+    }
+
+    // Handle backwards compatibility - if third argument is a string, treat it as schema
+    let options = {};
+    if (typeof schemaOrOptions === 'string') {
+      options = { schema: schemaOrOptions };
+    } else {
+      options = schemaOrOptions || {};
     }
 
     try {
@@ -703,6 +720,88 @@ When troubleshooting:
 
       // Update token counter with final history
       this.tokenCounter.updateHistory(this.history);
+
+      // Schema handling - format response according to provided schema
+      if (options.schema && !options._schemaFormatted) {
+        if (this.debug) {
+          console.log('[DEBUG] Schema provided, applying automatic formatting...');
+        }
+        
+        try {
+          // Step 1: Make a follow-up call to format according to schema
+          const schemaPrompt = `Now you need to respond according to this schema:\n\n${options.schema}\n\nPlease reformat your previous response to match this schema exactly. Only return the formatted response, no additional text.`;
+          
+          // Call answer recursively with _schemaFormatted flag to prevent infinite loop
+          finalResult = await this.answer(schemaPrompt, [], { 
+            ...options, 
+            _schemaFormatted: true 
+          });
+          
+          // Step 2: Clean the response (remove code blocks)
+          finalResult = cleanSchemaResponse(finalResult);
+          
+          // Step 3: Validate and fix Mermaid diagrams if present
+          try {
+            const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
+              debug: this.debug,
+              path: this.allowedFolders[0],
+              provider: this.clientApiProvider,
+              model: this.model
+            });
+            
+            if (mermaidValidation.wasFixed) {
+              finalResult = mermaidValidation.fixedResponse;
+              if (this.debug) {
+                console.log(`[DEBUG] Mermaid diagrams fixed`);
+                if (mermaidValidation.fixingResults) {
+                  mermaidValidation.fixingResults.forEach((fixResult, index) => {
+                    if (fixResult.wasFixed) {
+                      console.log(`[DEBUG] Fixed diagram ${index + 1}: ${fixResult.originalError}`);
+                    }
+                  });
+                }
+              }
+            }
+          } catch (error) {
+            if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation failed: ${error.message}`);
+            }
+          }
+          
+          // Step 4: Validate and potentially correct JSON responses
+          if (isJsonSchema(options.schema)) {
+            const validation = validateJsonResponse(finalResult);
+            
+            if (!validation.isValid) {
+              if (this.debug) {
+                console.log('[DEBUG] JSON validation failed:', validation.error);
+              }
+              
+              // Attempt correction once
+              const correctionPrompt = createJsonCorrectionPrompt(
+                finalResult, 
+                options.schema, 
+                validation.error
+              );
+              
+              finalResult = await this.answer(correctionPrompt, [], { 
+                ...options, 
+                _schemaFormatted: true 
+              });
+              finalResult = cleanSchemaResponse(finalResult);
+              
+              // Final validation
+              const finalValidation = validateJsonResponse(finalResult);
+              if (!finalValidation.isValid && this.debug) {
+                console.log('[DEBUG] JSON still invalid after correction:', finalValidation.error);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('[ERROR] Schema formatting failed:', error);
+          // Return the original result if schema formatting fails
+        }
+      }
 
       return finalResult;
 
