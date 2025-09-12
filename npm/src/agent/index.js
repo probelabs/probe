@@ -40,6 +40,68 @@ function readInputContent(input) {
   return input;
 }
 
+// Function to check if stdin has data available
+function isStdinAvailable() {
+  // Check if stdin is not a TTY (indicates piped input)
+  // Also ensure we're not in an interactive terminal session
+  return !process.stdin.isTTY && process.stdin.readable;
+}
+
+// Function to read from stdin with timeout detection for interactive vs piped usage
+function readFromStdin() {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    let hasReceivedData = false;
+    let dataChunks = [];
+    
+    // Short timeout to detect if this is interactive usage (no immediate data)
+    const timeout = setTimeout(() => {
+      if (!hasReceivedData) {
+        reject(new Error('INTERACTIVE_MODE'));
+      }
+    }, 100); // Very short timeout - piped input should arrive immediately
+    
+    process.stdin.setEncoding('utf8');
+    
+    // Try to read immediately to see if data is available
+    process.stdin.on('readable', () => {
+      let chunk;
+      while ((chunk = process.stdin.read()) !== null) {
+        hasReceivedData = true;
+        clearTimeout(timeout);
+        dataChunks.push(chunk);
+        data += chunk;
+      }
+    });
+    
+    process.stdin.on('end', () => {
+      clearTimeout(timeout);
+      const trimmed = data.trim();
+      if (!trimmed && dataChunks.length === 0) {
+        reject(new Error('No input received from stdin'));
+      } else {
+        resolve(trimmed);
+      }
+    });
+    
+    process.stdin.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    
+    // Force a read attempt to trigger readable event if data is available
+    process.nextTick(() => {
+      const chunk = process.stdin.read();
+      if (chunk !== null) {
+        hasReceivedData = true;
+        clearTimeout(timeout);
+        data += chunk;
+        dataChunks.push(chunk);
+      }
+    });
+  });
+}
+
 // Parse command line arguments
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -59,7 +121,8 @@ function parseArgs() {
     maxIterations: null,
     traceFile: undefined,
     traceRemote: undefined,
-    traceConsole: false
+    traceConsole: false,
+    useStdin: false // New flag to indicate stdin should be used
   };
   
   for (let i = 0; i < args.length; i++) {
@@ -101,6 +164,15 @@ function parseArgs() {
     }
   }
   
+  // Auto-detect stdin usage if no question provided and stdin appears to be piped
+  // For simplicity, let's use a more practical approach:
+  // If user provides no arguments at all, we try to read from stdin with a short timeout
+  // This works better across different environments
+  if (!config.question && !config.mcp && !config.acp && !config.help) {
+    // We'll check for stdin in the main function with a timeout approach
+    config.useStdin = true;
+  }
+  
   return config;
 }
 
@@ -112,6 +184,7 @@ probe agent - AI-powered code exploration tool
 Usage:
   probe agent <question>           Answer a question about the codebase
   probe agent <file>               Read question from file
+  echo "question" | probe agent    Read question from stdin (pipe input)
   probe agent --mcp                Start as MCP server
   probe agent --acp                Start as ACP server
 
@@ -143,6 +216,8 @@ Environment Variables:
 Examples:
   probe agent "How does authentication work?"
   probe agent question.txt        # Read question from file
+  echo "How does the search algorithm work?" | probe agent  # Read from stdin
+  cat requirements.txt | probe agent --prompt architect     # Pipe file content
   probe agent "Find all database queries" --path ./src --prompt engineer
   probe agent "Review this code for bugs" --prompt code-review --system-prompt custom-prompt.txt
   probe agent "List all functions" --schema '{"functions": [{"name": "string", "file": "string"}]}'
@@ -429,6 +504,29 @@ async function main() {
     });
     await server.start();
     return;
+  }
+
+  // Handle stdin input if detected
+  if (config.useStdin) {
+    try {
+      if (config.verbose) {
+        console.error('[DEBUG] Reading question from stdin...');
+      }
+      config.question = await readFromStdin();
+      if (!config.question) {
+        console.error('Error: No input received from stdin');
+        process.exit(1);
+      }
+    } catch (error) {
+      // If this is interactive mode (no piped input), show help
+      if (error.message === 'INTERACTIVE_MODE') {
+        showHelp();
+        process.exit(0);
+      } else {
+        console.error(`Error reading from stdin: ${error.message}`);
+        process.exit(1);
+      }
+    }
   }
 
   if (!config.question) {
