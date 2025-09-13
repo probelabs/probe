@@ -77,6 +77,6 @@ For GitHub-compatible mermaid diagrams, avoid single quotes and parentheses in n
 - NO complex expressions in diamonds: {a && b} → {condition}
 
 **Examples:**
-- ✅ `[Load Config]` `["Run command"]` `{Valid?}`
-- ❌ `[Load (config)]` `[Run 'command']` `{isValid('x')}`
+- ✅ [Load Config] ["Run command"] {Valid?}
+- ❌ [Load (config)] [Run 'command'] {isValid('x')}
 </mermaid-instructions>`
