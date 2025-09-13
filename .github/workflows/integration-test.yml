@@ -87,7 +87,7 @@ jobs:
         
         # Debug: Check what files are in npm/bin after npm install/build
         echo "Debug: Files in npm/bin after build:"
-        ls -la bin/
+        ls -la npm/bin/
 
     - name: Link Probe package locally
       run: |
