@@ -12,6 +12,7 @@ pub fn format_and_print_search_results(
     dry_run: bool,
     format: &str,
     query_plan: Option<&QueryPlan>,
+    symbols: bool,
 ) {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
@@ -27,7 +28,7 @@ pub fn format_and_print_search_results(
     // Handle different output formats
     match format {
         "color" if use_color => {
-            format_and_print_color_results(&valid_results, dry_run, query_plan, debug_mode);
+            format_and_print_color_results(&valid_results, dry_run, query_plan, debug_mode, symbols);
         }
         "json" => {
             if let Err(e) = format_and_print_json_results(&valid_results, symbols) {
@@ -36,7 +37,7 @@ pub fn format_and_print_search_results(
             return; // Skip the summary output at the end
         }
         "xml" => {
-            if let Err(e) = format_and_print_xml_results(&valid_results) {
+            if let Err(e) = format_and_print_xml_results(&valid_results, symbols) {
                 eprintln!("Error formatting XML: {e}");
             }
             return; // Skip the summary output at the end
@@ -66,12 +67,18 @@ pub fn format_and_print_search_results(
                         );
                     }
                 } else {
-                    // Normal mode with full content
+                    // Normal mode with full content or symbol display
                     if is_full_file {
                         println!("File: {}", result.file);
-                        println!("```{extension}");
-                        println!("{}", result.code);
-                        println!("```");
+                        if symbols && result.symbol_signature.is_some() {
+                            println!("Symbol: {}", result.symbol_signature.as_ref().unwrap());
+                        } else if symbols {
+                            println!("Symbol: <not available>");
+                        } else {
+                            println!("```{extension}");
+                            println!("{}", result.code);
+                            println!("```");
+                        }
                     } else {
                         println!("File: {}", result.file);
                         println!(
@@ -79,9 +86,15 @@ pub fn format_and_print_search_results(
                             start = result.lines.0,
                             end = result.lines.1
                         );
-                        println!("```{extension}");
-                        println!("{code}", code = result.code);
-                        println!("```");
+                        if symbols && result.symbol_signature.is_some() {
+                            println!("Symbol: {}", result.symbol_signature.as_ref().unwrap());
+                        } else if symbols {
+                            println!("Symbol: <not available>");
+                        } else {
+                            println!("```{extension}");
+                            println!("{code}", code = result.code);
+                            println!("```");
+                        }
                     }
                 }
                 if debug_mode {
@@ -206,6 +219,7 @@ fn format_and_print_color_results(
     dry_run: bool,
     query_plan: Option<&QueryPlan>,
     debug_mode: bool,
+    symbols: bool,
 ) {
     use colored::*;
     use regex::Regex;
@@ -312,101 +326,117 @@ fn format_and_print_color_results(
             _ => "",
         };
 
-        println!("{label}", label = "Code:".bold().magenta());
-
-        // Print the code with syntax highlighting
-        if !language.is_empty() {
-            println!("{code_block}", code_block = format!("```{language}").cyan());
+        // Check if we should display symbols instead of code
+        if symbols {
+            if let Some(symbol_signature) = &result.symbol_signature {
+                println!("{label} {signature}", 
+                    label = "Symbol:".bold().magenta(),
+                    signature = symbol_signature.bright_cyan());
+            } else {
+                println!("{label} {not_available}", 
+                    label = "Symbol:".bold().magenta(),
+                    not_available = "<not available>".dimmed());
+            }
         } else {
-            println!("{code_block}", code_block = "```".cyan());
-        }
+            println!("{label}", label = "Code:".bold().magenta());
 
-        // Generate patterns from the matched keywords in the search result
-        let mut patterns = Vec::new();
-
-        // Use the matched keywords from the search result if available
-        if let Some(keywords) = &result.matched_keywords {
-            for keyword in keywords {
-                // Create a case-insensitive regex for the keyword with word boundaries
-                if let Ok(regex) = Regex::new(&format!(r"(?i){}", regex::escape(keyword))) {
-                    patterns.push(regex);
-                }
-
-                // Also try to match camelCase/PascalCase variations
-                if let Ok(regex) = Regex::new(&format!(r"(?i){}", regex::escape(keyword))) {
-                    patterns.push(regex);
-                }
+            // Print the code with syntax highlighting
+            if !language.is_empty() {
+                println!("{code_block}", code_block = format!("```{language}").cyan());
+            } else {
+                println!("{code_block}", code_block = "```".cyan());
             }
         }
 
-        // If no patterns were generated, add some default patterns
-        if patterns.is_empty() {
-            // Use lazily initialized static regexes to avoid recompilation
-            lazy_static::lazy_static! {
-                static ref STRUCT_REGEX: Regex = Regex::new(r"(?i)struct").unwrap();
-                static ref SEARCH_REGEX: Regex = Regex::new(r"(?i)search").unwrap();
-                static ref RESULT_REGEX: Regex = Regex::new(r"(?i)result").unwrap();
-            }
+        // Only print code with highlighting if not in symbols mode
+        if !symbols {
+            // Generate patterns from the matched keywords in the search result
+            let mut patterns = Vec::new();
 
-            patterns.push(STRUCT_REGEX.clone());
-            patterns.push(SEARCH_REGEX.clone());
-            patterns.push(RESULT_REGEX.clone());
-        }
+            // Use the matched keywords from the search result if available
+            if let Some(keywords) = &result.matched_keywords {
+                for keyword in keywords {
+                    // Create a case-insensitive regex for the keyword with word boundaries
+                    if let Ok(regex) = Regex::new(&format!(r"(?i){}", regex::escape(keyword))) {
+                        patterns.push(regex);
+                    }
 
-        // Process the code line by line with inline highlighting
-        for line in result.code.lines() {
-            let mut output_line = String::new();
-            let mut last_end = 0;
-            let mut matches = Vec::new();
-
-            // Collect all matches from all patterns
-            for pattern in &patterns {
-                for mat in pattern.find_iter(line) {
-                    matches.push((mat.start(), mat.end()));
-                }
-            }
-
-            // Sort matches by start position
-            matches.sort_by_key(|&(start, _)| start);
-
-            // Merge overlapping matches
-            let mut merged_matches = Vec::new();
-            for (start, end) in matches {
-                if let Some((_, prev_end)) = merged_matches.last() {
-                    if start <= *prev_end {
-                        // Overlapping match, extend the previous one
-                        let last_idx = merged_matches.len() - 1;
-                        merged_matches[last_idx].1 = end.max(*prev_end);
-                        continue;
+                    // Also try to match camelCase/PascalCase variations
+                    if let Ok(regex) = Regex::new(&format!(r"(?i){}", regex::escape(keyword))) {
+                        patterns.push(regex);
                     }
                 }
-                merged_matches.push((start, end));
             }
 
-            // Build the highlighted line
-            for &(start, end) in &merged_matches {
-                // Add text before the match
-                if start > last_end {
-                    output_line.push_str(&line[last_end..start]);
+            // If no patterns were generated, add some default patterns
+            if patterns.is_empty() {
+                // Use lazily initialized static regexes to avoid recompilation
+                lazy_static::lazy_static! {
+                    static ref STRUCT_REGEX: Regex = Regex::new(r"(?i)struct").unwrap();
+                    static ref SEARCH_REGEX: Regex = Regex::new(r"(?i)search").unwrap();
+                    static ref RESULT_REGEX: Regex = Regex::new(r"(?i)result").unwrap();
                 }
 
-                // Add the highlighted match
-                let matched_text = &line[start..end];
-                output_line.push_str(&matched_text.yellow().bold().to_string());
-
-                last_end = end;
+                patterns.push(STRUCT_REGEX.clone());
+                patterns.push(SEARCH_REGEX.clone());
+                patterns.push(RESULT_REGEX.clone());
             }
 
-            // Add any remaining text
-            if last_end < line.len() {
-                output_line.push_str(&line[last_end..]);
-            }
+            // Process the code line by line with inline highlighting
+            for line in result.code.lines() {
+                let mut output_line = String::new();
+                let mut last_end = 0;
+                let mut matches = Vec::new();
 
-            // Print the line (highlighted or original if no matches)
-            if !merged_matches.is_empty() {
-                println!("{output_line}");
-            } else {
-                println!("{line}");
+                // Collect all matches from all patterns
+                for pattern in &patterns {
+                    for mat in pattern.find_iter(line) {
+                        matches.push((mat.start(), mat.end()));
+                    }
+                }
+
+                // Sort matches by start position
+                matches.sort_by_key(|&(start, _)| start);
+
+                // Merge overlapping matches
+                let mut merged_matches = Vec::new();
+                for (start, end) in matches {
+                    if let Some((_, prev_end)) = merged_matches.last() {
+                        if start <= *prev_end {
+                            // Overlapping match, extend the previous one
+                            let last_idx = merged_matches.len() - 1;
+                            merged_matches[last_idx].1 = end.max(*prev_end);
+                            continue;
+                        }
+                    }
+                    merged_matches.push((start, end));
+                }
+
+                // Build the highlighted line
+                for &(start, end) in &merged_matches {
+                    // Add text before the match
+                    if start > last_end {
+                        output_line.push_str(&line[last_end..start]);
+                    }
+
+                    // Add the highlighted match
+                    let matched_text = &line[start..end];
+                    output_line.push_str(&matched_text.yellow().bold().to_string());
+
+                    last_end = end;
+                }
+
+                // Add any remaining text
+                if last_end < line.len() {
+                    output_line.push_str(&line[last_end..]);
+                }
+
+                // Print the line (highlighted or original if no matches)
+                if !merged_matches.is_empty() {
+                    println!("{output_line}");
+                } else {
+                    println!("{line}");
+                }
             }
         }
 
@@ -523,6 +553,8 @@ fn format_and_print_json_results(results: &[&SearchResult], symbols: bool) -> Re
         lines: [usize; 2],
         node_type: &'a str,
         code: &'a str,
+        // Symbol signature (when symbols flag is used)
+        symbol_signature: Option<&'a String>,
         // Include other relevant fields
         matched_keywords: Option<&'a Vec<String>>,
         score: Option<f64>,
@@ -541,6 +573,7 @@ fn format_and_print_json_results(results: &[&SearchResult], symbols: bool) -> Re
             lines: [r.lines.0, r.lines.1],
             node_type: &r.node_type,
             code: &r.code,
+            symbol_signature: r.symbol_signature.as_ref(),
             matched_keywords: r.matched_keywords.as_ref(),
             score: r.score,
             tfidf_score: r.tfidf_score,
@@ -603,6 +636,13 @@ fn format_and_print_xml_results(results: &[&SearchResult], symbols: bool) -> Res
             "    <node_type>{}</node_type>",
             escape_xml(&result.node_type)
         );
+
+        if let Some(symbol_signature) = &result.symbol_signature {
+            println!(
+                "    <symbol_signature>{}</symbol_signature>",
+                escape_xml(symbol_signature)
+            );
+        }
 
         if let Some(keywords) = &result.matched_keywords {
             println!("    <matched_keywords>");
