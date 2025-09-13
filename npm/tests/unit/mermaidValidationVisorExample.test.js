@@ -17,7 +17,7 @@ const visorExampleDiagrams = {
 graph TD
     subgraph "Before: CLI-based Approach"
         A[AICheckProvider] --> B[AIReviewService]
-        B --> C{spawn('npx probe-chat')}
+        B --> C{spawn probe-chat}
         C --> D[AI API]
     end
 
@@ -57,11 +57,11 @@ sequenceDiagram
 \`\`\`mermaid
 flowchart TD
     A[Start: .visor.yaml] --> B{Read Check Config};
-    B --> C[Load Prompt<br/>(file or content)];
-    C --> D{Render Prompt Template<br/>with PR & Dep Context};
+    B --> C[Load Prompt<br/>from file or content];
+    C --> D{Render Prompt Template<br/>with PR and Dep Context};
     D --> E[Execute AI Check via ProbeAgent];
     E --> F[Receive Validated JSON Result];
-    F --> G[Load Output Template<br/>(from config or default)];
+    F --> G[Load Output Template<br/>from config or default];
     G --> H{Render Output Template<br/>with JSON Result};
     H --> I[Post Formatted Comment to GitHub];
     I --> J[End];
@@ -242,7 +242,7 @@ describe('Visor Project Mermaid Examples', () => {
       expect(diagram.content).toContain('{Render Output Template');
       
       // Check that multiline labels with HTML breaks are preserved
-      expect(diagram.content).toContain('[Load Prompt<br/>(file or content)]');
+      expect(diagram.content).toContain('[Load Prompt<br/>from file or content]');
     });
   });
 

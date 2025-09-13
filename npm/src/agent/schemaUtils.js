@@ -369,8 +369,10 @@ export async function validateMermaidDiagram(diagram) {
         
         // GitHub-strict: Check for complex expressions inside diamond nodes
         // Allow double-quoted strings in diamond nodes, but catch problematic single quotes and complex expressions
-        const diamondWithComplexContent = line.match(/\{[^"{}]*[()'"<>][^"{}]*\}/);
-        if (diamondWithComplexContent && !line.match(/\{\"[^\"]*\"\}/)) {
+        // Allow HTML breaks (<br/>, <br>, etc.) but catch other problematic patterns
+        const diamondWithComplexContent = line.match(/\{[^"{}]*[()'"<>&][^"{}]*\}/);
+        const hasHtmlBreak = line.match(/\{[^{}]*<br\s*\/?>.*\}/);
+        if (diamondWithComplexContent && !line.match(/\{\"[^\"]*\"\}/) && !hasHtmlBreak) {
           return {
             isValid: false,
             error: `Complex expression in diamond node on line ${i + 1} (GitHub incompatible)`,
