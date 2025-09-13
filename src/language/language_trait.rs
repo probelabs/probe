@@ -21,4 +21,12 @@ pub trait LanguageImpl {
         // Default implementation returns None
         None
     }
+
+    /// Extract the symbol signature without implementation body
+    /// Returns a clean signature for functions, structs, classes, methods, constants, etc.
+    fn get_symbol_signature(&self, _node: &Node, _source: &[u8]) -> Option<String> {
+        // Default implementation returns None
+        // Each language should implement this to extract clean signatures
+        None
+    }
 }

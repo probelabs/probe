@@ -12,6 +12,7 @@ mod tests {
                 lines: (1, 10),
                 node_type: "context".to_string(), // Changed to context for testing context boost
                 code: "fn test_function() { println!(\"This is a test function with search terms\"); }".to_string(),
+                symbol_signature: None,
                 matched_by_filename: None,
                 rank: None,
                 score: None,
@@ -31,6 +32,7 @@ mod tests {
                 lines: (1, 5),
                 node_type: "function".to_string(),
                 code: "fn another_function() { // This doesn't have the key term }".to_string(),
+                symbol_signature: None,
                 matched_by_filename: None,
                 rank: None,
                 score: None,
@@ -50,6 +52,7 @@ mod tests {
                 lines: (1, 10),
                 node_type: "function".to_string(),
                 code: "fn search_function() { // This has search in the function name and multiple search terms search search }".to_string(),
+                symbol_signature: None,
                 matched_by_filename: None,
                 rank: None,
                 score: None,

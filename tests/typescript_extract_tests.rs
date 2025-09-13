@@ -14,7 +14,7 @@ fn execute_test(content: &str, expected_outputs: Vec<(usize, usize, usize)>) {
     for (line_number, expected_start, expected_end) in expected_outputs {
         // Call process_file_for_extraction for the current line number
         let result =
-            process_file_for_extraction(&file_path, Some(line_number), None, None, false, 0, None)
+            process_file_for_extraction(&file_path, Some(line_number), None, None, false, 0, None, false)
                 .unwrap();
 
         // Compare outputs against the expected output structure

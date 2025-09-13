@@ -17,6 +17,7 @@ fn test_ip_whitelist_stemming() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        symbols: false,
         language: None,
         reranker: "hybrid",
         frequency_search: true, // Use frequency search to get detailed term stats
@@ -106,6 +107,7 @@ fn test_negative_terms_exclude_files() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: true,
+        symbols: false,
         language: None,
         reranker: "hybrid",
         frequency_search: true,

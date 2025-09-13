@@ -237,6 +237,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         timeout,
         question,
         no_gitignore,
+        symbols,
     } = options;
     // Start the timeout thread
     let timeout_handle = timeout::start_timeout_thread(*timeout);
@@ -704,6 +705,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 lines: (1, 1),
                 node_type: "file".to_string(),
                 code: String::new(),
+                symbol_signature: None,
                 matched_by_filename: None,
                 rank: None,
                 score: None,
@@ -725,7 +727,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 tokenized_content: None,
             });
         }
-        let mut limited = apply_limits(res, *max_results, *max_bytes, *max_tokens);
+        let mut limited = apply_limits(res, *max_results, *max_bytes, *max_tokens, *symbols);
 
         // No caching for files-only mode
         limited.cached_blocks_skipped = None;
@@ -970,6 +972,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                     preprocessed_queries: None,
                     no_merge: *no_merge,
                     query_plan: &plan,
+                    symbols: *symbols,
                 };
 
                 if debug_mode {
@@ -1371,7 +1374,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     }
 
     // First apply limits to the results
-    let mut limited = apply_limits(filtered_results, *max_results, *max_bytes, *max_tokens);
+    let mut limited = apply_limits(filtered_results, *max_results, *max_bytes, *max_tokens, *symbols);
 
     // Calculate files skipped due to early termination
     let files_skipped_early_termination = total_ranked_files.saturating_sub(files_processed);
