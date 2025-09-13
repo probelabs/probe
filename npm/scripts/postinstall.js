@@ -24,6 +24,18 @@ const binDir = path.resolve(__dirname, '..', 'bin');
  */
 async function main() {
 	try {
+		// Skip postinstall if binary already exists (for CI or development)
+		const isWindows = process.platform === 'win32';
+		const targetBinaryName = isWindows ? 'probe.exe' : 'probe-binary';
+		const targetBinaryPath = path.join(binDir, targetBinaryName);
+		
+		if (await fs.pathExists(targetBinaryPath)) {
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Probe binary already exists at ${targetBinaryPath}, skipping download`);
+			}
+			return;
+		}
+
 		// Create the bin directory if it doesn't exist
 		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
 			console.log(`Creating bin directory at: ${binDir}`);
@@ -109,9 +121,7 @@ You can download the binary from: https://github.com/probelabs/probe/releases
 			}
 
 			// Get the path to the target binary (preserve the Node.js wrapper script)
-			const isWindows = process.platform === 'win32';
-			const targetBinaryName = isWindows ? 'probe.exe' : 'probe-binary';
-			const targetBinaryPath = path.join(binDir, targetBinaryName);
+			// (variables already declared at the beginning of main function)
 
 			// Copy the downloaded binary to the correct location
 			if (binaryPath !== targetBinaryPath) {

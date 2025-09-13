@@ -31,7 +31,9 @@
     "bin/probe.exe",
     "bin/.gitkeep",
     "scripts/postinstall.js",
-    "build/**/*"
+    "build/**/*",
+    "MERMAID_SUPPORT_SUMMARY.md",
+    "GITHUB_MERMAID_COMPATIBILITY.md"
   ],
   "scripts": {
     "postinstall": "node scripts/postinstall.js",

@@ -327,14 +327,14 @@ export async function validateMermaidDiagram(diagram) {
       };
     }
 
-    // Basic syntax validation based on diagram type
+    // GitHub-compatible strict syntax validation
     const lines = trimmedDiagram.split('\n');
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
       
-      // Check for severely malformed syntax that would break parsing
+      // Check for GitHub-incompatible patterns that cause "got 'PS'" errors
       if (diagramType === 'flowchart') {
         // Check for unbalanced brackets in node labels
         const brackets = line.match(/\[[^\]]*$/); // Unclosed bracket
@@ -343,6 +343,40 @@ export async function validateMermaidDiagram(diagram) {
             isValid: false,
             error: `Unclosed bracket on line ${i + 1}`,
             detailedError: `Line "${line}" contains an unclosed bracket`
+          };
+        }
+        
+        // GitHub-strict: Check for parentheses inside node labels (causes PS token error)
+        // But allow parentheses inside double-quoted strings
+        const nodeWithParens = line.match(/\[[^"\[\]]*\([^"\[\]]*\]/);
+        if (nodeWithParens) {
+          return {
+            isValid: false,
+            error: `Parentheses in node label on line ${i + 1} (GitHub incompatible)`,
+            detailedError: `Line "${line}" contains parentheses inside node label brackets. GitHub mermaid renderer fails with 'got PS' error. Use quotes or escape characters instead.`
+          };
+        }
+        
+        // GitHub-strict: Check for single quotes inside node labels (causes PS token error)
+        const nodeWithQuotes = line.match(/\{[^{}]*'[^{}]*\}|\[[^[\]]*'[^[\]]*\]/);
+        if (nodeWithQuotes) {
+          return {
+            isValid: false,
+            error: `Single quotes in node label on line ${i + 1} (GitHub incompatible)`,
+            detailedError: `Line "${line}" contains single quotes inside node label. GitHub mermaid renderer fails with 'got PS' error. Use double quotes or escape characters instead.`
+          };
+        }
+        
+        // GitHub-strict: Check for complex expressions inside diamond nodes
+        // Allow double-quoted strings in diamond nodes, but catch problematic single quotes and complex expressions
+        // Allow HTML breaks (<br/>, <br>, etc.) but catch other problematic patterns
+        const diamondWithComplexContent = line.match(/\{[^"{}]*[()'"<>&][^"{}]*\}/);
+        const hasHtmlBreak = line.match(/\{[^{}]*<br\s*\/?>.*\}/);
+        if (diamondWithComplexContent && !line.match(/\{\"[^\"]*\"\}/) && !hasHtmlBreak) {
+          return {
+            isValid: false,
+            error: `Complex expression in diamond node on line ${i + 1} (GitHub incompatible)`,
+            detailedError: `Line "${line}" contains special characters in diamond node that may cause GitHub parsing errors. Use simpler text or escape characters.`
           };
         }
       }
