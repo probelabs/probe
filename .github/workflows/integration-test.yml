@@ -83,7 +83,8 @@ jobs:
         ls -la npm/bin/
         
         # Install npm package dependencies and build all packages
-        cd npm && npm install && npm run build
+        # Skip postinstall script since we're providing the binary manually
+        cd npm && npm install --ignore-scripts && npm run build
         
         # Debug: Check what files are in npm/bin after npm install/build
         echo "Debug: Files in npm/bin after build:"
