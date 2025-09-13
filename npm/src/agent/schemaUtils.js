@@ -4,32 +4,42 @@
  */
 
 /**
- * Clean AI response by removing code blocks and format indicators
+ * Clean AI response by extracting JSON content when response contains JSON
+ * Only processes responses that contain JSON structures { or [ 
  * @param {string} response - Raw AI response
- * @returns {string} - Cleaned response
+ * @returns {string} - Cleaned response with JSON boundaries extracted if applicable
  */
 export function cleanSchemaResponse(response) {
   if (!response || typeof response !== 'string') {
     return response;
   }
 
-  let cleaned = response.trim();
-
-  // Remove all markdown code blocks (including multiple blocks)
-  // This handles ```json, ```xml, ```yaml, etc. and plain ```
-  cleaned = cleaned.replace(/```\w*\n?/g, '');
-  cleaned = cleaned.replace(/\n?```/g, '');
-
-  // Remove any remaining leading/trailing whitespace
-  cleaned = cleaned.trim();
-
-  // Handle case where AI wrapped response in backticks without newlines
-  // e.g., `{"result": "value"}` 
-  if (cleaned.startsWith('`') && cleaned.endsWith('`')) {
-    cleaned = cleaned.slice(1, -1).trim();
+  const trimmed = response.trim();
+  
+  // Find JSON boundaries
+  const firstBracket = Math.min(
+    trimmed.indexOf('{') >= 0 ? trimmed.indexOf('{') : Infinity,
+    trimmed.indexOf('[') >= 0 ? trimmed.indexOf('[') : Infinity
+  );
+  
+  const lastBracket = Math.max(
+    trimmed.lastIndexOf('}'),
+    trimmed.lastIndexOf(']')
+  );
+  
+  // Only extract if we found valid JSON boundaries
+  if (firstBracket < Infinity && lastBracket >= 0 && firstBracket < lastBracket) {
+    // Check if the response likely starts with JSON (directly or after markdown)
+    const beforeFirstBracket = trimmed.substring(0, firstBracket).trim();
+    
+    // If there's minimal content before the first bracket (just markdown wrapper),
+    // extract the JSON. Otherwise, return original to preserve non-JSON content.
+    if (beforeFirstBracket === '' || beforeFirstBracket.match(/^```\w*$/)) {
+      return trimmed.substring(firstBracket, lastBracket + 1);
+    }
   }
-
-  return cleaned;
+  
+  return response; // Return original if no extractable JSON found
 }
 
 /**
