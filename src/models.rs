@@ -28,6 +28,8 @@ pub struct SearchResult {
     pub lines: (usize, usize),
     pub node_type: String,
     pub code: String,
+    // Symbol signature (when symbols flag is used)
+    pub symbol_signature: Option<String>,
     // Indicates if this result was found by filename matching
     pub matched_by_filename: Option<bool>,
     // Ranking information

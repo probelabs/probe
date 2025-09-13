@@ -30,7 +30,7 @@ pub fn format_and_print_search_results(
             format_and_print_color_results(&valid_results, dry_run, query_plan, debug_mode, symbols);
         }
         "json" => {
-            if let Err(e) = format_and_print_json_results(&valid_results) {
+            if let Err(e) = format_and_print_json_results(&valid_results, symbols) {
                 eprintln!("Error formatting JSON: {e}");
             }
             return; // Skip the summary output at the end
@@ -182,13 +182,28 @@ pub fn format_and_print_search_results(
 
     println!("Found {count} search results", count = valid_results.len());
 
-    let total_bytes: usize = valid_results.iter().map(|r| r.code.len()).sum();
+    let total_bytes: usize = if symbols {
+        // In symbols mode, count bytes from symbol signatures instead of full code
+        valid_results.iter().map(|r| {
+            r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0)
+        }).sum()
+    } else {
+        valid_results.iter().map(|r| r.code.len()).sum()
+    };
 
     // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION:
     // Use batch processing with content deduplication for improved performance
     // when multiple identical code blocks need tokenization (common in search results)
-    let code_blocks: Vec<&str> = valid_results.iter().map(|r| r.code.as_str()).collect();
-    let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
+    let total_tokens: usize = if symbols {
+        // In symbols mode, count tokens from symbol signatures instead of full code
+        let symbol_blocks: Vec<&str> = valid_results.iter()
+            .filter_map(|r| r.symbol_signature.as_ref().map(|s| s.as_str()))
+            .collect();
+        sum_tokens_with_deduplication(&symbol_blocks)
+    } else {
+        let code_blocks: Vec<&str> = valid_results.iter().map(|r| r.code.as_str()).collect();
+        sum_tokens_with_deduplication(&code_blocks)
+    };
     println!("Total bytes returned: {total_bytes}");
     println!("Total tokens returned: {total_tokens}");
 }
@@ -525,7 +540,7 @@ fn escape_xml(s: &str) -> String {
 }
 
 /// Format and print search results in JSON format
-fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
+fn format_and_print_json_results(results: &[&SearchResult], symbols: bool) -> Result<()> {
     // Create a simplified version of the results for JSON output
     #[derive(serde::Serialize)]
     struct JsonResult<'a> {
@@ -567,15 +582,29 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
 
     // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for JSON output:
     // Process all code blocks in batch to leverage content deduplication
-    let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
-    let total_tokens = sum_tokens_with_deduplication(&code_blocks);
+    let total_tokens = if symbols {
+        // In symbols mode, count tokens from symbol signatures instead of full code
+        let symbol_blocks: Vec<&str> = results.iter()
+            .filter_map(|r| r.symbol_signature.as_ref().map(|s| s.as_str()))
+            .collect();
+        sum_tokens_with_deduplication(&symbol_blocks)
+    } else {
+        let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
+        sum_tokens_with_deduplication(&code_blocks)
+    };
 
     // Create a wrapper object with results and summary
     let wrapper = serde_json::json!({
         "results": json_results,
         "summary": {
             "count": results.len(),
-            "total_bytes": results.iter().map(|r| r.code.len()).sum::<usize>(),
+            "total_bytes": if symbols {
+                results.iter().map(|r| {
+                    r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0)
+                }).sum::<usize>()
+            } else {
+                results.iter().map(|r| r.code.len()).sum::<usize>()
+            },
             "total_tokens": total_tokens,
         },
         "version": probe_code::version::get_version()
@@ -586,7 +615,7 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
 }
 
 /// Format and print search results in XML format
-fn format_and_print_xml_results(results: &[&SearchResult], _symbols: bool) -> Result<()> {
+fn format_and_print_xml_results(results: &[&SearchResult], symbols: bool) -> Result<()> {
     println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     println!("<probe_results>");
 
@@ -658,12 +687,26 @@ fn format_and_print_xml_results(results: &[&SearchResult], _symbols: bool) -> Re
     println!("    <count>{}</count>", results.len());
     println!(
         "    <total_bytes>{total_bytes}</total_bytes>",
-        total_bytes = results.iter().map(|r| r.code.len()).sum::<usize>()
+        total_bytes = if symbols {
+            results.iter().map(|r| {
+                r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0)
+            }).sum::<usize>()
+        } else {
+            results.iter().map(|r| r.code.len()).sum::<usize>()
+        }
     );
     // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for XML output:
     // Process all code blocks in batch to leverage content deduplication
-    let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
-    let total_tokens = sum_tokens_with_deduplication(&code_blocks);
+    let total_tokens = if symbols {
+        // In symbols mode, count tokens from symbol signatures instead of full code
+        let symbol_blocks: Vec<&str> = results.iter()
+            .filter_map(|r| r.symbol_signature.as_ref().map(|s| s.as_str()))
+            .collect();
+        sum_tokens_with_deduplication(&symbol_blocks)
+    } else {
+        let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
+        sum_tokens_with_deduplication(&code_blocks)
+    };
 
     println!("    <total_tokens>{total_tokens}</total_tokens>");
     println!("  </summary>");

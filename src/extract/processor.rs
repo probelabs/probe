@@ -4,6 +4,7 @@
 //! based on file paths and optional line numbers.
 use anyhow::{Context, Result};
 use probe_code::extract::symbol_finder::find_symbol_in_file;
+use probe_code::language::factory::get_language_impl;
 use probe_code::language::parser::parse_file_for_code_blocks;
 use probe_code::models::SearchResult;
 use std::collections::HashSet;
@@ -29,6 +30,7 @@ pub fn process_file_for_extraction(
     allow_tests: bool,
     context_lines: usize,
     specific_lines: Option<&HashSet<usize>>,
+    symbols: bool,
 ) -> Result<SearchResult> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -166,6 +168,7 @@ pub fn process_file_for_extraction(
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_range".to_string(),
                     code: merged_content,
+                    symbol_signature: extract_symbol_signature_for_extract(path, &content, merged_start, merged_end, symbols),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -210,6 +213,7 @@ pub fn process_file_for_extraction(
                     lines: (start, end),
                     node_type: "range".to_string(),
                     code: range_content,
+                    symbol_signature: extract_symbol_signature_for_extract(path, &content, start, end, symbols),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -307,6 +311,7 @@ pub fn process_file_for_extraction(
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_line".to_string(),
                     code: merged_content,
+                    symbol_signature: extract_symbol_signature_for_extract(path, &content, merged_start, merged_end, symbols),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -363,6 +368,7 @@ pub fn process_file_for_extraction(
                     lines: (start_ctx, end_ctx),
                     node_type: "context".to_string(),
                     code: context_code,
+                    symbol_signature: extract_symbol_signature_for_extract(path, &content, start_ctx, end_ctx, symbols),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -408,7 +414,8 @@ pub fn process_file_for_extraction(
                 file: path.to_string_lossy().to_string(),
                 lines: (1, lines.len()),
                 node_type: "file".to_string(),
-                code: content,
+                code: content.clone(),
+                symbol_signature: extract_symbol_signature_for_extract(path, &content, 1, lines.len(), symbols),
                 matched_by_filename: None,
                 rank: None,
                 score: None,
@@ -506,6 +513,7 @@ pub fn process_file_for_extraction(
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_specific_lines".to_string(),
                     code: merged_content,
+                    symbol_signature: extract_symbol_signature_for_extract(path, &content, merged_start, merged_end, symbols),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -564,6 +572,7 @@ pub fn process_file_for_extraction(
                     lines: (start, end),
                     node_type: "specific_lines".to_string(),
                     code: range_content,
+                    symbol_signature: extract_symbol_signature_for_extract(path, &content, start, end, symbols),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -603,7 +612,8 @@ pub fn process_file_for_extraction(
             file: path.to_string_lossy().to_string(),
             lines: (1, lines.len()),
             node_type: "file".to_string(),
-            code: content,
+            code: content.clone(),
+            symbol_signature: extract_symbol_signature_for_extract(path, &content, 1, lines.len(), symbols),
             matched_by_filename: None,
             rank: None,
             score: None,
@@ -625,6 +635,133 @@ pub fn process_file_for_extraction(
             tokenized_content: Some(tokenized_content),
         })
     }
+}
+
+/// Helper function to extract symbol signature for a specific line range
+/// Returns Some(String) if symbols is true and extraction succeeds, None otherwise
+fn extract_symbol_signature_for_extract(
+    path: &Path,
+    content: &str,
+    start_line: usize,
+    end_line: usize,
+    symbols: bool,
+) -> Option<String> {
+    if !symbols {
+        return None;
+    }
+
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    // Get file extension
+    let extension = file_extension(path);
+
+    // Get language implementation
+    let language_impl = get_language_impl(extension)?;
+
+    if debug_mode {
+        eprintln!("[DEBUG] Extracting symbol signature for lines {}-{} in {}", 
+                  start_line, end_line, path.display());
+    }
+
+    // Try to parse the content
+    if let Ok(mut parser) = probe_code::language::get_pooled_parser(extension) {
+        if let Some(tree) = parser.parse(content, None) {
+            // Convert line numbers to byte ranges
+            let lines: Vec<&str> = content.lines().collect();
+            
+            // Clamp line numbers to valid ranges
+            let start_line = start_line.clamp(1, lines.len());
+            let end_line = end_line.clamp(start_line, lines.len());
+            
+            // Calculate byte offsets for the line range
+            let start_byte = if start_line <= 1 { 
+                0 
+            } else { 
+                lines[..start_line - 1].iter().map(|l| l.len() + 1).sum::<usize>()
+            };
+            
+            let end_byte = if end_line >= lines.len() {
+                content.len()
+            } else {
+                lines[..end_line].iter().map(|l| l.len() + 1).sum::<usize>().saturating_sub(1)
+            };
+
+            if debug_mode {
+                eprintln!("[DEBUG] Line range {}-{} maps to byte range {}-{}", 
+                          start_line, end_line, start_byte, end_byte);
+            }
+
+            // Find nodes within the byte range and extract symbol signature
+            let root_node = tree.root_node();
+            let signature = find_node_and_extract_signature(
+                &root_node, 
+                start_byte, 
+                end_byte, 
+                content.as_bytes(), 
+                &*language_impl, 
+                debug_mode
+            );
+
+            // Return parser to pool
+            probe_code::language::return_pooled_parser(extension, parser);
+
+            signature
+        } else {
+            if debug_mode {
+                eprintln!("[DEBUG] Failed to parse content for symbol signature");
+            }
+            probe_code::language::return_pooled_parser(extension, parser);
+            None
+        }
+    } else {
+        if debug_mode {
+            eprintln!("[DEBUG] Failed to get parser for symbol signature extraction");
+        }
+        None
+    }
+}
+
+/// Find a node within the specified byte range and extract its symbol signature
+fn find_node_and_extract_signature(
+    node: &tree_sitter::Node,
+    start_byte: usize,
+    end_byte: usize,
+    source: &[u8],
+    language_impl: &dyn probe_code::language::language_trait::LanguageImpl,
+    debug_mode: bool,
+) -> Option<String> {
+    // Check if this node overlaps with the byte range
+    if node.start_byte() <= end_byte && node.end_byte() >= start_byte {
+        // First, search children to find more specific nodes
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(child_signature) = find_node_and_extract_signature(
+                &child, start_byte, end_byte, source, language_impl, debug_mode
+            ) {
+                return Some(child_signature);
+            }
+        }
+        
+        // If no child provides a signature, try the current node
+        // Skip root-level nodes like 'source_file' unless they're the only option
+        if node.kind() != "source_file" || (node.start_byte() == start_byte && node.end_byte() == end_byte) {
+            if debug_mode {
+                eprintln!("[DEBUG] Checking node of type '{}' for symbol signature (range {}-{})", 
+                         node.kind(), node.start_byte(), node.end_byte());
+            }
+            
+            let signature = language_impl.get_symbol_signature(node, source);
+            if let Some(ref sig) = signature {
+                if debug_mode {
+                    eprintln!("[DEBUG] Found symbol signature for node type '{}': {}", node.kind(), sig);
+                }
+                return signature;
+            } else if debug_mode {
+                eprintln!("[DEBUG] No symbol signature available for node type '{}'", node.kind());
+            }
+        }
+    }
+    None
 }
 
 /// Helper to get file extension as a &str

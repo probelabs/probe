@@ -63,6 +63,8 @@ pub struct ExtractOptions {
     pub instructions: Option<String>,
     /// Whether to ignore .gitignore files
     pub no_gitignore: bool,
+    /// Whether to extract only symbols without implementation
+    pub symbols: bool,
 }
 
 /// Handle the extract command
@@ -572,6 +574,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             params.allow_tests,
             params.context_lines,
             params.specific_lines.as_ref(),
+            options.symbols,
         ) {
             Ok(result) => {
                 if params.debug_mode {
@@ -756,6 +759,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 original_input.as_deref(),
                 system_prompt.as_deref(),
                 options.instructions.as_deref(),
+                options.symbols,
             )
         } else {
             formatter::format_extraction_results(
@@ -764,6 +768,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 original_input.as_deref(),
                 system_prompt.as_deref(),
                 options.instructions.as_deref(),
+                options.symbols,
             )
         };
 

@@ -34,6 +34,7 @@ struct SearchParams {
     timeout: u64,
     question: Option<String>,
     no_gitignore: bool,
+    symbols: bool,
 }
 
 struct BenchmarkParams {
@@ -141,6 +142,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
         timeout: params.timeout,
         question: params.question.as_deref(),
         no_gitignore: params.no_gitignore,
+        symbols: params.symbols,
     };
 
     let limited_results = perform_probe(&search_options)?;
@@ -165,6 +167,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
                 search_options.dry_run,
                 &params.format,
                 query_plan.as_ref(),
+                search_options.symbols,
             );
         } else {
             // For other formats, print the "No results found" message
@@ -183,6 +186,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
             search_options.dry_run,
             &params.format,
             query_plan.as_ref(),
+            search_options.symbols,
         );
 
         if !limited_results.skipped_files.is_empty() {
@@ -385,6 +389,7 @@ async fn main() -> Result<()> {
                 question: args.question,
                 no_gitignore: args.no_gitignore
                     || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+                symbols: false,
             })?
         }
         Some(Commands::Search {
@@ -409,6 +414,7 @@ async fn main() -> Result<()> {
             timeout,
             question,
             no_gitignore,
+            symbols,
         }) => handle_search(SearchParams {
             pattern,
             paths,
@@ -432,6 +438,7 @@ async fn main() -> Result<()> {
             question,
             no_gitignore: no_gitignore
                 || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+            symbols,
         })?,
         Some(Commands::Extract {
             files,
@@ -448,6 +455,7 @@ async fn main() -> Result<()> {
             prompt,
             instructions,
             no_gitignore,
+            symbols,
         }) => handle_extract(ExtractOptions {
             files,
             custom_ignores: ignore,
@@ -469,6 +477,7 @@ async fn main() -> Result<()> {
             instructions,
             no_gitignore: no_gitignore
                 || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+            symbols,
         })?,
         Some(Commands::Query {
             pattern,

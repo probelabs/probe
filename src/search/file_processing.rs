@@ -74,6 +74,7 @@ pub struct FileProcessingParams<'a> {
 
     #[allow(dead_code)]
     pub no_merge: bool,
+    pub symbols: bool,
 }
 
 /// Evaluate whether a block of lines satisfies a complex AST query
@@ -951,12 +952,26 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             // Start measuring result creation time
             let result_creation_start = Instant::now();
 
+            // Extract symbol signature for fallback context if symbols mode is enabled
+            let symbol_signature = if ctx.params.symbols {
+                // For fallback context, we try to extract symbol signature from the entire context
+                // Since this is fallback context, we parse the content as a standalone snippet
+                extract_symbol_signature_from_content(
+                    ctx.extension,
+                    &context_code,
+                    ctx.debug_mode,
+                )
+            } else {
+                None
+            };
+
             // BATCH OPTIMIZATION: Create single result for merged context window instead of multiple individual results
             let result = SearchResult {
                 file: ctx.params.path.to_string_lossy().to_string(),
                 lines: (context_start, context_end),
                 node_type,
                 code: context_code,
+                symbol_signature,
                 matched_by_filename: None,
                 rank: None,
                 score: None,
@@ -1490,6 +1505,28 @@ pub fn process_file_with_results(
                     // Start measuring result creation time
                     let result_creation_start = Instant::now();
 
+                    // Extract symbol signature if symbols mode is enabled
+                    let symbol_signature = if params.symbols {
+                        // Re-parse the tree for symbol signature extraction when needed
+                        let tree = crate::language::get_or_parse_tree_pooled(
+                            &format!("{}_{}", params.path.to_string_lossy(), extension),
+                            &content,
+                            extension,
+                        ).ok();
+                        
+                        extract_symbol_signature(
+                            true,
+                            tree.as_ref(),
+                            extension,
+                            content.as_bytes(),
+                            block.start_byte,
+                            block.end_byte,
+                            debug_mode,
+                        )
+                    } else {
+                        None
+                    };
+
                     let result = SearchResult {
                         file: params.path.to_string_lossy().to_string(),
                         lines: (final_start_line, final_end_line),
@@ -1502,6 +1539,7 @@ pub fn process_file_with_results(
                             block.node_type.clone()
                         },
                         code: full_code,
+                        symbol_signature,
                         matched_by_filename: None,
                         rank: None,
                         score: None,
@@ -1729,4 +1767,149 @@ pub fn process_file_with_results(
     }
 
     Ok((results, timings))
+}
+
+/// Helper function to extract symbol signature from a code block using the AST tree
+/// Returns the symbol signature if symbols mode is enabled and extraction succeeds
+fn extract_symbol_signature(
+    symbols_enabled: bool,
+    tree: Option<&tree_sitter::Tree>,
+    extension: &str,
+    source: &[u8],
+    start_byte: usize,
+    end_byte: usize,
+    debug_mode: bool,
+) -> Option<String> {
+    if !symbols_enabled {
+        return None;
+    }
+
+    let tree = tree?;
+    let language_impl = crate::language::factory::get_language_impl(extension)?;
+
+    if debug_mode {
+        println!("DEBUG: Extracting symbol signature for byte range {start_byte}-{end_byte}");
+    }
+
+    // Find the node at the given byte range
+    let root_node = tree.root_node();
+    find_node_and_extract_signature(&root_node, start_byte, end_byte, source, &*language_impl, debug_mode)
+}
+
+/// Helper function to extract symbol signature from code content directly
+/// This is used for fallback contexts where we don't have precise byte ranges
+fn extract_symbol_signature_from_content(
+    extension: &str,
+    content: &str,
+    debug_mode: bool,
+) -> Option<String> {
+    let language_impl = crate::language::factory::get_language_impl(extension)?;
+
+    if debug_mode {
+        println!("DEBUG: Extracting symbol signature from content snippet");
+    }
+
+    // Try to parse the content as a standalone snippet
+    if let Ok(mut parser) = crate::language::get_pooled_parser(extension) {
+        if let Some(tree) = parser.parse(content, None) {
+            let root_node = tree.root_node();
+            
+            // Look for the most significant node in the content
+            let signature = find_best_symbol_signature(&root_node, content.as_bytes(), &*language_impl, debug_mode);
+            
+            // Return parser to pool
+            crate::language::return_pooled_parser(extension, parser);
+            
+            signature
+        } else {
+            if debug_mode {
+                println!("DEBUG: Failed to parse content for symbol signature");
+            }
+            None
+        }
+    } else {
+        if debug_mode {
+            println!("DEBUG: Failed to get parser for symbol signature extraction");
+        }
+        None
+    }
+}
+
+/// Find the best symbol signature from a parsed tree by looking for significant nodes
+fn find_best_symbol_signature(
+    node: &tree_sitter::Node,
+    source: &[u8],
+    language_impl: &dyn crate::language::language_trait::LanguageImpl,
+    debug_mode: bool,
+) -> Option<String> {
+    // Try current node first
+    if let Some(signature) = language_impl.get_symbol_signature(node, source) {
+        if debug_mode {
+            println!("DEBUG: Found symbol signature for node type '{}': {}", node.kind(), signature);
+        }
+        return Some(signature);
+    }
+
+    // If no signature for current node, try children
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(signature) = find_best_symbol_signature(&child, source, language_impl, debug_mode) {
+            return Some(signature);
+        }
+    }
+
+    None
+}
+
+/// Helper function to find the most appropriate node within a byte range and extract its signature
+/// This avoids lifetime issues by directly extracting the signature instead of returning nodes
+fn find_node_and_extract_signature(
+    node: &tree_sitter::Node,
+    start_byte: usize,
+    end_byte: usize,
+    source: &[u8],
+    language_impl: &dyn crate::language::language_trait::LanguageImpl,
+    debug_mode: bool,
+) -> Option<String> {
+    // Check if this node is within the byte range
+    if node.start_byte() >= start_byte && node.end_byte() <= end_byte {
+        // First, search children to find more specific nodes
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(child_signature) = find_node_and_extract_signature(&child, start_byte, end_byte, source, language_impl, debug_mode) {
+                return Some(child_signature);
+            }
+        }
+        
+        // If no child provides a signature, try the current node
+        // But skip root-level nodes like 'source_file' unless they're the only option
+        if node.kind() != "source_file" || node.start_byte() == start_byte && node.end_byte() == end_byte {
+            if debug_mode {
+                println!("DEBUG: Checking node of type '{}' for symbol signature (range {}-{})", node.kind(), node.start_byte(), node.end_byte());
+            }
+            
+            let signature = language_impl.get_symbol_signature(node, source);
+            if let Some(ref sig) = signature {
+                if debug_mode {
+                    println!("DEBUG: Found symbol signature for node type '{}': {}", node.kind(), sig);
+                }
+                return signature;
+            } else if debug_mode {
+                println!("DEBUG: No symbol signature available for node type '{}'", node.kind());
+            }
+        }
+        
+        None
+    } else if node.start_byte() < end_byte && node.end_byte() > start_byte {
+        // Node partially overlaps - search children
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(signature) = find_node_and_extract_signature(&child, start_byte, end_byte, source, language_impl, debug_mode) {
+                return Some(signature);
+            }
+        }
+        None
+    } else {
+        None
+    }
 }

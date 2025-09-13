@@ -202,6 +202,10 @@ pub enum Commands {
         /// Natural language question for BERT reranking (requires --features bert-reranker)
         #[arg(long = "question")]
         question: Option<String>,
+
+        /// Extract only symbols (functions, structs, classes, methods, constants) without implementation
+        #[arg(long = "symbols")]
+        symbols: bool,
     },
 
     /// Extract code blocks from files
@@ -267,6 +271,10 @@ pub enum Commands {
         /// User instructions for LLM models
         #[arg(long = "instructions")]
         instructions: Option<String>,
+
+        /// Extract only symbols (functions, structs, classes, methods, constants) without implementation
+        #[arg(long = "symbols")]
+        symbols: bool,
     },
 
     /// Search code using AST patterns for precise structural matching

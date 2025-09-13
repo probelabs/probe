@@ -16,6 +16,7 @@ fn test_merge_different_node_types() {
         code:
             "fn test_function() {\n    let x = 1;\n    let y = 2;\n    println!(\"{}\", x + y);\n}"
                 .to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: Some(1),
         score: Some(0.9),
@@ -41,6 +42,7 @@ fn test_merge_different_node_types() {
     lines: (6, 10),
     node_type: "comment".to_string(),
     code: "// This is a comment block\n// It explains the function above\n// And provides context\n// For the next function\n// Below".to_string(),
+        symbol_signature: None,
     matched_by_filename: None,
     rank: Some(2),
     score: Some(0.8),
@@ -67,6 +69,7 @@ fn test_merge_different_node_types() {
         lines: (11, 15),
         node_type: "function".to_string(),
         code: "fn another_function() {\n    let z = 3;\n    let result = z * 2;\n    println!(\"{}\", result);\n}".to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: Some(3),
         score: Some(0.7),
@@ -134,6 +137,7 @@ fn test_merge_with_gaps() {
         code:
             "fn first_function() {\n    let x = 1;\n    let y = 2;\n    println!(\"{}\", x + y);\n}"
                 .to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: Some(1),
         score: Some(0.9),
@@ -161,6 +165,7 @@ fn test_merge_with_gaps() {
         lines: (9, 13),
         node_type: "function".to_string(),
         code: "fn second_function() {\n    let z = 3;\n    let result = z * 2;\n    println!(\"{}\", result);\n}".to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: Some(2),
         score: Some(0.8),
@@ -190,6 +195,7 @@ fn test_merge_with_gaps() {
         code:
             "fn third_function() {\n    let a = 4;\n    let b = 5;\n    println!(\"{}\", a + b);\n}"
                 .to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: Some(3),
         score: Some(0.7),
@@ -285,6 +291,7 @@ fn test_merge_overlapping_blocks() {
         lines: (1, 7),
         node_type: "function".to_string(),
         code: "fn first_function() {\n    let x = 1;\n    let y = 2;\n    println!(\"{}\", x + y);\n    // Shared lines\n    let shared = true;\n}".to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: Some(1),
         score: Some(0.9),
@@ -312,6 +319,7 @@ fn test_merge_overlapping_blocks() {
         lines: (5, 10),
         node_type: "function".to_string(),
         code: "    // Shared lines\n    let shared = true;\n}\n\nfn second_function() {\n    let z = 3;\n}".to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: Some(2),
         score: Some(0.8),
@@ -412,6 +420,7 @@ fn third_function() {
             files_only: false,
             custom_ignores: &custom_ignores,
             exclude_filenames: true,
+        symbols: false,
             language: None,
             reranker: "combined",
             frequency_search: false,
@@ -485,6 +494,7 @@ fn test_merge_parent_child_blocks() {
         lines: (1, 10),
         node_type: "class".to_string(),
         code: "struct TestStruct {\n    x: i32,\n    y: i32,\n}\n\nimpl TestStruct {\n    fn new(x: i32, y: i32) -> Self {\n        Self { x, y }\n    }\n}".to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: Some(2),
         score: Some(0.8),
@@ -512,6 +522,7 @@ fn test_merge_parent_child_blocks() {
         lines: (7, 9),
         node_type: "function".to_string(),
         code: "    fn new(x: i32, y: i32) -> Self {\n        Self { x, y }\n    }".to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: Some(1),
         score: Some(0.9),
