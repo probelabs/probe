@@ -86,9 +86,9 @@ jobs:
         # Skip postinstall script since we're providing the binary manually
         cd npm && npm install --ignore-scripts && npm run build
         
-        # Debug: Check what files are in npm/bin after npm install/build
+        # Debug: Check what files are in npm/bin after npm install/build  
         echo "Debug: Files in npm/bin after build:"
-        ls -la npm/bin/
+        ls -la bin/
 
     - name: Link Probe package locally
       run: |
