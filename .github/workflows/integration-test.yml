@@ -353,20 +353,8 @@ jobs:
           fi
         fi
 
-    - name: Run npm agent tests
-      shell: bash
-      run: |
-        echo "Running npm agent validation tests..."
-        cd npm
-        
-        # Install dependencies if not already installed
-        npm install
-        
-        # Run the test suite with timeout
-        echo "Starting test execution..."
-        npm test
-        
-        echo "✅ All npm agent tests passed successfully"
+    # Note: npm agent tests are handled by the dedicated rust-tests.yml workflow
+    # This integration test focuses on npm package installation and functionality verification
 
     - name: Upload test artifacts on failure
       if: failure()
