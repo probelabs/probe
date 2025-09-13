@@ -31,33 +31,66 @@ describe('Schema Utilities', () => {
       expect(cleanSchemaResponse({})).toEqual({});
     });
 
-    test('should remove markdown code blocks', () => {
+    test('should extract JSON from markdown code blocks when response starts with {', () => {
       const input = '```json\n{"test": "value"}\n```';
       const expected = '{"test": "value"}';
       expect(cleanSchemaResponse(input)).toBe(expected);
     });
 
-    test('should remove multiple code blocks', () => {
-      const input = '```json\n{"test": "value"}\n```\n\n```\nmore code\n```';
-      const expected = '{"test": "value"}\n\nmore code';
+    test('should extract JSON from markdown code blocks when response starts with [', () => {
+      const input = '```json\n[{"test": "value"}]\n```';
+      const expected = '[{"test": "value"}]';
       expect(cleanSchemaResponse(input)).toBe(expected);
     });
 
-    test('should remove code blocks with different languages', () => {
+    test('should extract JSON boundaries correctly with multiple brackets', () => {
+      const input = '```json\n{"nested": {"array": [1, 2, 3]}}\n```';
+      const expected = '{"nested": {"array": [1, 2, 3]}}';
+      expect(cleanSchemaResponse(input)).toBe(expected);
+    });
+
+    test('should return original input when not starting with JSON brackets', () => {
       const input = '```xml\n<root>test</root>\n```';
-      const expected = '<root>test</root>';
-      expect(cleanSchemaResponse(input)).toBe(expected);
+      expect(cleanSchemaResponse(input)).toBe(input); // Returns unchanged
     });
 
-    test('should remove inline backticks', () => {
-      const input = '`{"test": "value"}`';
-      const expected = '{"test": "value"}';
-      expect(cleanSchemaResponse(input)).toBe(expected);
+    test('should return original input for non-JSON backtick content', () => {
+      const input = '`some text content`';
+      expect(cleanSchemaResponse(input)).toBe(input); // Returns unchanged
     });
 
-    test('should handle mixed formatting', () => {
+    test('should handle JSON with surrounding whitespace and markdown', () => {
       const input = '  ```json\n{"test": "value"}\n```  ';
       const expected = '{"test": "value"}';
+      expect(cleanSchemaResponse(input)).toBe(expected);
+    });
+
+    test('should handle direct JSON input without markdown', () => {
+      const input = '{"test": "value"}';
+      const expected = '{"test": "value"}';
+      expect(cleanSchemaResponse(input)).toBe(expected);
+    });
+
+    test('should handle array JSON input without markdown', () => {
+      const input = '[1, 2, 3]';
+      const expected = '[1, 2, 3]';
+      expect(cleanSchemaResponse(input)).toBe(expected);
+    });
+
+    test('should return original for text that does not start with JSON', () => {
+      const input = 'This is some text with {"json": "inside"}';
+      expect(cleanSchemaResponse(input)).toBe(input); // Returns unchanged since it doesn't start with { or [
+    });
+
+    test('should handle empty JSON object', () => {
+      const input = '{}';
+      const expected = '{}';
+      expect(cleanSchemaResponse(input)).toBe(expected);
+    });
+
+    test('should handle empty JSON array', () => {
+      const input = '[]';
+      const expected = '[]';
       expect(cleanSchemaResponse(input)).toBe(expected);
     });
   });
