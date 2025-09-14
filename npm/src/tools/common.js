@@ -37,10 +37,9 @@ export const delegateSchema = z.object({
 	task: z.string().describe('The task to delegate to a subagent. Be specific about what needs to be accomplished.')
 });
 
-// Schema for the new attempt_completion tool
+// Schema for the attempt_completion tool - simplified to remove command parameter
 export const attemptCompletionSchema = z.object({
-	result: z.string().describe('The final result of the task. Formulate this result in a way that is final and does not require further input from the user. Do not end your result with questions or offers for further assistance.'),
-	command: z.string().optional().describe('A CLI command to execute to show a live demo of the result to the user (e.g., `open index.html`). Do not use commands like `echo` or `cat` that merely print text.')
+	result: z.string().describe('The final result of the task. This should be the complete, ready-to-display answer in plain text format. Do not include JSON or structured data unless specifically requested by the user.')
 });
 
 
@@ -185,12 +184,10 @@ export const attemptCompletionToolDefinition = `
 ## attempt_completion
 Description: Use this tool ONLY when the task is fully complete and you have received confirmation of success for all previous tool uses. Presents the final result to the user.
 Parameters:
-- result: (required) The final result of the task. Formulate this result concisely and definitively. Do not end with questions or offers for further assistance. Ensure that answer fully addresses the user's request, and a clear and detailed maneer.
-- command: (optional) A CLI command to demonstrate the result (e.g., 'open index.html'). Avoid simple print commands like 'echo'.
+- result: (required) The final result of the task. Provide your complete answer as plain text. Do not end with questions or offers for further assistance. Ensure your answer fully addresses the user's request in a clear and detailed manner.
 Usage Example:
 <attempt_completion>
-<result>I have refactored the search module according to the requirements and verified the tests pass.</result>
-<command>cargo test --lib</command>
+<result>I have refactored the search module according to the requirements and verified the tests pass. The module now uses the new BM25 ranking algorithm and has improved error handling.</result>
 </attempt_completion>
 `;
 
@@ -256,11 +253,11 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 		if (toolName === 'attempt_completion') {
 			const resultMatch = innerContent.match(/<result>([\s\S]*?)<\/result>/);
 			if (resultMatch) {
-				params['result'] = resultMatch[1].trim(); // Keep result content as is
+				params['result'] = resultMatch[1].trim(); // Keep result content as is - plain text response
 			}
-			const commandMatch = innerContent.match(/<command>([\s\S]*?)<\/command>/);
-			if (commandMatch) {
-				params['command'] = commandMatch[1].trim();
+			// Remove command parameter if it was parsed by generic logic above (legacy compatibility)
+			if (params.command) {
+				delete params.command;
 			}
 		}
 
