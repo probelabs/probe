@@ -98,12 +98,12 @@ mod tests {
     fn test_rank_search_results_hybrid() {
         let mut results = create_test_results();
         let queries = vec!["search".to_string()];
-        
+
         // Enable debug mode for this test to verify logging
         std::env::set_var("DEBUG", "1");
         rank_search_results(&mut results, &queries, "hybrid", None);
         std::env::remove_var("DEBUG");
-        
+
         // Check that all results have been assigned ranks and scores
         for result in &results {
             assert!(result.rank.is_some());
@@ -114,12 +114,12 @@ mod tests {
             assert!(result.tfidf_rank.is_some());
             assert!(result.bm25_rank.is_some());
         }
-        
+
         // Check that the results are sorted by rank
         for i in 1..results.len() {
             assert!(results[i-1].rank.unwrap() < results[i].rank.unwrap());
         }
-        
+
         // File3 should have the highest score (rank 1) because it contains "search" multiple times
         let top_result = &results[0];
         assert!(top_result.file.contains("file3"));
@@ -129,9 +129,9 @@ mod tests {
     fn test_rank_search_results_tfidf() {
         let mut results = create_test_results();
         let queries = vec!["search".to_string()];
-        
+
         rank_search_results(&mut results, &queries, "tfidf", None);
-        
+
         // Check that all results have been assigned ranks and scores
         for result in &results {
             assert!(result.rank.is_some());
@@ -142,7 +142,7 @@ mod tests {
             assert!(result.tfidf_rank.is_some());
             assert!(result.bm25_rank.is_some());
         }
-        
+
         // When using tfidf, the rank should match the tfidf_rank
         for result in &results {
             assert_eq!(result.rank, result.tfidf_rank);
@@ -153,9 +153,9 @@ mod tests {
     fn test_rank_search_results_bm25() {
         let mut results = create_test_results();
         let queries = vec!["search".to_string()];
-        
+
         rank_search_results(&mut results, &queries, "bm25", None);
-        
+
         // Check that all results have been assigned ranks and scores
         for result in &results {
             assert!(result.rank.is_some());
@@ -166,7 +166,7 @@ mod tests {
             assert!(result.tfidf_rank.is_some());
             assert!(result.bm25_rank.is_some());
         }
-        
+
         // When using bm25, the rank should match the bm25_rank
         for result in &results {
             assert_eq!(result.rank, result.bm25_rank);
@@ -177,9 +177,9 @@ mod tests {
     fn test_rank_search_results_multi_term_query() {
         let mut results = create_test_results();
         let queries = vec!["search".to_string(), "function".to_string()];
-        
+
         rank_search_results(&mut results, &queries, "hybrid", None);
-        
+
         // Check that all results have been assigned ranks and scores
         for result in &results {
             assert!(result.rank.is_some());
@@ -190,7 +190,7 @@ mod tests {
             assert!(result.tfidf_rank.is_some());
             assert!(result.bm25_rank.is_some());
         }
-        
+
         // Results with both terms should rank higher
         let top_result = &results[0];
         assert!(top_result.code.contains("search") && top_result.code.contains("function"));
@@ -200,10 +200,10 @@ mod tests {
     fn test_rank_search_results_empty() {
         let mut results = Vec::new();
         let queries = vec!["search".to_string()];
-        
+
         // Should not panic with empty results
         rank_search_results(&mut results, &queries, "hybrid", None);
-        
+
         assert_eq!(results.len(), 0);
     }
 }

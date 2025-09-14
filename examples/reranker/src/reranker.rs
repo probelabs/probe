@@ -17,14 +17,14 @@ pub struct BertReranker {
 impl BertReranker {
     pub async fn new(model_name: &str) -> Result<Self> {
         println!("Loading BERT model: {}", model_name);
-        
+
         // Check if we have local model files first
         let model_dir_name = match model_name {
             "cross-encoder/ms-marco-TinyBERT-L-2-v2" => "ms-marco-TinyBERT-L-2-v2",
-            "cross-encoder/ms-marco-MiniLM-L-6-v2" => "ms-marco-MiniLM-L-6-v2", 
+            "cross-encoder/ms-marco-MiniLM-L-6-v2" => "ms-marco-MiniLM-L-6-v2",
             "cross-encoder/ms-marco-MiniLM-L-2-v2" | _ => "ms-marco-MiniLM-L-2-v2",
         };
-        
+
         let local_model_dir = std::path::Path::new("models").join(model_dir_name);
         let (config_path, tokenizer_path, weights_path) = if local_model_dir.exists() {
             println!("Using local model files from: {:?}", local_model_dir);
@@ -35,7 +35,7 @@ impl BertReranker {
             )
         } else {
             println!("Downloading model files from HuggingFace Hub...");
-            
+
             let api = Api::new()?;
             let repo = api.repo(Repo::with_revision(
                 model_name.to_string(),
@@ -48,7 +48,7 @@ impl BertReranker {
                 .context("Failed to download config.json")?;
             let tokenizer_path = repo.get("tokenizer.json").await
                 .context("Failed to download tokenizer.json")?;
-            
+
             // Try different weight file formats
             let weights_path = match repo.get("model.safetensors").await {
                 Ok(path) => {
@@ -67,7 +67,7 @@ impl BertReranker {
                     }
                 }
             };
-            
+
             (config_path, tokenizer_path, weights_path)
         };
 
@@ -143,10 +143,10 @@ impl BertReranker {
         } else {
             document
         };
-        
+
         // Prepare input text for cross-encoder (BERT format: [CLS] query [SEP] document [SEP])
         let input_text = format!("{} [SEP] {}", query, doc_truncated);
-        
+
         // Tokenize with proper settings
         let mut encoding = self.tokenizer
             .encode(input_text, true)
@@ -164,7 +164,7 @@ impl BertReranker {
         // Convert to tensors
         let input_ids = Tensor::new(encoding.get_ids().to_vec(), &self.device)?
             .unsqueeze(0)?; // Add batch dimension [1, seq_len]
-        
+
         let attention_mask = Tensor::new(encoding.get_attention_mask().to_vec(), &self.device)?
             .unsqueeze(0)?; // Add batch dimension [1, seq_len]
 
@@ -193,13 +193,13 @@ impl BertReranker {
 
         // Get [CLS] token representation (first token)
         let cls_output = bert_outputs.i((.., 0, ..))?; // [batch_size, hidden_size]
-        
+
         // Pass through classification head
         let logits = self.classifier.forward(&cls_output)?; // [batch_size, 1]
-        
+
         // Get the relevance score
         let score = logits.i((0, 0))?.to_scalar::<f32>()?;
-        
+
         Ok(score)
     }
 }
@@ -217,14 +217,14 @@ impl DemoReranker {
         let query_words: Vec<&str> = query_lower
             .split_whitespace()
             .collect();
-        
+
         let mut scores: Vec<(usize, f32)> = documents
             .iter()
             .enumerate()
             .map(|(idx, doc)| {
                 let doc_lower = doc.to_lowercase();
                 let mut score = 0.0f32;
-                
+
                 // Calculate TF-IDF-like score
                 for word in &query_words {
                     if doc_lower.contains(word) {
@@ -237,11 +237,11 @@ impl DemoReranker {
                         score += tf * idf;
                     }
                 }
-                
+
                 // Normalize by document length (simple approach)
                 let doc_length = doc.split_whitespace().count().max(1) as f32;
                 score = score / doc_length.sqrt();
-                
+
                 (idx, score)
             })
             .collect();

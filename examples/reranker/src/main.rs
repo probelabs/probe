@@ -16,7 +16,7 @@ pub struct BertReranker {
 
 impl BertReranker {
     /// Creates a new BERT reranker with the specified model.
-    /// 
+    ///
     /// # Arguments
     /// * `model_id` - The HuggingFace model ID (e.g., "cross-encoder/ms-marco-MiniLM-L-2-v2")
     /// * `revision` - The model revision/branch to use
@@ -28,24 +28,24 @@ impl BertReranker {
     ) -> Result<Self> {
         println!("Loading BERT reranker model: {}", model_id);
         let device = Device::Cpu;
-        
+
         let api = Api::new()?;
         let repo = api.model(model_id.to_string());
-        
+
         // Download model configuration
         let config_filename = repo.get("config.json")?;
         println!("Config file: {:?}", config_filename);
-        
+
         let config = std::fs::read_to_string(config_filename)?;
         let config: Config = serde_json::from_str(&config)?;
         println!("Model config loaded: {:?}", config);
-        
+
         // Download tokenizer
         let tokenizer_filename = repo.get("tokenizer.json")?;
         println!("Tokenizer file: {:?}", tokenizer_filename);
-        
+
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-        
+
         // Download model weights
         let weights_filename = if use_pth {
             repo.get("pytorch_model.bin")?
@@ -53,36 +53,36 @@ impl BertReranker {
             repo.get("model.safetensors")?
         };
         println!("Weights file: {:?}", weights_filename);
-        
+
         // Load model weights
         let vb = if use_pth {
             VarBuilder::from_pth(&weights_filename, DTYPE, &device)?
         } else {
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? }
         };
-        
+
         // Initialize BERT model
         let model = BertModel::load(vb, &config)?;
         println!("BERT model loaded successfully");
-        
+
         Ok(BertReranker {
             model,
             tokenizer,
             device,
         })
     }
-    
+
     /// Reranks a list of documents based on their relevance to the query.
     /// Returns the documents sorted by relevance score (highest first).
-    /// 
+    ///
     /// # Arguments
     /// * `query` - The search query
     /// * `documents` - List of candidate documents to rerank
     pub fn rerank(&self, query: &str, documents: &[&str]) -> Result<Vec<RankedDocument>> {
         println!("Reranking {} documents for query: '{}'", documents.len(), query);
-        
+
         let mut ranked_docs = Vec::new();
-        
+
         for (idx, document) in documents.iter().enumerate() {
             let score = self.compute_relevance_score(query, document)?;
             ranked_docs.push(RankedDocument {
@@ -91,54 +91,54 @@ impl BertReranker {
                 score,
             });
         }
-        
+
         // Sort by score (highest first)
         ranked_docs.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-        
+
         println!("Reranking completed");
         Ok(ranked_docs)
     }
-    
+
     /// Computes the relevance score between a query and a document.
     /// Uses BERT cross-encoder architecture where query and document are concatenated
     /// and fed through the model to get a relevance score.
     fn compute_relevance_score(&self, query: &str, document: &str) -> Result<f32> {
         // Combine query and document for cross-encoder input
         let input_text = format!("{} [SEP] {}", query, document);
-        
+
         // Tokenize the input
         let encoding = self
             .tokenizer
             .encode(input_text, true)
             .map_err(E::msg)?;
-        
+
         let tokens = encoding.get_ids();
         let token_ids = Tensor::new(
             tokens,
             &self.device,
         )?.unsqueeze(0)?; // Add batch dimension
-        
+
         let token_type_ids = encoding.get_type_ids();
         let token_type_ids = Tensor::new(
             token_type_ids,
             &self.device,
         )?.unsqueeze(0)?; // Add batch dimension
-        
+
         let attention_mask = encoding.get_attention_mask();
         let attention_mask = Tensor::new(
             attention_mask,
             &self.device,
         )?.unsqueeze(0)?; // Add batch dimension
-        
+
         // Forward pass through BERT
         let embeddings = self.model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
-        
+
         // For cross-encoder, we typically use the [CLS] token embedding
         // and pass it through a classification head. For simplicity, we'll
         // use the first token (CLS) embedding and compute its norm as a score.
         let cls_embedding = embeddings.get(0)?.get(0)?; // [batch, seq, hidden] -> [hidden]
         let score = cls_embedding.sum_all()?.to_scalar::<f32>()?;
-        
+
         Ok(score)
     }
 }
@@ -228,7 +228,7 @@ fn main() -> Result<()> {
         println!("=== Interactive Mode ===");
         println!("Query: {}", query);
         println!("Enter documents to rerank (one per line, empty line to finish):");
-        
+
         let mut documents = Vec::new();
         loop {
             let mut input = String::new();
@@ -239,15 +239,15 @@ fn main() -> Result<()> {
             }
             documents.push(input.to_string());
         }
-        
+
         if documents.is_empty() {
             println!("No documents provided. Exiting.");
             return Ok(());
         }
-        
+
         let doc_refs: Vec<&str> = documents.iter().map(|s| s.as_str()).collect();
         let ranked = reranker.rerank(query, &doc_refs)?;
-        
+
         println!("\n=== Reranking Results ===");
         for (rank, doc) in ranked.iter().enumerate() {
             println!("{}. {}", rank + 1, doc);

@@ -11,7 +11,7 @@ function foo() {
 }
 
 // comment line
-// comment keyword 
+// comment keyword
 function bar() {
     console.log("bar");
 }
@@ -63,7 +63,7 @@ function foo() {
 }
 
 // comment line
-// comment keyword 
+// comment keyword
 function bar() {
     console.log("keyword");  // Same term in function body
 }

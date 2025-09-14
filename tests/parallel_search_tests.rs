@@ -22,10 +22,10 @@ fn function_{}_{}() {{
     // Initialize variables
     let search_term_alpha = {};
     let search_term_beta = {};
-    
+
     // Process data
     println!(\"Processing data with search_term_gamma\");
-    
+
     // Return result
     search_term_alpha + search_term_beta
 }}
@@ -265,19 +265,19 @@ fn function_with_blocks_{}() {{
         let search_term_alpha = {};
         println!(\"Block 1\");
     }}
-    
+
     // Block 2
     {{
         let search_term_beta = {};
         println!(\"Block 2\");
     }}
-    
+
     // Block 3
     {{
         let search_term_gamma = {};
         println!(\"Block 3\");
     }}
-    
+
     // Block 4
     if true {{
         let search_term_delta = {};

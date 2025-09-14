@@ -1211,7 +1211,7 @@ mod tests {
 
 **tests/file1.rs#test_function (line 100)**: Description
 *src/file2.go:50-60* - another file
-~~old/deprecated.py~~ 
+~~old/deprecated.py~~
 `quoted/file.js:10`
         "#;
 
@@ -1404,7 +1404,7 @@ Also check [**important file**](config/settings.json:42) and [*deprecated*](~~ol
     #[test]
     fn test_complex_punctuation_boundaries() {
         let text = r#"
-Errors: {src/error.rs:25}, (tests/unit.rs#test_error), [lib/handler.rs:100-200], 
+Errors: {src/error.rs:25}, (tests/unit.rs#test_error), [lib/handler.rs:100-200],
 <config/app.toml:10>, "docs/readme.md#installation", 'scripts/build.sh:50'.
         "#;
         let results = extract_file_paths_from_text(text, true);
@@ -1445,7 +1445,7 @@ Errors: {src/error.rs:25}, (tests/unit.rs#test_error), [lib/handler.rs:100-200],
 
 *Additional files to check:*
 - `lib/networking.rs:75-100` - connection handling
-- ~~old/legacy_server.rs~~ - deprecated implementation 
+- ~~old/legacy_server.rs~~ - deprecated implementation
 - **docs/troubleshooting.md#timeout-issues** - known issues
 
 See also: [main.rs](src/main.rs:10) and [utils](lib/utils.rs#helper_functions).
@@ -1597,7 +1597,7 @@ Also: version 1.2.3, but not file.extension.that.is.too.long.to.be.real.
         - Line 1-22: locals.nodes definition showing which pools should exist
         - each.value was not properly set
         - each.key should reference the instance
-        
+
         Actual files:
         - {main_path}:42
         - {test_path}:100-200
@@ -1871,7 +1871,7 @@ impl TestStruct {
     pub fn new() -> Self {
         Self
     }
-    
+
     pub fn method(&self) -> String {
         "test".to_string()
     }

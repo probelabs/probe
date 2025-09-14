@@ -14,10 +14,10 @@ import "fmt"
 // Function 1 - Top level function
 func Function1() {
     fmt.Println("Function 1")
-    
+
     // Local variable
     var x int = 10
-    
+
     // Nested block
     {
         var y int = 20
@@ -42,7 +42,7 @@ func Function2() {
     data.Field2 = 42
     data.Inner.SubField1 = "nested"
     data.Inner.SubField2 = 100
-    
+
     fmt.Println(data)
 }
 
@@ -50,7 +50,7 @@ func Function2() {
 func Function3() {
     // Different local variables
     var a, b, c int = 1, 2, 3
-    
+
     // Different nested block
     if a < b {
         var d int = a + b + c

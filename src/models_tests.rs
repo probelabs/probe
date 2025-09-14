@@ -32,7 +32,7 @@ mod tests {
             matched_keywords: None,
             tokenized_content: None,
         };
-        
+
         assert_eq!(result.file, "test.rs");
         assert_eq!(result.lines, (1, 10));
         assert_eq!(result.node_type, "function");
@@ -62,7 +62,7 @@ mod tests {
             parent_end_row: None,
             parent_context: None,
         };
-        
+
         assert_eq!(block.start_row, 1);
         assert_eq!(block.end_row, 10);
         assert_eq!(block.start_byte, 0);
@@ -127,7 +127,7 @@ mod tests {
                 tokenized_content: None,
             },
         ];
-        
+
         // Create some skipped files
         let skipped_files = vec![
             SearchResult {
@@ -157,7 +157,7 @@ mod tests {
                 tokenized_content: None,
             },
         ];
-        
+
         // Create limits
         let limits = SearchLimits {
             max_results: Some(2),
@@ -166,18 +166,18 @@ mod tests {
             total_bytes: 24,
             total_tokens: 6,
         };
-        
+
         // Create the limited search results
         let limited_results = LimitedSearchResults {
             results: results.clone(),
             skipped_files: skipped_files.clone(),
             limits_applied: Some(limits),
         };
-        
+
         // Check the contents
         assert_eq!(limited_results.results.len(), 2);
         assert_eq!(limited_results.skipped_files.len(), 1);
-        
+
         // Check that the limits are correctly stored
         let limits = limited_results.limits_applied.unwrap();
         assert_eq!(limits.max_results, Some(2));
@@ -196,7 +196,7 @@ mod tests {
             total_bytes: 500,
             total_tokens: 100,
         };
-        
+
         assert_eq!(limits.max_results, Some(10));
         assert_eq!(limits.max_bytes, Some(1000));
         assert_eq!(limits.max_tokens, Some(200));

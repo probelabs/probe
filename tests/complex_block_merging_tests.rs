@@ -36,7 +36,7 @@ fn test_merge_different_node_types() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
-            parent_context: None,
+        parent_context: None,
     };
     let block2 = SearchResult {
     file: "mixed_types.rs".to_string(),
@@ -160,7 +160,7 @@ fn test_merge_with_gaps() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
-            parent_context: None,
+        parent_context: None,
     };
 
     // Gap of 3 lines between block1 and block2
@@ -220,7 +220,7 @@ fn test_merge_with_gaps() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
-            parent_context: None,
+        parent_context: None,
     };
 
     // Test with default threshold (5)
@@ -428,7 +428,7 @@ fn third_function() {
             files_only: false,
             custom_ignores: &custom_ignores,
             exclude_filenames: true,
-        symbols: false,
+            symbols: false,
             language: None,
             reranker: "combined",
             frequency_search: false,
@@ -551,7 +551,7 @@ fn test_merge_parent_child_blocks() {
         block_id: Some(1),
         matched_keywords: None,
         tokenized_content: None,
-            parent_context: None,
+        parent_context: None,
     };
 
     // Create a vector with both blocks

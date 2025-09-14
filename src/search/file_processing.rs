@@ -958,11 +958,7 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             let symbol_signature = if ctx.params.symbols {
                 // For fallback context, we try to extract symbol signature from the entire context
                 // Since this is fallback context, we parse the content as a standalone snippet
-                extract_symbol_signature_from_content(
-                    ctx.extension,
-                    &context_code,
-                    ctx.debug_mode,
-                )
+                extract_symbol_signature_from_content(ctx.extension, &context_code, ctx.debug_mode)
             } else {
                 None
             };
@@ -1525,7 +1521,7 @@ pub fn process_file_with_results(
                             &content,
                             extension,
                         ).ok();
-                        
+
                         extract_symbol_signature(
                             true,
                             tree.as_ref(),
@@ -1813,7 +1809,14 @@ fn extract_symbol_signature(
 
     // Find the node at the given byte range
     let root_node = tree.root_node();
-    find_node_and_extract_signature(&root_node, start_byte, end_byte, source, &*language_impl, debug_mode)
+    find_node_and_extract_signature(
+        &root_node,
+        start_byte,
+        end_byte,
+        source,
+        &*language_impl,
+        debug_mode,
+    )
 }
 
 /// Helper function to extract symbol signature from code content directly
@@ -1833,13 +1836,18 @@ fn extract_symbol_signature_from_content(
     if let Ok(mut parser) = crate::language::get_pooled_parser(extension) {
         if let Some(tree) = parser.parse(content, None) {
             let root_node = tree.root_node();
-            
+
             // Look for the most significant node in the content
-            let signature = find_best_symbol_signature(&root_node, content.as_bytes(), &*language_impl, debug_mode);
-            
+            let signature = find_best_symbol_signature(
+                &root_node,
+                content.as_bytes(),
+                &*language_impl,
+                debug_mode,
+            );
+
             // Return parser to pool
             crate::language::return_pooled_parser(extension, parser);
-            
+
             signature
         } else {
             if debug_mode {
@@ -1865,7 +1873,11 @@ fn find_best_symbol_signature(
     // Try current node first
     if let Some(signature) = language_impl.get_symbol_signature(node, source) {
         if debug_mode {
-            println!("DEBUG: Found symbol signature for node type '{}': {}", node.kind(), signature);
+            println!(
+                "DEBUG: Found symbol signature for node type '{}': {}",
+                node.kind(),
+                signature
+            );
         }
         return Some(signature);
     }
@@ -1873,7 +1885,9 @@ fn find_best_symbol_signature(
     // If no signature for current node, try children
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if let Some(signature) = find_best_symbol_signature(&child, source, language_impl, debug_mode) {
+        if let Some(signature) =
+            find_best_symbol_signature(&child, source, language_impl, debug_mode)
+        {
             return Some(signature);
         }
     }
@@ -1893,7 +1907,7 @@ fn find_node_and_extract_signature(
 ) -> Option<String> {
     // First, find the smallest node that completely contains the target range
     let containing_node = find_smallest_containing_node(node, start_byte, end_byte)?;
-    
+
     // Then, traverse upward from that node to find a parent with symbol signature
     find_symbol_signature_upward(&containing_node, source, language_impl, debug_mode)
 }
@@ -1909,7 +1923,8 @@ fn find_smallest_containing_node<'a>(
         // Look for a smaller child node that also contains the range
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if let Some(smaller_node) = find_smallest_containing_node(&child, start_byte, end_byte) {
+            if let Some(smaller_node) = find_smallest_containing_node(&child, start_byte, end_byte)
+            {
                 return Some(smaller_node);
             }
         }
@@ -1928,29 +1943,40 @@ fn find_symbol_signature_upward(
     debug_mode: bool,
 ) -> Option<String> {
     let mut current_node = Some(*node);
-    
+
     while let Some(node) = current_node {
         if debug_mode {
-            println!("DEBUG: Checking node of type '{}' for symbol signature (range {}-{})", 
-                    node.kind(), node.start_byte(), node.end_byte());
+            println!(
+                "DEBUG: Checking node of type '{}' for symbol signature (range {}-{})",
+                node.kind(),
+                node.start_byte(),
+                node.end_byte()
+            );
         }
-        
+
         // Skip source_file nodes unless we're at the root
         if node.kind() != "source_file" {
             if let Some(signature) = language_impl.get_symbol_signature(&node, source) {
                 if debug_mode {
-                    println!("DEBUG: Found symbol signature for node type '{}': {}", node.kind(), signature);
+                    println!(
+                        "DEBUG: Found symbol signature for node type '{}': {}",
+                        node.kind(),
+                        signature
+                    );
                 }
                 return Some(signature);
             } else if debug_mode {
-                println!("DEBUG: No symbol signature available for node type '{}'", node.kind());
+                println!(
+                    "DEBUG: No symbol signature available for node type '{}'",
+                    node.kind()
+                );
             }
         }
-        
+
         // Move to parent
         current_node = node.parent();
     }
-    
+
     if debug_mode {
         println!("DEBUG: No symbol signature found in any parent node");
     }

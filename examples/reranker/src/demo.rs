@@ -11,14 +11,14 @@ impl MockBertReranker {
         println!("Creating mock BERT reranker (no model download required)");
         Ok(MockBertReranker)
     }
-    
+
     /// Mock reranking using simple text similarity heuristics
     /// In a real implementation, this would use the BERT model
     pub fn rerank(&self, query: &str, documents: &[&str]) -> Result<Vec<RankedDocument>> {
         println!("Mock reranking {} documents for query: '{}'", documents.len(), query);
-        
+
         let mut ranked_docs = Vec::new();
-        
+
         for (idx, document) in documents.iter().enumerate() {
             // Simple mock scoring based on word overlap
             let score = self.compute_mock_relevance_score(query, document);
@@ -28,21 +28,21 @@ impl MockBertReranker {
                 score,
             });
         }
-        
+
         // Sort by score (highest first)
         ranked_docs.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-        
+
         println!("Mock reranking completed");
         Ok(ranked_docs)
     }
-    
+
     /// Computes a mock relevance score using simple word overlap
     fn compute_mock_relevance_score(&self, query: &str, document: &str) -> f32 {
         let query_lower = query.to_lowercase();
         let doc_lower = document.to_lowercase();
         let query_words: Vec<&str> = query_lower.split_whitespace().collect();
         let doc_words: Vec<&str> = doc_lower.split_whitespace().collect();
-        
+
         let mut score = 0.0;
         for query_word in &query_words {
             for doc_word in &doc_words {
@@ -53,7 +53,7 @@ impl MockBertReranker {
                 }
             }
         }
-        
+
         // Add a small random component for demonstration
         score += (query.len() * document.len()) as f32 * 0.0001;
         score
@@ -118,7 +118,7 @@ fn main() -> Result<()> {
         println!("=== Interactive Mode ===");
         println!("Query: {}", query);
         println!("Enter documents to rerank (one per line, empty line to finish):");
-        
+
         let mut documents = Vec::new();
         loop {
             let mut input = String::new();
@@ -129,15 +129,15 @@ fn main() -> Result<()> {
             }
             documents.push(input.to_string());
         }
-        
+
         if documents.is_empty() {
             println!("No documents provided. Exiting.");
             return Ok(());
         }
-        
+
         let doc_refs: Vec<&str> = documents.iter().map(|s| s.as_str()).collect();
         let ranked = reranker.rerank(query, &doc_refs)?;
-        
+
         println!("\n=== Reranking Results ===");
         for (rank, doc) in ranked.iter().enumerate() {
             println!("{}. {}", rank + 1, doc);
@@ -176,7 +176,7 @@ fn main() -> Result<()> {
         for (rank, doc) in ranked.iter().enumerate() {
             println!("{}. {}", rank + 1, doc);
         }
-        
+
         println!("\n=== Note ===");
         println!("This is a mock implementation using simple word overlap.");
         println!("The real BERT reranker in main.rs would use transformer models for much better results.");

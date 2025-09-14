@@ -161,31 +161,31 @@ impl LanguageImpl for RustLanguage {
                 // For structs, we want the struct name and generic parameters
                 if let Some(name) = node.child_by_field_name("name") {
                     let mut sig = String::new();
-                    
+
                     // Add visibility if present
                     if let Some(vis) = node.child_by_field_name("visibility") {
                         let vis_text = &source[vis.start_byte()..vis.end_byte()];
                         sig.push_str(&String::from_utf8_lossy(vis_text));
                         sig.push(' ');
                     }
-                    
+
                     sig.push_str("struct ");
                     let name_text = &source[name.start_byte()..name.end_byte()];
                     sig.push_str(&String::from_utf8_lossy(name_text));
-                    
+
                     // Add generic parameters if present
                     if let Some(generics) = node.child_by_field_name("type_parameters") {
                         let gen_text = &source[generics.start_byte()..generics.end_byte()];
                         sig.push_str(&String::from_utf8_lossy(gen_text));
                     }
-                    
+
                     // Add field summary
                     if let Some(body) = node.child_by_field_name("body") {
                         if body.kind() == "field_declaration_list" {
                             sig.push_str(" { ... }");
                         }
                     }
-                    
+
                     Some(sig)
                 } else {
                     None
@@ -194,30 +194,30 @@ impl LanguageImpl for RustLanguage {
             "impl_item" => {
                 // Extract impl signature
                 let mut sig = String::new();
-                
+
                 // Check for impl keyword
                 sig.push_str("impl");
-                
+
                 // Add generic parameters if present
                 if let Some(generics) = node.child_by_field_name("type_parameters") {
                     let gen_text = &source[generics.start_byte()..generics.end_byte()];
                     sig.push_str(&String::from_utf8_lossy(gen_text));
                 }
-                
+
                 // Add type
                 if let Some(type_node) = node.child_by_field_name("type") {
                     sig.push(' ');
                     let type_text = &source[type_node.start_byte()..type_node.end_byte()];
                     sig.push_str(&String::from_utf8_lossy(type_text));
                 }
-                
+
                 // Add trait if present (for trait implementations)
                 if let Some(trait_node) = node.child_by_field_name("trait") {
                     sig.push_str(" for ");
                     let trait_text = &source[trait_node.start_byte()..trait_node.end_byte()];
                     sig.push_str(&String::from_utf8_lossy(trait_text));
                 }
-                
+
                 sig.push_str(" { ... }");
                 Some(sig)
             }
@@ -225,24 +225,24 @@ impl LanguageImpl for RustLanguage {
                 // Extract trait signature
                 if let Some(name) = node.child_by_field_name("name") {
                     let mut sig = String::new();
-                    
+
                     // Add visibility if present
                     if let Some(vis) = node.child_by_field_name("visibility") {
                         let vis_text = &source[vis.start_byte()..vis.end_byte()];
                         sig.push_str(&String::from_utf8_lossy(vis_text));
                         sig.push(' ');
                     }
-                    
+
                     sig.push_str("trait ");
                     let name_text = &source[name.start_byte()..name.end_byte()];
                     sig.push_str(&String::from_utf8_lossy(name_text));
-                    
+
                     // Add generic parameters if present
                     if let Some(generics) = node.child_by_field_name("type_parameters") {
                         let gen_text = &source[generics.start_byte()..generics.end_byte()];
                         sig.push_str(&String::from_utf8_lossy(gen_text));
                     }
-                    
+
                     sig.push_str(" { ... }");
                     Some(sig)
                 } else {
@@ -253,24 +253,24 @@ impl LanguageImpl for RustLanguage {
                 // Extract enum signature
                 if let Some(name) = node.child_by_field_name("name") {
                     let mut sig = String::new();
-                    
+
                     // Add visibility if present
                     if let Some(vis) = node.child_by_field_name("visibility") {
                         let vis_text = &source[vis.start_byte()..vis.end_byte()];
                         sig.push_str(&String::from_utf8_lossy(vis_text));
                         sig.push(' ');
                     }
-                    
+
                     sig.push_str("enum ");
                     let name_text = &source[name.start_byte()..name.end_byte()];
                     sig.push_str(&String::from_utf8_lossy(name_text));
-                    
+
                     // Add generic parameters if present
                     if let Some(generics) = node.child_by_field_name("type_parameters") {
                         let gen_text = &source[generics.start_byte()..generics.end_byte()];
                         sig.push_str(&String::from_utf8_lossy(gen_text));
                     }
-                    
+
                     sig.push_str(" { ... }");
                     Some(sig)
                 } else {
@@ -281,7 +281,7 @@ impl LanguageImpl for RustLanguage {
                 // Extract const/static signature without value
                 let sig = &source[node.start_byte()..node.end_byte()];
                 let sig_str = String::from_utf8_lossy(sig);
-                
+
                 // Find the = and remove everything after it
                 if let Some(eq_pos) = sig_str.find('=') {
                     Some(sig_str[..eq_pos].trim().to_string())
@@ -293,18 +293,18 @@ impl LanguageImpl for RustLanguage {
                 // Extract module signature
                 if let Some(name) = node.child_by_field_name("name") {
                     let mut sig = String::new();
-                    
+
                     // Add visibility if present
                     if let Some(vis) = node.child_by_field_name("visibility") {
                         let vis_text = &source[vis.start_byte()..vis.end_byte()];
                         sig.push_str(&String::from_utf8_lossy(vis_text));
                         sig.push(' ');
                     }
-                    
+
                     sig.push_str("mod ");
                     let name_text = &source[name.start_byte()..name.end_byte()];
                     sig.push_str(&String::from_utf8_lossy(name_text));
-                    
+
                     Some(sig)
                 } else {
                     None

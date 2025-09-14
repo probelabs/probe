@@ -1376,7 +1376,13 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     }
 
     // First apply limits to the results
-    let mut limited = apply_limits(filtered_results, *max_results, *max_bytes, *max_tokens, *symbols);
+    let mut limited = apply_limits(
+        filtered_results,
+        *max_results,
+        *max_bytes,
+        *max_tokens,
+        *symbols,
+    );
 
     // Calculate files skipped due to early termination
     let files_skipped_early_termination = total_ranked_files.saturating_sub(files_processed);
