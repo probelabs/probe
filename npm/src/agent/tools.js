@@ -124,9 +124,10 @@ User: Find all markdown files in the docs directory, but only at the top level.
  * This function removes any <thinking></thinking> tags from the input string
  * before passing it to the original parseXmlToolCall function
  * @param {string} xmlString - The XML string to parse
+ * @param {string[]} [validTools] - List of valid tool names to parse (optional)
  * @returns {Object|null} - The parsed tool call or null if no valid tool call found
  */
-export function parseXmlToolCallWithThinking(xmlString) {
+export function parseXmlToolCallWithThinking(xmlString, validTools) {
   // Extract thinking content if present (for potential logging or analysis)
   const thinkingMatch = xmlString.match(/<thinking>([\s\S]*?)<\/thinking>/);
   const thinkingContent = thinkingMatch ? thinkingMatch[1].trim() : null;
@@ -135,7 +136,7 @@ export function parseXmlToolCallWithThinking(xmlString) {
   const cleanedXmlString = xmlString.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
 
   // Use the original parseXmlToolCall function to parse the cleaned XML string
-  const parsedTool = parseXmlToolCall(cleanedXmlString);
+  const parsedTool = parseXmlToolCall(cleanedXmlString, validTools);
 
   // If debugging is enabled, log the thinking content
   if (process.env.DEBUG === '1' && thinkingContent) {

@@ -580,8 +580,15 @@ When troubleshooting:
           throw new Error(finalResult);
         }
 
-        // Parse tool call from response
-        const parsedTool = parseXmlToolCallWithThinking(assistantResponseContent);
+        // Parse tool call from response with valid tools list
+        const validTools = [
+          'search', 'query', 'extract', 'listFiles', 'searchFiles', 'attempt_completion'
+        ];
+        if (this.allowEdit) {
+          validTools.push('implement');
+        }
+        
+        const parsedTool = parseXmlToolCallWithThinking(assistantResponseContent, validTools);
         if (parsedTool) {
           const { toolName, params } = parsedTool;
           if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
@@ -722,7 +729,8 @@ When troubleshooting:
       this.tokenCounter.updateHistory(this.history);
 
       // Schema handling - format response according to provided schema
-      if (options.schema && !options._schemaFormatted) {
+      // Skip schema processing if result came from attempt_completion tool
+      if (options.schema && !options._schemaFormatted && !completionAttempted) {
         if (this.debug) {
           console.log('[DEBUG] Schema provided, applying automatic formatting...');
         }
@@ -821,6 +829,38 @@ Convert your previous response content into this JSON format now. Return nothing
         } catch (error) {
           console.error('[ERROR] Schema formatting failed:', error);
           // Return the original result if schema formatting fails
+        }
+      } else if (completionAttempted && options.schema) {
+        // For attempt_completion results with schema, still clean markdown if needed
+        try {
+          finalResult = cleanSchemaResponse(finalResult);
+          
+          // Validate and fix Mermaid diagrams if present
+          const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
+            debug: this.debug,
+            path: this.allowedFolders[0],
+            provider: this.clientApiProvider,
+            model: this.model
+          });
+          
+          if (mermaidValidation.wasFixed) {
+            finalResult = mermaidValidation.fixedResponse;
+            if (this.debug) {
+              console.log(`[DEBUG] Mermaid diagrams fixed in attempt_completion result`);
+            }
+          }
+          
+          // Validate JSON if schema expects JSON
+          if (isJsonSchema(options.schema)) {
+            const validation = validateJsonResponse(finalResult);
+            if (!validation.isValid && this.debug) {
+              console.log(`[DEBUG] attempt_completion result JSON validation failed: ${validation.error}`);
+            }
+          }
+        } catch (error) {
+          if (this.debug) {
+            console.log(`[DEBUG] attempt_completion result cleanup failed: ${error.message}`);
+          }
         }
       }
 
