@@ -7,7 +7,8 @@ import { tool } from 'ai';
 import { search } from '../search.js';
 import { query } from '../query.js';
 import { extract } from '../extract.js';
-import { searchSchema, querySchema, extractSchema, searchDescription, queryDescription, extractDescription } from './common.js';
+import { delegate } from '../delegate.js';
+import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescription, queryDescription, extractDescription, delegateDescription } from './common.js';
 
 /**
  * Search tool generator
@@ -209,6 +210,42 @@ export const extractTool = (options = {}) => {
 			} catch (error) {
 				console.error('Error executing extract command:', error);
 				return `Error executing extract command: ${error.message}`;
+			}
+		}
+	});
+};
+
+/**
+ * Delegate tool generator
+ * 
+ * @param {Object} [options] - Configuration options
+ * @param {boolean} [options.debug=false] - Enable debug logging
+ * @param {number} [options.timeout=300] - Default timeout in seconds
+ * @returns {Object} Configured delegate tool
+ */
+export const delegateTool = (options = {}) => {
+	const { debug = false, timeout = 300 } = options;
+
+	return tool({
+		name: 'delegate',
+		description: delegateDescription,
+		parameters: delegateSchema,
+		execute: async ({ task }) => {
+			try {
+				if (debug) {
+					console.error(`Executing delegate with task: "${task}"`);
+				}
+
+				const result = await delegate({
+					task,
+					timeout,
+					debug
+				});
+
+				return result;
+			} catch (error) {
+				console.error('Error executing delegate command:', error);
+				return `Error executing delegate command: ${error.message}`;
 			}
 		}
 	});

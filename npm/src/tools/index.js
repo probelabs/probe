@@ -4,7 +4,7 @@
  */
 
 // Export Vercel AI SDK tool generators
-export { searchTool, queryTool, extractTool } from './vercel.js';
+export { searchTool, queryTool, extractTool, delegateTool } from './vercel.js';
 
 // Export LangChain tools
 export { createSearchTool, createQueryTool, createExtractTool } from './langchain.js';
@@ -14,6 +14,9 @@ export {
 	searchSchema,
 	querySchema,
 	extractSchema,
+	delegateSchema,
+	delegateDescription,
+	delegateToolDefinition,
 	attemptCompletionSchema,
 	attemptCompletionToolDefinition
 } from './common.js';
@@ -22,7 +25,7 @@ export {
 export { DEFAULT_SYSTEM_MESSAGE } from './system-message.js';
 
 // For backward compatibility, create and export pre-configured tools
-import { searchTool as searchToolGenerator, queryTool as queryToolGenerator, extractTool as extractToolGenerator } from './vercel.js';
+import { searchTool as searchToolGenerator, queryTool as queryToolGenerator, extractTool as extractToolGenerator, delegateTool as delegateToolGenerator } from './vercel.js';
 import { DEFAULT_SYSTEM_MESSAGE } from './system-message.js';
 
 // Create default tool instances (for backward compatibility)
@@ -30,6 +33,7 @@ const tools = {
 	searchTool: searchToolGenerator(),
 	queryTool: queryToolGenerator(),
 	extractTool: extractToolGenerator(),
+	delegateTool: delegateToolGenerator(),
 	DEFAULT_SYSTEM_MESSAGE
 };
 

@@ -3,15 +3,18 @@ import {
   searchTool,
   queryTool,
   extractTool,
+  delegateTool,
   DEFAULT_SYSTEM_MESSAGE,
   attemptCompletionSchema,
   attemptCompletionToolDefinition,
   searchSchema,
   querySchema,
   extractSchema,
+  delegateSchema,
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
+  delegateToolDefinition,
   parseXmlToolCall
 } from '../index.js';
 import { randomUUID } from 'crypto';
@@ -21,7 +24,8 @@ export function createTools(configOptions) {
   return {
     searchTool: searchTool(configOptions),
     queryTool: queryTool(configOptions),
-    extractTool: extractTool(configOptions)
+    extractTool: extractTool(configOptions),
+    delegateTool: delegateTool(configOptions)
   };
 }
 
@@ -31,10 +35,12 @@ export {
   searchSchema,
   querySchema,
   extractSchema,
+  delegateSchema,
   attemptCompletionSchema,
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
+  delegateToolDefinition,
   attemptCompletionToolDefinition,
   parseXmlToolCall
 };

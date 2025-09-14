@@ -101,6 +101,9 @@ describe('ACPToolManager', () => {
         },
         extractToolInstance: {
           execute: jest.fn().mockResolvedValue('extract result')
+        },
+        delegateToolInstance: {
+          execute: jest.fn().mockResolvedValue('delegate result')
         }
       }
     };
@@ -113,6 +116,7 @@ describe('ACPToolManager', () => {
       expect(toolManager.getToolKind('search')).toBe(ToolCallKind.search);
       expect(toolManager.getToolKind('query')).toBe(ToolCallKind.query);
       expect(toolManager.getToolKind('extract')).toBe(ToolCallKind.extract);
+      expect(toolManager.getToolKind('delegate')).toBe(ToolCallKind.execute);
       expect(toolManager.getToolKind('implement')).toBe(ToolCallKind.edit);
       expect(toolManager.getToolKind('unknown')).toBe(ToolCallKind.execute);
     });
@@ -167,6 +171,18 @@ describe('ACPToolManager', () => {
       });
     });
     
+    test('should execute delegate tool successfully', async () => {
+      const params = { task: 'Analyze security vulnerabilities in authentication code' };
+      
+      const result = await toolManager.executeToolCall('session-123', 'delegate', params);
+      
+      expect(result).toBe('delegate result');
+      expect(mockProbeAgent.wrappedTools.delegateToolInstance.execute).toHaveBeenCalledWith({
+        ...params,
+        sessionId: 'test-session'
+      });
+    });
+    
     test('should handle tool execution errors', async () => {
       const error = new Error('Tool execution failed');
       mockProbeAgent.wrappedTools.searchToolInstance.execute.mockRejectedValue(error);
@@ -187,6 +203,10 @@ describe('ACPToolManager', () => {
       mockProbeAgent.wrappedTools.searchToolInstance = null;
       
       await expect(toolManager.executeToolCall('session-123', 'search', {})).rejects.toThrow('Search tool not available');
+      
+      mockProbeAgent.wrappedTools.delegateToolInstance = null;
+      
+      await expect(toolManager.executeToolCall('session-123', 'delegate', {})).rejects.toThrow('Delegate tool not available');
     });
   });
   
@@ -263,7 +283,7 @@ describe('ACPToolManager', () => {
     test('should provide correct tool definitions', () => {
       const definitions = ACPToolManager.getToolDefinitions();
       
-      expect(definitions).toHaveLength(3);
+      expect(definitions).toHaveLength(4);
       
       const searchTool = definitions.find(d => d.name === 'search');
       expect(searchTool).toBeDefined();
@@ -282,6 +302,12 @@ describe('ACPToolManager', () => {
       expect(extractTool.kind).toBe(ToolCallKind.extract);
       expect(extractTool.parameters.properties.files).toBeDefined();
       expect(extractTool.parameters.required).toContain('files');
+      
+      const delegateTool = definitions.find(d => d.name === 'delegate');
+      expect(delegateTool).toBeDefined();
+      expect(delegateTool.kind).toBe(ToolCallKind.execute);
+      expect(delegateTool.parameters.properties.task).toBeDefined();
+      expect(delegateTool.parameters.required).toContain('task');
     });
   });
   

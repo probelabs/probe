@@ -115,9 +115,13 @@ export class ProbeAgent {
       search: wrappedTools.searchToolInstance,
       query: wrappedTools.queryToolInstance,
       extract: wrappedTools.extractToolInstance,
+      delegate: wrappedTools.delegateToolInstance,
       listFiles: listFilesToolInstance,
       searchFiles: searchFilesToolInstance,
     };
+    
+    // Store wrapped tools for ACP system
+    this.wrappedTools = wrappedTools;
   }
 
   /**
@@ -621,6 +625,22 @@ When troubleshooting:
                 
                 // Execute tool with tracing if available
                 const executeToolCall = async () => {
+                  // For delegate tool, pass current iteration and max iterations
+                  if (toolName === 'delegate') {
+                    const enhancedParams = {
+                      ...toolParams,
+                      currentIteration,
+                      maxIterations,
+                      debug: this.debug
+                    };
+                    
+                    if (this.debug) {
+                      console.log(`[DEBUG] Executing delegate tool at iteration ${currentIteration}/${maxIterations}`);
+                      console.log(`[DEBUG] Delegate task: ${toolParams.task?.substring(0, 100)}...`);
+                    }
+                    
+                    return await this.toolImplementations[toolName].execute(enhancedParams);
+                  }
                   return await this.toolImplementations[toolName].execute(toolParams);
                 };
 

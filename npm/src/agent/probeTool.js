@@ -192,6 +192,15 @@ export function createWrappedTools(baseTools) {
     );
   }
 
+  // Wrap delegate tool
+  if (baseTools.delegateTool) {
+    wrappedTools.delegateToolInstance = wrapToolWithEmitter(
+      baseTools.delegateTool, 
+      'delegate', 
+      baseTools.delegateTool.execute
+    );
+  }
+
   return wrappedTools;
 }
 

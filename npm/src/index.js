@@ -10,6 +10,7 @@
 import { search } from './search.js';
 import { query } from './query.js';
 import { extract } from './extract.js';
+import { delegate } from './delegate.js';
 import { getBinaryPath, setBinaryPath } from './utils.js';
 import * as tools from './tools/index.js';
 import { listFilesByLevel } from './utils/file-lister.js';
@@ -18,20 +19,23 @@ import {
 	searchSchema,
 	querySchema,
 	extractSchema,
+	delegateSchema,
 	attemptCompletionSchema,
 	searchToolDefinition,
 	queryToolDefinition,
 	extractToolDefinition,
+	delegateToolDefinition,
 	attemptCompletionToolDefinition,
 	parseXmlToolCall
 } from './tools/common.js';
-import { searchTool, queryTool, extractTool } from './tools/vercel.js';
+import { searchTool, queryTool, extractTool, delegateTool } from './tools/vercel.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
 
 export {
 	search,
 	query,
 	extract,
+	delegate,
 	getBinaryPath,
 	setBinaryPath,
 	listFilesByLevel,
@@ -43,15 +47,18 @@ export {
 	searchTool,
 	queryTool,
 	extractTool,
+	delegateTool,
 	// Export schemas
 	searchSchema,
 	querySchema,
 	extractSchema,
+	delegateSchema,
 	attemptCompletionSchema,
 	// Export tool definitions
 	searchToolDefinition,
 	queryToolDefinition,
 	extractToolDefinition,
+	delegateToolDefinition,
 	attemptCompletionToolDefinition,
 	// Export parser function
 	parseXmlToolCall
