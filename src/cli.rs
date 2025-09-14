@@ -77,7 +77,7 @@ pub struct Args {
 
     /// Output format (default: color)
     /// Use 'json' or 'xml' for machine-readable output
-    #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color"])]
+    #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color", "outline"])]
     pub format: String,
 
     /// Session ID for caching search results
@@ -188,7 +188,7 @@ pub enum Commands {
 
         /// Output format (default: color)
         /// Use 'json' or 'xml' for machine-readable output with structured data
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color"])]
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color", "outline"])]
         format: String,
 
         /// Session ID for caching search results
@@ -203,9 +203,6 @@ pub enum Commands {
         #[arg(long = "question")]
         question: Option<String>,
 
-        /// Extract only symbols (functions, structs, classes, methods, constants) without implementation
-        #[arg(long = "symbols")]
-        symbols: bool,
     },
 
     /// Extract code blocks from files
@@ -272,9 +269,6 @@ pub enum Commands {
         #[arg(long = "instructions")]
         instructions: Option<String>,
 
-        /// Extract only symbols (functions, structs, classes, methods, constants) without implementation
-        #[arg(long = "symbols")]
-        symbols: bool,
     },
 
     /// Search code using AST patterns for precise structural matching

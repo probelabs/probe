@@ -74,7 +74,6 @@ pub struct FileProcessingParams<'a> {
 
     #[allow(dead_code)]
     pub no_merge: bool,
-    pub symbols: bool,
 }
 
 /// Evaluate whether a block of lines satisfies a complex AST query
@@ -954,14 +953,8 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
             // Start measuring result creation time
             let result_creation_start = Instant::now();
 
-            // Extract symbol signature for fallback context if symbols mode is enabled
-            let symbol_signature = if ctx.params.symbols {
-                // For fallback context, we try to extract symbol signature from the entire context
-                // Since this is fallback context, we parse the content as a standalone snippet
-                extract_symbol_signature_from_content(ctx.extension, &context_code, ctx.debug_mode)
-            } else {
-                None
-            };
+            // Symbol signature not used since symbols functionality was removed
+            let symbol_signature = None;
 
             // BATCH OPTIMIZATION: Create single result for merged context window instead of multiple individual results
             let result = SearchResult {
@@ -1514,7 +1507,7 @@ pub fn process_file_with_results(
                     let result_creation_start = Instant::now();
 
                     // Extract symbol signature if symbols mode is enabled
-                    let symbol_signature = if params.symbols {
+                    let symbol_signature = if false { // symbols functionality removed
                         // Re-parse the tree for symbol signature extraction when needed
                         let tree = crate::language::get_or_parse_tree_pooled(
                             &format!("{}_{}", params.path.to_string_lossy(), extension),

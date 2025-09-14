@@ -24,7 +24,6 @@ pub fn apply_limits(
     max_results: Option<usize>,
     max_bytes: Option<usize>,
     max_tokens: Option<usize>,
-    symbols: bool,
 ) -> LimitedSearchResults {
     // Early return if no limits are specified - avoids all token counting and processing
     if max_results.is_none() && max_bytes.is_none() && max_tokens.is_none() {
@@ -116,12 +115,7 @@ pub fn apply_limits(
             }
             continue;
         }
-        let r_bytes = if symbols {
-            // In symbols mode, use symbol signature length for byte limits
-            r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0)
-        } else {
-            r.code.len()
-        };
+        let r_bytes = r.code.len();
 
         // PRE-COMPUTED LIMITS: Check result count limit first (fastest check)
         if let Some(max_res) = max_results {
@@ -167,36 +161,14 @@ pub fn apply_limits(
                 running_tokens = limited
                     .iter()
                     .map(|result: &SearchResult| {
-                        if symbols {
-                            result
-                                .symbol_signature
-                                .as_ref()
-                                .map(|s| count_block_tokens(s))
-                                .unwrap_or(0)
-                        } else {
-                            count_block_tokens(&result.code)
-                        }
+                        count_block_tokens(&result.code)
                     })
                     .sum();
                 // Now count this result precisely too using block-level caching
-                if symbols {
-                    r.symbol_signature
-                        .as_ref()
-                        .map(|s| count_block_tokens(s))
-                        .unwrap_or(0)
-                } else {
-                    count_block_tokens(&r.code)
-                }
+                count_block_tokens(&r.code)
             } else if token_counting_started {
                 // We've already started precise counting - use block-level caching
-                if symbols {
-                    r.symbol_signature
-                        .as_ref()
-                        .map(|s| count_block_tokens(s))
-                        .unwrap_or(0)
-                } else {
-                    count_block_tokens(&r.code)
-                }
+                count_block_tokens(&r.code)
             } else {
                 // Still using estimation
                 estimated_tokens
@@ -235,15 +207,7 @@ pub fn apply_limits(
             limited
                 .iter()
                 .map(|result: &SearchResult| {
-                    if symbols {
-                        result
-                            .symbol_signature
-                            .as_ref()
-                            .map(|s| count_block_tokens(s))
-                            .unwrap_or(0)
-                    } else {
-                        count_block_tokens(&result.code)
-                    }
+                    count_block_tokens(&result.code)
                 })
                 .sum()
         } else {

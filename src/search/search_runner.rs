@@ -237,7 +237,6 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         timeout,
         question,
         no_gitignore,
-        symbols,
     } = options;
     // Start the timeout thread
     let timeout_handle = timeout::start_timeout_thread(*timeout);
@@ -729,7 +728,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 parent_context: None,
             });
         }
-        let mut limited = apply_limits(res, *max_results, *max_bytes, *max_tokens, *symbols);
+        let mut limited = apply_limits(res, *max_results, *max_bytes, *max_tokens);
 
         // No caching for files-only mode
         limited.cached_blocks_skipped = None;
@@ -974,7 +973,6 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                     preprocessed_queries: None,
                     no_merge: *no_merge,
                     query_plan: &plan,
-                    symbols: *symbols,
                 };
 
                 if debug_mode {
@@ -1381,7 +1379,6 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         *max_results,
         *max_bytes,
         *max_tokens,
-        *symbols,
     );
 
     // Calculate files skipped due to early termination

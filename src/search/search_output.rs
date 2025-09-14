@@ -12,7 +12,6 @@ pub fn format_and_print_search_results(
     dry_run: bool,
     format: &str,
     query_plan: Option<&QueryPlan>,
-    symbols: bool,
 ) {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
@@ -33,23 +32,22 @@ pub fn format_and_print_search_results(
                 dry_run,
                 query_plan,
                 debug_mode,
-                symbols,
             );
         }
         "json" => {
-            if let Err(e) = format_and_print_json_results(&valid_results, symbols) {
+            if let Err(e) = format_and_print_json_results(&valid_results) {
                 eprintln!("Error formatting JSON: {e}");
             }
             return; // Skip the summary output at the end
         }
         "xml" => {
-            if let Err(e) = format_and_print_xml_results(&valid_results, symbols) {
+            if let Err(e) = format_and_print_xml_results(&valid_results) {
                 eprintln!("Error formatting XML: {e}");
             }
             return; // Skip the summary output at the end
         }
         "outline" => {
-            format_and_print_outline_results(&valid_results, dry_run, symbols);
+            format_and_print_outline_results(&valid_results, dry_run);
             return; // Skip the duplicate summary output at the end
         }
         _ => {
@@ -76,15 +74,9 @@ pub fn format_and_print_search_results(
                     // Normal mode with full content or symbol display
                     if is_full_file {
                         println!("File: {}", result.file);
-                        if symbols && result.symbol_signature.is_some() {
-                            println!("Symbol: {}", result.symbol_signature.as_ref().unwrap());
-                        } else if symbols {
-                            println!("Symbol: <not available>");
-                        } else {
-                            println!("```{extension}");
-                            println!("{}", result.code);
-                            println!("```");
-                        }
+                        println!("```{extension}");
+                        println!("{}", result.code);
+                        println!("```");
                     } else {
                         println!("File: {}", result.file);
                         println!(
@@ -92,15 +84,9 @@ pub fn format_and_print_search_results(
                             start = result.lines.0,
                             end = result.lines.1
                         );
-                        if symbols && result.symbol_signature.is_some() {
-                            println!("Symbol: {}", result.symbol_signature.as_ref().unwrap());
-                        } else if symbols {
-                            println!("Symbol: <not available>");
-                        } else {
-                            println!("```{extension}");
-                            println!("{code}", code = result.code);
-                            println!("```");
-                        }
+                        println!("```{extension}");
+                        println!("{code}", code = result.code);
+                        println!("```");
                     }
                 }
                 if debug_mode {
@@ -193,30 +179,13 @@ pub fn format_and_print_search_results(
 
     println!("Found {count} search results", count = valid_results.len());
 
-    let total_bytes: usize = if symbols {
-        // In symbols mode, count bytes from symbol signatures instead of full code
-        valid_results
-            .iter()
-            .map(|r| r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0))
-            .sum()
-    } else {
-        valid_results.iter().map(|r| r.code.len()).sum()
-    };
+    let total_bytes: usize = valid_results.iter().map(|r| r.code.len()).sum();
 
     // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION:
     // Use batch processing with content deduplication for improved performance
     // when multiple identical code blocks need tokenization (common in search results)
-    let total_tokens: usize = if symbols {
-        // In symbols mode, count tokens from symbol signatures instead of full code
-        let symbol_blocks: Vec<&str> = valid_results
-            .iter()
-            .filter_map(|r| r.symbol_signature.as_deref())
-            .collect();
-        sum_tokens_with_deduplication(&symbol_blocks)
-    } else {
-        let code_blocks: Vec<&str> = valid_results.iter().map(|r| r.code.as_str()).collect();
-        sum_tokens_with_deduplication(&code_blocks)
-    };
+    let code_blocks: Vec<&str> = valid_results.iter().map(|r| r.code.as_str()).collect();
+    let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
     println!("Total bytes returned: {total_bytes}");
     println!("Total tokens returned: {total_tokens}");
 }
@@ -227,7 +196,6 @@ fn format_and_print_color_results(
     dry_run: bool,
     query_plan: Option<&QueryPlan>,
     debug_mode: bool,
-    symbols: bool,
 ) {
     use colored::*;
     use regex::Regex;
@@ -334,121 +302,102 @@ fn format_and_print_color_results(
             _ => "",
         };
 
-        // Check if we should display symbols instead of code
-        if symbols {
-            if let Some(symbol_signature) = &result.symbol_signature {
-                println!(
-                    "{label} {signature}",
-                    label = "Symbol:".bold().magenta(),
-                    signature = symbol_signature.bright_cyan()
-                );
-            } else {
-                println!(
-                    "{label} {not_available}",
-                    label = "Symbol:".bold().magenta(),
-                    not_available = "<not available>".dimmed()
-                );
-            }
-        } else {
-            println!("{label}", label = "Code:".bold().magenta());
+        println!("{label}", label = "Code:".bold().magenta());
 
-            // Print the code with syntax highlighting
-            if !language.is_empty() {
-                println!("{code_block}", code_block = format!("```{language}").cyan());
-            } else {
-                println!("{code_block}", code_block = "```".cyan());
+        // Print the code with syntax highlighting
+        if !language.is_empty() {
+            println!("{code_block}", code_block = format!("```{language}").cyan());
+        } else {
+            println!("{code_block}", code_block = "```".cyan());
+        }
+
+        // Print code with highlighting
+        // Generate patterns from the matched keywords in the search result
+        let mut patterns = Vec::new();
+
+        // Use the matched keywords from the search result if available
+        if let Some(keywords) = &result.matched_keywords {
+            for keyword in keywords {
+                // Create a case-insensitive regex for the keyword with word boundaries
+                if let Ok(regex) = Regex::new(&format!(r"(?i){}", regex::escape(keyword))) {
+                    patterns.push(regex);
+                }
+
+                // Also try to match camelCase/PascalCase variations
+                if let Ok(regex) = Regex::new(&format!(r"(?i){}", regex::escape(keyword))) {
+                    patterns.push(regex);
+                }
             }
         }
 
-        // Only print code with highlighting if not in symbols mode
-        if !symbols {
-            // Generate patterns from the matched keywords in the search result
-            let mut patterns = Vec::new();
+        // If no patterns were generated, add some default patterns
+        if patterns.is_empty() {
+            // Use lazily initialized static regexes to avoid recompilation
+            lazy_static::lazy_static! {
+                static ref STRUCT_REGEX: Regex = Regex::new(r"(?i)struct").unwrap();
+                static ref SEARCH_REGEX: Regex = Regex::new(r"(?i)search").unwrap();
+                static ref RESULT_REGEX: Regex = Regex::new(r"(?i)result").unwrap();
+            }
 
-            // Use the matched keywords from the search result if available
-            if let Some(keywords) = &result.matched_keywords {
-                for keyword in keywords {
-                    // Create a case-insensitive regex for the keyword with word boundaries
-                    if let Ok(regex) = Regex::new(&format!(r"(?i){}", regex::escape(keyword))) {
-                        patterns.push(regex);
-                    }
+            patterns.push(STRUCT_REGEX.clone());
+            patterns.push(SEARCH_REGEX.clone());
+            patterns.push(RESULT_REGEX.clone());
+        }
 
-                    // Also try to match camelCase/PascalCase variations
-                    if let Ok(regex) = Regex::new(&format!(r"(?i){}", regex::escape(keyword))) {
-                        patterns.push(regex);
-                    }
+        // Process the code line by line with inline highlighting
+        for line in result.code.lines() {
+            let mut output_line = String::new();
+            let mut last_end = 0;
+            let mut matches = Vec::new();
+
+            // Collect all matches from all patterns
+            for pattern in &patterns {
+                for mat in pattern.find_iter(line) {
+                    matches.push((mat.start(), mat.end()));
                 }
             }
 
-            // If no patterns were generated, add some default patterns
-            if patterns.is_empty() {
-                // Use lazily initialized static regexes to avoid recompilation
-                lazy_static::lazy_static! {
-                    static ref STRUCT_REGEX: Regex = Regex::new(r"(?i)struct").unwrap();
-                    static ref SEARCH_REGEX: Regex = Regex::new(r"(?i)search").unwrap();
-                    static ref RESULT_REGEX: Regex = Regex::new(r"(?i)result").unwrap();
-                }
+            // Sort matches by start position
+            matches.sort_by_key(|&(start, _)| start);
 
-                patterns.push(STRUCT_REGEX.clone());
-                patterns.push(SEARCH_REGEX.clone());
-                patterns.push(RESULT_REGEX.clone());
+            // Merge overlapping matches
+            let mut merged_matches = Vec::new();
+            for (start, end) in matches {
+                if let Some((_, prev_end)) = merged_matches.last() {
+                    if start <= *prev_end {
+                        // Overlapping match, extend the previous one
+                        let last_idx = merged_matches.len() - 1;
+                        merged_matches[last_idx].1 = end.max(*prev_end);
+                        continue;
+                    }
+                }
+                merged_matches.push((start, end));
             }
 
-            // Process the code line by line with inline highlighting
-            for line in result.code.lines() {
-                let mut output_line = String::new();
-                let mut last_end = 0;
-                let mut matches = Vec::new();
-
-                // Collect all matches from all patterns
-                for pattern in &patterns {
-                    for mat in pattern.find_iter(line) {
-                        matches.push((mat.start(), mat.end()));
-                    }
+            // Build the highlighted line
+            for &(start, end) in &merged_matches {
+                // Add text before the match
+                if start > last_end {
+                    output_line.push_str(&line[last_end..start]);
                 }
 
-                // Sort matches by start position
-                matches.sort_by_key(|&(start, _)| start);
+                // Add the highlighted match
+                let matched_text = &line[start..end];
+                output_line.push_str(&matched_text.yellow().bold().to_string());
 
-                // Merge overlapping matches
-                let mut merged_matches = Vec::new();
-                for (start, end) in matches {
-                    if let Some((_, prev_end)) = merged_matches.last() {
-                        if start <= *prev_end {
-                            // Overlapping match, extend the previous one
-                            let last_idx = merged_matches.len() - 1;
-                            merged_matches[last_idx].1 = end.max(*prev_end);
-                            continue;
-                        }
-                    }
-                    merged_matches.push((start, end));
-                }
+                last_end = end;
+            }
 
-                // Build the highlighted line
-                for &(start, end) in &merged_matches {
-                    // Add text before the match
-                    if start > last_end {
-                        output_line.push_str(&line[last_end..start]);
-                    }
+            // Add any remaining text
+            if last_end < line.len() {
+                output_line.push_str(&line[last_end..]);
+            }
 
-                    // Add the highlighted match
-                    let matched_text = &line[start..end];
-                    output_line.push_str(&matched_text.yellow().bold().to_string());
-
-                    last_end = end;
-                }
-
-                // Add any remaining text
-                if last_end < line.len() {
-                    output_line.push_str(&line[last_end..]);
-                }
-
-                // Print the line (highlighted or original if no matches)
-                if !merged_matches.is_empty() {
-                    println!("{output_line}");
-                } else {
-                    println!("{line}");
-                }
+            // Print the line (highlighted or original if no matches)
+            if !merged_matches.is_empty() {
+                println!("{output_line}");
+            } else {
+                println!("{line}");
             }
         }
 
@@ -544,7 +493,16 @@ fn format_and_print_color_results(
                 println!("Type: {}", result.node_type);
             }
         }
-    }
+    } // End of for loop
+
+    println!();
+    println!("Found {} search results", results.len());
+
+    let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
+    let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
+    let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
+    println!("Total bytes returned: {total_bytes}");
+    println!("Total tokens returned: {total_tokens}");
 }
 
 /// Helper function to escape XML special characters
@@ -557,7 +515,7 @@ fn escape_xml(s: &str) -> String {
 }
 
 /// Format and print search results in JSON format
-fn format_and_print_json_results(results: &[&SearchResult], symbols: bool) -> Result<()> {
+fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
     // Create a simplified version of the results for JSON output
     #[derive(serde::Serialize)]
     struct JsonResult<'a> {
@@ -599,30 +557,15 @@ fn format_and_print_json_results(results: &[&SearchResult], symbols: bool) -> Re
 
     // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for JSON output:
     // Process all code blocks in batch to leverage content deduplication
-    let total_tokens = if symbols {
-        // In symbols mode, count tokens from symbol signatures instead of full code
-        let symbol_blocks: Vec<&str> = results
-            .iter()
-            .filter_map(|r| r.symbol_signature.as_deref())
-            .collect();
-        sum_tokens_with_deduplication(&symbol_blocks)
-    } else {
-        let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
-        sum_tokens_with_deduplication(&code_blocks)
-    };
+    let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
+    let total_tokens = sum_tokens_with_deduplication(&code_blocks);
 
     // Create a wrapper object with results and summary
     let wrapper = serde_json::json!({
         "results": json_results,
         "summary": {
             "count": results.len(),
-            "total_bytes": if symbols {
-                results.iter().map(|r| {
-                    r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0)
-                }).sum::<usize>()
-            } else {
-                results.iter().map(|r| r.code.len()).sum::<usize>()
-            },
+            "total_bytes": results.iter().map(|r| r.code.len()).sum::<usize>(),
             "total_tokens": total_tokens,
         },
         "version": probe_code::version::get_version()
@@ -633,7 +576,7 @@ fn format_and_print_json_results(results: &[&SearchResult], symbols: bool) -> Re
 }
 
 /// Format and print search results in XML format
-fn format_and_print_xml_results(results: &[&SearchResult], symbols: bool) -> Result<()> {
+fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
     println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     println!("<probe_results>");
 
@@ -705,28 +648,12 @@ fn format_and_print_xml_results(results: &[&SearchResult], symbols: bool) -> Res
     println!("    <count>{}</count>", results.len());
     println!(
         "    <total_bytes>{total_bytes}</total_bytes>",
-        total_bytes = if symbols {
-            results
-                .iter()
-                .map(|r| r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0))
-                .sum::<usize>()
-        } else {
-            results.iter().map(|r| r.code.len()).sum::<usize>()
-        }
+        total_bytes = results.iter().map(|r| r.code.len()).sum::<usize>()
     );
     // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for XML output:
     // Process all code blocks in batch to leverage content deduplication
-    let total_tokens = if symbols {
-        // In symbols mode, count tokens from symbol signatures instead of full code
-        let symbol_blocks: Vec<&str> = results
-            .iter()
-            .filter_map(|r| r.symbol_signature.as_deref())
-            .collect();
-        sum_tokens_with_deduplication(&symbol_blocks)
-    } else {
-        let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
-        sum_tokens_with_deduplication(&code_blocks)
-    };
+    let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
+    let total_tokens = sum_tokens_with_deduplication(&code_blocks);
 
     println!("    <total_tokens>{total_tokens}</total_tokens>");
     println!("  </summary>");
@@ -1586,7 +1513,7 @@ fn print_ellipsis_once(
 }
 
 /// Format and print search results in outline format
-fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool, symbols: bool) {
+fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
     // Track actual content displayed for accurate token/byte counting
     let mut displayed_content = Vec::new();
 
@@ -1635,30 +1562,20 @@ fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool, sy
                 "{:<4} // Lines {}-{}",
                 result.lines.0, result.lines.0, result.lines.1
             );
-        } else if symbols {
-            // For symbols mode, collect all lines to display and then render them
-            if let Some(_symbol_signature) = &result.symbol_signature {
-                // Phase 1: Collect all lines that need to be displayed
-                let lines_to_display = collect_outline_lines(result, &result.file);
-
-                // Phase 2: Render the collected lines with proper gaps
-                render_outline_lines(
-                    &lines_to_display,
-                    &result.file,
-                    &mut displayed_lines,
-                    &mut displayed_content,
-                    &mut displayed_ellipsis_ranges,
-                    &result.matched_keywords,
-                );
-
-                // Update tracking
-            } else {
-                // Fallback if symbol_signature is missing - shouldn't happen
-                println!("{:<4} {}", result.lines.0, result.code);
-            }
         } else {
-            // Handle non-symbol results - just show the code block as-is
-            println!("{}", result.code);
+            // For outline mode, collect all lines to display and then render them
+            // Phase 1: Collect all lines that need to be displayed
+            let lines_to_display = collect_outline_lines(result, &result.file);
+
+            // Phase 2: Render the collected lines with proper gaps
+            render_outline_lines(
+                &lines_to_display,
+                &result.file,
+                &mut displayed_lines,
+                &mut displayed_content,
+                &mut displayed_ellipsis_ranges,
+                &result.matched_keywords,
+            );
         }
 
         last_end_line = result.lines.1;
