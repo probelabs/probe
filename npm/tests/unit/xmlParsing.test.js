@@ -34,8 +34,8 @@ describe('XML Tool Call Parsing', () => {
         expect(result).toEqual({
           toolName: 'attempt_completion',
           params: {
-            result: 'Task completed successfully',
-            command: 'npm test'
+            result: 'Task completed successfully'
+            // command parameter is intentionally removed for backward compatibility
           }
         });
       });
