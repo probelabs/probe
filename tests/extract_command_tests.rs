@@ -169,17 +169,18 @@ fn test_format_and_print_extraction_results() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+        parent_context: None,
     };
 
     // Test different formats
     let results = vec![result];
 
     // We can't easily test the output directly, but we can at least ensure the function doesn't panic
-    format_and_print_extraction_results(&results, "terminal", None, None, None).unwrap();
-    format_and_print_extraction_results(&results, "markdown", None, None, None).unwrap();
-    format_and_print_extraction_results(&results, "plain", None, None, None).unwrap();
-    format_and_print_extraction_results(&results, "json", None, None, None).unwrap();
-    format_and_print_extraction_results(&results, "xml", None, None, None).unwrap();
+    format_and_print_extraction_results(&results, "terminal", None, None, None, false).unwrap();
+    format_and_print_extraction_results(&results, "markdown", None, None, None, false).unwrap();
+    format_and_print_extraction_results(&results, "plain", None, None, None, false).unwrap();
+    format_and_print_extraction_results(&results, "json", None, None, None, false).unwrap();
+    format_and_print_extraction_results(&results, "xml", None, None, None, false).unwrap();
 
     // Test with system prompt and user instructions
     format_and_print_extraction_results(
@@ -188,6 +189,7 @@ fn test_format_and_print_extraction_results() {
         None,
         Some("Test system prompt"),
         Some("Test user instructions"),
+        false,
     )
     .unwrap();
 }

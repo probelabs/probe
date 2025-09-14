@@ -57,6 +57,10 @@ mod tests {
             start_byte: 0,
             end_byte: 100,
             node_type: "function".to_string(),
+            parent_node_type: None,
+            parent_start_row: None,
+            parent_end_row: None,
+            parent_context: None,
         };
         
         assert_eq!(block.start_row, 1);
