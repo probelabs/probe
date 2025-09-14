@@ -115,9 +115,13 @@ export class ProbeAgent {
       search: wrappedTools.searchToolInstance,
       query: wrappedTools.queryToolInstance,
       extract: wrappedTools.extractToolInstance,
+      delegate: wrappedTools.delegateToolInstance,
       listFiles: listFilesToolInstance,
       searchFiles: searchFilesToolInstance,
     };
+    
+    // Store wrapped tools for ACP system
+    this.wrappedTools = wrappedTools;
   }
 
   /**

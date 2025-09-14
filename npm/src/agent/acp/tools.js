@@ -160,6 +160,8 @@ export class ACPToolManager {
         return ToolCallKind.query;
       case 'extract':
         return ToolCallKind.extract;
+      case 'delegate':
+        return ToolCallKind.execute;
       case 'implement':
         return ToolCallKind.edit;
       default:
@@ -198,6 +200,15 @@ export class ACPToolManager {
           throw new Error('Extract tool not available');
         }
         return await tools.extractToolInstance.execute({
+          ...params,
+          sessionId: this.probeAgent.sessionId
+        });
+        
+      case 'delegate':
+        if (!tools.delegateToolInstance) {
+          throw new Error('Delegate tool not available');
+        }
+        return await tools.delegateToolInstance.execute({
           ...params,
           sessionId: this.probeAgent.sessionId
         });
@@ -335,6 +346,21 @@ export class ACPToolManager {
             }
           },
           required: ['files']
+        }
+      },
+      {
+        name: 'delegate',
+        description: 'Delegate a specific task to a specialized probe subagent. Use this tool when you need specialized assistance or want to offload complex work.',
+        kind: ToolCallKind.execute,
+        parameters: {
+          type: 'object',
+          properties: {
+            task: {
+              type: 'string',
+              description: 'The specific task to delegate. Be clear and detailed about what needs to be accomplished.'
+            }
+          },
+          required: ['task']
         }
       }
     ];

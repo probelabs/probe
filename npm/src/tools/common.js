@@ -33,6 +33,10 @@ export const extractSchema = z.object({
 	format: z.string().optional().default('plain').describe('Output format (plain, markdown, json, color)')
 });
 
+export const delegateSchema = z.object({
+	task: z.string().describe('The task to delegate to a subagent. Be specific about what needs to be accomplished.')
+});
+
 // Schema for the new attempt_completion tool
 export const attemptCompletionSchema = z.object({
 	result: z.string().describe('The final result of the task. Formulate this result in a way that is final and does not require further input from the user. Do not end your result with questions or offers for further assistance.'),
@@ -156,6 +160,18 @@ User: Read file inside the dependency
 </examples>
 `;
 
+export const delegateToolDefinition = `
+## delegate
+Description: Delegate a specific task to a specialized probe subagent. Use this tool when you need to perform a complex task that requires specialized knowledge or when you want to offload work to another agent.
+Parameters:
+- task: (required) The specific task to delegate. Be clear and detailed about what needs to be accomplished.
+
+Usage Example:
+<delegate>
+<task>Search through the authentication module and explain how user login validation works, including any security measures</task>
+</delegate>
+`;
+
 export const attemptCompletionToolDefinition = `
 ## attempt_completion
 Description: Use this tool ONLY when the task is fully complete and you have received confirmation of success for all previous tool uses. Presents the final result to the user.
@@ -172,12 +188,14 @@ Usage Example:
 export const searchDescription = 'Search code in the repository using Elasticsearch-like query syntax. Use this tool first for any code-related questions.';
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files.';
+export const delegateDescription = 'Delegate a specific task to a specialized probe subagent. Use this tool when you need specialized assistance or want to offload complex work.';
 
 // Valid tool names that should be parsed as tool calls
 const DEFAULT_VALID_TOOLS = [
 	'search',
 	'query', 
 	'extract',
+	'delegate',
 	'listFiles',
 	'searchFiles',
 	'implement',
