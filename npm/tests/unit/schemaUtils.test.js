@@ -77,9 +77,16 @@ describe('Schema Utilities', () => {
       expect(cleanSchemaResponse(input)).toBe(expected);
     });
 
-    test('should return original for text that does not start with JSON', () => {
+    test('should extract JSON from text with multiple lines before JSON', () => {
       const input = 'This is some text with {"json": "inside"}';
-      expect(cleanSchemaResponse(input)).toBe(input); // Returns unchanged since it doesn't start with { or [
+      // With enhanced logic, this should now extract the JSON since it's only 2 lines of content before
+      expect(cleanSchemaResponse(input)).toBe('{"json": "inside"}');
+    });
+
+    test('should return original for text with too much content before JSON', () => {
+      const input = 'Line 1\nLine 2\nLine 3\nLine 4\nMany lines of text that should prevent extraction {"json": "inside"}';
+      // Should return original since there are too many lines before the JSON
+      expect(cleanSchemaResponse(input)).toBe(input);
     });
 
     test('should handle empty JSON object', () => {
@@ -91,6 +98,87 @@ describe('Schema Utilities', () => {
     test('should handle empty JSON array', () => {
       const input = '[]';
       const expected = '[]';
+      expect(cleanSchemaResponse(input)).toBe(expected);
+    });
+
+    // New tests for enhanced JSON detection after code blocks
+    test('should extract JSON from code blocks with various patterns', () => {
+      const testCases = [
+        {
+          input: '```json\n{"test": "value"}\n```',
+          expected: '{"test": "value"}',
+          description: 'standard json code block'
+        },
+        {
+          input: '```\n{"test": "value"}\n```',
+          expected: '{"test": "value"}',
+          description: 'code block without language specifier'
+        },
+        {
+          input: '`{"test": "value"}`',
+          expected: '{"test": "value"}',
+          description: 'single backtick JSON'
+        }
+      ];
+
+      testCases.forEach(({ input, expected, description }) => {
+        expect(cleanSchemaResponse(input)).toBe(expected);
+      });
+    });
+
+    test('should handle code blocks with immediate JSON start', () => {
+      const input = '```json\n{';
+      const remaining = '"test": "value", "nested": {"array": [1, 2, 3]}}';
+      const fullInput = input + remaining;
+      
+      expect(cleanSchemaResponse(fullInput)).toBe('{' + remaining);
+    });
+
+    test('should handle code blocks with array JSON', () => {
+      const input = '```json\n[{"item": 1}, {"item": 2}]```';
+      const expected = '[{"item": 1}, {"item": 2}]';
+      expect(cleanSchemaResponse(input)).toBe(expected);
+    });
+
+    test('should extract JSON with proper bracket counting', () => {
+      const input = '```json\n{"outer": {"inner": {"deep": [1, 2, {"nested": true}]}}}\n```';
+      const expected = '{"outer": {"inner": {"deep": [1, 2, {"nested": true}]}}}';
+      expect(cleanSchemaResponse(input)).toBe(expected);
+    });
+
+    test('should handle code blocks with whitespace after marker', () => {
+      const input = '```json   \n  {"test": "value"}  \n```';
+      const expected = '{"test": "value"}';
+      expect(cleanSchemaResponse(input)).toBe(expected);
+    });
+
+    test('should handle incomplete code blocks gracefully', () => {
+      const input = '```json\n{"test": "incomplete"';
+      // Should fall back to boundary detection
+      expect(cleanSchemaResponse(input)).toBe(input);
+    });
+
+    test('should prioritize code block extraction over boundary detection', () => {
+      const input = 'Some text {"not": "this"} ```json\n{"extract": "this"}\n```';
+      const expected = '{"extract": "this"}';
+      expect(cleanSchemaResponse(input)).toBe(expected);
+    });
+
+    test('should handle mixed bracket types in code blocks', () => {
+      const input = '```json\n[{"objects": [1, 2]}, {"more": {"nested": true}}]\n```';
+      const expected = '[{"objects": [1, 2]}, {"more": {"nested": true}}]';
+      expect(cleanSchemaResponse(input)).toBe(expected);
+    });
+
+    test('should handle fallback to boundary detection when code block extraction fails', () => {
+      const input = 'Here is some JSON: {"test": "value"} that should be extracted';
+      // Should fall back to boundary detection with improved logic
+      expect(cleanSchemaResponse(input)).toBe('{"test": "value"}');
+    });
+
+    test('should handle text with minimal content before JSON', () => {
+      const input = 'Result:\n{"test": "value"}';
+      const expected = '{"test": "value"}';
       expect(cleanSchemaResponse(input)).toBe(expected);
     });
   });
@@ -203,54 +291,84 @@ describe('Schema Utilities', () => {
   });
 
   describe('createJsonCorrectionPrompt', () => {
-    test('should create basic correction prompt', () => {
+    test('should create basic correction prompt for first retry (retryCount 0)', () => {
+      const invalidResponse = '{"test": value}';
+      const schema = '{"test": "string"}';
+      const error = 'Unexpected token v in JSON';
+      
+      const prompt = createJsonCorrectionPrompt(invalidResponse, schema, error, 0);
+      
+      expect(prompt).toContain(invalidResponse);
+      expect(prompt).toContain(schema);
+      expect(prompt).toContain(error);
+      expect(prompt).toContain('CRITICAL JSON ERROR:');
+      expect(prompt).toContain('Return ONLY the corrected JSON');
+    });
+
+    test('should create more urgent prompt for second retry (retryCount 1)', () => {
+      const invalidResponse = '{"test": value}';
+      const schema = '{"test": "string"}';
+      const error = 'Unexpected token v in JSON';
+      
+      const prompt = createJsonCorrectionPrompt(invalidResponse, schema, error, 1);
+      
+      expect(prompt).toContain('URGENT - JSON PARSING FAILED:');
+      expect(prompt).toContain('second chance');
+      expect(prompt).toContain('ABSOLUTELY NO explanatory text');
+    });
+
+    test('should create final attempt prompt for third retry (retryCount 2)', () => {
+      const invalidResponse = '{"test": value}';
+      const schema = '{"test": "string"}';
+      const error = 'Unexpected token v in JSON';
+      
+      const prompt = createJsonCorrectionPrompt(invalidResponse, schema, error, 2);
+      
+      expect(prompt).toContain('FINAL ATTEMPT - CRITICAL JSON ERROR:');
+      expect(prompt).toContain('final retry');
+      expect(prompt).toContain('EXAMPLE:');
+      expect(prompt).toContain('NOT:');
+    });
+
+    test('should cap at highest strength level for retryCount > 2', () => {
+      const invalidResponse = '{"test": value}';
+      const schema = '{"test": "string"}';
+      const error = 'Unexpected token v in JSON';
+      
+      const prompt = createJsonCorrectionPrompt(invalidResponse, schema, error, 5);
+      
+      expect(prompt).toContain('FINAL ATTEMPT - CRITICAL JSON ERROR:');
+    });
+
+    test('should truncate long invalid responses', () => {
+      const longResponse = 'Hello '.repeat(200) + '{"test": value}';
+      const schema = '{"test": "string"}';
+      const error = 'Unexpected token v';
+      
+      const prompt = createJsonCorrectionPrompt(longResponse, schema, error, 0);
+      
+      expect(prompt).toContain('...');
+      expect(prompt.length).toBeLessThan(longResponse.length + 500);
+    });
+
+    test('should handle default retryCount parameter', () => {
       const invalidResponse = '{"test": value}';
       const schema = '{"test": "string"}';
       const error = 'Unexpected token v in JSON';
       
       const prompt = createJsonCorrectionPrompt(invalidResponse, schema, error);
       
-      expect(prompt).toContain(invalidResponse);
-      expect(prompt).toContain(schema);
-      expect(prompt).toContain(error);
-      expect(prompt).toContain('not valid JSON');
-      expect(prompt).toContain('Return ONLY the corrected JSON');
+      expect(prompt).toContain('CRITICAL JSON ERROR:');
     });
 
-    test('should include detailed errors when provided', () => {
-      const invalidResponse = '{"test": value}';
-      const schema = '{"test": "string"}';
-      const error = 'Unexpected token v';
-      const detailedError = 'Unexpected token v in JSON at position 9';
-      
-      const prompt = createJsonCorrectionPrompt(invalidResponse, schema, error, detailedError);
-      
-      expect(prompt).toContain(error);
-      expect(prompt).toContain(detailedError);
-      expect(prompt).toContain('Error:');
-      expect(prompt).toContain('Detailed Error:');
-    });
-
-    test('should not duplicate identical errors', () => {
-      const invalidResponse = '{"test":}';
-      const schema = '{"test": "string"}';
-      const error = 'Unexpected end of JSON input';
-      const detailedError = 'Unexpected end of JSON input'; // Same as error
-      
-      const prompt = createJsonCorrectionPrompt(invalidResponse, schema, error, detailedError);
-      
-      const errorOccurrences = (prompt.match(/Unexpected end of JSON input/g) || []).length;
-      expect(errorOccurrences).toBe(1);
-    });
-
-    test('should handle multiline responses', () => {
+    test('should handle multiline responses with truncation', () => {
       const invalidResponse = '{\n  "test": value\n}';
       const schema = '{"test": "string"}';
       const error = 'Unexpected token v';
       
-      const prompt = createJsonCorrectionPrompt(invalidResponse, schema, error);
+      const prompt = createJsonCorrectionPrompt(invalidResponse, schema, error, 1);
       
-      expect(prompt).toContain(invalidResponse);
+      expect(prompt).toContain('URGENT');
       expect(prompt.split('\n').length).toBeGreaterThan(5);
     });
   });

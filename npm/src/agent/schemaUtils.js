@@ -16,7 +16,49 @@ export function cleanSchemaResponse(response) {
 
   const trimmed = response.trim();
   
-  // Find JSON boundaries
+  // First, look for JSON after code block markers
+  const codeBlockPatterns = [
+    /```json\s*\n?([{\[][\s\S]*?[}\]])\s*\n?```/,
+    /```\s*\n?([{\[][\s\S]*?[}\]])\s*\n?```/,
+    /`([{\[][\s\S]*?[}\]])`/
+  ];
+  
+  for (const pattern of codeBlockPatterns) {
+    const match = trimmed.match(pattern);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+  
+  // Look for code block start followed immediately by JSON
+  const codeBlockStartPattern = /```(?:json)?\s*\n?\s*([{\[])/;
+  const codeBlockMatch = trimmed.match(codeBlockStartPattern);
+  
+  if (codeBlockMatch) {
+    const startIndex = codeBlockMatch.index + codeBlockMatch[0].length - 1; // Position of the bracket
+    
+    // Find the matching closing bracket
+    const openChar = codeBlockMatch[1];
+    const closeChar = openChar === '{' ? '}' : ']';
+    let bracketCount = 1;
+    let endIndex = startIndex + 1;
+    
+    while (endIndex < trimmed.length && bracketCount > 0) {
+      const char = trimmed[endIndex];
+      if (char === openChar) {
+        bracketCount++;
+      } else if (char === closeChar) {
+        bracketCount--;
+      }
+      endIndex++;
+    }
+    
+    if (bracketCount === 0) {
+      return trimmed.substring(startIndex, endIndex);
+    }
+  }
+  
+  // Fallback: Find JSON boundaries anywhere in the text
   const firstBracket = Math.min(
     trimmed.indexOf('{') >= 0 ? trimmed.indexOf('{') : Infinity,
     trimmed.indexOf('[') >= 0 ? trimmed.indexOf('[') : Infinity
@@ -29,12 +71,13 @@ export function cleanSchemaResponse(response) {
   
   // Only extract if we found valid JSON boundaries
   if (firstBracket < Infinity && lastBracket >= 0 && firstBracket < lastBracket) {
-    // Check if the response likely starts with JSON (directly or after markdown)
+    // Check if the response likely starts with JSON (directly or after minimal content)
     const beforeFirstBracket = trimmed.substring(0, firstBracket).trim();
     
-    // If there's minimal content before the first bracket (just markdown wrapper),
-    // extract the JSON. Otherwise, return original to preserve non-JSON content.
-    if (beforeFirstBracket === '' || beforeFirstBracket.match(/^```\w*$/)) {
+    // If there's minimal content before the first bracket, extract the JSON
+    if (beforeFirstBracket === '' || 
+        beforeFirstBracket.match(/^```\w*$/) ||
+        beforeFirstBracket.split('\n').length <= 2) {
       return trimmed.substring(firstBracket, lastBracket + 1);
     }
   }
@@ -148,26 +191,44 @@ export function isJsonSchema(schema) {
  * @param {string} invalidResponse - The invalid JSON response
  * @param {string} schema - The original schema
  * @param {string} error - The JSON parsing error
- * @param {string} [detailedError] - Additional error details
+ * @param {number} [retryCount=0] - The current retry attempt (0-based)
  * @returns {string} - Correction prompt for the AI
  */
-export function createJsonCorrectionPrompt(invalidResponse, schema, error, detailedError = '') {
-  let prompt = `Your previous response is not valid JSON and cannot be parsed. Here's what you returned:
+export function createJsonCorrectionPrompt(invalidResponse, schema, error, retryCount = 0) {
+  // Create increasingly stronger prompts based on retry attempt
+  const strengthLevels = [
+    {
+      prefix: "CRITICAL JSON ERROR:",
+      instruction: "You MUST fix this and return ONLY valid JSON.",
+      emphasis: "Return ONLY the corrected JSON, with no additional text or markdown formatting."
+    },
+    {
+      prefix: "URGENT - JSON PARSING FAILED:",
+      instruction: "This is your second chance. Return ONLY valid JSON that can be parsed by JSON.parse().",
+      emphasis: "ABSOLUTELY NO explanatory text, greetings, or formatting. ONLY JSON."
+    },
+    {
+      prefix: "FINAL ATTEMPT - CRITICAL JSON ERROR:",
+      instruction: "This is the final retry. You MUST return ONLY raw JSON without any other content.",
+      emphasis: "EXAMPLE: {\"key\": \"value\"} NOT: ```json{\"key\": \"value\"}``` NOT: Here is the JSON: {\"key\": \"value\"}"
+    }
+  ];
 
-${invalidResponse}
+  const level = Math.min(retryCount, strengthLevels.length - 1);
+  const currentLevel = strengthLevels[level];
 
-Error: ${error}`;
+  let prompt = `${currentLevel.prefix} Your previous response is not valid JSON and cannot be parsed. Here's what you returned:
 
-  if (detailedError && detailedError !== error) {
-    prompt += `\nDetailed Error: ${detailedError}`;
-  }
+${invalidResponse.substring(0, 500)}${invalidResponse.length > 500 ? '...' : ''}
 
-  prompt += `
+Error: ${error}
 
-Please correct your response to be valid JSON that matches this schema:
+${currentLevel.instruction}
+
+Schema to match:
 ${schema}
 
-Return ONLY the corrected JSON, with no additional text or markdown formatting.`;
+${currentLevel.emphasis}`;
 
   return prompt;
 }

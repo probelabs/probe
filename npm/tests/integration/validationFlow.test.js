@@ -165,8 +165,9 @@ sequenceDiagram
       const error = 'Unexpected token J in JSON at position 9';
       const detailedError = 'Unexpected token J in JSON at position 9';
 
-      const prompt = createJsonCorrectionPrompt(invalidJson, schema, error, detailedError);
+      const prompt = createJsonCorrectionPrompt(invalidJson, schema, error, 0);
 
+      expect(prompt).toContain('CRITICAL JSON ERROR:');
       expect(prompt).toContain('not valid JSON');
       expect(prompt).toContain(invalidJson);
       expect(prompt).toContain('Unexpected token J');
