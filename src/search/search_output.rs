@@ -779,6 +779,7 @@ fn find_complete_construct_for_line(
     file_path: &str,
     target_line: usize,
     source: &str,
+    keywords: &Option<Vec<String>>,
 ) -> Vec<(usize, String)> {
     // Get file extension and use existing tree parsing infrastructure
     let extension = file_extension(std::path::Path::new(file_path));
@@ -858,15 +859,110 @@ fn find_complete_construct_for_line(
     if let Some(node) = best_node {
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
+        let total_lines = end_line - start_line + 1;
 
-        // Extract all lines of the construct
-        let mut result = Vec::new();
-        for line_num in start_line..=end_line {
-            if line_num > 0 && line_num <= lines.len() {
-                result.push((line_num, lines[line_num - 1].to_string()));
-            }
+        // Debug output for node detection
+        if std::env::var("DEBUG").unwrap_or_default() == "1" {
+            eprintln!(
+                "DEBUG: Found node kind '{}' with {} lines",
+                node.kind(),
+                total_lines
+            );
         }
-        result
+
+        // For very large constructs (like arrays), truncate the display
+        const MAX_ARRAY_LINES: usize = 20; // Show at most 20 lines for arrays
+        const CONTEXT_LINES: usize = 5; // Show 5 lines at start and end
+
+        if total_lines > MAX_ARRAY_LINES
+            && matches!(
+                node.kind(),
+                "array_expression" | "object_expression" | "list" | "dictionary" |
+            "macro_invocation" | // Rust vec![], hashmap![], etc.
+            "arguments" | "argument_list" | "parameters" |
+            "tuple_expression" | "list_expression" | "array" | "table" |
+            "vector" | "sequence" | "collection"
+            )
+        {
+            // Debug output for truncation
+            if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                eprintln!(
+                    "DEBUG: Truncating {} with {} lines (> {})",
+                    node.kind(),
+                    total_lines,
+                    MAX_ARRAY_LINES
+                );
+            }
+            // For large arrays/objects, show first and last few lines with ellipsis
+            let mut result = Vec::new();
+
+            // Helper function to check if a line contains any keywords
+            let line_contains_keywords = |line_text: &str| -> bool {
+                if let Some(kws) = keywords {
+                    for keyword in kws {
+                        let search_term = if keyword.starts_with('"') && keyword.ends_with('"') {
+                            &keyword[1..keyword.len() - 1]
+                        } else {
+                            keyword
+                        };
+                        if line_text
+                            .to_lowercase()
+                            .contains(&search_term.to_lowercase())
+                        {
+                            return true;
+                        }
+                    }
+                }
+                false
+            };
+
+            // Add first few lines
+            for line_num in start_line..=(start_line + CONTEXT_LINES).min(end_line) {
+                if line_num > 0 && line_num <= lines.len() {
+                    result.push((line_num, lines[line_num - 1].to_string()));
+                }
+            }
+
+            // Find and add any lines in the middle that contain keywords
+            let mut middle_matches = Vec::new();
+            if end_line > start_line + CONTEXT_LINES * 2 {
+                let middle_start = start_line + CONTEXT_LINES + 1;
+                let middle_end = end_line - CONTEXT_LINES;
+
+                for line_num in middle_start..=middle_end {
+                    if line_num > 0 && line_num <= lines.len() {
+                        let line_text = lines[line_num - 1];
+                        if line_contains_keywords(line_text) {
+                            middle_matches.push((line_num, line_text.to_string()));
+                        }
+                    }
+                }
+            }
+
+            // Add middle matches if any
+            result.extend(middle_matches);
+
+            // Add marker for truncated content if we're actually truncating
+            if end_line > start_line + CONTEXT_LINES * 2 {
+                // Add the last few lines
+                for line_num in (end_line - CONTEXT_LINES + 1)..=end_line {
+                    if line_num > 0 && line_num <= lines.len() {
+                        result.push((line_num, lines[line_num - 1].to_string()));
+                    }
+                }
+            }
+
+            result
+        } else {
+            // Extract all lines of the construct for non-array types or small arrays
+            let mut result = Vec::new();
+            for line_num in start_line..=end_line {
+                if line_num > 0 && line_num <= lines.len() {
+                    result.push((line_num, lines[line_num - 1].to_string()));
+                }
+            }
+            result
+        }
     } else {
         // Fallback: return just the single line
         vec![(target_line, lines[target_line - 1].to_string())]
@@ -896,8 +992,133 @@ fn collect_parent_context_for_line(
     let root_node = tree.root_node();
 
     // Find the node at the target line
-    if let Some(target_node) = find_node_at_line(&root_node, line_num) {
-        // For outline mode: Traverse ALL the way up to collect the complete hierarchy
+    let mut target_node = find_node_at_line(&root_node, line_num);
+
+    // Special handling for doc comments: if this line is a comment that precedes a function,
+    // we should find the function it documents and use that as the context
+    if let Some(_node) = target_node {
+        let source_lines: Vec<&str> = source.lines().collect();
+        if line_num > 0 && line_num <= source_lines.len() {
+            let line_content = source_lines[line_num - 1].trim();
+
+            // Check if this is a doc comment (/// or /**)
+            if line_content.starts_with("///") || line_content.starts_with("/**") {
+                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                    eprintln!(
+                        "DEBUG: Found doc comment at line {}: {}",
+                        line_num, line_content
+                    );
+                }
+                // Look for the next non-comment, non-attribute line to find the function
+                for next_line in line_num + 1..=(line_num + 10).min(source_lines.len()) {
+                    let next_content = source_lines[next_line - 1].trim();
+                    if !next_content.starts_with("///")
+                        && !next_content.starts_with("/**")
+                        && !next_content.starts_with("#[")
+                        && !next_content.is_empty()
+                    {
+                        // This might be the function - find its node
+                        if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                            eprintln!(
+                                "DEBUG: Looking at next line {}: {}",
+                                next_line, next_content
+                            );
+                        }
+                        if let Some(func_node) = find_node_at_line(&root_node, next_line) {
+                            if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                                eprintln!(
+                                    "DEBUG: Found node at line {}: {}",
+                                    next_line,
+                                    func_node.kind()
+                                );
+                            }
+                            // Look for function in the ancestry
+                            let mut current = func_node;
+                            loop {
+                                if matches!(current.kind(), "function_item" | "function_definition")
+                                {
+                                    target_node = Some(current);
+                                    if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                                        eprintln!(
+                                            "DEBUG: Found function node: {} at lines {}-{}",
+                                            current.kind(),
+                                            current.start_position().row + 1,
+                                            current.end_position().row + 1
+                                        );
+                                        eprintln!(
+                                            "DEBUG: Updated target_node for doc comment on line {}",
+                                            line_num
+                                        );
+                                    }
+                                    break;
+                                }
+                                if let Some(parent) = current.parent() {
+                                    current = parent;
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                        // If we found a function, we're done with this doc comment
+                        if target_node.is_some() {
+                            break;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(target_node) = target_node {
+        if std::env::var("DEBUG").unwrap_or_default() == "1" {
+            eprintln!(
+                "DEBUG: Processing contexts for target_node: {} at lines {}-{}",
+                target_node.kind(),
+                target_node.start_position().row + 1,
+                target_node.end_position().row + 1
+            );
+        }
+        // For outline mode: First include the target node itself if it's a structural element
+        if matches!(
+            target_node.kind(),
+            "function_item"
+                | "function_definition"
+                | "method_definition"
+                | "function_declaration"
+                | "method_declaration"
+                | "function"
+                | "impl_item"
+                | "struct_item"
+                | "class_definition"
+        ) {
+            let start_line = target_node.start_position().row + 1;
+            let end_line = target_node.end_position().row + 1;
+            let source_lines: Vec<&str> = source.lines().collect();
+            let context_line = if start_line > 0 && start_line <= source_lines.len() {
+                source_lines[start_line - 1].to_string()
+            } else {
+                String::new()
+            };
+            let context = crate::models::ParentContext {
+                node_type: target_node.kind().to_string(),
+                start_line,
+                end_line,
+                context_line,
+                preceding_comments: Vec::new(),
+            };
+            contexts.push(context);
+            if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                eprintln!(
+                    "DEBUG: Added target node as context: {} at lines {}-{}",
+                    target_node.kind(),
+                    start_line,
+                    end_line
+                );
+            }
+        }
+
+        // Then traverse up to collect the complete hierarchy
         // This includes ALL structural parents (functions, loops, conditionals, etc.)
         let mut current = target_node;
         while let Some(parent) = current.parent() {
@@ -1188,8 +1409,12 @@ fn collect_outline_lines(result: &SearchResult, file_path: &str) -> Vec<(usize, 
         // Add the actual matched lines
         for &line_num in &matched_lines {
             // Find the complete construct for this line
-            let construct_lines =
-                find_complete_construct_for_line(file_path, line_num, &full_source);
+            let construct_lines = find_complete_construct_for_line(
+                file_path,
+                line_num,
+                &full_source,
+                &result.matched_keywords,
+            );
             if std::env::var("DEBUG").unwrap_or_default() == "1" {
                 eprintln!(
                     "DEBUG: Complete construct for line {}: found {} lines",
@@ -1202,29 +1427,105 @@ fn collect_outline_lines(result: &SearchResult, file_path: &str) -> Vec<(usize, 
             }
             if !construct_lines.is_empty() {
                 for (construct_line, _) in construct_lines {
-                    lines.push((construct_line, OutlineLineType::MatchedLine));
+                    // Only add real lines (skip truncation markers with line number 0)
+                    if construct_line > 0 {
+                        lines.push((construct_line, OutlineLineType::MatchedLine));
+                    }
                 }
             } else {
                 lines.push((line_num, OutlineLineType::MatchedLine));
             }
         }
 
-        // Add closing brace if needed
-        if let Some(last_context) = shared_contexts
-            .iter()
-            .filter(|c| c.start_line > result.lines.0)
-            .max_by_key(|c| c.end_line)
-        {
-            if last_context.end_line <= result.lines.1 {
-                lines.push((last_context.end_line, OutlineLineType::ClosingBrace));
+        // Add closing braces for functions and other contexts
+        // We need to show closing braces for ALL contexts (functions, impl blocks, etc.)
+        // not just those that fit within the original result range
+        let mut closing_braces = std::collections::HashSet::new();
+
+        // Add closing braces from shared contexts (common to all matches)
+        for context in &shared_contexts {
+            // Always show closing brace for functions, impl blocks, etc.
+            if matches!(
+                context.node_type.as_str(),
+                "function_item"
+                    | "impl_item"
+                    | "struct_item"
+                    | "enum_item"
+                    | "trait_item"
+                    | "mod_item"
+                    | "block"
+                    | "if_expression"
+                    | "while_expression"
+                    | "for_expression"
+                    | "match_expression"
+            ) && context.end_line > 0
+            {
+                closing_braces.insert(context.end_line);
             }
+        }
+
+        // Add closing braces from individual matched line contexts
+        for (_, contexts) in &all_contexts {
+            for context in contexts {
+                if matches!(
+                    context.node_type.as_str(),
+                    "function_item"
+                        | "impl_item"
+                        | "struct_item"
+                        | "enum_item"
+                        | "trait_item"
+                        | "mod_item"
+                ) && context.end_line > 0
+                {
+                    closing_braces.insert(context.end_line);
+                }
+            }
+        }
+
+        // Add all closing braces to the lines
+        for &brace_line in &closing_braces {
+            lines.push((brace_line, OutlineLineType::ClosingBrace));
         }
     }
 
-    // Sort by line number and deduplicate (keeping the first type for each line)
+    // Sort by line number and deduplicate (keeping the most specific type for each line)
     lines.sort_unstable_by_key(|(line, _)| *line);
-    lines.dedup_by_key(|(line, _)| *line);
-    lines
+
+    // Custom deduplication that preserves the most important line type
+    let mut deduped_lines = Vec::new();
+    let mut seen_lines = std::collections::HashMap::new();
+
+    for (line, line_type) in lines {
+        if let Some(existing_type) = seen_lines.get(&line).copied() {
+            // Preserve more specific types over generic ones
+            let should_replace = match (existing_type, line_type) {
+                // MatchedLine is most important
+                (_, OutlineLineType::MatchedLine) => true,
+                (OutlineLineType::MatchedLine, _) => false,
+                // FunctionSignature is more important than context
+                (OutlineLineType::ParentContext, OutlineLineType::FunctionSignature) => true,
+                (OutlineLineType::NestedContext, OutlineLineType::FunctionSignature) => true,
+                (OutlineLineType::FunctionSignature, OutlineLineType::ParentContext) => false,
+                (OutlineLineType::FunctionSignature, OutlineLineType::NestedContext) => false,
+                // Keep first occurrence otherwise
+                _ => false,
+            };
+
+            if should_replace {
+                seen_lines.insert(line, line_type);
+                // Find and update existing entry
+                if let Some(pos) = deduped_lines.iter().position(|(l, _)| *l == line) {
+                    deduped_lines[pos] = (line, line_type);
+                }
+            }
+        } else {
+            seen_lines.insert(line, line_type);
+            deduped_lines.push((line, line_type));
+        }
+    }
+
+    deduped_lines.sort_unstable_by_key(|(line, _)| *line);
+    deduped_lines
 }
 
 /// Render lines with proper gaps and ellipsis
@@ -1283,23 +1584,22 @@ fn render_outline_lines(
         if line_num > 0 && line_num <= source_lines.len() {
             let mut line_content = source_lines[line_num - 1].to_string();
 
-            // Apply keyword highlighting only for matched lines
-            if line_type == OutlineLineType::MatchedLine {
-                if let Some(keywords) = keywords {
-                    for keyword in keywords {
-                        let pattern = if keyword.starts_with('"') && keyword.ends_with('"') {
-                            regex::escape(&keyword[1..keyword.len() - 1])
-                        } else {
-                            format!(r"(?i){}", regex::escape(keyword))
-                        };
-                        if let Ok(re) = Regex::new(&format!("({})", pattern)) {
-                            line_content = re
-                                .replace_all(&line_content, |caps: &regex::Captures| {
-                                    use colored::*;
-                                    caps[1].bright_yellow().bold().to_string()
-                                })
-                                .to_string();
-                        }
+            // Apply keyword highlighting for all line types (not just matched lines)
+            // This ensures function signatures and other contexts with keywords are highlighted
+            if let Some(keywords) = keywords {
+                for keyword in keywords {
+                    let pattern = if keyword.starts_with('"') && keyword.ends_with('"') {
+                        regex::escape(&keyword[1..keyword.len() - 1])
+                    } else {
+                        format!(r"(?i){}", regex::escape(keyword))
+                    };
+                    if let Ok(re) = Regex::new(&format!("({})", pattern)) {
+                        line_content = re
+                            .replace_all(&line_content, |caps: &regex::Captures| {
+                                use colored::*;
+                                caps[1].bright_yellow().bold().to_string()
+                            })
+                            .to_string();
                     }
                 }
             }
