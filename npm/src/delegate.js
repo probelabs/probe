@@ -25,7 +25,7 @@ import { getBinaryPath, buildCliArgs } from './utils.js';
  * @param {boolean} [options.debug=false] - Enable debug logging
  * @param {number} [options.currentIteration=0] - Current tool iteration count from parent agent
  * @param {number} [options.maxIterations=30] - Maximum tool iterations allowed
- * @returns {Promise<string>} The response from the delegate agent, potentially with iteration warnings
+ * @returns {Promise<string>} The response from the delegate agent
  */
 export async function delegate({ task, timeout = 300, debug = false, currentIteration = 0, maxIterations = 30 }) {
 	if (!task || typeof task !== 'string') {
@@ -119,10 +119,7 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 						return;
 					}
 
-					// Check if we're near the iteration limit and add warning if needed
-					const responseWithWarning = addIterationWarningIfNeeded(response, currentIteration, maxIterations, debug);
-
-					resolve(responseWithWarning);
+					resolve(response);
 				} else {
 					// Failed delegation
 					const errorMessage = stderr.trim() || `Delegate process failed with exit code ${code}`;
@@ -173,34 +170,6 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 	}
 }
 
-/**
- * Add iteration warning to response if approaching limits
- * 
- * @param {string} response - Original response from subagent
- * @param {number} currentIteration - Current iteration count
- * @param {number} maxIterations - Maximum iterations allowed
- * @param {boolean} debug - Debug logging enabled
- * @returns {string} Response with warning added if needed
- */
-function addIterationWarningIfNeeded(response, currentIteration, maxIterations, debug) {
-	// Check if response length suggests it might cause too many more iterations
-	const responseLength = response.length;
-	const estimatedAdditionalIterations = Math.ceil(responseLength / 2000); // Rough estimate
-	const projectedTotalIterations = currentIteration + 1 + estimatedAdditionalIterations;
-	
-	// Add warning if we're close to or exceeding limits
-	if (projectedTotalIterations >= maxIterations - 2) {
-		const warning = `\n\n⚠️ DELEGATION WARNING: This response from the subagent may cause the tool iteration limit (${maxIterations}) to be exceeded. Consider using attempt_completion to finalize your response with the current information.`;
-		
-		if (debug) {
-			console.error(`[DELEGATE] Added iteration warning: current=${currentIteration}, estimated=${estimatedAdditionalIterations}, projected=${projectedTotalIterations}, max=${maxIterations}`);
-		}
-		
-		return response + warning;
-	}
-	
-	return response;
-}
 
 /**
  * Check if delegate functionality is available
