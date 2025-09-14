@@ -8,10 +8,17 @@ import { randomUUID } from 'crypto';
 import { getBinaryPath, buildCliArgs } from './utils.js';
 
 /**
- * Delegate a task to a probe subagent
+ * Delegate a big distinct task to a probe subagent
+ * 
+ * Spawns a new probe agent with a clean environment that:
+ * - Always uses the default 'code-researcher' prompt (not inherited)
+ * - Has schema validation disabled for simpler responses
+ * - Has mermaid validation disabled for faster processing
+ * 
+ * Perfect for breaking down large complex tasks into individual jobs.
  * 
  * @param {Object} options - Delegate options
- * @param {string} options.task - The task to delegate to the subagent
+ * @param {string} options.task - The task to delegate to the subagent. Should be a complete, self-contained task.
  * @param {number} [options.timeout=300] - Timeout in seconds (default: 5 minutes)
  * @param {boolean} [options.debug=false] - Enable debug logging
  * @returns {Promise<string>} The response from the delegate agent
@@ -37,8 +44,15 @@ export async function delegate({ task, timeout = 300, debug = false }) {
 			console.error(`[DELEGATE] Using binary at: ${binaryPath}`);
 		}
 
-		// Create the agent command
-		const args = ['agent', '--task', task, '--session-id', sessionId];
+		// Create the agent command with specific flags for subagents
+		const args = [
+			'agent', 
+			'--task', task, 
+			'--session-id', sessionId,
+			'--prompt-type', 'code-researcher',  // Always use default code researcher prompt
+			'--no-schema-validation',            // Disable schema validation
+			'--no-mermaid-validation'           // Disable mermaid validation
+		];
 		
 		if (debug) {
 			args.push('--debug');
