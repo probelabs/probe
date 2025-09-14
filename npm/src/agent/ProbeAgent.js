@@ -729,7 +729,19 @@ When troubleshooting:
         
         try {
           // Step 1: Make a follow-up call to format according to schema
-          const schemaPrompt = `Now you need to respond according to this schema:\n\n${options.schema}\n\nPlease reformat your previous response to match this schema exactly. Only return the formatted response, no additional text.`;
+          const schemaPrompt = `CRITICAL: You MUST respond with ONLY valid JSON that matches this schema. Ignore any previous response format or instructions.
+
+Schema:
+${options.schema}
+
+REQUIREMENTS:
+- Return ONLY the JSON object/array
+- NO additional text, explanations, or markdown
+- NO code blocks or formatting
+- The JSON must be parseable by JSON.parse()
+- DO NOT include any conversational text like "Hello" or explanations
+
+Convert your previous response content into this JSON format now. Return nothing but valid JSON.`;
           
           // Call answer recursively with _schemaFormatted flag to prevent infinite loop
           finalResult = await this.answer(schemaPrompt, [], { 
@@ -770,18 +782,21 @@ When troubleshooting:
           
           // Step 4: Validate and potentially correct JSON responses
           if (isJsonSchema(options.schema)) {
-            const validation = validateJsonResponse(finalResult);
+            let validation = validateJsonResponse(finalResult);
+            let retryCount = 0;
+            const maxRetries = 3;
             
-            if (!validation.isValid) {
+            while (!validation.isValid && retryCount < maxRetries) {
               if (this.debug) {
-                console.log('[DEBUG] JSON validation failed:', validation.error);
+                console.log(`[DEBUG] JSON validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
               }
               
-              // Attempt correction once
+              // Create increasingly stronger correction prompts
               const correctionPrompt = createJsonCorrectionPrompt(
                 finalResult, 
                 options.schema, 
-                validation.error
+                validation.error,
+                retryCount
               );
               
               finalResult = await this.answer(correctionPrompt, [], { 
@@ -790,11 +805,17 @@ When troubleshooting:
               });
               finalResult = cleanSchemaResponse(finalResult);
               
-              // Final validation
-              const finalValidation = validateJsonResponse(finalResult);
-              if (!finalValidation.isValid && this.debug) {
-                console.log('[DEBUG] JSON still invalid after correction:', finalValidation.error);
+              // Validate the corrected response
+              validation = validateJsonResponse(finalResult);
+              retryCount++;
+              
+              if (this.debug && !validation.isValid && retryCount < maxRetries) {
+                console.log(`[DEBUG] JSON still invalid after correction ${retryCount}, retrying...`);
               }
+            }
+            
+            if (!validation.isValid && this.debug) {
+              console.log(`[DEBUG] JSON still invalid after ${maxRetries} correction attempts:`, validation.error);
             }
           }
         } catch (error) {
