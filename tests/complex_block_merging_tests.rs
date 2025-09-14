@@ -36,6 +36,7 @@ fn test_merge_different_node_types() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+            parent_context: None,
     };
     let block2 = SearchResult {
     file: "mixed_types.rs".to_string(),
@@ -62,6 +63,7 @@ fn test_merge_different_node_types() {
     block_id: None,
     matched_keywords: None,
     tokenized_content: None,
+            parent_context: None,
 };
 
     let block3 = SearchResult {
@@ -89,6 +91,7 @@ fn test_merge_different_node_types() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+            parent_context: None,
     };
 
     // Create a vector with all blocks
@@ -157,6 +160,7 @@ fn test_merge_with_gaps() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+            parent_context: None,
     };
 
     // Gap of 3 lines between block1 and block2
@@ -185,6 +189,7 @@ fn test_merge_with_gaps() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+            parent_context: None,
     };
 
     // Gap of 2 lines between block2 and block3
@@ -215,6 +220,7 @@ fn test_merge_with_gaps() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+            parent_context: None,
     };
 
     // Test with default threshold (5)
@@ -311,6 +317,7 @@ fn test_merge_overlapping_blocks() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+            parent_context: None,
     };
 
     // Overlaps with block1 (lines 5-7 are shared)
@@ -339,6 +346,7 @@ fn test_merge_overlapping_blocks() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+            parent_context: None,
     };
 
     // Create a vector with both blocks
@@ -514,6 +522,7 @@ fn test_merge_parent_child_blocks() {
         block_id: Some(0),
         matched_keywords: None,
         tokenized_content: None,
+            parent_context: None,
     };
 
     // Child block (method inside the struct)
@@ -542,6 +551,7 @@ fn test_merge_parent_child_blocks() {
         block_id: Some(1),
         matched_keywords: None,
         tokenized_content: None,
+            parent_context: None,
     };
 
     // Create a vector with both blocks
