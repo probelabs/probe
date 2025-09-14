@@ -40,10 +40,13 @@ When users make complex requests, the AI agent should automatically:
 
 ## Subagent Environment
 
-Each delegated task runs in a clean environment:
-- **Prompt**: Always uses the default `code-researcher` prompt, regardless of the parent agent's prompt
-- **Validation**: Schema and Mermaid validation are disabled for faster, simpler responses
+Each delegated task runs in a clean environment with automatic configuration:
+- **Prompt**: Automatically uses the default `code-researcher` prompt, regardless of the parent agent's prompt
+- **Validation**: Schema and Mermaid validation are automatically disabled for faster, simpler responses
+- **Iterations**: Automatically limited to remaining parent iterations to respect global limits
 - **Isolation**: Each subagent runs independently without inheriting parent context
+
+All these settings are applied automatically - no manual configuration needed.
 
 ## Configuration Options
 

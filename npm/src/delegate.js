@@ -14,10 +14,11 @@ import { getBinaryPath, buildCliArgs } from './utils.js';
  * should automatically identify complex multi-part requests and break them down
  * into focused, parallel tasks using this delegation mechanism.
  * 
- * Spawns a new probe agent with a clean environment that:
- * - Always uses the default 'code-researcher' prompt (not inherited)
- * - Has schema validation disabled for simpler responses
- * - Has mermaid validation disabled for faster processing
+ * Spawns a new probe agent with a clean environment that automatically:
+ * - Uses the default 'code-researcher' prompt (not inherited)
+ * - Disables schema validation for simpler responses
+ * - Disables mermaid validation for faster processing
+ * - Limits iterations to remaining parent iterations
  * 
  * @param {Object} options - Delegate options
  * @param {string} options.task - A complete, self-contained task for the subagent. Should be specific and focused on one area of expertise.
@@ -53,15 +54,15 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 			console.error(`[DELEGATE] Using binary at: ${binaryPath}`);
 		}
 
-		// Create the agent command with specific flags for subagents
+		// Create the agent command with automatic subagent configuration
 		const args = [
 			'agent', 
 			'--task', task, 
 			'--session-id', sessionId,
-			'--prompt-type', 'code-researcher',  // Always use default code researcher prompt
-			'--no-schema-validation',            // Disable schema validation
-			'--no-mermaid-validation',           // Disable mermaid validation
-			'--max-iterations', remainingIterations.toString()  // Limit subagent iterations
+			'--prompt-type', 'code-researcher',  // Automatically use default code researcher prompt
+			'--no-schema-validation',            // Automatically disable schema validation
+			'--no-mermaid-validation',           // Automatically disable mermaid validation
+			'--max-iterations', remainingIterations.toString()  // Automatically limit to remaining iterations
 		];
 		
 		if (debug) {
