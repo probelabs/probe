@@ -4,15 +4,18 @@
  */
 
 import { jest } from '@jest/globals';
-import { delegateTool } from '../src/tools/vercel.js';
-import { ACPToolManager } from '../src/agent/acp/tools.js';
 
 // Mock just the delegate function itself
 const mockDelegate = jest.fn();
-jest.mock('../src/delegate.js', () => ({
+const mockIsDelegateAvailable = jest.fn(() => Promise.resolve(true));
+jest.unstable_mockModule('../src/delegate.js', () => ({
   delegate: mockDelegate,
-  isDelegateAvailable: jest.fn().mockResolvedValue(true)
+  isDelegateAvailable: mockIsDelegateAvailable
 }));
+
+// Import after mocking
+const { delegateTool } = await import('../src/tools/vercel.js');
+const { ACPToolManager } = await import('../src/agent/acp/tools.js');
 
 describe('Delegate Tool Configuration', () => {
   beforeEach(() => {

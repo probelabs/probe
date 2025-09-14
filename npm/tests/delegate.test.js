@@ -3,19 +3,23 @@
  */
 
 import { jest } from '@jest/globals';
-import { delegate, isDelegateAvailable } from '../src/delegate.js';
 
-// Mock child_process.spawn
+// Mock child_process.spawn at module level
 const mockSpawn = jest.fn();
-jest.mock('child_process', () => ({
+jest.unstable_mockModule('child_process', () => ({
   spawn: mockSpawn
 }));
 
 // Mock utils module
 const mockGetBinaryPath = jest.fn();
-jest.mock('../src/utils.js', () => ({
-  getBinaryPath: mockGetBinaryPath
+const mockBuildCliArgs = jest.fn();
+jest.unstable_mockModule('../src/utils.js', () => ({
+  getBinaryPath: mockGetBinaryPath,
+  buildCliArgs: mockBuildCliArgs
 }));
+
+// Import after mocking
+const { delegate, isDelegateAvailable } = await import('../src/delegate.js');
 
 describe('Delegate Tool', () => {
   let mockProcess;
