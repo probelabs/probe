@@ -1,5 +1,5 @@
 import { describe, test, expect } from '@jest/globals';
-import { cleanSchemaResponse } from '../../src/agent/schemaUtils.js';
+import { cleanSchemaResponse, isJsonSchemaDefinition } from '../../src/agent/schemaUtils.js';
 
 describe('attempt_completion JSON parsing issue', () => {
   test('should reproduce the issue where attempt_completion result with markdown causes JSON parsing errors', () => {
@@ -47,6 +47,55 @@ describe('attempt_completion JSON parsing issue', () => {
     expect(parsed).toHaveProperty('$schema');
     expect(parsed).toHaveProperty('properties');
     expect(parsed.properties).toHaveProperty('issues');
+
+    // NEW: Verify this is detected as a schema definition (the bug!)
+    expect(isJsonSchemaDefinition(cleaned)).toBe(true);
+  });
+
+  test('should detect when AI returns schema definition instead of data', () => {
+    // This is the problematic response - AI returned schema definition instead of data
+    const problemResponse = `\`\`\`json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "code-review",
+  "title": "Code Review", 
+  "description": "Structured format for code review issues",
+  "type": "object",
+  "required": ["issues"],
+  "properties": {
+    "issues": {
+      "type": "array",
+      "description": "List of issues found during code review",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": { "type": "string" },
+          "line": { "type": "number" },
+          "message": { "type": "string" },
+          "severity": { "type": "string" }
+        }
+      }
+    }
+  }
+}
+\`\`\``;
+
+    const cleaned = cleanSchemaResponse(problemResponse);
+    expect(isJsonSchemaDefinition(cleaned)).toBe(true);
+
+    // This is what should have been returned instead (actual data)
+    const correctResponse = JSON.stringify({
+      "issues": [
+        {
+          "file": "docs/failure-conditions-implementation.md",
+          "line": 1,
+          "message": "Documentation inconsistency found",
+          "severity": "error"
+        }
+      ]
+    });
+
+    expect(isJsonSchemaDefinition(correctResponse)).toBe(false);
   });
 
   test('should handle attempt_completion result that is plain text', () => {

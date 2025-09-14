@@ -30,6 +30,8 @@ import {
   isJsonSchema,
   validateJsonResponse,
   createJsonCorrectionPrompt,
+  isJsonSchemaDefinition,
+  createSchemaDefinitionCorrectionPrompt,
   validateAndFixMermaidResponse
 } from './schemaUtils.js';
 
@@ -757,19 +759,25 @@ When troubleshooting:
         
         try {
           // Step 1: Make a follow-up call to format according to schema
-          const schemaPrompt = `CRITICAL: You MUST respond with ONLY valid JSON that matches this schema. Ignore any previous response format or instructions.
+          const schemaPrompt = `CRITICAL: You MUST respond with ONLY valid JSON DATA that conforms to this schema structure. DO NOT return the schema definition itself.
 
-Schema:
+Schema to follow (this is just the structure - provide ACTUAL DATA):
 ${options.schema}
 
 REQUIREMENTS:
-- Return ONLY the JSON object/array
-- NO additional text, explanations, or markdown
-- NO code blocks or formatting
+- Return ONLY the JSON object/array with REAL DATA that matches the schema structure
+- DO NOT return the schema definition itself (no "$schema", "$id", "type", "properties", etc.)
+- NO additional text, explanations, or markdown formatting
+- NO code blocks or backticks
 - The JSON must be parseable by JSON.parse()
-- DO NOT include any conversational text like "Hello" or explanations
+- Fill in actual values that make sense based on your previous response content
 
-Convert your previous response content into this JSON format now. Return nothing but valid JSON.`;
+EXAMPLE:
+If schema defines {type: "object", properties: {name: {type: "string"}, age: {type: "number"}}}
+Return: {"name": "John Doe", "age": 25}
+NOT: {"type": "object", "properties": {"name": {"type": "string"}}}
+
+Convert your previous response content into actual JSON data that follows this schema structure.`;
           
           // Call answer recursively with _schemaFormatted flag to prevent infinite loop
           finalResult = await this.answer(schemaPrompt, [], { 
@@ -814,18 +822,62 @@ Convert your previous response content into this JSON format now. Return nothing
             let retryCount = 0;
             const maxRetries = 3;
             
+            // First check if the response is valid JSON but is actually a schema definition
+            if (validation.isValid && isJsonSchemaDefinition(finalResult)) {
+              if (this.debug) {
+                console.log(`[DEBUG] Response is a JSON schema definition instead of data, correcting...`);
+              }
+              
+              // Use specialized correction prompt for schema definition confusion
+              const schemaDefinitionPrompt = createSchemaDefinitionCorrectionPrompt(
+                finalResult,
+                options.schema,
+                0
+              );
+              
+              finalResult = await this.answer(schemaDefinitionPrompt, [], { 
+                ...options, 
+                _schemaFormatted: true 
+              });
+              finalResult = cleanSchemaResponse(finalResult);
+              validation = validateJsonResponse(finalResult);
+              retryCount = 1; // Start at 1 since we already did one correction
+            }
+            
             while (!validation.isValid && retryCount < maxRetries) {
               if (this.debug) {
                 console.log(`[DEBUG] JSON validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
               }
               
-              // Create increasingly stronger correction prompts
-              const correctionPrompt = createJsonCorrectionPrompt(
-                finalResult, 
-                options.schema, 
-                validation.error,
-                retryCount
-              );
+              // Check if the invalid response is actually a schema definition
+              let correctionPrompt;
+              try {
+                if (isJsonSchemaDefinition(finalResult)) {
+                  if (this.debug) {
+                    console.log(`[DEBUG] Response is still a schema definition, using specialized correction`);
+                  }
+                  correctionPrompt = createSchemaDefinitionCorrectionPrompt(
+                    finalResult,
+                    options.schema,
+                    retryCount
+                  );
+                } else {
+                  correctionPrompt = createJsonCorrectionPrompt(
+                    finalResult, 
+                    options.schema, 
+                    validation.error,
+                    retryCount
+                  );
+                }
+              } catch (error) {
+                // If we can't parse to check if it's a schema definition, use regular correction
+                correctionPrompt = createJsonCorrectionPrompt(
+                  finalResult, 
+                  options.schema, 
+                  validation.error,
+                  retryCount
+                );
+              }
               
               finalResult = await this.answer(correctionPrompt, [], { 
                 ...options, 
