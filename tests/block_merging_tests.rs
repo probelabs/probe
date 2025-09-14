@@ -65,6 +65,7 @@ fn test_merge_ranked_blocks() {
     matched_keywords: None,
     tokenized_content: None,
             parent_context: None,
+            matched_lines: None,
 };
 
     // Create block from a different file that should not be merged

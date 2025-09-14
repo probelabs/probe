@@ -3,6 +3,12 @@ use std::process::Command;
 
 pub struct TestContext;
 
+impl Default for TestContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestContext {
     pub fn new() -> Self {
         TestContext
