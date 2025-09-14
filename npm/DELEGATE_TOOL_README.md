@@ -1,48 +1,29 @@
 # Delegate Tool
 
-The delegate tool allows you to delegate **big distinct tasks** to specialized probe subagents. When you have large complex tasks, you can separate them into individual jobs and delegate each to a different agent. This is perfect for breaking down multi-part work, parallel processing, or when you need focused expertise on specific components.
+The delegate tool is used **automatically by AI agents** within the agentic loop to delegate big distinct tasks to specialized probe subagents. When an AI agent encounters complex multi-part requests, it should automatically identify opportunities for task separation and use delegation without explicit user instruction.
 
-## Usage
+## Agentic Usage Pattern
 
-### As a Vercel AI SDK Tool
+The delegate tool is designed for **automatic use by AI agents**, not direct developer calls. The AI agent recognizes when a user's request involves multiple large, distinct components and automatically breaks them down into focused, parallel tasks.
 
-```javascript
-import { delegateTool } from '@probelabs/probe';
+### Automatic Task Recognition
 
-// Create a delegate tool with configuration
-const delegate = delegateTool({
-  debug: true,        // Enable debug logging
-  timeout: 300        // Timeout in seconds (default: 5 minutes)
-});
+When users make complex requests, the AI agent should automatically:
 
-// Use the tool
-const result = await delegate.execute({
-  task: 'Search through the authentication module and explain how user login validation works, including any security measures'
-});
+1. **Identify** multiple distinct components in the request
+2. **Separate** them into self-contained tasks  
+3. **Delegate** each task to a specialized subagent
+4. **Combine** results from all subagents
 
-console.log(result);
-```
-
-### As a Raw Function
-
-```javascript
-import { delegate } from '@probelabs/probe';
-
-// Delegate a task directly
-const result = await delegate({
-  task: 'Analyze the codebase and create a summary of all API endpoints',
-  timeout: 600,       // 10 minutes timeout
-  debug: true
-});
-
-console.log(result);
-```
-
-### In XML Tool Format (for AI agents)
+### XML Tool Format (AI Agent Usage)
 
 ```xml
 <delegate>
-<task>Search through the authentication module and explain how user login validation works, including any security measures</task>
+<task>Analyze all authentication and authorization code in the codebase for security vulnerabilities and provide specific remediation recommendations</task>
+</delegate>
+
+<delegate>
+<task>Review database queries and API endpoints for performance bottlenecks and suggest optimization strategies</task>
 </delegate>
 ```
 
@@ -78,60 +59,69 @@ The delegate tool includes comprehensive error handling:
 - Agent execution errors
 - Empty responses
 
-## Use Cases
+## Agentic Use Cases
 
-1. **Task Separation**: Break large complex tasks into individual jobs for parallel processing
-2. **Complex Analysis**: Delegate comprehensive code analysis tasks to focused agents
-3. **Specialized Queries**: Ask domain-specific questions that require deep investigation
-4. **Load Distribution**: Distribute work across multiple agents for better performance
-5. **Modular Tasks**: Decompose multi-part work into smaller, self-contained pieces
+The AI agent automatically uses delegation for:
 
-## Task Separation Examples
+1. **Task Separation**: When user requests involve multiple distinct domains
+2. **Complex Analysis**: Breaking comprehensive analysis into specialized areas  
+3. **Parallel Processing**: Distributing work across multiple focused subagents
+4. **Domain Expertise**: Delegating to subagents optimized for specific areas
+5. **Large Scope**: Decomposing overwhelming requests into manageable pieces
 
-**Large Task**: "Analyze the entire codebase for issues"
+## Automatic Task Separation Examples
 
-**Separate into distinct tasks**:
-```javascript
-// Task 1: Security focus
-await delegate({
-  task: 'Analyze all authentication and authorization code for security vulnerabilities and suggest fixes'
-});
+**User Request**: "Analyze my entire codebase for security, performance, and maintainability issues"
 
-// Task 2: Performance focus  
-await delegate({
-  task: 'Review database queries and API endpoints for performance bottlenecks and optimization opportunities'
-});
+**AI Agent automatically separates into**:
+```xml
+<delegate>
+<task>Analyze all authentication, authorization, input validation, and cryptographic code for security vulnerabilities and provide specific remediation recommendations with code examples</task>
+</delegate>
 
-// Task 3: Code quality focus
-await delegate({
-  task: 'Examine code structure, patterns, and maintainability issues across all modules'
-});
+<delegate>
+<task>Review all database queries, API endpoints, algorithms, and resource usage patterns for performance bottlenecks and suggest concrete optimization strategies</task>
+</delegate>
+
+<delegate>  
+<task>Examine code structure, design patterns, documentation, and maintainability across all modules and provide refactoring recommendations</task>
+</delegate>
+```
+
+**User Request**: "Help me understand how the payment system works"
+
+**AI Agent automatically separates into**:
+```xml
+<delegate>
+<task>Analyze the payment processing flow including transaction handling, validation, and error management to explain the complete payment workflow</task>
+</delegate>
+
+<delegate>
+<task>Examine payment security measures including encryption, authentication, fraud detection, and compliance implementations</task>
+</delegate>
+
+<delegate>
+<task>Review payment database schema, data models, and storage patterns to explain how payment data is structured and managed</task>
+</delegate>
 ```
 
 ## Integration
 
-The delegate tool is fully integrated into:
-- Vercel AI SDK tools
-- LangChain tools (via Vercel compatibility)
-- ACP (Agent Communication Protocol) system
-- ProbeAgent class
-- XML tool parsing system
+The delegate tool is integrated into AI agent systems through:
+- **ACP (Agent Communication Protocol)**: For advanced agent systems
+- **XML Tool Parsing**: For AI agent tool call recognition
+- **ProbeAgent Class**: For programmatic agent implementations  
+- **Vercel AI SDK**: For AI framework compatibility
+- **LangChain Tools**: Via Vercel compatibility layer
 
-## Example Scenarios
+## AI Agent Decision Making
 
-```javascript
-// Delegate security analysis
-await delegate({
-  task: 'Analyze the authentication system for security vulnerabilities and suggest improvements'
-});
+The AI agent should automatically use delegation when it recognizes:
 
-// Delegate documentation generation
-await delegate({
-  task: 'Generate comprehensive API documentation for all endpoints in the /api folder'
-});
+- **Multi-domain requests**: User asks about multiple technical areas
+- **Large scope tasks**: Requests that would benefit from parallel processing
+- **Specialized expertise**: Tasks requiring focused domain knowledge
+- **Complex analysis**: Comprehensive reviews that can be divided
+- **Performance optimization**: When parallel execution improves response time
 
-// Delegate code review
-await delegate({
-  task: 'Review the recent changes in the user management module and identify potential issues'
-});
-```
+The delegate tool operates transparently within the agentic loop - users don't need to know it's being used. They simply get faster, more focused responses to complex requests.

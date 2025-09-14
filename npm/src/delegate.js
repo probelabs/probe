@@ -1,5 +1,5 @@
 /**
- * Delegate functionality for the probe package
+ * Delegate functionality for the probe package - used automatically by AI agents
  * @module delegate
  */
 
@@ -8,17 +8,19 @@ import { randomUUID } from 'crypto';
 import { getBinaryPath, buildCliArgs } from './utils.js';
 
 /**
- * Delegate a big distinct task to a probe subagent
+ * Delegate a big distinct task to a probe subagent (used automatically by AI agents)
+ * 
+ * This function is designed for automatic use within the agentic loop. AI agents
+ * should automatically identify complex multi-part requests and break them down
+ * into focused, parallel tasks using this delegation mechanism.
  * 
  * Spawns a new probe agent with a clean environment that:
  * - Always uses the default 'code-researcher' prompt (not inherited)
  * - Has schema validation disabled for simpler responses
  * - Has mermaid validation disabled for faster processing
  * 
- * Perfect for breaking down large complex tasks into individual jobs.
- * 
  * @param {Object} options - Delegate options
- * @param {string} options.task - The task to delegate to the subagent. Should be a complete, self-contained task.
+ * @param {string} options.task - A complete, self-contained task for the subagent. Should be specific and focused on one area of expertise.
  * @param {number} [options.timeout=300] - Timeout in seconds (default: 5 minutes)
  * @param {boolean} [options.debug=false] - Enable debug logging
  * @returns {Promise<string>} The response from the delegate agent

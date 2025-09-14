@@ -162,21 +162,23 @@ User: Read file inside the dependency
 
 export const delegateToolDefinition = `
 ## delegate
-Description: Delegate big distinct tasks to specialized probe subagents. When you have large complex tasks, you can separate them into individual jobs and delegate each to a different agent. This is perfect for breaking down multi-part work, parallel processing, or when you need focused expertise on specific components.
-Parameters:
-- task: (required) The specific task to delegate. Be clear and detailed about what needs to be accomplished. Should be a complete, self-contained task.
+Description: Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Use this when you recognize that a user's request involves multiple large, distinct components that would benefit from parallel processing or specialized focus. The AI agent should automatically identify opportunities for task separation and use delegation without explicit user instruction.
 
-Usage Example:
+Parameters:
+- task: (required) A complete, self-contained task that can be executed independently by a subagent. Should be specific and focused on one area of expertise.
+
+Usage Pattern:
+When the AI agent encounters complex multi-part requests, it should automatically break them down and delegate:
+
 <delegate>
-<task>Search through the authentication module and explain how user login validation works, including any security measures</task>
+<task>Analyze all authentication and authorization code in the codebase for security vulnerabilities and provide specific remediation recommendations</task>
 </delegate>
 
-<examples>
-User: I need to analyze the entire codebase for security issues and performance problems
-- Delegate Task 1: "Analyze all authentication and authorization code for security vulnerabilities"
-- Delegate Task 2: "Review database queries and identify performance bottlenecks"
-- Delegate Task 3: "Examine API endpoints for input validation and rate limiting issues"
-</examples>
+<delegate>
+<task>Review database queries and API endpoints for performance bottlenecks and suggest optimization strategies</task>
+</delegate>
+
+The agent uses this tool automatically when it identifies that work can be separated into distinct, parallel tasks for more efficient processing.
 `;
 
 export const attemptCompletionToolDefinition = `
@@ -195,7 +197,7 @@ Usage Example:
 export const searchDescription = 'Search code in the repository using Elasticsearch-like query syntax. Use this tool first for any code-related questions.';
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files.';
-export const delegateDescription = 'Delegate big distinct tasks to specialized probe subagents. Perfect for breaking down large complex tasks into individual jobs and processing them in parallel.';
+export const delegateDescription = 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Used by AI agents to break down complex requests into focused, parallel tasks.';
 
 // Valid tool names that should be parsed as tool calls
 const DEFAULT_VALID_TOOLS = [

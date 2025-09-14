@@ -350,14 +350,14 @@ export class ACPToolManager {
       },
       {
         name: 'delegate',
-        description: 'Delegate a specific task to a specialized probe subagent. Use this tool when you need specialized assistance or want to offload complex work.',
+        description: 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Use when complex requests can be broken into focused, parallel tasks.',
         kind: ToolCallKind.execute,
         parameters: {
           type: 'object',
           properties: {
             task: {
               type: 'string',
-              description: 'The specific task to delegate. Be clear and detailed about what needs to be accomplished.'
+              description: 'A complete, self-contained task that can be executed independently by a subagent. Should be specific and focused on one area of expertise.'
             }
           },
           required: ['task']
