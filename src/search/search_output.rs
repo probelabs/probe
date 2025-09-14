@@ -1419,7 +1419,11 @@ fn find_shared_parent_context(
         .unwrap_or(0);
 
     // Check each context level from outermost to innermost
-    for (i, candidate) in first_contexts.iter().enumerate().take(min_contexts.min(first_contexts.len())) {
+    for (i, candidate) in first_contexts
+        .iter()
+        .enumerate()
+        .take(min_contexts.min(first_contexts.len()))
+    {
         // Check if this context is common to ALL matched lines
         let is_shared = all_line_contexts.iter().all(|(_, contexts)| {
             contexts.get(i).is_some_and(|ctx| {
@@ -1497,11 +1501,7 @@ fn traverse_for_line<'a>(
 
 /// Check if a node represents a contextual parent (control structures, functions, etc.)
 #[allow(dead_code)]
-fn is_contextual_parent(
-    node: &Node,
-    language_impl: &dyn LanguageImpl,
-    _source: &[u8],
-) -> bool {
+fn is_contextual_parent(node: &Node, language_impl: &dyn LanguageImpl, _source: &[u8]) -> bool {
     let node_kind = node.kind();
 
     // Language-agnostic contextual structures - but exclude simple control flow
