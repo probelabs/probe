@@ -731,7 +731,9 @@ mod tests {
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            matched_lines: None,
             tokenized_content: None,
+            parent_context: None,
         };
 
         let result2 = SearchResult {
@@ -758,7 +760,9 @@ mod tests {
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            matched_lines: None,
             tokenized_content: None,
+            parent_context: None,
         };
 
         // Generate cache keys for both results

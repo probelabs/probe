@@ -724,7 +724,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 parent_file_id: None,
                 block_id: None,
                 matched_keywords: None,
+                matched_lines: None,
                 tokenized_content: None,
+                parent_context: None,
             });
         }
         let mut limited = apply_limits(res, *max_results, *max_bytes, *max_tokens, *symbols);

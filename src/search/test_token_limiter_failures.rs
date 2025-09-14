@@ -30,7 +30,9 @@ mod token_limiter_failure_tests {
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            matched_lines: None,
             tokenized_content: None,
+            parent_context: None,
         }
     }
 
