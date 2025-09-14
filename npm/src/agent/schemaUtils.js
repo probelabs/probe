@@ -4,6 +4,37 @@
  */
 
 /**
+ * HTML entity decoder map for common entities that might appear in mermaid diagrams
+ */
+const HTML_ENTITY_MAP = {
+  '&lt;': '<',
+  '&gt;': '>',
+  '&amp;': '&',
+  '&quot;': '"',
+  '&#39;': "'",
+  '&nbsp;': ' '
+};
+
+/**
+ * Decode HTML entities in text without requiring external dependencies
+ * @param {string} text - Text that may contain HTML entities
+ * @returns {string} - Text with HTML entities decoded
+ */
+export function decodeHtmlEntities(text) {
+  if (!text || typeof text !== 'string') {
+    return text;
+  }
+
+  let decoded = text;
+  for (const [entity, character] of Object.entries(HTML_ENTITY_MAP)) {
+    // Use global replacement to catch all instances
+    decoded = decoded.replace(new RegExp(entity, 'g'), character);
+  }
+
+  return decoded;
+}
+
+/**
  * Clean AI response by extracting JSON content when response contains JSON
  * Only processes responses that contain JSON structures { or [ 
  * @param {string} response - Raw AI response
@@ -644,6 +675,28 @@ When presented with a broken Mermaid diagram, analyze it thoroughly and provide 
    * @returns {Promise<string>} - The corrected Mermaid diagram
    */
   async fixMermaidDiagram(diagramContent, originalErrors = [], diagramInfo = {}) {
+    // First, try auto-fixing HTML entities without AI
+    const decodedContent = decodeHtmlEntities(diagramContent);
+    
+    // If HTML entity decoding changed the content, validate it first
+    if (decodedContent !== diagramContent) {
+      try {
+        const quickValidation = await validateMermaidDiagram(decodedContent);
+        if (quickValidation.isValid) {
+          // HTML entity decoding fixed the issue, no need for AI
+          if (this.options.debug) {
+            console.error('[DEBUG] Fixed Mermaid diagram with HTML entity decoding only');
+          }
+          return decodedContent;
+        }
+      } catch (error) {
+        // If validation fails, continue with AI fixing using decoded content
+        if (this.options.debug) {
+          console.error('[DEBUG] HTML entity decoding didn\'t fully fix diagram, continuing with AI fixing');
+        }
+      }
+    }
+
     await this.initializeAgent();
 
     const errorContext = originalErrors.length > 0 
@@ -654,11 +707,14 @@ When presented with a broken Mermaid diagram, analyze it thoroughly and provide 
       ? `\n\nExpected diagram type: ${diagramInfo.diagramType}` 
       : '';
 
+    // Use decoded content for AI fixing to ensure HTML entities are handled
+    const contentToFix = decodedContent !== diagramContent ? decodedContent : diagramContent;
+    
     const prompt = `Analyze and fix the following Mermaid diagram.${errorContext}${diagramTypeHint}
 
 Broken Mermaid diagram:
 \`\`\`mermaid
-${diagramContent}
+${contentToFix}
 \`\`\`
 
 Provide only the corrected Mermaid diagram within a mermaid code block. Do not add any explanations or additional text.`;
@@ -751,30 +807,104 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     };
   }
 
-  // Some diagrams are invalid, try to fix them with specialized agent
+  // Some diagrams are invalid, first try HTML entity decoding auto-fix
   if (debug) {
-    console.error('[DEBUG] Invalid Mermaid diagrams detected, starting specialized fixing agent...');
+    console.error('[DEBUG] Invalid Mermaid diagrams detected, trying HTML entity auto-fix first...');
   }
 
   try {
-    // Create specialized fixing agent
-    const mermaidFixer = new MermaidFixingAgent({
-      path, provider, model, debug, tracer
-    });
-
     let fixedResponse = response;
     const fixingResults = [];
+    let htmlEntityFixesApplied = false;
     
     // Extract diagrams with position information for replacement
     const { diagrams } = extractMermaidFromMarkdown(response);
     
-    // Fix invalid diagrams in reverse order to preserve indices
+    // First pass: Try HTML entity decoding on invalid diagrams
     const invalidDiagrams = validation.diagrams
       .map((result, index) => ({ ...result, originalIndex: index }))
       .filter(result => !result.isValid)
       .reverse();
 
     for (const invalidDiagram of invalidDiagrams) {
+      const originalContent = invalidDiagram.content;
+      const decodedContent = decodeHtmlEntities(originalContent);
+      
+      if (decodedContent !== originalContent) {
+        // HTML entities were found and decoded, validate the result
+        try {
+          const quickValidation = await validateMermaidDiagram(decodedContent);
+          if (quickValidation.isValid) {
+            // HTML entity decoding fixed this diagram!
+            const originalDiagram = diagrams[invalidDiagram.originalIndex];
+            const attributesStr = originalDiagram.attributes ? ` ${originalDiagram.attributes}` : '';
+            const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${decodedContent}\n\`\`\``;
+            
+            fixedResponse = fixedResponse.slice(0, originalDiagram.startIndex) + 
+                           newCodeBlock + 
+                           fixedResponse.slice(originalDiagram.endIndex);
+            
+            fixingResults.push({
+              diagramIndex: invalidDiagram.originalIndex,
+              wasFixed: true,
+              originalContent: originalContent,
+              fixedContent: decodedContent,
+              originalError: invalidDiagram.error,
+              fixedWithHtmlDecoding: true
+            });
+            
+            htmlEntityFixesApplied = true;
+            
+            if (debug) {
+              console.error(`[DEBUG] Fixed diagram ${invalidDiagram.originalIndex + 1} with HTML entity decoding: ${invalidDiagram.error}`);
+            }
+          }
+        } catch (error) {
+          if (debug) {
+            console.error(`[DEBUG] HTML entity decoding didn't fix diagram ${invalidDiagram.originalIndex + 1}: ${error.message}`);
+          }
+        }
+      }
+    }
+    
+    // If HTML entity fixes were applied, re-validate the entire response
+    if (htmlEntityFixesApplied) {
+      const revalidation = await validateMermaidResponse(fixedResponse);
+      if (revalidation.isValid) {
+        // All diagrams are now valid, return without AI fixing
+        if (debug) {
+          console.error('[DEBUG] All diagrams fixed with HTML entity decoding, no AI needed');
+        }
+        return {
+          ...revalidation,
+          wasFixed: true,
+          originalResponse: response,
+          fixedResponse: fixedResponse,
+          fixingResults: fixingResults
+        };
+      }
+    }
+    
+    // Still have invalid diagrams after HTML entity decoding, proceed with AI fixing
+    if (debug) {
+      console.error('[DEBUG] Some diagrams still invalid after HTML entity decoding, starting AI fixing...');
+    }
+    
+    // Create specialized fixing agent for remaining invalid diagrams
+    const mermaidFixer = new MermaidFixingAgent({
+      path, provider, model, debug, tracer
+    });
+    
+    // Re-extract diagrams and re-validate after HTML entity fixes
+    const { diagrams: updatedDiagrams } = extractMermaidFromMarkdown(fixedResponse);
+    const updatedValidation = await validateMermaidResponse(fixedResponse);
+    
+    const stillInvalidDiagrams = updatedValidation.diagrams
+      .map((result, index) => ({ ...result, originalIndex: index }))
+      .filter(result => !result.isValid)
+      .reverse();
+
+    for (const invalidDiagram of stillInvalidDiagrams) {
       try {
         const fixedContent = await mermaidFixer.fixMermaidDiagram(
           invalidDiagram.content,
@@ -784,7 +914,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
 
         if (fixedContent && fixedContent !== invalidDiagram.content) {
           // Replace the diagram in the response
-          const originalDiagram = diagrams[invalidDiagram.originalIndex];
+          const originalDiagram = updatedDiagrams[invalidDiagram.originalIndex];
           const attributesStr = originalDiagram.attributes ? ` ${originalDiagram.attributes}` : '';
           const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${fixedContent}\n\`\`\``;
           

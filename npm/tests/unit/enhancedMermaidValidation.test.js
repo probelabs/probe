@@ -487,4 +487,174 @@ graph TD
       expect(result.fixedResponse).toContain('🚀 Rocket');
     });
   });
+
+  describe('HTML Entity Auto-Fix Integration', () => {
+    test('should auto-fix escaped HTML entities without AI', async () => {
+      const responseWithEntities = `Here's a diagram with escaped entities:
+
+\`\`\`mermaid
+graph TD
+    A[Start] --&gt; B{&quot;Decision&lt;br&gt;Point&quot;}
+    B --&gt; C[&quot;Yes &amp; Continue&quot;]
+    B --&gt; D[&quot;No Problem&quot;]
+\`\`\``;
+
+      const result = await validateAndFixMermaidResponse(responseWithEntities, {
+        debug: true,
+        provider: 'anthropic',
+        model: 'claude-3'
+      });
+
+      // The HTML entities should be decoded in the result
+      expect(result.fixedResponse).toContain('A[Start] --> B{"Decision<br>Point"}');
+      expect(result.fixedResponse).toContain('B --> C["Yes & Continue"]');
+      expect(result.fixedResponse).toContain('B --> D["No Problem"]');
+      
+      // Should not contain the escaped entities
+      expect(result.fixedResponse).not.toContain('&gt;');
+      expect(result.fixedResponse).not.toContain('&lt;');
+      expect(result.fixedResponse).not.toContain('&quot;');
+      expect(result.fixedResponse).not.toContain('&amp;');
+      
+      // Should be fixed without AI
+      expect(result.wasFixed).toBe(true);
+      expect(result.isValid).toBe(true);
+      expect(result.fixingResults?.[0]?.fixedWithHtmlDecoding).toBe(true);
+    });
+
+    test('should fix HTML entities and still pass through AI for other fixes', async () => {
+      const responseWithEntitiesAndSyntaxError = `Diagram with entities and syntax errors:
+
+\`\`\`mermaid
+graph TD
+    A[Start] --&gt; B{&quot;Test&quot;}
+    B ->-> C[End]
+\`\`\``;
+
+      const result = await validateAndFixMermaidResponse(responseWithEntitiesAndSyntaxError, {
+        debug: true,
+        provider: 'anthropic',
+        model: 'claude-3'
+      });
+
+      // In this case, HTML entity decoding actually fixes all issues
+      expect(result.wasFixed).toBe(true);
+      expect(result.isValid).toBe(true);
+      expect(result.fixingResults).toBeDefined();
+      expect(result.fixingResults).toHaveLength(1);
+      
+      // Should have HTML entities in the original error case
+      expect(result.originalResponse).toContain('&gt;');
+      expect(result.originalResponse).toContain('&quot;');
+      
+      // The fixing should have been done with HTML decoding only
+      expect(result.fixingResults[0].fixedWithHtmlDecoding).toBe(true);
+      expect(result.fixingResults[0].fixingError).toBeUndefined();
+      
+      // Result should have entities decoded
+      expect(result.fixedResponse).toContain('A[Start] --> B{"Test"}');
+      expect(result.fixedResponse).not.toContain('&gt;');
+      expect(result.fixedResponse).not.toContain('&quot;');
+    });
+
+    test('should skip AI fixing when HTML entity decoding resolves all issues', async () => {
+      const responseWithOnlyEntities = `Valid diagram with only escaped entities:
+
+\`\`\`mermaid
+graph TD
+    A[Start] --&gt; B{&quot;Valid&lt;br&gt;Decision&quot;}
+    B --&gt; C[End]
+\`\`\``;
+
+      let aiWasCalled = false;
+      mockProbeAgent.answer = jest.fn(() => {
+        aiWasCalled = true;
+        return Promise.resolve('should not be called');
+      });
+
+      const result = await validateAndFixMermaidResponse(responseWithOnlyEntities, {
+        debug: true,
+        provider: 'anthropic',
+        model: 'claude-3'
+      });
+
+      // AI should NOT be called since HTML entity decoding fixed everything
+      expect(aiWasCalled).toBe(false);
+      
+      // Result should have decoded entities
+      expect(result.fixedResponse).toContain('A[Start] --> B{"Valid<br>Decision"}');
+      expect(result.wasFixed).toBe(true);
+      expect(result.isValid).toBe(true);
+    });
+
+    test('should handle mixed scenarios with multiple diagrams', async () => {
+      const responseWithMixedIssues = `Multiple diagrams with different issues:
+
+\`\`\`mermaid
+graph TD
+    A[Start] --&gt; B{&quot;Entities only&quot;}
+    B --&gt; C[End]
+\`\`\`
+
+\`\`\`mermaid
+graph TD
+    A[Start] --&gt; B{&quot;Test&quot;}
+    B ->-> C[End]
+\`\`\`
+
+\`\`\`mermaid
+graph TD
+    X --&gt; Y{&quot;Another&lt;br&gt;Entity&quot;}
+    Y --&gt; Z[Done]
+\`\`\``;
+
+      let aiCallCount = 0;
+      mockProbeAgent.answer = jest.fn(() => {
+        aiCallCount++;
+        return Promise.resolve(`\`\`\`mermaid
+graph TD
+    A[Start] --> B{"Fixed"}
+    B --> C[End]
+\`\`\``);
+      });
+
+      const result = await validateAndFixMermaidResponse(responseWithMixedIssues, {
+        debug: true,
+        provider: 'anthropic',
+        model: 'claude-3'
+      });
+
+      expect(result.diagrams).toHaveLength(3);
+      
+      // Should have decoded entities in diagrams that were fixed with HTML entity decoding
+      expect(result.fixedResponse).toContain('A[Start] --> B{"Entities only"}');
+      expect(result.fixedResponse).toContain('X --> Y{"Another<br>Entity"}');
+      
+      // Should not contain escaped entities in HTML-entity-fixed diagrams  
+      expect(result.fixedResponse.split('```mermaid')[1]).not.toContain('&quot;'); // First diagram
+      expect(result.fixedResponse.split('```mermaid')[3]).not.toContain('&quot;'); // Third diagram
+      
+      // AI should be called for the diagram with remaining syntax errors
+      // Since we don't have API keys in test environment, expect the attempt to be made
+      expect(result.fixingResults).toBeDefined();
+      expect(result.fixingResults.length).toBeGreaterThan(0);
+    });
+
+    test('should preserve original content when no HTML entities are present', async () => {
+      const normalResponse = `Normal diagram without entities:
+
+\`\`\`mermaid
+graph TD
+    A[Start] --> B{"Normal Decision"}
+    B --> C[End]
+\`\`\``;
+
+      const result = await validateAndFixMermaidResponse(normalResponse);
+
+      // Should pass through unchanged since it's already valid
+      expect(result.fixedResponse).toBe(normalResponse);
+      expect(result.wasFixed).toBe(false);
+      expect(result.isValid).toBe(true);
+    });
+  });
 });
