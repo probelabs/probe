@@ -825,13 +825,8 @@ fn test_function() {
         ];
 
         for method in &methods {
-            let result = find_symbol_in_file(
-                &test_file,
-                &format!("TestClass.{method}"),
-                content,
-                true,
-                0,
-            );
+            let result =
+                find_symbol_in_file(&test_file, &format!("TestClass.{method}"), content, true, 0);
             assert!(result.is_ok(), "Should find TestClass.{method} method");
             let search_result = result.unwrap();
             assert_eq!(search_result.node_type, "method_definition");
