@@ -18,6 +18,7 @@ pub mod csharp;
 pub mod go;
 pub mod java;
 pub mod javascript;
+pub mod markdown;
 pub mod php;
 pub mod python;
 pub mod ruby;

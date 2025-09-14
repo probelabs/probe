@@ -5,6 +5,7 @@ use probe_code::language::go::GoLanguage;
 use probe_code::language::java::JavaLanguage;
 use probe_code::language::javascript::JavaScriptLanguage;
 use probe_code::language::language_trait::LanguageImpl;
+use probe_code::language::markdown::MarkdownLanguage;
 use probe_code::language::php::PhpLanguage;
 use probe_code::language::python::PythonLanguage;
 use probe_code::language::ruby::RubyLanguage;
@@ -28,6 +29,7 @@ pub fn get_language_impl(extension: &str) -> Option<Box<dyn LanguageImpl>> {
         "php" => Some(Box::new(PhpLanguage::new())),
         "swift" => Some(Box::new(SwiftLanguage::new())),
         "cs" => Some(Box::new(CSharpLanguage::new())),
+        "md" | "markdown" => Some(Box::new(MarkdownLanguage::new())),
         _ => None,
     }
 }
