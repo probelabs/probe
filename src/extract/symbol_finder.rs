@@ -180,6 +180,7 @@ pub fn find_symbol_in_file(
                 if child.kind() == "identifier"
                     || child.kind() == "field_identifier"
                     || child.kind() == "type_identifier"
+                    || child.kind() == "property_identifier"
                     || child.kind() == "function_declarator"
                 {
                     // Get the text of this identifier
@@ -716,6 +717,97 @@ fn test_function() {
         assert_eq!(search_result.node_type, "function_item");
         assert!(search_result.code.contains("fn test_function()"));
         assert!(search_result.code.contains("let x = 42"));
+
+        // Clean up
+        let _ = fs::remove_file(&test_file);
+    }
+
+    #[test]
+    fn test_typescript_class_method_extraction() {
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_typescript_class.ts");
+
+        let content = r#"export class FailureConditionEvaluator {
+  private sandbox: Sandbox;
+
+  /**
+   * Secure expression evaluation using SandboxJS
+   */
+  private evaluateExpression(condition: string, context: any): boolean {
+    return true;
+  }
+
+  public anotherMethod(): void {
+    console.log("test");
+  }
+}"#;
+
+        let mut file = fs::File::create(&test_file).unwrap();
+        write!(file, "{content}").unwrap();
+
+        // Test simple method extraction
+        let result = find_symbol_in_file(&test_file, "evaluateExpression", content, true, 0);
+        assert!(result.is_ok(), "Should find evaluateExpression method");
+        let search_result = result.unwrap();
+        assert_eq!(search_result.node_type, "method_definition");
+        assert!(search_result.code.contains("evaluateExpression"));
+
+        // Test nested class.method extraction 
+        let result = find_symbol_in_file(&test_file, "FailureConditionEvaluator.evaluateExpression", content, true, 0);
+        assert!(result.is_ok(), "Should find nested FailureConditionEvaluator.evaluateExpression");
+        let search_result = result.unwrap();
+        assert_eq!(search_result.node_type, "method_definition");
+        assert!(search_result.code.contains("evaluateExpression"));
+        assert!(search_result.code.contains("private"));
+
+        // Test other method in the class
+        let result = find_symbol_in_file(&test_file, "FailureConditionEvaluator.anotherMethod", content, true, 0);
+        assert!(result.is_ok(), "Should find nested FailureConditionEvaluator.anotherMethod");
+        let search_result = result.unwrap();
+        assert_eq!(search_result.node_type, "method_definition");
+        assert!(search_result.code.contains("anotherMethod"));
+        assert!(search_result.code.contains("console.log"));
+
+        // Clean up
+        let _ = fs::remove_file(&test_file);
+    }
+
+    #[test]
+    fn test_typescript_private_public_methods() {
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_typescript_visibility.ts");
+
+        let content = r#"class TestClass {
+  private privateMethod(): string {
+    return "private";
+  }
+
+  public publicMethod(): string {
+    return "public";
+  }
+
+  protected protectedMethod(): string {
+    return "protected";
+  }
+
+  regularMethod(): string {
+    return "regular";
+  }
+}"#;
+
+        let mut file = fs::File::create(&test_file).unwrap();
+        write!(file, "{content}").unwrap();
+
+        // Test different visibility modifiers
+        let methods = ["privateMethod", "publicMethod", "protectedMethod", "regularMethod"];
+        
+        for method in &methods {
+            let result = find_symbol_in_file(&test_file, &format!("TestClass.{}", method), content, true, 0);
+            assert!(result.is_ok(), "Should find TestClass.{} method", method);
+            let search_result = result.unwrap();
+            assert_eq!(search_result.node_type, "method_definition");
+            assert!(search_result.code.contains(method));
+        }
 
         // Clean up
         let _ = fs::remove_file(&test_file);
