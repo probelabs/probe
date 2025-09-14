@@ -752,17 +752,35 @@ fn test_function() {
         assert_eq!(search_result.node_type, "method_definition");
         assert!(search_result.code.contains("evaluateExpression"));
 
-        // Test nested class.method extraction 
-        let result = find_symbol_in_file(&test_file, "FailureConditionEvaluator.evaluateExpression", content, true, 0);
-        assert!(result.is_ok(), "Should find nested FailureConditionEvaluator.evaluateExpression");
+        // Test nested class.method extraction
+        let result = find_symbol_in_file(
+            &test_file,
+            "FailureConditionEvaluator.evaluateExpression",
+            content,
+            true,
+            0,
+        );
+        assert!(
+            result.is_ok(),
+            "Should find nested FailureConditionEvaluator.evaluateExpression"
+        );
         let search_result = result.unwrap();
         assert_eq!(search_result.node_type, "method_definition");
         assert!(search_result.code.contains("evaluateExpression"));
         assert!(search_result.code.contains("private"));
 
         // Test other method in the class
-        let result = find_symbol_in_file(&test_file, "FailureConditionEvaluator.anotherMethod", content, true, 0);
-        assert!(result.is_ok(), "Should find nested FailureConditionEvaluator.anotherMethod");
+        let result = find_symbol_in_file(
+            &test_file,
+            "FailureConditionEvaluator.anotherMethod",
+            content,
+            true,
+            0,
+        );
+        assert!(
+            result.is_ok(),
+            "Should find nested FailureConditionEvaluator.anotherMethod"
+        );
         let search_result = result.unwrap();
         assert_eq!(search_result.node_type, "method_definition");
         assert!(search_result.code.contains("anotherMethod"));
@@ -799,11 +817,22 @@ fn test_function() {
         write!(file, "{content}").unwrap();
 
         // Test different visibility modifiers
-        let methods = ["privateMethod", "publicMethod", "protectedMethod", "regularMethod"];
-        
+        let methods = [
+            "privateMethod",
+            "publicMethod",
+            "protectedMethod",
+            "regularMethod",
+        ];
+
         for method in &methods {
-            let result = find_symbol_in_file(&test_file, &format!("TestClass.{}", method), content, true, 0);
-            assert!(result.is_ok(), "Should find TestClass.{} method", method);
+            let result = find_symbol_in_file(
+                &test_file,
+                &format!("TestClass.{method}"),
+                content,
+                true,
+                0,
+            );
+            assert!(result.is_ok(), "Should find TestClass.{method} method");
             let search_result = result.unwrap();
             assert_eq!(search_result.node_type, "method_definition");
             assert!(search_result.code.contains(method));
