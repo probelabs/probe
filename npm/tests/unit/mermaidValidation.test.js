@@ -8,7 +8,8 @@ import {
   extractMermaidFromMarkdown,
   validateMermaidDiagram,
   validateMermaidResponse,
-  createMermaidCorrectionPrompt
+  createMermaidCorrectionPrompt,
+  decodeHtmlEntities
 } from '../../src/agent/schemaUtils.js';
 
 describe('Mermaid Validation', () => {
@@ -384,6 +385,68 @@ invalid syntax
       expect(prompt).toContain('Basic error');
       // The word "Details:" appears in "Diagram Details:" section header, so we check for the specific pattern
       expect(prompt).not.toContain('Details: Basic error');
+    });
+  });
+
+  describe('decodeHtmlEntities', () => {
+    test('should decode common HTML entities', () => {
+      const testCases = [
+        { input: '&lt;br&gt;', expected: '<br>' },
+        { input: '&amp;', expected: '&' },
+        { input: '&quot;test&quot;', expected: '"test"' },
+        { input: '&#39;test&#39;', expected: "'test'" },
+        { input: '&nbsp;', expected: ' ' },
+        { input: 'normal text', expected: 'normal text' },
+        { input: '', expected: '' }
+      ];
+
+      testCases.forEach(({ input, expected }) => {
+        expect(decodeHtmlEntities(input)).toBe(expected);
+      });
+    });
+
+    test('should decode multiple entities in same string', () => {
+      const input = 'A[Start] --&gt; B{&quot;Decision&lt;br&gt;Point&quot;}';
+      const expected = 'A[Start] --> B{"Decision<br>Point"}';
+      expect(decodeHtmlEntities(input)).toBe(expected);
+    });
+
+    test('should handle repeated entities', () => {
+      const input = '&lt;&lt;interface&gt;&gt;';
+      const expected = '<<interface>>';
+      expect(decodeHtmlEntities(input)).toBe(expected);
+    });
+
+    test('should handle null and undefined inputs', () => {
+      expect(decodeHtmlEntities(null)).toBe(null);
+      expect(decodeHtmlEntities(undefined)).toBe(undefined);
+      expect(decodeHtmlEntities('')).toBe('');
+    });
+
+    test('should handle non-string inputs', () => {
+      expect(decodeHtmlEntities(123)).toBe(123);
+      expect(decodeHtmlEntities({})).toEqual({});
+      expect(decodeHtmlEntities([])).toEqual([]);
+    });
+
+    test('should decode entities in mermaid diagram contexts', () => {
+      const mermaidWithEntities = `graph TD
+    A[Start] --&gt; B{&quot;Is it working?&quot;}
+    B --&gt; C[Yes &amp; Good]
+    B --&gt; D[No&lt;br&gt;Fix it]`;
+
+      const expectedMermaid = `graph TD
+    A[Start] --> B{"Is it working?"}
+    B --> C[Yes & Good]
+    B --> D[No<br>Fix it]`;
+
+      expect(decodeHtmlEntities(mermaidWithEntities)).toBe(expectedMermaid);
+    });
+
+    test('should not affect valid HTML tags that are not encoded', () => {
+      const input = 'A[Start] --> B{Decision<br>Point}';
+      const expected = 'A[Start] --> B{Decision<br>Point}';
+      expect(decodeHtmlEntities(input)).toBe(expected);
     });
   });
 });

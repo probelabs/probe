@@ -173,52 +173,74 @@ export const searchDescription = 'Search code in the repository using Elasticsea
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files.';
 
+// Valid tool names that should be parsed as tool calls
+const DEFAULT_VALID_TOOLS = [
+	'search',
+	'query', 
+	'extract',
+	'listFiles',
+	'searchFiles',
+	'implement',
+	'attempt_completion'
+];
+
 // Simple XML parser helper
-export function parseXmlToolCall(xmlString) {
-	const toolMatch = xmlString.match(/<([a-zA-Z0-9_]+)>([\s\S]*?)<\/\1>/);
-	if (!toolMatch) {
-		return null;
-	}
+export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
+	// Find all potential XML tag matches
+	const globalRegex = /<([a-zA-Z0-9_]+)>([\s\S]*?)<\/\1>/g;
+	let match;
+	
+	// Look through all matches to find the first valid tool
+	while ((match = globalRegex.exec(xmlString)) !== null) {
+		const toolName = match[1];
+		
+		// Only parse XML tags that correspond to valid tools
+		if (!validTools.includes(toolName)) {
+			continue; // Skip non-tool tags and look for the next match
+		}
 
-	const toolName = toolMatch[1];
-	const innerContent = toolMatch[2];
-	const params = {};
+		const innerContent = match[2];
+		const params = {};
 
-	const paramRegex = /<([a-zA-Z0-9_]+)>([\s\S]*?)<\/\1>/g;
-	let paramMatch;
-	while ((paramMatch = paramRegex.exec(innerContent)) !== null) {
-		const paramName = paramMatch[1];
-		let paramValue = paramMatch[2].trim();
+		const paramRegex = /<([a-zA-Z0-9_]+)>([\s\S]*?)<\/\1>/g;
+		let paramMatch;
+		while ((paramMatch = paramRegex.exec(innerContent)) !== null) {
+			const paramName = paramMatch[1];
+			let paramValue = paramMatch[2].trim();
 
-		// Basic type inference (can be improved)
-		if (paramValue.toLowerCase() === 'true') {
-			paramValue = true;
-		} else if (paramValue.toLowerCase() === 'false') {
-			paramValue = false;
-		} else if (!isNaN(paramValue) && paramValue.trim() !== '') {
-			// Check if it's potentially a number (handle integers and floats)
-			const num = Number(paramValue);
-			if (Number.isFinite(num)) { // Use Number.isFinite to avoid Infinity/NaN
-				paramValue = num;
+			// Basic type inference (can be improved)
+			if (paramValue.toLowerCase() === 'true') {
+				paramValue = true;
+			} else if (paramValue.toLowerCase() === 'false') {
+				paramValue = false;
+			} else if (!isNaN(paramValue) && paramValue.trim() !== '') {
+				// Check if it's potentially a number (handle integers and floats)
+				const num = Number(paramValue);
+				if (Number.isFinite(num)) { // Use Number.isFinite to avoid Infinity/NaN
+					paramValue = num;
+				}
+				// Keep as string if not a valid finite number
 			}
-			// Keep as string if not a valid finite number
+
+			params[paramName] = paramValue;
 		}
 
-		params[paramName] = paramValue;
+		// Special handling for attempt_completion where result might contain nested XML/code
+		if (toolName === 'attempt_completion') {
+			const resultMatch = innerContent.match(/<result>([\s\S]*?)<\/result>/);
+			if (resultMatch) {
+				params['result'] = resultMatch[1].trim(); // Keep result content as is
+			}
+			const commandMatch = innerContent.match(/<command>([\s\S]*?)<\/command>/);
+			if (commandMatch) {
+				params['command'] = commandMatch[1].trim();
+			}
+		}
+
+		// Return the first valid tool found
+		return { toolName, params };
 	}
 
-	// Special handling for attempt_completion where result might contain nested XML/code
-	if (toolName === 'attempt_completion') {
-		const resultMatch = innerContent.match(/<result>([\s\S]*?)<\/result>/);
-		if (resultMatch) {
-			params['result'] = resultMatch[1].trim(); // Keep result content as is
-		}
-		const commandMatch = innerContent.match(/<command>([\s\S]*?)<\/command>/);
-		if (commandMatch) {
-			params['command'] = commandMatch[1].trim();
-		}
-	}
-
-
-	return { toolName, params };
+	// No valid tool found
+	return null;
 }
