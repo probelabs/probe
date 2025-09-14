@@ -218,6 +218,41 @@ export function isJsonSchema(schema) {
 }
 
 /**
+ * Detect if a JSON response is actually a JSON schema definition instead of data
+ * @param {string} jsonString - The JSON string to check
+ * @returns {boolean} - True if this appears to be a schema definition
+ */
+export function isJsonSchemaDefinition(jsonString) {
+  if (!jsonString || typeof jsonString !== 'string') {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(jsonString);
+    
+    // Check for common JSON schema properties
+    const schemaIndicators = [
+      parsed.$schema,
+      parsed.$id,
+      parsed.title && parsed.description,
+      parsed.type === 'object' && parsed.properties,
+      parsed.type === 'array' && parsed.items,
+      parsed.required && Array.isArray(parsed.required),
+      parsed.definitions,
+      parsed.additionalProperties !== undefined,
+      parsed.patternProperties,
+      parsed.anyOf || parsed.oneOf || parsed.allOf
+    ];
+
+    // If multiple schema indicators are present, this is likely a schema definition
+    const indicatorCount = schemaIndicators.filter(Boolean).length;
+    return indicatorCount >= 2;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
  * Create a correction prompt for invalid JSON
  * @param {string} invalidResponse - The invalid JSON response
  * @param {string} schema - The original schema
@@ -260,6 +295,52 @@ Schema to match:
 ${schema}
 
 ${currentLevel.emphasis}`;
+
+  return prompt;
+}
+
+/**
+ * Create a correction prompt specifically for when AI returns schema definition instead of data
+ * @param {string} schemaDefinition - The JSON schema definition that was incorrectly returned
+ * @param {string} originalSchema - The original schema that should be followed
+ * @param {number} [retryCount=0] - The current retry attempt (0-based)
+ * @returns {string} - Correction prompt for the AI
+ */
+export function createSchemaDefinitionCorrectionPrompt(schemaDefinition, originalSchema, retryCount = 0) {
+  const strengthLevels = [
+    {
+      prefix: "CRITICAL MISUNDERSTANDING:",
+      instruction: "You returned a JSON schema definition instead of data. You must return ACTUAL DATA that follows the schema.",
+      example: "Instead of: {\"type\": \"object\", \"properties\": {...}}\nReturn: {\"actualData\": \"value\", \"realField\": 123}"
+    },
+    {
+      prefix: "URGENT - WRONG RESPONSE TYPE:",
+      instruction: "You are returning the SCHEMA DEFINITION itself. I need DATA that MATCHES the schema, not the schema structure.",
+      example: "Schema defines structure - you provide content that fits that structure!"
+    },
+    {
+      prefix: "FINAL ATTEMPT - SCHEMA VS DATA CONFUSION:",
+      instruction: "STOP returning schema definitions! Return REAL DATA that conforms to the schema structure.",
+      example: "If schema has 'properties.name', return {\"name\": \"actual_value\"} NOT {\"properties\": {\"name\": {...}}}"
+    }
+  ];
+
+  const level = Math.min(retryCount, strengthLevels.length - 1);
+  const currentLevel = strengthLevels[level];
+
+  let prompt = `${currentLevel.prefix} You returned a JSON schema definition when I asked for data that matches a schema.
+
+What you returned (WRONG - this is a schema definition):
+${schemaDefinition.substring(0, 300)}${schemaDefinition.length > 300 ? '...' : ''}
+
+What I need: ACTUAL DATA that conforms to this schema structure:
+${originalSchema}
+
+${currentLevel.instruction}
+
+${currentLevel.example}
+
+Return ONLY the JSON data object/array that follows the schema structure. NO schema definitions, NO explanations, NO markdown formatting.`;
 
   return prompt;
 }
