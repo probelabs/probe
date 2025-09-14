@@ -919,12 +919,14 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
 
             // BATCH OPTIMIZATION: Get matched term indices for the entire merged context block
             let mut matched_term_indices = HashSet::new();
+            let mut matched_line_numbers = HashSet::new();
             for (&term_idx, lines) in ctx.params.term_matches {
-                if lines
-                    .iter()
-                    .any(|&l| l >= context_start && l <= context_end)
-                {
-                    matched_term_indices.insert(term_idx);
+                for &line_num in lines {
+                    if line_num >= context_start && line_num <= context_end {
+                        matched_term_indices.insert(term_idx);
+                        // Store line number relative to result start (0-based)
+                        matched_line_numbers.insert(line_num - context_start);
+                    }
                 }
             }
 
@@ -994,7 +996,15 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                 } else {
                     Some(matched_keywords)
                 },
+                matched_lines: if matched_line_numbers.is_empty() {
+                    None
+                } else {
+                    let mut lines_vec: Vec<usize> = matched_line_numbers.into_iter().collect();
+                    lines_vec.sort();
+                    Some(lines_vec)
+                },
                 tokenized_content: Some(context_terms),
+                parent_context: None,
             };
 
             // Add to result creation time
@@ -1472,14 +1482,16 @@ pub fn process_file_with_results(
                     // Start measuring line matching time
                     let line_matching_start = Instant::now();
 
-                    // Get the matched term indices for this block
+                    // Get the matched term indices and line numbers for this block
                     let mut matched_term_indices = HashSet::new();
+                    let mut matched_line_numbers = HashSet::new();
                     for (&term_idx, lines) in params.term_matches {
-                        if lines
-                            .iter()
-                            .any(|&l| l >= final_start_line && l <= final_end_line)
-                        {
-                            matched_term_indices.insert(term_idx);
+                        for &line_num in lines {
+                            if line_num >= final_start_line && line_num <= final_end_line {
+                                matched_term_indices.insert(term_idx);
+                                // Store line number relative to result start (0-based)
+                                matched_line_numbers.insert(line_num - final_start_line);
+                            }
                         }
                     }
 
@@ -1562,7 +1574,15 @@ pub fn process_file_with_results(
                         } else {
                             Some(matched_keywords)
                         },
+                        matched_lines: if matched_line_numbers.is_empty() {
+                            None
+                        } else {
+                            let mut lines_vec: Vec<usize> = matched_line_numbers.into_iter().collect();
+                            lines_vec.sort();
+                            Some(lines_vec)
+                        },
                         tokenized_content: Some(block_terms),
+                        parent_context: None,
                     };
 
                     let result_creation_duration_value = result_creation_start.elapsed();
@@ -1871,45 +1891,68 @@ fn find_node_and_extract_signature(
     language_impl: &dyn crate::language::language_trait::LanguageImpl,
     debug_mode: bool,
 ) -> Option<String> {
-    // Check if this node is within the byte range
-    if node.start_byte() >= start_byte && node.end_byte() <= end_byte {
-        // First, search children to find more specific nodes
+    // First, find the smallest node that completely contains the target range
+    let containing_node = find_smallest_containing_node(node, start_byte, end_byte)?;
+    
+    // Then, traverse upward from that node to find a parent with symbol signature
+    find_symbol_signature_upward(&containing_node, source, language_impl, debug_mode)
+}
+
+/// Find the smallest node that completely contains the given byte range
+fn find_smallest_containing_node<'a>(
+    node: &tree_sitter::Node<'a>,
+    start_byte: usize,
+    end_byte: usize,
+) -> Option<tree_sitter::Node<'a>> {
+    // Check if current node contains the range
+    if node.start_byte() <= start_byte && node.end_byte() >= end_byte {
+        // Look for a smaller child node that also contains the range
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if let Some(child_signature) = find_node_and_extract_signature(&child, start_byte, end_byte, source, language_impl, debug_mode) {
-                return Some(child_signature);
+            if let Some(smaller_node) = find_smallest_containing_node(&child, start_byte, end_byte) {
+                return Some(smaller_node);
             }
         }
+        // No smaller child found, this node is the smallest container
+        Some(*node)
+    } else {
+        None
+    }
+}
+
+/// Traverse upward from a node to find the first parent (or self) with a symbol signature
+fn find_symbol_signature_upward(
+    node: &tree_sitter::Node,
+    source: &[u8],
+    language_impl: &dyn crate::language::language_trait::LanguageImpl,
+    debug_mode: bool,
+) -> Option<String> {
+    let mut current_node = Some(*node);
+    
+    while let Some(node) = current_node {
+        if debug_mode {
+            println!("DEBUG: Checking node of type '{}' for symbol signature (range {}-{})", 
+                    node.kind(), node.start_byte(), node.end_byte());
+        }
         
-        // If no child provides a signature, try the current node
-        // But skip root-level nodes like 'source_file' unless they're the only option
-        if node.kind() != "source_file" || node.start_byte() == start_byte && node.end_byte() == end_byte {
-            if debug_mode {
-                println!("DEBUG: Checking node of type '{}' for symbol signature (range {}-{})", node.kind(), node.start_byte(), node.end_byte());
-            }
-            
-            let signature = language_impl.get_symbol_signature(node, source);
-            if let Some(ref sig) = signature {
+        // Skip source_file nodes unless we're at the root
+        if node.kind() != "source_file" {
+            if let Some(signature) = language_impl.get_symbol_signature(&node, source) {
                 if debug_mode {
-                    println!("DEBUG: Found symbol signature for node type '{}': {}", node.kind(), sig);
+                    println!("DEBUG: Found symbol signature for node type '{}': {}", node.kind(), signature);
                 }
-                return signature;
+                return Some(signature);
             } else if debug_mode {
                 println!("DEBUG: No symbol signature available for node type '{}'", node.kind());
             }
         }
         
-        None
-    } else if node.start_byte() < end_byte && node.end_byte() > start_byte {
-        // Node partially overlaps - search children
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if let Some(signature) = find_node_and_extract_signature(&child, start_byte, end_byte, source, language_impl, debug_mode) {
-                return Some(signature);
-            }
-        }
-        None
-    } else {
-        None
+        // Move to parent
+        current_node = node.parent();
     }
+    
+    if debug_mode {
+        println!("DEBUG: No symbol signature found in any parent node");
+    }
+    None
 }

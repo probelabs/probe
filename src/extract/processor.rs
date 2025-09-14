@@ -187,7 +187,9 @@ pub fn process_file_for_extraction(
                     parent_file_id: None,
                     block_id: None,
                     matched_keywords: None,
+                    matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    parent_context: None,
                 })
             }
             _ => {
@@ -232,7 +234,9 @@ pub fn process_file_for_extraction(
                     parent_file_id: None,
                     block_id: None,
                     matched_keywords: None,
+                    matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    parent_context: None,
                 })
             }
         }
@@ -330,7 +334,9 @@ pub fn process_file_for_extraction(
                     parent_file_id: None,
                     block_id: None,
                     matched_keywords: None,
+                    matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    parent_context: None,
                 })
             }
             _ => {
@@ -387,7 +393,9 @@ pub fn process_file_for_extraction(
                     parent_file_id: None,
                     block_id: None,
                     matched_keywords: None,
+                    matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    parent_context: None,
                 })
             }
         }
@@ -434,7 +442,9 @@ pub fn process_file_for_extraction(
                 parent_file_id: None,
                 block_id: None,
                 matched_keywords: None,
+                matched_lines: None,
                 tokenized_content: Some(tokenized_content),
+                    parent_context: None,
             });
         }
 
@@ -532,7 +542,9 @@ pub fn process_file_for_extraction(
                     parent_file_id: None,
                     block_id: None,
                     matched_keywords: None,
+                    matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    parent_context: None,
                 })
             }
             _ => {
@@ -591,7 +603,9 @@ pub fn process_file_for_extraction(
                     parent_file_id: None,
                     block_id: None,
                     matched_keywords: None,
+                    matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    parent_context: None,
                 })
             }
         }
@@ -632,7 +646,9 @@ pub fn process_file_for_extraction(
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            matched_lines: None,
             tokenized_content: Some(tokenized_content),
+                    parent_context: None,
         })
     }
 }
@@ -762,6 +778,148 @@ fn find_node_and_extract_signature(
         }
     }
     None
+}
+
+/// Extract all root-level symbols from a file
+/// Returns a vector of SearchResults, one for each root-level symbol
+pub fn extract_all_symbols_from_file(
+    path: &Path,
+    allow_tests: bool,
+) -> Result<Vec<SearchResult>> {
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    
+    if debug_mode {
+        eprintln!("[DEBUG] Extracting all symbols from file: {:?}", path);
+    }
+    
+    // Check if the file exists
+    if !path.exists() {
+        return Err(anyhow::anyhow!("File does not exist: {:?}", path));
+    }
+
+    // Read the file content
+    let content = fs::read_to_string(path).context(format!("Failed to read file: {path:?}"))?;
+
+    // Get file extension and language implementation
+    let extension = file_extension(path);
+    let language_impl = get_language_impl(extension)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported file extension: {}", extension))?;
+
+    if debug_mode {
+        eprintln!("[DEBUG] File extension: {}, Language detected", extension);
+    }
+
+    // Parse the file with tree-sitter
+    let mut results = Vec::new();
+    
+    if let Ok(mut parser) = probe_code::language::get_pooled_parser(extension) {
+        if let Some(tree) = parser.parse(&content, None) {
+            let root_node = tree.root_node();
+            
+            if debug_mode {
+                eprintln!("[DEBUG] Successfully parsed file, traversing root-level nodes");
+            }
+            
+            // Find all root-level acceptable parent nodes
+            let mut cursor = root_node.walk();
+            for child in root_node.children(&mut cursor) {
+                if debug_mode {
+                    eprintln!("[DEBUG] Checking root-level node: {} at lines {}-{}", 
+                             child.kind(), 
+                             child.start_position().row + 1, 
+                             child.end_position().row + 1);
+                }
+                
+                // Skip test nodes if not allowed
+                if !allow_tests && language_impl.is_test_node(&child, content.as_bytes()) {
+                    if debug_mode {
+                        eprintln!("[DEBUG] Skipping test node: {}", child.kind());
+                    }
+                    continue;
+                }
+                
+                // Check if this is an acceptable parent (symbol we want to extract)
+                if language_impl.is_acceptable_parent(&child) {
+                    if debug_mode {
+                        eprintln!("[DEBUG] Found acceptable symbol: {} at lines {}-{}", 
+                                 child.kind(),
+                                 child.start_position().row + 1, 
+                                 child.end_position().row + 1);
+                    }
+                    
+                    // Get the symbol signature
+                    if let Some(signature) = language_impl.get_symbol_signature(&child, content.as_bytes()) {
+                        let start_line = child.start_position().row + 1;
+                        let end_line = child.end_position().row + 1;
+                        
+                        // Create a SearchResult for this symbol
+                        let result = SearchResult {
+                            file: path.to_string_lossy().to_string(),
+                            lines: (start_line, end_line),
+                            node_type: child.kind().to_string(),
+                            code: String::new(), // Empty code since we only want the signature
+                            symbol_signature: Some(signature),
+                            matched_by_filename: None,
+                            rank: None,
+                            score: None,
+                            tfidf_score: None,
+                            bm25_score: None,
+                            tfidf_rank: None,
+                            bm25_rank: None,
+                            new_score: None,
+                            hybrid2_rank: None,
+                            combined_score_rank: None,
+                            file_unique_terms: None,
+                            file_total_matches: None,
+                            file_match_rank: None,
+                            block_unique_terms: None,
+                            block_total_matches: None,
+                            parent_file_id: None,
+                            block_id: None,
+                            matched_keywords: None,
+                            matched_lines: None,
+                            tokenized_content: None,
+                            parent_context: None,
+                        };
+                        
+                        results.push(result);
+                        
+                        if debug_mode {
+                            eprintln!("[DEBUG] Added symbol result: {} (lines {}-{})", 
+                                     child.kind(), start_line, end_line);
+                        }
+                    } else if debug_mode {
+                        eprintln!("[DEBUG] No signature available for node: {}", child.kind());
+                    }
+                } else if debug_mode {
+                    eprintln!("[DEBUG] Node not acceptable as symbol: {}", child.kind());
+                }
+            }
+        } else {
+            if debug_mode {
+                eprintln!("[DEBUG] Failed to parse file with tree-sitter");
+            }
+            probe_code::language::return_pooled_parser(extension, parser);
+            return Err(anyhow::anyhow!("Failed to parse file: {:?}", path));
+        }
+        
+        // Return parser to pool
+        probe_code::language::return_pooled_parser(extension, parser);
+    } else {
+        return Err(anyhow::anyhow!("Failed to get parser for file: {:?}", path));
+    }
+    
+    // Sort results by line number for consistent ordering
+    results.sort_by(|a, b| a.lines.0.cmp(&b.lines.0));
+    
+    if debug_mode {
+        eprintln!("[DEBUG] Found {} symbols in file (sorted by line number)", results.len());
+        for result in &results {
+            eprintln!("[DEBUG]   {} at lines {}-{}", result.node_type, result.lines.0, result.lines.1);
+        }
+    }
+    
+    Ok(results)
 }
 
 /// Helper to get file extension as a &str

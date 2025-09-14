@@ -110,7 +110,9 @@ pub fn find_symbol_in_file(
                 parent_file_id: None,
                 block_id: None,
                 matched_keywords: None,
+                matched_lines: None,
                 tokenized_content: Some(tokenized_content),
+                    parent_context: None,
             });
         }
     };
@@ -520,7 +522,9 @@ pub fn find_symbol_in_file(
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            matched_lines: None,
             tokenized_content: Some(tokenized_content),
+                    parent_context: None,
         });
     }
 
@@ -638,7 +642,9 @@ pub fn find_symbol_in_file(
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            matched_lines: None,
             tokenized_content: Some(tokenized_content),
+                    parent_context: None,
         });
     }
 
