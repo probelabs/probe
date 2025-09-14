@@ -22,6 +22,7 @@ use std::path::Path;
 ///
 /// This function returns a single SearchResult that includes either the merged AST code
 /// or the literal lines as a fallback.
+#[allow(clippy::too_many_arguments)]
 pub fn process_file_for_extraction(
     path: &Path,
     start_line: Option<usize>,
@@ -168,7 +169,13 @@ pub fn process_file_for_extraction(
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_range".to_string(),
                     code: merged_content,
-                    symbol_signature: extract_symbol_signature_for_extract(path, &content, merged_start, merged_end, symbols),
+                    symbol_signature: extract_symbol_signature_for_extract(
+                        path,
+                        &content,
+                        merged_start,
+                        merged_end,
+                        symbols,
+                    ),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -215,7 +222,9 @@ pub fn process_file_for_extraction(
                     lines: (start, end),
                     node_type: "range".to_string(),
                     code: range_content,
-                    symbol_signature: extract_symbol_signature_for_extract(path, &content, start, end, symbols),
+                    symbol_signature: extract_symbol_signature_for_extract(
+                        path, &content, start, end, symbols,
+                    ),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -315,7 +324,13 @@ pub fn process_file_for_extraction(
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_line".to_string(),
                     code: merged_content,
-                    symbol_signature: extract_symbol_signature_for_extract(path, &content, merged_start, merged_end, symbols),
+                    symbol_signature: extract_symbol_signature_for_extract(
+                        path,
+                        &content,
+                        merged_start,
+                        merged_end,
+                        symbols,
+                    ),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -374,7 +389,9 @@ pub fn process_file_for_extraction(
                     lines: (start_ctx, end_ctx),
                     node_type: "context".to_string(),
                     code: context_code,
-                    symbol_signature: extract_symbol_signature_for_extract(path, &content, start_ctx, end_ctx, symbols),
+                    symbol_signature: extract_symbol_signature_for_extract(
+                        path, &content, start_ctx, end_ctx, symbols,
+                    ),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -423,7 +440,13 @@ pub fn process_file_for_extraction(
                 lines: (1, lines.len()),
                 node_type: "file".to_string(),
                 code: content.clone(),
-                symbol_signature: extract_symbol_signature_for_extract(path, &content, 1, lines.len(), symbols),
+                symbol_signature: extract_symbol_signature_for_extract(
+                    path,
+                    &content,
+                    1,
+                    lines.len(),
+                    symbols,
+                ),
                 matched_by_filename: None,
                 rank: None,
                 score: None,
@@ -444,7 +467,7 @@ pub fn process_file_for_extraction(
                 matched_keywords: None,
                 matched_lines: None,
                 tokenized_content: Some(tokenized_content),
-                    parent_context: None,
+                parent_context: None,
             });
         }
 
@@ -523,7 +546,13 @@ pub fn process_file_for_extraction(
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_specific_lines".to_string(),
                     code: merged_content,
-                    symbol_signature: extract_symbol_signature_for_extract(path, &content, merged_start, merged_end, symbols),
+                    symbol_signature: extract_symbol_signature_for_extract(
+                        path,
+                        &content,
+                        merged_start,
+                        merged_end,
+                        symbols,
+                    ),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -584,7 +613,9 @@ pub fn process_file_for_extraction(
                     lines: (start, end),
                     node_type: "specific_lines".to_string(),
                     code: range_content,
-                    symbol_signature: extract_symbol_signature_for_extract(path, &content, start, end, symbols),
+                    symbol_signature: extract_symbol_signature_for_extract(
+                        path, &content, start, end, symbols,
+                    ),
                     matched_by_filename: None,
                     rank: None,
                     score: None,
@@ -627,7 +658,13 @@ pub fn process_file_for_extraction(
             lines: (1, lines.len()),
             node_type: "file".to_string(),
             code: content.clone(),
-            symbol_signature: extract_symbol_signature_for_extract(path, &content, 1, lines.len(), symbols),
+            symbol_signature: extract_symbol_signature_for_extract(
+                path,
+                &content,
+                1,
+                lines.len(),
+                symbols,
+            ),
             matched_by_filename: None,
             rank: None,
             score: None,
@@ -648,7 +685,7 @@ pub fn process_file_for_extraction(
             matched_keywords: None,
             matched_lines: None,
             tokenized_content: Some(tokenized_content),
-                    parent_context: None,
+            parent_context: None,
         })
     }
 }
@@ -675,8 +712,12 @@ fn extract_symbol_signature_for_extract(
     let language_impl = get_language_impl(extension)?;
 
     if debug_mode {
-        eprintln!("[DEBUG] Extracting symbol signature for lines {}-{} in {}", 
-                  start_line, end_line, path.display());
+        eprintln!(
+            "[DEBUG] Extracting symbol signature for lines {}-{} in {}",
+            start_line,
+            end_line,
+            path.display()
+        );
     }
 
     // Try to parse the content
@@ -684,38 +725,47 @@ fn extract_symbol_signature_for_extract(
         if let Some(tree) = parser.parse(content, None) {
             // Convert line numbers to byte ranges
             let lines: Vec<&str> = content.lines().collect();
-            
+
             // Clamp line numbers to valid ranges
             let start_line = start_line.clamp(1, lines.len());
             let end_line = end_line.clamp(start_line, lines.len());
-            
+
             // Calculate byte offsets for the line range
-            let start_byte = if start_line <= 1 { 
-                0 
-            } else { 
-                lines[..start_line - 1].iter().map(|l| l.len() + 1).sum::<usize>()
+            let start_byte = if start_line <= 1 {
+                0
+            } else {
+                lines[..start_line - 1]
+                    .iter()
+                    .map(|l| l.len() + 1)
+                    .sum::<usize>()
             };
-            
+
             let end_byte = if end_line >= lines.len() {
                 content.len()
             } else {
-                lines[..end_line].iter().map(|l| l.len() + 1).sum::<usize>().saturating_sub(1)
+                lines[..end_line]
+                    .iter()
+                    .map(|l| l.len() + 1)
+                    .sum::<usize>()
+                    .saturating_sub(1)
             };
 
             if debug_mode {
-                eprintln!("[DEBUG] Line range {}-{} maps to byte range {}-{}", 
-                          start_line, end_line, start_byte, end_byte);
+                eprintln!(
+                    "[DEBUG] Line range {}-{} maps to byte range {}-{}",
+                    start_line, end_line, start_byte, end_byte
+                );
             }
 
             // Find nodes within the byte range and extract symbol signature
             let root_node = tree.root_node();
             let signature = find_node_and_extract_signature(
-                &root_node, 
-                start_byte, 
-                end_byte, 
-                content.as_bytes(), 
-                &*language_impl, 
-                debug_mode
+                &root_node,
+                start_byte,
+                end_byte,
+                content.as_bytes(),
+                &*language_impl,
+                debug_mode,
             );
 
             // Return parser to pool
@@ -752,28 +802,46 @@ fn find_node_and_extract_signature(
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if let Some(child_signature) = find_node_and_extract_signature(
-                &child, start_byte, end_byte, source, language_impl, debug_mode
+                &child,
+                start_byte,
+                end_byte,
+                source,
+                language_impl,
+                debug_mode,
             ) {
                 return Some(child_signature);
             }
         }
-        
+
         // If no child provides a signature, try the current node
         // Skip root-level nodes like 'source_file' unless they're the only option
-        if node.kind() != "source_file" || (node.start_byte() == start_byte && node.end_byte() == end_byte) {
+        if node.kind() != "source_file"
+            || (node.start_byte() == start_byte && node.end_byte() == end_byte)
+        {
             if debug_mode {
-                eprintln!("[DEBUG] Checking node of type '{}' for symbol signature (range {}-{})", 
-                         node.kind(), node.start_byte(), node.end_byte());
+                eprintln!(
+                    "[DEBUG] Checking node of type '{}' for symbol signature (range {}-{})",
+                    node.kind(),
+                    node.start_byte(),
+                    node.end_byte()
+                );
             }
-            
+
             let signature = language_impl.get_symbol_signature(node, source);
             if let Some(ref sig) = signature {
                 if debug_mode {
-                    eprintln!("[DEBUG] Found symbol signature for node type '{}': {}", node.kind(), sig);
+                    eprintln!(
+                        "[DEBUG] Found symbol signature for node type '{}': {}",
+                        node.kind(),
+                        sig
+                    );
                 }
                 return signature;
             } else if debug_mode {
-                eprintln!("[DEBUG] No symbol signature available for node type '{}'", node.kind());
+                eprintln!(
+                    "[DEBUG] No symbol signature available for node type '{}'",
+                    node.kind()
+                );
             }
         }
     }
@@ -782,16 +850,14 @@ fn find_node_and_extract_signature(
 
 /// Extract all root-level symbols from a file
 /// Returns a vector of SearchResults, one for each root-level symbol
-pub fn extract_all_symbols_from_file(
-    path: &Path,
-    allow_tests: bool,
-) -> Result<Vec<SearchResult>> {
+#[allow(dead_code)]
+pub fn extract_all_symbols_from_file(path: &Path, allow_tests: bool) -> Result<Vec<SearchResult>> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    
+
     if debug_mode {
         eprintln!("[DEBUG] Extracting all symbols from file: {:?}", path);
     }
-    
+
     // Check if the file exists
     if !path.exists() {
         return Err(anyhow::anyhow!("File does not exist: {:?}", path));
@@ -811,25 +877,27 @@ pub fn extract_all_symbols_from_file(
 
     // Parse the file with tree-sitter
     let mut results = Vec::new();
-    
+
     if let Ok(mut parser) = probe_code::language::get_pooled_parser(extension) {
         if let Some(tree) = parser.parse(&content, None) {
             let root_node = tree.root_node();
-            
+
             if debug_mode {
                 eprintln!("[DEBUG] Successfully parsed file, traversing root-level nodes");
             }
-            
+
             // Find all root-level acceptable parent nodes
             let mut cursor = root_node.walk();
             for child in root_node.children(&mut cursor) {
                 if debug_mode {
-                    eprintln!("[DEBUG] Checking root-level node: {} at lines {}-{}", 
-                             child.kind(), 
-                             child.start_position().row + 1, 
-                             child.end_position().row + 1);
+                    eprintln!(
+                        "[DEBUG] Checking root-level node: {} at lines {}-{}",
+                        child.kind(),
+                        child.start_position().row + 1,
+                        child.end_position().row + 1
+                    );
                 }
-                
+
                 // Skip test nodes if not allowed
                 if !allow_tests && language_impl.is_test_node(&child, content.as_bytes()) {
                     if debug_mode {
@@ -837,21 +905,25 @@ pub fn extract_all_symbols_from_file(
                     }
                     continue;
                 }
-                
+
                 // Check if this is an acceptable parent (symbol we want to extract)
                 if language_impl.is_acceptable_parent(&child) {
                     if debug_mode {
-                        eprintln!("[DEBUG] Found acceptable symbol: {} at lines {}-{}", 
-                                 child.kind(),
-                                 child.start_position().row + 1, 
-                                 child.end_position().row + 1);
+                        eprintln!(
+                            "[DEBUG] Found acceptable symbol: {} at lines {}-{}",
+                            child.kind(),
+                            child.start_position().row + 1,
+                            child.end_position().row + 1
+                        );
                     }
-                    
+
                     // Get the symbol signature
-                    if let Some(signature) = language_impl.get_symbol_signature(&child, content.as_bytes()) {
+                    if let Some(signature) =
+                        language_impl.get_symbol_signature(&child, content.as_bytes())
+                    {
                         let start_line = child.start_position().row + 1;
                         let end_line = child.end_position().row + 1;
-                        
+
                         // Create a SearchResult for this symbol
                         let result = SearchResult {
                             file: path.to_string_lossy().to_string(),
@@ -881,12 +953,16 @@ pub fn extract_all_symbols_from_file(
                             tokenized_content: None,
                             parent_context: None,
                         };
-                        
+
                         results.push(result);
-                        
+
                         if debug_mode {
-                            eprintln!("[DEBUG] Added symbol result: {} (lines {}-{})", 
-                                     child.kind(), start_line, end_line);
+                            eprintln!(
+                                "[DEBUG] Added symbol result: {} (lines {}-{})",
+                                child.kind(),
+                                start_line,
+                                end_line
+                            );
                         }
                     } else if debug_mode {
                         eprintln!("[DEBUG] No signature available for node: {}", child.kind());
@@ -902,23 +978,29 @@ pub fn extract_all_symbols_from_file(
             probe_code::language::return_pooled_parser(extension, parser);
             return Err(anyhow::anyhow!("Failed to parse file: {:?}", path));
         }
-        
+
         // Return parser to pool
         probe_code::language::return_pooled_parser(extension, parser);
     } else {
         return Err(anyhow::anyhow!("Failed to get parser for file: {:?}", path));
     }
-    
+
     // Sort results by line number for consistent ordering
     results.sort_by(|a, b| a.lines.0.cmp(&b.lines.0));
-    
+
     if debug_mode {
-        eprintln!("[DEBUG] Found {} symbols in file (sorted by line number)", results.len());
+        eprintln!(
+            "[DEBUG] Found {} symbols in file (sorted by line number)",
+            results.len()
+        );
         for result in &results {
-            eprintln!("[DEBUG]   {} at lines {}-{}", result.node_type, result.lines.0, result.lines.1);
+            eprintln!(
+                "[DEBUG]   {} at lines {}-{}",
+                result.node_type, result.lines.0, result.lines.1
+            );
         }
     }
-    
+
     Ok(results)
 }
 

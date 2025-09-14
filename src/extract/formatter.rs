@@ -145,8 +145,9 @@ fn format_extraction_internal(
                 let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
                 let total_tokens = if symbols {
                     // In symbols mode, count tokens from symbol signatures instead of full code
-                    let symbol_blocks: Vec<&str> = results.iter()
-                        .filter_map(|r| r.symbol_signature.as_ref().map(|s| s.as_str()))
+                    let symbol_blocks: Vec<&str> = results
+                        .iter()
+                        .filter_map(|r| r.symbol_signature.as_deref())
                         .collect();
                     sum_tokens_with_deduplication(&symbol_blocks)
                 } else {
@@ -268,9 +269,10 @@ fn format_extraction_internal(
                     output,
                     "    <total_bytes>{}</total_bytes>",
                     if symbols {
-                        results.iter().map(|r| {
-                            r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0)
-                        }).sum::<usize>()
+                        results
+                            .iter()
+                            .map(|r| r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0))
+                            .sum::<usize>()
                     } else {
                         results.iter().map(|r| r.code.len()).sum::<usize>()
                     }
@@ -280,8 +282,9 @@ fn format_extraction_internal(
                 let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
                 let total_tokens = if symbols {
                     // In symbols mode, count tokens from symbol signatures instead of full code
-                    let symbol_blocks: Vec<&str> = results.iter()
-                        .filter_map(|r| r.symbol_signature.as_ref().map(|s| s.as_str()))
+                    let symbol_blocks: Vec<&str> = results
+                        .iter()
+                        .filter_map(|r| r.symbol_signature.as_deref())
                         .collect();
                     sum_tokens_with_deduplication(&symbol_blocks)
                 } else {
@@ -370,12 +373,10 @@ fn format_extraction_internal(
                                 } else {
                                     writeln!(output, "Symbol: {}", symbol_signature)?;
                                 }
+                            } else if format == "markdown" {
+                                writeln!(output, "### Symbol: *not available*")?;
                             } else {
-                                if format == "markdown" {
-                                    writeln!(output, "### Symbol: *not available*")?;
-                                } else {
-                                    writeln!(output, "Symbol: <not available>")?;
-                                }
+                                writeln!(output, "Symbol: <not available>")?;
                             }
                         } else {
                             // Show full code (existing behavior)
@@ -475,9 +476,10 @@ fn format_extraction_internal(
                     )?;
 
                     let total_bytes: usize = if symbols {
-                        results.iter().map(|r| {
-                            r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0)
-                        }).sum()
+                        results
+                            .iter()
+                            .map(|r| r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0))
+                            .sum()
                     } else {
                         results.iter().map(|r| r.code.len()).sum()
                     };
@@ -487,8 +489,9 @@ fn format_extraction_internal(
                     let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
                     let total_tokens: usize = if symbols {
                         // In symbols mode, count tokens from symbol signatures instead of full code
-                        let symbol_blocks: Vec<&str> = results.iter()
-                            .filter_map(|r| r.symbol_signature.as_ref().map(|s| s.as_str()))
+                        let symbol_blocks: Vec<&str> = results
+                            .iter()
+                            .filter_map(|r| r.symbol_signature.as_deref())
                             .collect();
                         sum_tokens_with_deduplication(&symbol_blocks)
                     } else {

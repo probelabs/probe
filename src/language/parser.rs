@@ -983,6 +983,7 @@ fn process_sparse_line_map(
                                 parent_node_type: None,
                                 parent_start_row: None,
                                 parent_end_row: None,
+                                parent_context: None,
                             });
                             if debug_mode {
                                 eprintln!(
@@ -1037,6 +1038,7 @@ fn process_sparse_line_map(
                             parent_node_type: None,
                             parent_start_row: None,
                             parent_end_row: None,
+                            parent_context: None,
                         });
                         if debug_mode {
                             eprintln!(
@@ -1089,6 +1091,7 @@ fn process_sparse_line_map(
                                 parent_node_type: info.parent_node_type.clone(),
                                 parent_start_row: info.parent_start_row,
                                 parent_end_row: info.parent_end_row,
+                                parent_context: None,
                             });
                             if debug_mode {
                                 eprintln!(
@@ -1122,6 +1125,7 @@ fn process_sparse_line_map(
                             parent_node_type: info.parent_node_type.clone(),
                             parent_start_row: info.parent_start_row,
                             parent_end_row: info.parent_end_row,
+                            parent_context: None,
                         });
                         if debug_mode {
                             eprintln!(
@@ -1375,6 +1379,7 @@ fn process_cached_line_map(
                                 parent_node_type: None, // Consistent with original miss path logic
                                 parent_start_row: None,
                                 parent_end_row: None,
+                                parent_context: None,
                             });
                             if debug_mode {
                                 eprintln!(
@@ -1420,6 +1425,7 @@ fn process_cached_line_map(
                             parent_node_type: None,
                             parent_start_row: None,
                             parent_end_row: None,
+                            parent_context: None,
                         });
                         if debug_mode {
                             eprintln!(
@@ -1481,6 +1487,7 @@ fn process_cached_line_map(
                                 parent_node_type: info.parent_node_type.clone(),
                                 parent_start_row: info.parent_start_row,
                                 parent_end_row: info.parent_end_row,
+                                parent_context: None,
                             });
                             if debug_mode {
                                 eprintln!(
@@ -1523,6 +1530,7 @@ fn process_cached_line_map(
                             parent_node_type: info.parent_node_type.clone(),
                             parent_start_row: info.parent_start_row,
                             parent_end_row: info.parent_end_row,
+                            parent_context: None,
                         });
                         if debug_mode {
                             eprintln!(

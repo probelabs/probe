@@ -9,7 +9,7 @@ use common::TestContext;
 fn test_python_outline_basic_symbols() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("basic.py");
-    
+
     let content = r#"class Calculator:
     """A simple calculator class."""
     
@@ -38,32 +38,48 @@ def test_calculator():
     calc = Calculator("test")
     assert calc.add(2, 3) == 5
 "#;
-    
+
     fs::write(&test_file, content)?;
-    
+
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
         "extract",
         test_file.to_str().unwrap(),
         "--format",
         "outline",
-        "--allow-tests"
+        "--allow-tests",
     ])?;
-    
+
     // Verify Python symbols are extracted
-    assert!(output.contains("class Calculator:"), "Missing class Calculator - output: {}", output);
-    assert!(output.contains("def process_data(data: list) -> int:"), "Missing function process_data - output: {}", output);
-    assert!(output.contains("async def fetch_data(url: str) -> str:"), "Missing async function fetch_data - output: {}", output);
-    assert!(output.contains("def test_calculator():"), "Missing test function - output: {}", output);
-    
+    assert!(
+        output.contains("class Calculator:"),
+        "Missing class Calculator - output: {}",
+        output
+    );
+    assert!(
+        output.contains("def process_data(data: list) -> int:"),
+        "Missing function process_data - output: {}",
+        output
+    );
+    assert!(
+        output.contains("async def fetch_data(url: str) -> str:"),
+        "Missing async function fetch_data - output: {}",
+        output
+    );
+    assert!(
+        output.contains("def test_calculator():"),
+        "Missing test function - output: {}",
+        output
+    );
+
     Ok(())
 }
 
-#[test] 
+#[test]
 fn test_python_outline_decorators() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("decorators.py");
-    
+
     let content = r#"from functools import wraps
 
 def timing_decorator(func):
@@ -101,25 +117,33 @@ class UserManager:
         """Process a list of users."""
         return [user for user in users if self.validate_email(user.get('email', ''))]
 "#;
-    
+
     fs::write(&test_file, content)?;
-    
+
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
         "extract",
         test_file.to_str().unwrap(),
-        "--format", 
+        "--format",
         "outline",
-        "--allow-tests"
+        "--allow-tests",
     ])?;
-    
+
     // Verify decorated functions and methods are properly shown
-    assert!(output.contains("def timing_decorator(func):"), "Missing decorator function - output: {}", output);
-    assert!(output.contains("class UserManager:"), "Missing UserManager class - output: {}", output);
+    assert!(
+        output.contains("def timing_decorator(func):"),
+        "Missing decorator function - output: {}",
+        output
+    );
+    assert!(
+        output.contains("class UserManager:"),
+        "Missing UserManager class - output: {}",
+        output
+    );
     // Note: Currently the extract command only shows top-level symbols
     // Decorated methods within classes are not currently extracted as separate symbols
     // This could be improved in future versions
-    
+
     Ok(())
 }
 
@@ -127,7 +151,7 @@ class UserManager:
 fn test_python_outline_nested_classes() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("nested.py");
-    
+
     let content = r#"class ReportGenerator:
     """Generate various types of reports."""
     
@@ -177,25 +201,37 @@ def outer_function():
     
     return inner_function, another_inner
 "#;
-    
+
     fs::write(&test_file, content)?;
-    
+
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
         "extract",
-        test_file.to_str().unwrap(), 
+        test_file.to_str().unwrap(),
         "--format",
         "outline",
-        "--allow-tests"
+        "--allow-tests",
     ])?;
-    
+
     // Verify top-level structures are shown - outline format only shows top-level classes and functions
-    assert!(output.contains("class ReportGenerator:"), "Missing ReportGenerator class - output: {}", output);
-    assert!(output.contains("def outer_function():"), "Missing outer function - output: {}", output);
+    assert!(
+        output.contains("class ReportGenerator:"),
+        "Missing ReportGenerator class - output: {}",
+        output
+    );
+    assert!(
+        output.contains("def outer_function():"),
+        "Missing outer function - output: {}",
+        output
+    );
     // Nested classes (PDFReport, CSVReport, Metadata) are not shown individually in outline format
     // They are inside ReportGenerator and outline format only shows top-level structures
-    assert!(output.contains("..."), "Missing ellipsis in outline format - output: {}", output);
-    
+    assert!(
+        output.contains("..."),
+        "Missing ellipsis in outline format - output: {}",
+        output
+    );
+
     Ok(())
 }
 
@@ -203,7 +239,7 @@ def outer_function():
 fn test_python_outline_docstrings_and_comments() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("docstrings.py");
-    
+
     let content = r#"# Single line comment
 def function_with_single_quotes():
     '''Function with single quote docstring.
@@ -258,25 +294,45 @@ def test_docstring_parsing():
     obj = DocumentedClass("test", 42)
     assert obj.method_with_docstring() == "test: 42"
 "#;
-    
+
     fs::write(&test_file, content)?;
-    
+
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
         "extract",
         test_file.to_str().unwrap(),
         "--format",
         "outline",
-        "--allow-tests"
+        "--allow-tests",
     ])?;
-    
+
     // Verify functions and classes are shown
-    assert!(output.contains("def function_with_single_quotes():"), "Missing function with single quote docstring - output: {}", output);
-    assert!(output.contains("def function_with_double_quotes():"), "Missing function with double quote docstring - output: {}", output); 
-    assert!(output.contains("def function_with_raw_docstring():"), "Missing function with raw docstring - output: {}", output);
-    assert!(output.contains("class DocumentedClass:"), "Missing documented class - output: {}", output);
-    assert!(output.contains("def test_docstring_parsing():"), "Missing test function - output: {}", output);
-    
+    assert!(
+        output.contains("def function_with_single_quotes():"),
+        "Missing function with single quote docstring - output: {}",
+        output
+    );
+    assert!(
+        output.contains("def function_with_double_quotes():"),
+        "Missing function with double quote docstring - output: {}",
+        output
+    );
+    assert!(
+        output.contains("def function_with_raw_docstring():"),
+        "Missing function with raw docstring - output: {}",
+        output
+    );
+    assert!(
+        output.contains("class DocumentedClass:"),
+        "Missing documented class - output: {}",
+        output
+    );
+    assert!(
+        output.contains("def test_docstring_parsing():"),
+        "Missing test function - output: {}",
+        output
+    );
+
     Ok(())
 }
 
@@ -284,7 +340,7 @@ def test_docstring_parsing():
 fn test_python_outline_complex_signatures() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("complex_signatures.py");
-    
+
     let content = r#"from typing import List, Dict, Optional, Union, Callable, AsyncIterator
 from dataclasses import dataclass
 
@@ -367,34 +423,54 @@ def test_complex_signatures():
     processor = GenericProcessor.from_config_file("config.json")
     assert processor.name == "from_config"
 "#;
-    
+
     fs::write(&test_file, content)?;
-    
+
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
         "extract",
         test_file.to_str().unwrap(),
-        "--format", 
+        "--format",
         "outline",
-        "--allow-tests"
+        "--allow-tests",
     ])?;
-    
+
     // Verify top-level complex signatures are preserved - outline format shows only top-level structures
-    assert!(output.contains("def function_with_defaults("), "Missing function with defaults - output: {}", output);
-    assert!(output.contains("async def async_function_complex("), "Missing async function - output: {}", output);
-    assert!(output.contains("def function_multiline_signature("), "Missing multiline signature function - output: {}", output);
-    assert!(output.contains("class GenericProcessor:"), "Missing GenericProcessor class - output: {}", output);
+    assert!(
+        output.contains("def function_with_defaults("),
+        "Missing function with defaults - output: {}",
+        output
+    );
+    assert!(
+        output.contains("async def async_function_complex("),
+        "Missing async function - output: {}",
+        output
+    );
+    assert!(
+        output.contains("def function_multiline_signature("),
+        "Missing multiline signature function - output: {}",
+        output
+    );
+    assert!(
+        output.contains("class GenericProcessor:"),
+        "Missing GenericProcessor class - output: {}",
+        output
+    );
     // Methods inside classes (like async process_batch) are not shown individually in outline format
-    assert!(output.contains("..."), "Missing ellipsis in outline format - output: {}", output);
-    
+    assert!(
+        output.contains("..."),
+        "Missing ellipsis in outline format - output: {}",
+        output
+    );
+
     Ok(())
 }
 
-#[test] 
+#[test]
 fn test_python_outline_test_patterns() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("test_patterns.py");
-    
+
     let content = r#"import unittest
 import pytest
 from unittest.mock import Mock, patch
@@ -501,26 +577,46 @@ def test_performance_large_dataset():
     result = process_large_dataset(data)
     assert len(result) == 10000
 "#;
-    
+
     fs::write(&test_file, content)?;
-    
+
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
         "extract",
         test_file.to_str().unwrap(),
         "--format",
         "outline",
-        "--allow-tests"
+        "--allow-tests",
     ])?;
-    
+
     // Verify test patterns are detected - outline format shows only top-level structures
-    assert!(output.contains("class TestUserManager(unittest.TestCase):"), "Missing unittest test class - output: {}", output);
+    assert!(
+        output.contains("class TestUserManager(unittest.TestCase):"),
+        "Missing unittest test class - output: {}",
+        output
+    );
     // Individual test methods inside TestUserManager class are not shown in outline format
-    assert!(output.contains("def test_simple_calculation():"), "Missing pytest test function - output: {}", output);
-    assert!(output.contains("def test_with_fixture(sample_data):"), "Missing pytest test with fixture - output: {}", output);
-    assert!(output.contains("class TestIntegration:"), "Missing pytest test class - output: {}", output);
-    assert!(output.contains("..."), "Missing ellipsis in outline format - output: {}", output);
-    
+    assert!(
+        output.contains("def test_simple_calculation():"),
+        "Missing pytest test function - output: {}",
+        output
+    );
+    assert!(
+        output.contains("def test_with_fixture(sample_data):"),
+        "Missing pytest test with fixture - output: {}",
+        output
+    );
+    assert!(
+        output.contains("class TestIntegration:"),
+        "Missing pytest test class - output: {}",
+        output
+    );
+    assert!(
+        output.contains("..."),
+        "Missing ellipsis in outline format - output: {}",
+        output
+    );
+
     Ok(())
 }
 
@@ -528,7 +624,7 @@ def test_performance_large_dataset():
 fn test_python_outline_edge_cases() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("edge_cases.py");
-    
+
     let content = r#"# -*- coding: utf-8 -*-
 """Module with edge cases for Python parsing."""
 
@@ -644,30 +740,62 @@ def test_indentation_edge_case():
     # This line uses spaces
     assert True
 "#;
-    
+
     fs::write(&test_file, content)?;
-    
+
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
         "extract",
         test_file.to_str().unwrap(),
         "--format",
         "outline",
-        "--allow-tests"
+        "--allow-tests",
     ])?;
-    
+
     // Verify edge cases are handled correctly
-    assert!(output.contains("class EmptyClass:"), "Missing empty class - output: {}", output);
-    assert!(output.contains("class ClassWithOnlyProperties:"), "Missing class with properties - output: {}", output);
-    assert!(output.contains("def function_with_only_pass():"), "Missing function with pass - output: {}", output);
-    assert!(output.contains("def function_with_nested_definitions():"), "Missing function with nested defs - output: {}", output);
-    assert!(output.contains("async def async_generator_function():"), "Missing async generator - output: {}", output);
-    assert!(output.contains("class MetaClass(type):"), "Missing metaclass - output: {}", output);
-    assert!(output.contains("class ClassWithMetaclass(metaclass=MetaClass):"), "Missing class with metaclass - output: {}", output);
-    
+    assert!(
+        output.contains("class EmptyClass:"),
+        "Missing empty class - output: {}",
+        output
+    );
+    assert!(
+        output.contains("class ClassWithOnlyProperties:"),
+        "Missing class with properties - output: {}",
+        output
+    );
+    assert!(
+        output.contains("def function_with_only_pass():"),
+        "Missing function with pass - output: {}",
+        output
+    );
+    assert!(
+        output.contains("def function_with_nested_definitions():"),
+        "Missing function with nested defs - output: {}",
+        output
+    );
+    assert!(
+        output.contains("async def async_generator_function():"),
+        "Missing async generator - output: {}",
+        output
+    );
+    assert!(
+        output.contains("class MetaClass(type):"),
+        "Missing metaclass - output: {}",
+        output
+    );
+    assert!(
+        output.contains("class ClassWithMetaclass(metaclass=MetaClass):"),
+        "Missing class with metaclass - output: {}",
+        output
+    );
+
     // Lambda functions should NOT be extracted as symbols
-    assert!(!output.contains("lambda"), "Lambda functions should not be symbols - output: {}", output);
-    
+    assert!(
+        !output.contains("lambda"),
+        "Lambda functions should not be symbols - output: {}",
+        output
+    );
+
     Ok(())
 }
 
@@ -675,7 +803,7 @@ def test_indentation_edge_case():
 fn test_python_outline_search_command() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("search_test.py");
-    
+
     let content = r#"class DataProcessor:
     """Process various types of data."""
     
@@ -705,9 +833,9 @@ def test_data_processing():
     result = processor.process_data([1, 2, None, 3])
     assert len(result) == 3
 "#;
-    
+
     fs::write(&test_file, content)?;
-    
+
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
         "search",
@@ -715,18 +843,19 @@ def test_data_processing():
         temp_dir.path().to_str().unwrap(),
         "--format",
         "outline",
-        "--allow-tests"
+        "--allow-tests",
     ])?;
-    
+
     // Should find symbols containing "process"
     assert!(
-        output.contains("DataProcessor") || 
-        output.contains("process_data") || 
-        output.contains("process_file") ||
-        output.contains("process_async"),
-        "Should find process-related symbols - output: {}", output
+        output.contains("DataProcessor")
+            || output.contains("process_data")
+            || output.contains("process_file")
+            || output.contains("process_async"),
+        "Should find process-related symbols - output: {}",
+        output
     );
-    
+
     Ok(())
 }
 
@@ -734,7 +863,7 @@ def test_data_processing():
 fn test_python_outline_multiline_docstrings() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("multiline_docstrings.py");
-    
+
     let content = r#"def function_with_long_docstring():
     """This is a function with a very long docstring.
     
@@ -805,23 +934,35 @@ class ClassWithLongDocstring:
         """
         return f"Name: {self.name}, Value: {self.value}"
 "#;
-    
+
     fs::write(&test_file, content)?;
-    
+
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
         "extract",
         test_file.to_str().unwrap(),
         "--format",
         "outline",
-        "--allow-tests"
+        "--allow-tests",
     ])?;
-    
-    // Verify top-level symbols are extracted - outline format shows only top-level structures  
-    assert!(output.contains("def function_with_long_docstring():"), "Missing function with long docstring - output: {}", output);
-    assert!(output.contains("class ClassWithLongDocstring:"), "Missing class with long docstring - output: {}", output);
+
+    // Verify top-level symbols are extracted - outline format shows only top-level structures
+    assert!(
+        output.contains("def function_with_long_docstring():"),
+        "Missing function with long docstring - output: {}",
+        output
+    );
+    assert!(
+        output.contains("class ClassWithLongDocstring:"),
+        "Missing class with long docstring - output: {}",
+        output
+    );
     // Methods inside classes (like get_info) are not shown individually in outline format
-    assert!(output.contains("..."), "Missing ellipsis in outline format - output: {}", output);
-    
+    assert!(
+        output.contains("..."),
+        "Missing ellipsis in outline format - output: {}",
+        output
+    );
+
     Ok(())
 }

@@ -112,7 +112,7 @@ pub fn find_symbol_in_file(
                 matched_keywords: None,
                 matched_lines: None,
                 tokenized_content: Some(tokenized_content),
-                    parent_context: None,
+                parent_context: None,
             });
         }
     };
@@ -524,7 +524,7 @@ pub fn find_symbol_in_file(
             matched_keywords: None,
             matched_lines: None,
             tokenized_content: Some(tokenized_content),
-                    parent_context: None,
+            parent_context: None,
         });
     }
 
@@ -644,7 +644,7 @@ pub fn find_symbol_in_file(
             matched_keywords: None,
             matched_lines: None,
             tokenized_content: Some(tokenized_content),
-                    parent_context: None,
+            parent_context: None,
         });
     }
 

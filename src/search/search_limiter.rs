@@ -168,7 +168,9 @@ pub fn apply_limits(
                     .iter()
                     .map(|result: &SearchResult| {
                         if symbols {
-                            result.symbol_signature.as_ref()
+                            result
+                                .symbol_signature
+                                .as_ref()
                                 .map(|s| count_block_tokens(s))
                                 .unwrap_or(0)
                         } else {
@@ -178,7 +180,8 @@ pub fn apply_limits(
                     .sum();
                 // Now count this result precisely too using block-level caching
                 if symbols {
-                    r.symbol_signature.as_ref()
+                    r.symbol_signature
+                        .as_ref()
                         .map(|s| count_block_tokens(s))
                         .unwrap_or(0)
                 } else {
@@ -187,7 +190,8 @@ pub fn apply_limits(
             } else if token_counting_started {
                 // We've already started precise counting - use block-level caching
                 if symbols {
-                    r.symbol_signature.as_ref()
+                    r.symbol_signature
+                        .as_ref()
                         .map(|s| count_block_tokens(s))
                         .unwrap_or(0)
                 } else {
@@ -232,7 +236,9 @@ pub fn apply_limits(
                 .iter()
                 .map(|result: &SearchResult| {
                     if symbols {
-                        result.symbol_signature.as_ref()
+                        result
+                            .symbol_signature
+                            .as_ref()
                             .map(|s| count_block_tokens(s))
                             .unwrap_or(0)
                     } else {

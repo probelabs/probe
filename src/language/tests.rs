@@ -187,6 +187,7 @@ fn test_merge_code_blocks() {
             parent_node_type: None,
             parent_start_row: None,
             parent_end_row: None,
+            parent_context: None,
         },
         CodeBlock {
             start_row: 5,
@@ -197,6 +198,7 @@ fn test_merge_code_blocks() {
             parent_node_type: None,
             parent_start_row: None,
             parent_end_row: None,
+            parent_context: None,
         },
         // Overlapping block
         CodeBlock {
@@ -208,6 +210,7 @@ fn test_merge_code_blocks() {
             parent_node_type: None,
             parent_start_row: None,
             parent_end_row: None,
+            parent_context: None,
         },
     ];
 
@@ -237,6 +240,7 @@ fn test_merge_code_blocks_no_overlap() {
             parent_node_type: None,
             parent_start_row: None,
             parent_end_row: None,
+            parent_context: None,
         },
         CodeBlock {
             start_row: 15, // Changed from 10 to 15 to ensure gap > 10 lines
@@ -247,6 +251,7 @@ fn test_merge_code_blocks_no_overlap() {
             parent_node_type: None,
             parent_start_row: None,
             parent_end_row: None,
+            parent_context: None,
         },
     ];
 
@@ -269,6 +274,7 @@ fn test_merge_code_blocks_struct_type() {
             parent_node_type: None,
             parent_start_row: None,
             parent_end_row: None,
+            parent_context: None,
         },
         // This is more than 10 lines away, so they should not merge
         CodeBlock {
@@ -280,6 +286,7 @@ fn test_merge_code_blocks_struct_type() {
             parent_node_type: None,
             parent_start_row: None,
             parent_end_row: None,
+            parent_context: None,
         },
     ];
 
@@ -299,6 +306,7 @@ fn test_merge_code_blocks_struct_type() {
             parent_node_type: None,
             parent_start_row: None,
             parent_end_row: None,
+            parent_context: None,
         },
         // This is within 10 lines, so they should merge
         CodeBlock {
@@ -310,6 +318,7 @@ fn test_merge_code_blocks_struct_type() {
             parent_node_type: None,
             parent_start_row: None,
             parent_end_row: None,
+            parent_context: None,
         },
     ];
 
