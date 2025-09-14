@@ -57,7 +57,6 @@ pub const MAX_USERS: usize = 1000;
         timeout: 30,
         question: None,
         no_gitignore: true,
-        symbols: true, // Enable symbols mode
     };
 
     let results = perform_probe(&options).expect("Search should succeed");
@@ -73,10 +72,7 @@ pub const MAX_USERS: usize = 1000;
     );
 
     // Test with symbols flag disabled
-    let options_no_symbols = SearchOptions {
-        symbols: false,
-        ..options
-    };
+    let options_no_symbols = SearchOptions { ..options };
 
     let results_no_symbols = perform_probe(&options_no_symbols).expect("Search should succeed");
 
@@ -140,7 +136,6 @@ MAX_USERS = 1000
         timeout: 30,
         question: None,
         no_gitignore: true,
-        symbols: true, // Enable symbols mode
     };
 
     let results = perform_probe(&options).expect("Search should succeed");

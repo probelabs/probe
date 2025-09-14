@@ -428,7 +428,6 @@ fn third_function() {
             files_only: false,
             custom_ignores: &custom_ignores,
             exclude_filenames: true,
-            symbols: false,
             language: None,
             reranker: "combined",
             frequency_search: false,

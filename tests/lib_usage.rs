@@ -12,7 +12,6 @@ mod tests {
             files_only: false,
             custom_ignores: &[],
             exclude_filenames: false,
-            symbols: false,
             reranker: "bm25",
             frequency_search: true,
             exact: false,

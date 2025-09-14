@@ -53,7 +53,7 @@ mod token_limiter_failure_tests {
             .collect();
 
         let token_limit = 100;
-        let limited = apply_limits(results, None, None, Some(token_limit), false);
+        let limited = apply_limits(results, None, None, Some(token_limit));
 
         // Calculate actual token count to verify overrun
         let actual_total_tokens: usize = limited
@@ -148,7 +148,7 @@ mod token_limiter_failure_tests {
             .collect();
 
         let token_limit = 150;
-        let limited = apply_limits(results.clone(), None, None, Some(token_limit), false);
+        let limited = apply_limits(results.clone(), None, None, Some(token_limit));
 
         let reported_tokens = limited
             .limits_applied

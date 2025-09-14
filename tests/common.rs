@@ -10,7 +10,7 @@ impl TestContext {
 
     pub fn run_probe(&self, args: &[&str]) -> Result<String> {
         let output = Command::new("cargo")
-            .args(&["run", "--"])
+            .args(["run", "--"])
             .args(args)
             .output()?;
 

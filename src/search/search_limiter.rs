@@ -160,9 +160,7 @@ pub fn apply_limits(
                 // Use block-level caching for better performance on code blocks
                 running_tokens = limited
                     .iter()
-                    .map(|result: &SearchResult| {
-                        count_block_tokens(&result.code)
-                    })
+                    .map(|result: &SearchResult| count_block_tokens(&result.code))
                     .sum();
                 // Now count this result precisely too using block-level caching
                 count_block_tokens(&r.code)
@@ -206,9 +204,7 @@ pub fn apply_limits(
             // Use block-level caching for final token count calculation
             limited
                 .iter()
-                .map(|result: &SearchResult| {
-                    count_block_tokens(&result.code)
-                })
+                .map(|result: &SearchResult| count_block_tokens(&result.code))
                 .sum()
         } else {
             running_tokens

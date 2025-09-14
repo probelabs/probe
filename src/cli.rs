@@ -202,7 +202,6 @@ pub enum Commands {
         /// Natural language question for BERT reranking (requires --features bert-reranker)
         #[arg(long = "question")]
         question: Option<String>,
-
     },
 
     /// Extract code blocks from files
@@ -268,7 +267,6 @@ pub enum Commands {
         /// User instructions for LLM models
         #[arg(long = "instructions")]
         instructions: Option<String>,
-
     },
 
     /// Search code using AST patterns for precise structural matching

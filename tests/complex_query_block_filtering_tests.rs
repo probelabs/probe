@@ -297,7 +297,6 @@ func (i *IPWhiteListMiddleware) Process() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        symbols: false,
         language: None,
         reranker: "hybrid",
         frequency_search: true,
@@ -379,7 +378,6 @@ func Process() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false, // Include filenames in search
-        symbols: false,
         language: None,
         reranker: "hybrid",
         frequency_search: true,

@@ -108,7 +108,6 @@ fn test_required_term_query() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        symbols: false,
         language: None,
         reranker: "hybrid",
         frequency_search: false,
@@ -219,7 +218,6 @@ fn test_excluded_term_query() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        symbols: false,
         language: None,
         reranker: "hybrid",
         frequency_search: false,
@@ -314,7 +312,6 @@ fn test_or_query() {
         files_only: true, // Use files_only to ensure we find all matching files
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        symbols: false,
         language: None,
         reranker: "hybrid",
         frequency_search: true, // Enable frequency search to improve matching
@@ -417,7 +414,6 @@ fn test_complex_query_or() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        symbols: false,
         language: None,
         reranker: "hybrid",
         frequency_search: true, // Enable frequency search to improve matching
@@ -518,7 +514,6 @@ fn test_complex_query_exclusion() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        symbols: false,
         language: None,
         reranker: "hybrid",
         frequency_search: false,
@@ -619,7 +614,6 @@ fn test_function() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        symbols: false,
         language: None,
         reranker: "hybrid",
         frequency_search: false,

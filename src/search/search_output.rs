@@ -27,12 +27,7 @@ pub fn format_and_print_search_results(
     // Handle different output formats
     match format {
         "color" if use_color => {
-            format_and_print_color_results(
-                &valid_results,
-                dry_run,
-                query_plan,
-                debug_mode,
-            );
+            format_and_print_color_results(&valid_results, dry_run, query_plan, debug_mode);
         }
         "json" => {
             if let Err(e) = format_and_print_json_results(&valid_results) {

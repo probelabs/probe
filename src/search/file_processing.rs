@@ -1814,6 +1814,7 @@ fn extract_symbol_signature(
 
 /// Helper function to extract symbol signature from code content directly
 /// This is used for fallback contexts where we don't have precise byte ranges
+#[allow(dead_code)]
 fn extract_symbol_signature_from_content(
     extension: &str,
     content: &str,
@@ -1857,6 +1858,7 @@ fn extract_symbol_signature_from_content(
 }
 
 /// Find the best symbol signature from a parsed tree by looking for significant nodes
+#[allow(dead_code)]
 fn find_best_symbol_signature(
     node: &tree_sitter::Node,
     source: &[u8],

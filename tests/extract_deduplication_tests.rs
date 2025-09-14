@@ -52,7 +52,6 @@ fn standalone_function() {
         prompt: None,
         instructions: None,
         no_gitignore: false,
-        symbols: false,
     };
 
     // Call handle_extract

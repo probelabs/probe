@@ -37,6 +37,7 @@ fn test_merge_ranked_blocks() {
         matched_keywords: None,
         tokenized_content: None,
         parent_context: None,
+        matched_lines: None,
     };
     let block2 = SearchResult {
     file: "test_file.rs".to_string(),
@@ -93,6 +94,7 @@ fn test_merge_ranked_blocks() {
         matched_keywords: None,
         tokenized_content: None,
             parent_context: None,
+        matched_lines: None,
     };
 
     // Create a vector with all blocks
@@ -185,7 +187,6 @@ fn test_integration_with_search_flow() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        symbols: false,
         language: None,
         reranker: "combined",
         frequency_search: false,
@@ -301,7 +302,6 @@ fn test_no_merge_flag() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        symbols: false,
         language: None,
         reranker: "combined",
         frequency_search: false,
@@ -329,7 +329,6 @@ fn test_no_merge_flag() {
         files_only: false,
         custom_ignores: &custom_ignores,
         exclude_filenames: false,
-        symbols: false,
         language: None,
         reranker: "combined",
         frequency_search: false,
