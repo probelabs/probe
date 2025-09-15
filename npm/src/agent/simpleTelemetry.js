@@ -170,6 +170,42 @@ export class SimpleAppTracer {
     }
   }
 
+  /**
+   * Record delegation events
+   */
+  recordDelegationEvent(eventType, data = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`delegation.${eventType}`, {
+      'session.id': this.sessionId,
+      ...data
+    });
+  }
+
+  /**
+   * Record JSON validation events
+   */
+  recordJsonValidationEvent(eventType, data = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`json_validation.${eventType}`, {
+      'session.id': this.sessionId,
+      ...data
+    });
+  }
+
+  /**
+   * Record Mermaid validation events
+   */
+  recordMermaidValidationEvent(eventType, data = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`mermaid_validation.${eventType}`, {
+      'session.id': this.sessionId,
+      ...data
+    });
+  }
+
   setAttributes(attributes) {
     // For simplicity, just log attributes when no active span
     if (this.telemetry && this.telemetry.enableConsole) {
