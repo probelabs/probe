@@ -2409,7 +2409,7 @@ fn generate_outline_xml_content(
     for (i, &(line_num, _line_type)) in lines.iter().enumerate() {
         // Check if we need to add an ellipsis for a gap
         if i > 0 && line_num > last_line + 1 {
-            result.push_str("\n...\n");
+            result.push_str("...\n");
         }
 
         // Get the actual line content (convert from 1-based to 0-based indexing)
