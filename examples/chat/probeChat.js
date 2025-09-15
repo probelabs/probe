@@ -916,6 +916,7 @@ When troubleshooting:
     let currentIteration = 0;
     let completionAttempted = false;
     let finalResult = `Error: Max tool iterations (${MAX_TOOL_ITERATIONS}) reached without completion. You can increase this limit using the MAX_TOOL_ITERATIONS environment variable or --max-iterations flag.`; // Default error
+    let consecutiveNoToolCallCount = 0;
 
     this.abortController = new AbortController();
     const debugFilePath = join(process.cwd(), 'probe-debug.txt');
@@ -1306,6 +1307,8 @@ When troubleshooting:
 
         const parsedTool = parseXmlToolCallWithThinking(assistantResponseContent);
         if (parsedTool) {
+          // Reset counter on successful tool call detection
+          consecutiveNoToolCallCount = 0;
           const { toolName, params } = parsedTool;
           if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
           
@@ -1432,10 +1435,30 @@ When troubleshooting:
           }
 
         } else {
-          if (this.debug) console.log(`[DEBUG] Assistant response did not contain a valid XML tool call.`);
-          const forceToolContent = `Your response did not contain a valid tool call in the required XML format. You MUST respond with exactly one tool call (e.g., <search>...</search> or <attempt_completion>...</attempt_completion>) based on the previous steps and the user's goal. Analyze the situation and choose the appropriate next tool.`;
-          currentMessages.push({ role: 'user', content: forceToolContent });
-          this.tokenCounter.calculateContextSize(currentMessages);
+          consecutiveNoToolCallCount++;
+          if (this.debug) console.log(`[DEBUG] No tool call detected in assistant response. Prompting for tool use.`);
+          
+          // After 3 consecutive failures to provide tool calls, force completion
+          if (consecutiveNoToolCallCount >= 3) {
+            if (this.debug) console.log(`[DEBUG] Too many consecutive failures to detect tool calls (${consecutiveNoToolCallCount}). Forcing completion.`);
+            
+            const forceCompletionContent = `You have failed to provide valid tool calls ${consecutiveNoToolCallCount} times in a row. This suggests your task may be complete or you're stuck in a loop. Please use <attempt_completion><result>Your final answer based on the work done so far</result></attempt_completion> to conclude this conversation. If the task is not fully complete, explain what was accomplished and what remains to be done.`;
+            currentMessages.push({ role: 'user', content: forceCompletionContent });
+            this.tokenCounter.calculateContextSize(currentMessages);
+          } else {
+            // Check if we've done substantial work that might indicate completion is appropriate
+            const hasToolResults = currentMessages.some(msg => msg.content && msg.content.includes('<tool_result>'));
+            
+            let forceToolContent;
+            if (hasToolResults && consecutiveNoToolCallCount >= 2) {
+              forceToolContent = `Your response did not contain a valid tool call in the required XML format. Based on the tool results above, if you believe the user's question has been answered or the task is complete, use <attempt_completion><result>Your final answer</result></attempt_completion>. Otherwise, use another tool like <search>...</search> to continue investigating.`;
+            } else {
+              forceToolContent = `Your response did not contain a valid tool call in the required XML format. You MUST respond with exactly one tool call (e.g., <search>...</search> or <attempt_completion>...</attempt_completion>) based on the previous steps and the user's goal. Analyze the situation and choose the appropriate next tool.`;
+            }
+            
+            currentMessages.push({ role: 'user', content: forceToolContent });
+            this.tokenCounter.calculateContextSize(currentMessages);
+          }
         }
 
         if (currentMessages.length > MAX_HISTORY_MESSAGES + 3) {
