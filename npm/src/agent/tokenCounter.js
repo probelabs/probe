@@ -272,6 +272,31 @@ export class TokenCounter {
   }
 
   /**
+   * Reset only the token counters, preserving conversation history.
+   * Useful for starting a fresh count while maintaining context.
+   */
+  resetCounters() {
+    // Reset counters
+    this.requestTokens = 0;
+    this.responseTokens = 0;
+    this.currentRequestTokens = 0;
+    this.currentResponseTokens = 0;
+    this.cacheCreationTokens = 0;
+    this.cacheReadTokens = 0;
+    this.currentCacheCreationTokens = 0;
+    this.currentCacheReadTokens = 0;
+    this.cachedPromptTokens = 0;
+    this.currentCachedPromptTokens = 0;
+
+    // Keep history but recalculate context size based on preserved history
+    this.calculateContextSize(); // Updates this.contextSize from existing history
+
+    if (this.debug) {
+      console.log('[DEBUG] TokenCounter: Counters reset, history preserved.');
+    }
+  }
+
+  /**
    * Clear all counters and internal history. Reset context size.
    */
   clear() {

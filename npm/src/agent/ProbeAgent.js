@@ -1174,9 +1174,28 @@ Convert your previous response content into actual JSON data that follows this s
     this.history = [];
     this.tokenCounter.clear();
     clearToolExecutionData(this.sessionId);
-    
+
     if (this.debug) {
       console.log(`[DEBUG] Cleared conversation history and reset counters for session ${this.sessionId}`);
+    }
+  }
+
+  /**
+   * Reset counters and tool execution data while preserving conversation history.
+   * Useful for follow-up sessions where you want to keep context but reset usage tracking.
+   */
+  resetCounters() {
+    // Reset token counters while preserving conversation history
+    this.tokenCounter.resetCounters();
+
+    // Clear tool execution data for fresh start
+    clearToolExecutionData(this.sessionId);
+
+    // Reset cancellation flag
+    this.cancelled = false;
+
+    if (this.debug) {
+      console.log(`[DEBUG] Reset counters and tool execution data for session ${this.sessionId} (history preserved)`);
     }
   }
 

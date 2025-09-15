@@ -165,6 +165,12 @@ export declare class ProbeAgent {
   clearHistory(): void;
 
   /**
+   * Reset counters and tool execution data while preserving conversation history.
+   * Useful for follow-up sessions where you want to keep context but reset usage tracking.
+   */
+  resetCounters(): void;
+
+  /**
    * Add a message to the conversation history
    * @param message - Message to add
    */

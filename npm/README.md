@@ -106,8 +106,11 @@ console.log(followUp);
 const usage = agent.getTokenUsage();
 console.log(`Used ${usage.total} tokens total`);
 
+// Reset counters for follow-up session (preserves conversation history)
+agent.resetCounters();
+
 // Clear conversation history if needed
-agent.history = [];
+agent.clearHistory();
 ```
 
 **Environment Variables:**
@@ -129,7 +132,9 @@ export MODEL_NAME=claude-3-5-sonnet-20241022
 - **Code search integration** - Uses probe's search capabilities transparently
 - **Multiple AI providers** - Supports Anthropic Claude, OpenAI GPT, Google Gemini
 - **Session management** - Maintain conversation context across calls
-- **Token tracking** - Monitor usage and costs
+- **Token tracking** - Monitor usage and costs with `getTokenUsage()`
+- **Counter reset** - Reset token counters for follow-up sessions with `resetCounters()` (preserves history)
+- **History management** - Clear conversation history with `clearHistory()` (resets everything)
 - **Configurable personas** - Engineer, architect, code-review, and more
 
 ### Using as an MCP Server
