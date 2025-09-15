@@ -45,6 +45,12 @@ pub fn format_and_print_search_results(
             format_and_print_outline_results(&valid_results, dry_run);
             return; // Skip the duplicate summary output at the end
         }
+        "outline-xml" => {
+            if let Err(e) = format_and_print_outline_xml_results(&valid_results, dry_run) {
+                eprintln!("Error formatting outline XML: {e}");
+            }
+            return; // Skip the duplicate summary output at the end
+        }
         _ => {
             // Default format (terminal)
             for result in &valid_results {
@@ -1322,32 +1328,35 @@ fn collect_outline_lines(
         for &line_num in &matched_lines {
             lines.push((line_num, OutlineLineType::MatchedLine));
 
-            // If this matched line is a comment, also include the code that follows it
-            let source_lines: Vec<&str> = full_source.lines().collect();
-            if let Some(line_content) = source_lines.get(line_num - 1) {
-                if is_comment_line(line_content) {
-                    // Add up to 3 lines of non-comment code following the comment
-                    let mut added_lines = 0;
-                    for offset in 1..=5 {
-                        // Look ahead up to 5 lines
-                        if added_lines >= 3 {
-                            break; // Limit to 3 lines of code
-                        }
-
-                        let following_line_num = line_num + offset;
-                        if let Some(following_line) = source_lines.get(following_line_num - 1) {
-                            let trimmed = following_line.trim();
-
-                            // Skip empty lines and additional comments
-                            if trimmed.is_empty() || is_comment_line(following_line) {
-                                continue;
+            // TEMPORARILY DISABLED: If this matched line is a comment, also include the code that follows it
+            let _disabled = true; // Set to false to re-enable
+            if !_disabled {
+                let source_lines: Vec<&str> = full_source.lines().collect();
+                if let Some(line_content) = source_lines.get(line_num - 1) {
+                    if is_comment_line(line_content) {
+                        // Add up to 3 lines of non-comment code following the comment
+                        let mut added_lines = 0;
+                        for offset in 1..=5 {
+                            // Look ahead up to 5 lines
+                            if added_lines >= 3 {
+                                break; // Limit to 3 lines of code
                             }
 
-                            // Add this line as a matched line (it provides context for the comment)
-                            lines.push((following_line_num, OutlineLineType::MatchedLine));
-                            added_lines += 1;
-                        } else {
-                            break; // End of file
+                            let following_line_num = line_num + offset;
+                            if let Some(following_line) = source_lines.get(following_line_num - 1) {
+                                let trimmed = following_line.trim();
+
+                                // Skip empty lines and additional comments
+                                if trimmed.is_empty() || is_comment_line(following_line) {
+                                    continue;
+                                }
+
+                                // Add this line as a matched line (it provides context for the comment)
+                                lines.push((following_line_num, OutlineLineType::MatchedLine));
+                                added_lines += 1;
+                            } else {
+                                break; // End of file
+                            }
                         }
                     }
                 }
@@ -2254,6 +2263,180 @@ fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
 
     println!("Total bytes returned: {total_bytes}");
     println!("Total tokens returned: {total_tokens}");
+}
+
+/// Format and print search results in outline XML format
+/// This reuses the outline format logic but outputs in XML structure
+fn format_and_print_outline_xml_results(results: &[&SearchResult], dry_run: bool) -> Result<()> {
+    // Track content for accounting
+    let mut displayed_content = Vec::new();
+
+    println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+    println!("<matches>");
+
+    // Group results by file and sort each group by line number
+    let mut files_map: std::collections::HashMap<String, Vec<&SearchResult>> =
+        std::collections::HashMap::new();
+
+    for result in results {
+        files_map
+            .entry(result.file.clone())
+            .or_default()
+            .push(result);
+    }
+
+    // Sort files for consistent output
+    let mut files: Vec<(String, Vec<&SearchResult>)> = files_map.into_iter().collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Sort results within each file by line number (not by score)
+    for (_, file_results) in &mut files {
+        file_results.sort_by_key(|r| r.lines.0);
+    }
+
+    for (file_path, file_results) in files.iter() {
+        // Collect all lines to display for this file
+        let mut all_lines_for_file = Vec::new();
+        let mut all_closing_brace_contexts = std::collections::HashMap::new();
+
+        // Process each result and collect all lines to display
+        for result in file_results {
+            // Collect lines for this result
+            let (lines_to_display, closing_brace_contexts) =
+                collect_outline_lines(result, &result.file);
+
+            // Merge into the file-level collections
+            for line in lines_to_display {
+                if !all_lines_for_file.iter().any(|(l, _)| *l == line.0) {
+                    all_lines_for_file.push(line);
+                }
+            }
+
+            for (line_num, context) in closing_brace_contexts {
+                all_closing_brace_contexts.insert(line_num, context);
+            }
+        }
+
+        // Sort all lines for this file by line number
+        all_lines_for_file.sort_by_key(|(line, _)| *line);
+
+        // Remove duplicates, keeping the most important line type
+        let mut deduped_lines = Vec::new();
+        let mut seen_lines = std::collections::HashMap::new();
+
+        for (line, line_type) in all_lines_for_file {
+            if let Some(existing_type) = seen_lines.get(&line).copied() {
+                // Preserve more specific types over generic ones
+                let should_replace = match (existing_type, line_type) {
+                    // MatchedLine is most important
+                    (_, OutlineLineType::MatchedLine) => true,
+                    (OutlineLineType::MatchedLine, _) => false,
+                    // FunctionSignature is more important than context
+                    (OutlineLineType::ParentContext, OutlineLineType::FunctionSignature) => true,
+                    (OutlineLineType::NestedContext, OutlineLineType::FunctionSignature) => true,
+                    (OutlineLineType::FunctionSignature, OutlineLineType::ParentContext) => false,
+                    (OutlineLineType::FunctionSignature, OutlineLineType::NestedContext) => false,
+                    // Keep first occurrence otherwise
+                    _ => false,
+                };
+
+                if should_replace {
+                    seen_lines.insert(line, line_type);
+                    // Find and update existing entry
+                    if let Some(pos) = deduped_lines.iter().position(|(l, _)| *l == line) {
+                        deduped_lines[pos] = (line, line_type);
+                    }
+                }
+            } else {
+                seen_lines.insert(line, line_type);
+                deduped_lines.push((line, line_type));
+            }
+        }
+
+        // Sort deduped lines by line number for final output
+        deduped_lines.sort_by_key(|(line, _)| *line);
+
+        // Generate the XML content for this file
+        let xml_content = generate_outline_xml_content(
+            &deduped_lines,
+            file_path,
+            &all_closing_brace_contexts,
+            dry_run,
+            &mut displayed_content,
+        );
+
+        // Print the file element with content
+        println!(
+            "  <file path=\"{}\">{}</file>",
+            escape_xml(file_path),
+            xml_content
+        );
+    }
+
+    println!("</matches>");
+
+    // Print summary (similar to outline format)
+    if !dry_run {
+        let total_bytes: usize = displayed_content.iter().map(|s| s.len()).sum();
+        let code_blocks: Vec<&str> = displayed_content.iter().map(|s| s.as_str()).collect();
+        let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
+
+        eprintln!("Total bytes returned: {total_bytes}");
+        eprintln!("Total tokens returned: {total_tokens}");
+    }
+
+    Ok(())
+}
+
+/// Generate XML content for a file by reading source lines and formatting them
+fn generate_outline_xml_content(
+    lines: &[(usize, OutlineLineType)],
+    file_path: &str,
+    _closing_brace_contexts: &std::collections::HashMap<usize, crate::models::ParentContext>,
+    dry_run: bool,
+    displayed_content: &mut Vec<String>,
+) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    // Read the source file
+    let source = match std::fs::read_to_string(file_path) {
+        Ok(content) => content,
+        Err(_) => return String::new(),
+    };
+    let source_lines: Vec<&str> = source.lines().collect();
+
+    let mut result = String::new();
+    let mut last_line = 0;
+
+    for (i, &(line_num, _line_type)) in lines.iter().enumerate() {
+        // Check if we need to add an ellipsis for a gap
+        if i > 0 && line_num > last_line + 1 {
+            result.push_str("\n...\n");
+        }
+
+        // Get the actual line content (convert from 1-based to 0-based indexing)
+        if let Some(line_content) = source_lines.get(line_num.saturating_sub(1)) {
+            if dry_run {
+                // For dry run, just show line numbers
+                result.push_str(&format!("{}", line_num));
+            } else {
+                // Add the actual line content
+                result.push_str(&escape_xml(line_content));
+                displayed_content.push(line_content.to_string());
+            }
+        }
+
+        // Add newline unless it's the last line
+        if i < lines.len() - 1 {
+            result.push('\n');
+        }
+
+        last_line = line_num;
+    }
+
+    result
 }
 
 #[cfg(test)]
