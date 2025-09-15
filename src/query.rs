@@ -557,8 +557,8 @@ pub fn handle_query(
                 })
                 .sum();
 
-            eprintln!("Total bytes returned: {total_bytes}");
-            eprintln!("Total tokens returned: {total_tokens}");
+            println!("Total bytes returned: {total_bytes}");
+            println!("Total tokens returned: {total_tokens}");
         }
     }
 

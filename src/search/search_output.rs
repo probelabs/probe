@@ -178,7 +178,7 @@ pub fn format_and_print_search_results(
         }
     }
 
-    eprintln!("Found {count} search results", count = valid_results.len());
+    println!("Found {count} search results", count = valid_results.len());
 
     let total_bytes: usize = valid_results.iter().map(|r| r.code.len()).sum();
 
@@ -187,8 +187,8 @@ pub fn format_and_print_search_results(
     // when multiple identical code blocks need tokenization (common in search results)
     let code_blocks: Vec<&str> = valid_results.iter().map(|r| r.code.as_str()).collect();
     let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
-    eprintln!("Total bytes returned: {total_bytes}");
-    eprintln!("Total tokens returned: {total_tokens}");
+    println!("Total bytes returned: {total_bytes}");
+    println!("Total tokens returned: {total_tokens}");
 }
 
 /// Format and print search results with color highlighting for matching words
@@ -497,13 +497,13 @@ fn format_and_print_color_results(
     } // End of for loop
 
     println!();
-    eprintln!("Found {} search results", results.len());
+    println!("Found {} search results", results.len());
 
     let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
     let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
     let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
-    eprintln!("Total bytes returned: {total_bytes}");
-    eprintln!("Total tokens returned: {total_tokens}");
+    println!("Total bytes returned: {total_bytes}");
+    println!("Total tokens returned: {total_tokens}");
 }
 
 /// Helper function to escape XML special characters
@@ -2254,15 +2254,15 @@ fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
 
     // Print summary at the end
     println!();
-    eprintln!("Found {} search results", results.len());
+    println!("Found {} search results", results.len());
 
     // Calculate total bytes and tokens from displayed content
     let total_bytes: usize = displayed_content.iter().map(|s| s.len()).sum();
     let code_blocks: Vec<&str> = displayed_content.iter().map(|s| s.as_str()).collect();
     let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
 
-    eprintln!("Total bytes returned: {total_bytes}");
-    eprintln!("Total tokens returned: {total_tokens}");
+    println!("Total bytes returned: {total_bytes}");
+    println!("Total tokens returned: {total_tokens}");
 }
 
 /// Format and print search results in outline XML format

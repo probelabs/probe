@@ -261,7 +261,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
 
     // Add helpful tip at the very bottom of output
     println!();
-    eprintln!("💡 Tip: Use --exact flag when searching for specific function names or variables for more precise results");
+    println!("💡 Tip: Use --exact flag when searching for specific function names or variables for more precise results");
 
     Ok(())
 }
