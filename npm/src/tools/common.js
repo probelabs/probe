@@ -269,29 +269,54 @@ const DEFAULT_VALID_TOOLS = [
 	'attempt_completion'
 ];
 
-// Simple XML parser helper
+// Simple XML parser helper - safer string-based approach
 export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
-	// Find all potential XML tag matches
-	const globalRegex = /<([a-zA-Z0-9_]+)>([\s\S]*?)<\/\1>/g;
-	let match;
-	
-	// Look through all matches to find the first valid tool
-	while ((match = globalRegex.exec(xmlString)) !== null) {
-		const toolName = match[1];
+	// Look for each valid tool name specifically using string search
+	for (const toolName of validTools) {
+		const openTag = `<${toolName}>`;
+		const closeTag = `</${toolName}>`;
 		
-		// Only parse XML tags that correspond to valid tools
-		if (!validTools.includes(toolName)) {
-			continue; // Skip non-tool tags and look for the next match
+		const openIndex = xmlString.indexOf(openTag);
+		if (openIndex === -1) {
+			continue; // Tool not found, try next tool
 		}
-
-		const innerContent = match[2];
+		
+		const closeIndex = xmlString.indexOf(closeTag, openIndex + openTag.length);
+		if (closeIndex === -1) {
+			continue; // No closing tag found, try next tool
+		}
+		
+		// Extract the content between tags
+		const innerContent = xmlString.substring(
+			openIndex + openTag.length, 
+			closeIndex
+		);
+		
 		const params = {};
 
-		const paramRegex = /<([a-zA-Z0-9_]+)>([\s\S]*?)<\/\1>/g;
-		let paramMatch;
-		while ((paramMatch = paramRegex.exec(innerContent)) !== null) {
-			const paramName = paramMatch[1];
-			let paramValue = paramMatch[2].trim();
+		// Parse parameters using string-based approach for better safety
+		// Common parameter names to look for (can be extended as needed)
+		const commonParams = ['query', 'file_path', 'line', 'end_line', 'path', 'recursive', 'includeHidden', 
+		                      'max_results', 'result', 'command', 'description', 'task', 'param'];
+		
+		for (const paramName of commonParams) {
+			const paramOpenTag = `<${paramName}>`;
+			const paramCloseTag = `</${paramName}>`;
+			
+			const paramOpenIndex = innerContent.indexOf(paramOpenTag);
+			if (paramOpenIndex === -1) {
+				continue; // Parameter not found
+			}
+			
+			const paramCloseIndex = innerContent.indexOf(paramCloseTag, paramOpenIndex + paramOpenTag.length);
+			if (paramCloseIndex === -1) {
+				continue; // No closing tag found
+			}
+			
+			let paramValue = innerContent.substring(
+				paramOpenIndex + paramOpenTag.length,
+				paramCloseIndex
+			).trim();
 
 			// Basic type inference (can be improved)
 			if (paramValue.toLowerCase() === 'true') {
@@ -312,10 +337,19 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 
 		// Special handling for attempt_completion - allow direct XML response without validation
 		if (toolName === 'attempt_completion') {
-			// First try to find <result> tags (backward compatibility)
-			const resultMatch = innerContent.match(/<result>([\s\S]*?)<\/result>/);
-			if (resultMatch) {
-				params['result'] = resultMatch[1].trim();
+			// First try to find <result> tags (backward compatibility) using string-based approach
+			const resultOpenTag = '<result>';
+			const resultCloseTag = '</result>';
+			const resultOpenIndex = innerContent.indexOf(resultOpenTag);
+			
+			if (resultOpenIndex !== -1) {
+				const resultCloseIndex = innerContent.indexOf(resultCloseTag, resultOpenIndex + resultOpenTag.length);
+				if (resultCloseIndex !== -1) {
+					params['result'] = innerContent.substring(
+						resultOpenIndex + resultOpenTag.length,
+						resultCloseIndex
+					).trim();
+				}
 			} else {
 				// Count how many parameters were parsed (excluding command which will be removed)
 				const paramsCount = Object.keys(params).filter(key => key !== 'command').length;
@@ -337,4 +371,33 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 
 	// No valid tool found
 	return null;
+}
+
+/**
+ * Creates an improved preview of a message showing start and end portions
+ * @param {string} message - The message to preview
+ * @param {number} charsPerSide - Number of characters to show from start and end (default: 200)
+ * @returns {string} Formatted preview string
+ */
+export function createMessagePreview(message, charsPerSide = 200) {
+	if (message === null || message === undefined) {
+		return 'null/undefined';
+	}
+	
+	if (typeof message !== 'string') {
+		return 'null/undefined';
+	}
+	
+	const totalChars = charsPerSide * 2;
+	
+	if (message.length <= totalChars) {
+		// Message is short enough to show completely
+		return message;
+	}
+	
+	// Message is longer - show start and end with ... in between
+	const start = message.substring(0, charsPerSide);
+	const end = message.substring(message.length - charsPerSide);
+	
+	return `${start}...${end}`;
 }

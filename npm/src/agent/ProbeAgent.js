@@ -18,6 +18,7 @@ import {
   attemptCompletionSchema,
   parseXmlToolCallWithThinking
 } from './tools.js';
+import { createMessagePreview } from '../tools/common.js';
 import { 
   createWrappedTools, 
   listFilesToolInstance, 
@@ -507,11 +508,11 @@ When troubleshooting:
           console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${maxIterations} ---`);
           console.log(`[DEBUG] Current messages count for AI call: ${currentMessages.length}`);
           
-          // Log first 200 characters of the latest user message (helpful for debugging loops)
+          // Log preview of the latest user message (helpful for debugging loops)
           const lastUserMessage = [...currentMessages].reverse().find(msg => msg.role === 'user');
           if (lastUserMessage && lastUserMessage.content) {
-            const userPreview = lastUserMessage.content.substring(0, 200);
-            console.log(`[DEBUG] Latest user message (200 chars): ${userPreview}${lastUserMessage.content.length > 200 ? '...' : ''}`);
+            const userPreview = createMessagePreview(lastUserMessage.content);
+            console.log(`[DEBUG] Latest user message (${lastUserMessage.content.length} chars): ${userPreview}`);
           }
         }
 
@@ -596,10 +597,10 @@ When troubleshooting:
           throw new Error(finalResult);
         }
 
-        // Log first 200 characters of assistant response for debugging loops
+        // Log preview of assistant response for debugging loops
         if (this.debug && assistantResponseContent) {
-          const assistantPreview = assistantResponseContent.substring(0, 200);
-          console.log(`[DEBUG] Assistant response (200 chars): ${assistantPreview}${assistantResponseContent.length > 200 ? '...' : ''}`);
+          const assistantPreview = createMessagePreview(assistantResponseContent);
+          console.log(`[DEBUG] Assistant response (${assistantResponseContent.length} chars): ${assistantPreview}`);
         }
 
         // Parse tool call from response with valid tools list

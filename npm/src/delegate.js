@@ -6,6 +6,7 @@
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { getBinaryPath, buildCliArgs } from './utils.js';
+import { createMessagePreview } from './tools/common.js';
 
 /**
  * Delegate a big distinct task to a probe subagent (used automatically by AI agents)
@@ -89,7 +90,8 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 				stdout += chunk;
 				
 				if (debug) {
-					console.error(`[DELEGATE] stdout chunk received (${chunk.length} chars): ${chunk.substring(0, 200)}${chunk.length > 200 ? '...' : ''}`);
+					const preview = createMessagePreview(chunk);
+					console.error(`[DELEGATE] stdout chunk received (${chunk.length} chars): ${preview}`);
 				}
 			});
 
@@ -99,7 +101,8 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 				stderr += chunk;
 				
 				if (debug) {
-					console.error(`[DELEGATE] stderr chunk received (${chunk.length} chars): ${chunk.substring(0, 200)}${chunk.length > 200 ? '...' : ''}`);
+					const preview = createMessagePreview(chunk);
+					console.error(`[DELEGATE] stderr chunk received (${chunk.length} chars): ${preview}`);
 				}
 			});
 
