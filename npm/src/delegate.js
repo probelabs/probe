@@ -28,7 +28,7 @@ import { getBinaryPath, buildCliArgs } from './utils.js';
  * @param {number} [options.maxIterations=30] - Maximum tool iterations allowed
  * @returns {Promise<string>} The response from the delegate agent
  */
-export async function delegate({ task, timeout = 300, debug = false, currentIteration = 0, maxIterations = 30 }) {
+export async function delegate({ task, timeout = 300, debug = false, currentIteration = 0, maxIterations = 30, tracer = null }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
 	}
@@ -52,11 +52,6 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 		// Get the probe binary path
 		const binaryPath = await getBinaryPath();
 		
-		if (debug) {
-			console.error(`[DELEGATE] Using binary at: ${binaryPath}`);
-			console.error(`[DELEGATE] Command args: ${args.join(' ')}`);
-		}
-
 		// Create the agent command with automatic subagent configuration
 		const args = [
 			'agent', 
@@ -70,10 +65,15 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 		
 		if (debug) {
 			args.push('--debug');
+			console.error(`[DELEGATE] Using binary at: ${binaryPath}`);
+			console.error(`[DELEGATE] Command args: ${args.join(' ')}`);
 		}
 
 		// Spawn the delegate process
 		return new Promise((resolve, reject) => {
+			// Create delegation span for telemetry if tracer is available
+			const delegationSpan = tracer ? tracer.createDelegationSpan(sessionId, task) : null;
+			
 			const process = spawn(binaryPath, args, {
 				stdio: ['pipe', 'pipe', 'pipe'],
 				timeout: timeout * 1000
