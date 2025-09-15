@@ -178,7 +178,7 @@ pub fn format_and_print_search_results(
         }
     }
 
-    println!("Found {count} search results", count = valid_results.len());
+    eprintln!("Found {count} search results", count = valid_results.len());
 
     let total_bytes: usize = valid_results.iter().map(|r| r.code.len()).sum();
 
@@ -187,8 +187,8 @@ pub fn format_and_print_search_results(
     // when multiple identical code blocks need tokenization (common in search results)
     let code_blocks: Vec<&str> = valid_results.iter().map(|r| r.code.as_str()).collect();
     let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
-    println!("Total bytes returned: {total_bytes}");
-    println!("Total tokens returned: {total_tokens}");
+    eprintln!("Total bytes returned: {total_bytes}");
+    eprintln!("Total tokens returned: {total_tokens}");
 }
 
 /// Format and print search results with color highlighting for matching words
@@ -497,13 +497,13 @@ fn format_and_print_color_results(
     } // End of for loop
 
     println!();
-    println!("Found {} search results", results.len());
+    eprintln!("Found {} search results", results.len());
 
     let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
     let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
     let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
-    println!("Total bytes returned: {total_bytes}");
-    println!("Total tokens returned: {total_tokens}");
+    eprintln!("Total bytes returned: {total_bytes}");
+    eprintln!("Total tokens returned: {total_tokens}");
 }
 
 /// Helper function to escape XML special characters
@@ -2254,15 +2254,15 @@ fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
 
     // Print summary at the end
     println!();
-    println!("Found {} search results", results.len());
+    eprintln!("Found {} search results", results.len());
 
     // Calculate total bytes and tokens from displayed content
     let total_bytes: usize = displayed_content.iter().map(|s| s.len()).sum();
     let code_blocks: Vec<&str> = displayed_content.iter().map(|s| s.as_str()).collect();
     let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
 
-    println!("Total bytes returned: {total_bytes}");
-    println!("Total tokens returned: {total_tokens}");
+    eprintln!("Total bytes returned: {total_bytes}");
+    eprintln!("Total tokens returned: {total_tokens}");
 }
 
 /// Format and print search results in outline XML format
@@ -2271,7 +2271,15 @@ fn format_and_print_outline_xml_results(results: &[&SearchResult], dry_run: bool
     // Track content for accounting
     let mut displayed_content = Vec::new();
 
-    println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+    println!("<instructions>");
+    println!("- Search results organized by file, showing code matches within their parent functions/classes.");
+    println!(
+        "- Line numbers help you locate exact positions. Ellipsis (...) indicates skipped code."
+    );
+    println!("- To see complete functions: 'probe extract filename.ext:line_number' or 'probe extract filename.ext#symbol_name'");
+    println!("- Also works with probe extract CLI or MCP commands for AI assistants.");
+    println!("</instructions>");
+    println!();
     println!("<matches>");
 
     // Group results by file and sort each group by line number
@@ -2368,11 +2376,11 @@ fn format_and_print_outline_xml_results(results: &[&SearchResult], dry_run: bool
         // Print the file element with content (no XML escaping for simpler output)
         // Add empty lines for better readability
         println!();
-        println!("  <file path=\"{}\">", file_path);
+        println!("<file path=\"{}\">", file_path);
         println!();
         print!("{}", xml_content);
         println!();
-        println!("  </file>");
+        println!("</file>");
     }
 
     println!("</matches>");
