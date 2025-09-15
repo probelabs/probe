@@ -37,10 +37,65 @@ export const delegateSchema = z.object({
 	task: z.string().describe('The task to delegate to a subagent. Be specific about what needs to be accomplished.')
 });
 
-// Schema for the attempt_completion tool - no validation, direct XML response
+// Schema for the attempt_completion tool - flexible validation for direct XML response
 export const attemptCompletionSchema = {
-	// No Zod validation - allow direct XML response
-	safeParse: (params) => ({ success: true, data: params })
+	// Custom validation that requires result parameter but allows direct XML response
+	safeParse: (params) => {
+		// Validate that params is an object
+		if (!params || typeof params !== 'object') {
+			return {
+				success: false,
+				error: {
+					issues: [{
+						code: 'invalid_type',
+						expected: 'object',
+						received: typeof params,
+						path: [],
+						message: 'Expected object'
+					}]
+				}
+			};
+		}
+
+		// Validate that result parameter exists and is a string
+		if (!('result' in params)) {
+			return {
+				success: false,
+				error: {
+					issues: [{
+						code: 'invalid_type',
+						expected: 'string',
+						received: 'undefined',
+						path: ['result'],
+						message: 'Required'
+					}]
+				}
+			};
+		}
+
+		if (typeof params.result !== 'string') {
+			return {
+				success: false,
+				error: {
+					issues: [{
+						code: 'invalid_type',
+						expected: 'string',
+						received: typeof params.result,
+						path: ['result'],
+						message: 'Expected string'
+					}]
+				}
+			};
+		}
+
+		// Filter out command parameter if present (legacy compatibility)
+		const filteredData = { result: params.result };
+		
+		return {
+			success: true,
+			data: filteredData
+		};
+	}
 };
 
 
@@ -262,8 +317,13 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 			if (resultMatch) {
 				params['result'] = resultMatch[1].trim();
 			} else {
-				// If no <result> tags, use the entire inner content as direct XML response
-				params['result'] = innerContent.trim();
+				// Count how many parameters were parsed (excluding command which will be removed)
+				const paramsCount = Object.keys(params).filter(key => key !== 'command').length;
+				
+				// If no <result> tags and no other meaningful parameters parsed, use the entire inner content as direct XML response
+				if (paramsCount === 0) {
+					params['result'] = innerContent.trim();
+				}
 			}
 			// Remove command parameter if it was parsed by generic logic above (legacy compatibility)
 			if (params.command) {
