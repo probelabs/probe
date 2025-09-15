@@ -2366,7 +2366,13 @@ fn format_and_print_outline_xml_results(results: &[&SearchResult], dry_run: bool
         );
 
         // Print the file element with content (no XML escaping for simpler output)
-        println!("  <file path=\"{}\">{}</file>", file_path, xml_content);
+        // Add empty lines for better readability
+        println!();
+        println!("  <file path=\"{}\">", file_path);
+        println!();
+        print!("{}", xml_content);
+        println!();
+        println!("  </file>");
     }
 
     println!("</matches>");
