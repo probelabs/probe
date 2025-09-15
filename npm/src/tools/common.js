@@ -24,7 +24,7 @@ export const querySchema = z.object({
 });
 
 export const extractSchema = z.object({
-	file_path: z.string().optional().describe('Path to the file to extract from. Can include line numbers or symbol names'),
+	targets: z.string().optional().describe('File paths or symbols to extract from. Can include line numbers, symbol names, or multiple space-separated targets'),
 	input_content: z.string().optional().describe('Text content to extract file paths from'),
 	line: z.number().optional().describe('Start line number to extract a specific code block'),
 	end_line: z.number().optional().describe('End line number for extracting a range of lines'),
@@ -106,6 +106,12 @@ export const searchToolDefinition = `
 Description: Search code in the repository using Elasticsearch query syntax (except field based queries, e.g. "filename:..." NOT supported).
 
 You need to focus on main keywords when constructing the query, and always use elastic search syntax like OR AND and brackets to group keywords.
+
+**Session Management & Caching:**
+- Ensure not to re-read the same symbols twice - reuse context from previous tool calls
+- Probe returns a session ID on first run - reuse it for subsequent calls to avoid redundant searches
+- Once data is returned, it's cached and won't return on next runs (this is expected behavior)
+
 Parameters:
 - query: (required) Search query with Elasticsearch syntax. You can use + for important terms, and - for negation.
 - path: (required) Path to search in. All dependencies located in /dep folder, under language sub folders, like this: "/dep/go/github.com/owner/repo", "/dep/js/package_name", or "/dep/rust/cargo_name" etc. YOU SHOULD ALWAYS provide FULL PATH when searching dependencies, including depency name.
@@ -115,10 +121,21 @@ Parameters:
 - maxTokens: (optional, default: 10000) Maximum number of tokens to return (number).
 - language: (optional) Limit search to files of a specific programming language (e.g., 'rust', 'js', 'python', 'go' etc.).
 
+**Workflow:** Always start with search, then use extract for detailed context when needed.
 
 Usage Example:
 
 <examples>
+
+User: Where is the login logic?
+Assistant workflow:
+1. <search>
+<query>login AND auth AND token</query>
+<path>.</path>
+</search>
+2. Now lets look closer: <extract>
+<targets>session.rs#AuthService.login auth.rs:2-100</targets>
+</extract>
 
 User: How to calculate the total amount in the payments module?
 <search>
@@ -142,7 +159,6 @@ User: Find all react imports in the project.
 <exact>true</exact>
 <language>js</language>
 </search>
-
 
 User: Find how decompoud library works?
 <search>
@@ -177,11 +193,16 @@ Usage Example:
 
 export const extractToolDefinition = `
 ## extract
-Description: Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files. It can be used to read full files as well. 
+Description: Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files. It can be used to read full files as well.
 Full file extraction should be the LAST RESORT! Always prefer search.
 
+**Multiple Extraction:** You can extract multiple symbols/files in one call by providing multiple file paths separated by spaces.
+
+**Session Awareness:** Reuse context from previous tool calls. Don't re-extract the same symbols you already have.
+
 Parameters:
-- file_path: (required) Path to the file to extract from. Can include line numbers or symbol names (e.g., 'src/main.rs:10-20', 'src/utils.js#myFunction').
+- targets: (required) File paths or symbols to extract from. Can include line numbers, symbol names, or multiple space-separated targets (e.g., 'src/main.rs:10-20', 'src/utils.js#myFunction').
+  For multiple extractions: 'session.rs#AuthService.login auth.rs:2-100 config.rs#DatabaseConfig'
 - line: (optional) Start line number to extract a specific code block. Use with end_line for ranges.
 - end_line: (optional) End line number for extracting a range of lines.
 - allow_tests: (optional, default: false) Allow test files and test code blocks (true/false).
@@ -189,28 +210,37 @@ Usage Example:
 
 <examples>
 
+User: Where is the login logic? (After search found relevant files)
+<extract>
+<targets>session.rs#AuthService.login auth.rs:2-100 config.rs#DatabaseConfig</targets>
+</extract>
+
+User: How does error handling work? (After search identified files)
+<extract>
+<targets>error.rs#ErrorType utils.rs#handle_error src/main.rs:50-80</targets>
+</extract>
+
 User: How RankManager works
 <extract>
-<file_path>src/search/ranking.rs#RankManager</file_path>
+<targets>src/search/ranking.rs#RankManager</targets>
 </extract>
 
 User: Lets read the whole file
 <extract>
-<file_path>src/search/ranking.rs</file_path>
+<targets>src/search/ranking.rs</targets>
 </extract>
 
 User: Read the first 10 lines of the file
 <extract>
-<file_path>src/search/ranking.rs</file_path>
+<targets>src/search/ranking.rs</targets>
 <line>1</line>
 <end_line>10</end_line>
 </extract>
 
 User: Read file inside the dependency
 <extract>
-<file_path>/dep/go/github.com/gorilla/mux/router.go</file_path>
+<targets>/dep/go/github.com/gorilla/mux/router.go</targets>
 </extract>
-
 
 </examples>
 `;
@@ -300,7 +330,7 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 		const commonParams = ['query', 'file_path', 'line', 'end_line', 'path', 'recursive', 'includeHidden', 
 		                      'max_results', 'maxResults', 'result', 'command', 'description', 'task', 'param', 'pattern',
 		                      'allow_tests', 'exact', 'maxTokens', 'language', 'input_content',
-		                      'context_lines', 'format', 'directory', 'autoCommits', 'files'];
+		                      'context_lines', 'format', 'directory', 'autoCommits', 'files', 'targets'];
 		
 		for (const paramName of commonParams) {
 			const paramOpenTag = `<${paramName}>`;
